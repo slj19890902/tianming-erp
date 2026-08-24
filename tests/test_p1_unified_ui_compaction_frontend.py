@@ -74,10 +74,11 @@ def test_production_rows_use_plain_language_and_two_line_product_summary() -> No
     assert "max-height:2.7em" in INDEX
 
 
-def test_production_destination_is_narrow_without_changing_location_gates() -> None:
+def test_production_destination_is_horizontal_without_changing_location_gates() -> None:
     page = _production_page()
     assert "production-destination-column" in page
-    assert ".production-destination-column { width:180px; }" in INDEX
+    assert ".production-destination-column { width:300px; }" in INDEX
+    assert "grid-template-columns:64px 92px minmax(112px,1fr)" in INDEX
     assert ".production-table .production-location-picker" in INDEX
     for marker in (
         "onProductionFloorChange",

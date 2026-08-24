@@ -138,6 +138,81 @@ def test_actual_material_projects_to_receipt_history_and_card_without_overwritin
         assert order_item.snapshot_material == "KAKAK"
 
 
+def test_received_material_projection_rejects_null_and_combined_flute_display(
+    requisition_app,
+) -> None:
+    from app.models.purchase_receipt import PurchaseReceiptFact
+
+    app, session_factory = requisition_app
+    _seed_material_and_staging(session_factory)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        source = _create_frozen_sources(
+            client,
+            session_factory,
+            order_quantity=10,
+            purchase_total=10,
+            order_purpose=10,
+            stock_purpose=0,
+        )[0]
+        frozen = _freeze_receipt_fact(
+            client,
+            source,
+            idempotency_key="p191-normalized-material-fact",
+        )
+        assert frozen.status_code == 200, frozen.text
+        received = _receive(
+            client,
+            source,
+            frozen.json(),
+            quantity=10,
+            idempotency_key="p191-normalized-material-receive",
+        )
+        assert received.status_code == 200, received.text
+
+        with session_factory() as session:
+            fact = session.scalar(
+                select(PurchaseReceiptFact).where(
+                    PurchaseReceiptFact.supplier_requisition_order_item_id
+                    == source.supplier_item_id
+                )
+            )
+            assert fact is not None
+            fact.expected_material_code_snapshot = "N717N-AB/EB"
+            fact.actual_material_code_snapshot = "N717N-AB/EB"
+            fact.actual_material_layer_count_snapshot = 5
+            fact.actual_material_flute_type_snapshot = "AB/BE"
+            session.commit()
+
+        recent = client.get("/api/incoming/received", params={"page": 1, "page_size": 1})
+        assert recent.status_code == 200, recent.text
+        recent_row = recent.json()["items"][0]
+        assert recent_row["reported_material_code"] == "N717N"
+        assert recent_row["actual_material_code"] == "N717N"
+        assert recent_row["actual_material_flute_type"] == "AB"
+        assert recent_row["actual_material_display"] == "N717N / AB"
+        assert "AB/BE" not in recent_row["actual_material_display"]
+        assert "None" not in recent_row["actual_material_display"]
+
+        with session_factory() as session:
+            fact = session.scalar(
+                select(PurchaseReceiptFact).where(
+                    PurchaseReceiptFact.supplier_requisition_order_item_id
+                    == source.supplier_item_id
+                )
+            )
+            assert fact is not None
+            fact.actual_material_flute_type_snapshot = None
+            session.commit()
+
+        history = client.get("/api/incoming/history", params={"page": 1, "page_size": 1})
+        assert history.status_code == 200, history.text
+        history_row = history.json()["items"][0]
+        assert history_row["actual_material_flute_type"] == "AB"
+        assert history_row["actual_material_display"] == "N717N / AB"
+        assert "None" not in history_row["actual_material_display"]
+
+
 def test_pending_purchase_order_is_projected_as_one_row_per_product_detail(
     requisition_app,
 ) -> None:
@@ -280,8 +355,12 @@ def test_compact_incoming_frontend_uses_top_selection_and_no_row_print_buttons()
     assert "打印生产卡（{{ incomingProductionCardSelectedCount }}）" in incoming
     assert '@click="openIncomingProductionCard(row)"' not in incoming
     assert "报料长" in incoming and "报料宽" in incoming and "压线尺寸" in incoming
-    assert "客户简称 / 存货编码 / 客户产品名称" in incoming
-    assert '<span class="incoming-product-name">{{ row.product_name || \'-\' }}</span>' in incoming
+    assert "客户简称 / 存货编码 / 产品名称" in incoming
+    assert "incomingDimensionMm(row.cardboard_len)" in incoming
+    assert "incomingDimensionMm(row.cardboard_width)" in incoming
+    assert 'class="incoming-product-identity-line"' in incoming
+    assert '<div class="incoming-product-name">{{ row.product_name || \'-\' }}</div>' in incoming
+    assert 'class="incoming-history-action-line"' in incoming
     assert "incomingTab==='pending' ? '本次实收' : '实收数量'" in incoming
     assert "撤销收料，回到已报料" not in incoming
     assert ".table-wrap:has(> .incoming-compact-table)" in index
@@ -290,3 +369,6 @@ def test_compact_incoming_frontend_uses_top_selection_and_no_row_print_buttons()
     assert "/api/incoming/production-card-batch" in print_page
     assert 'return this.loadIncomingReceived({force:true})' in index
     assert "return this.loadIncomingHistory()" in index
+    assert "incomingCleanDisplayToken(value)" in index
+    assert "incomingDisplayFlute(value, fallbackValue)" in index
+    assert ".incoming-history-action-line" in index

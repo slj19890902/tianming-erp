@@ -104,7 +104,10 @@ from app.services.requisition_production_print import (
     build_receipt_production_print_package,
 )
 from app.services.requisition_production_print_batch import production_print_batch_pages
-from app.services.supplier_material_display import clean_supplier_material_code
+from app.services.supplier_material_display import (
+    clean_supplier_flute_type,
+    clean_supplier_material_code,
+)
 from app.services.product_specification import resolved_product_specification
 from app.services.receipt_purpose_distribution import (
     receipt_purpose_finished_capacity,
@@ -126,6 +129,25 @@ router = APIRouter()
 can_read = PermissionChecker("incoming.view")
 can_operate = PermissionChecker("incoming.execute")
 admin_rollback = RoleChecker(["admin"])
+
+
+def _clean_receipt_material_code(
+    value: str | None,
+    *,
+    layer_count: int | None,
+    fallback: str | None = None,
+) -> str:
+    """Normalize one receipt material code without leaking null sentinels."""
+
+    for candidate in (value, fallback):
+        cleaned = clean_supplier_material_code(candidate, layer_count)
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _receipt_material_display(material_code: str, flute_type: str) -> str:
+    return " / ".join(value for value in (material_code, flute_type) if value)
 
 
 def _drawing_suffix(reference: str | None) -> str:
@@ -406,6 +428,24 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
             select(RequisitionItem).where(RequisitionItem.id.in_(requisition_ids))
         ).all()
     } if requisition_ids else {}
+    component_snapshots_by_requisition = {
+        int(requisition_item_id): snapshot
+        for requisition_item_id, snapshot in db.execute(
+            select(
+                RequisitionItemBomSource.requisition_item_id,
+                SalesOrderItemBomComponent,
+            )
+            .join(
+                SalesOrderItemBomComponent,
+                SalesOrderItemBomComponent.id
+                == RequisitionItemBomSource.sales_order_item_bom_component_id,
+            )
+            .where(
+                RequisitionItemBomSource.requisition_item_id.in_(requisition_ids),
+                RequisitionItemBomSource.active_guard == 1,
+            )
+        ).all()
+    } if requisition_ids else {}
     order_item_ids = {
         int(source.order_item_id)
         for source in [*supplier_sources.values(), *requisition_sources.values()]
@@ -565,6 +605,21 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
         else:
             row.update({"purpose_status": "legacy_unset", "receipt_fact_ready": True})
             continue
+        component_snapshot = component_snapshots_by_requisition.get(
+            int(requisition_id or 0)
+        )
+        if component_snapshot is not None:
+            row["layer_count"] = component_snapshot.snapshot_component_layer_count
+            row["flute_type"] = clean_supplier_flute_type(
+                component_snapshot.snapshot_component_flute_type,
+                fallback=row.get("flute_type"),
+            ) or None
+        elif supplier_id is not None and source is not None:
+            row["layer_count"] = getattr(source, "layer_count_snapshot", None)
+            row["flute_type"] = clean_supplier_flute_type(
+                getattr(source, "flute_type_snapshot", None),
+                fallback=row.get("flute_type"),
+            ) or None
         marker = str(getattr(source, "purpose_contract_status", "legacy_unset"))
         source_snapshots = snapshots_by_source.get(source_key, [])
         if marker == "legacy_unset" and not source_snapshots:
@@ -645,25 +700,32 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
             and material_calculation_fingerprint(actual_material)
             == fact.actual_material_fingerprint
         )
-        reported_material_code = (
-            str(fact.expected_material_code_snapshot or "").strip()
-            if fact_ready
-            else str(
-                getattr(source, "material_code_snapshot", None)
-                or getattr(source, "material_snapshot", None)
-                or row.get("material")
-                or ""
-            ).strip()
+        material_layer_count = (
+            int(fact.actual_material_layer_count_snapshot)
+            if fact_ready and fact.actual_material_layer_count_snapshot is not None
+            else int(getattr(source, "layer_count_snapshot", 0) or 0)
+            or int(row.get("layer_count") or 0)
+            or None
         )
-        actual_material_code = (
-            str(fact.actual_material_code_snapshot or "").strip()
-            if fact_ready
-            else reported_material_code
+        route_flute_type = clean_supplier_flute_type(row.get("flute_type"))
+        source_material_code = (
+            getattr(source, "material_code_snapshot", None)
+            or getattr(source, "material_snapshot", None)
+            or row.get("material")
         )
-        actual_flute_type = (
-            str(fact.actual_material_flute_type_snapshot or "").strip()
-            if fact_ready
-            else str(row.get("flute_type") or "").strip()
+        reported_material_code = _clean_receipt_material_code(
+            fact.expected_material_code_snapshot if fact_ready else source_material_code,
+            layer_count=material_layer_count,
+            fallback=source_material_code,
+        )
+        actual_material_code = _clean_receipt_material_code(
+            fact.actual_material_code_snapshot if fact_ready else reported_material_code,
+            layer_count=material_layer_count,
+            fallback=reported_material_code,
+        )
+        actual_flute_type = clean_supplier_flute_type(
+            fact.actual_material_flute_type_snapshot if fact_ready else None,
+            fallback=route_flute_type,
         )
         row.update(
             {
@@ -697,20 +759,15 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
                     reported_material_code or None
                 ),
                 "reported_material_code": reported_material_code or None,
-                "reported_material_display": " / ".join(
-                    value
-                    for value in (
-                        reported_material_code,
-                        str(row.get("flute_type") or "").strip(),
-                    )
-                    if value
+                "reported_material_display": _receipt_material_display(
+                    reported_material_code,
+                    route_flute_type,
                 ),
                 "actual_material_code": actual_material_code or None,
                 "actual_material_flute_type": actual_flute_type or None,
-                "actual_material_display": " / ".join(
-                    value
-                    for value in (actual_material_code, actual_flute_type)
-                    if value
+                "actual_material_display": _receipt_material_display(
+                    actual_material_code,
+                    actual_flute_type,
                 ),
                 "material_changed": bool(
                     fact_ready
@@ -1090,7 +1147,14 @@ def _supplier_order_item_overlay(
             supplier_item.material_code_snapshot,
             supplier_item.layer_count_snapshot,
         ),
-        "flute_type": supplier_item.flute_type_snapshot,
+        "material_code": clean_supplier_material_code(
+            supplier_item.material_code_snapshot,
+            supplier_item.layer_count_snapshot,
+        ),
+        "layer_count": supplier_item.layer_count_snapshot,
+        "flute_type": clean_supplier_flute_type(
+            supplier_item.flute_type_snapshot
+        ) or None,
         "requisition_qty": int(supplier_item.requisition_qty or 0),
         "incoming_quantity": int(supplier_item.requisition_qty or 0),
         "cardboard_len": length,
@@ -1320,16 +1384,22 @@ def _stock_replenishment_pending_rows(
                 "specification": (
                     f"{item.report_length_mm or '-'}×{item.report_width_mm or '-'}"
                 ),
-                "material": item.material_code_snapshot,
-                "material_code": item.material_code_snapshot,
-                "flute_type": item.flute_type,
-                "material_display": " / ".join(
-                    value
-                    for value in (
-                        (item.material_code_snapshot or "").strip(),
-                        (item.flute_type or "").strip(),
-                    )
-                    if value
+                "material": clean_supplier_material_code(
+                    item.material_code_snapshot,
+                    item.layer_count,
+                ),
+                "material_code": clean_supplier_material_code(
+                    item.material_code_snapshot,
+                    item.layer_count,
+                ),
+                "layer_count": item.layer_count,
+                "flute_type": clean_supplier_flute_type(item.flute_type) or None,
+                "material_display": _receipt_material_display(
+                    clean_supplier_material_code(
+                        item.material_code_snapshot,
+                        item.layer_count,
+                    ),
+                    clean_supplier_flute_type(item.flute_type),
                 ),
                 "quantity": item.quantity,
                 "delivery_date": None,
@@ -2776,16 +2846,22 @@ def _stock_replenishment_receipt_row(
         "specification": (
             f"{item.report_length_mm or '-'}×{item.report_width_mm or '-'}"
         ),
-        "material": item.material_code_snapshot or "",
-        "material_code": item.material_code_snapshot or "",
-        "flute_type": item.flute_type,
-        "material_display": " / ".join(
-            value
-            for value in (
-                (item.material_code_snapshot or "").strip(),
-                (item.flute_type or "").strip(),
-            )
-            if value
+        "material": clean_supplier_material_code(
+            item.material_code_snapshot,
+            item.layer_count,
+        ),
+        "material_code": clean_supplier_material_code(
+            item.material_code_snapshot,
+            item.layer_count,
+        ),
+        "layer_count": item.layer_count,
+        "flute_type": clean_supplier_flute_type(item.flute_type) or None,
+        "material_display": _receipt_material_display(
+            clean_supplier_material_code(
+                item.material_code_snapshot,
+                item.layer_count,
+            ),
+            clean_supplier_flute_type(item.flute_type),
         ),
         "quantity": item.quantity,
         "delivery_date": None,
@@ -2896,24 +2972,25 @@ def _decorate_received_rows_with_purpose(
         if allocation is None:
             row["purpose_status"] = "legacy_unset"
             row["purpose_allocation"] = None
-            reported_material_code = str(
-                row.get("material_code") or row.get("material") or ""
-            ).strip()
-            flute_type = str(row.get("flute_type") or "").strip()
+            layer_count = int(row.get("layer_count") or 0) or None
+            reported_material_code = _clean_receipt_material_code(
+                row.get("material_code"),
+                layer_count=layer_count,
+                fallback=row.get("material"),
+            )
+            flute_type = clean_supplier_flute_type(row.get("flute_type"))
             row.update(
                 {
                     "reported_material_code": reported_material_code or None,
-                    "reported_material_display": " / ".join(
-                        value
-                        for value in (reported_material_code, flute_type)
-                        if value
+                    "reported_material_display": _receipt_material_display(
+                        reported_material_code,
+                        flute_type,
                     ),
                     "actual_material_code": reported_material_code or None,
                     "actual_material_flute_type": flute_type or None,
-                    "actual_material_display": " / ".join(
-                        value
-                        for value in (reported_material_code, flute_type)
-                        if value
+                    "actual_material_display": _receipt_material_display(
+                        reported_material_code,
+                        flute_type,
                     ),
                     "material_changed": False,
                 }
@@ -2926,36 +3003,52 @@ def _decorate_received_rows_with_purpose(
         receipt_fact = receipt_facts.get(
             int(allocation.purchase_receipt_fact_id or 0)
         )
-        reported_material_code = str(
-            receipt_fact.expected_material_code_snapshot
+        layer_count = (
+            int(receipt_fact.actual_material_layer_count_snapshot)
             if receipt_fact is not None
-            else row.get("material_code") or row.get("material") or ""
-        ).strip()
-        reported_flute_type = str(row.get("flute_type") or "").strip()
-        actual_material_code = str(
-            receipt_fact.actual_material_code_snapshot
-            if receipt_fact is not None
-            else reported_material_code
-        ).strip()
-        actual_flute_type = str(
-            receipt_fact.actual_material_flute_type_snapshot
-            if receipt_fact is not None
-            else reported_flute_type
-        ).strip()
+            and receipt_fact.actual_material_layer_count_snapshot is not None
+            else int(row.get("layer_count") or 0)
+            or None
+        )
+        reported_material_code = _clean_receipt_material_code(
+            (
+                receipt_fact.expected_material_code_snapshot
+                if receipt_fact is not None
+                else row.get("material_code")
+            ),
+            layer_count=layer_count,
+            fallback=row.get("material"),
+        )
+        reported_flute_type = clean_supplier_flute_type(row.get("flute_type"))
+        actual_material_code = _clean_receipt_material_code(
+            (
+                receipt_fact.actual_material_code_snapshot
+                if receipt_fact is not None
+                else reported_material_code
+            ),
+            layer_count=layer_count,
+            fallback=reported_material_code,
+        )
+        actual_flute_type = clean_supplier_flute_type(
+            (
+                receipt_fact.actual_material_flute_type_snapshot
+                if receipt_fact is not None
+                else None
+            ),
+            fallback=reported_flute_type,
+        )
         row.update(
             {
                 "reported_material_code": reported_material_code or None,
-                "reported_material_display": " / ".join(
-                    value
-                    for value in (reported_material_code, reported_flute_type)
-                    if value
+                "reported_material_display": _receipt_material_display(
+                    reported_material_code,
+                    reported_flute_type,
                 ),
                 "actual_material_code": actual_material_code or None,
                 "actual_material_flute_type": actual_flute_type or None,
-                "actual_material_display": " / ".join(
-                    value
-                    for value in (actual_material_code, actual_flute_type)
-                    if value
+                "actual_material_display": _receipt_material_display(
+                    actual_material_code,
+                    actual_flute_type,
                 ),
                 "material_changed": bool(
                     receipt_fact is not None
@@ -2989,11 +3082,42 @@ def _receipt_fact_rows(
     registry = build_display_registry(db)
     visible_customer_ids = _visible_customer_ids(user, db)
     rows: list[dict] = []
-    for fact in receipt_history(
+    history_facts = receipt_history(
         db,
         received_since=received_since,
         include_reversed=include_reversed,
-    ):
+    )
+    component_requisition_ids = {
+        int(fact.requisition_item_id)
+        for fact in history_facts
+        if fact.requisition_item_id is not None
+    }
+    component_context_by_requisition: dict[
+        int, tuple[str, SalesOrderItemBomComponent]
+    ] = {}
+    if component_requisition_ids:
+        component_context_by_requisition = {
+            int(requisition_item_id): (str(component_type or "whole"), snapshot)
+            for requisition_item_id, component_type, snapshot in db.execute(
+                select(
+                    RequisitionItemBomSource.requisition_item_id,
+                    RequisitionItemBomSource.component_type,
+                    SalesOrderItemBomComponent,
+                )
+                .join(
+                    SalesOrderItemBomComponent,
+                    SalesOrderItemBomComponent.id
+                    == RequisitionItemBomSource.sales_order_item_bom_component_id,
+                )
+                .where(
+                    RequisitionItemBomSource.requisition_item_id.in_(
+                        component_requisition_ids
+                    ),
+                    RequisitionItemBomSource.active_guard == 1,
+                )
+            ).all()
+        }
+    for fact in history_facts:
         if fact.stock_replenishment_item_id is not None:
             stock_row = _stock_replenishment_receipt_row(db, fact)
             if stock_row is None:
@@ -3036,9 +3160,15 @@ def _receipt_fact_rows(
             if fact.supplier_order_id
             else None
         )
+        component_context = component_context_by_requisition.get(
+            int(fact.requisition_item_id or 0)
+        )
+        component_snapshot = component_context[1] if component_context else None
         component = (
             supplier_order_item_component_type(supplier_item)
             if supplier_item is not None
+            else component_context[0]
+            if component_context is not None
             else _requisition_component_kind(db, requisition_item)
             if requisition_item is not None
             else ""
@@ -3057,13 +3187,36 @@ def _receipt_fact_rows(
             if requisition_item
             else None
         ) or item.snapshot_product_name
-        material_code = (
+        raw_material_code = (
             supplier_item.material_code_snapshot
             if supplier_item is not None
             else requisition_item.material_snapshot
             if requisition_item
             else None
         ) or item.snapshot_material or ""
+        layer_count = (
+            supplier_item.layer_count_snapshot
+            if supplier_item is not None
+            else component_snapshot.snapshot_component_layer_count
+            if component_snapshot is not None
+            else item.layer_count
+            or (product.layer_count if product is not None else None)
+        )
+        flute_type = clean_supplier_flute_type(
+            (
+                supplier_item.flute_type_snapshot
+                if supplier_item is not None
+                else component_snapshot.snapshot_component_flute_type
+                if component_snapshot is not None
+                else item.flute_type
+            ),
+            fallback=product.flute_type if product is not None else None,
+        )
+        material_code = _clean_receipt_material_code(
+            raw_material_code,
+            layer_count=layer_count,
+            fallback=item.snapshot_material,
+        )
         display_number = display_order_number(order, registry)
         drawing_reference = (item.drawing_file or "").strip() or None
         drawing_path = _order_drawing_url(item.id, drawing_reference)
@@ -3123,13 +3276,11 @@ def _receipt_fact_rows(
             or resolved_product_specification(item.snapshot_spec, product),
             "material": material_code,
             "material_code": material_code,
-            "flute_type": (
-                supplier_item.flute_type_snapshot
-                if supplier_item is not None
-                else item.flute_type
-            ) or (product.flute_type if product else None),
-            "material_display": (
-                f"{material_code} / {item.flute_type}" if material_code and item.flute_type else material_code
+            "layer_count": layer_count,
+            "flute_type": flute_type or None,
+            "material_display": _receipt_material_display(
+                material_code,
+                flute_type,
             ),
             "quantity": item.quantity,
             "delivery_date": order.delivery_date,

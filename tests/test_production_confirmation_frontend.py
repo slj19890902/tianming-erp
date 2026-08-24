@@ -46,6 +46,14 @@ def test_direct_destination_posts_one_formal_completion_and_stays_pending() -> N
     assert "重试会复用同一幂等键" in body
 
 
+def test_production_confirmation_keeps_destination_and_history_actions_compact() -> None:
+    assert 'class="production-history-action-menu"' in INDEX
+    assert ".production-history-action-menu[open] > .toolbar-group" in INDEX
+    assert "grid-template-columns:64px 92px minmax(112px,1fr)" in INDEX
+    assert ".ui-large .production-table .input" in INDEX
+    assert "min-height:32px" in INDEX
+
+
 def test_stock_location_only_selects_locally_then_customer_groups_are_posted() -> None:
     assert "全部入库：选好库位，再点顶部“批量确认入库”" not in INDEX
     assert "合格品全部入库" in INDEX

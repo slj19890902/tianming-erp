@@ -1758,7 +1758,7 @@
       .table-wrap:has(> .requisition-hold-table),
       .table-wrap:has(> .production-table),
       .table-wrap:has(> .production-history-table) { max-height:none; overflow-x:auto; overflow-y:visible; }
-      .incoming-compact-table th,.incoming-compact-table td { padding:5px 5px; line-height:1.22; }
+      .incoming-compact-table th,.incoming-compact-table td { padding:4px 5px; line-height:1.15; }
       .incoming-compact-table th:nth-child(1) { width:5.5%; }
       .incoming-compact-table th:nth-child(2),.incoming-compact-table th:nth-child(4) { width:5.3%; }
       .incoming-compact-table th:nth-child(3) { width:2%; }
@@ -1775,7 +1775,13 @@
       .incoming-material-cell small { display:block; color:var(--muted); font-size:10px; }
       .incoming-material-button { max-width:100%; padding:0; border:0; background:transparent; color:var(--blue); font:inherit; font-weight:700; cursor:pointer; text-align:left; }
       .incoming-product-cell { overflow:hidden; }
-      .incoming-product-name { display:block; margin-top:2px; color:var(--text); font-size:11px; line-height:1.2; }
+      .incoming-product-identity-line { display:flex; align-items:baseline; gap:4px; min-width:0; white-space:nowrap; overflow:hidden; }
+      .incoming-product-identity-line strong { flex:0 0 auto; max-width:42%; overflow:hidden; text-overflow:ellipsis; }
+      .incoming-product-identity-line span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+      .incoming-product-name { display:block; margin-top:0; color:var(--text); font-size:11px; line-height:1.1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .incoming-history-action-line { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; white-space:nowrap; }
+      .incoming-compact-table .incoming-history-action-line .status { flex:0 1 auto; white-space:nowrap; }
+      .incoming-compact-table .incoming-history-action-line .btn { display:inline-flex; width:auto !important; min-width:0; margin:0 !important; padding:3px 6px; white-space:nowrap; }
       .incoming-action-menu { display:inline-block; margin-left:4px; position:relative; }
       .incoming-action-menu summary { cursor:pointer; color:var(--blue); font-weight:700; }
       .incoming-action-menu[open] { display:block; margin:4px 0 0; padding:5px; border:1px solid var(--line); background:var(--surface); border-radius:6px; }
@@ -2246,7 +2252,7 @@
         border:1px solid var(--line); border-radius:10px; background:var(--panel);
       }
       .production-table th,
-      .production-table td { padding:6px 8px; line-height:1.3; vertical-align:middle; }
+      .production-table td { padding:4px 6px; line-height:1.2; vertical-align:middle; }
       .production-product-summary {
         display:grid; gap:2px; max-height:2.7em; overflow:hidden; white-space:normal;
       }
@@ -2260,11 +2266,11 @@
         display:grid; grid-template-columns:58px 68px auto; gap:4px;
         align-items:center; white-space:nowrap;
       }
-      .production-input-line + .production-input-line { margin-top:4px; }
+      .production-input-line + .production-input-line { margin-top:2px; }
       .production-input-line .input { width:68px; min-width:0; padding-left:6px; padding-right:6px; }
       .production-input-unit { color:var(--muted); font-size:12px; }
-      .production-destination-column { width:180px; }
-      .production-destination-cell > .select { width:172px; max-width:100%; }
+      .production-destination-column { width:300px; }
+      .production-destination-cell > .select { width:100%; max-width:100%; }
       .production-location-picker {
         display: grid; grid-template-columns: minmax(92px, .7fr) minmax(130px, 1.3fr);
         gap: 5px; width: 100%;
@@ -2276,7 +2282,25 @@
         min-width:310px;
       }
       .production-table .production-location-picker {
-        grid-template-columns:1fr; width:172px; max-width:100%;
+        grid-template-columns:64px 92px minmax(112px,1fr); width:100%; max-width:100%;
+      }
+      .ui-large .production-table .input,
+      .ui-large .production-table .select { min-height:32px; height:32px; padding:3px 6px; font-size:14px; }
+      .production-history-action-menu { position:relative; display:inline-block; }
+      .production-history-action-menu > summary {
+        display:inline-flex; align-items:center; justify-content:center; cursor:pointer;
+        min-height:28px; padding:3px 9px; border:1px solid var(--line-strong);
+        border-radius:6px; background:var(--surface); color:var(--blue); font-weight:700;
+        list-style:none;
+      }
+      .production-history-action-menu > summary::-webkit-details-marker { display:none; }
+      .production-history-action-menu[open] > .toolbar-group {
+        position:absolute; right:0; top:calc(100% + 4px); z-index:40;
+        display:flex; width:420px; padding:8px; border:1px solid var(--line-strong);
+        border-radius:8px; background:var(--surface); box-shadow:0 8px 24px rgba(15,23,42,.16);
+      }
+      .production-history-action-menu[open] .production-location-picker {
+        grid-template-columns:64px 92px minmax(112px,1fr);
       }
       .audit-tabs {
         display: inline-flex; gap: 4px; padding: 4px;
@@ -3885,18 +3909,18 @@
               <div v-if="incomingTab==='pending' && incomingLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingLocationsError }} <button class="btn small" @click="ensureIncomingLocations()">重试</button></div>
               <data-panel :empty="!incomingRowsForTab().length && !(incomingTab==='pending' && (incomingPendingLoading || incomingPendingError)) && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
                 <table class="incoming-table incoming-compact-table">
-                  <thead><tr><th class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="allIncomingProductionCardsSelected" @change="toggleIncomingProductionCardPage($event.target.checked)" /> 序号</th><th>报料长</th><th class="incoming-times-cell">×</th><th>报料宽</th><th>压线尺寸</th><th>材质楞型</th><th>客户简称 / 存货编码 / 客户产品名称</th><th>{{ incomingTab==='pending' ? '报料日期' : '实收时间' }}</th><th>图纸</th><th>计划 / 已收 / 待收</th><th>{{ incomingTab==='pending' ? '本次实收' : '实收数量' }}</th><th>收料结果 / 操作</th></tr></thead>
+                  <thead><tr><th class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="allIncomingProductionCardsSelected" @change="toggleIncomingProductionCardPage($event.target.checked)" /> 序号</th><th>报料长(mm)</th><th class="incoming-times-cell">×</th><th>报料宽(mm)</th><th>压线尺寸</th><th>材质楞型</th><th>客户简称 / 存货编码 / 产品名称</th><th>{{ incomingTab==='pending' ? '报料日期' : '实收时间' }}</th><th>图纸</th><th>计划 / 已收 / 待收</th><th>{{ incomingTab==='pending' ? '本次实收' : '实收数量' }}</th><th>收料结果 / 操作</th></tr></thead>
                   <tbody><tr v-for="(row,index) in incomingRowsForTab()" :key="row.history_key || row.receipt_item_id || row.item_id">
                     <td class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="incomingProductionCardSelected(row)" :disabled="!canPrintIncomingCard(row)" @change="toggleIncomingProductionCard(row,$event.target.checked)" /> {{ (incomingCurrentPage()-1)*incomingListPageSize()+index+1 }}</td>
-                    <td class="incoming-dimension-cell"><strong>{{ row.cardboard_len || '-' }}</strong></td><td class="incoming-times-cell">×</td><td class="incoming-dimension-cell"><strong>{{ row.cardboard_width || '-' }}</strong></td>
+                    <td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row.cardboard_len) }}</strong></td><td class="incoming-times-cell">×</td><td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row.cardboard_width) }}</strong></td>
                     <td class="incoming-crease-cell" :title="formatCrease(row)">{{ formatCrease(row) }}</td>
-                    <td class="incoming-material-cell" :title="incomingMaterialTitle(row)"><button v-if="incomingTab==='pending' && row.purpose_status==='frozen' && hasPermission('incoming.execute')" class="incoming-material-button" type="button" @click="openPurchaseReceiptMaterialChange(row)">{{ incomingActualMaterialDisplay(row) }}</button><span v-else>{{ incomingActualMaterialDisplay(row) }}</span><small v-if="row.material_changed">原 {{ row.reported_material_display || '-' }}</small></td>
-                    <td class="incoming-product-cell" :title="`${row.customer_name || '-'}｜${row.product_name || '-'}｜${row.specification || '-'}`"><strong>{{ incomingCustomerLabel(row) }}</strong><br>{{ row.product_code || '-' }}<span class="incoming-product-name">{{ row.product_name || '-' }}</span></td>
+                    <td class="incoming-material-cell" :title="incomingMaterialTitle(row)"><button v-if="incomingTab==='pending' && row.purpose_status==='frozen' && hasPermission('incoming.execute')" class="incoming-material-button" type="button" @click="openPurchaseReceiptMaterialChange(row)">{{ incomingActualMaterialDisplay(row) }}</button><span v-else>{{ incomingActualMaterialDisplay(row) }}</span><small v-if="row.material_changed">原 {{ incomingReportedMaterialDisplay(row) }}</small></td>
+                    <td class="incoming-product-cell" :title="`${row.customer_name || '-'}｜${row.product_code || '-'}｜${row.product_name || '-'}｜${row.specification || '-'}`"><div class="incoming-product-identity-line"><strong>{{ incomingCustomerLabel(row) }}</strong><span>{{ row.product_code || '-' }}</span></div><div class="incoming-product-name">{{ row.product_name || '-' }}</div></td>
                     <td class="incoming-date-cell">{{ incomingTab==='pending' ? (row.requisition_date || '-') : (row.material_received_at ? formatDateTime(row.material_received_at) : '-') }}</td>
                     <td><a v-if="row.drawing_path" class="btn small" :href="row.drawing_path" target="_blank" rel="noopener">图纸</a><span v-else>-</span></td>
                     <td class="incoming-quantity-summary">{{ row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0 }} / {{ row.cumulative_received_quantity || 0 }} / {{ row.remaining_quantity ?? 0 }}</td>
                     <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.received_quantity_this_time ?? row.incoming_quantity ?? 0 }}</strong></td>
-                    <td class="incoming-action-cell"><template v-if="incomingTab==='pending'"><span :class="['status',incomingProjectedVariance(row)===0?'green':'orange']">{{ incomingProjectedVariance(row)===0 ? '数量相符' : (incomingProjectedVariance(row)<0 ? '少收' : '多收') }}</span><details class="incoming-action-menu"><summary>操作</summary><div v-if="row.purpose_status==='legacy_unset'"><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id"><option :value="null">选择余量库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select></div><div v-else class="muted">预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张｜预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张｜预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只<div v-if="row.finished_location_name">成品位置：{{ row.finished_location_name }}</div><div v-if="row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div></div><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button></details></template><template v-else><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></template></td>
+                    <td class="incoming-action-cell"><template v-if="incomingTab==='pending'"><span :class="['status',incomingProjectedVariance(row)===0?'green':'orange']">{{ incomingProjectedVariance(row)===0 ? '数量相符' : (incomingProjectedVariance(row)<0 ? '少收' : '多收') }}</span><details class="incoming-action-menu"><summary>操作</summary><div v-if="row.purpose_status==='legacy_unset'"><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id"><option :value="null">选择余量库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select></div><div v-else class="muted">预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张｜预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张｜预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只<div v-if="row.finished_location_name">成品位置：{{ row.finished_location_name }}</div><div v-if="row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div></div><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button></details></template><template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></div></template></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -3954,7 +3978,7 @@
                     <td class="production-history-time">{{ formatDateTime(row.completed_at) }}</td><td><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
                     <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}</div><div v-if="row.is_component_task && row.composite_parent" class="muted" style="white-space:normal">组合父件 {{ row.composite_parent.product_code || '-' }}｜{{ row.composite_parent.product_name || '-' }}</div></div></td><td><strong>{{ row.quantity || 0 }}{{ row.is_component_task ? '片' : '' }}</strong><br><span class="muted">{{ row.completed_by_name || '-' }}</span></td>
                     <td style="white-space:normal"><span v-if="row.status==='reversed'" class="status orange">已撤销</span><span v-else :class="['status',productionCompletionIsStock(row)?'green':'blue']">{{ productionDestinationLabel(row) }}</span><br><template v-if="row.warehouse_location_name || row.warehouse_location_code"><strong>{{ row.warehouse_location_name || '位置名称待完善' }}</strong></template><template v-else-if="row.status!=='reversed'"><span class="muted">已进入待送货</span></template><div>投入 {{ row.material_input_quantity }} / 合格 {{ row.actual_output_quantity }} / 损耗 {{ row.defective_quantity }}</div><div v-if="row.surplus_finished_quantity" class="status orange">客户余货 {{ row.surplus_finished_quantity }}</div><div v-if="row.status==='reversed'" class="muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</div></td>
-                    <td class="production-history-actions"><div class="toolbar-group"><template v-if="row.status!=='reversed' && row.can_transfer_to_stock && canWarehouseExecute"><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></div><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">转入成品库存</button></template><button v-if="user?.role==='admin' && row.can_supplement" class="btn small success" :disabled="productionBusy" @click="supplementProductionCompletion(row)">补录余量 {{ row.available_material_input_quantity }}</button><button v-if="row.status!=='reversed'" class="btn small" :disabled="productionBusy" @click="productionCompletionIsStock(row)?openProductionInventory(row):go('deliveries')">{{ productionCompletionIsStock(row)?'定位库存':'去送货' }}</button><button v-if="user?.role==='admin' && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销生产确认</button></div></td>
+                    <td class="production-history-actions"><details class="production-history-action-menu"><summary>操作</summary><div class="toolbar-group"><template v-if="row.status!=='reversed' && row.can_transfer_to_stock && canWarehouseExecute"><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></div><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">转入成品库存</button></template><button v-if="user?.role==='admin' && row.can_supplement" class="btn small success" :disabled="productionBusy" @click="supplementProductionCompletion(row)">补录余量 {{ row.available_material_input_quantity }}</button><button v-if="row.status!=='reversed'" class="btn small" :disabled="productionBusy" @click="productionCompletionIsStock(row)?openProductionInventory(row):go('deliveries')">{{ productionCompletionIsStock(row)?'定位库存':'去送货' }}</button><button v-if="user?.role==='admin' && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销生产确认</button></div></details></td>
                   </tr></tbody>
                   </table>
                 </data-panel>
@@ -17709,12 +17733,58 @@
           incomingCustomerLabel(row) {
             return String(row?.customer_short_name || row?.customer_name || "-").trim() || "-";
           },
+          incomingCleanDisplayToken(value) {
+            const text=String(value ?? "").trim();
+            return /^(none|null|undefined|nan|n\/a)$/i.test(text) ? "" : text;
+          },
+          incomingMaterialCode(value, layerCount) {
+            const text=this.incomingCleanDisplayToken(value).toUpperCase();
+            if (!text) return "";
+            const expectedLength={3:3,5:5,7:7}[Number(layerCount || 0)] || 0;
+            if (expectedLength) {
+              const exact=text.split(/\s*[\/|]\s*/).map(item=>item.replace(/\s+/g,"")).find(item=>item.length===expectedLength);
+              if (exact) return exact;
+            }
+            const tokens=text.match(/[A-Z0-9]+/g) || [];
+            const code=tokens.find(token=>/[A-Z]/.test(token) && !["A","B","C","E","AB","BE","AAA","ABC"].includes(token)) || "";
+            return expectedLength ? code.slice(0,expectedLength) : code;
+          },
+          incomingDisplayFlute(value, fallbackValue) {
+            const supported=["AAA","ABC","AB","BE","A","B","C","E"];
+            for (const candidate of [value,fallbackValue]) {
+              const normalized=this.incomingCleanDisplayToken(candidate).replace(/\s+/g,"").toUpperCase();
+              if (supported.includes(normalized)) return normalized;
+            }
+            return "";
+          },
+          incomingDimensionMm(value) {
+            const text=this.incomingCleanDisplayToken(value);
+            if (!text) return "-";
+            const numeric=Number(text);
+            return Number.isFinite(numeric) ? String(Math.round(numeric)) : "-";
+          },
           incomingActualMaterialDisplay(row) {
-            return String(row?.actual_material_display || row?.material_display || [row?.material_code || row?.material,row?.flute_type].filter(Boolean).join(" / ") || "-");
+            const materialCode=this.incomingMaterialCode(
+              row?.actual_material_code || row?.reported_material_code || row?.material_code || row?.material,
+              row?.layer_count,
+            );
+            const flute=this.incomingDisplayFlute(
+              row?.actual_material_flute_type,
+              row?.flute_type,
+            );
+            return [materialCode,flute].filter(Boolean).join(" / ") || "-";
+          },
+          incomingReportedMaterialDisplay(row) {
+            const materialCode=this.incomingMaterialCode(
+              row?.reported_material_code || row?.material_code || row?.material,
+              row?.layer_count,
+            );
+            const flute=this.incomingDisplayFlute(row?.flute_type);
+            return [materialCode,flute].filter(Boolean).join(" / ") || "-";
           },
           incomingMaterialTitle(row) {
             const actual=this.incomingActualMaterialDisplay(row);
-            return row?.material_changed ? `本批实收：${actual}｜原报料：${row.reported_material_display || "-"}` : actual;
+            return row?.material_changed ? `本批实收：${actual}｜原报料：${this.incomingReportedMaterialDisplay(row)}` : actual;
           },
           canPrintIncomingCard(row) {
             return Boolean(Number(row?.receipt_item_id || 0) && row?.receipt_status === "posted" && row?.order_item_id);

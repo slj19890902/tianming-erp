@@ -839,6 +839,21 @@ def _resolve_plan(
             "quote_price": raw["quote_price"],
             "price_source": "供应商材质 Excel 批量维护",
             "price_unit": raw["price_unit"],
+            "purchase_currency": (
+                existing.purchase_currency
+                if existing is not None and existing.purchase_currency
+                else "CNY"
+            ),
+            "purchase_tax_included": (
+                existing.purchase_tax_included
+                if existing is not None and existing.purchase_tax_included is not None
+                else True
+            ),
+            "purchase_tax_rate": (
+                existing.purchase_tax_rate
+                if existing is not None and existing.purchase_tax_rate is not None
+                else Decimal("0.13")
+            ),
             "supplier_name": raw["supplier_name"],
             "quote_date": raw["quote_date"],
             "remarks": raw["remarks"],

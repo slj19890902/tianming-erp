@@ -817,6 +817,9 @@ def apply_high_confidence_material_mapping(
                 basis_weight_description=matched_cand.weight_structure,
                 quote_price=matched_cand.new_price,
                 price_unit="元/㎡",
+                purchase_currency="CNY",
+                purchase_tax_included=True,
+                purchase_tax_rate=Decimal("0.13"),
                 remarks=(
                     f"由 cowork CSV 自动导入；"
                     f"旧代码: {matched_cand.old_code}；"

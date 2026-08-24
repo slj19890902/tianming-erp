@@ -11468,6 +11468,12 @@
             const detail=error?.response?.data?.detail;
             if (typeof detail === "string") return detail;
             if (Array.isArray(detail)) return detail.map(row => row?.msg || row?.message || "字段校验失败").join("；");
+            if (detail && typeof detail === "object") {
+              if (typeof detail.message === "string" && detail.message.trim()) return detail.message.trim();
+              if (typeof detail.detail === "string" && detail.detail.trim()) return detail.detail.trim();
+            }
+            const responseMessage=error?.response?.data?.message;
+            if (typeof responseMessage === "string" && responseMessage.trim()) return responseMessage.trim();
             return error?.message && !String(error.message).startsWith("{") ? error.message : "操作失败，请检查填写内容后重试";
           },
           normalizeValidationErrors(error, fieldMap = {}) {
@@ -18371,9 +18377,30 @@
               }
               preparation={saving:true,committed:false,preparing:true};
               this.incomingBatchReceiveAttempt=preparation;
-              for (const row of rows) {
-                try { await this.ensureAutomaticPurchaseReceiptFact(row); } catch(error) { if (this.incomingBatchReceiveAttempt === preparation) this.incomingBatchReceiveAttempt=null; this.showToast(`${row.product_code || row.product_name}：${this.errorMessage(error)}`,true); return; }
-                try { preparedItems.push(this.incomingPayload(row)); } catch(error) { if (this.incomingBatchReceiveAttempt === preparation) this.incomingBatchReceiveAttempt=null; this.showToast(`${row.product_code || row.product_name}：${error.message}`,true); return; }
+              const quantitySnapshot=new Map(rows.map(row => [String(row.item_id),Number(row.incoming_quantity)]));
+              let preparationError=null;
+              let preparationErrorRow=null;
+              try {
+                for (const row of rows) {
+                  preparationErrorRow=row;
+                  await this.ensureAutomaticPurchaseReceiptFact(row);
+                  const item=this.incomingPayload(row);
+                  item.received_quantity=quantitySnapshot.get(String(row.item_id));
+                  preparedItems.push(item);
+                }
+              } catch(error) {
+                preparationError=error;
+              } finally {
+                preparation.preparing=false;
+                if (preparationError) {
+                  preparation.saving=false;
+                  if (this.incomingBatchReceiveAttempt === preparation) this.incomingBatchReceiveAttempt=null;
+                }
+              }
+              if (preparationError) {
+                const label=preparationErrorRow?.product_code || preparationErrorRow?.product_name || "所选来料";
+                this.showToast(`${label}：${this.errorMessage(preparationError)}`,true);
+                return;
               }
               signature=JSON.stringify(preparedItems);
             }
@@ -18468,7 +18495,7 @@
             } catch(error) {
               preparation.saving=false;
               if (!previousAttempt && this.incomingReceiveAttempts[attemptKey] === preparation) this.incomingReceiveAttempts[attemptKey]=null;
-              this.showToast(error.message || this.errorMessage(error),true);
+              this.showToast(this.errorMessage(error),true);
               return;
             }
             const idempotencyKey=previousAttempt?.idempotencyKey || createIdempotencyKey();

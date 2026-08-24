@@ -41,6 +41,7 @@ from app.services.master_data_versioning import (
     preview_versioned_update,
     record_versioned_create,
 )
+from app.services.material_purchase_contract import purchase_price_contract_issues
 from app.services.supplier_master import (
     SupplierLookupError,
     clean_supplier_name,
@@ -94,10 +95,10 @@ class MaterialPayload(BaseModel):
     quote_price: Decimal | None = Field(default=None, ge=0)
     rule_base_price: Decimal | None = Field(default=None, ge=0)
     price_source: str | None = None
-    price_unit: str | None = None
-    purchase_currency: str | None = Field(default=None, min_length=3, max_length=3)
-    purchase_tax_included: bool | None = None
-    purchase_tax_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    price_unit: str | None = "元/㎡"
+    purchase_currency: str | None = Field(default="CNY", min_length=3, max_length=3)
+    purchase_tax_included: bool | None = True
+    purchase_tax_rate: Decimal | None = Field(default=Decimal("0.13"), ge=0, le=1)
     supplier_name: str | None = None
     quote_date: date | None = None
     remarks: str | None = None
@@ -108,6 +109,16 @@ class MaterialPayload(BaseModel):
         error = seven_layer_code_error(self.code, self.layer_count)
         if error:
             raise ValueError(error)
+        if self.quote_price is not None and self.quote_price > 0:
+            issues = purchase_price_contract_issues(
+                quote_price=self.quote_price,
+                price_unit=self.price_unit,
+                purchase_currency=self.purchase_currency,
+                purchase_tax_included=self.purchase_tax_included,
+                purchase_tax_rate=self.purchase_tax_rate,
+            )
+            if issues:
+                raise ValueError("采购价格合同不完整：" + "；".join(issues))
         return self
 
     @field_validator("purchase_currency")
@@ -1278,6 +1289,9 @@ def save_material_composition(
                 else "人工填写"
             ),
             price_unit="元/㎡",
+            purchase_currency="CNY",
+            purchase_tax_included=True,
+            purchase_tax_rate=Decimal("0.13"),
             supplier_name=supplier_name,
             remarks=(payload.remarks or "").strip() or None,
             is_active=True,

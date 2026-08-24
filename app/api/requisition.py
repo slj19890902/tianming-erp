@@ -322,41 +322,30 @@ def _material_master_price_contract(
     material: Material,
 ) -> tuple[Decimal, str, str, bool, Decimal]:
     """Map the material-master display unit to the immutable fact contract."""
+    from app.services.material_purchase_contract import (
+        normalize_purchase_price_unit,
+        purchase_price_contract_issues,
+    )
 
-    unit = str(material.price_unit or "").strip().lower().replace(" ", "")
-    if unit in {"per_sheet", "sheet", "元/张", "元/片"}:
-        normalized_unit = "per_sheet"
-    elif unit in {
-        "per_square_meter",
-        "sqm",
-        "m2",
-        "元/㎡",
-        "元/平方米",
-        "元/m²",
-    }:
-        normalized_unit = "per_square_meter"
-    else:
+    issues = purchase_price_contract_issues(
+        quote_price=material.quote_price,
+        price_unit=material.price_unit,
+        purchase_currency=material.purchase_currency,
+        purchase_tax_included=material.purchase_tax_included,
+        purchase_tax_rate=material.purchase_tax_rate,
+    )
+    if issues:
+        material_code = str(material.code or material.id).strip()
         raise PurchaseReceiptFactValidationError(
-            "Material master must have a supported purchase price unit before receipt."
+            f"材质 {material_code} 的采购价格合同不完整："
+            + "；".join(issues)
+            + "。请在材质主档补齐后重新实收。"
         )
-    if material.quote_price is None or Decimal(material.quote_price) <= 0:
-        raise PurchaseReceiptFactValidationError(
-            "Material master purchase price is required before normal receipt."
-        )
-    currency = str(material.purchase_currency or "").strip().upper()
-    if len(currency) != 3 or not currency.isalpha():
-        raise PurchaseReceiptFactValidationError(
-            "Material master purchase currency is required before normal receipt."
-        )
-    if material.purchase_tax_included is None or material.purchase_tax_rate is None:
-        raise PurchaseReceiptFactValidationError(
-            "Material master tax mode and tax rate are required before normal receipt."
-        )
+    normalized_unit = normalize_purchase_price_unit(material.price_unit)
+    if normalized_unit is None:  # pragma: no cover - issues already guards this
+        raise PurchaseReceiptFactValidationError("采购计价单位无效")
+    currency = str(material.purchase_currency).strip().upper()
     tax_rate = Decimal(material.purchase_tax_rate)
-    if tax_rate < 0 or tax_rate > 1:
-        raise PurchaseReceiptFactValidationError(
-            "Material master tax rate is invalid."
-        )
     return (
         Decimal(material.quote_price),
         currency,

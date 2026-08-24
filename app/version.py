@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.163"
-APP_VERSION_NAME = "真实FIN自动入库与既有地堆发布"
-APP_BUILD_DATE = "2026-08-22"
+APP_VERSION = "v0.22.164"
+APP_VERSION_NAME = "来料单条实收契约与状态释放"
+APP_BUILD_DATE = "2026-08-24"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -527,18 +527,32 @@ _V022162_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认版本为v0.22.162、数据库 revision 为唯一 head de39v8x9z28；旧订单、报料、收料、生产、库存、送货和财务事实没有被自动回填或改写。",
 ]
 
-APP_CHANGES = [
+_V022163_CHANGES = [
     "订单用途来料自动成品改为从已发布的 FIN-001～003 地堆计划中顺序选择真实空位置；新收料不再写入旧 F1-DISPATCH-01。",
     "FIN 地堆正常发布会原位认领既有 TWIN 实测位置，不改 FIN 区域身份、不重复创建重叠库位，也不搬动现有栈板或库存。",
     "真实 FIN 自动成品在同一事务建立库存批次、系统栈板和地堆占用；送货清空、取消送货和撤销收料同步释放或恢复空间占用。",
     "旧 F1-DISPATCH-01 的既有库存、系统栈板、送货和转库存兼容路径继续保留；本版无数据库迁移，不修复或改写历史业务事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022163_VERIFICATION_STEPS = [
     "进入仓库实测地图的区域规划，打开 FIN-001 地堆排位，确认发布后仍是原 10 个真实位置，库位、栈板和库存数量没有增加、删除或搬动。",
     "打开待来料，确认订单用途自动成品位置预览显示 FIN-001 的真实空位置；完成一笔测试收料后，库存批次、系统栈板和地图占用指向同一位置。",
     "抽查旧 F1-DISPATCH-01 的既有库存仍可查询、送货和转库存；新收料不得再新增到该旧位置。",
     "进入系统备份→系统版本，确认版本为v0.22.163、数据库 revision 仍为唯一 head de39v8x9z28；本版没有执行迁移或历史数据修复。",
+]
+
+APP_CHANGES = [
+    "修复待来料单条实收误把路径中的 item_id 再次放进请求体，导致后端返回 Extra inputs are not permitted 的问题。",
+    "明确的 4xx 校验失败会立即解除“正在实收”并显示原始原因，可修正后重新提交；只有网络中断或 5xx 不确定结果才保留原数量和幂等凭证。",
+    "单条与批量实收在准备正式采购价快照前先取得页面级单飞锁，快速重复点击不会重复冻结采购事实或发出并发请求。",
+    "YSP3944 的既有报料、采购价和待收状态保持不变；本版无数据库迁移，也不自动创建或修改任何收料、库存、生产事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "强制刷新待来料页面，找到 YSP3944，确认不再残留“正在实收”；按实际数量点击单条实收，页面不得再出现 Extra inputs are not permitted。",
+    "若输入或业务规则不合格导致 4xx，确认按钮会立即恢复可用并显示具体错误；修正后可再次提交，不需要刷新页面或等待超时。",
+    "快速连续点击单条或批量实收，确认同一明细只发送一次正式请求，采购价快照和收料事实均不重复。",
+    "进入系统备份→系统版本，确认版本为v0.22.164、数据库 revision 仍为唯一 head de39v8x9z28；发布过程没有替操作员执行 YSP3944 实收。",
 ]
 
 
@@ -632,6 +646,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.163：本次更新｜{item}" for item in _V022163_CHANGES),
+    *(f"v0.22.163：如何验证｜{item}" for item in _V022163_VERIFICATION_STEPS),
     *(f"v0.22.162：本次更新｜{item}" for item in _V022162_CHANGES),
     *(f"v0.22.162：如何验证｜{item}" for item in _V022162_VERIFICATION_STEPS),
     *(f"v0.22.160：本次更新｜{item}" for item in _V022160_CHANGES),

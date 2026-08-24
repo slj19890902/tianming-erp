@@ -141,14 +141,21 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
         body = wide.json()
         assert body["product_count"] == 2
         assert body["label_projection_mode"] == "shared_mold"
-        assert body["label_inventory_code"] == "按任务显示"
-        assert body["label_shared_summary"] == "共用 2 款｜扫码按订单存货"
-        assert body["label_product_specification"] == "多款见扫码"
-        assert body["label_report_specification"] == "多款见扫码"
-        assert body["label_flute_type"] == "多款见扫码"
-        assert body["label_cutting_mode"] == "多款见扫码"
-        assert "SME-LONG-CODE-2" not in body["label_shared_summary"]
-        assert "SME-SECOND" not in body["label_shared_summary"]
+        assert body["label_inventory_code"] == "SME-LONG-CODE-2 / SME-SECOND"
+        assert body["label_shared_summary"] == "共用 2 款"
+        assert body["label_product_specification"] == (
+            "520 × 350 × 300 / 400 × 300"
+        )
+        assert body["label_report_specification"] == "1100 × 760 / 900 × 650"
+        assert body["label_flute_type"] == "BC/B"
+        assert body["label_cutting_mode"] == "一开二/一开一"
+        assert body["label_products"] == [
+            {
+                "product_code": "SME-LONG-CODE-2",
+                "product_name": "五层加强纸箱横向标签样例2",
+            },
+            {"product_code": "SME-SECOND", "product_name": "第二款"},
+        ]
 
         batch = client.get(
             "/api/warehouse/molds/labels",
@@ -159,9 +166,7 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
         )
         assert batch.status_code == 200, batch.text
         assert batch.json()["items"][0]["label_projection_mode"] == "shared_mold"
-        assert batch.json()["items"][0]["label_shared_summary"] == (
-            "共用 2 款｜扫码按订单存货"
-        )
+        assert batch.json()["items"][0]["label_shared_summary"] == "共用 2 款"
 
         created = client.post(
             "/api/warehouse/molds/label-prints",
@@ -254,15 +259,16 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         "transform:translateX(40mm) rotate(90deg)!important",
         'WIDE_PRINTER_QUEUE="Gprinter GP-3120TU - 40x80纵向标签"',
         "真实 40×80 纵向纸型",
-        '.template-80x40 .wide-inventory{font:900 6.3mm/.95',
-        ".template-80x40 .wide-customer{font-size:4mm",
-        "label_inventory_code",
-        "label_product_name",
+        ".template-80x40 .wide-board-row{grid-column:1;grid-row:1",
+        ".template-80x40 .wide-customer{grid-column:2;grid-row:1",
         "label_projection_mode",
-        "label_shared_summary",
-        "wide-inventory",
-        "wide-flute",
-        "wide-cutting",
+        "label_products",
+        "label_product_specification",
+        "label_report_specification",
+        "wide-product-facts",
+        "wide-mold",
+        "wide-products-list",
+        "wide-code-grid",
         "label_cutting_mode",
         "waitForQrImages",
         "window.print()",
@@ -271,7 +277,8 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
     assert "40mm 80mm" in LABEL
     assert "rotate(90deg)" in LABEL
     assert "--print-x-compensation:2mm" in LABEL
-    assert 'product=shared?null:products[0]||null' in LABEL
+    assert 'product=shared?null:products[0]||null' not in LABEL
+    assert "多款见扫码" not in LABEL.split("function labelHtml80", 1)[1]
     assert "body,html{width:40mm;height:auto" in LABEL
 
 
@@ -284,9 +291,11 @@ def test_40x80_feed_uses_one_portrait_page_with_one_inner_rotation(
     qr = _qr_data_url()
     labels = "".join(
         f'''<article class="label template-80x40">
-        <div class="wide-board">1100 × 760</div>
-        <div class="wide-product-row"><div class="wide-product">520 × 350 × 300</div><div class="wide-flute">BC</div><div class="wide-cutting">一开二</div></div>
-        <div class="wide-identity"><div class="wide-inventory">SME-LONG-CODE-{index:03d}</div><div class="wide-meta"><span class="wide-customer">思迈尔</span><span class="wide-name">五层加强纸箱横向标签样例</span></div></div>
+        <div class="wide-board-row"><span class="wide-label-key">片料</span><strong class="wide-board-value">1100 × 760</strong></div>
+        <div class="wide-customer">思迈尔</div>
+        <div class="wide-product-facts"><div class="wide-inline-fact"><span class="wide-label-key">纸箱</span><strong class="wide-inline-value">520 × 350 × 300</strong></div><div class="wide-inline-fact compact"><span class="wide-label-key">楞</span><strong class="wide-inline-value">BC</strong></div><div class="wide-inline-fact compact"><span class="wide-label-key">开</span><strong class="wide-inline-value">一开二</strong></div></div>
+        <div class="wide-mold"><span class="wide-label-key">模具</span><strong class="wide-mold-value">P162-{index:03d}</strong></div>
+        <div class="wide-products"><div class="wide-products-title">对应纸箱</div><div class="wide-products-list count-1"><div class="wide-product-line"><strong class="wide-product-code">SME-LONG-CODE-{index:03d}</strong><span class="wide-product-name">五层加强纸箱横向标签样例</span></div></div></div>
         <img class="qr" src="{qr}" alt="二维码"></article>'''
         for index in range(1, label_count + 1)
     )
@@ -308,7 +317,7 @@ def test_40x80_feed_uses_one_portrait_page_with_one_inner_rotation(
         assert width_mm == pytest.approx(40.0, abs=0.25)
         assert height_mm == pytest.approx(80.0, abs=0.25)
         assert height_mm > width_mm
-        text = page.extract_text() or ""
+        text = " ".join((page.extract_text() or "").split())
         for expected in (
             "1100 × 760",
             "520 × 350 × 300",
@@ -335,9 +344,11 @@ def test_40x80_portrait_pixels_keep_rotated_content_inside_physical_page(
         + '<style>@page{size:40mm 80mm;margin:0}</style></head>'
         + f'''<body class="template-80x40"><section id="previewContent"><main id="labels" class="labels">
         <article class="label template-80x40">
-          <div class="wide-board">705 × 700</div>
-          <div class="wide-product-row"><div class="wide-product">180 × 160 × 110</div><div class="wide-flute">B</div><div class="wide-cutting">一开二</div></div>
-          <div class="wide-identity"><div class="wide-inventory">3.D30257</div><div class="wide-meta"><span class="wide-customer">高泰</span><span class="wide-name">纸箱16×18×11内箱</span></div></div>
+          <div class="wide-board-row"><span class="wide-label-key">片料</span><strong class="wide-board-value">705 × 700</strong></div>
+          <div class="wide-customer">高泰</div>
+          <div class="wide-product-facts"><div class="wide-inline-fact"><span class="wide-label-key">纸箱</span><strong class="wide-inline-value">180 × 160 × 110</strong></div><div class="wide-inline-fact compact"><span class="wide-label-key">楞</span><strong class="wide-inline-value">B</strong></div><div class="wide-inline-fact compact"><span class="wide-label-key">开</span><strong class="wide-inline-value">一开二</strong></div></div>
+          <div class="wide-mold"><span class="wide-label-key">模具</span><strong class="wide-mold-value">3.D30257</strong></div>
+          <div class="wide-products"><div class="wide-products-title">对应纸箱</div><div class="wide-products-list count-1"><div class="wide-product-line"><strong class="wide-product-code">3.D30257</strong><span class="wide-product-name">纸箱16×18×11内箱</span></div></div></div>
           <img class="qr" src="{qr}" alt="二维码">
         </article></main></section></body></html>''',
         encoding="utf-8",

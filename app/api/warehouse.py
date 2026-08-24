@@ -14254,7 +14254,43 @@ def _label_identity(row: MoldTool, products: list[Product]) -> str:
     return f"{customer_name}{_label_mold_number(row, products)}"
 
 
-def _label_dimension(products: list[Product], field: str) -> str:
+def _ordered_label_values(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
+
+
+def _label_customer_rows(row: MoldTool, products: list[Product]) -> list[str]:
+    values: list[str] = []
+    for product in products:
+        customer = product.customer
+        if customer is None:
+            values.append("")
+            continue
+        short_name = str(customer.chinese_short_name or "").strip()
+        if not short_name:
+            short_name = (
+                mold_customer_short_name(
+                    row.mold_name,
+                    customer.name,
+                    customer.customer_code,
+                )
+                or ""
+            )
+        values.append(short_name)
+    return values
+
+
+def _label_customer_values(row: MoldTool, products: list[Product]) -> list[str]:
+    """Return every bound customer's verified Chinese short name in product order."""
+
+    return _ordered_label_values(_label_customer_rows(row, products))
+
+
+def _label_dimension_rows(products: list[Product], field: str) -> list[str]:
     if field == "specification":
         dimensions = []
         for product in products:
@@ -14267,18 +14303,27 @@ def _label_dimension(products: list[Product], field: str) -> str:
             (product.report_length_mm, product.report_width_mm)
             for product in products
         ]
+
     def format_value(value) -> str:
         number = Decimal(str(value))
         if number == number.to_integral_value():
             return str(int(number))
         return format(number.normalize(), "f")
 
-    values = [
+    return [
         " × ".join(format_value(value) for value in row)
         if row and all(value is not None and value > 0 for value in row)
         else ""
         for row in dimensions
     ]
+
+
+def _label_dimension_values(products: list[Product], field: str) -> list[str]:
+    return _ordered_label_values(_label_dimension_rows(products, field))
+
+
+def _label_dimension(products: list[Product], field: str) -> str:
+    values = _label_dimension_rows(products, field)
     unique_values = set(values)
     if len(unique_values) == 1 and values and values[0]:
         return values[0]
@@ -14287,8 +14332,8 @@ def _label_dimension(products: list[Product], field: str) -> str:
     return ""
 
 
-def _label_flute_type(products: list[Product]) -> str:
-    values = [
+def _label_flute_rows(products: list[Product]) -> list[str]:
+    return [
         str(
             product.flute_type
             or (product.material.flute_type if product.material is not None else "")
@@ -14298,6 +14343,14 @@ def _label_flute_type(products: list[Product]) -> str:
         .upper()
         for product in products
     ]
+
+
+def _label_flute_values(products: list[Product]) -> list[str]:
+    return _ordered_label_values(_label_flute_rows(products))
+
+
+def _label_flute_type(products: list[Product]) -> str:
+    values = _label_flute_rows(products)
     if not values or not any(values):
         return ""
     if any(not value for value in values) or len(set(values)) != 1:
@@ -14305,11 +14358,19 @@ def _label_flute_type(products: list[Product]) -> str:
     return values[0]
 
 
-def _label_cutting_mode(products: list[Product]) -> str:
-    values = [
+def _label_cutting_rows(products: list[Product]) -> list[str]:
+    return [
         normalize_cutting_mode(product.default_cutting_mode)
         for product in products
     ]
+
+
+def _label_cutting_values(products: list[Product]) -> list[str]:
+    return _ordered_label_values(_label_cutting_rows(products))
+
+
+def _label_cutting_mode(products: list[Product]) -> str:
+    values = _label_cutting_rows(products)
     if not values:
         return ""
     if len(set(values)) != 1:
@@ -14344,14 +14405,35 @@ def _mold_label_printability_error(
             "请核对客户简称、标签名称和中文简写"
         )
     if template_version == MOLD_LABEL_TEMPLATE_80X40:
+        customer_rows = _label_customer_rows(row, products)
+        customer_values = _ordered_label_values(customer_rows)
+        customer = "/".join(customer_values)
         if len(products) > 1:
-            customer = _label_customer(row, products)[0]
             mold_number = _label_mold_number(row, products)
+            product_size_rows = _label_dimension_rows(products, "specification")
+            board_size_rows = _label_dimension_rows(
+                products,
+                "report_specification",
+            )
+            flute_rows = _label_flute_rows(products)
+            cutting_rows = _label_cutting_rows(products)
             missing = [
                 label
                 for label, value in (
-                    ("客户中文简称", customer if customer != "待完善" else ""),
+                    ("客户中文简称", all(customer_rows)),
                     ("模具标签名称", mold_number if mold_number != "待完善" else ""),
+                    (
+                        "存货编码",
+                        all(str(product.product_code or "").strip() for product in products),
+                    ),
+                    (
+                        "产品名称",
+                        all(str(product.product_name or "").strip() for product in products),
+                    ),
+                    ("产品尺寸", all(product_size_rows)),
+                    ("片料尺寸", all(board_size_rows)),
+                    ("楞型", all(flute_rows)),
+                    ("开料方式", all(cutting_rows)),
                 )
                 if not value
             ]
@@ -14360,14 +14442,40 @@ def _mold_label_printability_error(
                     f"模具 {display_name} 的{'、'.join(missing)}待完善，"
                     "不能打印 40×80 共用模具标签"
                 )
-            if len(customer) > 12 or len(mold_number) > 34:
+            product_sizes = " / ".join(
+                _ordered_label_values(product_size_rows)
+            )
+            board_sizes = " / ".join(
+                _ordered_label_values(board_size_rows)
+            )
+            flute_types = "/".join(_ordered_label_values(flute_rows))
+            cutting_modes = "/".join(_ordered_label_values(cutting_rows))
+            if (
+                len(products) > 12
+                or len(customer) > 14
+                or len(mold_number) > 34
+                or any(len(str(product.product_code or "")) > 18 for product in products)
+                or (
+                    len(products) <= 5
+                    and any(
+                        len(str(product.product_name or "")) > 30
+                        or len(str(product.product_code or ""))
+                        + len(str(product.product_name or ""))
+                        > 44
+                        for product in products
+                    )
+                )
+                or len(product_sizes) > 52
+                or len(board_sizes) > 34
+                or len(flute_types) > 8
+                or len(cutting_modes) > 8
+            ):
                 return (
-                    f"模具 {display_name} 的客户简称或模具标签名称超出已验证版式，"
+                    f"模具 {display_name} 的40×80标签内容超出已验证版式，"
                     "请先人工核对，系统不会静默裁切"
                 )
             return None
         product = products[0]
-        customer = _label_customer(row, products)[0]
         inventory_code = str(product.product_code or "").strip()
         product_name = str(product.product_name or "").strip()
         product_size = _label_dimension(products, "specification")
@@ -14377,7 +14485,7 @@ def _mold_label_printability_error(
         missing = [
             label
             for label, value in (
-                ("客户中文简称", customer if customer != "待完善" else ""),
+                ("客户中文简称", all(customer_rows)),
                 ("存货编码", inventory_code),
                 ("产品名称", product_name),
                 ("产品尺寸", product_size),
@@ -14389,9 +14497,18 @@ def _mold_label_printability_error(
         ]
         if missing:
             return f"模具 {display_name} 的{'、'.join(missing)}待完善，不能打印 40×80 标签"
-        if len(customer) > 12 or len(inventory_code) > 34 or len(product_name) > 40:
+        if (
+            len(customer) > 14
+            or len(inventory_code) > 18
+            or len(product_name) > 30
+            or len(inventory_code) + len(product_name) > 44
+            or len(product_size) > 24
+            or len(board_size) > 22
+            or len(flute_type) > 8
+            or len(cutting_mode) > 8
+        ):
             return (
-                f"模具 {display_name} 的客户简称、存货编码或产品名称超出已验证版式，"
+                f"模具 {display_name} 的40×80标签内容超出已验证版式，"
                 "请先人工核对，系统不会静默裁切"
             )
     return None
@@ -14455,6 +14572,24 @@ def _mold_label_dict(
     }
     if template_version == MOLD_LABEL_TEMPLATE_80X40:
         shared_mold = len(products) > 1
+        customer_names = _label_customer_values(row, products)
+        product_specifications = _label_dimension_values(
+            products,
+            "specification",
+        )
+        report_specifications = _label_dimension_values(
+            products,
+            "report_specification",
+        )
+        flute_types = _label_flute_values(products)
+        cutting_modes = _label_cutting_values(products)
+        label_products = [
+            {
+                "product_code": str(product.product_code or "").strip(),
+                "product_name": str(product.product_name or "").strip(),
+            }
+            for product in products
+        ]
         result.update(
             {
                 "template_version": template_version,
@@ -14462,32 +14597,34 @@ def _mold_label_dict(
                 "label_projection_mode": (
                     "shared_mold" if shared_mold else "single_product"
                 ),
-                "label_cutting_mode": _label_cutting_mode(products),
-                "label_inventory_code": (
-                    "按任务显示"
-                    if shared_mold
-                    else str(products[0].product_code or "").strip()
+                "label_customer_names": customer_names,
+                "label_customer_name": "/".join(customer_names),
+                "label_product_specifications": product_specifications,
+                "label_report_specifications": report_specifications,
+                "label_flute_types": flute_types,
+                "label_cutting_modes": cutting_modes,
+                "label_products": label_products,
+                "label_product_specification": " / ".join(
+                    product_specifications
                 ),
-                "label_product_name": (
-                    f"共用 {len(products)} 款｜扫码按订单存货"
-                    if shared_mold
-                    else str(products[0].product_name or "").strip()
+                "label_report_specification": " / ".join(
+                    report_specifications
+                ),
+                "label_flute_type": "/".join(flute_types),
+                "label_cutting_mode": "/".join(cutting_modes),
+                "label_inventory_code": " / ".join(
+                    product["product_code"] for product in label_products
+                ),
+                "label_product_name": " / ".join(
+                    product["product_name"] for product in label_products
                 ),
                 "label_shared_summary": (
-                    f"共用 {len(products)} 款｜扫码按订单存货"
+                    f"共用 {len(products)} 款"
                     if shared_mold
                     else None
                 ),
             }
         )
-        if shared_mold:
-            for field in (
-                "label_product_specification",
-                "label_report_specification",
-                "label_flute_type",
-                "label_cutting_mode",
-            ):
-                result[field] = result.get(field) or "多款见扫码"
     return result
 
 

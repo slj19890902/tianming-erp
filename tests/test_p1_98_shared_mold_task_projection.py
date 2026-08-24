@@ -74,11 +74,16 @@ def test_reported_gaotai_shape_prints_frozen_shared_mold_identity(mold_app) -> N
     body = response.json()
     assert body["label_projection_mode"] == "shared_mold"
     assert body["label_customer_name"] == "高泰"
+    assert body["label_customer_names"] == ["高泰"]
     assert body["label_mold_number"] == "3D30268 19*19*16加强"
-    assert body["label_inventory_code"] == "按任务显示"
-    assert body["label_shared_summary"] == "共用 2 款｜扫码按订单存货"
+    assert body["label_inventory_code"] == "3D30151 / 3D30268"
+    assert body["label_shared_summary"] == "共用 2 款"
+    assert body["label_products"] == [
+        {"product_code": "3D30151", "product_name": "纸箱190*190*160"},
+        {"product_code": "3D30268", "product_name": "纸箱190*190*160"},
+    ]
     assert body["label_product_specification"] == "190 × 190 × 160"
-    assert body["label_report_specification"] == "多款见扫码"
+    assert body["label_report_specification"] == "800 × 375 / 795 × 375"
     assert body["label_flute_type"] == "AB"
     assert body["label_cutting_mode"] == "一开一"
 

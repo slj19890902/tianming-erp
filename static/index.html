@@ -3873,7 +3873,7 @@
                   <button :class="['btn',{primary:incomingTab==='history'}]" @click="selectIncomingTab('history')">历史入库 {{ incomingHistoryTotal }}</button>
                 </div>
                 <div class="toolbar-group incoming-compact-head-actions">
-                  <button v-if="incomingTab==='history'" class="btn" type="button" @click="incomingHistoryFilterVisible=!incomingHistoryFilterVisible">筛选</button>
+                  <button v-if="incomingTab==='history'" class="btn" type="button" @click="toggleIncomingHistoryFilters">筛选</button>
                   <button v-if="incomingTab!=='pending'" class="btn primary" type="button" :disabled="incomingProductionCardBatchBusy || !incomingProductionCardSelectedCount" @click="openSelectedIncomingProductionCards"><template v-if="incomingProductionCardBatchBusy">正在核对…</template><template v-else>打印生产卡（{{ incomingProductionCardSelectedCount }}）</template></button>
                   <button v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="btn success" :disabled="incomingBatchReceiveAttempt?.saving || (!incomingBatchReceiveAttempt && !incomingSelectedCount())" @click="batchReceiveIncoming">{{ incomingBatchReceiveAttempt?.saving ? '正在核对批量实收…' : incomingBatchReceiveAttempt ? '核对上次批量实收' : '批量确认入库（' + incomingSelectedCount() + '）' }}</button>
                   <button class="btn" type="button" @click="openExternalPackagingIncoming">包材收料</button>
@@ -3910,7 +3910,7 @@
               <data-panel :empty="!incomingRowsForTab().length && !(incomingTab==='pending' && (incomingPendingLoading || incomingPendingError)) && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
                 <table class="incoming-table incoming-compact-table">
                   <thead><tr><th class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="allIncomingProductionCardsSelected" @change="toggleIncomingProductionCardPage($event.target.checked)" /> 序号</th><th>报料长(mm)</th><th class="incoming-times-cell">×</th><th>报料宽(mm)</th><th>压线尺寸</th><th>材质楞型</th><th>客户简称 / 存货编码 / 产品名称</th><th>{{ incomingTab==='pending' ? '报料日期' : '实收时间' }}</th><th>图纸</th><th>计划 / 已收 / 待收</th><th>{{ incomingTab==='pending' ? '本次实收' : '实收数量' }}</th><th>收料结果 / 操作</th></tr></thead>
-                  <tbody><tr v-for="(row,index) in incomingRowsForTab()" :key="row.history_key || row.receipt_item_id || row.item_id">
+                  <tbody ref="incomingCompactTableBody"><tr v-for="(row,index) in incomingRowsForTab()" :key="row.history_key || row.receipt_item_id || row.item_id">
                     <td class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="incomingProductionCardSelected(row)" :disabled="!canPrintIncomingCard(row)" @change="toggleIncomingProductionCard(row,$event.target.checked)" /> {{ (incomingCurrentPage()-1)*incomingListPageSize()+index+1 }}</td>
                     <td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row.cardboard_len) }}</strong></td><td class="incoming-times-cell">×</td><td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row.cardboard_width) }}</strong></td>
                     <td class="incoming-crease-cell" :title="formatCrease(row)">{{ formatCrease(row) }}</td>
@@ -3920,7 +3920,7 @@
                     <td><a v-if="row.drawing_path" class="btn small" :href="row.drawing_path" target="_blank" rel="noopener">图纸</a><span v-else>-</span></td>
                     <td class="incoming-quantity-summary">{{ row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0 }} / {{ row.cumulative_received_quantity || 0 }} / {{ row.remaining_quantity ?? 0 }}</td>
                     <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.received_quantity_this_time ?? row.incoming_quantity ?? 0 }}</strong></td>
-                    <td class="incoming-action-cell"><template v-if="incomingTab==='pending'"><span :class="['status',incomingProjectedVariance(row)===0?'green':'orange']">{{ incomingProjectedVariance(row)===0 ? '数量相符' : (incomingProjectedVariance(row)<0 ? '少收' : '多收') }}</span><details class="incoming-action-menu"><summary>操作</summary><div v-if="row.purpose_status==='legacy_unset'"><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id"><option :value="null">选择余量库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select></div><div v-else class="muted">预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张｜预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张｜预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只<div v-if="row.finished_location_name">成品位置：{{ row.finished_location_name }}</div><div v-if="row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div></div><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button></details></template><template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></div></template></td>
+                    <td class="incoming-action-cell"><template v-if="incomingTab==='pending'"><span :class="['status',incomingProjectedVariance(row)===0?'green':'orange']">{{ incomingProjectedVariance(row)===0 ? '数量相符' : (incomingProjectedVariance(row)<0 ? '少收' : '多收') }}</span><details class="incoming-action-menu"><summary>操作</summary><div v-if="row.purpose_status==='legacy_unset'"><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id"><option :value="null">选择余量库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select></div><div v-else class="muted">预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张｜预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张｜预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只<div v-if="row.finished_location_name">成品位置：{{ row.finished_location_name }}</div><div v-if="row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div></div><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button></details></template><template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && incomingGroupRevertButtonVisible(row)" class="btn small danger" :disabled="incomingGroupRevertAttempts[row.reversal_group_key]?.saving" @click="revertIncomingGroup(row)">{{ incomingGroupRevertAttempts[row.reversal_group_key]?.saving ? '整组撤销中…' : `整组撤销（${row.reversal_group_size}款）` }}</button><button v-else-if="canAdmin" class="btn small danger" v-show="row.receipt_status==='posted' && !row.reversal_group_key" @click="revertIncoming(row)">撤销</button></div></template></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -8604,7 +8604,7 @@
             reportedItemVoidAttempts: {},
             productionPrintCandidatePanels: {}, productionPrintSelections: {}, productionPrintSelectionSequence: 0, productionPrintBatchBusy: false,
             productionPrintBatchAttempt: null, productionPrintRecoveryUrl: "", productionPrintBatchError: "", productionPrintInvalidItems: [],
-            incomingWorkspace: "board", incomingTab: "pending", incomingPending: [], incomingPendingTotal: 0, incomingPendingLoading: false, incomingPendingError: "", incomingPendingAppliedPage: 1, incomingPendingRetryPage: 1, incomingReceived: [], incomingReceivedTotal: 0, incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingProductionCardOpening: false, incomingProductionCardBatchBusy: false, incomingProductionCardSelections: {}, incomingProductionCardAttemptId: "", incomingProductionCardRecoveryUrl: "", incomingProductionCardRecoveryMessage: "", incomingHistoryFilterVisible: false,
+            incomingWorkspace: "board", incomingTab: "pending", incomingPending: [], incomingPendingTotal: 0, incomingPendingLoading: false, incomingPendingError: "", incomingPendingAppliedPage: 1, incomingPendingRetryPage: 1, incomingReceived: [], incomingReceivedTotal: 0, incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingProductionCardOpening: false, incomingProductionCardBatchBusy: false, incomingProductionCardSelections: {}, incomingProductionCardAttemptId: "", incomingProductionCardRecoveryUrl: "", incomingProductionCardRecoveryMessage: "", incomingHistoryFilterVisible: false, incomingViewportPageSizes: {received:12,history:12}, incomingViewportResizeTimer: null, incomingViewportResizeHandler: null, incomingGroupRevertAttempts: {},
             externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingFilter: "", externalIncomingLoaded: false, externalIncomingDrafts: {}, externalIncomingSavingId: null, externalIncomingSavingAttemptId: "",
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
             productionTab: "pending", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
@@ -9892,6 +9892,14 @@
             this.closeModal();
           });
           window.addEventListener("popstate", this.handlePdfWarehousePopState);
+          this.incomingViewportResizeHandler = () => this.scheduleIncomingViewportPageSizeRefresh();
+          window.addEventListener("resize", this.incomingViewportResizeHandler, {passive:true});
+        },
+        beforeUnmount() {
+          if (this.incomingViewportResizeHandler) {
+            window.removeEventListener("resize", this.incomingViewportResizeHandler);
+          }
+          clearTimeout(this.incomingViewportResizeTimer);
         },
         methods: {
           customerPhoneAnalysis(value) {
@@ -10022,6 +10030,13 @@
               return this.runExplicitPageListLoad("orders");
             }
             if (this.activePage === "incoming" && this.incomingWorkspace === "board") {
+              this.incomingViewportPageSizes = {
+                received:nextMode === "large" ? 8 : 12,
+                history:nextMode === "large" ? 8 : 12,
+              };
+              if (["received", "history"].includes(this.incomingTab)) {
+                await this.refreshIncomingViewportPageSize({reload:false});
+              }
               if (this.incomingTab === "received") {
                 this.pages.incomingReceived = 1;
                 return this.loadIncomingReceived({force:true});
@@ -13068,6 +13083,11 @@
             this.incomingProductionCardRecoveryUrl = "";
             this.incomingProductionCardRecoveryMessage = "";
             this.incomingHistoryFilterVisible = false;
+            this.incomingViewportPageSizes = {
+              received:this.isLargeUi ? 8 : 12,
+              history:this.isLargeUi ? 8 : 12,
+            };
+            this.incomingGroupRevertAttempts = {};
             this.pages.incomingReceived = 1;
             this.incomingHistory = [];
             this.incomingHistoryTotal = 0;
@@ -17718,7 +17738,9 @@
             };
           },
           incomingListPageSize() {
-            return this.isLargeUi ? 8 : 12;
+            if (!["received", "history"].includes(this.incomingTab)) return this.isLargeUi ? 8 : 12;
+            const fallback=this.isLargeUi ? 8 : 12;
+            return Math.max(4, Math.min(50, Number(this.incomingViewportPageSizes?.[this.incomingTab] || fallback)));
           },
           incomingRowsForTab() {
             if (this.incomingTab === "received") return this.incomingReceived || [];
@@ -17729,6 +17751,55 @@
             if (this.incomingTab === "received") return Number(this.pages.incomingReceived || 1);
             if (this.incomingTab === "history") return Number(this.pages.incomingHistory || 1);
             return Number(this.pages.incomingPending || 1);
+          },
+          scheduleIncomingViewportPageSizeRefresh() {
+            clearTimeout(this.incomingViewportResizeTimer);
+            this.incomingViewportResizeTimer=setTimeout(() => {
+              this.refreshIncomingViewportPageSize({reload:true});
+            }, 120);
+          },
+          async refreshIncomingViewportPageSize({reload=false}={}) {
+            if (
+              this.activePage !== "incoming"
+              || (this.incomingWorkspace || "board") !== "board"
+              || !["received", "history"].includes(this.incomingTab)
+            ) return false;
+            await this.$nextTick();
+            const bodyRef=Array.isArray(this.$refs.incomingCompactTableBody)
+              ? this.$refs.incomingCompactTableBody[0]
+              : this.$refs.incomingCompactTableBody;
+            const tableRef=bodyRef?.closest?.("table");
+            if (!tableRef?.getBoundingClientRect) return false;
+            const tableRect=tableRef.getBoundingClientRect();
+            const headerHeight=Math.max(28, Number(tableRef.tHead?.getBoundingClientRect?.().height || 0));
+            const bodyRows=[...(tableRef.tBodies?.[0]?.rows || [])];
+            const measuredHeights=bodyRows
+              .map(element=>Number(element.getBoundingClientRect?.().height || 0))
+              .filter(value=>Number.isFinite(value) && value>8);
+            const rowHeight=measuredHeights.length
+              ? Math.max(18, measuredHeights.reduce((sum,value)=>sum+value,0)/measuredHeights.length + 1)
+              : (this.isLargeUi ? 52 : 38);
+            const viewportHeight=Math.max(0, Number(window.innerHeight || document.documentElement?.clientHeight || 0));
+            if (viewportHeight < 320) return false;
+            const availableHeight=Math.max(0, viewportHeight - tableRect.top - headerHeight - 18);
+            const nextSize=Math.max(4, Math.min(50, Math.floor(availableHeight/rowHeight)));
+            const oldSize=this.incomingListPageSize();
+            if (!Number.isFinite(nextSize) || nextSize === oldSize) return false;
+            const pageKey=this.incomingTab === "received" ? "incomingReceived" : "incomingHistory";
+            const firstVisibleIndex=(Math.max(1, Number(this.pages[pageKey] || 1))-1)*oldSize;
+            this.incomingViewportPageSizes={
+              ...(this.incomingViewportPageSizes || {}),
+              [this.incomingTab]:nextSize,
+            };
+            this.pages[pageKey]=Math.floor(firstVisibleIndex/nextSize)+1;
+            if (!reload) return true;
+            if (this.incomingTab === "received") await this.loadIncomingReceived({force:true});
+            else await this.loadIncomingHistory();
+            return true;
+          },
+          async toggleIncomingHistoryFilters() {
+            this.incomingHistoryFilterVisible=!this.incomingHistoryFilterVisible;
+            await this.refreshIncomingViewportPageSize({reload:true});
           },
           incomingCustomerLabel(row) {
             return String(row?.customer_short_name || row?.customer_name || "-").trim() || "-";
@@ -18035,6 +18106,7 @@
               this.incomingReceivedTotal=Number(received.data.total ?? this.incomingReceived.length);
               this.pages.incomingReceived=Number(received.data.page || this.pages.incomingReceived || 1);
               this.incomingReceivedLoaded = true;
+              this.$nextTick(()=>this.refreshIncomingViewportPageSize({reload:true}));
             } catch (error) {
               if (!this.isCancelledRequest(error)) this.incomingReceivedError = "读取今日实收失败：" + this.errorMessage(error);
             } finally {
@@ -18064,6 +18136,9 @@
           async selectIncomingTab(tab) {
             if (tab === this.incomingTab) return;
             this.incomingTab = tab;
+            if (["received", "history"].includes(tab)) {
+              await this.refreshIncomingViewportPageSize({reload:false});
+            }
             if (tab === "received") await this.loadIncomingReceived();
             if (tab === "history") {
               const tasks = [this.loadIncomingHistory()];
@@ -18540,6 +18615,66 @@
               this.showToast("已按当前实收数量完成短收结单");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
+          incomingGroupRevertButtonVisible(row) {
+            return Boolean(
+              row?.receipt_status === "posted"
+              && row?.reversal_group_all_posted
+              && row?.reversal_group_key
+              && Number(row?.reversal_group_size || 0) > 1
+              && Number(row?.reversal_group_anchor_receipt_item_id || 0) === Number(row?.receipt_item_id || 0)
+            );
+          },
+          async revertIncomingGroup(row) {
+            if (!this.incomingGroupRevertButtonVisible(row)) {
+              this.showToast("合并实收组已变化，请刷新后重试", true);
+              return false;
+            }
+            const memberIds=(row.reversal_group_receipt_item_ids || [])
+              .map(value=>Number(value))
+              .filter(value=>Number.isInteger(value) && value>0)
+              .sort((a,b)=>a-b);
+            if (memberIds.length !== Number(row.reversal_group_size || 0)) {
+              this.showToast("合并实收组明细不完整，请刷新后重试", true);
+              return false;
+            }
+            if (!confirm(`确认把这 ${memberIds.length} 款同批、同规格、同材质的合并报料一起撤销吗？\n\n系统会逐款校验；任一款已有生产、送货或更晚实收，整组都不会撤销。`)) return false;
+            const groupKey=String(row.reversal_group_key);
+            const existingAttempt=this.incomingGroupRevertAttempts[groupKey];
+            if (existingAttempt?.saving) return false;
+            const attempt=existingAttempt || {
+              idempotencyKey:createIdempotencyKey(),
+              saving:false,
+            };
+            attempt.saving=true;
+            this.incomingGroupRevertAttempts[groupKey]=attempt;
+            try {
+              await axios.put(
+                `/api/incoming/receipt-reversal-groups/${row.receipt_item_id}/revert`,
+                {
+                  idempotency_key:attempt.idempotencyKey,
+                  expected_group_key:groupKey,
+                  expected_receipt_item_ids:memberIds,
+                },
+              );
+              delete this.incomingGroupRevertAttempts[groupKey];
+              const pendingRefresh=this.loadIncomingPendingPage({
+                page:this.incomingPendingAppliedPage,
+                clearSelection:false,
+              });
+              if (this.incomingTab === "history") {
+                await Promise.all([pendingRefresh, this.loadIncomingHistory(), this.loadKpi()]);
+              } else {
+                await Promise.all([pendingRefresh, this.loadIncomingReceived({force:true}), this.loadKpi()]);
+              }
+              this.showToast(`已整组撤销 ${memberIds.length} 款合并报料实收`);
+              return true;
+            } catch(error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              attempt.saving=false;
+            }
+          },
           async revertIncoming(row) {
             if (!confirm("确认撤销本次纸板收料并回到已报料状态吗？系统会自动记录操作人、时间和前后状态。")) return;
             try {
@@ -18701,6 +18836,8 @@
                 incoming_quantity: Number(row.incoming_quantity || row.requisition_qty || row.quantity || 0)
               }));
               this.incomingHistoryTotal = Number(data.total || 0);
+              this.pages.incomingHistory = Number(data.page || this.pages.incomingHistory || 1);
+              this.$nextTick(()=>this.refreshIncomingViewportPageSize({reload:true}));
             } catch (error) { if (!this.isCancelledRequest(error)) this.showToast(this.errorMessage(error), true); }
             finally { this.finishLatestRequest("incoming:history", controller); }
           },

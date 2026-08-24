@@ -6,6 +6,7 @@ import hmac
 import json
 import socket
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
 from typing import Annotated
@@ -875,6 +876,23 @@ def _lock_order_for_material_revert(db: Session, order_id: int) -> Order:
 class RevertRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
     idempotency_key: str | None = Field(default=None, max_length=120)
+
+
+class RevertReceiptGroupRequest(RevertRequest):
+    model_config = {"extra": "forbid"}
+
+    expected_group_key: str = Field(min_length=64, max_length=64)
+    expected_receipt_item_ids: list[int] = Field(min_length=2, max_length=50)
+
+    @field_validator("expected_receipt_item_ids")
+    @classmethod
+    def validate_expected_receipt_item_ids(cls, values: list[int]) -> list[int]:
+        normalized = [int(value) for value in values]
+        if any(value <= 0 for value in normalized):
+            raise ValueError("实收明细ID必须大于0")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("整组撤销明细不能重复")
+        return sorted(normalized)
 
 
 def _material_revert_reason(value: str | None) -> str:
@@ -3072,6 +3090,320 @@ def _decorate_received_rows_with_purpose(
             }
 
 
+def _reversal_dimension_token(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return ""
+    if not number.is_finite() or number <= 0:
+        return ""
+    return format(number.normalize(), "f")
+
+
+def _reversal_physical_signature(
+    supplier_item: SupplierRequisitionOrderItem | None,
+    requisition_item: RequisitionItem | None,
+) -> tuple[str, str, str, str]:
+    layer_count = (
+        supplier_item.layer_count_snapshot
+        if supplier_item is not None
+        else None
+    )
+    material_code = clean_supplier_material_code(
+        (
+            supplier_item.material_code_snapshot
+            if supplier_item is not None
+            else requisition_item.material_snapshot
+            if requisition_item is not None
+            else None
+        ),
+        layer_count,
+    )
+    flute_type = clean_supplier_flute_type(
+        supplier_item.flute_type_snapshot if supplier_item is not None else None
+    )
+    return (
+        _reversal_dimension_token(
+            supplier_item.report_length_mm
+            if supplier_item is not None
+            else requisition_item.cardboard_len
+            if requisition_item is not None
+            else None
+        ),
+        _reversal_dimension_token(
+            supplier_item.report_width_mm
+            if supplier_item is not None
+            else requisition_item.cardboard_width
+            if requisition_item is not None
+            else None
+        ),
+        str(material_code or "").strip().upper(),
+        str(flute_type or "").strip().upper(),
+    )
+
+
+def _supplier_source_requisition_item_id(
+    supplier_item: SupplierRequisitionOrderItem | None,
+) -> int | None:
+    source_key = str(supplier_item.source_key or "").strip() if supplier_item else ""
+    prefix = "requisition_item:"
+    if not source_key.startswith(prefix):
+        return None
+    value = source_key[len(prefix) :]
+    return int(value) if value.isdigit() and int(value) > 0 else None
+
+
+def _receipt_reversal_group_metadata(
+    db: Session,
+    receipt_item_ids: set[int],
+) -> dict[int, dict]:
+    """Resolve only authoritative merged requisition receipts from one receive batch.
+
+    Visible text is deliberately insufficient.  A shared reversal requires the
+    immutable receive batch audit, one formal merged requisition, one supplier
+    order and the same frozen physical material signature.
+    """
+
+    normalized_ids = {int(value) for value in receipt_item_ids if int(value) > 0}
+    if len(normalized_ids) < 2:
+        return {}
+    receipt_items = {
+        int(row.id): row
+        for row in db.scalars(
+            select(IncomingReceiptItem).where(IncomingReceiptItem.id.in_(normalized_ids))
+        ).all()
+    }
+    if len(receipt_items) < 2:
+        return {}
+
+    batch_by_receipt: dict[int, str] = {}
+    for entity_id, batch_id in db.execute(
+        select(OperationLog.entity_id, OperationLog.batch_id)
+        .where(
+            OperationLog.action_code == "incoming.receive",
+            OperationLog.entity_type == "incoming_receipt_item",
+            OperationLog.entity_id.in_(normalized_ids),
+            OperationLog.batch_id.is_not(None),
+        )
+        .order_by(OperationLog.id.desc())
+    ).all():
+        if entity_id is not None and batch_id:
+            batch_by_receipt.setdefault(int(entity_id), str(batch_id))
+    if len(batch_by_receipt) < 2:
+        return {}
+
+    supplier_item_ids = {
+        int(row.supplier_order_item_id)
+        for row in receipt_items.values()
+        if row.supplier_order_item_id is not None
+    }
+    supplier_items = {
+        int(row.id): row
+        for row in (
+            db.scalars(
+                select(SupplierRequisitionOrderItem).where(
+                    SupplierRequisitionOrderItem.id.in_(supplier_item_ids)
+                )
+            ).all()
+            if supplier_item_ids
+            else []
+        )
+    }
+
+    direct_requisition_ids = {
+        int(row.requisition_item_id)
+        for row in receipt_items.values()
+        if row.requisition_item_id is not None
+    }
+    direct_requisition_ids.update(
+        value
+        for value in (
+            _supplier_source_requisition_item_id(
+                supplier_items.get(int(row.supplier_order_item_id or 0))
+            )
+            for row in receipt_items.values()
+        )
+        if value is not None
+    )
+    fallback_order_item_ids = {
+        int(row.order_item_id)
+        for row in receipt_items.values()
+        if row.order_item_id is not None
+    }
+    requisition_filters = []
+    if direct_requisition_ids:
+        requisition_filters.append(RequisitionItem.id.in_(direct_requisition_ids))
+    if fallback_order_item_ids:
+        requisition_filters.append(
+            RequisitionItem.order_item_id.in_(fallback_order_item_ids)
+        )
+    if not requisition_filters:
+        return {}
+    requisition_rows = db.execute(
+        select(RequisitionItem, Requisition)
+        .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+        .where(or_(*requisition_filters))
+    ).all()
+    requisition_by_id = {
+        int(item.id): (item, requisition)
+        for item, requisition in requisition_rows
+        if requisition.status == "supplier_requisition_created"
+    }
+    requisitions_by_order_item: dict[int, list[RequisitionItem]] = {}
+    for item, requisition in requisition_rows:
+        if requisition.status != "supplier_requisition_created":
+            continue
+        requisitions_by_order_item.setdefault(int(item.order_item_id), []).append(item)
+
+    resolved_rows: list[
+        tuple[
+            IncomingReceiptItem,
+            RequisitionItem,
+            tuple[str, str, str, str],
+            str,
+        ]
+    ] = []
+    for receipt_item in receipt_items.values():
+        batch_id = batch_by_receipt.get(int(receipt_item.id))
+        supplier_item = supplier_items.get(int(receipt_item.supplier_order_item_id or 0))
+        if (
+            not batch_id
+            or supplier_item is None
+            or receipt_item.supplier_order_id is None
+        ):
+            continue
+        requisition_item_id = (
+            int(receipt_item.requisition_item_id)
+            if receipt_item.requisition_item_id is not None
+            else _supplier_source_requisition_item_id(supplier_item)
+        )
+        requisition_pair = requisition_by_id.get(int(requisition_item_id or 0))
+        if requisition_pair is None and receipt_item.order_item_id is not None:
+            supplier_signature = _reversal_physical_signature(supplier_item, None)
+            candidates = []
+            for candidate in requisitions_by_order_item.get(
+                int(receipt_item.order_item_id), []
+            ):
+                candidate_signature = _reversal_physical_signature(None, candidate)
+                if (
+                    candidate_signature[:3] == supplier_signature[:3]
+                    and (
+                        not candidate_signature[3]
+                        or not supplier_signature[3]
+                        or candidate_signature[3] == supplier_signature[3]
+                    )
+                ):
+                    candidates.append(candidate)
+            if len(candidates) == 1:
+                candidate = candidates[0]
+                requisition_pair = requisition_by_id.get(int(candidate.id))
+        if requisition_pair is None:
+            continue
+        requisition_item, _requisition = requisition_pair
+        signature = _reversal_physical_signature(supplier_item, requisition_item)
+        if not all(signature[:3]):
+            continue
+        resolved_rows.append((receipt_item, requisition_item, signature, batch_id))
+
+    grouped: dict[tuple, list[tuple[IncomingReceiptItem, RequisitionItem]]] = {}
+    for receipt_item, requisition_item, signature, batch_id in resolved_rows:
+        group_identity = (
+            batch_id,
+            int(requisition_item.requisition_id),
+            int(receipt_item.supplier_order_id),
+            *signature,
+        )
+        grouped.setdefault(group_identity, []).append((receipt_item, requisition_item))
+
+    metadata_by_receipt: dict[int, dict] = {}
+    for identity, members in grouped.items():
+        unique_receipts = {int(receipt.id): receipt for receipt, _item in members}
+        unique_sources = {int(item.id) for _receipt, item in members}
+        if (
+            len(unique_receipts) < 2
+            or len(unique_receipts) > 50
+            or len(unique_sources) < 2
+        ):
+            continue
+        member_ids = sorted(unique_receipts)
+        group_key = canonical_purchase_receipt_hash(
+            {
+                "receive_batch_id": identity[0],
+                "requisition_id": identity[1],
+                "supplier_order_id": identity[2],
+                "physical_signature": list(identity[3:]),
+                "receipt_item_ids": member_ids,
+            }
+        )
+        public_metadata = {
+            "reversal_group_key": group_key,
+            "reversal_group_size": len(member_ids),
+            "reversal_group_receipt_item_ids": member_ids,
+            "reversal_group_anchor_receipt_item_id": max(member_ids),
+            "reversal_group_all_posted": all(
+                row.status == "posted" for row in unique_receipts.values()
+            ),
+            "reversal_group_all_reversed": all(
+                row.status == "reversed" for row in unique_receipts.values()
+            ),
+        }
+        for receipt_item_id in member_ids:
+            metadata_by_receipt[receipt_item_id] = public_metadata
+    return metadata_by_receipt
+
+
+def _decorate_received_rows_with_reversal_groups(
+    db: Session,
+    *,
+    rows: list[dict],
+) -> None:
+    receipt_item_ids = {
+        int(row["receipt_item_id"])
+        for row in rows
+        if row.get("receipt_item_id") is not None
+    }
+    metadata_by_receipt = _receipt_reversal_group_metadata(db, receipt_item_ids)
+    for row in rows:
+        metadata = metadata_by_receipt.get(int(row.get("receipt_item_id") or 0))
+        if metadata is not None and metadata["reversal_group_all_posted"]:
+            row.update(metadata)
+
+
+def _receipt_reversal_group_for_anchor(
+    db: Session,
+    receipt_item_id: int,
+) -> dict | None:
+    batch_id = db.scalar(
+        select(OperationLog.batch_id)
+        .where(
+            OperationLog.action_code == "incoming.receive",
+            OperationLog.entity_type == "incoming_receipt_item",
+            OperationLog.entity_id == int(receipt_item_id),
+            OperationLog.batch_id.is_not(None),
+        )
+        .order_by(OperationLog.id.desc())
+    )
+    if not batch_id:
+        return None
+    candidate_ids = {
+        int(value)
+        for value in db.scalars(
+            select(OperationLog.entity_id).where(
+                OperationLog.action_code == "incoming.receive",
+                OperationLog.entity_type == "incoming_receipt_item",
+                OperationLog.batch_id == str(batch_id),
+                OperationLog.entity_id.is_not(None),
+            )
+        ).all()
+        if value is not None
+    }
+    return _receipt_reversal_group_metadata(db, candidate_ids).get(
+        int(receipt_item_id)
+    )
+
+
 def _receipt_fact_rows(
     db: Session,
     *,
@@ -3358,6 +3690,7 @@ def _receipt_fact_rows(
         _apply_component_crease(row, component)
         rows.append(row)
     _decorate_received_rows_with_purpose(db, rows=rows, user=user)
+    _decorate_received_rows_with_reversal_groups(db, rows=rows)
     return rows
 
 
@@ -4149,11 +4482,13 @@ def history_received_items(
         receipt_status=receipt_status,
     )
     total = len(rows)
-    start = (page - 1) * page_size
+    last_page = max(1, (total + page_size - 1) // page_size)
+    resolved_page = min(page, last_page)
+    start = (resolved_page - 1) * page_size
     return {
         "items": [_incoming_row_response(row) for row in rows[start : start + page_size]],
         "total": total,
-        "page": page,
+        "page": resolved_page,
         "page_size": page_size,
         "filters": {
             "customer_ids": sorted(requested_customer_ids),
@@ -4707,6 +5042,187 @@ def revert_new_receipt_item(
     except IncomingReceiptError as error:
         db.rollback()
         _raise_receipt_error(error)
+
+
+@router.put("/receipt-reversal-groups/{receipt_item_id}/revert")
+def revert_merged_receipt_group(
+    receipt_item_id: int,
+    payload: RevertReceiptGroupRequest,
+    request: Request = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_rollback),
+) -> dict:
+    """Atomically revert one authoritative same-batch merged requisition group."""
+
+    _preflight_receipt_item_customer_access(
+        db,
+        receipt_item_id=receipt_item_id,
+        user=user,
+    )
+    metadata = _receipt_reversal_group_for_anchor(db, receipt_item_id)
+    if metadata is None:
+        raise HTTPException(
+            status_code=409,
+            detail="该实收明细不属于可验证的同批合并报料组，请逐条核对",
+        )
+    actual_ids = sorted(
+        int(value) for value in metadata["reversal_group_receipt_item_ids"]
+    )
+    if (
+        not hmac.compare_digest(
+            str(payload.expected_group_key),
+            str(metadata["reversal_group_key"]),
+        )
+        or payload.expected_receipt_item_ids != actual_ids
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INCOMING_REVERSAL_GROUP_STALE",
+                "message": "合并实收组已变化，请刷新今日实收或历史入库后重试",
+            },
+        )
+    if int(metadata["reversal_group_anchor_receipt_item_id"]) != int(
+        receipt_item_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="请从该组合并实收明细的整组撤销按钮操作",
+        )
+    for member_id in actual_ids:
+        _preflight_receipt_item_customer_access(
+            db,
+            receipt_item_id=member_id,
+            user=user,
+        )
+
+    outer_key = (payload.idempotency_key or "").strip() or (
+        f"incoming-group-revert:{metadata['reversal_group_key'][:32]}"
+    )
+    contracts: list[tuple[int, str, str, dict | None]] = []
+    for member_id in actual_ids:
+        line_key = "incoming-group:" + hashlib.sha256(
+            f"{outer_key}:{metadata['reversal_group_key']}:{member_id}".encode("utf-8")
+        ).hexdigest()
+        line_payload = RevertRequest(
+            reason=payload.reason,
+            idempotency_key=line_key,
+        )
+        line_key, request_hash, replay = _reversal_idempotency_contract(
+            db,
+            user=user,
+            target_kind="receipt_item",
+            target_id=member_id,
+            payload=line_payload,
+        )
+        contracts.append((member_id, line_key, request_hash, replay))
+
+    replay_count = sum(
+        1
+        for _member_id, _key, _hash, replay in contracts
+        if replay is not None
+    )
+    if replay_count:
+        if replay_count != len(contracts):
+            raise HTTPException(
+                status_code=409,
+                detail="该组合并实收存在部分已撤销明细，禁止继续整组写入",
+            )
+        replay_items = [
+            replay
+            for _member_id, _key, _hash, replay in contracts
+            if replay is not None
+        ]
+        return {
+            "reversal_group_key": metadata["reversal_group_key"],
+            "reverted_count": len(replay_items),
+            "receipt_item_ids": actual_ids,
+            "items": replay_items,
+        }
+    if not metadata["reversal_group_all_posted"]:
+        raise HTTPException(
+            status_code=409,
+            detail="该组合并实收存在已撤销明细，请刷新后逐条核对",
+        )
+
+    responses_by_id: dict[int, dict] = {}
+    try:
+        for member_id, line_key, request_hash, _replay in sorted(
+            contracts, key=lambda value: value[0], reverse=True
+        ):
+            fact = revert_receipt_item(
+                db,
+                user=user,
+                receipt_item_id=member_id,
+                reason=payload.reason,
+                idempotency_key=line_key,
+                audit_context={
+                    "request": request,
+                    "batch_id": metadata["reversal_group_key"],
+                },
+            )
+            response = _new_receipt_response(
+                db,
+                fact,
+                can_view_cost=has_permission(user, "cost.view"),
+            )
+            purpose_reversal = db.scalar(
+                select(IncomingReceiptPurposeReversal).where(
+                    IncomingReceiptPurposeReversal.incoming_receipt_item_id
+                    == fact.id
+                )
+            )
+            responses_by_id[member_id] = _record_reversal_fact(
+                db,
+                user=user,
+                target_kind="receipt_item",
+                target_id=member_id,
+                idempotency_key=line_key,
+                request_hash=request_hash,
+                response=response,
+                incoming_receipt_item_id=fact.id,
+                incoming_receipt_purpose_reversal_id=(
+                    purpose_reversal.id if purpose_reversal is not None else None
+                ),
+            )
+        responses = [responses_by_id[member_id] for member_id in actual_ids]
+        append_audit_event(
+            db,
+            request=request,
+            actor=user,
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="incoming",
+            action_code="incoming.revert_group",
+            legacy_action="REVERT_MATERIAL_GROUP",
+            resource="IncomingReceiptGroup",
+            entity_type="incoming_receipt_group",
+            entity_id=receipt_item_id,
+            object_ref=f"incoming-reversal-group:{metadata['reversal_group_key'][:32]}",
+            batch_id=metadata["reversal_group_key"],
+            description="整组撤销同批同规格材质的合并报料实收",
+            details={
+                "reversal_group_key": metadata["reversal_group_key"],
+                "receipt_item_ids": actual_ids,
+                "reverted_count": len(responses),
+                "idempotency_key": outer_key,
+            },
+        )
+        result = {
+            "reversal_group_key": metadata["reversal_group_key"],
+            "reverted_count": len(responses),
+            "receipt_item_ids": actual_ids,
+            "items": responses,
+        }
+        db.commit()
+        return result
+    except IncomingReceiptError as error:
+        db.rollback()
+        _raise_receipt_error(error)
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _revert_requisition_component(

@@ -30,7 +30,7 @@ def test_requisition_has_three_clear_tabs_and_batch_hold_entry() -> None:
 def test_waiting_table_shows_component_demand_and_has_only_two_actions() -> None:
     waiting = _block(
         "<data-panel v-if=\"requisitionTab==='waiting'\"",
-        "<data-panel v-if=\"requisitionTab==='submitted'\"",
+        "<div v-if=\"requisitionTab==='submitted' && requisitionItems.length\" class=\"reported-item-table-wrap\"",
     )
     header = re.search(r"<thead><tr>(.*?)</tr></thead>", waiting, flags=re.DOTALL)
     assert header

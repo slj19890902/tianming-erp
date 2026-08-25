@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.time_contract import beijing_now_naive, beijing_today, utc_now_naive
 from app.models.customer import Customer
 from app.models.delivery import DeliveryItem
-from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
@@ -664,7 +663,6 @@ SEMI_FINISHED_FLUTES_BY_LAYER: dict[int, frozenset[str]] = {
 
 RAW_MATERIAL_STAGING_WAREHOUSE_TYPES = frozenset({"semi_finished", "shared"})
 RAW_MATERIAL_STAGING_STORAGE_TYPES = frozenset({"ground", "temporary_aisle"})
-TRANSITIONAL_RAW_MATERIAL_STAGING_LOCATION_CODE = "1FA"
 
 
 @dataclass(frozen=True)
@@ -762,22 +760,13 @@ def _is_raw_material_staging_location(
     """Return whether a location is the explicitly allowed board staging point."""
 
     location_code = (location.location_code or "").strip().upper()
-    transitional_marker = (
-        location_code == TRANSITIONAL_RAW_MATERIAL_STAGING_LOCATION_CODE
-    )
     if (
         not location.is_active
         or location.warehouse_type not in RAW_MATERIAL_STAGING_WAREHOUSE_TYPES
         or location.warehouse_floor != 1
         or (location.area_code or "").strip().upper() != "A1"
         or location.storage_type not in RAW_MATERIAL_STAGING_STORAGE_TYPES
-        or (
-            location.placement_status != "placed"
-            and not (
-                transitional_marker
-                and location.placement_status == "unplaced"
-            )
-        )
+        or location.placement_status != "placed"
         or location.source_version == "V11"
         or location_code == "F1-DISPATCH-01"
     ):
@@ -795,13 +784,7 @@ def _is_raw_material_staging_location(
             WarehouseArea.area_code == location.area_code,
         )
     )
-    if area is None or (
-        area.construction_status != "enabled"
-        and not (
-            transitional_marker
-            and area.construction_status == "ledger_building"
-        )
-    ):
+    if area is None or area.construction_status != "enabled":
         return False
     return True
 
@@ -820,6 +803,28 @@ def automatic_raw_material_staging_location(db: Session) -> WarehouseLocation:
         )
     ).all()
     candidates = [row for row in rows if _is_raw_material_staging_location(db, row)]
+    require_published_location = has_space_ledger(db)
+    projection_contexts = (
+        load_warehouse_location_projection_contexts(db, candidates)
+        if require_published_location
+        else {}
+    )
+    candidates = [
+        row
+        for row in candidates
+        if operational_location_issue(
+            db,
+            row,
+            warehouse_types=RAW_MATERIAL_STAGING_WAREHOUSE_TYPES,
+            require_published=require_published_location,
+            require_map_geometry=require_published_location,
+            required_inventory_type=(
+                "semi_finished" if require_published_location else None
+            ),
+            projection_context=projection_contexts.get(int(row.id)),
+        )
+        is None
+    ]
     candidates.sort(
         key=lambda row: (
             0 if row.location_code == "1FA" else 1,
@@ -829,7 +834,7 @@ def automatic_raw_material_staging_location(db: Session) -> WarehouseLocation:
     )
     if not candidates:
         raise WarehouseInventoryError(
-            "未配置可用的一楼 A1 原料暂存位置，请先维护原料区域主数据；系统不会改用一楼待送区。",
+            "未配置已发布且可在地图操作的一楼 A1 原料暂存位置，请先完成区域与库位发布；系统不会改用一楼待送区。",
             409,
         )
     return candidates[0]
@@ -891,34 +896,6 @@ def _location(
         return location
     if not location.is_active:
         raise WarehouseInventoryError("该库位已停用，不能入库")
-    if (
-        inventory_type == "semi_finished"
-        and allow_raw_material_staging
-        and _is_raw_material_staging_location(db, location)
-    ):
-        if location.placement_status == "unplaced":
-            if not (
-                raw_material_staging_source_type == "replenishment"
-                and raw_material_staging_source_ref_type
-                == "stock_replenishment_receipt"
-                and raw_material_staging_source_ref_id is not None
-            ):
-                raise WarehouseInventoryError(
-                    "过渡原料暂存标记只允许补库来料实收使用。", 409
-                )
-            posted_receipt_item = db.scalar(
-                select(IncomingReceiptItem.id).where(
-                    IncomingReceiptItem.id
-                    == raw_material_staging_source_ref_id,
-                    IncomingReceiptItem.status == "posted",
-                    IncomingReceiptItem.stock_replenishment_item_id.is_not(None),
-                )
-            )
-            if posted_receipt_item is None:
-                raise WarehouseInventoryError(
-                    "过渡原料暂存标记缺少有效的补库来料实收事实。", 409
-                )
-        return location
     if getattr(location, "placement_status", None) == "unplaced":
         raise WarehouseInventoryError(
             "该库位尚未完成空间放置，不能入库；请先补齐楼层、区域和存储方式",

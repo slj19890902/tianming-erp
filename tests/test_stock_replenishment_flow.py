@@ -1007,7 +1007,7 @@ def test_replenishment_auto_stages_material_without_location_choice(
         assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
 
 
-def test_replenishment_accepts_explicit_floor1_a1_marker_during_layout_transition(
+def test_replenishment_rejects_floor1_a1_marker_until_map_is_published(
     stock_replenishment_app,
 ) -> None:
     app, session_factory = stock_replenishment_app
@@ -1052,16 +1052,14 @@ def test_replenishment_accepts_explicit_floor1_a1_marker_during_layout_transitio
                 "idempotency_key": "replenishment-transitional-floor1-a1-staging",
             },
         )
-        assert received.status_code == 200, received.text
+        assert received.status_code == 409, received.text
+        assert "已发布" in received.json()["detail"]
+        assert "地图操作" in received.json()["detail"]
+        assert "不会改用一楼待送区" in received.json()["detail"]
 
     with session_factory() as session:
-        staging = session.scalar(
-            select(WarehouseLocation).where(WarehouseLocation.location_code == "1FA")
-        )
-        lot = session.scalar(select(InventoryLot))
-        assert lot is not None and staging is not None
-        assert lot.warehouse_location_id == staging.id
-        assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
+        assert session.scalar(select(func.count(InventoryLot.id))) == 0
+        assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 0
 
 
 def test_replenishment_does_not_broaden_transition_to_other_unplaced_markers(
@@ -1117,7 +1115,7 @@ def test_replenishment_does_not_broaden_transition_to_other_unplaced_markers(
         assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 0
 
 
-def test_transitional_floor1_a1_marker_rejects_non_receipt_service_calls(
+def test_unpublished_floor1_a1_marker_rejects_all_inventory_service_calls(
     stock_replenishment_app,
 ) -> None:
     _app, session_factory = stock_replenishment_app
@@ -1152,7 +1150,7 @@ def test_transitional_floor1_a1_marker_rejects_non_receipt_service_calls(
 
         with pytest.raises(
             WarehouseInventoryError,
-            match="只允许补库来料实收使用",
+            match="目标库位.*刷新后重试",
         ):
             manual_semi_finished_in(
                 session,

@@ -10,8 +10,8 @@ from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 import json
 from typing import Any
 
-from sqlalchemy import exists, func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy.orm import Session
 
 from app.core.time_contract import beijing_today, utc_now_naive
 from app.models.customer import Customer
@@ -30,7 +30,13 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
-from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+from app.models.warehouse_inventory import (
+    InventoryLot,
+    InventoryMovement,
+    WarehouseArea,
+    WarehouseFloor,
+    WarehouseLocation,
+)
 from app.services.production_workflow import (
     ProductionWorkflowError,
     ensure_receipt_auto_main_task,
@@ -47,9 +53,6 @@ from app.services.warehouse_inventory import (
     automatic_raw_material_staging_location,
     manual_semi_finished_in,
     mutate_lot,
-)
-from app.services.location_candidates import (
-    load_warehouse_location_projection_contexts,
 )
 from app.services.warehouse_location_address import employee_location_name
 
@@ -680,6 +683,59 @@ def post_receipt_purpose_allocation(
     return allocation
 
 
+def _receipt_lots_with_location_names(
+    db: Session,
+    lot_ids: set[int],
+) -> tuple[dict[int, InventoryLot], dict[int, str]]:
+    """Load receipt lots and employee names in one bounded query.
+
+    Receipt serialization needs only the stable floor/area naming projection,
+    not map geometry, ground-layout or publication readiness.  Joining the
+    formal floor and area masters here keeps custom ``area_name`` changes live
+    without invoking the heavier map projection loader.
+    """
+
+    if not lot_ids:
+        return {}, {}
+    rows = db.execute(
+        select(
+            InventoryLot,
+            WarehouseLocation,
+            WarehouseArea,
+            WarehouseFloor,
+        )
+        .select_from(InventoryLot)
+        .outerjoin(
+            WarehouseLocation,
+            WarehouseLocation.id == InventoryLot.warehouse_location_id,
+        )
+        .outerjoin(
+            WarehouseFloor,
+            WarehouseFloor.floor_number == WarehouseLocation.warehouse_floor,
+        )
+        .outerjoin(
+            WarehouseArea,
+            and_(
+                WarehouseArea.floor_id == WarehouseFloor.id,
+                func.upper(func.trim(WarehouseArea.area_code))
+                == func.upper(func.trim(WarehouseLocation.area_code)),
+            ),
+        )
+        .where(InventoryLot.id.in_(lot_ids))
+    ).all()
+    lots: dict[int, InventoryLot] = {}
+    names: dict[int, str] = {}
+    for lot, location, area, floor in rows:
+        lots[int(lot.id)] = lot
+        if location is not None:
+            names[int(lot.id)] = employee_location_name(
+                location,
+                area=area,
+                floor=floor,
+            )
+    return lots, names
+
+
 def serialize_receipt_purpose_allocation(
     db: Session,
     allocation: IncomingReceiptPurposeAllocation,
@@ -722,22 +778,17 @@ def serialize_receipt_purpose_allocation(
             "PURCHASE_RECEIPT_FACT_REQUIRED",
             "收料用途分配关联的正式采购事实不存在。",
         )
-    locations = [
-        lot.location
-        for lot in (finished_lot, reserve_lot)
-        if lot is not None and lot.location is not None
-    ]
-    location_contexts = load_warehouse_location_projection_contexts(db, locations)
+    _lots, location_names = _receipt_lots_with_location_names(
+        db,
+        {
+            int(lot.id)
+            for lot in (finished_lot, reserve_lot)
+            if lot is not None
+        },
+    )
 
     def projected_location_name(lot: InventoryLot | None) -> str | None:
-        if lot is None or lot.location is None:
-            return None
-        context = location_contexts.get(int(lot.location.id), {})
-        return employee_location_name(
-            lot.location,
-            area=context.get("area"),
-            floor=context.get("floor"),
-        )
+        return location_names.get(int(lot.id)) if lot is not None else None
 
     return {
         "order_sheet_delta": allocation.receipt_order_purpose_sheet_qty,
@@ -826,26 +877,10 @@ def serialize_receipt_purpose_allocations(
             lot_ids.add(int(finished_id))
         if allocation.semi_finished_inventory_lot_id is not None:
             lot_ids.add(int(allocation.semi_finished_inventory_lot_id))
-    lots = {
-        row.id: row
-        for row in db.scalars(
-            select(InventoryLot)
-            .options(selectinload(InventoryLot.location))
-            .where(InventoryLot.id.in_(lot_ids))
-        ).all()
-    } if lot_ids else {}
-    locations = [row.location for row in lots.values() if row.location is not None]
-    location_contexts = load_warehouse_location_projection_contexts(db, locations)
+    lots, location_names = _receipt_lots_with_location_names(db, lot_ids)
 
     def projected_location_name(lot: InventoryLot | None) -> str | None:
-        if lot is None or lot.location is None:
-            return None
-        context = location_contexts.get(int(lot.location.id), {})
-        return employee_location_name(
-            lot.location,
-            area=context.get("area"),
-            floor=context.get("floor"),
-        )
+        return location_names.get(int(lot.id)) if lot is not None else None
 
     facts = {
         row.id: row

@@ -35,6 +35,7 @@ from app.models.warehouse_inventory import (
     WarehouseGroundOccupancySlot,
     WarehouseLocation,
 )
+from app.services import location_candidates
 from app.services.warehouse_ground_slots import build_ground_slot_preview
 
 
@@ -57,6 +58,16 @@ def _measured_layout() -> dict:
     }
 
 
+def _published_runtime_identity() -> dict:
+    """Return the canonical current-map identity after the fixture is published."""
+
+    return {
+        "revision": "p1-87-map-r1",
+        "zones_by_id": {"ZONE-3F-A01": "A01"},
+        "zone_ids_by_area": {"A01": ("ZONE-3F-A01",)},
+    }
+
+
 @pytest.fixture()
 def p187_app(tmp_path, monkeypatch):
     engine = create_sqlite_engine(tmp_path / "p187.sqlite3")
@@ -64,6 +75,13 @@ def p187_app(tmp_path, monkeypatch):
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setattr(
         warehouse_api, "load_warehouse_twin_floor", lambda _floor_code: _measured_layout()
+    )
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda floor_number: (
+            _published_runtime_identity() if int(floor_number) == 3 else None
+        ),
     )
 
     with factory() as db:

@@ -141,6 +141,7 @@ from app.services.warehouse_twin_layout import (
 from app.services.warehouse_pallet_standard import standard_pallet_contract
 from app.services.warehouse_floor1_candidate_planner import (
     Floor1CandidatePlanningError,
+    _percent_round_trip_epsilon,
     build_floor1_formal_candidate_plan,
     confirmed_capacity_slots_for_zone,
     confirm_floor1_formal_candidate_plan,
@@ -242,6 +243,7 @@ from app.services.warehouse_ground_slots import (
     ground_occupancy_payload,
     ground_preview_fingerprint,
     ground_slots_adjacent,
+    number_ground_physical_slots,
     occupancy_physical_quantity,
     published_ground_plan,
 )
@@ -4249,6 +4251,49 @@ def _assert_legacy_floor3_write_allowed(
         )
 
 
+def _assert_published_ground_plan_area_unlocked(
+    db: Session,
+    *,
+    area_id: int,
+) -> None:
+    plan_id = db.scalar(
+        select(WarehouseGroundLayoutPlan.id).where(
+            WarehouseGroundLayoutPlan.area_id == int(area_id),
+            WarehouseGroundLayoutPlan.status == "published",
+        )
+    )
+    if plan_id is not None:
+        raise WarehouseAreaActivationError(
+            "该区域已有正式发布的地堆排位；请通过地堆排位变更流程调整，"
+            "不能从旧空间布局入口改动库位数量、状态或坐标",
+            status_code=409,
+        )
+
+
+def _assert_published_ground_plan_location_unlocked(
+    db: Session,
+    *,
+    location_id: int,
+) -> None:
+    plan_id = db.scalar(
+        select(WarehouseGroundLayoutPlan.id)
+        .join(
+            WarehouseGroundLayoutSlot,
+            WarehouseGroundLayoutSlot.plan_id == WarehouseGroundLayoutPlan.id,
+        )
+        .where(
+            WarehouseGroundLayoutSlot.location_id == int(location_id),
+            WarehouseGroundLayoutPlan.status == "published",
+        )
+    )
+    if plan_id is not None:
+        raise WarehouseAreaActivationError(
+            "该库位属于正式发布的地堆排位；请通过地堆排位变更流程调整，"
+            "不能从旧空间布局入口启用、停用或移动",
+            status_code=409,
+        )
+
+
 def _claim_empty_location_for_reflow(
     db: Session,
     location: WarehouseLocation,
@@ -5218,7 +5263,10 @@ def list_ground_storage_candidates(
         raise HTTPException(status_code=409, detail="所选产品不属于当前客户或已停用")
     try:
         plan = published_ground_plan(
-            db, floor_code=floor_code, area_code=area_code
+            db,
+            floor_code=floor_code,
+            area_code=area_code,
+            required_inventory_type="finished",
         )
         items = ground_candidate_rows(
             db,
@@ -5278,6 +5326,7 @@ def _ground_slot_for_location(
         db,
         floor_code=slot.plan.area.floor.floor_code,
         area_code=slot.plan.area.area_code,
+        required_inventory_type="finished",
     )
     slot = next(row for row in plan.slots if row.location_id == location_id)
     return plan, slot
@@ -5830,12 +5879,14 @@ def set_activated_area_location_count(
 ) -> dict:
     WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK.acquire()
     try:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
         route = resolve_area_location_management(
             db, floor_code=floor_code, area_code=area_code
         )
         _floor, _area, area_policy = _area_layout_context(
             db, floor_code=route.floor_code, area_code=route.area_code
         )
+        _assert_published_ground_plan_area_unlocked(db, area_id=_area.id)
         if area_policy is None:
             raise WarehouseAreaActivationError(
                 "历史区域尚未完成正式区域确认，请先在区域规划中确认并发布",
@@ -6030,12 +6081,14 @@ def auto_arrange_activated_area_locations(
 
     WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK.acquire()
     try:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
         route = resolve_area_location_management(
             db, floor_code=floor_code, area_code=area_code
         )
         _floor, area, policy = formal_area(
             db, floor_code=route.floor_code, area_code=route.area_code
         )
+        _assert_published_ground_plan_area_unlocked(db, area_id=area.id)
         if policy.storage_layout == "rack":
             raise WarehouseAreaActivationError(
                 "自动均匀排布仅适用于栈板地堆货位；货架位请按实测货架维护",
@@ -6150,6 +6203,16 @@ def get_area_location_management(
         management = area_location_management_payload(route)
         if policy is None:
             management["available_actions"] = []
+        elif db.scalar(
+            select(WarehouseGroundLayoutPlan.id).where(
+                WarehouseGroundLayoutPlan.area_id == _area.id,
+                WarehouseGroundLayoutPlan.status == "published",
+            )
+        ) is not None:
+            management["available_actions"] = []
+            management["spatial_layout_locked_reason"] = (
+                "该区域已有正式发布的地堆排位；请通过地堆排位变更流程调整"
+            )
         return {
             **management,
             "policy_version": policy.version if policy is not None else None,
@@ -6173,12 +6236,14 @@ def patch_activated_area_location_layout(
 ) -> dict:
     WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK.acquire()
     try:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
         route = resolve_area_location_management(
             db, floor_code=floor_code, area_code=area_code
         )
         _floor, _area, policy = _area_layout_context(
             db, floor_code=route.floor_code, area_code=route.area_code
         )
+        _assert_published_ground_plan_area_unlocked(db, area_id=_area.id)
         if policy is None:
             raise WarehouseAreaActivationError(
                 "历史区域尚未完成正式区域确认，请先在区域规划中确认并发布",
@@ -6313,10 +6378,22 @@ def disable_activated_area_location(
 ) -> dict:
     WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK.acquire()
     try:
+        floor_number = db.scalar(
+            select(WarehouseLocation.warehouse_floor).where(
+                WarehouseLocation.id == location_id
+            )
+        )
+        if floor_number is not None:
+            _claim_floor_projection_for_layout_write(
+                db, floor_code=f"{int(floor_number)}F"
+            )
         existing, route = resolve_location_management(db, location_id=location_id)
         before = _location_layout_state(existing)
         floor, area, policy = _area_layout_context(
             db, floor_code=route.floor_code, area_code=route.area_code
+        )
+        _assert_published_ground_plan_location_unlocked(
+            db, location_id=location_id
         )
         if policy is None:
             raise WarehouseAreaActivationError(
@@ -6423,10 +6500,22 @@ def enable_activated_area_location(
 ) -> dict:
     WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK.acquire()
     try:
+        floor_number = db.scalar(
+            select(WarehouseLocation.warehouse_floor).where(
+                WarehouseLocation.id == location_id
+            )
+        )
+        if floor_number is not None:
+            _claim_floor_projection_for_layout_write(
+                db, floor_code=f"{int(floor_number)}F"
+            )
         existing, route = resolve_location_management(db, location_id=location_id)
         before = _location_layout_state(existing)
         floor, area, policy = _area_layout_context(
             db, floor_code=route.floor_code, area_code=route.area_code
+        )
+        _assert_published_ground_plan_location_unlocked(
+            db, location_id=location_id
         )
         if policy is None:
             raise WarehouseAreaActivationError(
@@ -9723,14 +9812,10 @@ def _claim_floor_projection_for_layout_write(
 ) -> None:
     """Serialize a runtime-map change with every inventory destination write."""
 
-    normalized_floor_code = floor_code.strip().upper()
-    floor_number = db.scalar(
-        select(WarehouseFloor.floor_number).where(
-            func.upper(WarehouseFloor.floor_code) == normalized_floor_code
-        )
-    )
-    if floor_number is None:
+    floor = warehouse_floor_for_code(db, floor_code)
+    if floor is None:
         return
+    floor_number = int(floor.floor_number)
     try:
         floor_claimed = claim_warehouse_floor_projection(
             db,
@@ -10682,6 +10767,321 @@ def _ensure_one_step_pallet_locations(
     }
 
 
+def _ensure_one_step_ground_plan(
+    db: Session,
+    *,
+    floor_layout: dict,
+    feature_id: str,
+    area: WarehouseArea,
+    storage_layout: str,
+    location_count: int,
+    operation_key: str,
+    operator_id: int,
+) -> dict:
+    """Materialize real one-step ground positions in the canonical plan ledger.
+
+    A measured zone confirmation used to create ``TWIN_V1`` locations and
+    advertise them as available without creating the published ground plan
+    required by every inventory write.  Only positions that match an actual
+    1200x1000 measured pallet footprint are operational.  Capacity-only
+    logical anchors remain visible planning facts, but are deliberately not
+    returned as available inventory destinations.
+    """
+
+    existing_plan = db.scalar(
+        select(WarehouseGroundLayoutPlan)
+        .where(WarehouseGroundLayoutPlan.area_id == area.id)
+        .options(selectinload(WarehouseGroundLayoutPlan.slots))
+        .with_for_update()
+    )
+    if storage_layout != "pallet_ground":
+        if existing_plan is not None:
+            raise WarehouseAreaActivationError(
+                "该区域已有正式地堆排位，不能从一次确认改成其他布局",
+                status_code=409,
+            )
+        return {
+            "available_location_count": max(0, int(location_count)),
+            "ground_plan_id": None,
+            "ground_plan_status": None,
+            "location_readiness_issue": None,
+        }
+    if location_count <= 0:
+        if existing_plan is not None:
+            raise WarehouseAreaActivationError(
+                "该区域已有正式地堆排位，不能从一次确认清空或停用其库位",
+                status_code=409,
+            )
+        return {
+            "available_location_count": 0,
+            "ground_plan_id": None,
+            "ground_plan_status": None,
+            "location_readiness_issue": None,
+        }
+
+    floor = area.floor
+    policy = area.storage_policy
+    current_revision = str(floor_layout.get("revision") or "").strip()
+    if (
+        floor is None
+        or policy is None
+        or policy.status != "published"
+        or str(policy.map_feature_id or "").strip() != str(feature_id).strip()
+        or str(policy.published_map_revision or "").strip() != current_revision
+        or not current_revision
+    ):
+        raise WarehouseAreaActivationError(
+            "区域地图身份尚未完成正式发布，不能生成地堆排位",
+            status_code=409,
+        )
+
+    rows = list(
+        db.scalars(
+            select(WarehouseLocation)
+            .where(
+                WarehouseLocation.warehouse_floor == floor.floor_number,
+                func.upper(WarehouseLocation.area_code) == area.area_code.upper(),
+                WarehouseLocation.is_active.is_(True),
+                WarehouseLocation.placement_status == "placed",
+                WarehouseLocation.storage_type == "ground",
+            )
+            .options(selectinload(WarehouseLocation.floor3_layout))
+            .order_by(WarehouseLocation.sort_order, WarehouseLocation.id)
+        ).all()
+    )
+    if len(rows) != int(location_count):
+        raise WarehouseAreaActivationError(
+            "区域货位数量在确认过程中发生变化，请刷新后重试",
+            status_code=409,
+        )
+
+    non_physical = [
+        row
+        for row in rows
+        if row.floor3_layout is None
+        or row.floor3_layout.layout_kind != "physical_pallet"
+    ]
+    if non_physical:
+        if existing_plan is not None:
+            raise WarehouseAreaActivationError(
+                "该区域正式地堆排位与当前库位几何已经漂移，不能降级为规划位置",
+                status_code=409,
+            )
+        return {
+            "available_location_count": 0,
+            "ground_plan_id": None,
+            "ground_plan_status": "planning_only",
+            "location_readiness_issue": (
+                "确认容量中含非标准实测栈板位；这些位置仅作规划展示，"
+                "不能用于收料、入库或移位"
+            ),
+        }
+
+    layout_slots = [_layout_geometry_payload(row) for row in rows]
+    try:
+        validated_slots = validate_capacity_layout_slots_for_zone(
+            floor_layout,
+            feature_id=feature_id,
+            slots=layout_slots,
+        )
+    except Floor1CandidatePlanningError as error:
+        raise WarehouseAreaActivationError(
+            str(error), status_code=error.status_code
+        ) from error
+
+    feature = next(
+        (
+            row
+            for row in floor_layout.get("features") or []
+            if row.get("feature_kind") == "zone"
+            and str(row.get("id") or "") == str(feature_id)
+        ),
+        None,
+    )
+    points = (feature or {}).get("points") or []
+    geometry_epsilon = _percent_round_trip_epsilon(points)
+    pallet_contract = standard_pallet_contract()
+    standard_width = int(pallet_contract["width_mm"])
+    standard_depth = int(pallet_contract["depth_mm"])
+    matched_slots: list[dict] = []
+    for row, layout_slot, actual_slot in zip(
+        rows, layout_slots, validated_slots, strict=True
+    ):
+        layout = row.floor3_layout
+        assert layout is not None
+        actual_width = float(actual_slot["width_mm"])
+        actual_depth = float(actual_slot["depth_mm"])
+        standard_orientation = (
+            abs(actual_width - standard_width) <= geometry_epsilon
+            and abs(actual_depth - standard_depth) <= geometry_epsilon
+        )
+        rotated_orientation = (
+            abs(actual_width - standard_depth) <= geometry_epsilon
+            and abs(actual_depth - standard_width) <= geometry_epsilon
+        )
+        if not standard_orientation and not rotated_orientation:
+            if existing_plan is not None:
+                raise WarehouseAreaActivationError(
+                    "该区域正式地堆排位与当前库位几何已经漂移，不能降级为规划位置",
+                    status_code=409,
+                )
+            return {
+                "available_location_count": 0,
+                "ground_plan_id": None,
+                "ground_plan_status": "planning_only",
+                "location_readiness_issue": (
+                    "确认位置无法按当前地图还原为1200×1000毫米标准栈板位；"
+                    "这些位置不能用于收料、入库或移位"
+                ),
+            }
+        width_mm = standard_width if standard_orientation else standard_depth
+        depth_mm = standard_depth if standard_orientation else standard_width
+        matched_slots.append(
+            {
+                **layout_slot,
+                "x_mm": Decimal(str(actual_slot["x_mm"])).quantize(
+                    Decimal("0.001")
+                ),
+                "y_mm": Decimal(str(actual_slot["y_mm"])).quantize(
+                    Decimal("0.001")
+                ),
+                "width_mm": width_mm,
+                "depth_mm": depth_mm,
+                "location_code": row.location_code,
+                "existing_location_id": int(row.id),
+                "existing_layout_version": int(layout.version),
+            }
+        )
+    try:
+        matched_slots = number_ground_physical_slots(
+            matched_slots,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+        )
+    except WarehouseGroundSlotError as error:
+        raise WarehouseAreaActivationError(
+            error.message, status_code=error.status_code
+        ) from error
+
+    configuration = {
+        "target_slot_count": len(rows),
+        "numbering_origin": "south",
+        "row_direction": "from_aisle_inward",
+        "slot_direction": "left_to_right",
+        "row_start_no": 1,
+        "slot_start_no": 1,
+    }
+    fingerprint = ground_preview_fingerprint(
+        area_id=area.id,
+        policy_version=policy.version,
+        map_revision=current_revision,
+        configuration=configuration,
+        slots=matched_slots,
+    )
+    expected_location_ids = {int(row.id) for row in rows}
+    if existing_plan is not None:
+        existing_location_ids = {
+            int(slot.location_id) for slot in existing_plan.slots
+        }
+        expected_by_location_id = {
+            int(slot["existing_location_id"]): slot for slot in matched_slots
+        }
+        epsilon = Decimal(str(geometry_epsilon))
+        geometry_matches = all(
+            (
+                expected := expected_by_location_id.get(int(slot.location_id))
+            )
+            is not None
+            and abs(Decimal(str(slot.x_mm)) - Decimal(str(expected["x_mm"])))
+            <= epsilon
+            and abs(Decimal(str(slot.y_mm)) - Decimal(str(expected["y_mm"])))
+            <= epsilon
+            and int(slot.width_mm) == int(expected["width_mm"])
+            and int(slot.depth_mm) == int(expected["depth_mm"])
+            and int(slot.route_sequence) == int(expected["route_sequence"])
+            and int(slot.row_no) == int(expected["row_no"])
+            and int(slot.slot_no) == int(expected["slot_no"])
+            for slot in existing_plan.slots
+        )
+        if (
+            existing_plan.status == "published"
+            and str(existing_plan.published_map_revision or "").strip()
+            == current_revision
+            and existing_location_ids == expected_location_ids
+            and int(existing_plan.target_slot_count) == len(rows)
+            and existing_plan.numbering_origin == configuration["numbering_origin"]
+            and existing_plan.row_direction == configuration["row_direction"]
+            and existing_plan.slot_direction == configuration["slot_direction"]
+            and int(existing_plan.row_start_no) == configuration["row_start_no"]
+            and int(existing_plan.slot_start_no) == configuration["slot_start_no"]
+            and existing_plan.preview_fingerprint == fingerprint
+            and geometry_matches
+        ):
+            return {
+                "available_location_count": len(rows),
+                "ground_plan_id": int(existing_plan.id),
+                "ground_plan_status": "published",
+                "location_readiness_issue": None,
+            }
+        raise WarehouseAreaActivationError(
+            "该区域已有其他或已漂移的地堆排位事实，已停止一次确认以避免覆盖真实位置",
+            status_code=409,
+        )
+
+    idempotency_key = (
+        "one-step-ground:"
+        + hashlib.sha256(operation_key.encode("utf-8")).hexdigest()
+    )
+    request_hash = ground_canonical_hash(
+        {
+            "operation_key": operation_key,
+            "area_id": area.id,
+            "map_revision": current_revision,
+            "preview_fingerprint": fingerprint,
+        }
+    )
+    now = beijing_now_naive()
+    plan = WarehouseGroundLayoutPlan(
+        area_id=area.id,
+        status="published",
+        draft_map_revision=current_revision,
+        published_map_revision=current_revision,
+        preview_fingerprint=fingerprint,
+        version=1,
+        publish_idempotency_key=idempotency_key,
+        publish_request_hash=request_hash,
+        updated_by=operator_id,
+        published_by=operator_id,
+        published_at=now,
+        updated_at=now,
+        **configuration,
+    )
+    db.add(plan)
+    db.flush()
+    for slot in matched_slots:
+        db.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=plan.id,
+                location_id=int(slot["existing_location_id"]),
+                route_sequence=int(slot["route_sequence"]),
+                row_no=int(slot["row_no"]),
+                slot_no=int(slot["slot_no"]),
+                x_mm=Decimal(str(slot["x_mm"])),
+                y_mm=Decimal(str(slot["y_mm"])),
+                width_mm=int(slot["width_mm"]),
+                depth_mm=int(slot["depth_mm"]),
+            )
+        )
+    db.flush()
+    return {
+        "available_location_count": len(rows),
+        "ground_plan_id": int(plan.id),
+        "ground_plan_status": "published",
+        "location_readiness_issue": None,
+    }
+
+
 @router.post('/twin-layout/floors/{floor_code}/zones/{feature_id}/confirm-area')
 def confirm_twin_zone_area(
     floor_code: str,
@@ -10815,19 +11215,61 @@ def confirm_twin_zone_area(
             # loaded before the publish step created the policy.  Refresh that
             # identity before creating physical pallet positions.
             db.expire(area, ['storage_policy'])
-            (
-                created_locations,
-                available_location_count,
-                location_layout_result,
-            ) = _ensure_one_step_pallet_locations(
-                db,
-                floor_layout=load_warehouse_twin_floor(floor_code),
-                feature_id=feature_id,
-                area=area,
-                inventory_type=payload.primary_inventory_type,
-                storage_layout=payload.storage_layout,
-                target_count=payload.max_pallet_capacity,
-                operator_id=user.id,
+            published_floor_layout = load_warehouse_twin_floor(floor_code)
+            existing_ground_plan_id = db.scalar(
+                select(WarehouseGroundLayoutPlan.id).where(
+                    WarehouseGroundLayoutPlan.area_id == area.id
+                )
+            )
+            if existing_ground_plan_id is not None:
+                # A published plan is already the physical ledger.  Validate
+                # the exact current state before any legacy count/reflow code
+                # can touch its member locations; an exact replay is a no-op.
+                ground_readiness = _ensure_one_step_ground_plan(
+                    db,
+                    floor_layout=published_floor_layout,
+                    feature_id=feature_id,
+                    area=area,
+                    storage_layout=payload.storage_layout,
+                    location_count=payload.max_pallet_capacity,
+                    operation_key=payload.operation_key,
+                    operator_id=user.id,
+                )
+                created_locations = []
+                planned_location_count = payload.max_pallet_capacity
+                location_layout_result = {
+                    "source_version": "TWIN_V1",
+                    "enabled_ids": [],
+                    "disabled_ids": [],
+                    "reflow": None,
+                }
+            else:
+                (
+                    created_locations,
+                    planned_location_count,
+                    location_layout_result,
+                ) = _ensure_one_step_pallet_locations(
+                    db,
+                    floor_layout=published_floor_layout,
+                    feature_id=feature_id,
+                    area=area,
+                    inventory_type=payload.primary_inventory_type,
+                    storage_layout=payload.storage_layout,
+                    target_count=payload.max_pallet_capacity,
+                    operator_id=user.id,
+                )
+                ground_readiness = _ensure_one_step_ground_plan(
+                    db,
+                    floor_layout=published_floor_layout,
+                    feature_id=feature_id,
+                    area=area,
+                    storage_layout=payload.storage_layout,
+                    location_count=planned_location_count,
+                    operation_key=payload.operation_key,
+                    operator_id=user.id,
+                )
+            available_location_count = int(
+                ground_readiness["available_location_count"]
             )
             for change in (location_layout_result.get("reflow") or {}).get(
                 "changes", []
@@ -10885,6 +11327,11 @@ def confirm_twin_zone_area(
                     'max_pallet_capacity': payload.max_pallet_capacity,
                     'created_location_count': len(created_locations),
                     'available_location_count': available_location_count,
+                    'ground_plan_id': ground_readiness.get('ground_plan_id'),
+                    'ground_plan_status': ground_readiness.get('ground_plan_status'),
+                    'location_readiness_issue': ground_readiness.get(
+                        'location_readiness_issue'
+                    ),
                     'location_source_version': location_layout_result.get('source_version'),
                     'enabled_location_ids': location_layout_result.get('enabled_ids', []),
                     'disabled_location_ids': location_layout_result.get('disabled_ids', []),
@@ -10914,10 +11361,20 @@ def confirm_twin_zone_area(
                         if available_location_count
                         else ''
                     )
+                    + (
+                        f"；{ground_readiness['location_readiness_issue']}"
+                        if ground_readiness.get('location_readiness_issue')
+                        else ''
+                    )
                 ),
                 'advanced_draft_preserved': advanced_draft_preserved,
                 'created_location_count': len(created_locations),
                 'available_location_count': available_location_count,
+                'ground_plan_id': ground_readiness.get('ground_plan_id'),
+                'ground_plan_status': ground_readiness.get('ground_plan_status'),
+                'location_readiness_issue': ground_readiness.get(
+                    'location_readiness_issue'
+                ),
                 'inventory_changed': False,
                 'pallet_binding_changed': False,
             }

@@ -163,7 +163,7 @@ def _seed_material_and_staging(session_factory) -> int:
         )
         raw_area.storage_policy = WarehouseAreaStoragePolicy(
             map_feature_id="zone-p181-1f-a1",
-            allowed_inventory_types_json='["raw_material"]',
+            allowed_inventory_types_json='["raw_material","semi_finished"]',
             storage_layout="pallet_ground",
             status="published",
             published_map_revision="p181-anonymous-map-v1",
@@ -225,7 +225,7 @@ def _seed_material_and_staging(session_factory) -> int:
             storage_type="ground",
             placement_status="placed",
             is_temporary=True,
-            source_version="P1-81",
+            source_version="TWIN_V1",
         )
         raw_location.floor3_layout = Floor3LocationLayout(
             left_pct=Decimal("20"),
@@ -283,6 +283,40 @@ def _seed_material_and_staging(session_factory) -> int:
                     depth_mm=1000,
                 )
             )
+        raw_plan = WarehouseGroundLayoutPlan(
+            area_id=raw_area.id,
+            status="published",
+            target_slot_count=1,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="p181-anonymous-map-v1",
+            published_map_revision="p181-anonymous-map-v1",
+            preview_fingerprint="c" * 64,
+            version=1,
+            publish_idempotency_key="p181-raw-ground-publish",
+            publish_request_hash="d" * 64,
+            updated_by=1,
+            published_by=1,
+            published_at=datetime.now(),
+        )
+        session.add(raw_plan)
+        session.flush()
+        session.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=raw_plan.id,
+                location_id=raw_location.id,
+                route_sequence=1,
+                row_no=1,
+                slot_no=1,
+                x_mm=Decimal("1000"),
+                y_mm=Decimal("2500"),
+                width_mm=1200,
+                depth_mm=1000,
+            )
+        )
         session.commit()
         return material.id
 

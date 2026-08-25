@@ -145,7 +145,7 @@ def test_candidate_locations_publish_the_server_derived_map_status() -> None:
     assert 'projection["position_status"] != "mapped"' in source
 
 
-def test_v11_ground_position_needs_a_current_published_plan_slot() -> None:
+def test_legacy_v11_ground_position_keeps_the_unique_runtime_zone_compatibility() -> None:
     row = _location(
         floor=3,
         source_version="V11",
@@ -154,7 +154,10 @@ def test_v11_ground_position_needs_a_current_published_plan_slot() -> None:
         storage_type="ground",
     )
 
-    assert warehouse._location_map_status(row, _projection_context(row)) == "unplaced"
+    assert (
+        warehouse._location_map_status(row, _projection_context(row))
+        == "floor3_mapped"
+    )
 
 
 def test_readonly_locator_blocks_writes_and_hides_all_write_entry_points() -> None:

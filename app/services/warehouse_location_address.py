@@ -152,12 +152,15 @@ def published_measured_map_readiness(
         )
 
     source_version = str(location.source_version or "").strip().upper()
+    # Publishing an area policy does not rewrite the stable identity of the
+    # seeded V11 locations inside that area.  Policy-backed V11 locations use
+    # the strict current-policy binding checks below, while policy-free V11
+    # locations retain the unique-area compatibility projection.
     legacy_v11 = bool(
-        policy is None
-        and source_version == "V11"
+        source_version == "V11"
         and int(location.warehouse_floor or 0) == 3
     )
-    if legacy_v11:
+    if legacy_v11 and policy is None:
         area_code = str(location.area_code or "").strip().upper()
         zone_ids_by_area = {
             str(key).strip().upper(): tuple(
@@ -178,7 +181,7 @@ def published_measured_map_readiness(
             )
         feature_id = feature_ids[0]
     else:
-        if source_version != "TWIN_V1":
+        if not legacy_v11 and source_version != "TWIN_V1":
             return PublishedMeasuredMapReadiness(
                 "area_only",
                 "该库位不是当前实测地图生成的正式位置",

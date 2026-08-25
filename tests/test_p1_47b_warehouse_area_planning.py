@@ -27,6 +27,8 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
     WarehouseLocation,
     InventoryLot,
     InventoryPallet,
@@ -183,11 +185,12 @@ def _confirm_area_payload(
     area_code: str = 'F1',
     area_name: str = '三楼成品区',
     existing_area_id: int | None = None,
+    expected_version: int = 1,
 ):
     return warehouse_api.TwinZoneConfirmAreaPayload(
         expected_revision=revision,
         expected_published_revision=published_revision or revision,
-        expected_version=1,
+        expected_version=expected_version,
         operation_key=operation_key,
         primary_inventory_type=usage,
         storage_layout=storage_layout,
@@ -2889,10 +2892,15 @@ def test_one_step_zero_capacity_marks_non_pallet_area_excluded(
 
 
 @pytest.mark.parametrize(
-    ("storage_layout", "capacity", "expected_storage_type"),
+    (
+        "storage_layout",
+        "capacity",
+        "expected_storage_type",
+        "expected_available_count",
+    ),
     [
-        ("pallet_ground", 3, "ground"),
-        ("rack", 2, "rack"),
+        ("pallet_ground", 3, "ground", 0),
+        ("rack", 2, "rack", 2),
     ],
 )
 def test_one_step_confirmed_capacity_activates_narrow_pallet_and_rack_zones(
@@ -2901,6 +2909,7 @@ def test_one_step_confirmed_capacity_activates_narrow_pallet_and_rack_zones(
     storage_layout: str,
     capacity: int,
     expected_storage_type: str,
+    expected_available_count: int,
 ) -> None:
     published, _draft = _isolate_layout_paths(tmp_path, monkeypatch)
     document = json.loads(published.read_text(encoding="utf-8"))
@@ -2951,7 +2960,13 @@ def test_one_step_confirmed_capacity_activates_narrow_pallet_and_rack_zones(
             )
 
             assert result["created_location_count"] == capacity
-            assert result["available_location_count"] == capacity
+            assert result["available_location_count"] == expected_available_count
+            if storage_layout == "pallet_ground":
+                assert result["ground_plan_status"] == "planning_only"
+                assert "不能用于收料、入库或移位" in result["location_readiness_issue"]
+            else:
+                assert result["ground_plan_status"] is None
+                assert result["location_readiness_issue"] is None
             rows = list(
                 db.scalars(
                     select(WarehouseLocation).order_by(WarehouseLocation.location_code)
@@ -2986,6 +3001,14 @@ def test_one_step_raw_material_area_creates_shared_pallet_positions(
 ) -> None:
     published, _draft = _isolate_layout_paths(tmp_path, monkeypatch)
     runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(
+        "app.services.location_candidates.load_warehouse_twin_published_floor_identity",
+        lambda _floor_number: {
+            "revision": _revision(runtime if runtime.exists() else published),
+            "zones_by_id": {"zone-f1": "F1"},
+            "zone_ids_by_area": {"F1": ("zone-f1",)},
+        },
+    )
     monkeypatch.setattr(
         warehouse_api,
         'list_production_projection_mappings',
@@ -3024,6 +3047,8 @@ def test_one_step_raw_material_area_creates_shared_pallet_positions(
             ]
             assert result['created_location_count'] == 4
             assert result['available_location_count'] == 4
+            assert result['ground_plan_status'] == 'published'
+            assert result['location_readiness_issue'] is None
             rows = list(
                 db.scalars(select(WarehouseLocation).order_by(WarehouseLocation.id))
             )
@@ -3032,6 +3057,311 @@ def test_one_step_raw_material_area_creates_shared_pallet_positions(
             assert all(row.storage_type == 'ground' for row in rows)
             assert all(row.is_active and row.placement_status == 'placed' for row in rows)
             assert all(row.floor3_layout is not None for row in rows)
+            plan = db.scalar(select(WarehouseGroundLayoutPlan))
+            assert plan is not None
+            assert plan.status == 'published'
+            assert plan.published_map_revision == _revision(runtime)
+            ground_slots = list(
+                db.scalars(
+                    select(WarehouseGroundLayoutSlot).order_by(
+                        WarehouseGroundLayoutSlot.route_sequence
+                    )
+                )
+            )
+            assert {slot.location_id for slot in ground_slots} == {
+                row.id for row in rows
+            }
+            assert [slot.route_sequence for slot in ground_slots] == [1, 2, 3, 4]
+            expected_spatial_order = sorted(
+                ground_slots,
+                key=lambda slot: (
+                    float(slot.y_mm) + float(slot.depth_mm) / 2,
+                    float(slot.x_mm) + float(slot.width_mm) / 2,
+                ),
+            )
+            assert [slot.id for slot in ground_slots] == [
+                slot.id for slot in expected_spatial_order
+            ]
+            distinct_row_centers = sorted(
+                {
+                    round(float(slot.y_mm) + float(slot.depth_mm) / 2, 3)
+                    for slot in ground_slots
+                }
+            )
+            assert [slot.row_no for slot in ground_slots] == [
+                distinct_row_centers.index(
+                    round(float(slot.y_mm) + float(slot.depth_mm) / 2, 3)
+                )
+                + 1
+                for slot in ground_slots
+            ]
+
+            current_document = json.loads(runtime.read_text(encoding='utf-8'))
+            current_floor = current_document['floors']['3F']
+            current_feature = next(
+                item
+                for item in current_floor['features']
+                if item['id'] == 'zone-f1'
+            )
+            runtime_before_rejected_zero = runtime.read_bytes()
+            with monkeypatch.context() as scoped:
+                scoped.setattr(
+                    warehouse_api,
+                    '_ensure_one_step_pallet_locations',
+                    lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                        AssertionError(
+                            'published plan members must not reach legacy count/reflow'
+                        )
+                    ),
+                )
+                with pytest.raises(warehouse_api.HTTPException) as zero_capacity:
+                    warehouse_api.confirm_twin_zone_area(
+                        '3F',
+                        'zone-f1',
+                        _confirm_area_payload(
+                            revision=current_floor['revision'],
+                            published_revision=current_floor['revision'],
+                            operation_key='p1-60-one-step-existing-plan-zero',
+                            usage='raw_material',
+                            storage_layout='pallet_ground',
+                            capacity=0,
+                            expected_version=int(current_feature['version']),
+                        ),
+                        _request(),
+                        db,
+                        admin,
+                    )
+            assert zero_capacity.value.status_code == 409
+            assert '不能从一次确认清空' in str(zero_capacity.value.detail)
+            assert runtime.read_bytes() == runtime_before_rejected_zero
+            assert db.scalar(
+                select(func.count(WarehouseLocation.id)).where(
+                    WarehouseLocation.is_active.is_(True)
+                )
+            ) == 4
+
+            claimed_floor_numbers: list[int] = []
+            with monkeypatch.context() as scoped:
+                scoped.setattr(
+                    warehouse_api,
+                    'claim_warehouse_floor_projection',
+                    lambda _db, *, floor_number: (
+                        claimed_floor_numbers.append(int(floor_number)) or True
+                    ),
+                )
+                warehouse_api._claim_floor_projection_for_layout_write(
+                    db, floor_code='F3'
+                )
+            assert claimed_floor_numbers == [3]
+
+            customer = Customer(
+                name='P1-47B raw-only ground candidate',
+                payment_term_days=0,
+                credit_limit=Decimal('0'),
+            )
+            db.add(customer)
+            db.flush()
+            product = Product(
+                customer_id=customer.id,
+                product_code='P147B-RAW-ONLY-CANDIDATE',
+                customer_material_code='P147B-RAW-ONLY-CANDIDATE',
+                product_name='P1-47B raw-only candidate product',
+            )
+            db.add(product)
+            db.commit()
+            with pytest.raises(warehouse_api.HTTPException) as candidate_error:
+                warehouse_api.list_ground_storage_candidates(
+                    '3F',
+                    'F1',
+                    customer.id,
+                    product.id,
+                    1,
+                    db,
+                    admin,
+                )
+            assert candidate_error.value.status_code == 409
+            assert candidate_error.value.detail['code'] == (
+                'GROUND_AREA_INVENTORY_TYPE_NOT_ALLOWED'
+            )
+
+            area = db.scalar(select(WarehouseArea).where(WarehouseArea.area_code == 'F1'))
+            policy = db.scalar(select(WarehouseAreaStoragePolicy))
+            assert area is not None and policy is not None
+            policy.allowed_inventory_types_json = '{'
+            db.flush()
+            with pytest.raises(warehouse_api.HTTPException) as invalid_policy:
+                warehouse_api.list_ground_storage_candidates(
+                    '3F',
+                    'F1',
+                    customer.id,
+                    product.id,
+                    1,
+                    db,
+                    admin,
+                )
+            assert invalid_policy.value.status_code == 409
+            assert invalid_policy.value.detail['code'] == 'GROUND_AREA_POLICY_INVALID'
+            db.rollback()
+
+            rows = list(
+                db.scalars(select(WarehouseLocation).order_by(WarehouseLocation.id))
+            )
+            area = db.scalar(select(WarehouseArea).where(WarehouseArea.area_code == 'F1'))
+            policy = db.scalar(select(WarehouseAreaStoragePolicy))
+            assert area is not None and policy is not None
+            layout_versions = {
+                row.id: row.floor3_layout.version for row in rows
+            }
+            first_layout = rows[0].floor3_layout
+            assert first_layout is not None
+            spatial_snapshot = [
+                (
+                    row.id,
+                    row.is_active,
+                    row.placement_status,
+                    row.floor3_layout.version,
+                    row.floor3_layout.left_pct,
+                    row.floor3_layout.top_pct,
+                    row.floor3_layout.width_pct,
+                    row.floor3_layout.height_pct,
+                )
+                for row in rows
+            ]
+            protected_actions = [
+                lambda: warehouse_api.set_activated_area_location_count(
+                    '3F',
+                    'F1',
+                    warehouse_api.Floor3AreaLocationCountPayload(
+                        target_count=3,
+                        confirmed=True,
+                        expected_map_revision=policy.published_map_revision,
+                        expected_policy_version=policy.version,
+                        expected_layout_versions=layout_versions,
+                    ),
+                    _request(),
+                    db,
+                    admin,
+                ),
+                lambda: warehouse_api.auto_arrange_activated_area_locations(
+                    '3F',
+                    'F1',
+                    warehouse_api.AreaLocationAutoArrangePayload(
+                        confirmed=True,
+                        expected_map_revision=policy.published_map_revision,
+                        expected_policy_version=policy.version,
+                        expected_layout_versions=layout_versions,
+                    ),
+                    _request(),
+                    db,
+                    admin,
+                ),
+                lambda: warehouse_api.patch_activated_area_location_layout(
+                    '3F',
+                    'F1',
+                    warehouse_api.Floor3LayoutAreaPatchPayload(
+                        expected_map_revision=policy.published_map_revision,
+                        expected_policy_version=policy.version,
+                        slots=[
+                            warehouse_api.Floor3LayoutAreaSlotPayload(
+                                location_id=rows[0].id,
+                                expected_version=first_layout.version,
+                                left_pct=first_layout.left_pct,
+                                top_pct=first_layout.top_pct,
+                                width_pct=first_layout.width_pct,
+                                height_pct=first_layout.height_pct,
+                                z_index=first_layout.z_index,
+                            )
+                        ],
+                    ),
+                    _request(),
+                    db,
+                    admin,
+                ),
+                lambda: warehouse_api.disable_activated_area_location(
+                    rows[0].id,
+                    warehouse_api.Floor3LayoutSlotStatePayload(
+                        expected_version=first_layout.version,
+                        expected_map_revision=policy.published_map_revision,
+                        expected_policy_version=policy.version,
+                    ),
+                    _request(),
+                    db,
+                    admin,
+                ),
+                lambda: warehouse_api.enable_activated_area_location(
+                    rows[0].id,
+                    warehouse_api.Floor3LayoutSlotStatePayload(
+                        expected_version=first_layout.version,
+                        expected_map_revision=policy.published_map_revision,
+                        expected_policy_version=policy.version,
+                    ),
+                    _request(),
+                    db,
+                    admin,
+                ),
+            ]
+            for action in protected_actions:
+                with pytest.raises(warehouse_api.HTTPException) as locked:
+                    action()
+                assert locked.value.status_code == 409
+                assert '地堆排位' in str(locked.value.detail)
+            after_rows = list(
+                db.scalars(select(WarehouseLocation).order_by(WarehouseLocation.id))
+            )
+            assert [
+                (
+                    row.id,
+                    row.is_active,
+                    row.placement_status,
+                    row.floor3_layout.version,
+                    row.floor3_layout.left_pct,
+                    row.floor3_layout.top_pct,
+                    row.floor3_layout.width_pct,
+                    row.floor3_layout.height_pct,
+                )
+                for row in after_rows
+            ] == spatial_snapshot
+
+            plan = db.scalar(select(WarehouseGroundLayoutPlan))
+            assert plan is not None
+            with pytest.raises(WarehouseAreaActivationError, match='不能从一次确认清空'):
+                warehouse_api._ensure_one_step_ground_plan(
+                    db,
+                    floor_layout=json.loads(runtime.read_text(encoding='utf-8'))[
+                        'floors'
+                    ]['3F'],
+                    feature_id='zone-f1',
+                    area=area,
+                    storage_layout='pallet_ground',
+                    location_count=0,
+                    operation_key='p1-60-one-step-zero-after-plan',
+                    operator_id=admin.id,
+                )
+            drifted_slot = db.scalar(
+                select(WarehouseGroundLayoutSlot).order_by(
+                    WarehouseGroundLayoutSlot.route_sequence
+                )
+            )
+            assert drifted_slot is not None
+            drifted_slot.x_mm += Decimal('10')
+            db.flush()
+            with pytest.raises(WarehouseAreaActivationError, match='已漂移'):
+                warehouse_api._ensure_one_step_ground_plan(
+                    db,
+                    floor_layout=json.loads(runtime.read_text(encoding='utf-8'))[
+                        'floors'
+                    ]['3F'],
+                    feature_id='zone-f1',
+                    area=area,
+                    storage_layout='pallet_ground',
+                    location_count=4,
+                    operation_key='p1-60-one-step-drifted-plan',
+                    operator_id=admin.id,
+                )
+            db.rollback()
+            rows = list(
+                db.scalars(select(WarehouseLocation).order_by(WarehouseLocation.id))
+            )
             pallet_result = warehouse_api.create_floor3_pallet(
                     warehouse_api.Floor3PalletCreatePayload(
                         location_id=rows[0].id,
@@ -3333,7 +3663,10 @@ def test_one_step_confirmed_capacity_above_standard_fit_creates_logical_position
                 admin,
             )
             assert result['created_location_count'] == 49
-            assert result['available_location_count'] == 49
+            assert result['available_location_count'] == 0
+            assert result['ground_plan_status'] == 'planning_only'
+            assert '不能用于收料、入库或移位' in result['location_readiness_issue']
+            assert '可移动空货位' not in result['message']
             assert draft.exists()
             assert Path(editor.TWIN_LAYOUT_PATH).exists()
             assert db.scalar(select(func.count(WarehouseArea.id))) == 1

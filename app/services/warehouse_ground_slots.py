@@ -29,6 +29,10 @@ from app.services.warehouse_floor1_candidate_planner import (
     Floor1CandidatePlanningError,
     measured_pallet_slots_for_zone,
 )
+from app.services.warehouse_area_activation import (
+    WarehouseAreaActivationError,
+    policy_inventory_types,
+)
 from app.services.warehouse_location_address import employee_location_name
 
 
@@ -111,6 +115,58 @@ def _ordered_physical_slots(
             left_to_right_ascending = not left_to_right_ascending
         rows.append(sorted(current, key=coordinate, reverse=not left_to_right_ascending))
     return rows
+
+
+def number_ground_physical_slots(
+    slots: list[dict],
+    *,
+    numbering_origin: str,
+    row_direction: str,
+    slot_direction: str,
+    row_start_no: int = 1,
+    slot_start_no: int = 1,
+) -> list[dict]:
+    """Attach deterministic route, row and slot numbers to measured footprints."""
+
+    if not 1 <= row_start_no <= 99 or not 1 <= slot_start_no <= 99:
+        raise WarehouseGroundSlotError(
+            "GROUND_NUMBER_START_INVALID",
+            "排号和位号起点必须在 1～99 之间。",
+            status_code=422,
+        )
+    numbered: list[dict] = []
+    route_sequence = 0
+    for row_index, row in enumerate(
+        _ordered_physical_slots(
+            slots,
+            numbering_origin=numbering_origin,
+            row_direction=row_direction,
+            slot_direction=slot_direction,
+        )
+    ):
+        row_no = row_start_no + row_index
+        if row_no > 99:
+            raise WarehouseGroundSlotError(
+                "GROUND_ROW_NUMBER_OVERFLOW",
+                "生成后的排号超过 99，请调整编号起点。",
+            )
+        for slot_index, slot in enumerate(row):
+            slot_no = slot_start_no + slot_index
+            if slot_no > 99:
+                raise WarehouseGroundSlotError(
+                    "GROUND_SLOT_NUMBER_OVERFLOW",
+                    "生成后的位号超过 99，请调整编号起点。",
+                )
+            route_sequence += 1
+            numbered.append(
+                {
+                    **slot,
+                    "route_sequence": route_sequence,
+                    "row_no": row_no,
+                    "slot_no": slot_no,
+                }
+            )
+    return numbered
 
 
 def build_ground_slot_preview(
@@ -377,7 +433,11 @@ def ground_slots_adjacent(left: WarehouseGroundLayoutSlot, right: WarehouseGroun
 
 
 def published_ground_plan(
-    db: Session, *, floor_code: str, area_code: str
+    db: Session,
+    *,
+    floor_code: str,
+    area_code: str,
+    required_inventory_type: str | None = None,
 ) -> WarehouseGroundLayoutPlan:
     plan = db.scalar(
         select(WarehouseGroundLayoutPlan)
@@ -411,6 +471,19 @@ def published_ground_plan(
     ):
         raise WarehouseGroundSlotError(
             "GROUND_LAYOUT_PUBLISH_STALE", "区域地图或存放策略已变化，请管理员重新核对地堆排位。"
+        )
+    try:
+        allowed_inventory_types = set(policy_inventory_types(policy))
+    except WarehouseAreaActivationError as error:
+        raise WarehouseGroundSlotError(
+            "GROUND_AREA_POLICY_INVALID",
+            str(error),
+            status_code=error.status_code,
+        ) from error
+    if required_inventory_type and required_inventory_type not in allowed_inventory_types:
+        raise WarehouseGroundSlotError(
+            "GROUND_AREA_INVENTORY_TYPE_NOT_ALLOWED",
+            "该区域的正式用途不允许存放本次库存，不能作为可选地堆位置。",
         )
     return plan
 

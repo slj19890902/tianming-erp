@@ -12,6 +12,7 @@ from app.services.warehouse_location_address import (
     employee_area_name,
     employee_location_name,
     location_address_payload,
+    published_measured_map_readiness,
 )
 
 
@@ -59,6 +60,7 @@ def _location(
         level_no=level_no,
         side_code=side_code,
         source_version="V11",
+        is_active=True,
         placement_status="placed",
     )
 
@@ -166,3 +168,141 @@ def test_v11_location_and_payload_use_the_same_employee_area_name(
     assert payload["area_name"] == f"右区{location.area_code}"
     assert payload["area_master_name"] == f"{location.area_code} 区"
     assert "位置名称待完善" not in expected
+
+
+def _published_identity(*, feature_id: str, area_code: str) -> dict:
+    return {
+        "revision": "runtime-rev-1",
+        "feature_ids": frozenset({feature_id}),
+        "erp_area_codes": frozenset({area_code}),
+        "zones_by_id": {feature_id: area_code},
+        "zone_ids_by_area": {area_code: (feature_id,)},
+    }
+
+
+def _published_policy(*, feature_id: str, revision: str = "runtime-rev-1") -> dict:
+    return {
+        "status": "published",
+        "published_map_revision": revision,
+        "map_feature_id": feature_id,
+    }
+
+
+def test_v11_location_accepts_a_strict_current_published_area_policy() -> None:
+    floor = _floor(3)
+    area = _area(floor, area_code="D2", area_name="D2 区")
+    location = _location(
+        code="D2-L01",
+        area_code="D2",
+        storage_type="ground",
+        side_code="L",
+    )
+
+    readiness = published_measured_map_readiness(
+        location,
+        floor=floor,
+        area=area,
+        policy=_published_policy(feature_id="zone-d2"),
+        published_floor_identity=_published_identity(
+            feature_id="zone-d2",
+            area_code="D2",
+        ),
+        has_geometry=True,
+        ground_layout=None,
+    )
+
+    assert readiness.position_status == "mapped"
+    assert readiness.issue is None
+    assert readiness.map_feature_id == "zone-d2"
+    assert readiness.published_map_revision == "runtime-rev-1"
+
+
+@pytest.mark.parametrize(
+    ("policy", "identity"),
+    [
+        (
+            {
+                "status": "draft",
+                "published_map_revision": None,
+                "map_feature_id": "zone-d2",
+            },
+            _published_identity(feature_id="zone-d2", area_code="D2"),
+        ),
+        (
+            _published_policy(feature_id="zone-d2", revision="stale-rev"),
+            _published_identity(feature_id="zone-d2", area_code="D2"),
+        ),
+        (
+            _published_policy(feature_id="zone-d2"),
+            _published_identity(feature_id="zone-d2", area_code="E4"),
+        ),
+    ],
+)
+def test_v11_policy_compatibility_fails_closed_for_noncurrent_bindings(
+    policy: dict,
+    identity: dict,
+) -> None:
+    floor = _floor(3)
+    area = _area(floor, area_code="D2", area_name="D2 区")
+    location = _location(
+        code="D2-L01",
+        area_code="D2",
+        storage_type="ground",
+        side_code="L",
+    )
+
+    readiness = published_measured_map_readiness(
+        location,
+        floor=floor,
+        area=area,
+        policy=policy,
+        published_floor_identity=identity,
+        has_geometry=True,
+        ground_layout=None,
+    )
+
+    assert readiness.position_status == "area_only"
+    assert readiness.issue
+    assert readiness.map_feature_id is None
+
+
+def test_twin_ground_location_still_requires_a_current_published_ground_slot() -> None:
+    floor = _floor(3)
+    area = _area(floor, area_code="D2", area_name="D2 区")
+    location = _location(
+        code="TWIN-D2-001",
+        area_code="D2",
+        storage_type="ground",
+        side_code="L",
+    )
+    location.source_version = "TWIN_V1"
+    policy = _published_policy(feature_id="zone-d2")
+    identity = _published_identity(feature_id="zone-d2", area_code="D2")
+
+    blocked = published_measured_map_readiness(
+        location,
+        floor=floor,
+        area=area,
+        policy=policy,
+        published_floor_identity=identity,
+        has_geometry=True,
+        ground_layout=None,
+    )
+    mapped = published_measured_map_readiness(
+        location,
+        floor=floor,
+        area=area,
+        policy=policy,
+        published_floor_identity=identity,
+        has_geometry=True,
+        ground_layout={
+            "status": "published",
+            "published_map_revision": "runtime-rev-1",
+            "area_id": area.id,
+            "location_id": location.id,
+        },
+    )
+
+    assert blocked.position_status == "area_only"
+    assert "已发布排位" in str(blocked.issue)
+    assert mapped.position_status == "mapped"

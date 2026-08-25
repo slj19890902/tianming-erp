@@ -2071,6 +2071,54 @@ def _actual_goods_lines(
     ]
 
 
+def _customer_document_fulfillment_mode(
+    *,
+    frozen_order_mode: str | None,
+    current_product_mode: str | None,
+) -> str:
+    """Resolve the customer-facing delivery projection without changing stock facts.
+
+    An order explicitly frozen as parent delivery must stay consolidated.  A later
+    explicit product-master switch to parent delivery may also consolidate an older
+    component-delivery order on customer documents, which is the safe one-way
+    compatibility path for already-created delivery notes.  Switching the master
+    back to component delivery never expands an order that was frozen as parent.
+    """
+
+    if "parent_delivery" in {frozen_order_mode, current_product_mode}:
+        return "parent_delivery"
+    return "component_delivery"
+
+
+def _delivery_document_goods_lines(
+    *,
+    order_item_id: int,
+    product_code: str | None,
+    product_name: str | None,
+    specification: str | None,
+    parent_quantity: int,
+    kit_metadata: dict,
+) -> list[dict]:
+    """Project one saved delivery item into customer-visible goods lines."""
+
+    if kit_metadata.get("is_composite_bom"):
+        fulfillment_mode = (
+            kit_metadata.get("composite_fulfillment_mode")
+            or "component_delivery"
+        )
+    else:
+        fulfillment_mode = "parent_delivery"
+    return _actual_goods_lines(
+        order_item_id=order_item_id,
+        product_code=product_code,
+        product_name=product_name,
+        specification=specification,
+        parent_quantity=parent_quantity,
+        component_lines=kit_metadata.get("component_lines") or [],
+        fulfillment_mode=fulfillment_mode,
+    )
+
+
 def _delivery_kit_metadata(
     db: Session,
     order_item: OrderItem | None,
@@ -2078,6 +2126,7 @@ def _delivery_kit_metadata(
     planned_delivery_quantity: int | None = None,
     delivery_item_id: int | None = None,
     dispatched: bool = False,
+    current_product_fulfillment_mode: str | None = None,
 ) -> dict:
     if order_item is None or not is_composite_order_item(db, order_item.id):
         return {
@@ -2109,11 +2158,23 @@ def _delivery_kit_metadata(
         delivery_item_id=delivery_item_id,
         dispatched=dispatched,
     )
+    if (
+        current_product_fulfillment_mode is None
+        and order_item.product_id is not None
+    ):
+        product = db.get(Product, order_item.product_id)
+        current_product_fulfillment_mode = (
+            product.composite_fulfillment_mode if product is not None else None
+        )
     return {
         "is_composite_bom": True,
-        "composite_fulfillment_mode": (
-            getattr(order_item, "composite_fulfillment_mode_snapshot", None)
-            or "component_delivery"
+        "composite_fulfillment_mode": _customer_document_fulfillment_mode(
+            frozen_order_mode=getattr(
+                order_item,
+                "composite_fulfillment_mode_snapshot",
+                None,
+            ),
+            current_product_mode=current_product_fulfillment_mode,
         ),
         "kit_availability": availability,
         "available_sets": int(availability.get("available_sets") or 0),
@@ -2353,6 +2414,9 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
                 Product.length_mm.label("product_length_mm"),
                 Product.width_mm.label("product_width_mm"),
                 Product.height_mm.label("product_height_mm"),
+                Product.composite_fulfillment_mode.label(
+                    "current_product_fulfillment_mode"
+                ),
                 DeliveryItem.unit_snapshot,
                 OrderItem.snapshot_production_notes.label("production_notes"),
         )
@@ -2637,6 +2701,7 @@ def _delivery_list_kit_metadata(
     planned_delivery_quantity: int,
     delivery_item_id: int,
     dispatched: bool,
+    current_product_fulfillment_mode: str | None = None,
 ) -> dict:
     demands = context["component_demands_by_order_item"].get(order_item.id, [])
     if not demands:
@@ -2753,9 +2818,13 @@ def _delivery_list_kit_metadata(
     ]
     return {
         "is_composite_bom": True,
-        "composite_fulfillment_mode": (
-            getattr(order_item, "composite_fulfillment_mode_snapshot", None)
-            or "component_delivery"
+        "composite_fulfillment_mode": _customer_document_fulfillment_mode(
+            frozen_order_mode=getattr(
+                order_item,
+                "composite_fulfillment_mode_snapshot",
+                None,
+            ),
+            current_product_mode=current_product_fulfillment_mode,
         ),
         "kit_availability": availability,
         "available_sets": available_sets,
@@ -3627,6 +3696,9 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
                 planned_delivery_quantity=int(row["delivered_quantity"] or 0),
                 delivery_item_id=delivery_item_id,
                 dispatched=dispatched,
+                current_product_fulfillment_mode=row.get(
+                    "current_product_fulfillment_mode"
+                ),
             )
             inventory_sources = _delivery_list_composite_inventory_sources(
                 context,
@@ -3727,9 +3799,13 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
             OrderItem.composite_fulfillment_mode_snapshot.label(
                 "composite_fulfillment_mode"
             ),
+            Product.composite_fulfillment_mode.label(
+                "current_product_fulfillment_mode"
+            ),
         )
         .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
         .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .outerjoin(Product, Product.id == OrderItem.product_id)
         .where(
             DeliveryItem.delivery_id.in_(delivery_ids),
             DeliveryItem.order_item_id.in_(
@@ -3741,7 +3817,10 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
     component_delivery_rows = [
         row
         for row in composite_rows
-        if (row.composite_fulfillment_mode or "component_delivery")
+        if _customer_document_fulfillment_mode(
+            frozen_order_mode=row.composite_fulfillment_mode,
+            current_product_mode=row.current_product_fulfillment_mode,
+        )
         == "component_delivery"
     ]
     for row in component_delivery_rows:
@@ -4181,6 +4260,10 @@ def _delivery_response(
     total_actual_goods_quantity = 0
     for row in items:
         mapping = dict(row)
+        current_product_fulfillment_mode = mapping.pop(
+            "current_product_fulfillment_mode",
+            None,
+        )
         mapping["product_code"] = (
             str(mapping.get("product_code") or "").strip()
             or "存货编码未登记"
@@ -4226,6 +4309,9 @@ def _delivery_response(
                     planned_delivery_quantity=mapping["delivered_quantity"],
                     delivery_item_id=mapping["id"],
                     dispatched=has_dispatch_history,
+                    current_product_fulfillment_mode=(
+                        current_product_fulfillment_mode
+                    ),
                 )
             )
         )
@@ -4246,16 +4332,13 @@ def _delivery_response(
                 }
             ]
             if is_unordered
-            else _actual_goods_lines(
+            else _delivery_document_goods_lines(
                 order_item_id=mapping["order_item_id"],
                 product_code=mapping["product_code"],
                 product_name=mapping["product_name"],
                 specification=mapping["specification"],
                 parent_quantity=mapping["delivered_quantity"],
-                component_lines=kit_metadata["component_lines"],
-                fulfillment_mode=kit_metadata.get(
-                    "composite_fulfillment_mode", "component_delivery"
-                ),
+                kit_metadata=kit_metadata,
             )
         )
         actual_goods_quantity = sum(
@@ -8412,6 +8495,9 @@ def get_delivery_print_data(
             Product.length_mm.label("product_length_mm"),
             Product.width_mm.label("product_width_mm"),
             Product.height_mm.label("product_height_mm"),
+            Product.composite_fulfillment_mode.label(
+                "current_product_fulfillment_mode"
+            ),
             DeliveryItem.unit_snapshot,
             DeliveryItem.delivered_quantity.label("quantity"),
             DeliveryItem.ordered_quantity_snapshot,
@@ -8466,6 +8552,7 @@ def get_delivery_print_data(
             planned_delivery_quantity=row.quantity,
             delivery_item_id=row.delivery_item_id,
             dispatched=delivery.status == "dispatched",
+            current_product_fulfillment_mode=row.current_product_fulfillment_mode,
         )
         actual_goods_lines = (
             [
@@ -8484,16 +8571,13 @@ def get_delivery_print_data(
                 }
             ]
             if is_unordered
-            else _actual_goods_lines(
+            else _delivery_document_goods_lines(
                 order_item_id=row.order_item_id,
                 product_code=_print_product_code(product_code),
                 product_name=product_name,
                 specification=specification,
                 parent_quantity=row.quantity,
-                component_lines=kit_metadata["component_lines"],
-                fulfillment_mode=kit_metadata.get(
-                    "composite_fulfillment_mode", "component_delivery"
-                ),
+                kit_metadata=kit_metadata,
             )
         )
         document_goods_lines = [

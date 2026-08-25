@@ -10,11 +10,19 @@ from alembic.config import Config
 import pytest
 from sqlalchemy.orm import Session
 
-from app.api.deliveries import _actual_goods_lines
+from app.api.deliveries import (
+    _actual_goods_lines,
+    _customer_document_fulfillment_mode,
+    _delivery_list_summary_context,
+    _delivery_response,
+    _delivery_summary_response,
+    get_delivery_print_data,
+)
 from app.api.orders import OrderItemCreate, _validated_combination_provenance
 from app.core.database import create_sqlite_engine
 from app.models import Base
 from app.models.customer import Customer
+from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_bom import (
@@ -514,6 +522,143 @@ def test_parent_delivery_hides_child_lines_from_customer_documents() -> None:
     assert [(line["line_type"], line["product_code"], line["quantity"]) for line in lines] == [
         ("parent", "P179-KIT", 1800)
     ]
+
+
+def test_customer_document_parent_delivery_is_a_one_way_override() -> None:
+    assert _customer_document_fulfillment_mode(
+        frozen_order_mode="component_delivery",
+        current_product_mode="parent_delivery",
+    ) == "parent_delivery"
+    assert _customer_document_fulfillment_mode(
+        frozen_order_mode="parent_delivery",
+        current_product_mode="component_delivery",
+    ) == "parent_delivery"
+    assert _customer_document_fulfillment_mode(
+        frozen_order_mode="component_delivery",
+        current_product_mode="component_delivery",
+    ) == "component_delivery"
+
+
+def test_current_parent_delivery_print_keeps_other_actual_product(
+    tmp_path: Path,
+) -> None:
+    engine = create_sqlite_engine(tmp_path / "p0-21-parent-delivery-print.sqlite3")
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as db:
+            user = User(
+                username="p0-21-print-admin",
+                password_hash="pytest-only",
+                role="admin",
+                real_name="送货打印管理员",
+                display_name="送货打印管理员",
+                is_active=True,
+                must_change_password=False,
+            )
+            db.add(user)
+            db.flush()
+            _requisition, composite_item, _items = _seed_label_facts(db)
+            parent = db.get(Product, composite_item.product_id)
+            assert parent is not None
+            parent.composite_fulfillment_mode = "parent_delivery"
+            composite_item.delivered_quantity = 500
+
+            order = db.get(Order, composite_item.order_id)
+            assert order is not None
+            ordinary = Product(
+                customer_id=order.customer_id,
+                product_code="Z.001.000206",
+                customer_material_code="Z.001.000206",
+                product_name="30入装衬板6片",
+                unit="PCS",
+            )
+            db.add(ordinary)
+            db.flush()
+            ordinary_item = OrderItem(
+                order_id=order.id,
+                product_id=ordinary.id,
+                item_order_number="P0-21-ORDINARY-001",
+                item_sequence=2,
+                quantity=1800,
+                delivered_quantity=500,
+                unit_price=Decimal("1"),
+                subtotal=Decimal("1800"),
+                material_status="received",
+                snapshot_product_code=ordinary.product_code,
+                snapshot_product_name=ordinary.product_name,
+                snapshot_spec="778×1139mm",
+                special_process="无",
+            )
+            db.add(ordinary_item)
+            db.flush()
+
+            delivery = Delivery(
+                delivery_number="YL-20260825-P021",
+                customer_id=order.customer_id,
+                delivery_date=date(2026, 8, 25),
+                status="dispatched",
+                total_quantity=1000,
+                created_by=user.id,
+            )
+            db.add(delivery)
+            db.flush()
+            db.add_all(
+                [
+                    DeliveryItem(
+                        delivery_id=delivery.id,
+                        source_type="order",
+                        order_item_id=ordinary_item.id,
+                        product_code_snapshot=ordinary.product_code,
+                        product_name_snapshot=ordinary.product_name,
+                        specification_snapshot="778×1139mm",
+                        delivered_quantity=500,
+                        ordered_quantity_snapshot=1800,
+                        order_remaining_snapshot=1800,
+                    ),
+                    DeliveryItem(
+                        delivery_id=delivery.id,
+                        source_type="order",
+                        order_item_id=composite_item.id,
+                        product_code_snapshot=parent.product_code,
+                        product_name_snapshot=parent.product_name,
+                        specification_snapshot="组合规格",
+                        delivered_quantity=500,
+                        ordered_quantity_snapshot=1800,
+                        order_remaining_snapshot=1800,
+                    ),
+                ]
+            )
+            db.commit()
+
+            payload = get_delivery_print_data(delivery.id, db=db, user=user)
+            detail = _delivery_response(db, delivery.id)
+            summary = _delivery_summary_response(
+                delivery.id,
+                context=_delivery_list_summary_context(db, [delivery.id]),
+            )
+
+            assert [
+                (row["line_type"], row["product_code"], row["quantity"])
+                for row in payload["actual_goods_items"]
+            ] == [
+                ("parent", "Z.001.000206", 500),
+                ("parent", "Z.001.000205", 500),
+            ]
+            assert payload["total_quantity"] == 1000
+            assert payload["total_actual_goods_quantity"] == 1000
+            assert [
+                [line["product_code"] for line in item["actual_goods_lines"]]
+                for item in payload["items"]
+            ] == [["Z.001.000206"], ["Z.001.000205"]]
+            assert [
+                [line["product_code"] for line in item["actual_goods_lines"]]
+                for item in detail["items"]
+            ] == [["Z.001.000206"], ["Z.001.000205"]]
+            assert detail["total_actual_goods_quantity"] == 1000
+            assert summary["item_count"] == 2
+            assert summary["total_actual_goods_quantity"] == 1000
+    finally:
+        engine.dispose()
 
 
 def test_reported_ui_and_label_page_expose_composite_group_contract() -> None:

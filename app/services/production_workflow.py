@@ -39,6 +39,7 @@ from app.models.production import (
     ProductionStockTransfer,
     ProductionTask,
 )
+from app.models.requisition import RequisitionItem
 from app.models.user import User
 from app.models.warehouse_inventory import (
     InventoryLot,
@@ -60,6 +61,7 @@ from app.models.warehouse_inventory import (
 )
 from app.services.production_station_routing import production_station_memberships
 from app.services.composite_bom_workflow import (
+    ComponentDemand,
     CompositeBomWorkflowError,
     component_available_quantity,
     effective_component_demands,
@@ -728,6 +730,87 @@ def _component_semi_inventory_fully_covers(
     )
 
 
+def _virtual_composite_receipts_are_complete(
+    db: Session,
+    item: OrderItem,
+    *,
+    demands: Sequence[ComponentDemand],
+) -> bool:
+    """Recognize closed component receipts even when the parent flag is stale.
+
+    Virtual composite parents have no physical parent board.  Older receipt
+    code nevertheless waited for that nonexistent source and could leave the
+    parent ``material_status`` at ``pending`` after every real component had
+    been received.  Use only exact active BOM-source links plus posted receipt
+    facts here; a mutable status flag alone must not release a task.
+    """
+    if not bool(item.is_virtual_composite_parent_snapshot):
+        return False
+
+    required_snapshot_ids = {
+        int(demand.snapshot_id)
+        for demand in demands
+        if demand.is_required
+        and component_available_quantity(db, demand.snapshot_id)
+        < int(demand.required_piece_quantity)
+    }
+    if not required_snapshot_ids:
+        return False
+
+    source_rows = db.execute(
+        select(
+            RequisitionItemBomSource.sales_order_item_bom_component_id,
+            RequisitionItem.id,
+            RequisitionItem.status,
+        )
+        .join(
+            RequisitionItem,
+            RequisitionItem.id == RequisitionItemBomSource.requisition_item_id,
+        )
+        .where(
+            RequisitionItemBomSource.sales_order_item_bom_component_id.in_(
+                required_snapshot_ids
+            ),
+            RequisitionItemBomSource.active_guard == 1,
+            RequisitionItem.order_item_id == item.id,
+        )
+    ).all()
+    sources_by_snapshot: dict[int, list[tuple[int, str]]] = {}
+    requisition_item_ids: set[int] = set()
+    for snapshot_id, requisition_item_id, status in source_rows:
+        normalized_snapshot_id = int(snapshot_id)
+        normalized_requisition_item_id = int(requisition_item_id)
+        sources_by_snapshot.setdefault(normalized_snapshot_id, []).append(
+            (normalized_requisition_item_id, str(status))
+        )
+        requisition_item_ids.add(normalized_requisition_item_id)
+    if not requisition_item_ids:
+        return False
+
+    posted_receipt_source_ids = set(
+        db.scalars(
+            select(IncomingReceiptItem.requisition_item_id)
+            .where(
+                IncomingReceiptItem.requisition_item_id.in_(requisition_item_ids),
+                IncomingReceiptItem.order_item_id == item.id,
+                IncomingReceiptItem.status == "posted",
+            )
+            .distinct()
+        ).all()
+    )
+    for snapshot_id in required_snapshot_ids:
+        snapshot_sources = sources_by_snapshot.get(snapshot_id, [])
+        if not snapshot_sources:
+            return False
+        if any(
+            status != "已入库"
+            or requisition_item_id not in posted_receipt_source_ids
+            for requisition_item_id, status in snapshot_sources
+        ):
+            return False
+    return True
+
+
 def _refresh_composite_production_tasks(
     db: Session,
     item: OrderItem,
@@ -746,6 +829,11 @@ def _refresh_composite_production_tasks(
         raise ProductionWorkflowError(str(error), 409) from error
     tasks: list[ProductionTask] = []
     now = utc_now_naive()
+    reconciled_component_receipts = _virtual_composite_receipts_are_complete(
+        db,
+        item,
+        demands=demands,
+    )
     for demand in demands:
         snapshot = db.get(SalesOrderItemBomComponent, demand.snapshot_id)
         if snapshot is None:
@@ -812,7 +900,11 @@ def _refresh_composite_production_tasks(
             planned_quantity = 0
             material_input_quantity = 0
             readiness_basis = "component_finished_inventory"
-        elif item.material_status == "received" or semi_inventory_ready:
+        elif (
+            item.material_status == "received"
+            or reconciled_component_receipts
+            or semi_inventory_ready
+        ):
             next_status = PENDING
             planned_quantity = production_needed
             material_input_quantity = ceil(
@@ -821,7 +913,12 @@ def _refresh_composite_production_tasks(
             readiness_basis = (
                 "component_semi_finished_inventory"
                 if semi_inventory_ready
-                else "component_material_received"
+                else (
+                    "component_receipts_reconciled"
+                    if reconciled_component_receipts
+                    and item.material_status != "received"
+                    else "component_material_received"
+                )
             )
         else:
             next_status = WAITING_MATERIAL

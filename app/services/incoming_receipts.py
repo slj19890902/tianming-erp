@@ -1107,7 +1107,11 @@ def _mark_order_progress(db: Session, target: IncomingTarget, *, closed: bool, u
         item.material_received_by = None
     db.flush()
     try:
-        production_task = refresh_production_task(db, item.id)
+        production_task = refresh_production_task(
+            db,
+            item.id,
+            create_if_missing=(item.supply_mode_snapshot != "external_purchase"),
+        )
     except ProductionWorkflowError as error:
         raise IncomingReceiptError(str(error), error.status_code) from error
     except IntegrityError as error:

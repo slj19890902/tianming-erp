@@ -105,7 +105,6 @@ from app.services.order_status_policy import (
     order_item_forward_block_message,
     order_item_forward_block_reason,
 )
-from app.services.composite_bom_workflow import is_composite_order_item
 from app.services.audit_log import append_audit_event
 from app.services.requisition_production_print import (
     build_receipt_production_print_package,
@@ -856,13 +855,15 @@ def _refresh_production_after_material_change(
 ) -> bool:
     """Refresh N029 state and report whether this is a production-managed item."""
     try:
-        # Composite BOM parent items do not own a single ordinary task.  Once
-        # their material receipt changes, refresh/create every snapshot task
-        # independently; ordinary and A3 items retain the existing behavior.
+        # A posted material change is an authoritative opportunity to repair
+        # a missing persistent task.  This covers both composite snapshots and
+        # ordinary production items; pure external purchases remain taskless.
         task = refresh_production_task(
             db,
             order_item.id,
-            create_if_missing=is_composite_order_item(db, order_item.id),
+            create_if_missing=(
+                order_item.supply_mode_snapshot != "external_purchase"
+            ),
         )
     except ProductionWorkflowError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error

@@ -497,6 +497,12 @@ def build_order_business_statuses(
         else:
             production_ready = tasks.get(None) in READY_PRODUCTION_STATUSES
         finished_coverage = finished_coverage_by_item.get(item_id, 0)
+        legacy_taskless_delivery_ready = bool(
+            not required_components
+            and not tasks
+            and item.supply_mode_snapshot == "corrugated_production"
+            and item.material_status == "received"
+        )
         production_ready = (
             production_ready
             or (
@@ -504,6 +510,11 @@ def build_order_business_statuses(
                 and item_id in posted_completion_item_ids
             )
             or (quantity > 0 and finished_coverage >= quantity)
+            # Delivery intentionally keeps this bridge for received lines
+            # created before persistent production tasks existed.  Describe
+            # the same eligibility here so those rows do not claim to need a
+            # production task that can never exist.
+            or legacy_taskless_delivery_ready
         )
         has_actual_incoming = (
             item.material_status == "received"
@@ -673,11 +684,19 @@ def build_order_business_statuses(
                 )
             elif production_ready:
                 status = "pending_delivery"
-                evidence = _evidence(
-                    "production_or_finished_inventory_ready",
-                    "生产已完成或成品库存已足额覆盖",
-                    finished_inventory_coverage=finished_coverage,
-                )
+                if legacy_taskless_delivery_ready:
+                    evidence = _evidence(
+                        "legacy_taskless_delivery_compatibility",
+                        "历史订单无持久生产任务，沿用现有送货兼容资格",
+                        legacy_taskless_delivery_ready=True,
+                    )
+                else:
+                    evidence = _evidence(
+                        "production_or_finished_inventory_ready",
+                        "生产已完成或成品库存已足额覆盖",
+                        finished_inventory_coverage=finished_coverage,
+                        legacy_taskless_delivery_ready=False,
+                    )
             else:
                 status = "pending_production"
                 evidence = _evidence(
@@ -686,11 +705,19 @@ def build_order_business_statuses(
                 )
         elif production_ready:
             status = "pending_delivery"
-            evidence = _evidence(
-                "production_or_finished_inventory_ready",
-                "生产已完成或成品库存已足额覆盖",
-                finished_inventory_coverage=finished_coverage,
-            )
+            if legacy_taskless_delivery_ready:
+                evidence = _evidence(
+                    "legacy_taskless_delivery_compatibility",
+                    "历史订单无持久生产任务，沿用现有送货兼容资格",
+                    legacy_taskless_delivery_ready=True,
+                )
+            else:
+                evidence = _evidence(
+                    "production_or_finished_inventory_ready",
+                    "生产已完成或成品库存已足额覆盖",
+                    finished_inventory_coverage=finished_coverage,
+                    legacy_taskless_delivery_ready=False,
+                )
         elif has_actual_incoming:
             status = "pending_production"
             evidence = _evidence(

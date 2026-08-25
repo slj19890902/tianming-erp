@@ -914,6 +914,7 @@ def audit_incomplete_order_chains(
                 continue
             scanned_items += 1
             item_id = int(item.id)
+            item_projection = projection["items"].get(item_id, {})
             item_receipts = receipts.get(item_id, [])
             has_receipt = bool(item_receipts)
             item_tasks = tasks.get(item_id, {})
@@ -1090,14 +1091,18 @@ def audit_incomplete_order_chains(
                         focus_terms=normalized_focus,
                     )
                 )
-            if has_receipt and any(
-                str(row["status"]) == "waiting_material"
-                for row in item_tasks.values()
+            if (
+                has_receipt
+                and item_projection.get("business_status") == "pending_production"
+                and any(
+                    str(row["status"]) == "waiting_material"
+                    for row in item_tasks.values()
+                )
             ):
                 findings.append(
                     _finding(
                         code="P015_RECEIPT_NOT_PROJECTED_TO_PRODUCTION_TASK",
-                        severity="review",
+                        severity="error",
                         order=order,
                         item=item,
                         key=anonymization_key,
@@ -1824,7 +1829,6 @@ def audit_incomplete_order_chains(
                                 focus_terms=normalized_focus,
                             )
                         )
-            item_projection = projection["items"].get(item_id, {})
             mismatch = item_projection.get("business_status_evidence", {}).get(
                 "delivery_counter_mismatch"
             )

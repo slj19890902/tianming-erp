@@ -613,7 +613,9 @@ def test_valid_receipt_waiting_for_manual_production_is_not_stock_error(tmp_path
     assert "P015_FINISHED_STOCK_NOT_DELIVERABLE" not in codes
 
 
-def test_missing_task_and_legacy_material_status_are_distinct_contracts(tmp_path: Path):
+def test_missing_task_and_legacy_delivery_compatibility_are_distinct_contracts(
+    tmp_path: Path,
+):
     engine = build_p0_15_database(tmp_path / "input-facts.sqlite3")
     with Session(engine) as db:
         _, _, receipt_order, receipt_item = add_order(db, "MISSING-TASK")
@@ -626,7 +628,7 @@ def test_missing_task_and_legacy_material_status_are_distinct_contracts(tmp_path
     codes = finding_codes(report)
     assert codes.count("P015_INCOMING_WITHOUT_PRODUCTION_TASK") == 1
     assert codes.count("P015_LEGACY_RECEIVED_STATUS_TRACE_GAP") == 1
-    assert codes.count("P015_PENDING_PRODUCTION_WITHOUT_INPUT_FACT") == 1
+    assert "P015_PENDING_PRODUCTION_WITHOUT_INPUT_FACT" not in codes
     assert "P015_RECEIVED_AWAITING_MANUAL_PRODUCTION" not in codes
 
 
@@ -1302,7 +1304,8 @@ def test_report_and_focus_metadata_never_emit_raw_business_identifiers(tmp_path:
             assert match["matched"] is True
             assert all(token.startswith("FOCUS-") for token in match["focus_tokens"])
         assert finding["order_ref"].startswith("ORDER-")
-        assert finding["order_item_ref"].startswith("ITEM-")
+        if finding["order_item_ref"] is not None:
+            assert finding["order_item_ref"].startswith("ITEM-")
 
 
 def test_anonymization_key_is_mandatory(tmp_path: Path):

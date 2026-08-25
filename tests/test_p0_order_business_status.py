@@ -539,14 +539,20 @@ def test_mixed_order_keeps_earliest_blocker_and_compact_delivery_progress(
 
         projection = _projection(db, order.id)
         assert projection["business_status"] == "pending_incoming"
-        assert projection["items"][first.id]["business_status"] == "pending_production"
+        assert projection["items"][first.id]["business_status"] == "pending_delivery"
+        assert projection["items"][first.id]["business_status_evidence"][
+            "basis"
+        ] == "legacy_taskless_delivery_compatibility"
+        assert projection["items"][first.id]["business_status_evidence"][
+            "legacy_taskless_delivery_ready"
+        ] is True
         assert projection["items"][second.id]["business_status"] == "pending_incoming"
         assert projection["items"][third.id]["business_status"] == "partially_delivered"
         assert projection["business_delivery_progress"]["item_sequences"] == [3]
 
         second.material_status = "received"
         db.flush()
-        assert _projection(db, order.id)["business_status"] == "pending_production"
+        assert _projection(db, order.id)["business_status"] == "partially_delivered"
 
         _add_completed_task(db, first.id)
         _add_completed_task(db, second.id)
@@ -596,6 +602,7 @@ def test_composite_item_requires_all_required_components_before_pending_delivery
             ProductionTask(
                 order_item_id=item.id,
                 sales_order_item_bom_component_id=component.id,
+                task_role="component_internal",
                 status="completed" if index == 0 else "pending",
                 planned_quantity=item.quantity,
                 finished_coverage_snapshot=0,
@@ -685,7 +692,8 @@ def test_orders_api_filter_detail_and_dashboard_share_projection(status_app) -> 
     assert dashboard.status_code == 200, dashboard.text
     counts = dashboard.json()["business_status_counts"]
     assert counts["pending_incoming"] == 1
-    assert counts["pending_production"] == 1
+    assert counts.get("pending_production", 0) == 0
+    assert counts["pending_delivery"] == 1
 
 
 def test_business_view_and_unfinished_badge_use_derived_status_before_paging(

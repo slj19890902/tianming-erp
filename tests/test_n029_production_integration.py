@@ -318,6 +318,36 @@ def _login(client: TestClient) -> None:
     assert response.status_code == 200, response.text
 
 
+def test_material_change_recreates_missing_regular_production_task(
+    n029_delivery_app,
+) -> None:
+    from app.api.incoming import _refresh_production_after_material_change
+    from app.models.order import OrderItem
+    from app.models.production import ProductionTask
+
+    _app, factory, ids = n029_delivery_app
+    with factory() as db:
+        item = db.get(OrderItem, ids["legacy_received"])
+        assert item is not None
+        assert db.scalar(
+            select(ProductionTask.id).where(
+                ProductionTask.order_item_id == item.id
+            )
+        ) is None
+
+        managed = _refresh_production_after_material_change(db, item)
+
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == item.id
+            )
+        )
+        assert managed is True
+        assert task is not None
+        assert task.status == "pending"
+        assert task.planned_quantity == item.quantity
+
+
 def test_legacy_delivery_eligibility_and_unfinished_task_gate(n029_delivery_app) -> None:
     from app.api.dashboard import _delivery_ready_filter
     from app.api.deliveries import _delivery_remaining_quantity, _pending_query

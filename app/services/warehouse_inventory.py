@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import beijing_now_naive, beijing_today, utc_now_naive
 from app.models.customer import Customer
@@ -40,6 +40,9 @@ from app.models.warehouse_inventory import (
     SemiFinishedInventoryDetail,
     SemiFinishedLotAllowedProduct,
     WarehouseArea,
+    WarehouseGroundOccupancy,
+    WarehouseGroundOccupancySlot,
+    WarehouseGroundPlacementMutation,
     WarehouseFloor,
     WarehouseLocation,
 )
@@ -51,6 +54,9 @@ from app.services.inventory_cost_snapshot import (
 )
 from app.services.location_candidates import (
     claim_active_placed_location,
+    current_same_location_pallet,
+    has_space_ledger,
+    load_warehouse_location_projection_contexts,
     operational_location_issue,
 )
 
@@ -118,6 +124,333 @@ def _pallet_has_physical_goods(db: Session, pallet_id: int) -> bool:
         .limit(1)
     )
     return live_lot_exists is not None
+
+
+def _finished_lot_physical_quantity(lot: InventoryLot) -> int:
+    return max(
+        int(lot.quantity_available or 0)
+        + int(lot.quantity_reserved or 0)
+        + int(lot.quantity_damaged or 0),
+        0,
+    )
+
+
+def _ensure_finished_projection_postcondition(
+    db: Session,
+    *,
+    lot: InventoryLot,
+    operator_id: int | None,
+    create_missing: bool,
+    pallet_id: int | None = None,
+    pallet_code: str | None = None,
+    require_empty_pallet: bool = False,
+    ground_secondary_location_id: int | None = None,
+    ground_capacity_quantity: int | None = None,
+) -> InventoryPallet | None:
+    """Keep every new positive finished fact on one real map pallet.
+
+    Historical gaps stay visible as audit blockers.  A replay only validates
+    the previously committed projection; an in-flight authorized write may
+    create its missing pallet/ground occupancy in the same transaction.
+    """
+
+    if lot.inventory_type != "finished" or _finished_lot_physical_quantity(lot) <= 0:
+        return None
+    if lot.warehouse_location_id is None:
+        raise WarehouseInventoryError("成品库存缺少正式库位，不能完成空间投影", 409)
+    location = db.get(WarehouseLocation, int(lot.warehouse_location_id))
+    if location is None:
+        raise WarehouseInventoryError("成品库存缺少正式库位，不能完成空间投影", 409)
+    space_ledger_exists = has_space_ledger(db)
+    projection_required = space_ledger_exists or str(
+        location.source_version or ""
+    ).strip().upper() == "V11"
+    if not projection_required:
+        return None
+
+    context: dict[str, object | None] = {}
+    if space_ledger_exists:
+        context = load_warehouse_location_projection_contexts(db, [location]).get(
+            int(location.id), {}
+        )
+        issue = operational_location_issue(
+            db,
+            location,
+            warehouse_types={"finished", "shared"},
+            require_published=True,
+            required_inventory_type="finished",
+            projection_context=context,
+        )
+        if issue:
+            raise WarehouseInventoryError(
+                f"{issue}，不能形成成品库存空间投影",
+                409,
+            )
+
+    current_pallet = current_same_location_pallet(lot)
+    if current_pallet is None:
+        if not create_missing:
+            raise WarehouseInventoryError(
+                "已完成的成品库存缺少同库位当前真实栈板，请先核对历史数据",
+                409,
+            )
+        if lot.pallet_item is not None:
+            raise WarehouseInventoryError(
+                "成品库存仍绑定历史或异位栈板，不能自动改写空间事实",
+                409,
+            )
+        from app.services.floor3_locations import (
+            Floor3LocationError,
+            bind_finished_lot_to_floor3_pallet,
+        )
+
+        try:
+            bind_finished_lot_to_floor3_pallet(
+                db,
+                lot=lot,
+                operator_id=operator_id,
+                pallet_id=pallet_id,
+                pallet_code=pallet_code,
+                require_empty_pallet=require_empty_pallet,
+                allow_operational_location=has_space_ledger(db),
+            )
+        except Floor3LocationError as error:
+            raise WarehouseInventoryError(str(error), error.status_code) from error
+        db.flush()
+        db.expire(lot, ["pallet_item"])
+        current_pallet = current_same_location_pallet(lot)
+    if current_pallet is None:
+        raise WarehouseInventoryError(
+            "成品库存未能形成同库位当前真实栈板，事务已停止",
+            409,
+        )
+
+    pallet_item = lot.pallet_item
+    if pallet_item is None:
+        raise WarehouseInventoryError("成品库存缺少真实栈板明细，事务已停止", 409)
+    expected_item_quantity = _finished_lot_physical_quantity(lot)
+    if int(pallet_item.quantity or 0) != expected_item_quantity:
+        if not create_missing:
+            raise WarehouseInventoryError(
+                "已完成的成品库存与真实栈板数量不一致，请先核对历史数据",
+                409,
+            )
+        pallet_item.quantity = expected_item_quantity
+        current_pallet.version = int(current_pallet.version or 0) + 1
+        current_pallet.updated_by = operator_id
+        db.flush()
+
+    if not space_ledger_exists:
+        # Pre-space-ledger test/installations retain the historical V11 pallet
+        # projection.  Formal databases always have the floor/area ledger and
+        # therefore cannot use this compatibility branch.
+        return current_pallet
+
+    if str(location.storage_type or "").strip().lower() not in {
+        "ground",
+        "temporary_aisle",
+    }:
+        return current_pallet
+
+    ground_layout = context.get("ground_layout")
+    published_identity = context.get("published_floor_identity")
+    area_code = str(location.area_code or "").strip().upper()
+    legacy_v11_compat = bool(
+        str(location.source_version or "").strip().upper() == "V11"
+        and int(location.warehouse_floor or 0) == 3
+        and context.get("policy") is None
+        and context.get("layout") is not None
+        and isinstance(published_identity, dict)
+        and str(published_identity.get("revision") or "").strip()
+        and len(
+            tuple(
+                (published_identity.get("zone_ids_by_area") or {}).get(
+                    area_code, ()
+                )
+            )
+        )
+        == 1
+    )
+    if legacy_v11_compat:
+        # V11 is the accepted legacy third-floor map itself.  It has no area
+        # policy/ground-plan lifecycle; adding a second occupancy projection
+        # would recreate the dual-source bug this gate removes.
+        return current_pallet
+    if not isinstance(ground_layout, dict):
+        raise WarehouseInventoryError(
+            "地堆成品位置缺少当前发布排位，不能形成真实空间占用",
+            409,
+        )
+    active_occupancies = list(
+        db.scalars(
+        select(WarehouseGroundOccupancy)
+        .where(
+            WarehouseGroundOccupancy.pallet_id == int(current_pallet.id),
+            WarehouseGroundOccupancy.status == "active",
+        )
+        .options(selectinload(WarehouseGroundOccupancy.slots))
+        ).all()
+    )
+    if len(active_occupancies) > 1:
+        raise WarehouseInventoryError("真实栈板存在重复活动地堆占用", 409)
+    existing_occupancy = active_occupancies[0] if active_occupancies else None
+    pallet_physical_quantity = int(
+        db.scalar(
+            select(
+                func.coalesce(
+                    func.sum(
+                        InventoryLot.quantity_available
+                        + InventoryLot.quantity_reserved
+                        + InventoryLot.quantity_damaged
+                    ),
+                    0,
+                )
+            )
+            .join(
+                InventoryPalletItem,
+                InventoryPalletItem.inventory_lot_id == InventoryLot.id,
+            )
+            .where(
+                InventoryPalletItem.pallet_id == int(current_pallet.id),
+                InventoryLot.status.in_(("active", "frozen")),
+            )
+        )
+        or 0
+    )
+    if pallet_physical_quantity <= 0:
+        raise WarehouseInventoryError("真实栈板没有正数成品，不能建立地堆占用", 409)
+    if existing_occupancy is not None:
+        active_location_ids = {
+            int(slot.location_id)
+            for slot in existing_occupancy.slots
+            if slot.status == "active"
+        }
+        if (
+            int(existing_occupancy.primary_location_id) != int(location.id)
+            or int(location.id) not in active_location_ids
+        ):
+            raise WarehouseInventoryError("真实栈板的地堆占用与库存库位不一致", 409)
+        if int(existing_occupancy.capacity_quantity) < pallet_physical_quantity:
+            if not create_missing:
+                raise WarehouseInventoryError(
+                    "已完成的地堆成品数量超过活动空间占用容量，请先核对历史数据",
+                    409,
+                )
+            controlled_capacity = db.scalar(
+                select(WarehouseGroundPlacementMutation.id)
+                .where(
+                    WarehouseGroundPlacementMutation.occupancy_id
+                    == int(existing_occupancy.id)
+                )
+                .limit(1)
+            )
+            if controlled_capacity is not None:
+                raise WarehouseInventoryError(
+                    "地堆位置现场容量不足，不能增加成品数量",
+                    409,
+                )
+            existing_occupancy.capacity_quantity = pallet_physical_quantity
+            existing_occupancy.version = int(existing_occupancy.version or 1) + 1
+            db.flush()
+        return current_pallet
+    if not create_missing:
+        raise WarehouseInventoryError(
+            "已完成的地堆成品缺少活动空间占用，请先核对历史数据",
+            409,
+        )
+    if operator_id is None:
+        raise WarehouseInventoryError("建立真实地堆占用必须记录操作人", 409)
+    occupancy_location_ids = [int(location.id)]
+    if ground_secondary_location_id is not None:
+        secondary_location_id = int(ground_secondary_location_id)
+        if secondary_location_id == int(location.id):
+            raise WarehouseInventoryError("地堆双位不能重复选择同一库位", 409)
+        secondary_location = db.get(WarehouseLocation, secondary_location_id)
+        if secondary_location is None:
+            raise WarehouseInventoryError("地堆第二库位不存在", 409)
+        secondary_context = load_warehouse_location_projection_contexts(
+            db, [secondary_location]
+        ).get(secondary_location_id, {})
+        secondary_issue = operational_location_issue(
+            db,
+            secondary_location,
+            warehouse_types={"finished", "shared"},
+            require_published=True,
+            required_inventory_type="finished",
+            projection_context=secondary_context,
+        )
+        secondary_ground_layout = secondary_context.get("ground_layout")
+        if secondary_issue:
+            raise WarehouseInventoryError(
+                f"{secondary_issue}，不能作为地堆第二库位",
+                409,
+            )
+        if (
+            not isinstance(secondary_ground_layout, dict)
+            or int(secondary_ground_layout.get("plan_id") or 0)
+            != int(ground_layout.get("plan_id") or 0)
+        ):
+            raise WarehouseInventoryError("地堆双位必须属于同一当前发布排位", 409)
+        occupancy_location_ids.append(secondary_location_id)
+    conflicting_occupancy = db.scalar(
+        select(WarehouseGroundOccupancySlot.id)
+        .join(
+            WarehouseGroundOccupancy,
+            WarehouseGroundOccupancy.id
+            == WarehouseGroundOccupancySlot.occupancy_id,
+        )
+        .where(
+            WarehouseGroundOccupancySlot.location_id.in_(occupancy_location_ids),
+            WarehouseGroundOccupancySlot.status == "active",
+            WarehouseGroundOccupancy.status == "active",
+        )
+        .limit(1)
+    )
+    if conflicting_occupancy is not None:
+        raise WarehouseInventoryError("地堆位置已有其它活动空间占用", 409)
+    detail = lot.finished_detail
+    if detail is None:
+        raise WarehouseInventoryError("成品库存缺少产品明细，不能建立地堆占用", 409)
+    occupancy_customer_id = detail.owner_customer_id or db.scalar(
+        select(Product.customer_id).where(Product.id == int(detail.product_id))
+    )
+    if occupancy_customer_id is None:
+        raise WarehouseInventoryError("成品库存缺少客户归属，不能建立地堆占用", 409)
+    occupancy_capacity = (
+        int(ground_capacity_quantity)
+        if ground_capacity_quantity is not None
+        else pallet_physical_quantity
+    )
+    if occupancy_capacity < pallet_physical_quantity:
+        raise WarehouseInventoryError("地堆位置现场容量不足，不能存放本次成品", 409)
+    occupancy = WarehouseGroundOccupancy(
+        pallet_id=int(current_pallet.id),
+        primary_location_id=int(location.id),
+        customer_id=int(occupancy_customer_id),
+        product_id=int(detail.product_id),
+        footprint_kind="double" if len(occupancy_location_ids) == 2 else "single",
+        capacity_quantity=occupancy_capacity,
+        status="active",
+        version=1,
+        created_by=int(operator_id),
+    )
+    db.add(occupancy)
+    db.flush()
+    db.add_all(
+        [
+            WarehouseGroundOccupancySlot(
+                occupancy_id=int(occupancy.id),
+                location_id=occupancy_location_id,
+                slot_sequence=sequence,
+                status="active",
+            )
+            for sequence, occupancy_location_id in enumerate(
+                occupancy_location_ids, start=1
+            )
+        ]
+    )
+    db.flush()
+    return current_pallet
 
 
 def release_empty_pallets_after_delivery(
@@ -528,16 +861,30 @@ def _location(
             raise WarehouseInventoryError(
                 "V11 货位楼层无效，不能办理成品入库", 409
             )
+    require_published_location = has_space_ledger(db)
     if inventory_type == "finished":
         if getattr(location, "placement_status", None) == "unplaced":
             raise WarehouseInventoryError(
                 "该库位尚未完成空间放置，不能办理成品库存业务",
                 409,
             )
+        projection_context = (
+            load_warehouse_location_projection_contexts(db, [location]).get(
+                int(location.id), {}
+            )
+            if require_published_location
+            else None
+        )
         issue = operational_location_issue(
             db,
             location,
             warehouse_types=allowed,
+            require_published=require_published_location,
+            require_map_geometry=require_published_location,
+            required_inventory_type=(
+                "finished" if require_published_location else None
+            ),
+            projection_context=projection_context,
         )
         if issue:
             raise WarehouseInventoryError(f"{issue}，不能办理成品库存业务", 409)
@@ -577,8 +924,26 @@ def _location(
             "该库位尚未完成空间放置，不能入库；请先补齐楼层、区域和存储方式",
             409,
         )
-    if location.warehouse_type not in allowed:
-        raise WarehouseInventoryError("所选库位类型与库存类型不匹配")
+    projection_context = (
+        load_warehouse_location_projection_contexts(db, [location]).get(
+            int(location.id), {}
+        )
+        if require_published_location
+        else None
+    )
+    issue = operational_location_issue(
+        db,
+        location,
+        warehouse_types=allowed,
+        require_published=require_published_location,
+        require_map_geometry=require_published_location,
+        required_inventory_type=(
+            "semi_finished" if require_published_location else None
+        ),
+        projection_context=projection_context,
+    )
+    if issue:
+        raise WarehouseInventoryError(f"{issue}，不能办理半成品库存业务", 409)
     return location
 
 
@@ -701,13 +1066,21 @@ def _transfer_key(*parts: object, max_length: int = 100) -> str:
 
 
 def _lot_location_transfer_hash(
-    *, lot_id: int, expected_version: int, quantity: int, location_id: int
+    *,
+    lot_id: int,
+    expected_version: int,
+    quantity: int,
+    location_id: int,
+    ground_secondary_location_id: int | None = None,
+    ground_capacity_quantity: int | None = None,
 ) -> str:
     payload = {
         "expected_version": expected_version,
         "location_id": location_id,
         "lot_id": lot_id,
         "quantity": quantity,
+        "ground_secondary_location_id": ground_secondary_location_id,
+        "ground_capacity_quantity": ground_capacity_quantity,
     }
     return sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
@@ -728,6 +1101,8 @@ def _transfer_finished_lot_location(
     require_staging_source: bool,
     require_empty_target: bool = False,
     expected_target_layout_version: int | None = None,
+    ground_secondary_location_id: int | None = None,
+    ground_capacity_quantity: int | None = None,
 ) -> FinishedLotLocationTransferResult:
     """Move all or part of a finished lot without changing stock totals.
 
@@ -746,6 +1121,8 @@ def _transfer_finished_lot_location(
         expected_version=expected_version,
         quantity=quantity,
         location_id=location_id,
+        ground_secondary_location_id=ground_secondary_location_id,
+        ground_capacity_quantity=ground_capacity_quantity,
     )
     repeated = db.scalar(
         select(InventoryLotTransfer).where(
@@ -990,6 +1367,9 @@ def _transfer_finished_lot_location(
             if source_pallet is not None:
                 if not _pallet_has_physical_goods(db, source_pallet.id):
                     from app.services.floor3_locations import clear_pallet
+                    from app.services.warehouse_ground_slots import (
+                        release_ground_occupancy_for_pallet,
+                    )
 
                     clear_pallet(
                         db,
@@ -1000,6 +1380,11 @@ def _transfer_finished_lot_location(
                         idempotency_key=_transfer_key(
                             "location-transfer", key, "source-pallet-clear"
                         ),
+                    )
+                    release_ground_occupancy_for_pallet(
+                        db,
+                        pallet_id=int(source_pallet.id),
+                        operator_id=operator_id,
                     )
     elif target_lot.id != lot.id:
         source_item = db.scalar(
@@ -1018,42 +1403,15 @@ def _transfer_finished_lot_location(
                 source_pallet.version = int(source_pallet.version or 0) + 1
                 source_pallet.updated_by = operator_id
 
-    if target_location.source_version == "V11":
-        from app.services.floor3_locations import (
-            Floor3LocationError,
-            bind_finished_lot_to_floor3_pallet,
-        )
-
-        try:
-            bind_finished_lot_to_floor3_pallet(
-                db,
-                lot=target_lot,
-                operator_id=operator_id,
-                require_empty_pallet=require_staging_source or require_empty_target,
-                require_no_live_inventory=require_empty_target,
-            )
-        except Floor3LocationError as error:
-            raise WarehouseInventoryError(str(error), error.status_code) from error
-    elif (
-        target_location.source_version == "TWIN_V1"
-        and target_location.storage_type != "rack"
-    ):
-        from app.services.floor3_locations import (
-            Floor3LocationError,
-            bind_finished_lot_to_floor3_pallet,
-        )
-
-        try:
-            bind_finished_lot_to_floor3_pallet(
-                db,
-                lot=target_lot,
-                operator_id=operator_id,
-                require_empty_pallet=require_staging_source or require_empty_target,
-                allow_operational_location=True,
-                require_no_live_inventory=require_empty_target,
-            )
-        except Floor3LocationError as error:
-            raise WarehouseInventoryError(str(error), error.status_code) from error
+    _ensure_finished_projection_postcondition(
+        db,
+        lot=target_lot,
+        operator_id=operator_id,
+        create_missing=True,
+        require_empty_pallet=require_staging_source or require_empty_target,
+        ground_secondary_location_id=ground_secondary_location_id,
+        ground_capacity_quantity=ground_capacity_quantity,
+    )
 
     transfer = InventoryLotTransfer(
         source_lot_id=lot_id,
@@ -1148,6 +1506,8 @@ def transfer_finished_lot_between_locations(
     idempotency_key: str,
     require_empty_target: bool = False,
     expected_target_layout_version: int | None = None,
+    ground_secondary_location_id: int | None = None,
+    ground_capacity_quantity: int | None = None,
 ) -> FinishedLotLocationTransferResult:
     return _transfer_finished_lot_location(
         db,
@@ -1160,6 +1520,8 @@ def transfer_finished_lot_between_locations(
         require_staging_source=False,
         require_empty_target=require_empty_target,
         expected_target_layout_version=expected_target_layout_version,
+        ground_secondary_location_id=ground_secondary_location_id,
+        ground_capacity_quantity=ground_capacity_quantity,
     )
 
 
@@ -1185,9 +1547,17 @@ def manual_finished_in(
     stock_date_original_text: str | None = None,
     is_general: bool = False,
     expected_layout_version: int | None = None,
+    ground_secondary_location_id: int | None = None,
+    ground_capacity_quantity: int | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
+        _ensure_finished_projection_postcondition(
+            db,
+            lot=existing,
+            operator_id=operator_id,
+            create_missing=False,
+        )
         return existing
     if quantity <= 0:
         raise WarehouseInventoryError("入库数量必须大于0")
@@ -1270,24 +1640,39 @@ def manual_finished_in(
         remarks=remarks,
         idempotency_key=idempotency_key,
     )
-    if getattr(location, "source_version", None) == "V11":
-        # Local import avoids a module cycle while keeping the official lot and
-        # its physical-map projection in the same database transaction.
-        from app.services.floor3_locations import bind_finished_lot_to_floor3_pallet
-
-        bind_finished_lot_to_floor3_pallet(
-            db,
-            lot=lot,
-            operator_id=operator_id,
-            pallet_id=pallet_id,
-            pallet_code=pallet_code,
-            require_empty_pallet=require_empty_pallet,
-        )
+    _ensure_finished_projection_postcondition(
+        db,
+        lot=lot,
+        operator_id=operator_id,
+        create_missing=True,
+        pallet_id=pallet_id,
+        pallet_code=pallet_code,
+        require_empty_pallet=require_empty_pallet,
+        ground_secondary_location_id=ground_secondary_location_id,
+        ground_capacity_quantity=ground_capacity_quantity,
+    )
     db.flush()
     return lot
 
 
 def active_finished_reserved_qty(db: Session, order_item_id: int) -> int:
+    """Return canonical order coverage: delivered plus unconsumed reservation.
+
+    Consumed reservation credit normally becomes ``delivered_quantity``.  The
+    two facts are kept independent because formal receipt reconciliation and
+    legacy imports can adjust delivery without mutating reservation history.
+    Adding delivered to *remaining* credit avoids both omission and double
+    counting.
+    """
+
+    delivered_quantity = int(
+        db.scalar(
+            select(OrderItem.delivered_quantity).where(
+                OrderItem.id == int(order_item_id)
+            )
+        )
+        or 0
+    )
     rows = db.scalars(
         select(InventoryReservation).where(
             InventoryReservation.order_item_id == order_item_id,
@@ -1296,14 +1681,16 @@ def active_finished_reserved_qty(db: Session, order_item_id: int) -> int:
             InventoryReservation.status != "cancelled",
         )
     ).all()
-    return sum(
+    remaining_reserved = sum(
         max(
             int(row.credited_requirement_quantity or 0)
+            - int(row.consumed_requirement_quantity or 0)
             - int(row.released_requirement_quantity or 0),
             0,
         )
         for row in rows
     )
+    return max(delivered_quantity, 0) + remaining_reserved
 
 
 def active_finished_reservations_by_item_ids(
@@ -1311,6 +1698,14 @@ def active_finished_reservations_by_item_ids(
 ) -> dict[int, int]:
     if not order_item_ids:
         return {}
+    delivered_by_item_id = {
+        int(order_item_id): max(int(delivered_quantity or 0), 0)
+        for order_item_id, delivered_quantity in db.execute(
+            select(OrderItem.id, OrderItem.delivered_quantity).where(
+                OrderItem.id.in_(order_item_ids)
+            )
+        )
+    }
     rows = db.scalars(
         select(InventoryReservation).where(
             InventoryReservation.order_item_id.in_(order_item_ids),
@@ -1319,12 +1714,13 @@ def active_finished_reservations_by_item_ids(
             InventoryReservation.status != "cancelled",
         )
     ).all()
-    result: dict[int, int] = {}
+    result: dict[int, int] = dict(delivered_by_item_id)
     for row in rows:
         if row.order_item_id is None:
             continue
         result[row.order_item_id] = result.get(row.order_item_id, 0) + max(
             int(row.credited_requirement_quantity or 0)
+            - int(row.consumed_requirement_quantity or 0)
             - int(row.released_requirement_quantity or 0),
             0,
         )
@@ -3337,6 +3733,19 @@ def edit_finished_lot(
         else {}
     )
     if location_changed and pallet is not None:
+        active_ground_occupancy = db.scalar(
+            select(WarehouseGroundOccupancy.id)
+            .where(
+                WarehouseGroundOccupancy.pallet_id == int(pallet.id),
+                WarehouseGroundOccupancy.status == "active",
+            )
+            .limit(1)
+        )
+        if active_ground_occupancy is not None:
+            raise WarehouseInventoryError(
+                "地堆栈板不能通过批次编辑改库位，请使用仓库地图转位流程",
+                409,
+            )
         from app.services.floor3_locations import Floor3LocationError, move_pallet
 
         move_key = f"finished-edit:{sha256(idempotency_key.encode('utf-8')).hexdigest()}"
@@ -3427,20 +3836,12 @@ def edit_finished_lot(
                 )
 
     db.flush()
-    if pallet_item is None and target_location.source_version == "V11":
-        from app.services.floor3_locations import (
-            Floor3LocationError,
-            bind_finished_lot_to_floor3_pallet,
-        )
-
-        try:
-            bind_finished_lot_to_floor3_pallet(
-                db,
-                lot=lot,
-                operator_id=operator_id,
-            )
-        except Floor3LocationError as error:
-            raise WarehouseInventoryError(str(error), error.status_code) from error
+    _ensure_finished_projection_postcondition(
+        db,
+        lot=lot,
+        operator_id=operator_id,
+        create_missing=True,
+    )
 
     db.refresh(lot)
     audit = {
@@ -3477,6 +3878,13 @@ def mutate_lot(
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
+        if existing.inventory_type == "finished":
+            _ensure_finished_projection_postcondition(
+                db,
+                lot=existing,
+                operator_id=operator_id,
+                create_missing=False,
+            )
         return existing
     if operation == "adjust" and quantity > 0:
         location_id = db.scalar(
@@ -3551,6 +3959,13 @@ def mutate_lot(
     db.expire(lot)
     lot = db.get(InventoryLot, lot.id)
     assert lot is not None
+    if lot.inventory_type == "finished":
+        _ensure_finished_projection_postcondition(
+            db,
+            lot=lot,
+            operator_id=operator_id,
+            create_missing=True,
+        )
     _movement(
         db,
         lot=lot,

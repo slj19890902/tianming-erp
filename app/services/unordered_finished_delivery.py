@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+from hashlib import sha256
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.core.time_contract import utc_now_naive
+from app.core.time_contract import beijing_now_naive, utc_now_naive
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
+    InventoryLocationMovement,
     InventoryLot,
     InventoryMovement,
+    InventoryPallet,
     UnorderedFinishedDeliveryAllocation,
     UnorderedFinishedDeliveryReversal,
 )
@@ -18,8 +21,194 @@ from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     _balances,
     _claim_inventory_destination,
+    _ensure_finished_projection_postcondition,
     _movement,
+    _pallet_has_physical_goods,
 )
+
+
+def _projection_mutation_key(prefix: str, value: str) -> str:
+    return f"{prefix}:{sha256(value.encode('utf-8')).hexdigest()}"
+
+
+def _restore_receipt_return_pallet(
+    db: Session,
+    *,
+    lot: InventoryLot,
+    delivery_id: int,
+    operator_id: int | None,
+    idempotency_key: str,
+) -> None:
+    """短收回库后恢复本次正式送货释放的原栈板。"""
+
+    pallet_item = lot.pallet_item
+    pallet = pallet_item.pallet if pallet_item is not None else None
+    if (
+        pallet is not None
+        and (not pallet.is_current or pallet.location_id is None)
+    ):
+        clear_prefix = f"delivery-{delivery_id}-auto-release-pallet-"
+        clear_movement = db.scalar(
+            select(InventoryLocationMovement)
+            .where(
+                InventoryLocationMovement.pallet_id == pallet.id,
+                InventoryLocationMovement.movement_type == "clear",
+                InventoryLocationMovement.idempotency_key.like(f"{clear_prefix}%"),
+                InventoryLocationMovement.from_location_id
+                == lot.warehouse_location_id,
+            )
+            .order_by(InventoryLocationMovement.id.desc())
+            .limit(1)
+        )
+        if clear_movement is None:
+            raise WarehouseInventoryError(
+                "退回成品批次仍绑定已释放栈板，但缺少本次正式送货释放事实。",
+                409,
+            )
+
+        restore_key = _projection_mutation_key(
+            "unordered-return-pallet-restore", idempotency_key
+        )
+        existing_restore = db.scalar(
+            select(InventoryLocationMovement).where(
+                InventoryLocationMovement.idempotency_key == restore_key
+            )
+        )
+        if existing_restore is not None:
+            if (
+                existing_restore.pallet_id != pallet.id
+                or existing_restore.movement_type != "move"
+                or existing_restore.to_location_id != lot.warehouse_location_id
+            ):
+                raise WarehouseInventoryError(
+                    "短收回库栈板幂等标识已绑定其他空间投影。",
+                    409,
+                )
+        else:
+            _claim_inventory_destination(db, int(lot.warehouse_location_id))
+            occupied = db.scalar(
+                select(InventoryPallet.id)
+                .where(
+                    InventoryPallet.location_id == lot.warehouse_location_id,
+                    InventoryPallet.is_current.is_(True),
+                    InventoryPallet.location_occupancy_key
+                    == pallet.location_occupancy_key,
+                    InventoryPallet.id != pallet.id,
+                )
+                .limit(1)
+            )
+            if occupied is not None:
+                raise WarehouseInventoryError(
+                    "原成品位置已被占用，不能接收本次短收退回。",
+                    409,
+                )
+            version_before = int(pallet.version)
+            changed = db.execute(
+                update(InventoryPallet)
+                .where(
+                    InventoryPallet.id == pallet.id,
+                    InventoryPallet.version == version_before,
+                    InventoryPallet.is_current.is_(False),
+                    InventoryPallet.location_id.is_(None),
+                )
+                .values(
+                    location_id=lot.warehouse_location_id,
+                    status="active",
+                    is_current=True,
+                    version=InventoryPallet.version + 1,
+                    closed_at=None,
+                    updated_by=operator_id,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if changed.rowcount != 1:
+                raise WarehouseInventoryError(
+                    "短收回库恢复期间原栈板已发生变化，请刷新后重试。",
+                    409,
+                )
+            now = beijing_now_naive()
+            db.add(
+                InventoryLocationMovement(
+                    pallet_id=pallet.id,
+                    from_location_id=None,
+                    to_location_id=lot.warehouse_location_id,
+                    movement_type="move",
+                    operator_id=operator_id,
+                    moved_at=now,
+                    idempotency_key=restore_key,
+                    confirmed_at=now,
+                    pallet_version_before=version_before,
+                    pallet_version_after=version_before + 1,
+                    remarks="客户短收退回，恢复原正式栈板与位置。",
+                )
+            )
+            from app.services.warehouse_ground_slots import (
+                WarehouseGroundSlotError,
+                restore_ground_occupancy_for_pallet,
+            )
+
+            try:
+                restore_ground_occupancy_for_pallet(
+                    db,
+                    pallet_id=int(pallet.id),
+                    location_id=int(lot.warehouse_location_id),
+                )
+            except WarehouseGroundSlotError as error:
+                raise WarehouseInventoryError(
+                    error.message, error.status_code
+                ) from error
+            db.flush()
+            db.expire(pallet)
+
+    _ensure_finished_projection_postcondition(
+        db,
+        lot=lot,
+        operator_id=operator_id,
+        create_missing=True,
+    )
+
+
+def _release_reconsumed_return_pallet(
+    db: Session,
+    *,
+    lot: InventoryLot,
+    reversal_id: int,
+    operator_id: int | None,
+) -> None:
+    pallet_item = lot.pallet_item
+    pallet = pallet_item.pallet if pallet_item is not None else None
+    if pallet is None or not pallet.is_current or pallet.location_id is None:
+        return
+    if _pallet_has_physical_goods(db, int(pallet.id)):
+        _ensure_finished_projection_postcondition(
+            db,
+            lot=lot,
+            operator_id=operator_id,
+            create_missing=True,
+        )
+        return
+
+    from app.services.floor3_locations import Floor3LocationError, clear_pallet
+    from app.services.warehouse_ground_slots import release_ground_occupancy_for_pallet
+
+    try:
+        clear_pallet(
+            db,
+            pallet_id=int(pallet.id),
+            expected_version=int(pallet.version),
+            remarks="回单编辑或取消已重新扣回退货，释放空栈板与位置占用。",
+            operator_id=operator_id,
+            idempotency_key=_projection_mutation_key(
+                "unordered-return-pallet-release", str(reversal_id)
+            ),
+        )
+    except Floor3LocationError as error:
+        raise WarehouseInventoryError(str(error), error.status_code) from error
+    release_ground_occupancy_for_pallet(
+        db,
+        pallet_id=int(pallet.id),
+        operator_id=operator_id,
+    )
 
 
 def _validated_customer_lot(
@@ -174,6 +363,19 @@ def _restore_allocation_quantity(
         if existing is None:
             break
         if existing.status == "active":
+            if existing.reversal_kind != "dispatch_cancel":
+                replay_lot = _validated_customer_lot(
+                    db,
+                    delivery=delivery,
+                    delivery_item=delivery_item,
+                    allocation=allocation,
+                )
+                _ensure_finished_projection_postcondition(
+                    db,
+                    lot=replay_lot,
+                    operator_id=operator_id,
+                    create_missing=False,
+                )
             return existing
         cycle += 1
         idempotency_key = f"{base_idempotency_key}-cycle-{cycle}"
@@ -242,6 +444,14 @@ def _restore_allocation_quantity(
         reversal_of_movement_id=allocation.consume_movement_id,
     )
     db.flush()
+    if reversal_kind != "dispatch_cancel":
+        _restore_receipt_return_pallet(
+            db,
+            lot=lot,
+            delivery_id=int(delivery.id),
+            operator_id=operator_id,
+            idempotency_key=idempotency_key,
+        )
     reversal = UnorderedFinishedDeliveryReversal(
         allocation_id=allocation.id,
         return_receipt_item_id=return_receipt_item_id,
@@ -460,6 +670,12 @@ def reconsume_unordered_finished_receipt_returns(
             reversal_of_movement_id=reversal.inventory_movement_id,
         )
         db.flush()
+        _release_reconsumed_return_pallet(
+            db,
+            lot=lot,
+            reversal_id=int(reversal.id),
+            operator_id=operator_id,
+        )
         allocation.restored_quantity = max(
             int(allocation.restored_quantity or 0) - quantity,
             0,

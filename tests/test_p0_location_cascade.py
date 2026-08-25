@@ -17,6 +17,8 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
     WarehouseLocation,
 )
 from app.services.floor3_locations import Floor3LocationError, move_pallet
@@ -46,7 +48,39 @@ STOCKTAKE_HTML = (ROOT / "static" / "mobile_stocktake.html").read_text(
 
 
 @pytest.fixture()
-def location_db(tmp_path: Path):
+def location_db(tmp_path: Path, monkeypatch):
+    from app.services import location_candidates
+
+    identities = {
+        1: {
+            "revision": "p1-101-test-map",
+            "zones_by_id": {
+                "zone-1f-a1": "A1",
+                "zone-1f-draft": "DRAFT",
+            },
+            "zone_ids_by_area": {
+                "A1": ("zone-1f-a1",),
+                "DRAFT": ("zone-1f-draft",),
+            },
+        },
+        3: {
+            "revision": "p1-101-test-map",
+            "zones_by_id": {"zone-3f-c1": "C1"},
+            "zone_ids_by_area": {"C1": ("zone-3f-c1",)},
+        },
+    }
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda floor_number: identities.get(
+            int(floor_number),
+            {
+                "revision": "p1-101-test-map",
+                "zones_by_id": {},
+                "zone_ids_by_area": {},
+            },
+        ),
+    )
     engine = create_sqlite_engine(tmp_path / "p0-location-cascade.sqlite3")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -73,12 +107,23 @@ def _location(
         area_code=area,
         storage_type=storage_type,
         placement_status=placement_status,
-        source_version="V11" if floor == 3 else "P0-TEST",
+        source_version="V11" if floor == 3 else "TWIN_V1",
         is_active=active,
     )
 
 
 def _seed_space(db: Session) -> dict[str, WarehouseLocation]:
+    from app.models.user import User
+
+    operator = User(
+        username="p0-location-cascade",
+        password_hash="not-used",
+        role="admin",
+        real_name="匿名位置级联测试",
+        must_change_password=False,
+    )
+    db.add(operator)
+    db.flush()
     floor1 = WarehouseFloor(
         floor_code="1F",
         floor_name="一楼",
@@ -169,27 +214,84 @@ def _seed_space(db: Session) -> dict[str, WarehouseLocation]:
                 layout_kind="physical_pallet",
             )
         )
-    db.add_all(
-        [
-            WarehouseAreaStoragePolicy(
-                area_id=area_a1.id,
-                map_feature_id="zone-1f-a1",
-                allowed_inventory_types_json='["finished"]',
-                storage_layout="pallet_ground",
-                status="published",
-                published_map_revision="p1-101-test-map",
-                version=1,
-            ),
-            WarehouseAreaStoragePolicy(
-                area_id=area_c1.id,
-                map_feature_id="zone-3f-c1",
-                allowed_inventory_types_json='["finished"]',
-                storage_layout="mixed",
-                status="published",
-                published_map_revision="p1-101-test-map",
-                version=1,
-            ),
-        ]
+    db.add(
+        WarehouseAreaStoragePolicy(
+            area_id=area_a1.id,
+            map_feature_id="zone-1f-a1",
+            allowed_inventory_types_json='["finished"]',
+            storage_layout="pallet_ground",
+            status="published",
+            published_map_revision="p1-101-test-map",
+            version=1,
+        )
+    )
+    ground_plan = WarehouseGroundLayoutPlan(
+        area_id=area_a1.id,
+        status="published",
+        target_slot_count=1,
+        numbering_origin="south",
+        row_direction="from_aisle_inward",
+        slot_direction="left_to_right",
+        row_start_no=1,
+        slot_start_no=1,
+        draft_map_revision="p1-101-test-map",
+        published_map_revision="p1-101-test-map",
+        preview_fingerprint="a" * 64,
+        version=1,
+        publish_idempotency_key="p0-location-cascade-ground",
+        publish_request_hash="b" * 64,
+        updated_by=operator.id,
+        published_by=operator.id,
+        published_at=datetime.now(),
+    )
+    db.add(ground_plan)
+    db.flush()
+    db.add(
+        WarehouseGroundLayoutSlot(
+            plan_id=ground_plan.id,
+            location_id=rows["valid_1f"].id,
+            route_sequence=1,
+            row_no=1,
+            slot_no=1,
+            x_mm=Decimal("1000"),
+            y_mm=Decimal("1000"),
+            width_mm=1200,
+            depth_mm=1000,
+        )
+    )
+    floor3_ground_plan = WarehouseGroundLayoutPlan(
+        area_id=area_c1.id,
+        status="published",
+        target_slot_count=1,
+        numbering_origin="south",
+        row_direction="from_aisle_inward",
+        slot_direction="left_to_right",
+        row_start_no=1,
+        slot_start_no=1,
+        draft_map_revision="p1-101-test-map",
+        published_map_revision="p1-101-test-map",
+        preview_fingerprint="c" * 64,
+        version=1,
+        publish_idempotency_key="p0-location-cascade-floor3-ground",
+        publish_request_hash="d" * 64,
+        updated_by=operator.id,
+        published_by=operator.id,
+        published_at=datetime.now(),
+    )
+    db.add(floor3_ground_plan)
+    db.flush()
+    db.add(
+        WarehouseGroundLayoutSlot(
+            plan_id=floor3_ground_plan.id,
+            location_id=rows["valid_3f"].id,
+            route_sequence=1,
+            row_no=1,
+            slot_no=1,
+            x_mm=Decimal("1000"),
+            y_mm=Decimal("1000"),
+            width_mm=1200,
+            depth_mm=1000,
+        )
     )
     db.flush()
     return rows

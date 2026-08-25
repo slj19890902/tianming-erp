@@ -49,7 +49,9 @@ def test_operational_frontend_requires_backend_contract_without_local_fallback()
     assert "width_mm: 1200" not in INVENTORY_SOURCE
     assert "depth_mm: 1000" not in INVENTORY_SOURCE
     assert "height_mm: 160" not in INVENTORY_SOURCE
-    assert "pallets: movePreviewPallets" in TWIN_SOURCE
+    assert "return movePreviewPallets;" in TWIN_SOURCE
+    assert "return movePreviewPallets.map" in TWIN_SOURCE
+    assert "pallets: groundCandidatePallets" in TWIN_SOURCE
     assert "pallets: [...layout.pallets" not in TWIN_SOURCE
 
 

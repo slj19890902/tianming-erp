@@ -54,7 +54,7 @@ def test_admin_ledger_and_inventory_deep_links_keep_their_existing_load_paths() 
     )
 
     assert "await loadLocations(true)" in switch_location
-    assert 'requestedTab&&["finished","semi_finished"].includes(requestedTab)' in deep_link
+    assert 'requestedTab&&["finished","semi_finished","molds"].includes(requestedTab)' in deep_link
     assert "await switchTab(requestedTab)" in deep_link
     assert "if(locationId||lotId||keyword)await locateWarehouseLedger" in deep_link
 
@@ -98,7 +98,7 @@ def _location_db(tmp_path):
                 warehouse_type="finished",
                 warehouse_floor=3,
                 area_code="E1",
-                storage_type="ground",
+                storage_type="rack",
                 source_version="V11",
                 placement_status="placed",
                 sort_order=index,
@@ -154,4 +154,6 @@ def test_location_ledger_eager_loads_floor3_map_status_without_n_plus_one(tmp_pa
 
     assert len(payload["items"]) == 30
     assert {row["map_status"] for row in payload["items"]} == {"floor3_mapped"}
-    assert selects <= 2
+    # One ledger query plus four fixed-size projection preload queries.  The
+    # count must not grow with the 30 locations.
+    assert selects == 5

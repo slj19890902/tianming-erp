@@ -227,15 +227,83 @@ def test_only_admin_and_workshop_can_read_pending_sorted_by_recent_record(
 
 def test_surplus_locations_use_incoming_execute_without_warehouse_view(
     incoming_api_app,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.models.access_control import UserPermissionOverride
     from app.models.user import User
-    from app.models.warehouse_inventory import WarehouseLocation
+    from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
+        WarehouseArea,
+        WarehouseAreaStoragePolicy,
+        WarehouseFloor,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
+        WarehouseLocation,
+    )
+    from app.services.warehouse_inventory import WarehouseInventoryError, _location
+
+    monkeypatch.setattr(
+        "app.services.location_candidates.load_warehouse_twin_published_floor_identity",
+        lambda _floor_number: {
+            "revision": "incoming-surplus-map-v1",
+            "zones_by_id": {"incoming-zone-sf": "SF"},
+            "zone_ids_by_area": {"SF": ("incoming-zone-sf",)},
+        },
+    )
 
     app, session_factory = incoming_api_app
     with session_factory() as session:
         workshop = session.scalar(select(User).where(User.username == "workshop"))
         sales = session.scalar(select(User).where(User.username == "sales"))
+        floor = WarehouseFloor(
+            floor_code="2F",
+            floor_name="二楼半成品仓",
+            floor_number=2,
+            construction_status="enabled",
+        )
+        session.add(floor)
+        session.flush()
+        area = WarehouseArea(
+            floor_id=floor.id,
+            area_code="SF",
+            area_name="半成品区",
+            construction_status="enabled",
+        )
+        session.add(area)
+        session.flush()
+        session.add(
+            WarehouseAreaStoragePolicy(
+                area_id=area.id,
+                map_feature_id="incoming-zone-sf",
+                allowed_inventory_types_json='["semi_finished","shared"]',
+                storage_layout="pallet_ground",
+                status="published",
+                published_map_revision="incoming-surplus-map-v1",
+                version=1,
+            )
+        )
+        semi = WarehouseLocation(
+            location_code="N005-SEMI",
+            location_name="N005半成品库位",
+            warehouse_type="semi_finished",
+            warehouse_floor=2,
+            area_code="SF",
+            storage_type="ground",
+            placement_status="placed",
+            source_version="TWIN_V1",
+            is_active=True,
+        )
+        shared = WarehouseLocation(
+            location_code="N005-SHARED",
+            location_name="N005共享库位",
+            warehouse_type="shared",
+            warehouse_floor=2,
+            area_code="SF",
+            storage_type="ground",
+            placement_status="placed",
+            source_version="TWIN_V1",
+            is_active=True,
+        )
         session.add_all(
             [
                 UserPermissionOverride(
@@ -248,18 +316,8 @@ def test_surplus_locations_use_incoming_execute_without_warehouse_view(
                     permission_code="incoming.view",
                     is_allowed=True,
                 ),
-                WarehouseLocation(
-                    location_code="N005-SEMI",
-                    location_name="N005半成品库位",
-                    warehouse_type="semi_finished",
-                    is_active=True,
-                ),
-                WarehouseLocation(
-                    location_code="N005-SHARED",
-                    location_name="N005共享库位",
-                    warehouse_type="shared",
-                    is_active=True,
-                ),
+                semi,
+                shared,
                 WarehouseLocation(
                     location_code="N005-FINISHED",
                     location_name="N005成品库位",
@@ -281,7 +339,56 @@ def test_surplus_locations_use_incoming_execute_without_warehouse_view(
                 ),
             ]
         )
+        session.flush()
+        for index, location in enumerate((semi, shared), start=1):
+            session.add(
+                Floor3LocationLayout(
+                    location_id=location.id,
+                    left_pct=Decimal(str(index * 10)),
+                    top_pct=Decimal("10"),
+                    width_pct=Decimal("8"),
+                    height_pct=Decimal("8"),
+                    source_type="seeded",
+                )
+            )
+        plan = WarehouseGroundLayoutPlan(
+            area_id=area.id,
+            status="published",
+            target_slot_count=2,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="incoming-surplus-map-v1",
+            published_map_revision="incoming-surplus-map-v1",
+            preview_fingerprint="c" * 64,
+            version=1,
+            publish_idempotency_key="incoming-surplus-ground",
+            publish_request_hash="d" * 64,
+            updated_by=workshop.id,
+            published_by=workshop.id,
+            published_at=datetime.now(),
+        )
+        session.add(plan)
+        session.flush()
+        for index, location in enumerate((semi, shared), start=1):
+            session.add(
+                WarehouseGroundLayoutSlot(
+                    plan_id=plan.id,
+                    location_id=location.id,
+                    route_sequence=index,
+                    row_no=1,
+                    slot_no=index,
+                    x_mm=Decimal(str(index * 1000)),
+                    y_mm=Decimal("1000"),
+                    width_mm=1200,
+                    depth_mm=1000,
+                )
+            )
         session.commit()
+        semi_id = int(semi.id)
+        area_id = int(area.id)
 
     with TestClient(app) as client:
         _login(client, "workshop")
@@ -295,7 +402,34 @@ def test_surplus_locations_use_incoming_execute_without_warehouse_view(
         "N005-SEMI",
         "N005-SHARED",
     ]
+    assert {
+        row["position_status"] for row in allowed.json()["items"]
+    } == {"mapped"}
+    assert all(
+        row["location_name"] != "位置名称待完善"
+        for row in allowed.json()["items"]
+    )
     assert read_only.status_code == 403
+
+    with session_factory() as session:
+        policy = session.scalar(
+            select(WarehouseAreaStoragePolicy).where(
+                WarehouseAreaStoragePolicy.area_id == area_id
+            )
+        )
+        assert policy is not None
+        policy.allowed_inventory_types_json = '["finished"]'
+        session.commit()
+
+    with session_factory() as session:
+        with pytest.raises(WarehouseInventoryError, match="不允许当前库存类型"):
+            _location(session, semi_id, "semi_finished")
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        blocked = client.get("/api/incoming/surplus-locations")
+    assert blocked.status_code == 200
+    assert blocked.json()["items"] == []
 
 
 def test_pending_incoming_prioritizes_latest_requisition_operation(
@@ -1038,12 +1172,27 @@ def test_surplus_inventory_in_use_blocks_receipt_revert(
 
 def test_over_receipt_requires_selected_location_layout_version(
     incoming_api_app,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.models.incoming_receipt import IncomingReceipt
     from app.models.order import OrderItem
     from app.models.warehouse_inventory import (
         Floor3LocationLayout,
+        WarehouseArea,
+        WarehouseAreaStoragePolicy,
+        WarehouseFloor,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
         WarehouseLocation,
+    )
+
+    monkeypatch.setattr(
+        "app.services.location_candidates.load_warehouse_twin_published_floor_identity",
+        lambda _floor_number: {
+            "revision": "incoming-overage-map-v1",
+            "zones_by_id": {"incoming-zone-overage": "SF"},
+            "zone_ids_by_area": {"SF": ("incoming-zone-overage",)},
+        },
     )
 
     app, session_factory = incoming_api_app
@@ -1055,12 +1204,42 @@ def test_over_receipt_requires_selected_location_layout_version(
         item.layer_count = 5
         item.flute_type = "AB"
         item.snapshot_material = "K616K"
+        floor = WarehouseFloor(
+            floor_code="3F",
+            floor_name="三楼片料区",
+            floor_number=3,
+            construction_status="enabled",
+        )
+        session.add(floor)
+        session.flush()
+        area = WarehouseArea(
+            floor_id=floor.id,
+            area_code="SF",
+            area_name="片料暂存区",
+            construction_status="enabled",
+        )
+        session.add(area)
+        session.flush()
+        session.add(
+            WarehouseAreaStoragePolicy(
+                area_id=area.id,
+                map_feature_id="incoming-zone-overage",
+                allowed_inventory_types_json='["semi_finished"]',
+                storage_layout="pallet_ground",
+                status="published",
+                published_map_revision="incoming-overage-map-v1",
+                version=1,
+            )
+        )
         location = WarehouseLocation(
             location_code="N005-SI-MAPPED",
             location_name="N005半成品地图位",
             warehouse_type="semi_finished",
             warehouse_floor=3,
+            area_code="SF",
+            storage_type="ground",
             placement_status="placed",
+            source_version="TWIN_V1",
             is_active=True,
         )
         session.add(location)
@@ -1076,6 +1255,40 @@ def test_over_receipt_requires_selected_location_layout_version(
             version=1,
         )
         session.add(layout)
+        plan = WarehouseGroundLayoutPlan(
+            area_id=area.id,
+            status="published",
+            target_slot_count=1,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="incoming-overage-map-v1",
+            published_map_revision="incoming-overage-map-v1",
+            preview_fingerprint="e" * 64,
+            version=1,
+            publish_idempotency_key="incoming-overage-ground",
+            publish_request_hash="f" * 64,
+            updated_by=1,
+            published_by=1,
+            published_at=datetime.now(),
+        )
+        session.add(plan)
+        session.flush()
+        session.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=plan.id,
+                location_id=location.id,
+                route_sequence=1,
+                row_no=1,
+                slot_no=1,
+                x_mm=Decimal("1000"),
+                y_mm=Decimal("1000"),
+                width_mm=1200,
+                depth_mm=1000,
+            )
+        )
         session.commit()
         location_id = location.id
 

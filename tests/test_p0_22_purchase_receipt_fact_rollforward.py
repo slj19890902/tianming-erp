@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from urllib.parse import quote
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -14,8 +15,16 @@ from tests.test_p1_81_receipt_purpose_flow import (
     _login,
     _receive,
     _seed_material_and_staging,
+    _use_p181_published_map_identity,
 )
 from tests.test_phase11_requisition import requisition_app
+
+
+@pytest.fixture(autouse=True)
+def _p022_published_map_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep price roll-forward tests on the same anonymous published map."""
+
+    _use_p181_published_map_identity(monkeypatch)
 
 
 def _auto_freeze(

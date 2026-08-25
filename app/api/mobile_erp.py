@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import mimetypes
@@ -75,15 +76,14 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
     WarehouseLocationDiscrepancy,
 )
-from app.services.warehouse_location_address import (
-    employee_location_name,
-    format_location_address,
-    location_address_payload,
-)
+from app.services.warehouse_location_address import location_address_payload
 from app.services.audit_log import append_audit_event
 from app.services.location_candidates import (
+    current_same_location_pallet,
+    load_warehouse_location_projection_contexts,
     list_operational_locations,
-    operational_location_issue,
+    operational_location_payload,
+    warehouse_location_projection,
 )
 from app.services.warehouse_floor1_candidate_planner import overlay_formal_area_bindings
 from app.services.warehouse_inventory import (
@@ -325,13 +325,16 @@ def _task_status_text(status: str) -> str:
 def _safe_production_task(task: dict, *, drawing_path: str | None) -> dict:
     """Expose workshop facts only; supplier material codes and prices stay private."""
 
-    available_input = max(int(task.get("available_material_input_quantity") or 0), 0)
-    output_factor = max(int(task.get("output_factor") or 1), 1)
-    pieces_per_box = max(int(task.get("pieces_per_box") or 1), 1)
+    planned_output = max(int(task.get("planned_output_quantity") or 0), 0)
+    receipt_purpose_managed = task.get("receipt_purpose_managed") is True
     return {
         "task_id": task["id"],
         "status": task["status"],
-        "status_text": _task_status_text(task["status"]),
+        "status_text": (
+            "收料自动推进"
+            if receipt_purpose_managed
+            else _task_status_text(task["status"])
+        ),
         "order_number": task.get("order_number"),
         "item_order_number": task.get("item_order_number"),
         "product_code": task.get("product_code"),
@@ -340,8 +343,17 @@ def _safe_production_task(task: dict, *, drawing_path: str | None) -> dict:
         "flute_type": task.get("flute"),
         "order_quantity": task.get("ordered_quantity"),
         "received_material_quantity": task.get("material_received_quantity"),
-        "current_producible_quantity": available_input * output_factor // pieces_per_box,
-        "planned_output_quantity": task.get("planned_output_quantity"),
+        "current_producible_quantity": planned_output,
+        "planned_output_quantity": planned_output,
+        "actual_output_quantity": max(
+            int(task.get("actual_output_quantity") or 0),
+            0,
+        ),
+        "receipt_purpose_managed": receipt_purpose_managed,
+        "receipt_purpose_summary": task.get("receipt_purpose_summary") or {},
+        "completion_actionable": task.get("completion_actionable") is not False,
+        "completion_block_code": task.get("completion_block_code"),
+        "completion_block_message": task.get("completion_block_message"),
         "cutting_mode": task.get("special_process"),
         "production_process": task.get("production_process"),
         "production_notes": task.get("production_notes"),
@@ -547,6 +559,19 @@ def _production_station_task_payloads(
             "product_name": task.get("product_name"),
             "carton_specification": task.get("specification"),
             "order_quantity": int(task.get("ordered_quantity") or 0),
+            "planned_output_quantity": max(
+                int(task.get("planned_output_quantity") or 0),
+                0,
+            ),
+            "actual_output_quantity": max(
+                int(task.get("actual_output_quantity") or 0),
+                0,
+            ),
+            "receipt_purpose_managed": task.get("receipt_purpose_managed") is True,
+            "receipt_purpose_summary": task.get("receipt_purpose_summary") or {},
+            "completion_actionable": task.get("completion_actionable") is not False,
+            "completion_block_code": task.get("completion_block_code"),
+            "completion_block_message": task.get("completion_block_message"),
             "drawing_path": drawing_url,
             "drawing_kind": drawing_kind,
             "is_component_task": task.get("is_component_task") is True,
@@ -1003,25 +1028,55 @@ def _lot_load_options():
     )
 
 
-def _position_payload(lot: InventoryLot) -> dict:
+def _position_payload(
+    lot: InventoryLot,
+    projection_context: Mapping[str, object] | None = None,
+) -> dict:
     location = lot.location
-    pallet_item = lot.pallet_item
-    pallet = pallet_item.pallet if pallet_item is not None else None
-    is_mapped = location.floor3_layout is not None
-    is_unplaced = (
-        location.placement_status == "unplaced"
-        or location.is_temporary
-        or (pallet is not None and pallet.needs_relocation)
-    )
-    if is_unplaced:
-        map_status = "unplaced"
-        map_status_text = "待归位，暂不能在地图定位"
-    elif is_mapped:
+    pallet = current_same_location_pallet(lot)
+    if location is None:
+        return {
+            "lot_id": lot.id,
+            "lot_version": lot.version,
+            "lot_number": lot.lot_number,
+            "location_id": None,
+            "location_code": None,
+            "location_name": "尚未绑定正式位置",
+            "location_master_name": None,
+            "current_address_name": "尚未绑定正式位置",
+            "employee_location_name": "尚未绑定正式位置",
+            "floor": None,
+            "area_code": None,
+            "pallet_code": None,
+            "pallet_projection_status": "missing_current_pallet",
+            "quantity_available": lot.quantity_available,
+            "quantity_reserved": lot.quantity_reserved,
+            "quantity_total": lot.quantity_available + lot.quantity_reserved,
+            "unit": "只" if lot.inventory_type == "finished" else "张",
+            "position_status": "unlocated",
+            "map_status": "unplaced",
+            "map_status_text": "尚未绑定正式位置",
+            "map_issue": "库存批次尚未绑定正式位置",
+            "map_url": None,
+            "last_updated_at": utc_naive_to_api(lot.last_movement_at),
+        }
+    context = dict(projection_context or {})
+    projection = warehouse_location_projection(location, **context)
+    position_status = str(projection["position_status"])
+    if pallet is not None and pallet.needs_relocation:
+        position_status = "unplaced"
+        map_issue = "当前栈板待重新归位"
+    else:
+        map_issue = projection.get("map_issue")
+    if position_status == "mapped":
         map_status = "mapped"
-        map_status_text = "三楼地图已定位"
+        map_status_text = "实测地图已定位"
+    elif position_status in {"unplaced", "unlocated", "disabled"}:
+        map_status = "unplaced"
+        map_status_text = str(map_issue or "待归位，暂不能在地图定位")
     else:
         map_status = "ledger_only"
-        map_status_text = "已登记库位，尚未接入平面图"
+        map_status_text = str(map_issue or "已登记库位，尚未接入当前发布地图")
     map_url = None
     if map_status == "mapped":
         map_url = (
@@ -1030,29 +1085,40 @@ def _position_payload(lot: InventoryLot) -> dict:
             f"&lot_id={lot.id}&source=mobile-product"
         )
     unit_label = "只" if lot.inventory_type == "finished" else "张"
-    address = location_address_payload(location)
+    address = location_address_payload(
+        location,
+        area=context.get("area"),
+        floor=context.get("floor"),
+        position_status=position_status,
+    )
     return {
         "lot_id": lot.id,
         "lot_version": lot.version,
         "lot_number": lot.lot_number,
         "location_id": location.id,
         "location_code": location.location_code,
-        "location_name": location.location_name,
+        "location_name": address["employee_location_name"],
+        "location_master_name": location.location_name,
         "current_address_name": address["current_address_name"],
         "employee_location_name": address["employee_location_name"],
         "floor": location.warehouse_floor,
         "area_code": location.area_code,
         "pallet_code": (
-            pallet.pallet_code
-            if pallet is not None and pallet.is_current
-            else None
+            pallet.pallet_code if pallet is not None else None
+        ),
+        "pallet_projection_status": (
+            "current_same_location"
+            if pallet is not None
+            else "missing_current_pallet"
         ),
         "quantity_available": lot.quantity_available,
         "quantity_reserved": lot.quantity_reserved,
         "quantity_total": lot.quantity_available + lot.quantity_reserved,
         "unit": unit_label,
+        "position_status": position_status,
         "map_status": map_status,
         "map_status_text": map_status_text,
+        "map_issue": map_issue,
         "map_url": map_url,
         "last_updated_at": utc_naive_to_api(lot.last_movement_at),
     }
@@ -1087,15 +1153,27 @@ def _inventory_group(
     *,
     unit: str,
     pending_pick_by_lot: dict[int, int] | None = None,
+    projection_contexts: Mapping[int, Mapping[str, object]] | None = None,
 ) -> dict:
     pending_pick_by_lot = pending_pick_by_lot or {}
-    positions = [_position_payload(lot) for lot in lots]
+    projection_contexts = projection_contexts or {}
+    positions = [
+        _position_payload(
+            lot,
+            (
+                projection_contexts.get(int(lot.warehouse_location_id))
+                if lot.warehouse_location_id is not None
+                else None
+            ),
+        )
+        for lot in lots
+    ]
     positions.sort(
         key=lambda row: (
             row["floor"] is None,
             row["floor"] or 0,
             row["area_code"] or "",
-            row["location_code"],
+            row["location_code"] or "",
             row["lot_id"],
         )
     )
@@ -2531,6 +2609,14 @@ def product_inventory(
     pending_pick = _pending_pick_by_lot(
         db, [lot.id for lot in finished_lots]
     )
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [
+            lot.location
+            for lot in [*finished_lots, *semi_finished_lots]
+            if lot.location is not None
+        ],
+    )
     timestamps = [
         lot.last_movement_at for lot in [*finished_lots, *semi_finished_lots]
     ]
@@ -2541,10 +2627,12 @@ def product_inventory(
         finished_lots,
         unit="只",
         pending_pick_by_lot=pending_pick,
+        projection_contexts=projection_contexts,
     )
     semi_finished_group = _inventory_group(
         semi_finished_lots,
         unit="张",
+        projection_contexts=projection_contexts,
     )
     mapped_positions = [
         position
@@ -2691,14 +2779,13 @@ def _require_mobile_lot(
 
 
 def _mobile_location_is_published(db: Session, location: WarehouseLocation) -> bool:
-    return bool(
-        location.floor3_layout is not None
-        and operational_location_issue(
-            db,
-            location,
-            warehouse_types={"finished", "semi_finished", "shared"},
-        )
-        is None
+    context = load_warehouse_location_projection_contexts(db, [location]).get(
+        int(location.id),
+        {},
+    )
+    return (
+        warehouse_location_projection(location, **context)["position_status"]
+        == "mapped"
     )
 
 
@@ -2761,18 +2848,6 @@ def _mobile_area_name(row) -> str:
     return "区域名称待完善"
 
 
-def _mobile_location_name(row) -> str:
-    area = row.area if row.area is not None and row.location.address_area_id == row.area.id else None
-    _code, name = format_location_address(
-        row.location,
-        area=area,
-        floor=row.floor if area is not None else None,
-    )
-    if str(name or "").strip().casefold() == str(_code or "").strip().casefold():
-        return "位置名称待完善"
-    return name or "位置名称待完善"
-
-
 @router.get("/warehouse/map/floors")
 def mobile_warehouse_map_floors(
     response: Response,
@@ -2781,16 +2856,9 @@ def mobile_warehouse_map_floors(
 ) -> dict:
     _no_store(response)
     rows = list_operational_locations(db)
-    location_ids = [int(row.location.id) for row in rows]
-    placed_ids = set(
-        db.scalars(
-            select(Floor3LocationLayout.location_id).where(
-                Floor3LocationLayout.location_id.in_(location_ids or [-1])
-            )
-        ).all()
-    )
     grouped: dict[str, dict] = {}
     for row in rows:
+        location_payload = operational_location_payload(row)
         floor_code = _mobile_floor_code(row)
         floor = grouped.setdefault(
             floor_code,
@@ -2810,7 +2878,7 @@ def mobile_warehouse_map_floors(
                 "published_location_count": 0,
             },
         )
-        if row.location.id in placed_ids:
+        if location_payload["position_status"] == "mapped":
             area["published_location_count"] += 1
     floors: list[dict] = []
     for floor in sorted(
@@ -2858,14 +2926,6 @@ def mobile_warehouse_map_area(
         raise HTTPException(status_code=404, detail="仓库楼层或区域不存在或尚未启用")
     locations = [row.location for row in rows]
     location_ids = [int(location.id) for location in locations]
-    layouts = {
-        int(layout.location_id): layout
-        for layout in db.scalars(
-            select(Floor3LocationLayout).where(
-                Floor3LocationLayout.location_id.in_(location_ids)
-            )
-        ).all()
-    }
     lots = list(
         db.scalars(
             select(InventoryLot)
@@ -2917,27 +2977,41 @@ def mobile_warehouse_map_area(
     location_payloads = []
     for row in rows:
         location = row.location
-        layout = layouts.get(int(location.id))
+        canonical = operational_location_payload(row)
+        is_mapped = canonical["position_status"] == "mapped"
+        layout = (row.projection_context or {}).get("layout") if is_mapped else None
         goods = goods_by_location.get(int(location.id), [])
-        readable_location = _mobile_location_name(row)
         location_payloads.append(
             {
                 "location_id": int(location.id),
                 "location_code": location.location_code,
-                "location_name": location.location_name,
-                "current_address_name": readable_location,
-                "employee_location_name": readable_location,
+                "location_name": canonical["employee_location_name"],
+                "location_master_name": location.location_name,
+                "current_address_name": canonical["current_address_name"],
+                "employee_location_name": canonical["employee_location_name"],
                 "area_code": normalized_area,
-                "geometry": _mobile_layout_payload(layout) if layout else None,
-                "map_status": "ready" if layout else "unmeasured",
-                "map_status_text": "实测地图已建立" if layout else "未建立实测地图",
+                "position_status": canonical["position_status"],
+                "map_issue": canonical["map_issue"],
+                "published_map_revision": canonical["published_map_revision"],
+                "map_feature_id": canonical["map_feature_id"],
+                "geometry": (
+                    _mobile_layout_payload(layout)
+                    if isinstance(layout, Floor3LocationLayout)
+                    else None
+                ),
+                "map_status": "ready" if is_mapped else "unmeasured",
+                "map_status_text": (
+                    "实测地图已建立"
+                    if is_mapped
+                    else str(canonical["map_issue"] or "未建立实测地图")
+                ),
                 "occupancy_state": (
                     "occupied" if goods else "empty"
                 )
                 if unrestricted
                 else ("visible_goods" if goods else "not_disclosed"),
                 "goods": goods,
-                "can_select_target": layout is not None,
+                "can_select_target": is_mapped,
             }
         )
     has_geometry = any(item["geometry"] is not None for item in location_payloads)
@@ -3044,29 +3118,49 @@ def mobile_move_warehouse_lot(
 
 
 def _mobile_discrepancy_payload(
+    db: Session,
     row: WarehouseLocationDiscrepancy,
     *,
     lot: InventoryLot,
     registered: WarehouseLocation,
     observed: WarehouseLocation,
+    projection_contexts: Mapping[int, Mapping[str, object]] | None = None,
 ) -> dict:
+    contexts = (
+        projection_contexts
+        if projection_contexts is not None
+        else load_warehouse_location_projection_contexts(
+            db,
+            [registered, observed],
+        )
+    )
+
+    def location_payload(location: WarehouseLocation) -> dict:
+        context = contexts.get(int(location.id), {})
+        projection = warehouse_location_projection(location, **context)
+        address = location_address_payload(
+            location,
+            area=context.get("area"),
+            floor=context.get("floor"),
+            position_status=str(projection["position_status"]),
+        )
+        return {
+            "location_id": location.id,
+            "location_code": location.location_code,
+            "location_name": address["employee_location_name"],
+            "location_master_name": location.location_name,
+            "employee_location_name": address["employee_location_name"],
+            "position_status": projection["position_status"],
+            "map_issue": projection["map_issue"],
+        }
+
     return {
         "id": row.id,
         "version": row.version,
         "status": row.status,
         "lot": _mobile_goods_payload(lot),
-        "registered_location": {
-            "location_id": registered.id,
-            "location_code": registered.location_code,
-            "location_name": registered.location_name,
-            "employee_location_name": employee_location_name(registered),
-        },
-        "observed_location": {
-            "location_id": observed.id,
-            "location_code": observed.location_code,
-            "location_name": observed.location_name,
-            "employee_location_name": employee_location_name(observed),
-        },
+        "registered_location": location_payload(registered),
+        "observed_location": location_payload(observed),
         "observed_location_layout_version": row.observed_location_layout_version,
         "reported_quantity": row.reported_quantity,
         "reason": row.reason,
@@ -3138,6 +3232,7 @@ def report_mobile_warehouse_location_discrepancy(
             "message": "位置不符已上报，尚未改变库存位置",
             "idempotent_replay": True,
             "report": _mobile_discrepancy_payload(
+                db,
                 existing,
                 lot=lot,
                 registered=existing_registered,
@@ -3191,6 +3286,7 @@ def report_mobile_warehouse_location_discrepancy(
         "message": "位置不符已上报，尚未改变库存位置",
         "idempotent_replay": False,
         "report": _mobile_discrepancy_payload(
+            db,
             row, lot=lot, registered=registered, observed=observed
         ),
     }
@@ -3217,22 +3313,50 @@ def list_mobile_warehouse_location_discrepancies(
             .limit(limit * 3)
         ).all()
     )
-    items = []
-    for row in rows:
-        lot = db.scalar(
+    lot_ids = {int(row.inventory_lot_id) for row in rows}
+    lots_by_id = {
+        int(lot.id): lot
+        for lot in db.scalars(
             select(InventoryLot)
             .options(*_mobile_lot_options())
-            .where(InventoryLot.id == row.inventory_lot_id)
+            .where(InventoryLot.id.in_(lot_ids))
+        ).all()
+    }
+    location_ids = {
+        int(location_id)
+        for row in rows
+        for location_id in (
+            row.registered_location_id,
+            row.observed_location_id,
         )
+    }
+    locations_by_id = {
+        int(location.id): location
+        for location in db.scalars(
+            select(WarehouseLocation).where(WarehouseLocation.id.in_(location_ids))
+        ).all()
+    }
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        locations_by_id.values(),
+    )
+    items = []
+    for row in rows:
+        lot = lots_by_id.get(int(row.inventory_lot_id))
         if lot is None or not _mobile_lot_is_visible(lot, visible_customer_ids):
             continue
-        registered = db.get(WarehouseLocation, row.registered_location_id)
-        observed = db.get(WarehouseLocation, row.observed_location_id)
+        registered = locations_by_id.get(int(row.registered_location_id))
+        observed = locations_by_id.get(int(row.observed_location_id))
         if registered is None or observed is None:
             continue
         items.append(
             _mobile_discrepancy_payload(
-                row, lot=lot, registered=registered, observed=observed
+                db,
+                row,
+                lot=lot,
+                registered=registered,
+                observed=observed,
+                projection_contexts=projection_contexts,
             )
         )
         if len(items) >= limit:

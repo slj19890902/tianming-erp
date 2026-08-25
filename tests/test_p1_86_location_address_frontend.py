@@ -77,6 +77,10 @@ def test_search_map_labels_and_cross_module_views_prefer_current_chinese_address
     assert "x.from_location_name||\"-\"" in warehouse
     assert "x.to_location_name||\"-\"" in warehouse
     assert "location.employee_location_name || location.current_address_name || location.location_name" in label
+    assert "location?.area_name" in index
+    assert "row?.completion_actionable === false" in index
+    assert "row.completion_block_message" in index
+    assert "available_material_input_quantity ?? 0" in index
     location_markup = label.split('<section class="location">', 1)[1].split("</section>", 1)[0]
     assert "location.location_code" not in location_markup
 

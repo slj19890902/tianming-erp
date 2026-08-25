@@ -11,7 +11,18 @@ from sqlalchemy.orm import Session, sessionmaker
 
 
 @pytest.fixture()
-def twin_dashboard_app(tmp_path):
+def twin_dashboard_app(tmp_path, monkeypatch):
+    from app.services import location_candidates
+
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda floor_number: {
+            "revision": f"p1-29-{int(floor_number)}f-map-v1",
+            "zones_by_id": {"zone-a1": "A1"},
+            "zone_ids_by_area": {"A1": ("zone-a1",)},
+        },
+    )
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.warehouse import router as warehouse_router
@@ -32,6 +43,8 @@ def twin_dashboard_app(tmp_path):
         SemiFinishedInventoryDetail,
         WarehouseArea,
         WarehouseFloor,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
         WarehouseLocation,
     )
 
@@ -82,36 +95,34 @@ def twin_dashboard_app(tmp_path):
             floor_code="1F",
             floor_name="一楼生产与周转区",
             floor_number=1,
-            construction_status="layout_complete",
+            construction_status="enabled",
         )
         floor3 = WarehouseFloor(
             floor_code="3F",
             floor_name="三楼成品仓",
             floor_number=3,
-            construction_status="layout_complete",
+            construction_status="enabled",
         )
         db.add_all([floor1, floor3])
         db.flush()
-        db.add_all(
-            [
-                WarehouseArea(
-                    floor_id=floor1.id,
-                    area_code="RAW",
-                    area_name="原料区",
-                    planned_location_count=2,
-                    planned_pallet_capacity=10,
-                    construction_status="enabled",
-                ),
-                WarehouseArea(
-                    floor_id=floor3.id,
-                    area_code="A1",
-                    area_name="A1成品区",
-                    planned_location_count=4,
-                    planned_pallet_capacity=20,
-                    construction_status="enabled",
-                ),
-            ]
+        raw_area = WarehouseArea(
+            floor_id=floor1.id,
+            area_code="RAW",
+            area_name="原料区",
+            planned_location_count=2,
+            planned_pallet_capacity=10,
+            construction_status="enabled",
         )
+        finished_area = WarehouseArea(
+            floor_id=floor3.id,
+            area_code="A1",
+            area_name="A1成品区",
+            planned_location_count=4,
+            planned_pallet_capacity=20,
+            construction_status="enabled",
+        )
+        db.add_all([raw_area, finished_area])
+        db.flush()
         locations = [
             WarehouseLocation(
                 location_code="A1-L01",
@@ -181,6 +192,41 @@ def twin_dashboard_app(tmp_path):
                     source_type="manual",
                 )
             )
+        ground_plan = WarehouseGroundLayoutPlan(
+            area_id=finished_area.id,
+            status="published",
+            target_slot_count=3,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="p1-29-3f-map-v1",
+            published_map_revision="p1-29-3f-map-v1",
+            preview_fingerprint="a" * 64,
+            version=1,
+            publish_idempotency_key="p1-29-ground-publish",
+            publish_request_hash="b" * 64,
+            updated_by=admin.id,
+            published_by=admin.id,
+            published_at=datetime.now(),
+        )
+        db.add(ground_plan)
+        db.flush()
+        for index, location in enumerate(locations[:3], start=1):
+            db.add(
+                WarehouseGroundLayoutSlot(
+                    plan_id=ground_plan.id,
+                    location_id=location.id,
+                    route_sequence=index,
+                    row_no=1,
+                    slot_no=index,
+                    x_mm=Decimal(str(1000 + (index - 1) * 1200)),
+                    y_mm=Decimal("1000"),
+                    width_mm=1200,
+                    depth_mm=1000,
+                )
+            )
 
         def finished_lot(
             *,
@@ -231,6 +277,15 @@ def twin_dashboard_app(tmp_path):
             quantity=120,
             age_days=120,
             code="TM-FG-001",
+        )
+        loose_owner_lot = finished_lot(
+            suffix="OWNER-LOOSE",
+            location=locations[0],
+            customer=owner,
+            target_product=product,
+            quantity=5,
+            age_days=2,
+            code="TM-FG-001-LOOSE",
         )
         hidden_lot = finished_lot(
             suffix="HIDDEN",
@@ -317,6 +372,14 @@ def twin_dashboard_app(tmp_path):
                 )
             )
             pallets.append(pallet)
+        db.add(
+            InventoryPallet(
+                pallet_code="PLT-3F-EMPTY-RESIDUE",
+                location_id=locations[2].id,
+                status="active",
+                is_current=True,
+            )
+        )
         db.flush()
         yesterday = datetime.utcnow() - timedelta(days=1)
         db.add_all(
@@ -401,12 +464,52 @@ def test_dashboard_keeps_native_units_and_hides_unconfirmed_capacity_metrics(
         "height_mm": 150,
     }
     quantities = {row["key"]: row for row in payload["summary"]["quantities"]}
-    assert quantities["finished:boxes"]["available"] == 215
+    assert quantities["finished:boxes"]["available"] == 220
     assert quantities["semi_finished:sheets"]["available"] == 60
     assert payload["summary"]["occupied_pallets"] == 2
     assert payload["summary"]["empty_mapped_locations"] == 1
     assert payload["summary"]["long_age_lots"] == 1
     assert payload["summary"]["unlocated_lots"] == 1
+    assert payload["summary"]["finished_map_coverage"] == {
+        "total_lots": 4,
+        "mapped_lots": 3,
+        "unlocated_lots": 1,
+        "total_quantity": 220,
+        "mapped_quantity": 205,
+        "unlocated_quantity": 15,
+        "total_physical_quantity": 220,
+        "mapped_physical_quantity": 205,
+        "unlocated_physical_quantity": 15,
+        "all_located": False,
+    }
+    assert payload["summary"]["finished_pallet_coverage"] == {
+        "total_lots": 4,
+        "current_same_location_pallet_lots": 2,
+        "without_current_same_location_pallet_lots": 2,
+        "total_quantity": 220,
+        "current_same_location_pallet_quantity": 200,
+        "without_current_same_location_pallet_quantity": 20,
+        "total_physical_quantity": 220,
+        "current_same_location_pallet_physical_quantity": 200,
+        "without_current_same_location_pallet_physical_quantity": 20,
+        "all_on_current_same_location_pallet": False,
+        "conservation": {
+            "lot_count": True,
+            "quantity": True,
+            "physical_quantity": True,
+        },
+    }
+    assert payload["summary"]["mapped_location_without_current_pallet"] == {
+        "lot_count": 1,
+        "quantity": 5,
+        "physical_quantity": 5,
+    }
+    assert payload["summary"]["empty_current_pallet_residue_count"] == 1
+    assert payload["summary"]["finished_projection_complete"] is False
+    assert len(payload["unlocated_inventory"]) == 1
+    assert payload["unlocated_inventory"][0]["inventory_code"] == "TM-FG-001-PENDING"
+    assert payload["unlocated_inventory"][0]["position_status"] == "unplaced"
+    assert payload["unlocated_inventory"][0]["map_position"] is None
     assert payload["floors"][1]["capacity"]["confirmed"] is False
     assert payload["floors"][1]["capacity"]["safe_pallet_capacity"] is None
     assert payload["floors"][1]["capacity"]["basis"] == "planning_reference"
@@ -421,6 +524,24 @@ def test_dashboard_keeps_native_units_and_hides_unconfirmed_capacity_metrics(
     mapped = next(row for row in payload["locations"] if row["location_code"] == "A1-L01")
     assert mapped["map_position"]["version"] == 1
     assert mapped["map_position"]["z_index"] == 0
+    assert mapped["current_address_name"] == "三楼 A1成品区·左侧第1位"
+    assert mapped["employee_location_name"] == "三楼 A1成品区·左侧第1位"
+    assert [row["inventory_code"] for row in mapped["loose_items"]] == [
+        "TM-FG-001-LOOSE"
+    ]
+    assert mapped["loose_items"][0]["pallet_projection_status"] == (
+        "missing_current_pallet"
+    )
+    empty = next(row for row in payload["locations"] if row["location_code"] == "A1-L03")
+    assert empty["occupancy_status"] == "empty"
+    assert empty["pallets"] == []
+    assert {
+        row["code"] for row in payload["alerts"]
+    } >= {
+        "mapped_location_without_current_pallet",
+        "empty_current_pallet_residue",
+        "unlocated_inventory",
+    }
 
 
 def test_homepage_capacity_summary_waits_for_all_field_confirmations(
@@ -570,14 +691,14 @@ def test_inventory_code_search_returns_all_real_and_unplaced_matches(
         )
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["result_count"] == 2
+    assert payload["result_count"] == 3
     assert {row["position_status"] for row in payload["items"]} == {"mapped", "unplaced"}
     assert {row["location_code"] for row in payload["items"]} == {"A1-L01", "A1-PENDING"}
     assert payload["floor_summaries"] == [
         {
             "floor_code": "3F",
-            "lot_count": 2,
-            "quantities": {"finished:boxes": 135},
+            "lot_count": 3,
+            "quantities": {"finished:boxes": 140},
             "location_count": 2,
         }
     ]

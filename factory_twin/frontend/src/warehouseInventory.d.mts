@@ -8,6 +8,7 @@ export interface InventoryProjectionItem {
   quantity?: number;
   available_quantity?: number;
   reserved_quantity?: number;
+  damaged_quantity?: number;
   unit?: string;
   age_days?: number | null;
 }
@@ -24,8 +25,13 @@ export interface InventoryProjectionLocation {
   location_id?: number;
   location_code: string;
   location_name: string;
+  employee_location_name?: string | null;
+  current_address_name?: string | null;
   floor_code: string;
   area_code: string | null;
+  map_feature_id?: string | null;
+  published_map_revision?: string | null;
+  source_version?: string | null;
   occupancy_status?: "occupied" | "empty";
   position_status?: string;
   map_position?: {
@@ -61,6 +67,19 @@ export function filterAreaInventory(
 export function inventoryAgeLabel(ageDays?: number | null): string;
 export function inventoryAgeTone(ageDays?: number | null): "unknown" | "critical" | "warning" | "normal";
 export function inventoryUnitLabel(unit?: string | null): string;
+export function inventoryPhysicalQuantity(item?: {
+  quantity?: number | null;
+  available_quantity?: number | null;
+  reserved_quantity?: number | null;
+  damaged_quantity?: number | null;
+} | null): number;
+
+export function inventoryHasPhysicalQuantity(item?: {
+  quantity?: number | null;
+  available_quantity?: number | null;
+  reserved_quantity?: number | null;
+  damaged_quantity?: number | null;
+} | null): boolean;
 
 export function searchHighlightAreaCodes(
   items: Array<{ floor_code?: string; area_code?: string | null; position_status?: string }>,
@@ -85,6 +104,8 @@ export function warehouseSearchFloorSummaries(items: Array<{
   location_name?: string | null;
   quantity?: number | null;
   available_quantity?: number | null;
+  reserved_quantity?: number | null;
+  damaged_quantity?: number | null;
 }>): Array<{ floor_code: string; quantity: number; location_count: number }>;
 
 export function warehouseSearchLocationSummaries(items: Array<{
@@ -95,6 +116,8 @@ export function warehouseSearchLocationSummaries(items: Array<{
   position_status?: string | null;
   quantity?: number | null;
   available_quantity?: number | null;
+  reserved_quantity?: number | null;
+  damaged_quantity?: number | null;
 }>): Array<{
   key: string;
   floor_code: string;
@@ -113,12 +136,20 @@ export function inventoryLocationItems(
   location?: InventoryProjectionLocation | null
 ): InventoryProjectionItem[];
 
+export function normalizeInventoryLocationProjection(
+  location?: InventoryProjectionLocation | null
+): InventoryProjectionLocation | null | undefined;
+
 export function singleLocationPallet(
   location?: InventoryProjectionLocation | null
 ): InventoryProjectionPallet | null;
 
 export function employeeLocationName(
-  location?: { location_name?: string | null } | null
+  location?: {
+    employee_location_name?: string | null;
+    current_address_name?: string | null;
+    location_name?: string | null;
+  } | null
 ): string;
 
 export function employeeAreaName(

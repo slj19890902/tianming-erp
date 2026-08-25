@@ -2,52 +2,30 @@ function normalized(value) {
   return String(value ?? "").trim().toLocaleLowerCase("zh-CN");
 }
 
-function pointInPolygon(x, y, points) {
-  let inside = false;
-  for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
-    const [xi, yi] = points[index];
-    const [xj, yj] = points[previous];
-    const crosses = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi || 1) + xi;
-    if (crosses) inside = !inside;
+export function inventoryPhysicalQuantity(item) {
+  const hasBreakdown = [item?.available_quantity, item?.reserved_quantity, item?.damaged_quantity]
+    .some((value) => value !== undefined && value !== null);
+  if (hasBreakdown) {
+    return [item?.available_quantity, item?.reserved_quantity, item?.damaged_quantity]
+      .map((value) => Number(value || 0))
+      .filter(Number.isFinite)
+      .reduce((sum, value) => sum + value, 0);
   }
-  return inside;
+  const physical = Number(item?.quantity || 0);
+  return Number.isFinite(physical) ? physical : 0;
 }
 
-function stableZonePoints(points, count) {
-  if (!count || points.length < 3) return [];
-  const xs = points.map((point) => Number(point[0]));
-  const ys = points.map((point) => Number(point[1]));
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const width = Math.max(1, maxX - minX);
-  const height = Math.max(1, maxY - minY);
-  const marginX = Math.min(600, width * 0.08);
-  const marginY = Math.min(500, height * 0.08);
-  const candidates = [];
-  const seen = new Set();
-  for (let density = 2; density <= 8 && candidates.length < count; density += 1) {
-    const columns = Math.max(1, Math.ceil(Math.sqrt(count * (width / height)) * density));
-    const rows = Math.max(1, Math.ceil((count * density * density) / columns));
-    for (let row = 0; row < rows; row += 1) {
-      for (let column = 0; column < columns; column += 1) {
-        const x = minX + marginX + ((column + 0.5) * Math.max(1, width - marginX * 2)) / columns;
-        const y = minY + marginY + ((row + 0.5) * Math.max(1, height - marginY * 2)) / rows;
-        const key = `${Math.round(x)}:${Math.round(y)}`;
-        if (!seen.has(key) && pointInPolygon(x, y, points)) {
-          seen.add(key);
-          candidates.push([x, y]);
-        }
-      }
-    }
-  }
-  if (!candidates.length) {
-    const centroid = points.reduce((sum, point) => [sum[0] + Number(point[0]), sum[1] + Number(point[1])], [0, 0]);
-    candidates.push([centroid[0] / points.length, centroid[1] / points.length]);
-  }
-  if (candidates.length <= count) return Array.from({ length: count }, (_, index) => candidates[index % candidates.length]);
-  return Array.from({ length: count }, (_, index) => candidates[Math.floor((index * candidates.length) / count)]);
+export function inventoryHasPhysicalQuantity(item) {
+  const hasQuantityFact = [
+    item?.quantity,
+    item?.available_quantity,
+    item?.reserved_quantity,
+    item?.damaged_quantity
+  ].some((value) => value !== undefined && value !== null);
+  // Older projections may not carry quantity fields. Keep those visible until
+  // the backend supplies a quantity fact; only an explicit non-positive fact
+  // is safe to remove from the current warehouse picture.
+  return !hasQuantityFact || inventoryPhysicalQuantity(item) > 0;
 }
 
 function zoneBounds(points) {
@@ -128,7 +106,7 @@ export function warehouseSearchFloorSummaries(items) {
       location_count: 0,
       location_keys: new Set()
     };
-    row.quantity += Number(item.quantity ?? item.available_quantity ?? 0);
+    row.quantity += inventoryPhysicalQuantity(item);
     row.location_keys.add(item.location_id || `${item.area_code || "TEXT"}:${item.location_name || "待定位"}`);
     row.location_count = row.location_keys.size;
     floors.set(floorCode, row);
@@ -153,7 +131,7 @@ export function warehouseSearchLocationSummaries(items) {
       position_status: item.position_status || "unlocated",
       quantity: 0
     };
-    row.quantity += Number(item.quantity ?? item.available_quantity ?? 0);
+    row.quantity += inventoryPhysicalQuantity(item);
     locations.set(key, row);
   }
   return [...locations.values()].sort((left, right) =>
@@ -168,6 +146,19 @@ export function inventoryLocationPallets(location) {
   const candidates = listed.length ? listed : location?.pallet ? [location.pallet] : [];
   const seen = new Set();
   return candidates
+    .map((pallet) => {
+      if (!Array.isArray(pallet?.items)) return pallet;
+      const items = pallet.items.filter((item) => inventoryHasPhysicalQuantity(item));
+      if (!items.length) return null;
+      if (items.length === pallet.items.length) return pallet;
+      return {
+        ...pallet,
+        items,
+        item_count: items.length,
+        visible_item_count: items.length
+      };
+    })
+    .filter(Boolean)
     .filter((pallet, index) => {
       const palletId = Number(pallet?.pallet_id);
       const identity = Number.isFinite(palletId) && palletId > 0 ? `id:${palletId}` : `legacy:${index}`;
@@ -189,7 +180,7 @@ export function inventoryLocationItems(location) {
   const seenLotIds = new Set();
   return [
     ...inventoryLocationPallets(location).flatMap((pallet) => pallet.items || []),
-    ...(location?.loose_items || [])
+    ...(location?.loose_items || []).filter((item) => inventoryHasPhysicalQuantity(item))
   ].filter((item) => {
     const lotId = Number(item?.lot_id);
     if (!Number.isFinite(lotId) || lotId <= 0) return true;
@@ -199,28 +190,39 @@ export function inventoryLocationItems(location) {
   });
 }
 
+export function normalizeInventoryLocationProjection(location) {
+  if (!location) return location;
+  const pallets = inventoryLocationPallets(location);
+  const looseItems = (location.loose_items || [])
+    .filter((item) => inventoryHasPhysicalQuantity(item));
+  const occupied = pallets.length > 0 || looseItems.length > 0;
+  return {
+    ...location,
+    pallets,
+    pallet: pallets.length === 1 ? pallets[0] : null,
+    loose_items: looseItems,
+    occupancy_status: occupied ? "occupied" : "empty"
+  };
+}
+
 export function singleLocationPallet(location) {
   const pallets = inventoryLocationPallets(location);
   return pallets.length === 1 ? pallets[0] : null;
 }
 
 export function employeeLocationName(location) {
-  const name = String(location?.location_name || "").trim();
+  const name = String(
+    location?.employee_location_name
+      || location?.current_address_name
+      || location?.location_name
+      || ""
+  ).trim();
   return name || "位置名称待完善";
 }
 
 export function employeeAreaName(area) {
   const name = String(area?.area_name || area?.name || "").trim();
   return name || "区域名称待完善";
-}
-
-function dispatchPalletItemQuantity(item) {
-  if (item?.quantity !== undefined && item?.quantity !== null) return Math.max(0, Number(item.quantity) || 0);
-  return Math.max(
-    0,
-    Number(item?.available_quantity || 0)
-      + Number(item?.reserved_quantity || 0)
-  );
 }
 
 export function normalizeStandardPalletContract(value) {
@@ -260,66 +262,16 @@ export function standardPalletContractsMatch(left, right) {
 }
 
 export function buildMeasuredDispatchPallets(
-  features,
-  dispatchLocation,
-  floorCode,
-  standardPallet,
-  layoutId = "erp-twin"
+  _features,
+  _dispatchLocation,
+  _floorCode,
+  _standardPallet,
+  _layoutId = "erp-twin"
 ) {
-  const standard = normalizeStandardPalletContract(standardPallet);
-  if (!standard) return [];
-  if (floorCode !== "1F" || dispatchLocation?.location_code !== "F1-DISPATCH-01") return [];
-  const zones = (features || [])
-    .filter((feature) => feature.feature_kind === "zone"
-      && String(feature.subtype || "").toLowerCase() === "finished_wait_delivery"
-      && feature.points?.length >= 3)
-    .sort((left, right) => String(left.feature_code).localeCompare(String(right.feature_code), "zh-CN", { numeric: true }));
-  const sourcePallets = inventoryLocationPallets(dispatchLocation);
-  if (!zones.length || !sourcePallets.length) return [];
-
-  const zonePallets = zones.map(() => []);
-  sourcePallets.forEach((pallet, index) => zonePallets[index % zones.length].push(pallet));
-  return zones.flatMap((zone, zoneIndex) => {
-    const pallets = zonePallets[zoneIndex];
-    const points = stableZonePoints(zone.points, pallets.length);
-    return pallets.map((pallet, palletIndex) => {
-      const items = Array.isArray(pallet.items) ? pallet.items : [];
-      const productNames = [...new Set(items.map((item) => item.product_name).filter(Boolean))];
-      const customerNames = [...new Set(items.map((item) => item.customer_name).filter(Boolean))];
-      const totalQuantity = items.reduce((sum, item) => sum + dispatchPalletItemQuantity(item), 0);
-      const unit = items.find((item) => item.unit)?.unit || "boxes";
-      const productLabel = productNames.length === 1
-        ? productNames[0]
-        : productNames.length > 1 ? `${productNames[0]} 等 ${productNames.length} 款` : "产品名称待补充";
-      const customerLabel = customerNames.length === 1
-        ? customerNames[0]
-        : customerNames.length > 1 ? `${customerNames.length} 个客户` : "客户待确认";
-      return {
-        id: `erp-dispatch-pallet-${pallet.pallet_id}`,
-        layout_id: layoutId,
-        pallet_code: pallet.pallet_code,
-        name: `${productLabel} · ${totalQuantity.toLocaleString("zh-CN")} ${inventoryUnitLabel(unit)}`,
-        zone_id: `combined-dispatch-${dispatchLocation.location_id}`,
-        zone_code: "一楼成品合并暂存区",
-        x_mm: points[palletIndex][0],
-        y_mm: points[palletIndex][1],
-        z_mm: 0,
-        width_mm: standard.width_mm,
-        depth_mm: standard.depth_mm,
-        height_mm: standard.height_mm,
-        rotation_deg: 0,
-        color: "#ea580c",
-        visual_status: "waiting",
-        status_note: `真实待送栈板 · ${customerLabel} · ${pallet.pallet_code}`,
-        visual_kind: "physical_pallet",
-        display_label: `${productLabel} · ${totalQuantity.toLocaleString("zh-CN")} ${inventoryUnitLabel(unit)}`,
-        operational_group_id: `dispatch-location:${dispatchLocation.location_id}`,
-        is_simulated: false,
-        version: Number(pallet.version || 1),
-        snapped: false
-      };
-    });
-  });
+  // F1-DISPATCH-01 has ledger identity but no measured geometry.  Borrowing a
+  // FIN polygon would falsely tell operators that the stock has been moved.
+  // The overview's unlocated_inventory blocker is the only valid projection.
+  return [];
 }
 
 export function buildMappedLocationPallets(
@@ -331,25 +283,35 @@ export function buildMappedLocationPallets(
 ) {
   const standard = normalizeStandardPalletContract(standardPallet);
   if (!standard) return [];
-  const zoneByArea = new Map(
-    features
-      .filter((feature) => feature.feature_kind === "zone" && feature.erp_area_code && feature.points?.length >= 3)
-      .map((feature) => [String(feature.erp_area_code), feature])
+  const measuredZones = features.filter(
+    (feature) => feature.feature_kind === "zone" && feature.id && feature.points?.length >= 3
   );
+  const zoneById = new Map(measuredZones.map((feature) => [String(feature.id), feature]));
   const grouped = new Map();
   for (const location of locations) {
-    if (location.floor_code !== floorCode || !location.area_code) continue;
-    if (["disabled", "unplaced", "unlocated"].includes(location.position_status || "")) continue;
-    if (!zoneByArea.has(String(location.area_code))) continue;
-    const key = String(location.area_code);
-    grouped.set(key, [...(grouped.get(key) || []), location]);
+    if (location.floor_code !== floorCode) continue;
+    if (location.position_status !== "mapped") continue;
+    if (!Number(location.map_position?.version)) continue;
+    const mapFeatureId = String(location.map_feature_id || "").trim();
+    let zone = mapFeatureId ? zoneById.get(mapFeatureId) : null;
+    if (!zone && String(location.source_version || "").trim().toUpperCase() === "V11") {
+      const areaCode = String(location.area_code || "").trim().toUpperCase();
+      zone = areaCode
+        ? measuredZones.find(
+          (feature) => String(feature.erp_area_code || "").trim().toUpperCase() === areaCode
+        ) || null
+        : null;
+    }
+    if (!zone) continue;
+    const key = String(zone.id);
+    const group = grouped.get(key) || { zone, locations: [] };
+    group.locations.push(normalizeInventoryLocationProjection(location));
+    grouped.set(key, group);
   }
   const pallets = [];
-  for (const [areaCode, areaLocations] of [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right, "zh-CN"))) {
-    const zone = zoneByArea.get(areaCode);
+  for (const [, { zone, locations: areaLocations }] of [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right, "zh-CN"))) {
     const ordered = [...areaLocations].sort((left, right) => String(left.location_code).localeCompare(String(right.location_code), "zh-CN", { numeric: true }));
-    const fallbackPositions = stableZonePoints(zone.points, ordered.length);
-    const positions = ordered.map((location, index) => mappedLocationPoint(zone, location) || fallbackPositions[index]);
+    const positions = ordered.map((location) => mappedLocationPoint(zone, location));
     const xs = zone.points.map((point) => Number(point[0]));
     const ys = zone.points.map((point) => Number(point[1]));
     ordered.forEach((location, index) => {
@@ -399,7 +361,7 @@ export function buildMappedLocationPallets(
         display_label: readableLocationName,
         operational_group_id: `location:${location.location_id}`,
         is_logical_anchor: isLogicalAnchor,
-        is_simulated: true,
+        is_simulated: false,
         version: 1,
         snapped: false
       });

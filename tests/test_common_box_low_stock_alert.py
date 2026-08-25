@@ -575,6 +575,7 @@ def test_quick_policy_update_only_changes_two_thresholds(tmp_path: Path) -> None
 
 def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finished_stock(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
@@ -594,12 +595,26 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
     from app.models.user import User
     from app.models.warehouse_inventory import InventoryLot
     from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
         FinishedGoodsInventoryDetail,
         InventoryMovement,
         SemiFinishedLotAllowedProduct,
         WarehouseArea,
         WarehouseFloor,
         WarehouseLocation,
+    )
+    from app.services import location_candidates
+
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda floor_number: {
+            "revision": "anonymous-common-box-map-v1",
+            "zones_by_id": {"zone-e1": "E1"},
+            "zone_ids_by_area": {"E1": ("zone-e1",)},
+        }
+        if int(floor_number) == 3
+        else None,
     )
 
     _engine, factory, ids = _factory(tmp_path)
@@ -737,6 +752,19 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             is_active=True,
         )
         db.add_all([raw_staging, semi_location, production_location])
+        db.flush()
+        db.add(
+            Floor3LocationLayout(
+                location_id=production_location.id,
+                left_pct=10,
+                top_pct=10,
+                width_pct=5,
+                height_pct=5,
+                version=1,
+                source_type="manual",
+                layout_kind="physical_pallet",
+            )
+        )
         db.commit()
         semi_location_id = semi_location.id
         production_location_id = production_location.id
@@ -1154,9 +1182,11 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
                 ],
                 "source_ref_type": "stock_replenishment_receipt",
                 "source_ref_id": received.json()["receipt_item_id"],
-                "location_code": "1FA",
-                "location_name": "Floor 1 A1 raw-material staging",
-                "remaining_sheet_quantity": 40,
+                    "location_code": "1FA",
+                    "location_name": "Floor 1 A1 raw-material staging",
+                    "current_address_name": "Floor 1 A1 raw-material staging",
+                    "employee_location_name": "Floor 1 A1 raw-material staging",
+                    "remaining_sheet_quantity": 40,
                 "remaining_product_quantity": 80,
                 "stock_yield_per_sheet": 2,
                 "display_name": "客户专用纸板备料",
@@ -1174,6 +1204,7 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
                     "actual_output_quantity": 70,
                     "defective_quantity": 10,
                     "location_id": production_location_id,
+                    "expected_layout_version": 1,
                 }
             ],
         }

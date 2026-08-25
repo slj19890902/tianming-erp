@@ -24,7 +24,10 @@ from app.models.warehouse_inventory import (
     Floor3LocationLayout,
     WarehouseLocation,
 )
-from app.services.location_candidates import operational_location_issue
+from app.services.location_candidates import (
+    claim_active_placed_location,
+    operational_location_issue,
+)
 
 
 class Floor3LocationError(ValueError):
@@ -127,6 +130,7 @@ def _operational_pallet_location(
     *,
     require_published: bool = False,
     required_inventory_type: str | None = None,
+    pallet_storage_only: bool = True,
 ) -> WarehouseLocation:
     """Resolve any published finished-goods ground slot used by the map UI."""
 
@@ -161,7 +165,7 @@ def _operational_pallet_location(
         db,
         row,
         warehouse_types={required_inventory_type or "finished", "shared"},
-        pallet_storage_only=True,
+        pallet_storage_only=pallet_storage_only,
         require_published=require_published,
         require_map_geometry=require_published,
         required_inventory_type=required_inventory_type,
@@ -288,6 +292,23 @@ def _claim_empty_active_location(
     expected_layout_version: int | None = None,
 ) -> None:
     """Serialize occupancy with slot disabling using the SQLite writer lock."""
+    try:
+        floor_claimed = claim_active_placed_location(
+            db,
+            int(location.id),
+            expected_layout_version=expected_layout_version,
+        )
+    except OperationalError as error:
+        raise Floor3LocationError(
+            "目标货位正在被其他入库、移位或布局操作使用，请稍后重试",
+            status_code=409,
+        ) from error
+    if not floor_claimed:
+        raise Floor3LocationError(
+            "目标货位或其当前发布地图版本已经变化，请刷新后重试",
+            status_code=409,
+        )
+
     claim_conditions = [
         WarehouseLocation.id == location.id,
         WarehouseLocation.is_active.is_(True),
@@ -1128,7 +1149,12 @@ def bind_finished_lot_to_floor3_pallet(
     if lot.inventory_type != "finished" or lot.finished_detail is None:
         raise Floor3LocationError("只有正式成品库存可以绑定三楼货位")
     location = (
-        _operational_pallet_location(db, lot.warehouse_location_id)
+        _operational_pallet_location(
+            db,
+            lot.warehouse_location_id,
+            required_inventory_type="finished",
+            pallet_storage_only=False,
+        )
         if allow_operational_location
         else _location(db, lot.warehouse_location_id)
     )
@@ -1154,6 +1180,7 @@ def bind_finished_lot_to_floor3_pallet(
             },
             operator_id=operator_id,
             allow_operational_location=allow_operational_location,
+            pallet_storage_only=False,
         )
     item = {
         "inventory_lot_id": lot.id,
@@ -1180,6 +1207,8 @@ def bind_finished_lot_to_floor3_pallet(
             allow_operational_location=allow_operational_location,
             allowed_inventory_lot_id=int(lot.id),
             require_no_live_inventory=require_no_live_inventory,
+            required_inventory_type="finished",
+            pallet_storage_only=False,
         )
     return add_pallet_item(
         db,
@@ -1188,6 +1217,7 @@ def bind_finished_lot_to_floor3_pallet(
         item=item,
         operator_id=operator_id,
         allow_operational_location=allow_operational_location,
+        pallet_storage_only=False,
     )
 
 
@@ -1233,6 +1263,7 @@ def create_pallet(
     allowed_inventory_lot_id: int | None = None,
     require_no_live_inventory: bool = False,
     expected_layout_version: int | None = None,
+    pallet_storage_only: bool = True,
 ) -> InventoryPallet:
     official_items = [
         item for item in items if item.get("create_finished_inventory") is True
@@ -1256,6 +1287,7 @@ def create_pallet(
             location_id,
             require_published=require_published_location,
             required_inventory_type=required_inventory_type,
+            pallet_storage_only=pallet_storage_only,
         )
         if allow_operational_location
         else _location(db, location_id)
@@ -1274,6 +1306,17 @@ def create_pallet(
                 "该货位已有当前栈板，请先移位或清空", status_code=409
             ) from error
         raise
+    if allow_operational_location:
+        # The floor mutex may have waited for a map publish.  Re-evaluate the
+        # target against that now-current published projection before writing
+        # any pallet or inventory fact.
+        location = _operational_pallet_location(
+            db,
+            location_id,
+            require_published=require_published_location,
+            required_inventory_type=required_inventory_type,
+            pallet_storage_only=pallet_storage_only,
+        )
     if not items:
         raise Floor3LocationError("栈板至少需要一条内容")
 
@@ -1421,12 +1464,17 @@ def add_pallet_item(
     item: dict,
     operator_id: int | None,
     allow_operational_location: bool = False,
+    pallet_storage_only: bool = True,
 ) -> InventoryPallet:
     row = _pallet(db, pallet_id)
     if not row.is_current or row.location_id is None:
         raise Floor3LocationError("栈板已清空或移出，不能继续增加内容", status_code=409)
     location = (
-        _operational_pallet_location(db, row.location_id)
+        _operational_pallet_location(
+            db,
+            row.location_id,
+            pallet_storage_only=pallet_storage_only,
+        )
         if allow_operational_location
         else _location(db, row.location_id)
     )
@@ -1992,6 +2040,28 @@ def merge_pallet_remaining_goods(
             target_location, [*target_items, *moved_items]
         )
         target.updated_by = operator_id
+        from app.services.warehouse_ground_slots import (
+            release_ground_occupancy_for_pallet,
+        )
+
+        release_ground_occupancy_for_pallet(
+            db,
+            pallet_id=int(source.id),
+            operator_id=operator_id,
+        )
+        db.flush()
+        if str(target_location.source_version or "").strip().upper() == "TWIN_V1":
+            from app.services.warehouse_inventory import (
+                _ensure_finished_projection_postcondition,
+            )
+
+            for lot in _linked_inventory_lots(db, target.id):
+                _ensure_finished_projection_postcondition(
+                    db,
+                    lot=lot,
+                    operator_id=operator_id,
+                    create_missing=True,
+                )
 
         source_movement = InventoryLocationMovement(
             pallet_id=source.id,
@@ -2113,6 +2183,33 @@ def move_pallet(
             require_no_live_inventory=require_published_target,
             expected_layout_version=expected_target_layout_version,
         )
+        target = db.get(
+            WarehouseLocation,
+            int(to_location_id),
+            populate_existing=True,
+        )
+        if target is None:
+            raise Floor3LocationError("目标货位不存在", status_code=404)
+        post_claim_issue = operational_location_issue(
+            db,
+            target,
+            warehouse_types={"finished", "shared"},
+            pallet_storage_only=True,
+            require_published=require_published_target,
+            require_map_geometry=require_published_target,
+            required_inventory_type=(
+                "finished" if require_published_target else None
+            ),
+            require_empty=require_published_target,
+            capacity_source_location_id=(
+                int(row.location_id) if require_published_target else None
+            ),
+        )
+        if post_claim_issue:
+            raise Floor3LocationError(
+                f"目标货位不可用：{post_claim_issue}",
+                status_code=409,
+            )
 
         # A duplicate may have committed while this request waited for that
         # writer lock. Recheck before claiming the pallet version.
@@ -2131,16 +2228,39 @@ def move_pallet(
             version_before = row.version
             _claim_pallet_version(db, row, expected_version=expected_version)
             from_location_id = row.location_id
+            from app.services.warehouse_ground_slots import (
+                release_ground_occupancy_for_pallet,
+            )
+
+            release_ground_occupancy_for_pallet(
+                db,
+                pallet_id=int(row.id),
+                operator_id=operator_id,
+            )
             row.location_id = target.id
             if row.location_occupancy_key != "PRIMARY":
                 row.location_occupancy_key = "PRIMARY"
             row.status = "active"
             row.needs_relocation = _needs_relocation(target, row.items)
             row.updated_by = operator_id
-            for lot in _linked_inventory_lots(db, row.id):
+            linked_lots = _linked_inventory_lots(db, row.id)
+            for lot in linked_lots:
                 lot.warehouse_location_id = target.id
                 lot.version += 1
                 lot.last_movement_at = utc_now_naive()
+            db.flush()
+            if str(target.source_version or "").strip().upper() == "TWIN_V1":
+                from app.services.warehouse_inventory import (
+                    _ensure_finished_projection_postcondition,
+                )
+
+                for lot in linked_lots:
+                    _ensure_finished_projection_postcondition(
+                        db,
+                        lot=lot,
+                        operator_id=operator_id,
+                        create_missing=True,
+                    )
             movement = InventoryLocationMovement(
                 pallet_id=row.id,
                 from_location_id=from_location_id,
@@ -2218,6 +2338,15 @@ def clear_pallet(
     row.needs_relocation = False
     row.closed_at = now
     row.updated_by = operator_id
+    from app.services.warehouse_ground_slots import (
+        release_ground_occupancy_for_pallet,
+    )
+
+    release_ground_occupancy_for_pallet(
+        db,
+        pallet_id=int(row.id),
+        operator_id=operator_id,
+    )
     db.add(
         InventoryLocationMovement(
             pallet_id=row.id,

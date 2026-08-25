@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import json
 
@@ -10,16 +11,25 @@ from app.models.warehouse_inventory import (
     Floor3LocationLayout,
     InventoryLot,
     InventoryPallet,
+    InventoryPalletItem,
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
     WarehouseGroundOccupancy,
     WarehouseGroundOccupancySlot,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
     WarehouseLocation,
 )
 from app.services.warehouse_location_address import (
     employee_location_name,
     format_location_address,
+    location_address_payload,
+    published_measured_map_readiness,
+)
+from app.services.warehouse_twin_layout import (
+    WarehouseTwinLayoutNotFoundError,
+    load_warehouse_twin_published_floor_identity,
 )
 
 
@@ -29,6 +39,241 @@ class OperationalLocationRow:
     floor: WarehouseFloor | None
     area: WarehouseArea | None
     occupied: bool
+    projection_context: Mapping[str, object] | None = None
+
+
+def current_same_location_pallet(
+    lot: InventoryLot,
+) -> InventoryPallet | None:
+    """Return the only pallet that can represent this lot on the map.
+
+    A historical pallet-item link is retained after a pallet is released so a
+    delivery cancellation can restore the original handling unit.  Consumers
+    must therefore not treat the relationship alone as a current spatial
+    projection: the pallet must still be active/current and its location must
+    agree with the authoritative lot location.
+    """
+
+    pallet_item = getattr(lot, "pallet_item", None)
+    pallet = getattr(pallet_item, "pallet", None) if pallet_item is not None else None
+    if (
+        pallet is None
+        or not bool(pallet.is_current)
+        or str(pallet.status or "").strip().lower() != "active"
+        or pallet.location_id is None
+        or lot.warehouse_location_id is None
+        or int(pallet.location_id) != int(lot.warehouse_location_id)
+    ):
+        return None
+    return pallet
+
+
+def pallet_has_physical_goods_condition(pallet_id_expression):
+    """SQL predicate matching the dashboard's real product-occupancy rule."""
+
+    return or_(
+        exists(
+            select(InventoryPalletItem.id).where(
+                InventoryPalletItem.pallet_id == pallet_id_expression,
+                InventoryPalletItem.inventory_lot_id.is_(None),
+                InventoryPalletItem.quantity > 0,
+            )
+        ),
+        exists(
+            select(InventoryPalletItem.id)
+            .join(
+                InventoryLot,
+                InventoryLot.id == InventoryPalletItem.inventory_lot_id,
+            )
+            .where(
+                InventoryPalletItem.pallet_id == pallet_id_expression,
+                InventoryLot.status.in_(("active", "frozen")),
+                (
+                    InventoryLot.quantity_available
+                    + InventoryLot.quantity_reserved
+                    + InventoryLot.quantity_damaged
+                )
+                > 0,
+            )
+        ),
+    )
+
+
+def _map_number(value: object) -> float:
+    return round(float(value or 0), 3)
+
+
+def load_warehouse_location_projection_contexts(
+    db: Session,
+    locations: Iterable[WarehouseLocation | None],
+) -> dict[int, dict[str, object | None]]:
+    """Batch-load the only context allowed to classify published map positions."""
+
+    location_rows = [
+        row for row in locations if row is not None and row.id is not None
+    ]
+    location_ids = [int(row.id) for row in location_rows]
+    if not location_ids:
+        return {}
+
+    space_records = db.execute(
+        select(
+            WarehouseFloor,
+            WarehouseArea,
+            WarehouseAreaStoragePolicy,
+        )
+        .join(WarehouseArea, WarehouseArea.floor_id == WarehouseFloor.id)
+        .outerjoin(
+            WarehouseAreaStoragePolicy,
+            WarehouseAreaStoragePolicy.area_id == WarehouseArea.id,
+        )
+        .execution_options(populate_existing=True)
+    ).all()
+    space_by_key = {
+        (int(floor.floor_number), str(area.area_code).strip().upper()): {
+            "floor": floor,
+            "area": area,
+            "policy": policy,
+        }
+        for floor, area, policy in space_records
+    }
+    layouts_by_location = {
+        int(layout.location_id): layout
+        for layout in db.scalars(
+            select(Floor3LocationLayout).where(
+                Floor3LocationLayout.location_id.in_(location_ids)
+            ).execution_options(populate_existing=True)
+        ).all()
+    }
+    ground_rows_by_location: dict[int, list[dict[str, object]]] = {}
+    for plan_id, status, revision, area_id, location_id in db.execute(
+        select(
+            WarehouseGroundLayoutPlan.id,
+            WarehouseGroundLayoutPlan.status,
+            WarehouseGroundLayoutPlan.published_map_revision,
+            WarehouseGroundLayoutPlan.area_id,
+            WarehouseGroundLayoutSlot.location_id,
+        )
+        .join(
+            WarehouseGroundLayoutSlot,
+            WarehouseGroundLayoutSlot.plan_id == WarehouseGroundLayoutPlan.id,
+        )
+        .where(WarehouseGroundLayoutSlot.location_id.in_(location_ids))
+    ).all():
+        ground_rows_by_location.setdefault(int(location_id), []).append(
+            {
+                "plan_id": int(plan_id),
+                "status": status,
+                "published_map_revision": revision,
+                "area_id": area_id,
+                "location_id": location_id,
+            }
+        )
+
+    published_identities: dict[int, dict | None] = {}
+    for floor_number in {
+        int(row.warehouse_floor)
+        for row in location_rows
+        if row.warehouse_floor is not None
+    }:
+        try:
+            published_identities[floor_number] = (
+                load_warehouse_twin_published_floor_identity(floor_number)
+            )
+        except (OSError, ValueError, WarehouseTwinLayoutNotFoundError):
+            published_identities[floor_number] = None
+
+    contexts: dict[int, dict[str, object | None]] = {}
+    for location in location_rows:
+        floor_number = int(location.warehouse_floor or 0)
+        area_code = str(location.area_code or "").strip().upper()
+        context = dict(space_by_key.get((floor_number, area_code), {}))
+        current_revision = str(
+            (published_identities.get(floor_number) or {}).get("revision") or ""
+        ).strip()
+        ground_candidates = ground_rows_by_location.get(int(location.id), [])
+        ground_layout = next(
+            (
+                candidate
+                for candidate in sorted(
+                    ground_candidates,
+                    key=lambda item: int(item["plan_id"]),
+                    reverse=True,
+                )
+                if candidate["status"] == "published"
+                and str(candidate["published_map_revision"] or "").strip()
+                == current_revision
+            ),
+            (
+                max(
+                    ground_candidates,
+                    key=lambda item: int(item["plan_id"]),
+                )
+                if ground_candidates
+                else None
+            ),
+        )
+        context.update(
+            {
+                "layout": layouts_by_location.get(int(location.id)),
+                "published_floor_identity": published_identities.get(floor_number),
+                "ground_layout": ground_layout,
+            }
+        )
+        contexts[int(location.id)] = context
+    return contexts
+
+
+def warehouse_location_projection(
+    location: WarehouseLocation,
+    *,
+    floor: WarehouseFloor | None = None,
+    area: WarehouseArea | None = None,
+    policy: WarehouseAreaStoragePolicy | Mapping[str, object] | None = None,
+    published_floor_identity: Mapping[str, object] | None = None,
+    ground_layout: Mapping[str, object] | None = None,
+    layout: Floor3LocationLayout | None = None,
+) -> dict[str, object | None]:
+    """Return the canonical current published-map projection for one location."""
+
+    readiness = published_measured_map_readiness(
+        location,
+        floor=floor,
+        area=area,
+        policy=policy,
+        published_floor_identity=published_floor_identity,
+        has_geometry=layout is not None,
+        ground_layout=ground_layout,
+    )
+    map_position = None
+    if readiness.position_status == "mapped" and layout is not None:
+        map_position = {
+            "left_pct": _map_number(layout.left_pct),
+            "top_pct": _map_number(layout.top_pct),
+            "width_pct": _map_number(layout.width_pct),
+            "height_pct": _map_number(layout.height_pct),
+            "z_index": int(layout.z_index or 0),
+            "version": int(layout.version),
+            "source_type": layout.source_type,
+            "layout_kind": layout.layout_kind,
+            "map_feature_id": readiness.map_feature_id,
+            "published_map_revision": readiness.published_map_revision,
+        }
+    source_version = str(location.source_version or "").strip().upper()
+    if readiness.position_status == "mapped":
+        map_status = "floor3_mapped" if source_version == "V11" else "twin_mapped"
+    elif source_version in {"V11", "TWIN_V1"}:
+        map_status = "unplaced"
+    else:
+        map_status = "ledger_only"
+    return {
+        "position_status": readiness.position_status,
+        "map_status": map_status,
+        "map_position": map_position,
+        "map_feature_id": readiness.map_feature_id,
+        "published_map_revision": readiness.published_map_revision,
+        "map_issue": readiness.issue,
+    }
 
 
 def _placed_condition():
@@ -93,6 +338,30 @@ def location_has_live_inventory(db: Session, location_id: int) -> bool:
     )
 
 
+def claim_warehouse_floor_projection(
+    db: Session,
+    *,
+    floor_number: int,
+) -> bool:
+    """Acquire the persistent floor mutex shared by map and inventory writes.
+
+    The no-op update is held until the caller commits or rolls back.  SQLite
+    therefore serializes every writer, while row-locking databases serialize
+    projection changes and inventory placement on the same floor row.
+    """
+
+    result = db.execute(
+        update(WarehouseFloor)
+        .where(WarehouseFloor.floor_number == int(floor_number))
+        .values(
+            construction_status=WarehouseFloor.construction_status,
+            updated_at=WarehouseFloor.updated_at,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == 1
+
+
 def _current_pallet_exists(location_id_expression):
     return exists(
         select(InventoryPallet.id).where(
@@ -130,6 +399,32 @@ def claim_active_placed_location(
     workflows.  SQLite obtains its writer lock here; databases with row-level
     locking serialize on the same warehouse-location row.
     """
+
+    floor_number = db.scalar(
+        select(WarehouseLocation.warehouse_floor).where(
+            WarehouseLocation.id == location_id
+        )
+    )
+    if floor_number is not None:
+        floor_exists = db.scalar(
+            select(WarehouseFloor.id).where(
+                WarehouseFloor.floor_number == int(floor_number)
+            )
+        )
+        if floor_exists is not None and not claim_warehouse_floor_projection(
+            db,
+            floor_number=int(floor_number),
+        ):
+            return False
+        if floor_exists is not None:
+            # Refresh only the claimed target.  ``expire_all`` would discard
+            # unrelated unflushed business changes in composite receipt,
+            # stocktake and return transactions.
+            db.get(
+                WarehouseLocation,
+                int(location_id),
+                populate_existing=True,
+            )
 
     conditions = [
         WarehouseLocation.id == location_id,
@@ -217,6 +512,9 @@ def operational_location_issue(
     required_inventory_type: str | None = None,
     require_empty: bool = False,
     capacity_source_location_id: int | None = None,
+    projection_context: Mapping[str, object] | None = None,
+    known_occupied: bool | None = None,
+    area_occupied_pallet_count: int | None = None,
 ) -> str | None:
     if not location.is_active:
         return "该库位已停用"
@@ -235,55 +533,42 @@ def operational_location_issue(
     # Older unit fixtures and pre-ledger databases retain the historical
     # active/placed gate.  Once the space ledger exists, every formal write
     # must also pass its enabled floor and area gates.
-    if not has_space_ledger(db):
+    if projection_context is None and not has_space_ledger(db):
         if require_published or require_map_geometry:
             return "该库位缺少正式楼层、区域和发布台账"
         return None
     if location.warehouse_floor is None or not (location.area_code or "").strip():
         return "该库位尚未登记楼层和区域"
 
-    floor = db.scalar(
-        select(WarehouseFloor).where(
-            WarehouseFloor.floor_number == location.warehouse_floor
+    context = dict(
+        projection_context
+        if projection_context is not None
+        else load_warehouse_location_projection_contexts(db, [location]).get(
+            int(location.id), {}
         )
     )
+    floor = context.get("floor")
     if floor is None:
         return "该库位所属楼层尚未建立台账"
+    assert isinstance(floor, WarehouseFloor)
     if floor.construction_status != "enabled":
         return "该库位所属楼层尚未启用"
-    area = db.scalar(
-        select(WarehouseArea).where(
-            WarehouseArea.floor_id == floor.id,
-            func.upper(WarehouseArea.area_code)
-            == str(location.area_code).strip().upper(),
-        )
-    )
+    area = context.get("area")
     if area is None:
         return "该库位所属区域尚未建立台账"
+    assert isinstance(area, WarehouseArea)
     if area.construction_status != "enabled":
         return "该库位所属区域尚未启用"
+    policy = context.get("policy")
     if require_published:
-        policy = db.scalar(
-            select(WarehouseAreaStoragePolicy).where(
-                WarehouseAreaStoragePolicy.area_id == area.id
-            )
+        projection = warehouse_location_projection(
+            location,
+            **context,
         )
-        # V11 is the accepted three-floor map that predates the new area-policy
-        # table.  Keep those real mapped slots usable until an area explicitly
-        # enters the new draft/published policy lifecycle.  New or draft-bound
-        # areas still pass the full policy gate below.
-        legacy_v11_map_location = bool(
-            policy is None
-            and require_map_geometry
-            and location.warehouse_floor == 3
-            and location.source_version == "V11"
-            and location.placement_status == "placed"
-        )
-        if not legacy_v11_map_location:
-            if policy is None or policy.status != "published":
-                return "该库位所属区域尚未发布"
-            if not (policy.published_map_revision or "").strip():
-                return "该库位所属区域缺少已发布地图版本"
+        if projection["position_status"] != "mapped":
+            return str(projection["map_issue"] or "该库位尚未发布到当前实测地图")
+        if policy is not None:
+            assert isinstance(policy, WarehouseAreaStoragePolicy)
             try:
                 allowed_types = json.loads(policy.allowed_inventory_types_json)
             except (TypeError, ValueError, json.JSONDecodeError):
@@ -302,38 +587,36 @@ def operational_location_issue(
                 and policy.storage_layout not in {"pallet_ground", "mixed"}
             ):
                 return "该库位所属区域的正式存储布局不允许地面栈板"
-    if require_map_geometry:
-        geometry_id = db.scalar(
-            select(Floor3LocationLayout.id)
-            .where(Floor3LocationLayout.location_id == location.id)
-            .limit(1)
-        )
-        if geometry_id is None:
+    elif require_map_geometry:
+        if context.get("layout") is None:
             return "该库位缺少已确认的地图几何位置"
     if require_empty:
-        occupied_pallet = db.scalar(
-            select(InventoryPallet.id)
-            .where(
-                InventoryPallet.location_id == location.id,
-                InventoryPallet.is_current.is_(True),
+        occupied = known_occupied
+        if occupied is None:
+            occupied_pallet = db.scalar(
+                select(InventoryPallet.id)
+                .where(
+                    InventoryPallet.location_id == location.id,
+                    InventoryPallet.is_current.is_(True),
+                )
+                .limit(1)
             )
-            .limit(1)
-        )
-        occupied_ground_slot = db.scalar(
-            select(WarehouseGroundOccupancySlot.id)
-            .join(WarehouseGroundOccupancy)
-            .where(
-                WarehouseGroundOccupancySlot.location_id == location.id,
-                WarehouseGroundOccupancySlot.status == "active",
-                WarehouseGroundOccupancy.status == "active",
+            occupied_ground_slot = db.scalar(
+                select(WarehouseGroundOccupancySlot.id)
+                .join(WarehouseGroundOccupancy)
+                .where(
+                    WarehouseGroundOccupancySlot.location_id == location.id,
+                    WarehouseGroundOccupancySlot.status == "active",
+                    WarehouseGroundOccupancy.status == "active",
+                )
+                .limit(1)
             )
-            .limit(1)
-        )
-        if (
-            occupied_pallet is not None
-            or occupied_ground_slot is not None
-            or location_has_live_inventory(db, location.id)
-        ):
+            occupied = bool(
+                occupied_pallet is not None
+                or occupied_ground_slot is not None
+                or location_has_live_inventory(db, location.id)
+            )
+        if occupied:
             return "该库位已有活动库存或当前栈板"
     if (
         require_published
@@ -341,22 +624,24 @@ def operational_location_issue(
         and area.capacity_eligible
         and area.confirmed_pallet_capacity is not None
     ):
-        occupied_count = int(
-            db.scalar(
-                select(func.count(InventoryPallet.id))
-                .join(
-                    WarehouseLocation,
-                    WarehouseLocation.id == InventoryPallet.location_id,
+        occupied_count = area_occupied_pallet_count
+        if occupied_count is None:
+            occupied_count = int(
+                db.scalar(
+                    select(func.count(InventoryPallet.id))
+                    .join(
+                        WarehouseLocation,
+                        WarehouseLocation.id == InventoryPallet.location_id,
+                    )
+                    .where(
+                        InventoryPallet.is_current.is_(True),
+                        WarehouseLocation.warehouse_floor == floor.floor_number,
+                        func.upper(WarehouseLocation.area_code)
+                        == str(area.area_code).strip().upper(),
+                    )
                 )
-                .where(
-                    InventoryPallet.is_current.is_(True),
-                    WarehouseLocation.warehouse_floor == floor.floor_number,
-                    func.upper(WarehouseLocation.area_code)
-                    == str(area.area_code).strip().upper(),
-                )
+                or 0
             )
-            or 0
-        )
         source_in_same_area = False
         if capacity_source_location_id is not None:
             source_location = db.get(WarehouseLocation, capacity_source_location_id)
@@ -499,12 +784,16 @@ def list_operational_locations(
             WarehouseLocation.id,
         )
     ).all()
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db, [location for location, _floor, _area, _occupied in rows]
+    )
     return [
         OperationalLocationRow(
             location=location,
             floor=floor,
             area=area,
             occupied=bool(occupied),
+            projection_context=projection_contexts.get(int(location.id)),
         )
         for location, floor, area, occupied in rows
     ]
@@ -514,20 +803,35 @@ def operational_location_payload(row: OperationalLocationRow) -> dict:
     location = row.location
     floor = row.floor
     area = row.area
-    address_area = (
-        area
-        if area is not None and location.address_area_id == area.id
-        else getattr(location, "address_area", None)
-    )
+    context = dict(row.projection_context or {})
+    if floor is not None:
+        context["floor"] = floor
+    if area is not None:
+        context["area"] = area
+    projection = warehouse_location_projection(location, **context)
+    address_area = area or getattr(location, "address_area", None)
     current_address_code, current_address_name = format_location_address(
         location,
         area=address_area,
-        floor=floor if address_area is not None else None,
+        floor=floor,
     )
+    address_payload = location_address_payload(
+        location,
+        area=address_area,
+        floor=floor,
+        position_status=str(projection["position_status"]),
+    )
+    employee_name = employee_location_name(
+        location,
+        area=address_area,
+        floor=floor,
+    )
+    layout = context.get("layout")
     return {
         "id": location.id,
         "location_code": location.location_code,
-        "location_name": location.location_name,
+        "location_name": employee_name,
+        "location_master_name": location.location_name,
         "warehouse_type": location.warehouse_type,
         "warehouse_floor": location.warehouse_floor,
         "floor_id": floor.id if floor else None,
@@ -538,12 +842,14 @@ def operational_location_payload(row: OperationalLocationRow) -> dict:
         "area_name": area.area_name if area else None,
         "storage_type": location.storage_type,
         "is_temporary": bool(location.is_temporary),
-        "placement_status": location.placement_status or "placed",
+        "placement_status": location.placement_status or "unplaced",
+        "is_active": bool(location.is_active),
         "layout_version": (
-            int(location.floor3_layout.version)
-            if location.floor3_layout is not None
+            int(layout.version)
+            if isinstance(layout, Floor3LocationLayout)
             else None
         ),
+        **projection,
         "sort_order": int(location.sort_order or 0),
         "occupied": row.occupied,
         "is_empty": not row.occupied,
@@ -562,5 +868,6 @@ def operational_location_payload(row: OperationalLocationRow) -> dict:
         "address_version": int(location.address_version or 1),
         "current_address_code": current_address_code,
         "current_address_name": current_address_name,
-        "employee_location_name": employee_location_name(location),
+        "employee_location_name": employee_name,
+        "projection_source": address_payload["projection_source"],
     }

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -9,21 +11,36 @@ from alembic.config import Config
 from sqlalchemy import func, select
 
 from app.models.audit import OperationLog
-from app.models.production import ProductionCompletion, ProductionCompletionBatch
-from app.models.production import ProductionTask
+from app.models.production import (
+    ProductionCompletion,
+    ProductionCompletionBatch,
+    ProductionStockTransfer,
+    ProductionTask,
+)
 from app.models.warehouse_inventory import (
+    Floor3LocationLayout,
     InventoryLocationMovement,
     InventoryLot,
     InventoryMovement,
     InventoryPallet,
     InventoryPalletItem,
+    WarehouseArea,
+    WarehouseAreaStoragePolicy,
+    WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
+    WarehouseGroundOccupancy,
+    WarehouseGroundOccupancySlot,
+    WarehouseGroundPlacementMutation,
     WarehouseLocation,
 )
 from app.services.production_workflow import (
     CompletionCommand,
     ProductionWorkflowError,
+    StockTransferCommand,
     complete_production_batch,
     list_production_completions,
+    transfer_direct_completion_to_stock,
 )
 from test_n029_production_service import production_app
 
@@ -68,6 +85,544 @@ def _new_direct_case(db, *, key: str, quantity: int):
         quantity=quantity,
         material_status="received",
     )
+
+
+def _seed_current_fin_target(
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    count: int = 1,
+) -> list[WarehouseLocation]:
+    from app.models.user import User
+    from app.services import location_candidates
+
+    revision = "p1-102-direct-fin-map"
+    feature_id = "zone-p1-102-fin-001"
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda floor_number: (
+            {
+                "revision": revision,
+                "zones_by_id": {feature_id: "FIN-001"},
+                "zone_ids_by_area": {"FIN-001": (feature_id,)},
+            }
+            if int(floor_number) == 1
+            else None
+        ),
+    )
+    operator = db.scalar(select(User).where(User.username == "n029-admin"))
+    assert operator is not None
+    floor = WarehouseFloor(
+        floor_code="P1102-F1",
+        floor_name="P1-102 匿名一楼",
+        floor_number=1,
+        construction_status="enabled",
+    )
+    db.add(floor)
+    db.flush()
+    area = WarehouseArea(
+        floor_id=floor.id,
+        area_code="FIN-001",
+        area_name="匿名真实成品待送区",
+        construction_status="enabled",
+    )
+    area.storage_policy = WarehouseAreaStoragePolicy(
+        map_feature_id=feature_id,
+        allowed_inventory_types_json='["finished"]',
+        storage_layout="pallet_ground",
+        status="published",
+        published_map_revision=revision,
+        version=1,
+    )
+    location = WarehouseLocation(
+        location_code="F1-FIN-001-P001",
+        location_name="匿名真实成品待送位 001",
+        warehouse_type="finished",
+        is_active=True,
+        warehouse_floor=1,
+        area_code="FIN-001",
+        storage_type="ground",
+        placement_status="placed",
+        source_version="TWIN_V1",
+    )
+    location.floor3_layout = Floor3LocationLayout(
+        left_pct=Decimal("10"),
+        top_pct=Decimal("10"),
+        width_pct=Decimal("6"),
+        height_pct=Decimal("10"),
+        z_index=1,
+        version=1,
+        source_type="manual",
+        layout_kind="physical_pallet",
+    )
+    db.add_all([area, location])
+    db.flush()
+    locations = [location]
+    for index in range(2, count + 1):
+        extra = WarehouseLocation(
+            location_code=f"F1-FIN-001-P{index:03d}",
+            location_name=f"匿名真实成品待送位 {index:03d}",
+            warehouse_type="finished",
+            is_active=True,
+            warehouse_floor=1,
+            area_code="FIN-001",
+            storage_type="ground",
+            placement_status="placed",
+            source_version="TWIN_V1",
+        )
+        extra.floor3_layout = Floor3LocationLayout(
+            left_pct=Decimal(str(10 + index * 8)),
+            top_pct=Decimal("10"),
+            width_pct=Decimal("6"),
+            height_pct=Decimal("10"),
+            z_index=index,
+            version=1,
+            source_type="manual",
+            layout_kind="physical_pallet",
+        )
+        db.add(extra)
+        locations.append(extra)
+    db.flush()
+    plan = WarehouseGroundLayoutPlan(
+        area_id=area.id,
+        status="published",
+        target_slot_count=count,
+        numbering_origin="south",
+        row_direction="from_aisle_inward",
+        slot_direction="left_to_right",
+        row_start_no=1,
+        slot_start_no=1,
+        draft_map_revision=revision,
+        published_map_revision=revision,
+        preview_fingerprint="a" * 64,
+        version=1,
+        publish_idempotency_key="p1-102-direct-fin-plan",
+        publish_request_hash="b" * 64,
+        updated_by=operator.id,
+        published_by=operator.id,
+        published_at=datetime.now(),
+    )
+    db.add(plan)
+    db.flush()
+    db.add(
+        WarehouseGroundLayoutSlot(
+            plan_id=plan.id,
+            location_id=location.id,
+            route_sequence=1,
+            row_no=1,
+            slot_no=1,
+            x_mm=Decimal("1000"),
+            y_mm=Decimal("1000"),
+            width_mm=1200,
+            depth_mm=1000,
+        )
+    )
+    for index, extra in enumerate(locations[1:], start=2):
+        db.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=plan.id,
+                location_id=extra.id,
+                route_sequence=index,
+                row_no=1,
+                slot_no=index,
+                x_mm=Decimal(str(1000 + (index - 1) * 1400)),
+                y_mm=Decimal("1000"),
+                width_mm=1200,
+                depth_mm=1000,
+            )
+        )
+    db.flush()
+    return locations
+
+
+def _seed_current_twin_stock_target(
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    storage_type: str,
+) -> WarehouseLocation:
+    from app.services import location_candidates
+
+    assert storage_type in {"ground", "rack"}
+    revision = "p1-102-direct-fin-map"
+    fin_feature_id = "zone-p1-102-fin-001"
+    area_code = f"STOCK-{storage_type.upper()}"
+    stock_feature_id = f"zone-p1-102-{area_code.lower()}"
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda floor_number: (
+            {
+                "revision": revision,
+                "zones_by_id": {
+                    fin_feature_id: "FIN-001",
+                    stock_feature_id: area_code,
+                },
+                "zone_ids_by_area": {
+                    "FIN-001": (fin_feature_id,),
+                    area_code: (stock_feature_id,),
+                },
+            }
+            if int(floor_number) == 1
+            else None
+        ),
+    )
+    floor = db.scalar(select(WarehouseFloor).where(WarehouseFloor.floor_number == 1))
+    assert floor is not None
+    area = WarehouseArea(
+        floor_id=floor.id,
+        area_code=area_code,
+        area_name=f"Current TWIN {storage_type} stock area",
+        construction_status="enabled",
+    )
+    area.storage_policy = WarehouseAreaStoragePolicy(
+        map_feature_id=stock_feature_id,
+        allowed_inventory_types_json='["finished"]',
+        storage_layout=("pallet_ground" if storage_type == "ground" else "rack"),
+        status="published",
+        published_map_revision=revision,
+        version=1,
+    )
+    location = WarehouseLocation(
+        location_code=f"F1-{area_code}-001",
+        location_name=f"Current TWIN {storage_type} stock position",
+        warehouse_type="finished",
+        is_active=True,
+        warehouse_floor=1,
+        area_code=area_code,
+        storage_type=storage_type,
+        placement_status="placed",
+        source_version="TWIN_V1",
+    )
+    location.floor3_layout = Floor3LocationLayout(
+        left_pct=Decimal("45"),
+        top_pct=Decimal("45"),
+        width_pct=Decimal("6"),
+        height_pct=Decimal("10"),
+        z_index=2,
+        version=1,
+        source_type="manual",
+        layout_kind="physical_pallet",
+    )
+    db.add_all([area, location])
+    db.flush()
+    if storage_type == "ground":
+        plan = WarehouseGroundLayoutPlan(
+            area_id=area.id,
+            status="published",
+            target_slot_count=1,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision=revision,
+            published_map_revision=revision,
+            preview_fingerprint="c" * 64,
+            version=1,
+            publish_idempotency_key=f"p1-102-{storage_type}-plan",
+            publish_request_hash="d" * 64,
+            updated_by=1,
+            published_by=1,
+            published_at=datetime.now(),
+        )
+        db.add(plan)
+        db.flush()
+        db.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=plan.id,
+                location_id=location.id,
+                route_sequence=1,
+                row_no=1,
+                slot_no=1,
+                x_mm=Decimal("5000"),
+                y_mm=Decimal("5000"),
+                width_mm=1200,
+                depth_mm=1000,
+            )
+        )
+    db.flush()
+    return location
+
+
+def test_current_space_ledger_direct_completion_uses_real_fin_target(
+    production_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.user import User
+
+    _app, factory, ids = production_app
+    with factory() as db:
+        fin_location = _seed_current_fin_target(db, monkeypatch)[0]
+        _order, _item, task = _new_direct_case(
+            db,
+            key="p1-102-direct-real-fin",
+            quantity=12,
+        )
+        operator = db.scalar(select(User).where(User.username == "n029-admin"))
+        assert operator is not None
+        command_row = _direct_command(task, quantity=12)
+        result = complete_production_batch(
+            db,
+            idempotency_key="p1-102-direct-real-fin",
+            commands=[command_row],
+            operator_id=operator.id,
+        )
+        completion = result.completions[0]
+        lot = db.get(InventoryLot, completion.inventory_lot_id)
+        assert lot is not None and lot.pallet_item is not None
+        pallet = lot.pallet_item.pallet
+        assert completion.warehouse_location_id == fin_location.id
+        assert lot.warehouse_location_id == fin_location.id
+        assert pallet.location_id == fin_location.id
+        assert pallet.needs_relocation is False
+        assert db.scalar(
+            select(func.count()).select_from(WarehouseGroundOccupancy).where(
+                WarehouseGroundOccupancy.pallet_id == pallet.id,
+                WarehouseGroundOccupancy.primary_location_id == fin_location.id,
+                WarehouseGroundOccupancy.status == "active",
+            )
+        ) == 1
+        assert db.scalar(
+            select(func.count()).select_from(InventoryLot).where(
+                InventoryLot.warehouse_location_id == ids["staging"],
+                InventoryLot.source_ref_type == "production_completion",
+                InventoryLot.source_ref_id == completion.id,
+            )
+        ) == 0
+
+        replay = complete_production_batch(
+            db,
+            idempotency_key="p1-102-direct-real-fin",
+            commands=[command_row],
+            operator_id=operator.id,
+        )
+        assert replay.replayed is True
+        assert replay.completions[0].id == completion.id
+
+
+def test_direct_batch_claims_one_distinct_fin_slot_per_completion(
+    production_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.user import User
+
+    _app, factory, _ids = production_app
+    with factory() as db:
+        fin_locations = _seed_current_fin_target(db, monkeypatch, count=2)
+        _order_a, _item_a, task_a = _new_direct_case(
+            db,
+            key="p1-102-direct-batch-a",
+            quantity=7,
+        )
+        _order_b, _item_b, task_b = _new_direct_case(
+            db,
+            key="p1-102-direct-batch-b",
+            quantity=9,
+        )
+        operator = db.scalar(select(User).where(User.username == "n029-admin"))
+        assert operator is not None
+        result = complete_production_batch(
+            db,
+            idempotency_key="p1-102-direct-real-fin-batch",
+            commands=[
+                _direct_command(task_a, quantity=7),
+                _direct_command(task_b, quantity=9),
+            ],
+            operator_id=operator.id,
+        )
+        assert len(result.completions) == 2
+        assert {
+            int(completion.warehouse_location_id)
+            for completion in result.completions
+        } == {int(location.id) for location in fin_locations}
+        pallet_ids: set[int] = set()
+        for completion in result.completions:
+            lot = db.get(InventoryLot, completion.inventory_lot_id)
+            assert lot is not None and lot.pallet_item is not None
+            pallet = lot.pallet_item.pallet
+            pallet_ids.add(int(pallet.id))
+            assert pallet.location_id == completion.warehouse_location_id
+            assert pallet.needs_relocation is False
+        assert len(pallet_ids) == 2
+        assert db.scalar(
+            select(func.count()).select_from(WarehouseGroundOccupancy).where(
+                WarehouseGroundOccupancy.pallet_id.in_(pallet_ids),
+                WarehouseGroundOccupancy.status == "active",
+            )
+        ) == 2
+
+
+@pytest.mark.parametrize("storage_type", ["ground", "rack"])
+def test_direct_fin_transfer_to_current_twin_position_closes_spatial_loop_once(
+    production_app,
+    monkeypatch: pytest.MonkeyPatch,
+    storage_type: str,
+) -> None:
+    from app.models.user import User
+
+    _app, factory, _ids = production_app
+    with factory() as db:
+        source_location = _seed_current_fin_target(db, monkeypatch)[0]
+        target_location = _seed_current_twin_stock_target(
+            db,
+            monkeypatch,
+            storage_type=storage_type,
+        )
+        _order, _item, task = _new_direct_case(
+            db,
+            key=f"p1-102-transfer-{storage_type}",
+            quantity=13,
+        )
+        operator = db.scalar(select(User).where(User.username == "n029-admin"))
+        assert operator is not None
+        completion = complete_production_batch(
+            db,
+            idempotency_key=f"p1-102-transfer-{storage_type}-complete",
+            commands=[_direct_command(task, quantity=13)],
+            operator_id=operator.id,
+        ).completions[0]
+        lot = db.get(InventoryLot, completion.inventory_lot_id)
+        assert lot is not None and lot.pallet_item is not None
+        source_pallet = lot.pallet_item.pallet
+        source_occupancy = db.scalar(
+            select(WarehouseGroundOccupancy).where(
+                WarehouseGroundOccupancy.pallet_id == source_pallet.id,
+                WarehouseGroundOccupancy.primary_location_id == source_location.id,
+                WarehouseGroundOccupancy.status == "active",
+            )
+        )
+        assert source_occupancy is not None
+        assert source_pallet.location_occupancy_key == (
+            f"PRODUCTION_COMPLETION:{completion.id}"
+        )
+        assert db.scalar(
+            select(func.count())
+            .select_from(WarehouseGroundPlacementMutation)
+            .where(
+                WarehouseGroundPlacementMutation.occupancy_id
+                == source_occupancy.id,
+                WarehouseGroundPlacementMutation.result_lot_id == lot.id,
+            )
+        ) == 1
+        completion_id = int(completion.id)
+        lot_id = int(lot.id)
+        source_location_id = int(source_location.id)
+        source_occupancy_id = int(source_occupancy.id)
+        target_location_id = int(target_location.id)
+        operator_id = int(operator.id)
+        db.commit()
+
+    command = StockTransferCommand(
+        idempotency_key=f"p1-102-transfer-{storage_type}-stock",
+        location_id=target_location_id,
+        expected_layout_version=1,
+    )
+    with factory() as db:
+        transferred = transfer_direct_completion_to_stock(
+            db,
+            completion_id=completion_id,
+            command=command,
+            operator_id=operator_id,
+        )
+        assert transferred.replayed is False
+        transfer_id = int(transferred.transfer.id)
+        db.commit()
+
+    def fact_counts(db) -> tuple[int, ...]:
+        return (
+            int(db.scalar(select(func.count()).select_from(InventoryLot)) or 0),
+            int(db.scalar(select(func.count()).select_from(InventoryPallet)) or 0),
+            int(db.scalar(select(func.count()).select_from(InventoryPalletItem)) or 0),
+            int(
+                db.scalar(select(func.count()).select_from(WarehouseGroundOccupancy))
+                or 0
+            ),
+            int(
+                db.scalar(
+                    select(func.count()).select_from(WarehouseGroundOccupancySlot)
+                )
+                or 0
+            ),
+            int(
+                db.scalar(select(func.count()).select_from(InventoryLocationMovement))
+                or 0
+            ),
+            int(db.scalar(select(func.count()).select_from(InventoryMovement)) or 0),
+            int(
+                db.scalar(select(func.count()).select_from(ProductionStockTransfer))
+                or 0
+            ),
+            int(
+                db.scalar(
+                    select(func.count()).select_from(
+                        WarehouseGroundPlacementMutation
+                    )
+                )
+                or 0
+            ),
+        )
+
+    with factory() as db:
+        lot = db.get(InventoryLot, lot_id)
+        assert lot is not None and lot.pallet_item is not None
+        target_pallet = lot.pallet_item.pallet
+        assert lot.warehouse_location_id == target_location_id
+        assert target_pallet.is_current is True
+        assert target_pallet.status == "active"
+        assert target_pallet.location_id == target_location_id
+        assert db.scalar(
+            select(func.count()).select_from(InventoryPallet).where(
+                InventoryPallet.location_id == source_location_id,
+                InventoryPallet.is_current.is_(True),
+            )
+        ) == 0
+        source_occupancy = db.get(WarehouseGroundOccupancy, source_occupancy_id)
+        assert source_occupancy is not None
+        assert source_occupancy.status == "released"
+        assert db.scalar(
+            select(func.count())
+            .select_from(WarehouseGroundOccupancySlot)
+            .where(
+                WarehouseGroundOccupancySlot.occupancy_id == source_occupancy_id,
+                WarehouseGroundOccupancySlot.status == "active",
+            )
+        ) == 0
+        target_occupancy = db.scalar(
+            select(WarehouseGroundOccupancy).where(
+                WarehouseGroundOccupancy.pallet_id == target_pallet.id,
+                WarehouseGroundOccupancy.primary_location_id == target_location_id,
+                WarehouseGroundOccupancy.status == "active",
+            )
+        )
+        if storage_type == "ground":
+            assert target_occupancy is not None
+            assert db.scalar(
+                select(func.count())
+                .select_from(WarehouseGroundOccupancySlot)
+                .where(
+                    WarehouseGroundOccupancySlot.occupancy_id
+                    == target_occupancy.id,
+                    WarehouseGroundOccupancySlot.location_id == target_location_id,
+                    WarehouseGroundOccupancySlot.status == "active",
+                )
+            ) == 1
+        else:
+            assert target_occupancy is None
+        before_replay = fact_counts(db)
+
+    with factory() as db:
+        replayed = transfer_direct_completion_to_stock(
+            db,
+            completion_id=completion_id,
+            command=command,
+            operator_id=operator_id,
+        )
+        assert replayed.replayed is True
+        assert int(replayed.transfer.id) == transfer_id
+        db.commit()
+        assert fact_counts(db) == before_replay
 
 
 def test_direct_completion_56_creates_one_formal_system_pallet_and_replays(

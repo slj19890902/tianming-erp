@@ -1668,7 +1668,7 @@
         const metrics = node("div", "task-grid");
         const facts = [
           ["订单要做", task.order_quantity, "只"],
-          ["现在可生产", task.current_producible_quantity, "只"],
+          [task.receipt_purpose_managed ? "已自动形成" : "现在可生产", task.receipt_purpose_managed ? task.actual_output_quantity : task.current_producible_quantity, "只"],
           ["纸板已收", task.received_material_quantity, "张"],
           ["任务状态", task.status_text, ""],
         ];
@@ -1678,6 +1678,9 @@
           metrics.append(fact);
         });
         card.append(metrics);
+        if (task.receipt_purpose_managed && task.completion_block_message) {
+          card.append(node("p", "fact-line", task.completion_block_message));
+        }
         if (task.production_process) {
           card.append(node("p", "fact-line", `生产工艺：${task.production_process}`));
         }

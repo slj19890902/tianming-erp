@@ -22,6 +22,8 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.warehouse_twin_dashboard import warehouse_capacity_summary
+from app.services.receipt_managed_production import receipt_managed_order_item_ids
+from app.services.location_candidates import pallet_has_physical_goods_condition
 
 
 SOURCE_LABELS = {
@@ -223,7 +225,12 @@ def _supplier_source(
     }
 
 
-def _production_source(row: ProductionTask, order: Order | None) -> dict[str, Any]:
+def _production_source(
+    row: ProductionTask,
+    order: Order | None,
+    *,
+    receipt_purpose_managed: bool = False,
+) -> dict[str, Any]:
     reference_date = order.delivery_date if order is not None else None
     order_number = order.order_number if order is not None else f"任务{row.id}"
     return {
@@ -235,7 +242,14 @@ def _production_source(row: ProductionTask, order: Order | None) -> dict[str, An
         "reference_label": "客户交期参考" if reference_date else "没有可靠完工日期",
         "created_date": _as_date(row.created_at),
         "suggested_effect": "inflow",
-        "valid": row.status == "pending" and int(row.planned_quantity or 0) > 0,
+        "valid": (
+            not receipt_purpose_managed
+            and row.status == "pending"
+            and int(row.planned_quantity or 0) > 0
+        ),
+        "invalid_reason": (
+            "receipt_auto_managed" if receipt_purpose_managed else None
+        ),
     }
 
 
@@ -285,7 +299,17 @@ def resolve_capacity_forecast_source(
             .join(Order, Order.id == OrderItem.order_id)
             .where(ProductionTask.id == source_id)
         ).first()
-        return _production_source(*result) if result is not None else None
+        if result is None:
+            return None
+        task, order = result
+        receipt_purpose_managed = bool(
+            receipt_managed_order_item_ids(db, [int(task.order_item_id)])
+        )
+        return _production_source(
+            task,
+            order,
+            receipt_purpose_managed=receipt_purpose_managed,
+        )
     if source_type == "delivery":
         row = db.get(Delivery, source_id)
         return _delivery_source(row) if row is not None else None
@@ -341,7 +365,19 @@ def _candidate_sources(db: Session, *, as_of: date, horizon: int) -> list[dict[s
         .order_by(ProductionTask.id.desc())
         .limit(100)
     ).all()
-    sources.extend(_production_source(task, order) for task, order in production_rows)
+    managed_order_item_ids = receipt_managed_order_item_ids(
+        db,
+        [int(task.order_item_id) for task, _order in production_rows],
+    )
+    sources.extend(
+        _production_source(
+            task,
+            order,
+            receipt_purpose_managed=int(task.order_item_id)
+            in managed_order_item_ids,
+        )
+        for task, order in production_rows
+    )
 
     delivery_rows = db.scalars(
         select(Delivery)
@@ -380,6 +416,8 @@ def _occupied_by_floor(db: Session) -> dict[int, int]:
             .join(InventoryPallet, InventoryPallet.location_id == WarehouseLocation.id)
             .where(
                 InventoryPallet.is_current.is_(True),
+                InventoryPallet.status == "active",
+                pallet_has_physical_goods_condition(InventoryPallet.id),
                 formal_location,
                 WarehouseLocation.warehouse_floor.in_((1, 3)),
             )
@@ -464,6 +502,35 @@ def build_warehouse_capacity_forecast(
     source_cache = {
         (source["source_type"], source["source_id"]): source for source in candidates
     }
+    missing_production_source_ids = {
+        int(plan.source_id)
+        for plan in plans
+        if plan.source_type == "production_task"
+        and (plan.source_type, int(plan.source_id)) not in source_cache
+    }
+    if missing_production_source_ids:
+        saved_production_rows = db.execute(
+            select(ProductionTask, Order)
+            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(ProductionTask.id.in_(missing_production_source_ids))
+        ).all()
+        saved_managed_order_item_ids = receipt_managed_order_item_ids(
+            db,
+            [int(task.order_item_id) for task, _order in saved_production_rows],
+        )
+        source_cache.update(
+            {
+                ("production_task", int(task.id)): _production_source(
+                    task,
+                    order,
+                    receipt_purpose_managed=(
+                        int(task.order_item_id) in saved_managed_order_item_ids
+                    ),
+                )
+                for task, order in saved_production_rows
+            }
+        )
     plan_keys: set[tuple[str, int]] = set()
     valid_plans: list[WarehouseCapacityForecastPlan] = []
     stale_plans: list[dict[str, Any]] = []

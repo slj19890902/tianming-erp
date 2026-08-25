@@ -482,6 +482,91 @@ def _short_receipt_payload(delivery_id: int, delivery_item_id: int, *, quantity:
     }
 
 
+def _place_unordered_lots_on_ground_pallet(
+    factory,
+    seed: UnorderedFinishedSeed,
+) -> tuple[int, int, int]:
+    from app.models.warehouse_inventory import (
+        InventoryLocationMovement,
+        InventoryPallet,
+        InventoryPalletItem,
+        WarehouseGroundOccupancy,
+        WarehouseGroundOccupancySlot,
+    )
+
+    with factory() as db:
+        location = WarehouseLocation(
+            location_code="P115B-SHORT-GROUND-01",
+            location_name="P1-15B 短收退回地堆位",
+            warehouse_type="finished",
+            storage_type="ground",
+            is_active=True,
+        )
+        pallet = InventoryPallet(
+            pallet_code="P115B-SHORT-GROUND-PALLET",
+            location=location,
+            status="active",
+            is_current=True,
+            needs_relocation=False,
+            created_by=1,
+            updated_by=1,
+        )
+        db.add_all([location, pallet])
+        db.flush()
+        for lot_id in (seed.free_first_lot_id, seed.free_second_lot_id):
+            lot = db.get(InventoryLot, lot_id)
+            assert lot is not None and lot.finished_detail is not None
+            lot.warehouse_location_id = location.id
+            db.add(
+                InventoryPalletItem(
+                    pallet_id=pallet.id,
+                    inventory_lot_id=lot.id,
+                    customer_id=seed.customer_a_id,
+                    product_id=seed.priced_product_id,
+                    inventory_code=lot.finished_detail.inventory_code_snapshot,
+                    customer_name_snapshot="P1-15B 客户甲",
+                    product_name=lot.finished_detail.product_name_snapshot,
+                    item_type="finished",
+                    quantity=lot.quantity_available,
+                    unit="boxes",
+                    match_status="matched",
+                    created_by=1,
+                )
+            )
+        occupancy = WarehouseGroundOccupancy(
+            pallet_id=pallet.id,
+            primary_location_id=location.id,
+            customer_id=seed.customer_a_id,
+            product_id=seed.priced_product_id,
+            footprint_kind="single",
+            capacity_quantity=20,
+            status="active",
+            version=1,
+            created_by=1,
+        )
+        db.add(occupancy)
+        db.flush()
+        db.add_all(
+            [
+                WarehouseGroundOccupancySlot(
+                    occupancy_id=occupancy.id,
+                    location_id=location.id,
+                    slot_sequence=1,
+                    status="active",
+                ),
+                InventoryLocationMovement(
+                    pallet_id=pallet.id,
+                    from_location_id=None,
+                    to_location_id=location.id,
+                    movement_type="create",
+                    operator_id=1,
+                ),
+            ]
+        )
+        db.commit()
+        return int(location.id), int(pallet.id), int(occupancy.id)
+
+
 def _as_money(value) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.00"))
 
@@ -928,6 +1013,163 @@ def test_unordered_full_dispatch_releases_and_cancel_restores_pallet(
         assert pallet.location_id == location_id
         assert first is not None and int(first.quantity_available) == 12
         assert second is not None and int(second.quantity_available) == 8
+
+
+def test_unordered_full_dispatch_short_return_restores_and_reconsume_releases_ground_projection(
+    unordered_finished_delivery_app,
+) -> None:
+    from app.models.warehouse_inventory import (
+        InventoryLocationMovement,
+        InventoryPallet,
+        WarehouseGroundOccupancy,
+    )
+    from app.services.unordered_finished_delivery import (
+        _restore_allocation_quantity,
+    )
+
+    app, factory = unordered_finished_delivery_app
+    seed = _seed(app, factory)
+    location_id, pallet_id, occupancy_id = _place_unordered_lots_on_ground_pallet(
+        factory, seed
+    )
+    payload = _unordered_payload(seed, quantity=20)
+    payload["lines"][0]["allocations"] = [
+        {"inventory_lot_id": seed.free_first_lot_id, "quantity": 12},
+        {"inventory_lot_id": seed.free_second_lot_id, "quantity": 8},
+    ]
+
+    with TestClient(app) as client:
+        _login(client)
+        delivery = _create_unordered_delivery(client, payload)
+        line = _delivery_line(delivery)
+        dispatched = client.put(f"/api/deliveries/{delivery['id']}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+        with factory() as db:
+            pallet = db.get(InventoryPallet, pallet_id)
+            occupancy = db.get(WarehouseGroundOccupancy, occupancy_id)
+            assert pallet is not None and occupancy is not None
+            assert pallet.is_current is False and pallet.location_id is None
+            assert occupancy.status == "released"
+
+        receipt = client.post(
+            "/api/finance/return_receipts",
+            json=_short_receipt_payload(delivery["id"], line["id"], quantity=18),
+        )
+        assert receipt.status_code == 201, receipt.text
+        receipt_id = int(receipt.json()["id"])
+
+        with factory() as db:
+            pallet = db.get(InventoryPallet, pallet_id)
+            occupancy = db.get(WarehouseGroundOccupancy, occupancy_id)
+            lot = db.get(InventoryLot, seed.free_second_lot_id)
+            assert pallet is not None and occupancy is not None and lot is not None
+            assert int(lot.quantity_available) == 2
+            assert lot.pallet_item is not None
+            assert int(lot.pallet_item.pallet_id) == pallet_id
+            assert pallet.is_current is True and pallet.location_id == location_id
+            assert occupancy.status == "active"
+
+            receipt_item = db.scalar(
+                select(ReturnReceiptItem).where(
+                    ReturnReceiptItem.return_receipt_id == receipt_id
+                )
+            )
+            assert receipt_item is not None
+            allocation = db.scalar(
+                select(UnorderedFinishedDeliveryAllocation).where(
+                    UnorderedFinishedDeliveryAllocation.delivery_item_id == line["id"],
+                    UnorderedFinishedDeliveryAllocation.inventory_lot_id
+                    == seed.free_second_lot_id,
+                )
+            )
+            reversal = db.scalar(
+                select(UnorderedFinishedDeliveryReversal).where(
+                    UnorderedFinishedDeliveryReversal.return_receipt_item_id
+                    == receipt_item.id
+                )
+            )
+            delivery_row = db.get(Delivery, delivery["id"])
+            delivery_item = db.get(DeliveryItem, line["id"])
+            assert (
+                allocation is not None
+                and reversal is not None
+                and delivery_row is not None
+                and delivery_item is not None
+            )
+            movement_count = int(
+                db.scalar(select(func.count()).select_from(InventoryMovement)) or 0
+            )
+            projection_movement_count = int(
+                db.scalar(select(func.count()).select_from(InventoryLocationMovement))
+                or 0
+            )
+            pallet_version = int(pallet.version)
+            occupancy_version = int(occupancy.version)
+            replay = _restore_allocation_quantity(
+                db,
+                delivery=delivery_row,
+                delivery_item=delivery_item,
+                allocation=allocation,
+                quantity=2,
+                operator_id=1,
+                reversal_kind="receipt_short_return",
+                reason="客户短收，幂等重放核对",
+                idempotency_key=reversal.idempotency_key,
+                return_receipt_item_id=receipt_item.id,
+            )
+            db.flush()
+            assert replay.id == reversal.id
+            assert int(lot.quantity_available) == 2
+            assert int(pallet.version) == pallet_version
+            assert int(occupancy.version) == occupancy_version
+            assert int(
+                db.scalar(select(func.count()).select_from(InventoryMovement)) or 0
+            ) == movement_count
+            assert int(
+                db.scalar(select(func.count()).select_from(InventoryLocationMovement))
+                or 0
+            ) == projection_movement_count
+            db.commit()
+
+        cancelled = client.post(f"/api/finance/return_receipts/{receipt_id}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+        with factory() as db:
+            pallet = db.get(InventoryPallet, pallet_id)
+            occupancy = db.get(WarehouseGroundOccupancy, occupancy_id)
+            lot = db.get(InventoryLot, seed.free_second_lot_id)
+            assert pallet is not None and occupancy is not None and lot is not None
+            assert int(lot.quantity_available) == 0
+            assert pallet.is_current is False and pallet.location_id is None
+            assert occupancy.status == "released"
+
+        reconfirmed = client.put(
+            f"/api/finance/return_receipts/{receipt_id}",
+            json=_short_receipt_payload(delivery["id"], line["id"], quantity=18),
+        )
+        assert reconfirmed.status_code == 200, reconfirmed.text
+
+    with factory() as db:
+        pallet = db.get(InventoryPallet, pallet_id)
+        occupancy = db.get(WarehouseGroundOccupancy, occupancy_id)
+        lot = db.get(InventoryLot, seed.free_second_lot_id)
+        assert pallet is not None and occupancy is not None and lot is not None
+        assert int(lot.quantity_available) == 2
+        assert pallet.is_current is True and pallet.location_id == location_id
+        assert occupancy.status == "active"
+        projection_remarks = list(
+            db.scalars(
+                select(InventoryLocationMovement.remarks).where(
+                    InventoryLocationMovement.pallet_id == pallet_id,
+                    InventoryLocationMovement.remarks.is_not(None),
+                )
+            ).all()
+        )
+        assert "客户短收退回，恢复原正式栈板与位置。" in projection_remarks
+        assert "回单编辑或取消已重新扣回退货，释放空栈板与位置占用。" in projection_remarks
+        assert all(
+            "Customer" not in value and "Receipt return" not in value
+            for value in projection_remarks
+        )
 
 
 def test_dispatch_competition_or_insufficient_stock_rolls_back_completely(

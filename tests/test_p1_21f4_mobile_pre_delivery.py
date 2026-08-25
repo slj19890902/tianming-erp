@@ -114,7 +114,9 @@ if(!nodes.taskMap.innerHTML.includes("三楼 C1区·B架·1层·2格")||nodes.ta
     _run_node(tmp_path, "p1-21f4-task-map.js", harness)
 
 
-def test_pick_plan_maps_published_location_on_a_non_third_floor(pick_app) -> None:
+def test_pick_plan_does_not_map_layout_only_location_on_a_non_third_floor(
+    pick_app,
+) -> None:
     from app.models.order import OrderItem
     from app.models.user import User
     from app.models.warehouse_inventory import (
@@ -185,15 +187,16 @@ def test_pick_plan_maps_published_location_on_a_non_third_floor(pick_app) -> Non
     with TestClient(app) as client:
         _login(client, "admin")
         task = _create_task(client, ids["delivery"])
-        mapped = next(
+        layout_only = next(
             group
             for group in task["location_groups"]
             if group["location_code"] == "F2-B2-01"
         )
-        assert mapped["warehouse_floor"] == 2
-        assert mapped["area_code"] == "B2"
-        assert mapped["map_status"] == "mapped"
-        assert mapped["map_point"]["left_pct"] == 18.0
+        assert layout_only["warehouse_floor"] == 2
+        assert layout_only["area_code"] == "B2"
+        assert layout_only["position_status"] != "mapped"
+        assert layout_only["map_status"] == "unmapped"
+        assert layout_only["map_point"] is None
 
 
 def test_pre_delivery_labels_and_state_boundary_are_plain_and_safe() -> None:

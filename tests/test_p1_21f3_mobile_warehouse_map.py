@@ -36,6 +36,8 @@ def _add_map_target(factory, *, code: str = "C1-L02") -> tuple[int, int]:
         Floor3LocationLayout,
         InventoryLot,
         InventoryPalletItem,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
         WarehouseLocation,
     )
 
@@ -78,6 +80,26 @@ def _add_map_target(factory, *, code: str = "C1-L02") -> tuple[int, int]:
                 width_pct=Decimal("10"),
                 height_pct=Decimal("10"),
                 source_type="manual",
+            )
+        )
+        ground_plan = db.scalar(
+            select(WarehouseGroundLayoutPlan).where(
+                WarehouseGroundLayoutPlan.status == "published"
+            )
+        )
+        assert ground_plan is not None
+        ground_plan.target_slot_count = int(ground_plan.target_slot_count or 0) + 1
+        db.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=ground_plan.id,
+                location_id=target.id,
+                route_sequence=ground_plan.target_slot_count,
+                row_no=1,
+                slot_no=ground_plan.target_slot_count,
+                x_mm=Decimal(str(1000 + ground_plan.target_slot_count * 1200)),
+                y_mm=Decimal("1000"),
+                width_mm=1200,
+                depth_mm=1000,
             )
         )
         existing = InventoryLot(
@@ -336,6 +358,12 @@ def test_employee_report_is_read_only_until_authorized_correction(
         assert denied.status_code == 403
 
         _login(client, "mobile-admin")
+        listed = client.get("/api/mobile/erp/warehouse/location-discrepancies")
+        assert listed.status_code == 200, listed.text
+        assert [item["id"] for item in listed.json()["items"]] == [report["id"]]
+        assert listed.json()["items"][0]["observed_location"][
+            "position_status"
+        ] == "mapped"
         corrected = client.post(
             f"/api/mobile/erp/warehouse/location-discrepancies/{report['id']}/resolve",
             json={

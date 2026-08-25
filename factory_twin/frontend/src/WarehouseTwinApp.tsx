@@ -13,7 +13,6 @@ import {
 import type { Floor1CandidateBlockingItem } from "./floor1CandidateBlockers.mjs";
 import { pointsBoundsMm, resizeAndMovePointsMm, translatePointsMm } from "./layoutGeometry.mjs";
 import {
-  buildMeasuredDispatchPallets,
   buildMappedLocationPallets,
   employeeAreaName,
   employeeLocationName,
@@ -22,10 +21,13 @@ import {
   findPalletColumnConflicts,
   inventoryAgeLabel,
   inventoryAgeTone,
+  inventoryHasPhysicalQuantity,
   inventoryLocationItems,
   inventoryLocationPallets,
+  inventoryPhysicalQuantity,
   inventoryUnitLabel,
   locationLayoutGeometry,
+  normalizeInventoryLocationProjection,
   normalizeStandardPalletContract,
   searchHighlightAreaCodes,
   standardPalletContractsMatch,
@@ -215,8 +217,14 @@ interface DashboardLocation {
   location_id: number;
   location_code: string;
   location_name: string;
+  employee_location_name?: string | null;
+  current_address_name?: string | null;
+  floor_name?: string | null;
+  area_name?: string | null;
   floor_code: string;
   area_code: string | null;
+  map_feature_id?: string | null;
+  published_map_revision?: string | null;
   source_version: string | null;
   warehouse_type: string;
   allowed_inventory_types?: InventoryUsage[];
@@ -266,9 +274,20 @@ interface TwinDashboard {
     occupied_pallets: number;
     long_age_lots: number;
     unlocated_lots: number;
+    finished_map_coverage?: {
+      total_lots: number;
+      mapped_lots: number;
+      unlocated_lots: number;
+      total_quantity: number;
+      mapped_quantity: number;
+      unlocated_quantity: number;
+      total_physical_quantity: number;
+      all_located: boolean;
+    };
   };
   floors: Array<{ floor_code: string; occupied_locations: number; active_lots: number }>;
   locations: DashboardLocation[];
+  unlocated_inventory?: SearchItem[];
   distribution: { areas: AreaDistribution[] };
 }
 
@@ -286,6 +305,7 @@ interface SearchItem extends InventoryItem {
   location_code: string | null;
   location_name: string;
   position_status: string;
+  unlocated_reason?: string | null;
 }
 
 interface SearchResponse {
@@ -775,8 +795,7 @@ function formatNumber(value: number | null | undefined) {
 }
 
 function inventoryLabelQuantity(item: InventoryItem) {
-  if (item.quantity !== undefined && item.quantity !== null) return item.quantity;
-  return Number(item.available_quantity || 0) + Number(item.reserved_quantity || 0);
+  return inventoryPhysicalQuantity(item);
 }
 
 function palletMoveSource(location: DashboardLocation, pallet?: DashboardPallet | null): WarehouseMoveSource | null {
@@ -826,6 +845,7 @@ function searchProductKey(item: InventoryItem) {
 function groupSearchProducts(items: SearchItem[]): SearchProductGroup[] {
   const groups = new Map<string, SearchProductGroup>();
   for (const item of items) {
+    if (!inventoryHasPhysicalQuantity(item)) continue;
     const key = searchProductKey(item);
     const current: SearchProductGroup = groups.get(key) || {
       key,
@@ -841,7 +861,7 @@ function groupSearchProducts(items: SearchItem[]): SearchProductGroup[] {
       location_summaries: [],
       items: [] as SearchItem[]
     };
-    current.total_quantity += Number(item.quantity ?? inventoryLabelQuantity(item));
+    current.total_quantity += inventoryPhysicalQuantity(item);
     current.items.push(item);
     current.location_count = new Set(current.items.map((row) => row.location_id || `text:${row.location_name}`)).size;
     current.floor_summaries = warehouseSearchFloorSummaries(current.items);
@@ -1682,9 +1702,10 @@ export function WarehouseTwinApp() {
   const warehouseMoveModeActive = mapMode === "move" && moveAction === "relocate" && canExecuteWarehouse && viewMode === "2d";
   const currentFloor = dashboard?.floors.find((item) => item.floor_code === floorCode);
   const visualLocations = useMemo<DashboardLocation[]>(() => (dashboard?.locations || []).map((location) => {
+    const projectedLocation = normalizeInventoryLocationProjection(location) as DashboardLocation;
     const draft = locationDrafts[location.location_id];
     return draft ? {
-      ...location,
+      ...projectedLocation,
       position_status: "mapped",
       map_position: {
         left_pct: draft.left_pct,
@@ -1698,8 +1719,14 @@ export function WarehouseTwinApp() {
           ?? location.layout_draft_position?.layout_kind
           ?? "unknown"
       }
-    } : location;
+    } : projectedLocation;
   }), [dashboard?.locations, locationDrafts]);
+  const currentFloorOccupiedLocations = useMemo(
+    () => visualLocations.filter((location) => (
+      location.floor_code === floorCode && location.occupancy_status === "occupied"
+    )).length,
+    [visualLocations, floorCode]
+  );
   const dispatchStagingLocation = useMemo(
     () => visualLocations.find((item) => item.floor_code === "1F" && item.location_code === "F1-DISPATCH-01"),
     [visualLocations]
@@ -1736,12 +1763,14 @@ export function WarehouseTwinApp() {
     });
   }, [locationEditMode, advancedAreaMaintenanceOpen, floorCode, dashboard?.locations]);
   const mappedLocationPallets = useMemo(
-    () => [
-      ...buildMappedLocationPallets(features, visualLocations, floorCode, standardPallet, layout?.id)
-        .filter((pallet) => pallet.id !== `erp-location-${dispatchStagingLocation?.location_id || 0}`),
-      ...buildMeasuredDispatchPallets(features, dispatchStagingLocation, floorCode, standardPallet, layout?.id)
-    ],
-    [features, visualLocations, dispatchStagingLocation, floorCode, standardPallet, layout?.id]
+    () => buildMappedLocationPallets(
+      features,
+      visualLocations,
+      floorCode,
+      standardPallet,
+      layout?.id
+    ),
+    [features, visualLocations, floorCode, standardPallet, layout?.id]
   );
   const palletColumnConflicts = useMemo(
     () => layout ? findPalletColumnConflicts(mappedLocationPallets, layout.structures, features) : [],
@@ -1925,11 +1954,14 @@ export function WarehouseTwinApp() {
     () => groupSearchProducts(searchResponse?.items || []),
     [searchResponse?.items]
   );
+  const unlocatedFinishedItems = (dashboard?.unlocated_inventory || []).filter((item) => inventoryHasPhysicalQuantity(item));
+  const unlocatedFinishedCount = unlocatedFinishedItems.length;
   const focusedSearchProduct = useMemo(
     () => searchProductGroups.find((item) => item.key === focusedSearchProductKey) || null,
     [searchProductGroups, focusedSearchProductKey]
   );
-  const searchHighlightItems = focusedSearchProduct?.items || searchResponse?.items || [];
+  const searchHighlightItems = (focusedSearchProduct?.items || searchResponse?.items || [])
+    .filter((item) => inventoryHasPhysicalQuantity(item));
   const highlightedAreaCodes = useMemo(
     () => searchHighlightAreaCodes(searchHighlightItems, floorCode),
     [searchHighlightItems, floorCode]
@@ -1952,7 +1984,7 @@ export function WarehouseTwinApp() {
   const searchHighlightPalletIds = useMemo(() => [...new Set(
     [
       ...searchHighlightItems
-        .filter((item) => item.floor_code === floorCode && item.location_id && !["disabled", "unplaced", "unlocated"].includes(item.position_status))
+        .filter((item) => item.floor_code === floorCode && item.location_id && item.position_status === "mapped")
         .map((item) => `erp-location-${item.location_id}`),
       ...(searchResponse?.resources || [])
         .filter((item) => item.floor_code === floorCode && item.location_id && item.map_status === "mapped")
@@ -3415,7 +3447,7 @@ export function WarehouseTwinApp() {
     setFocusedSearchProductKey(searchProductKey(item));
     setFocusedResource(null);
     setAreaInventorySearch(item.inventory_code || item.lot_number || "");
-    if (item.location_id) {
+    if (item.location_id && item.position_status === "mapped") {
       cameraFocusSequenceRef.current += 1;
       setCameraFocusTarget({ entity: { kind: "pallet", id: `erp-location-${item.location_id}` }, token: cameraFocusSequenceRef.current, source: "search" });
       setPendingAreaCode(null);
@@ -4344,7 +4376,7 @@ export function WarehouseTwinApp() {
         <button type="button" disabled={spatialEditBusy} onClick={discardLayoutDraft}>{layoutDraftControl?.has_draft ? "放弃草稿" : "取消编辑"}</button>
       </div>}
       <div className="twin-toolbar-spacer" />
-      <div className="twin-toolbar-summary"><span><b>{currentFloor?.active_lots || 0}</b> 有效批次</span><span><b>{currentFloor?.occupied_locations || 0}</b> 占用库位</span><span><b>{mappedLocationPallets.length}</b> 地图库位</span><span><b>{dashboard?.summary.unlocated_lots || 0}</b> 待定位</span>{palletColumnConflicts.length > 0 && <span className="column-conflict"><b>{palletColumnConflicts.length}</b> 柱子冲突</span>}</div>
+      <div className="twin-toolbar-summary"><span><b>{currentFloor?.active_lots || 0}</b> 有效批次</span><span><b>{currentFloorOccupiedLocations}</b> 占用库位</span><span><b>{mappedLocationPallets.length}</b> 地图库位</span><button type="button" className="unlocated-blocker" disabled={!unlocatedFinishedCount} onClick={() => { setSearchPanelOpen(true); setSearchType("finished"); }}><b>{unlocatedFinishedCount}</b> 待定位成品</button>{palletColumnConflicts.length > 0 && <span className="column-conflict"><b>{palletColumnConflicts.length}</b> 柱子冲突</span>}</div>
     </section>
 
     <section className={`twin-workspace ${layerPanelOpen ? "layers-open" : "layers-collapsed"} ${searchPanelOpen ? "context-open" : "context-collapsed"} ${locationEditMode ? "location-editing" : ""}`}>
@@ -4361,6 +4393,17 @@ export function WarehouseTwinApp() {
         <header><small>WAREHOUSE SEARCH</small><h2>全仓查找</h2></header>
         <section className="twin-global-search">
           <div className="twin-context-heading"><b>统一查货</b>{search && <button type="button" onClick={() => { setSearch(""); setSearchResponse(null); setSearchError(""); setFocusedSearchItem(null); setFocusedSearchProductKey(null); setFocusedResource(null); setCameraFocusTarget(null); setAreaInventorySearch(""); }}>清除</button>}</div>
+          {unlocatedFinishedCount > 0 && <div className="twin-unlocated-finished-blocker">
+            <div><b>待定位成品 {unlocatedFinishedCount} 批</b><span>账上有货，但没有已发布实测格位；不会借用其他区域坐标。</span></div>
+            <div className="twin-unlocated-finished-list">
+              {unlocatedFinishedItems.map((item) => <button type="button" key={item.lot_id} onClick={() => focusSearchItem(item)}>
+                <b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b>
+                <strong>{item.product_name || "产品名称待补充"}</strong>
+                <span>{item.location_name || "尚未绑定正式位置"} · {item.unlocated_reason || "缺少已发布实测格位"}</span>
+                <small>实存 {formatNumber(inventoryPhysicalQuantity(item))} {inventoryUnitLabel(item.unit)}{Number(item.reserved_quantity || 0) > 0 ? ` · 已预占 ${formatNumber(item.reserved_quantity)}` : ""}{Number(item.damaged_quantity || 0) > 0 ? ` · 质量冻结 ${formatNumber(item.damaged_quantity)}` : ""} · {item.lot_number || "批次待补充"}</small>
+              </button>)}
+            </div>
+          </div>}
           <div className="twin-search-type-grid" role="tablist" aria-label="全仓查找类型">
             <button type="button" className={searchType === "finished" ? "active" : ""} onClick={() => { setSearchType("finished"); setSearch(""); setSearchResponse(null); setFocusedResource(null); setFocusedSearchProductKey(null); }}>纸箱成品</button>
             <button type="button" className={searchType === "mold" ? "active" : ""} onClick={() => { setSearchType("mold"); setSearchResponse(null); setFocusedSearchItem(null); setFocusedSearchProductKey(null); }}>模具</button>
@@ -4842,7 +4885,7 @@ export function WarehouseTwinApp() {
                 {!selectedInventory.length && <div className="twin-area-empty"><b>{selectedAreaHasPublishedBinding ? "区域已启用，当前没有货物" : selectedAreaActivationLabel === "待启用" ? "区域绑定仍待启用" : "区域尚未启用"}</b><span>{selectedAreaHasPublishedBinding ? `${selectedAreaCapacitySummary}；库存为 0 不代表区域未启用。` : "进入区域规划确认用途、形式和容量后即可启用；系统不会生成模拟货物。"}</span></div>}
                 {selectedInventory.length > 0 && !filteredSelectedInventory.length && <div className="twin-area-empty"><b>本区域没有匹配结果</b><span>请更换存货编码、产品、客户或位置关键词。</span></div>}
                 {visibleSelectedInventory.map((item) => <article className={`twin-area-lot ${focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey ? "search-hit product-search-hit" : focusedSearchItem?.lot_id === item.lot_id ? "search-hit" : ""}`} key={item.lot_id}>
-                  <div><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(item.available_quantity ?? item.quantity)} {inventoryUnitLabel(item.unit)}</strong></div>
+                  <div><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(inventoryPhysicalQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>
                   <strong>{item.product_name || "待补充库存名称"}</strong>
                   <span>{item.customer_name || "客户待确认"} · {item.location_name || "位置待补充"}</span>
                   {areaInventoryDetailsOpen && <div className="twin-area-lot-details"><span>{selectedAreaFeature.name || "区域名称待完善"} · {item.location_name || "位置名称待完善"} · {item.pallet_code || "地堆/散存"}</span><span>{item.lot_number || "批次待补充"} · {inventoryAgeLabel(item.age_days)}</span>{(item.reserved_quantity || 0) > 0 && <small>已预占 {formatNumber(item.reserved_quantity)} {inventoryUnitLabel(item.unit)}</small>}</div>}

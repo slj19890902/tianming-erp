@@ -23,7 +23,7 @@ MAIN_SOURCE = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
 
 
 @pytest.fixture()
-def mobile_erp_app(tmp_path):
+def mobile_erp_app(tmp_path, monkeypatch: pytest.MonkeyPatch):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.mobile_erp import router as mobile_erp_router
@@ -43,7 +43,34 @@ def mobile_erp_app(tmp_path):
         InventoryReservation,
         SemiFinishedInventoryDetail,
         SemiFinishedLotAllowedProduct,
+        WarehouseArea,
+        WarehouseAreaStoragePolicy,
+        WarehouseFloor,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
         WarehouseLocation,
+    )
+
+    def published_identity(floor_number: int) -> dict:
+        if int(floor_number) == 3:
+            zones = {"mobile-zone-c1": "C1", "mobile-zone-sf": "SF"}
+        else:
+            zones = {"mobile-zone-fg": "FG"}
+        return {
+            "floor_code": f"{int(floor_number)}F",
+            "revision": "mobile-map-v1",
+            "feature_ids": frozenset(zones),
+            "erp_area_codes": frozenset(zones.values()),
+            "zones_by_id": zones,
+            "zone_ids_by_area": {
+                area_code: (feature_id,)
+                for feature_id, area_code in zones.items()
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.services.location_candidates.load_warehouse_twin_published_floor_identity",
+        published_identity,
     )
 
     engine = create_sqlite_engine(tmp_path / "mobile-erp.sqlite3")
@@ -101,6 +128,51 @@ def mobile_erp_app(tmp_path):
         )
         db.add_all([product, product_two, other_product])
         db.flush()
+        floor1 = WarehouseFloor(
+            floor_code="1F",
+            floor_name="一楼成品区",
+            floor_number=1,
+            construction_status="enabled",
+        )
+        floor3 = WarehouseFloor(
+            floor_code="3F",
+            floor_name="三楼成品仓",
+            floor_number=3,
+            construction_status="enabled",
+        )
+        db.add_all([floor1, floor3])
+        db.flush()
+        finished_area = WarehouseArea(
+            floor_id=floor3.id,
+            area_code="C1",
+            area_name="C1成品区",
+            construction_status="enabled",
+        )
+        semi_area = WarehouseArea(
+            floor_id=floor3.id,
+            area_code="SF",
+            area_name="纸板暂存区",
+            construction_status="enabled",
+        )
+        ledger_area = WarehouseArea(
+            floor_id=floor1.id,
+            area_code="FG",
+            area_name="成品台账区",
+            construction_status="enabled",
+        )
+        db.add_all([finished_area, semi_area, ledger_area])
+        db.flush()
+        db.add(
+            WarehouseAreaStoragePolicy(
+                area_id=finished_area.id,
+                map_feature_id="mobile-zone-c1",
+                allowed_inventory_types_json='["finished"]',
+                storage_layout="pallet_ground",
+                status="published",
+                published_map_revision="mobile-map-v1",
+                version=1,
+            )
+        )
         mapped_location = WarehouseLocation(
             location_code="C1-L01",
             location_name="三楼 C1 第一货位",
@@ -109,7 +181,7 @@ def mobile_erp_app(tmp_path):
             area_code="C1",
             storage_type="ground",
             placement_status="placed",
-            source_version="V11",
+            source_version="TWIN_V1",
         )
         ledger_location = WarehouseLocation(
             location_code="FG-L01",
@@ -140,6 +212,40 @@ def mobile_erp_app(tmp_path):
                 width_pct=Decimal("10"),
                 height_pct=Decimal("10"),
                 source_type="manual",
+            )
+        )
+        ground_plan = WarehouseGroundLayoutPlan(
+            area_id=finished_area.id,
+            status="published",
+            target_slot_count=1,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="mobile-map-v1",
+            published_map_revision="mobile-map-v1",
+            preview_fingerprint="a" * 64,
+            version=1,
+            publish_idempotency_key="mobile-ground-publish",
+            publish_request_hash="b" * 64,
+            updated_by=admin.id,
+            published_by=admin.id,
+            published_at=now,
+        )
+        db.add(ground_plan)
+        db.flush()
+        db.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=ground_plan.id,
+                location_id=mapped_location.id,
+                route_sequence=1,
+                row_no=1,
+                slot_no=1,
+                x_mm=Decimal("1000"),
+                y_mm=Decimal("1000"),
+                width_mm=1200,
+                depth_mm=1000,
             )
         )
 

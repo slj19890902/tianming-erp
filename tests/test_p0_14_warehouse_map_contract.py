@@ -114,20 +114,17 @@ def test_normal_move_submit_is_one_request_and_cancel_is_zero_request() -> None:
     assert APP_SOURCE.count("onClick={confirmMoveDrafts}") == 1
 
 
-def test_fin_segments_share_one_dispatch_staging_identity() -> None:
+def test_legacy_dispatch_inventory_stays_in_the_unlocated_blocker() -> None:
     dispatch_builder = _between(
         INVENTORY_SOURCE,
         "export function buildMeasuredDispatchPallets",
         "export function buildMappedLocationPallets",
     )
-    assert 'dispatchLocation?.location_code !== "F1-DISPATCH-01"' in dispatch_builder
-    assert "operational_group_id" in dispatch_builder
-    assert 'zone_code: "一楼成品合并暂存区"' in dispatch_builder
-
-    # The three measured outlines are one visual staging group.  The frontend may
-    # spread pallet markers over those outlines, but it must not synthesize three
-    # inventory locations or use their FIN codes as employee-facing identities.
-    assert "dispatch-location:" in dispatch_builder
+    # F1-DISPATCH-01 has no current measured geometry.  The three FIN outlines
+    # must never be borrowed as simulated coordinates for its historical stock.
+    assert "return [];" in dispatch_builder
+    assert "operational_group_id" not in dispatch_builder
+    assert "dispatch-location:" not in dispatch_builder
     assert "location_code: feature" not in dispatch_builder
     assert "location_id: feature" not in dispatch_builder
 

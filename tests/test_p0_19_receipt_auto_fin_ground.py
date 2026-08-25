@@ -121,6 +121,64 @@ def _seed_published_fin_ground_plan(session_factory) -> int:
         return location.id
 
 
+def _mock_fin_runtime_identity(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.warehouse_inventory import (
+        WarehouseArea,
+        WarehouseAreaStoragePolicy,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
+    from app.services import location_candidates
+
+    with session_factory() as session:
+        location, area, policy = session.execute(
+            select(
+                WarehouseLocation,
+                WarehouseArea,
+                WarehouseAreaStoragePolicy,
+            )
+            .join(
+                WarehouseFloor,
+                WarehouseFloor.floor_number == WarehouseLocation.warehouse_floor,
+            )
+            .join(
+                WarehouseArea,
+                WarehouseArea.floor_id == WarehouseFloor.id,
+            )
+            .join(
+                WarehouseAreaStoragePolicy,
+                WarehouseAreaStoragePolicy.area_id == WarehouseArea.id,
+            )
+            .where(
+                WarehouseLocation.location_code == "F1-FIN-001-L001",
+                WarehouseArea.area_code == WarehouseLocation.area_code,
+            )
+        ).one()
+        revision = str(policy.published_map_revision)
+        feature_id = str(policy.map_feature_id)
+        area_code = str(area.area_code).strip().upper()
+
+    original = location_candidates.load_warehouse_twin_published_floor_identity
+
+    def load_identity(floor_number: int):
+        if int(floor_number) == 1:
+            return {
+                "revision": revision,
+                "zones_by_id": {feature_id: area_code},
+                "zone_ids_by_area": {area_code: (feature_id,)},
+            }
+        return original(floor_number)
+
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        load_identity,
+    )
+
+
 def _seed_floor3_v11_fallback(
     session_factory,
     *,
@@ -322,10 +380,12 @@ def _receive_full_order_to_fallback(
 
 def test_receipt_preview_uses_real_published_fin_member_not_legacy_dispatch(
     requisition_app,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _app, session_factory = requisition_app
     _seed_material_and_staging(session_factory)
     expected_location_id = _seed_published_fin_ground_plan(session_factory)
+    _mock_fin_runtime_identity(session_factory, monkeypatch)
 
     with session_factory() as session:
         projection = receipt_auto_finished_location_projection(session)
@@ -339,7 +399,12 @@ def test_receipt_preview_uses_real_published_fin_member_not_legacy_dispatch(
         assert location is not None
         assert projection == {
             "ready": True,
+            "location_id": location.id,
+            "location_code": location.location_code,
             "location_name": location.location_name,
+            "current_address_name": location.location_name,
+            "employee_location_name": location.location_name,
+            "position_status": "mapped",
             "layout_version": 2,
             "capacity_warning": None,
             "issue": None,
@@ -1136,6 +1201,7 @@ def test_floor3_fallback_fails_closed_if_policy_is_created_after_selection(
 
 def test_receipt_posts_lot_pallet_and_ground_occupancy_to_real_fin_then_releases_on_revert(
     requisition_app,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.models.production import ProductionCompletion
     from app.models.warehouse_inventory import (
@@ -1149,6 +1215,7 @@ def test_receipt_posts_lot_pallet_and_ground_occupancy_to_real_fin_then_releases
     app, session_factory = requisition_app
     _seed_material_and_staging(session_factory)
     expected_location_id = _seed_published_fin_ground_plan(session_factory)
+    _mock_fin_runtime_identity(session_factory, monkeypatch)
 
     with TestClient(app) as client:
         _login(client, "admin")

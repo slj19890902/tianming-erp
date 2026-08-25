@@ -1462,6 +1462,100 @@ def test_ordered_inventory_short_receipt_requires_current_return_layout_version(
         assert details["items"][0]["expected_return_layout_version"] == 2
 
 
+def test_ordered_inventory_short_receipt_rejects_unpublished_return_location(
+    n029_delivery_app,
+) -> None:
+    from app.models.finance import ReturnReceipt
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        OrderedFinishedReceiptReturn,
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
+
+    app, factory, ids = n029_delivery_app
+    with factory() as db:
+        floor = WarehouseFloor(
+            floor_code="1F",
+            floor_name="return projection test floor",
+            floor_number=1,
+            construction_status="enabled",
+        )
+        db.add(floor)
+        db.flush()
+        db.add(
+            WarehouseArea(
+                floor_id=floor.id,
+                area_code="RETURN",
+                area_name="return projection test area",
+                construction_status="enabled",
+            )
+        )
+        location = db.get(WarehouseLocation, ids["return_location"])
+        assert location is not None
+        location.warehouse_floor = 1
+        location.area_code = "RETURN"
+        location.storage_type = "rack"
+        location.placement_status = "placed"
+        location.source_version = "P1-25C"
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/deliveries",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    {
+                        "order_item_id": ids["legacy_finished"],
+                        "delivered_quantity": 40,
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        delivery_id = created.json()["id"]
+        delivery_item_id = created.json()["items"][0]["id"]
+        dispatched = client.put(f"/api/deliveries/{delivery_id}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+
+        rejected = client.post(
+            "/api/finance/return_receipts",
+            json={
+                "delivery_id": delivery_id,
+                "actual_received_date": date.today().isoformat(),
+                "items": [
+                    {
+                        "delivery_item_id": delivery_item_id,
+                        "actual_received_quantity": 34,
+                        "resolution_action": "continue_delivery",
+                        "return_location_id": ids["return_location"],
+                    }
+                ],
+            },
+        )
+
+    assert rejected.status_code == 409, rejected.text
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(ReturnReceipt)) == 0
+        assert (
+            db.scalar(
+                select(func.count()).select_from(OrderedFinishedReceiptReturn)
+            )
+            == 0
+        )
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(InventoryLot)
+                .where(InventoryLot.source_ref_type == "return_receipt_item")
+            )
+            == 0
+        )
+
+
 def test_accept_short_returns_customer_stock_and_statement_uses_received_quantity(
     n029_delivery_app,
 ) -> None:

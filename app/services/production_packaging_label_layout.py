@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from typing import Any
 
 from sqlalchemy import desc, select
@@ -14,36 +15,51 @@ from app.models.production_label_print import ProductionPackagingLabelLayoutRevi
 CATALOG_VERSION = "p1-66b-v1"
 PAPER_WIDTH_MM = 40.0
 PAPER_HEIGHT_MM = 30.0
+DEFAULT_QUANTITY_FIXED_SUFFIX = "只/捆"
+MAX_FIXED_SUFFIX_LENGTH = 8
+OVERLAP_EPSILON_MM = 0.001
+_SAFE_FIXED_SUFFIX_PATTERN = re.compile(r"^[A-Za-z\u3400-\u9fff/／·_ -]*$")
+_DANGEROUS_FIXED_SUFFIX_PATTERN = re.compile(
+    r"(?:script|javascript|alert|onerror|onload|style|data|https?|www|url)",
+    re.IGNORECASE,
+)
 ELEMENT_CATALOG = (
     {
         "id": "customer_short_name",
         "label": "客户中文简称",
         "kind": "text",
         "required": True,
+        "hideable": True,
     },
     {
         "id": "product_code",
         "label": "存货编码",
         "kind": "text",
         "required": True,
+        "hideable": True,
     },
     {
         "id": "product_name",
         "label": "产品名称",
         "kind": "text",
         "required": True,
+        "hideable": True,
     },
     {
         "id": "specification",
         "label": "规格",
         "kind": "text",
         "required": True,
+        "hideable": True,
     },
     {
         "id": "quantity",
         "label": "数量（只/捆）",
         "kind": "text",
         "required": True,
+        "hideable": True,
+        "fixed_suffix_editable": True,
+        "default_fixed_suffix": DEFAULT_QUANTITY_FIXED_SUFFIX,
     },
     {
         "id": "product_qr",
@@ -54,6 +70,20 @@ ELEMENT_CATALOG = (
     },
 )
 _CATALOG_BY_ID = {item["id"]: item for item in ELEMENT_CATALOG}
+_BASE_ELEMENT_KEYS = {
+    "id",
+    "kind",
+    "x_mm",
+    "y_mm",
+    "width_mm",
+    "height_mm",
+    "visible",
+}
+_TEXT_ELEMENT_KEYS = _BASE_ELEMENT_KEYS | {
+    "font_size_mm",
+    "font_weight",
+    "text_align",
+}
 
 
 class ProductionPackagingLabelLayoutError(ValueError):
@@ -164,6 +194,45 @@ def _finite_number(value: object, *, name: str) -> float:
     return round(number, 3)
 
 
+def _normalize_fixed_suffix(value: object) -> str:
+    if not isinstance(value, str):
+        raise ProductionPackagingLabelLayoutError("数量后的固定说明必须是文字")
+    normalized = value.strip()
+    if len(normalized) > MAX_FIXED_SUFFIX_LENGTH:
+        raise ProductionPackagingLabelLayoutError(
+            f"数量后的固定说明最多{MAX_FIXED_SUFFIX_LENGTH}个字符"
+        )
+    if (
+        not _SAFE_FIXED_SUFFIX_PATTERN.fullmatch(normalized)
+        or _DANGEROUS_FIXED_SUFFIX_PATTERN.search(normalized)
+    ):
+        raise ProductionPackagingLabelLayoutError(
+            "数量后的固定说明只能使用简短中文、英文字母或单位分隔符"
+        )
+    return normalized
+
+
+def _validate_visible_element_overlaps(elements: list[dict[str, Any]]) -> None:
+    visible = [element for element in elements if element["visible"]]
+    for index, first in enumerate(visible):
+        for second in visible[index + 1 :]:
+            overlaps = (
+                first["x_mm"]
+                < second["x_mm"] + second["width_mm"] - OVERLAP_EPSILON_MM
+                and second["x_mm"]
+                < first["x_mm"] + first["width_mm"] - OVERLAP_EPSILON_MM
+                and first["y_mm"]
+                < second["y_mm"] + second["height_mm"] - OVERLAP_EPSILON_MM
+                and second["y_mm"]
+                < first["y_mm"] + first["height_mm"] - OVERLAP_EPSILON_MM
+            )
+            if overlaps:
+                raise ProductionPackagingLabelLayoutError(
+                    f"{_CATALOG_BY_ID[first['id']]['label']}与"
+                    f"{_CATALOG_BY_ID[second['id']]['label']}不能重叠"
+                )
+
+
 def _normalize_element(raw: object) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ProductionPackagingLabelLayoutError("布局中存在无效元素")
@@ -173,11 +242,20 @@ def _normalize_element(raw: object) -> dict[str, Any]:
         raise ProductionPackagingLabelLayoutError("布局中存在未登记元素")
     if raw.get("kind") != metadata["kind"]:
         raise ProductionPackagingLabelLayoutError(f"{element_id} 的元素类型无效")
+    if "fixed_suffix" in raw and element_id != "quantity":
+        raise ProductionPackagingLabelLayoutError("只有数量元素可以设置固定说明")
+    allowed_keys = (
+        _TEXT_ELEMENT_KEYS | ({"fixed_suffix"} if element_id == "quantity" else set())
+        if metadata["kind"] == "text"
+        else _BASE_ELEMENT_KEYS
+    )
+    if set(raw) - allowed_keys:
+        raise ProductionPackagingLabelLayoutError(
+            f"{metadata['label']}包含未登记的布局字段"
+        )
     visible = raw.get("visible")
     if not isinstance(visible, bool):
         raise ProductionPackagingLabelLayoutError(f"{element_id} 的显示状态无效")
-    if metadata.get("required") and not visible:
-        raise ProductionPackagingLabelLayoutError(f"{metadata['label']} 不能隐藏")
     if metadata["kind"] == "qr" and visible and not metadata.get(
         "source_available"
     ):
@@ -232,12 +310,22 @@ def _normalize_element(raw: object) -> dict[str, Any]:
                 "text_align": text_align,
             }
         )
+        if "fixed_suffix" in raw:
+            normalized["fixed_suffix"] = _normalize_fixed_suffix(
+                raw.get("fixed_suffix")
+            )
     return normalized
 
 
-def normalize_layout(payload: object) -> dict[str, Any]:
+def normalize_layout(
+    payload: object,
+    *,
+    validate_visible_overlaps: bool = True,
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ProductionPackagingLabelLayoutError("标签布局必须是对象")
+    if set(payload) - {"catalog_version", "paper", "elements"}:
+        raise ProductionPackagingLabelLayoutError("标签布局包含未登记字段")
     if payload.get("catalog_version") != CATALOG_VERSION:
         raise ProductionPackagingLabelLayoutError(
             "标签元素目录版本已变化，请重新加载默认布局"
@@ -245,6 +333,8 @@ def normalize_layout(payload: object) -> dict[str, Any]:
     paper = payload.get("paper")
     if not isinstance(paper, dict):
         raise ProductionPackagingLabelLayoutError("标签纸张定义无效")
+    if set(paper) - {"width_mm", "height_mm"}:
+        raise ProductionPackagingLabelLayoutError("标签纸张包含未登记字段")
     if (
         _finite_number(paper.get("width_mm"), name="纸张宽度")
         != PAPER_WIDTH_MM
@@ -272,6 +362,8 @@ def normalize_layout(payload: object) -> dict[str, Any]:
         )
     order = {item["id"]: index for index, item in enumerate(ELEMENT_CATALOG)}
     normalized_elements.sort(key=lambda item: order[item["id"]])
+    if validate_visible_overlaps:
+        _validate_visible_element_overlaps(normalized_elements)
     return {
         "catalog_version": CATALOG_VERSION,
         "paper": {"width_mm": PAPER_WIDTH_MM, "height_mm": PAPER_HEIGHT_MM},
@@ -311,7 +403,7 @@ def _row_layout(row: ProductionPackagingLabelLayoutRevision) -> dict[str, Any]:
         raw = json.loads(row.payload_json)
     except (TypeError, ValueError, json.JSONDecodeError) as error:
         raise ProductionPackagingLabelLayoutError("保存的标签布局已损坏") from error
-    normalized = normalize_layout(raw)
+    normalized = normalize_layout(raw, validate_visible_overlaps=False)
     if layout_hash(normalized) != row.payload_hash:
         raise ProductionPackagingLabelLayoutError("保存的标签布局校验失败")
     return normalized

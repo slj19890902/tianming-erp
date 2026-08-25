@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.172"
-    assert APP_VERSION_NAME == "YL双规格生产任务收料自愈"
+    assert APP_VERSION == "v0.22.173"
+    assert APP_VERSION_NAME == "生产标签元素隐藏与数量说明编辑"
     assert APP_BUILD_DATE == "2026-08-25"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,14 +49,16 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "Z.001.000205" in item and "两种规格" in item for item in current_release)
-    assert any("本次更新｜" in item and "任务缺失" in item and "重复建单" in item for item in current_release)
-    assert any("本次更新｜" in item and "断链审计" in item and "真实异常" in item for item in current_release)
-    assert any("本次更新｜" in item and "订单项10050" in item and "任务255、256" in item for item in current_release)
-    assert any("如何验证｜" in item and "TM20260818002" in item and "7200片" in item for item in current_release)
-    assert any("如何验证｜" in item and "1350张" in item and "一开四" in item for item in current_release)
-    assert any("如何验证｜" in item and "already_applied" in item and "生产任务总数" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.172" in item and "de39v8x9z28" in item for item in current_release)
+    assert any("本次更新｜" in item and "删除显示" in item and "业务快照" in item for item in current_release)
+    assert any("本次更新｜" in item and "50只/捆" in item and "尾张" in item for item in current_release)
+    assert any("本次更新｜" in item and "40×30" in item and "重叠" in item for item in current_release)
+    assert any("本次更新｜" in item and "补打不漂移" in item and "无数据库迁移" in item for item in current_release)
+    assert any("如何验证｜" in item and "已隐藏列表" in item and "产品名称" in item for item in current_release)
+    assert any("如何验证｜" in item and "50只/捆" in item and "50只" in item for item in current_release)
+    assert any("如何验证｜" in item and "冻结布局" in item and "旧作业" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.173" in item and "de39v8x9z28" in item for item in current_release)
+    assert any(item.startswith("v0.22.172：本次更新｜") and "Z.001.000205" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.172：如何验证｜") and "v0.22.172" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.171：本次更新｜") and "部分送货" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.171：如何验证｜") and "v0.22.171" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.170：本次更新｜") and "真实档案" in item for item in APP_CHANGELOG)
@@ -292,7 +294,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.172" in item and "de39" in item
+        "如何验证｜" in item and "v0.22.173" in item and "de39" in item
         for item in current_release
     )
     assert any(

@@ -37,7 +37,7 @@ def test_factory_update_reports_current_release_version() -> None:
     )
 
     assert APP_VERSION == "v0.22.173"
-    assert APP_VERSION_NAME == "生产标签元素隐藏与数量说明编辑"
+    assert APP_VERSION_NAME == "组合父件送货单打印完整显示"
     assert APP_BUILD_DATE == "2026-08-25"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,13 +49,13 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "删除显示" in item and "业务快照" in item for item in current_release)
-    assert any("本次更新｜" in item and "50只/捆" in item and "尾张" in item for item in current_release)
-    assert any("本次更新｜" in item and "40×30" in item and "重叠" in item for item in current_release)
-    assert any("本次更新｜" in item and "补打不漂移" in item and "无数据库迁移" in item for item in current_release)
-    assert any("如何验证｜" in item and "已隐藏列表" in item and "产品名称" in item for item in current_release)
-    assert any("如何验证｜" in item and "50只/捆" in item and "50只" in item for item in current_release)
-    assert any("如何验证｜" in item and "冻结布局" in item and "旧作业" in item for item in current_release)
+    assert any("本次更新｜" in item and "DeliveryItem" in item and "普通产品" in item for item in current_release)
+    assert any("本次更新｜" in item and "单向覆盖" in item and "父件" in item for item in current_release)
+    assert any("本次更新｜" in item and "子件交付" in item and "生产BOM" in item for item in current_release)
+    assert any("本次更新｜" in item and "P1-104" in item and "v0.22.174" in item and "无数据库迁移" in item for item in current_release)
+    assert any("如何验证｜" in item and "Z.001.000206" in item and "Z.001.000205" in item for item in current_release)
+    assert any("如何验证｜" in item and "列表、详情、打印和汇总" in item and "1000" in item for item in current_release)
+    assert any("如何验证｜" in item and "子件交付" in item and "普通产品" in item for item in current_release)
     assert any("如何验证｜" in item and "v0.22.173" in item and "de39v8x9z28" in item for item in current_release)
     assert any(item.startswith("v0.22.172：本次更新｜") and "Z.001.000205" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.172：如何验证｜") and "v0.22.172" in item for item in APP_CHANGELOG)

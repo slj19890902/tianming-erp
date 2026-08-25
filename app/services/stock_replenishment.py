@@ -1050,6 +1050,11 @@ def receive_replenishment_item(
                     else "补库来料转半成品库存"
                 ),
                 allow_raw_material_staging=True,
+                expected_layout_version=(
+                    int(destination.floor3_layout.version)
+                    if destination.floor3_layout is not None
+                    else None
+                ),
                 **common,
             )
             if customer_board_preparation:

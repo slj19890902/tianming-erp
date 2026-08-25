@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 import hashlib
 from pathlib import Path
@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 
 @pytest.fixture()
-def stock_replenishment_app(tmp_path: Path):
+def stock_replenishment_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.incoming import router as incoming_router
@@ -31,11 +31,24 @@ def stock_replenishment_app(tmp_path: Path):
     from app.models.supplier import Supplier, SupplierAlias
     from app.models.user import User
     from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
         WarehouseArea,
+        WarehouseAreaStoragePolicy,
         WarehouseFloor,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
         WarehouseLocation,
     )
     from app.services.supplier_master import normalize_supplier_identity
+
+    monkeypatch.setattr(
+        "app.services.location_candidates.load_warehouse_twin_published_floor_identity",
+        lambda _floor_number: {
+            "revision": "stock-replenishment-map-v1",
+            "zones_by_id": {"stock-replenishment-zone-a1": "A1"},
+            "zone_ids_by_area": {"A1": ("stock-replenishment-zone-a1",)},
+        },
+    )
 
     engine = create_sqlite_engine(tmp_path / "stock-replenishment.sqlite3")
     Base.metadata.create_all(engine)
@@ -109,21 +122,30 @@ def stock_replenishment_app(tmp_path: Path):
         )
         session.add(floor1)
         session.flush()
-        session.add_all(
-            [
-                WarehouseArea(
-                    floor_id=floor1.id,
-                    area_code="A1",
-                    area_name="A1原料暂存区",
-                    construction_status="enabled",
-                ),
-                WarehouseArea(
-                    floor_id=floor1.id,
-                    area_code="A2",
-                    area_name="A2正式库存区",
-                    construction_status="enabled",
-                ),
-            ]
+        area_a1 = WarehouseArea(
+            floor_id=floor1.id,
+            area_code="A1",
+            area_name="A1原料暂存区",
+            construction_status="enabled",
+        )
+        area_a2 = WarehouseArea(
+            floor_id=floor1.id,
+            area_code="A2",
+            area_name="A2正式库存区",
+            construction_status="enabled",
+        )
+        session.add_all([area_a1, area_a2])
+        session.flush()
+        session.add(
+            WarehouseAreaStoragePolicy(
+                area_id=area_a1.id,
+                map_feature_id="stock-replenishment-zone-a1",
+                allowed_inventory_types_json='["semi_finished","shared"]',
+                storage_layout="pallet_ground",
+                status="published",
+                published_map_revision="stock-replenishment-map-v1",
+                version=1,
+            )
         )
         locations = [
             WarehouseLocation(
@@ -169,10 +191,57 @@ def stock_replenishment_app(tmp_path: Path):
                 area_code="A1",
                 storage_type="ground",
                 placement_status="placed",
+                source_version="TWIN_V1",
                 is_active=True,
             ),
         ]
         session.add_all([product, *locations])
+        session.flush()
+        staging = locations[-1]
+        session.add(
+            Floor3LocationLayout(
+                location_id=staging.id,
+                left_pct=Decimal("10"),
+                top_pct=Decimal("10"),
+                width_pct=Decimal("8"),
+                height_pct=Decimal("8"),
+                source_type="seeded",
+            )
+        )
+        ground_plan = WarehouseGroundLayoutPlan(
+            area_id=area_a1.id,
+            status="published",
+            target_slot_count=1,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="stock-replenishment-map-v1",
+            published_map_revision="stock-replenishment-map-v1",
+            preview_fingerprint="a" * 64,
+            version=1,
+            publish_idempotency_key="stock-replenishment-ground-v1",
+            publish_request_hash="b" * 64,
+            updated_by=user.id,
+            published_by=user.id,
+            published_at=datetime.now(),
+        )
+        session.add(ground_plan)
+        session.flush()
+        session.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=ground_plan.id,
+                location_id=staging.id,
+                route_sequence=1,
+                row_no=1,
+                slot_no=1,
+                x_mm=Decimal("1000"),
+                y_mm=Decimal("1000"),
+                width_mm=1200,
+                depth_mm=1000,
+            )
+        )
         session.commit()
 
     app = FastAPI()

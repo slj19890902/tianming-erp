@@ -53,6 +53,7 @@ from app.models.production import (
     ProductionStockTransfer,
     ProductionTask,
 )
+from app.models.production_label_print import ProductionPackagingLabelPrintJob
 from app.models.requisition import RequisitionItem
 from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryDraft,
@@ -73,6 +74,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.audit_log import append_audit_event
 from app.services.fulfillment_reminders import list_delivery_reminders
 from app.services.location_candidates import is_operational_location
 from app.services.warehouse_floor1_candidate_planner import (
@@ -89,6 +91,25 @@ from app.services.delivery_numbering import (
 from app.services.delivery_snapshots import (
     build_order_delivery_snapshot,
     ensure_order_delivery_snapshot,
+)
+from app.services.delivery_goods_projection import (
+    actual_goods_lines as project_actual_goods_lines,
+    customer_document_fulfillment_mode as resolve_customer_document_fulfillment_mode,
+    delivery_component_lines as project_delivery_component_lines,
+)
+from app.services.production_packaging_label import (
+    ProductionPackagingLabelError,
+    build_delivery_packaging_label_package,
+)
+from app.services.production_packaging_label_layout import (
+    ProductionPackagingLabelLayoutError,
+)
+from app.services.production_label_operations import (
+    ProductionLabelOperationError,
+    latest_printed_delivery_job_metadata,
+    packaging_label_job_response,
+    prepare_delivery_packaging_label_job,
+    production_label_write_guard,
 )
 from app.services.product_specification import (
     product_dimension_specification,
@@ -112,8 +133,6 @@ from app.services.composite_bom_workflow import (
     CompositeBomWorkflowError,
     component_availability,
     delivery_component_required_quantities,
-    delivered_component_quantities,
-    delivery_item_component_quantities,
     effective_component_demands,
     execute_delivery_component_consumption,
     is_composite_order_item,
@@ -539,6 +558,66 @@ class DeliveryUpdate(BaseModel):
             for line in selected:
                 if line.source_type == "finished_stock":
                     line.source_type = "unordered_finished"
+        return self
+
+
+class DeliveryPackagingLabelJobItemRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    selection_key: str = Field(min_length=1, max_length=160)
+    print_label_count: int = Field(ge=0)
+
+    @field_validator("selection_key")
+    @classmethod
+    def validate_selection_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if not re.fullmatch(
+            r"delivery:\d+:item:\d+:(?:parent|product|component:\d+)",
+            normalized,
+        ):
+            raise ValueError("送货标签明细身份无效")
+        return normalized
+
+    @field_validator("print_label_count", mode="before")
+    @classmethod
+    def reject_boolean_count(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("本次打印标签张数必须为整数")
+        return value
+
+
+class DeliveryPackagingLabelJobRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    plan_fingerprint: str = Field(min_length=64, max_length=64)
+    confirmed: Literal[True]
+    items: list[DeliveryPackagingLabelJobItemRequest] = Field(
+        min_length=1,
+        max_length=500,
+    )
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 8:
+            raise ValueError("送货标签幂等键过短")
+        return normalized
+
+    @field_validator("plan_fingerprint")
+    @classmethod
+    def validate_plan_fingerprint(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", normalized):
+            raise ValueError("送货标签计划指纹无效")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_unique_items(self):
+        keys = [item.selection_key for item in self.items]
+        if len(keys) != len(set(keys)):
+            raise ValueError("送货标签明细不能重复")
         return self
 
 
@@ -1764,6 +1843,16 @@ def _delivery_for_user(
     return delivery
 
 
+def _delivery_for_label_user(
+    db: Session,
+    delivery_id: int,
+    user: User,
+) -> Delivery:
+    if not has_permission(user, "orders.view"):
+        raise HTTPException(status_code=403, detail="无产品标签查看权限")
+    return _delivery_for_user(db, delivery_id, user)
+
+
 def _require_order_item_customer_access(
     db: Session,
     order_item_id: int,
@@ -1982,48 +2071,13 @@ def _delivery_component_lines(
     delivery_item_id: int | None = None,
     dispatched: bool = False,
 ) -> list[dict]:
-    demands = effective_component_demands(db, order_item.id)
-    if not demands:
-        return []
-    cumulative = delivered_component_quantities(db, order_item.id)
-    document_quantities = (
-        delivery_item_component_quantities(db, delivery_item_id)
-        if dispatched and delivery_item_id is not None
-        else delivery_component_required_quantities(
-            db,
-            order_item_id=order_item.id,
-            delivery_sets=max(int(planned_delivery_quantity or 0), 0),
-        )
+    return project_delivery_component_lines(
+        db,
+        order_item=order_item,
+        planned_delivery_quantity=planned_delivery_quantity,
+        delivery_item_id=delivery_item_id,
+        dispatched=dispatched,
     )
-    return [
-        {
-            "line_type": "component",
-            "component_snapshot_id": demand.snapshot_id,
-            "component_product_id": demand.component_product_id,
-            "product_code": demand.component_code,
-            "product_name": demand.component_name,
-            "specification": demand.specification,
-            "unit": "PCS",
-            "quantity_per_set": demand.quantity_per_set,
-            "target_quantity": demand.required_piece_quantity,
-            "delivered_quantity": cumulative.get(demand.snapshot_id, 0),
-            "remaining_quantity": max(
-                demand.required_piece_quantity
-                - cumulative.get(demand.snapshot_id, 0),
-                0,
-            ),
-            "planned_delivery_quantity": document_quantities.get(
-                demand.snapshot_id,
-                0,
-            ),
-            "pricing_included": False,
-            "show_on_delivery": bool(demand.show_on_delivery),
-            "pricing_note": "套内组件，不单独计价",
-            "independent_return_receipt": False,
-            "independent_statement": False,
-        }
-        for demand in demands
-    ]
 
 
 def _actual_goods_lines(
@@ -2036,39 +2090,15 @@ def _actual_goods_lines(
     component_lines: list[dict],
     fulfillment_mode: str = "component_delivery",
 ) -> list[dict]:
-    if fulfillment_mode == "component_delivery":
-        return [
-            {
-                "line_type": "component",
-                "order_item_id": order_item_id,
-                "component_snapshot_id": component["component_snapshot_id"],
-                "product_code": component["product_code"],
-                "product_name": component["product_name"],
-                "specification": component["specification"],
-                "unit": component["unit"],
-                "quantity": component["planned_delivery_quantity"],
-                "pricing_included": False,
-                "independent_return_receipt": False,
-                "independent_statement": False,
-            }
-            for component in component_lines
-            if int(component["planned_delivery_quantity"] or 0) > 0
-        ]
-    return [
-        {
-            "line_type": "parent",
-            "order_item_id": order_item_id,
-            "component_snapshot_id": None,
-            "product_code": product_code,
-            "product_name": product_name,
-            "specification": specification,
-            "unit": "PCS",
-            "quantity": max(int(parent_quantity or 0), 0),
-            "pricing_included": True,
-            "independent_return_receipt": True,
-            "independent_statement": True,
-        }
-    ]
+    return project_actual_goods_lines(
+        order_item_id=order_item_id,
+        product_code=product_code,
+        product_name=product_name,
+        specification=specification,
+        parent_quantity=parent_quantity,
+        component_lines=component_lines,
+        fulfillment_mode=fulfillment_mode,
+    )
 
 
 def _customer_document_fulfillment_mode(
@@ -2085,9 +2115,10 @@ def _customer_document_fulfillment_mode(
     back to component delivery never expands an order that was frozen as parent.
     """
 
-    if "parent_delivery" in {frozen_order_mode, current_product_mode}:
-        return "parent_delivery"
-    return "component_delivery"
+    return resolve_customer_document_fulfillment_mode(
+        frozen_order_mode=frozen_order_mode,
+        current_product_mode=current_product_mode,
+    )
 
 
 def _delivery_document_goods_lines(
@@ -4606,6 +4637,11 @@ def _delivery_deletion_facts(
         db,
         delivery,
     )
+    label_job_at = db.scalar(
+        select(func.min(ProductionPackagingLabelPrintJob.created_at)).where(
+            ProductionPackagingLabelPrintJob.delivery_id == delivery.id
+        )
+    )
     history_times = [
         delivery.ever_dispatched_at,
         movement_at,
@@ -4627,7 +4663,8 @@ def _delivery_deletion_facts(
         "receipt": receipt,
         "statement_item_id": statement_item_id,
         "history_at": min(history_times) if history_times else None,
-        "has_history": bool(history_times),
+        "has_history": bool(history_times) or label_job_at is not None,
+        "label_job_at": label_job_at,
     }
 
 
@@ -7864,6 +7901,213 @@ def update_delivery(
         raise
 
 
+@router.get("/{delivery_id}/production-packaging-label-package")
+def get_delivery_production_packaging_label_package(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    delivery = _delivery_for_label_user(db, delivery_id, user)
+    try:
+        package = build_delivery_packaging_label_package(db, delivery)
+    except (
+        ProductionPackagingLabelError,
+        ProductionPackagingLabelLayoutError,
+    ) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if package["review_required"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "delivery_label_review_required",
+                "message": "送货产品标签计划需要核对",
+                "reasons": package["review_messages"],
+            },
+        )
+    if not package["label_count"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "delivery_label_not_enabled",
+                "message": "该送货单没有在常用箱中勾选打印标签的产品",
+                "excluded_items": package.get("excluded_items") or [],
+            },
+        )
+    package["latest_printed_job"] = latest_printed_delivery_job_metadata(
+        db,
+        delivery.id,
+    )
+    return package
+
+
+@router.get("/{delivery_id}/production-packaging-label-latest-job")
+def get_delivery_latest_production_packaging_label_job(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    delivery = _delivery_for_label_user(db, delivery_id, user)
+    latest = latest_printed_delivery_job_metadata(db, delivery.id)
+    if latest is None:
+        raise HTTPException(
+            status_code=404,
+            detail="该送货单没有已登记打印的产品标签作业",
+        )
+    return {"delivery_id": int(delivery.id), "latest_printed_job": latest}
+
+
+@router.post("/{delivery_id}/production-packaging-label-jobs")
+def post_delivery_production_packaging_label_job(
+    delivery_id: int,
+    payload: DeliveryPackagingLabelJobRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    delivery = _delivery_for_label_user(db, delivery_id, user)
+    is_reprint = (
+        latest_printed_delivery_job_metadata(db, delivery.id) is not None
+    )
+    try:
+        result = prepare_delivery_packaging_label_job(
+            db,
+            delivery=delivery,
+            idempotency_key=payload.idempotency_key,
+            expected_plan_fingerprint=payload.plan_fingerprint,
+            requested_print_counts={
+                item.selection_key: item.print_label_count
+                for item in payload.items
+            },
+            operator_id=user.id,
+        )
+        if not result.replayed:
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="delivery",
+                action_code="delivery.packaging_label_job.prepared",
+                legacy_action="PREPARE_DELIVERY_LABEL_JOB",
+                resource="ProductionPackagingLabelPrintJob",
+                actor=user,
+                entity_type="production_packaging_label_print_job",
+                entity_id=result.job.id,
+                object_ref=(
+                    f"production_packaging_label_print_job:{result.job.id}"
+                ),
+                batch_id=result.job.idempotency_key,
+                description="冻结送货产品标签打印作业",
+                details={
+                    "delivery_id": delivery.id,
+                    "delivery_number": delivery.delivery_number,
+                    "template_version": result.job.template_version,
+                    "label_policy_source": result.package.get(
+                        "label_policy_source"
+                    ),
+                    "is_reprint": is_reprint,
+                    "plan_fingerprint": result.job.plan_fingerprint,
+                    "payload_hash": result.job.payload_hash,
+                    "layout_version": (
+                        (result.package.get("label_layout") or {}).get("version")
+                    ),
+                    "layout_hash": (
+                        (result.package.get("label_layout") or {}).get(
+                            "layout_hash"
+                        )
+                    ),
+                    "label_count": result.package.get("label_count"),
+                    "system_label_count": result.package.get(
+                        "system_label_count"
+                    ),
+                    "print_selection": result.package.get("print_selection"),
+                    "fulfillment_modes": sorted(
+                        {
+                            str(plan.get("fulfillment_mode") or "")
+                            for plan in result.package.get("plans") or []
+                        }
+                    ),
+                    "lines": [
+                        {
+                            "selection_key": plan.get("selection_key"),
+                            "delivery_item_id": plan.get("delivery_item_id"),
+                            "order_item_id": plan.get("order_item_id"),
+                            "component_snapshot_id": plan.get(
+                                "component_snapshot_id"
+                            ),
+                            "product_id": plan.get("product_id"),
+                            "product_code": plan.get("product_code"),
+                            "product_name": plan.get("product_name"),
+                            "total_quantity": plan.get("total_quantity"),
+                            "units_per_label": plan.get("units_per_label"),
+                            "print_label_count": plan.get(
+                                "print_label_count",
+                                plan.get("label_count"),
+                            ),
+                            "fulfillment_mode": plan.get("fulfillment_mode"),
+                        }
+                        for plan in result.package.get("plans") or []
+                        if isinstance(plan, dict)
+                    ],
+                },
+            )
+        db.commit()
+        return packaging_label_job_response(
+            result.job,
+            result.package,
+            replayed=result.replayed,
+        )
+    except (
+        ProductionPackagingLabelError,
+        ProductionPackagingLabelLayoutError,
+    ) as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ProductionLabelOperationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        repeated = db.scalar(
+            select(ProductionPackagingLabelPrintJob).where(
+                ProductionPackagingLabelPrintJob.idempotency_key
+                == payload.idempotency_key
+            )
+        )
+        if repeated is not None:
+            try:
+                replay = prepare_delivery_packaging_label_job(
+                    db,
+                    delivery=_delivery_for_label_user(db, delivery_id, user),
+                    idempotency_key=payload.idempotency_key,
+                    expected_plan_fingerprint=payload.plan_fingerprint,
+                    requested_print_counts={
+                        item.selection_key: item.print_label_count
+                        for item in payload.items
+                    },
+                    operator_id=user.id,
+                )
+                db.commit()
+                return packaging_label_job_response(
+                    replay.job,
+                    replay.package,
+                    replayed=True,
+                )
+            except ProductionLabelOperationError as replay_error:
+                db.rollback()
+                raise HTTPException(
+                    status_code=replay_error.status_code,
+                    detail=str(replay_error),
+                ) from replay_error
+        raise HTTPException(
+            status_code=409,
+            detail="送货标签打印作业已被其他请求创建，请刷新后重试",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.delete("/{delivery_id}")
 def delete_delivery(
     delivery_id: int,
@@ -7964,13 +8208,19 @@ def delete_delivery(
                 status_code=409,
                 detail="无订单成品送货库存尚未全部退回原批次，不能作废",
             )
+        has_delivery_history = facts["history_at"] is not None
+        has_label_only_history = (
+            not has_delivery_history and facts["label_job_at"] is not None
+        )
         _discard_delivery_pick_task(
             db,
             delivery_id=delivery_id,
             user=user,
             reason=(
                 "delivery_voided_after_cancel"
-                if facts["has_history"]
+                if has_delivery_history
+                else "delivery_voided_with_label_history"
+                if has_label_only_history
                 else "送货草稿被删除"
             ),
         )
@@ -7989,7 +8239,6 @@ def delete_delivery(
                     ever_dispatched_at=func.coalesce(
                         Delivery.ever_dispatched_at,
                         facts["history_at"],
-                        voided_at,
                     ),
                     printed_by=None,
                     printed_at=None,
@@ -8014,7 +8263,11 @@ def delete_delivery(
             _write_audit(
                 db,
                 user=user,
-                action="VOID_AFTER_CANCEL",
+                action=(
+                    "VOID_AFTER_CANCEL"
+                    if has_delivery_history
+                    else "VOID_WITH_LABEL_HISTORY"
+                ),
                 resource="Delivery",
                 entity_id=delivery.id,
                 details={
@@ -8032,8 +8285,17 @@ def delete_delivery(
                     "return_receipt_status": (
                         receipt.status if receipt is not None else None
                     ),
+                    "label_job_at": (
+                        utc_naive_to_api(facts["label_job_at"])
+                        if facts["label_job_at"] is not None
+                        else None
+                    ),
                 },
-                description="作废已取消发货的送货单并保留库存及审计记录",
+                description=(
+                    "作废已取消发货的送货单并保留库存及审计记录"
+                    if has_delivery_history
+                    else "作废已有产品标签历史的待发货送货单并保留审计记录"
+                ),
             )
             db.commit()
             return {

@@ -11,7 +11,9 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import utc_naive_to_api, utc_now_naive
+from app.models.customer import Customer
 from app.models.order import OrderItem
+from app.models.delivery import Delivery
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.production import ProductionCompletion, ProductionTask
@@ -33,8 +35,10 @@ from app.services.production_label_strategy import (
 )
 from app.services.production_packaging_label import (
     ProductionPackagingLabelError,
+    apply_delivery_packaging_label_print_counts,
     apply_packaging_label_print_counts,
     build_composite_requisition_packaging_label_package,
+    build_delivery_packaging_label_package,
     build_supplier_requisition_packaging_label_package,
 )
 from app.services.warehouse_inventory import active_finished_reserved_qty
@@ -174,6 +178,40 @@ def _claim_product_version(
     if product is None or int(product.version) != int(expected_version):
         raise ProductionLabelOperationError("常用箱产品版本已变化，请刷新后重试")
     return product
+
+
+def _claim_customer_version(
+    db: Session,
+    *,
+    customer_id: int,
+    expected_version: int,
+) -> Customer:
+    try:
+        result = db.execute(
+            update(Customer)
+            .where(
+                Customer.id == int(customer_id),
+                Customer.version == int(expected_version),
+            )
+            .values(version=Customer.version, updated_at=Customer.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+    except OperationalError as error:
+        if _is_sqlite_busy(error):
+            raise ProductionLabelOperationError(
+                "客户资料正在被其他操作更新，请刷新后重试"
+            ) from error
+        raise
+    if result.rowcount != 1:
+        raise ProductionLabelOperationError("客户资料版本已变化，请刷新后重试")
+    customer = db.scalar(
+        select(Customer)
+        .where(Customer.id == int(customer_id))
+        .execution_options(populate_existing=True)
+    )
+    if customer is None or int(customer.version) != int(expected_version):
+        raise ProductionLabelOperationError("客户资料版本已变化，请刷新后重试")
+    return customer
 
 
 def task_label_snapshot(task: ProductionTask) -> dict[str, object]:
@@ -562,6 +600,34 @@ def _validate_job_task_links(
             )
         ).all()
     )
+    if job.delivery_id is not None:
+        plans = package.get("plans") or []
+        keys = [
+            str(plan.get("selection_key") or "")
+            for plan in plans
+            if isinstance(plan, dict)
+        ]
+        label_keys = {
+            str(label.get("selection_key") or "")
+            for label in (package.get("labels") or [])
+            if isinstance(label, dict)
+        }
+        if (
+            links
+            or int(package.get("delivery_id") or 0) != int(job.delivery_id)
+            or not keys
+            or any(not key for key in keys)
+            or len(keys) != len(set(keys))
+            or not label_keys.issubset(set(keys))
+            or any(
+                isinstance(plan, dict) and plan.get("production_task_id") is not None
+                for plan in plans
+            )
+        ):
+            raise ProductionLabelOperationError(
+                "送货标签作业来源校验失败，已停止读取或补打"
+            )
+        return []
     frozen_task_rows = package.get("job_tasks") or package.get("plans") or []
     frozen_plans = {
         int(plan["production_task_id"]): plan
@@ -613,7 +679,10 @@ def _package_plan_product_versions(package: dict) -> dict[int, int]:
     """Return the exact current common-box versions frozen into a new package."""
 
     versions: dict[int, int] = {}
-    for plan in package.get("plans") or []:
+    version_rows = list(package.get("plans") or []) + list(
+        package.get("source_product_versions") or []
+    )
+    for plan in version_rows:
         try:
             product_id = int(plan.get("product_id") or 0)
             product_version = int(plan.get("product_version") or 0)
@@ -656,6 +725,24 @@ def _assert_prepared_job_is_current(
     """Do not let an unprinted draft masquerade as the current label plan."""
 
     if job.status != "prepared":
+        return
+    if job.delivery_id is not None:
+        delivery = db.get(Delivery, job.delivery_id)
+        if delivery is None:
+            raise ProductionLabelOperationError(
+                "未实际打印的送货标签草稿来源已不存在，请重新打开送货单"
+            )
+        try:
+            current_package = build_delivery_packaging_label_package(db, delivery)
+        except ProductionPackagingLabelError as error:
+            raise ProductionLabelOperationError(
+                f"未实际打印的送货标签草稿已过期：{error}"
+            ) from error
+        if current_package.get("plan_fingerprint") != job.plan_fingerprint:
+            raise ProductionLabelOperationError(
+                "未实际打印的送货标签草稿已过期，送货明细、交付模式、"
+                "常用箱标签策略或标签布局已经变化，请重新打开送货单"
+            )
         return
     links = _validate_job_task_links(db, job, package)
     current_task_versions = {
@@ -705,6 +792,9 @@ def packaging_label_job_response(
             int(job.material_requisition_id)
             if job.material_requisition_id is not None
             else None
+        ),
+        "delivery_id": (
+            int(job.delivery_id) if job.delivery_id is not None else None
         ),
         "status": job.status,
         "template_version": job.template_version,
@@ -944,6 +1034,154 @@ def prepare_composite_packaging_label_job(
     return PackagingLabelJobResult(job, package, False)
 
 
+def _claim_delivery_label_source(
+    db: Session,
+    *,
+    delivery_id: int,
+    expected_status: str,
+) -> Delivery:
+    try:
+        claim = db.execute(
+            update(Delivery)
+            .where(
+                Delivery.id == int(delivery_id),
+                Delivery.status == expected_status,
+                Delivery.status.in_(("pending", "dispatched")),
+            )
+            .values(status=Delivery.status)
+            .execution_options(synchronize_session=False)
+        )
+    except OperationalError as error:
+        if _is_sqlite_busy(error):
+            raise ProductionLabelOperationError(
+                "送货单正在被其他操作更新，请刷新后重试"
+            ) from error
+        raise
+    if claim.rowcount != 1:
+        raise ProductionLabelOperationError("送货单状态已变化，请刷新后重试")
+    delivery = db.scalar(
+        select(Delivery)
+        .where(Delivery.id == int(delivery_id))
+        .execution_options(populate_existing=True)
+    )
+    if delivery is None or delivery.status != expected_status:
+        raise ProductionLabelOperationError("送货单状态已变化，请刷新后重试")
+    return delivery
+
+
+def _claim_delivery_package_customer(db: Session, package: dict) -> None:
+    try:
+        customer_id = int(package.get("customer_id") or 0)
+        customer_version = int(package.get("customer_version") or 0)
+    except (TypeError, ValueError):
+        customer_id = 0
+        customer_version = 0
+    if customer_id <= 0 or customer_version <= 0:
+        raise ProductionLabelOperationError(
+            "送货标签计划缺少客户资料版本，请刷新后重试"
+        )
+    _claim_customer_version(
+        db,
+        customer_id=customer_id,
+        expected_version=customer_version,
+    )
+
+
+def prepare_delivery_packaging_label_job(
+    db: Session,
+    *,
+    delivery: Delivery,
+    idempotency_key: str,
+    expected_plan_fingerprint: str,
+    requested_print_counts: dict[str, int] | None = None,
+    operator_id: int,
+) -> PackagingLabelJobResult:
+    key = idempotency_key.strip()
+    normalized_counts = (
+        {str(selection_key): value for selection_key, value in requested_print_counts.items()}
+        if requested_print_counts is not None
+        else None
+    )
+    request_hash = _canonical_hash(
+        {
+            "delivery_id": int(delivery.id),
+            "idempotency_key": key,
+            "plan_fingerprint": expected_plan_fingerprint,
+            "print_counts": (
+                [[selection_key, normalized_counts[selection_key]] for selection_key in sorted(normalized_counts)]
+                if normalized_counts is not None
+                else "all_planned"
+            ),
+        }
+    )
+    repeated = db.scalar(
+        select(ProductionPackagingLabelPrintJob).where(
+            ProductionPackagingLabelPrintJob.idempotency_key == key
+        )
+    )
+    if repeated is not None:
+        if repeated.request_hash != request_hash or repeated.operator_id != operator_id:
+            raise ProductionLabelOperationError("幂等键已用于不同的送货标签打印作业")
+        repeated_package = _load_job_package(repeated, db)
+        _assert_prepared_job_is_current(db, repeated, repeated_package)
+        return PackagingLabelJobResult(repeated, repeated_package, True)
+
+    package = build_delivery_packaging_label_package(db, delivery)
+    if package.get("review_required"):
+        raise ProductionLabelOperationError(
+            "送货标签计划需要核对："
+            + "；".join(str(value) for value in package.get("review_messages") or [])
+        )
+    if not package.get("label_count"):
+        raise ProductionLabelOperationError(
+            "该送货单没有在常用箱中勾选打印标签的产品"
+        )
+    if package.get("plan_fingerprint") != expected_plan_fingerprint:
+        raise ProductionLabelOperationError("送货标签计划已变化，请刷新预览后重试")
+    if normalized_counts is None:
+        normalized_counts = {
+            str(plan["selection_key"]): int(plan["label_count"])
+            for plan in package.get("plans") or []
+        }
+
+    delivery = _claim_delivery_label_source(
+        db,
+        delivery_id=int(delivery.id),
+        expected_status=str(package.get("delivery_status") or ""),
+    )
+    _claim_delivery_package_customer(db, package)
+    _claim_package_product_versions(db, package)
+    package = build_delivery_packaging_label_package(db, delivery)
+    if package.get("plan_fingerprint") != expected_plan_fingerprint:
+        raise ProductionLabelOperationError("送货标签计划已变化，请刷新预览后重试")
+    try:
+        package = apply_delivery_packaging_label_print_counts(
+            package,
+            normalized_counts,
+        )
+    except ProductionPackagingLabelError as error:
+        raise ProductionLabelOperationError(str(error)) from error
+
+    frozen_json = _canonical_json(package)
+    payload_hash = sha256(frozen_json.encode("utf-8")).hexdigest()
+    job = ProductionPackagingLabelPrintJob(
+        supplier_order_id=None,
+        material_requisition_id=None,
+        delivery_id=int(delivery.id),
+        idempotency_key=key,
+        request_hash=request_hash,
+        operator_id=operator_id,
+        template_version=str(package["template_version"]),
+        plan_fingerprint=expected_plan_fingerprint,
+        payload_json=frozen_json,
+        payload_hash=payload_hash,
+        status="prepared",
+    )
+    db.add(job)
+    db.flush()
+    return PackagingLabelJobResult(job, package, False)
+
+
 def get_packaging_label_job(
     db: Session,
     job_id: int,
@@ -979,28 +1217,43 @@ def confirm_packaging_label_job_printed(
         raise ProductionLabelOperationError("只有待确认的标签打印作业可以登记实际打印")
 
     links = _validate_job_task_links(db, job, package)
-    task_ids = [int(link.production_task_id) for link in links]
-    if not task_ids:
-        raise ProductionLabelOperationError(
-            "打印作业没有关联生产任务，不能登记实际打印"
+    if job.delivery_id is not None:
+        delivery = _claim_delivery_label_source(
+            db,
+            delivery_id=int(job.delivery_id),
+            expected_status=str(package.get("delivery_status") or ""),
         )
-    frozen_task_rows = package.get("job_tasks") or package.get("plans") or []
-    frozen_plans = {
-        int(plan["production_task_id"]): plan
-        for plan in frozen_task_rows
-    }
-    _claim_task_versions(
-        db,
-        {
-            task_id: int(frozen_plans[task_id]["production_task_version"])
-            for task_id in task_ids
-        },
-        conflict_message=(
-            "打印作业准备后标签计划已变化，"
-            "不能登记旧预览为实际打印"
-        ),
-    )
-    _claim_package_product_versions(db, package)
+        _claim_delivery_package_customer(db, package)
+        _claim_package_product_versions(db, package)
+        current_package = build_delivery_packaging_label_package(db, delivery)
+        if current_package.get("plan_fingerprint") != job.plan_fingerprint:
+            raise ProductionLabelOperationError(
+                "送货标签作业准备后，送货明细、交付模式、常用箱标签策略"
+                "或标签布局已经变化，不能登记旧预览为实际打印"
+            )
+    else:
+        task_ids = [int(link.production_task_id) for link in links]
+        if not task_ids:
+            raise ProductionLabelOperationError(
+                "打印作业没有关联生产任务，不能登记实际打印"
+            )
+        frozen_task_rows = package.get("job_tasks") or package.get("plans") or []
+        frozen_plans = {
+            int(plan["production_task_id"]): plan
+            for plan in frozen_task_rows
+        }
+        _claim_task_versions(
+            db,
+            {
+                task_id: int(frozen_plans[task_id]["production_task_version"])
+                for task_id in task_ids
+            },
+            conflict_message=(
+                "打印作业准备后标签计划已变化，"
+                "不能登记旧预览为实际打印"
+            ),
+        )
+        _claim_package_product_versions(db, package)
 
     printed_at = utc_now_naive()
     try:
@@ -1083,6 +1336,31 @@ def latest_printed_composite_job_metadata(
         .where(
             ProductionPackagingLabelPrintJob.material_requisition_id
             == material_requisition_id,
+            ProductionPackagingLabelPrintJob.status == "printed",
+        )
+        .order_by(
+            ProductionPackagingLabelPrintJob.printed_at.desc(),
+            ProductionPackagingLabelPrintJob.id.desc(),
+        )
+        .limit(1)
+    )
+    if job is None:
+        return None
+    return {
+        "job_id": int(job.id),
+        "template_version": job.template_version,
+        "printed_at": utc_naive_to_api(job.printed_at) if job.printed_at else None,
+    }
+
+
+def latest_printed_delivery_job_metadata(
+    db: Session,
+    delivery_id: int,
+) -> dict | None:
+    job = db.scalar(
+        select(ProductionPackagingLabelPrintJob)
+        .where(
+            ProductionPackagingLabelPrintJob.delivery_id == int(delivery_id),
             ProductionPackagingLabelPrintJob.status == "printed",
         )
         .order_by(

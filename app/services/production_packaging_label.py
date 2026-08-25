@@ -10,7 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.customer import Customer
-from app.models.order import OrderItem
+from app.models.delivery import Delivery, DeliveryItem
+from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_bom import RequisitionItemBomSource, SalesOrderItemBomComponent
 from app.models.production import ProductionTask
@@ -23,6 +24,15 @@ from app.services.production_label_strategy import (
     CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION,
 )
 from app.services.production_packaging_label_layout import effective_layout
+from app.services.product_specification import (
+    embedded_dimension_specification,
+    resolved_product_specification,
+)
+from app.services.delivery_goods_projection import (
+    actual_goods_lines,
+    customer_document_fulfillment_mode,
+    delivery_component_lines,
+)
 
 
 class ProductionPackagingLabelError(ValueError):
@@ -165,6 +175,415 @@ def apply_packaging_label_print_counts(
         "system_label_count": int(package.get("label_count") or 0),
     }
     return frozen
+
+
+def apply_delivery_packaging_label_print_counts(
+    package: dict,
+    requested_counts: Mapping[str, int],
+) -> dict:
+    """Freeze delivery-label counts by opaque projected-line identity."""
+
+    plans = list(package.get("plans") or [])
+    expected_keys = {str(plan["selection_key"]) for plan in plans}
+    actual_keys = {str(selection_key) for selection_key in requested_counts}
+    if actual_keys != expected_keys:
+        raise ProductionPackagingLabelError(
+            "本次送货标签清单与当前送货单不一致，请刷新后重试"
+        )
+
+    frozen = json.loads(json.dumps(package, ensure_ascii=False, default=str))
+    selected_plans: list[dict] = []
+    selection: list[dict] = []
+    for plan in frozen.get("plans") or []:
+        selection_key = str(plan["selection_key"])
+        system_count = int(plan.get("label_count") or 0)
+        requested = requested_counts[selection_key]
+        if isinstance(requested, bool) or not isinstance(requested, int):
+            raise ProductionPackagingLabelError("本次打印标签张数必须为整数")
+        if requested < 0 or requested > system_count:
+            raise ProductionPackagingLabelError(
+                f"送货标签 {selection_key} 本次打印张数必须在 0～{system_count} 之间"
+            )
+        selection.append(
+            {
+                "selection_key": selection_key,
+                "print_label_count": requested,
+                "system_label_count": system_count,
+            }
+        )
+        if requested == 0:
+            continue
+        plan["system_label_count"] = system_count
+        plan["print_label_count"] = requested
+        selected_plans.append(plan)
+
+    if not selected_plans:
+        raise ProductionPackagingLabelError("本次未选择需要打印的送货标签")
+
+    selected_by_key = {
+        str(plan["selection_key"]): int(plan["print_label_count"])
+        for plan in selected_plans
+    }
+    labels = [
+        label
+        for label in (frozen.get("labels") or [])
+        if str(label["selection_key"]) in selected_by_key
+        and int(label["label_number"])
+        <= selected_by_key[str(label["selection_key"])]
+    ]
+    frozen["system_print_plan_count"] = int(
+        package.get("print_plan_count") or len(plans)
+    )
+    frozen["system_label_count"] = int(
+        package.get("label_count") or len(package.get("labels") or [])
+    )
+    frozen["print_plan_count"] = len(selected_plans)
+    frozen["label_count"] = len(labels)
+    frozen["plans"] = selected_plans
+    frozen["labels"] = labels
+    frozen["print_selection"] = selection
+    frozen["print_summary"] = {
+        "printed_plan_count": len(selected_plans),
+        "print_label_count": len(labels),
+        "system_plan_count": len(plans),
+        "system_label_count": int(package.get("label_count") or 0),
+    }
+    return frozen
+
+
+def build_delivery_packaging_label_package(
+    db: Session,
+    delivery: Delivery,
+) -> dict:
+    """Build labels from the same customer-facing goods projection as delivery PDF.
+
+    A new preview follows the current common-box label policy and the established
+    one-way parent-delivery override.  Preparing a print job freezes the exact
+    projected rows, product versions, quantities, and released layout.
+    """
+
+    if delivery.status == "voided":
+        raise ProductionPackagingLabelError("已作废送货单不能创建产品标签")
+    if delivery.status not in {"pending", "dispatched"}:
+        raise ProductionPackagingLabelError("当前送货单状态不能创建产品标签")
+
+    customer = db.get(Customer, delivery.customer_id)
+    if customer is None:
+        raise ProductionPackagingLabelError("送货单客户不存在，不能创建产品标签")
+    template_version = CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
+    customer_label_fields = _customer_label_fields(
+        template_version,
+        customer.chinese_short_name,
+    )
+    delivery_items = list(
+        db.scalars(
+            select(DeliveryItem)
+            .where(DeliveryItem.delivery_id == delivery.id)
+            .order_by(DeliveryItem.id)
+        ).all()
+    )
+    if not delivery_items:
+        raise ProductionPackagingLabelError("送货单没有可打印的产品明细")
+
+    order_item_ids = {
+        int(item.order_item_id)
+        for item in delivery_items
+        if item.order_item_id is not None
+    }
+    order_items = {
+        int(item.id): item
+        for item in (
+            db.scalars(select(OrderItem).where(OrderItem.id.in_(order_item_ids))).all()
+            if order_item_ids
+            else []
+        )
+    }
+    order_ids = {int(item.order_id) for item in order_items.values()}
+    orders = {
+        int(order.id): order
+        for order in (
+            db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
+            if order_ids
+            else []
+        )
+    }
+
+    projected_rows: list[dict] = []
+    review_messages: list[str] = []
+    source_product_versions: dict[int, int] = {}
+    for delivery_item in delivery_items:
+        if delivery_item.source_type == "unordered_finished":
+            direct_product = (
+                db.get(Product, delivery_item.product_id)
+                if delivery_item.product_id is not None
+                else None
+            )
+            if direct_product is not None:
+                source_product_versions[int(direct_product.id)] = int(
+                    direct_product.version
+                )
+            projected_rows.append(
+                {
+                    "line_type": "product",
+                    "order_item_id": None,
+                    "component_snapshot_id": None,
+                    "source_delivery_item_id": int(delivery_item.id),
+                    "projected_product_id": delivery_item.product_id,
+                    "fulfillment_mode": "single_product",
+                    # Unordered-finished rows are already frozen delivery facts.
+                    # Current Product data may control label enablement/counts, but
+                    # must never silently rename the historical delivered goods.
+                    "product_code": delivery_item.product_code_snapshot,
+                    "product_name": delivery_item.product_name_snapshot,
+                    "specification": resolved_product_specification(
+                        delivery_item.specification_snapshot,
+                        direct_product,
+                    ),
+                    "unit": delivery_item.unit_snapshot,
+                    "quantity": int(delivery_item.delivered_quantity or 0),
+                    "order_numbers": [],
+                    "customer_pos": [],
+                }
+            )
+            continue
+
+        order_item = order_items.get(int(delivery_item.order_item_id or 0))
+        if order_item is None:
+            review_messages.append(
+                f"送货明细 #{delivery_item.id} 的订单明细不存在，请核对"
+            )
+            continue
+        parent_product = db.get(Product, order_item.product_id)
+        if parent_product is not None:
+            source_product_versions[int(parent_product.id)] = int(
+                parent_product.version
+            )
+        current_mode = (
+            parent_product.composite_fulfillment_mode
+            if parent_product is not None
+            else None
+        )
+        component_rows = delivery_component_lines(
+            db,
+            order_item=order_item,
+            planned_delivery_quantity=int(delivery_item.delivered_quantity or 0),
+            delivery_item_id=int(delivery_item.id),
+            dispatched=delivery.status == "dispatched",
+        )
+        is_composite = bool(component_rows) or bool(
+            order_item.is_virtual_composite_parent_snapshot
+        )
+        fulfillment_mode = (
+            customer_document_fulfillment_mode(
+                frozen_order_mode=order_item.composite_fulfillment_mode_snapshot,
+                current_product_mode=current_mode,
+            )
+            if is_composite
+            else "parent_delivery"
+        )
+        rows = actual_goods_lines(
+            order_item_id=int(order_item.id),
+            product_code=delivery_item.product_code_snapshot
+            or order_item.snapshot_product_code,
+            product_name=delivery_item.product_name_snapshot
+            or order_item.snapshot_product_name,
+            specification=(
+                resolved_product_specification(
+                    delivery_item.specification_snapshot,
+                    parent_product,
+                    fallback_snapshots=(order_item.snapshot_spec,),
+                )
+                or embedded_dimension_specification(
+                    parent_product.product_name if parent_product else None
+                )
+            ),
+            parent_quantity=int(delivery_item.delivered_quantity or 0),
+            component_lines=component_rows,
+            fulfillment_mode=fulfillment_mode,
+            source_delivery_item_id=int(delivery_item.id),
+            parent_product_id=order_item.product_id,
+            include_internal_ids=True,
+        )
+        order = orders.get(int(order_item.order_id))
+        for row in rows:
+            row["fulfillment_mode"] = (
+                fulfillment_mode if is_composite else "single_product"
+            )
+            row["order_numbers"] = [order.order_number] if order is not None else []
+            row["customer_pos"] = (
+                [order.customer_po]
+                if order is not None and str(order.customer_po or "").strip()
+                else []
+            )
+        projected_rows.extend(rows)
+
+    plans: list[dict] = []
+    labels: list[dict] = []
+    excluded_items: list[dict] = []
+    for row in projected_rows:
+        delivery_item_id = int(row.get("source_delivery_item_id") or 0)
+        component_snapshot_id = row.get("component_snapshot_id")
+        line_identity = (
+            f"component:{int(component_snapshot_id)}"
+            if component_snapshot_id is not None
+            else str(row.get("line_type") or "product")
+        )
+        selection_key = (
+            f"delivery:{int(delivery.id)}:item:{delivery_item_id}:{line_identity}"
+        )
+        product_id = _positive_int(row.get("projected_product_id"))
+        product = db.get(Product, product_id) if product_id else None
+        if product is None:
+            review_messages.append(
+                f"{row.get('product_code') or selection_key} 没有可回读的常用箱产品，请核对"
+            )
+            continue
+        source_product_versions[int(product.id)] = int(product.version)
+        if not bool(product.production_label_enabled):
+            excluded_items.append(
+                {
+                    "selection_key": selection_key,
+                    "delivery_item_id": delivery_item_id,
+                    "product_id": product_id,
+                    "product_version": int(product.version),
+                    "product_code": row.get("product_code"),
+                    "product_name": row.get("product_name"),
+                    "reason": "常用箱未勾选打印标签",
+                }
+            )
+            continue
+        missing_label_fields = [
+            field_name
+            for field_name, value in (
+                ("存货编码", row.get("product_code")),
+                ("产品名称", row.get("product_name")),
+                ("规格", row.get("specification")),
+            )
+            if not str(value or "").strip()
+        ]
+        if missing_label_fields:
+            review_messages.append(
+                f"{row.get('product_code') or selection_key} 缺少"
+                f"{'、'.join(missing_label_fields)}，请核对送货快照"
+            )
+            continue
+        units_per_label = _positive_int(product.production_label_units_per_label)
+        total_quantity = _positive_int(row.get("quantity"))
+        if not units_per_label or not total_quantity:
+            review_messages.append(
+                f"{row.get('product_code') or selection_key} 的标签数量策略或送货数量不完整，请核对"
+            )
+            continue
+        label_count = ceil(total_quantity / units_per_label)
+        quantities = [
+            min(units_per_label, total_quantity - index * units_per_label)
+            for index in range(label_count)
+        ]
+        plan = {
+            "selection_key": selection_key,
+            "delivery_item_id": delivery_item_id,
+            "order_item_id": row.get("order_item_id"),
+            "component_snapshot_id": component_snapshot_id,
+            "fulfillment_mode": row.get("fulfillment_mode"),
+            "product_id": product_id,
+            "product_version": int(product.version),
+            "label_policy_source": "product_master_current",
+            "template_version": template_version,
+            "customer_id": int(customer.id),
+            "customer_name": customer.name,
+            "customer_code": customer.customer_code,
+            "product_code": row.get("product_code"),
+            "product_name": row.get("product_name"),
+            "specification": row.get("specification"),
+            "order_numbers": list(row.get("order_numbers") or []),
+            "customer_pos": list(row.get("customer_pos") or []),
+            "total_quantity": total_quantity,
+            "units_per_label": units_per_label,
+            "label_count": label_count,
+            "label_quantities": quantities,
+            **customer_label_fields,
+        }
+        plans.append(plan)
+        for index, quantity in enumerate(quantities, start=1):
+            labels.append(
+                {
+                    "selection_key": selection_key,
+                    "delivery_item_id": delivery_item_id,
+                    "order_item_id": row.get("order_item_id"),
+                    "component_snapshot_id": component_snapshot_id,
+                    "fulfillment_mode": row.get("fulfillment_mode"),
+                    "template_version": template_version,
+                    "customer_id": int(customer.id),
+                    "customer_name": customer.name,
+                    "customer_code": customer.customer_code,
+                    "customer_short_name": customer_label_fields[
+                        "customer_short_name"
+                    ],
+                    "product_code": row.get("product_code"),
+                    "product_name": row.get("product_name"),
+                    "specification": row.get("specification"),
+                    "order_numbers": list(row.get("order_numbers") or []),
+                    "customer_pos": list(row.get("customer_pos") or []),
+                    "quantity": quantity,
+                    "total_quantity": total_quantity,
+                    "units_per_label": units_per_label,
+                    "label_number": index,
+                    "label_count": label_count,
+                }
+            )
+
+    label_layout = effective_layout(db)
+    fingerprint_payload = {
+        "delivery_id": int(delivery.id),
+        "delivery_number": delivery.delivery_number,
+        "delivery_status": delivery.status,
+        "plans": plans,
+        "excluded_items": excluded_items,
+        "customer_id": int(customer.id),
+        "customer_version": int(customer.version),
+        "source_product_versions": [
+            {
+                "product_id": product_id,
+                "product_version": source_product_versions[product_id],
+            }
+            for product_id in sorted(source_product_versions)
+        ],
+        "label_layout": label_layout,
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    messages = list(dict.fromkeys(str(value) for value in review_messages if value))
+    return {
+        "delivery_id": int(delivery.id),
+        "delivery_number": delivery.delivery_number,
+        "delivery_status": delivery.status,
+        "status_label": "送货产品标签｜非库存标签",
+        "label_policy_source": "product_master_current",
+        "customer_id": int(customer.id),
+        "customer_version": int(customer.version),
+        "source_product_versions": fingerprint_payload[
+            "source_product_versions"
+        ],
+        "template_version": template_version,
+        "template_dimensions": template_dimensions(template_version),
+        "plan_fingerprint": fingerprint,
+        "print_plan_count": len(plans),
+        "label_count": len(labels),
+        "review_required": bool(messages),
+        "review_messages": messages,
+        "printable": bool(labels) and not messages,
+        "plans": plans,
+        "labels": labels,
+        "excluded_items": excluded_items,
+        "label_layout": label_layout,
+    }
 
 
 def build_supplier_requisition_packaging_label_package(

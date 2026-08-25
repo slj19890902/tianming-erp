@@ -20,6 +20,11 @@ _DIMENSION_SPECIFICATION = re.compile(
     r"(?:\s*[xX×*]\s*(\d+(?:\.\d+)?))?\s*(?:mm)?\s*$",
     re.IGNORECASE,
 )
+_EMBEDDED_DIMENSION_SPECIFICATION = re.compile(
+    r"(?<!\d)(\d+(?:\.\d+)?)\s*[xX×*]\s*(\d+(?:\.\d+)?)"
+    r"(?:\s*[xX×*]\s*(\d+(?:\.\d+)?))?\s*(?:mm)?(?!\d)",
+    re.IGNORECASE,
+)
 
 
 def _positive_decimal(value: Any) -> Decimal | None:
@@ -76,6 +81,16 @@ def normalized_specification_text(value: Any) -> str | None:
     match = _DIMENSION_SPECIFICATION.fullmatch(text)
     if match is None:
         return text
+    dimensions = [Decimal(part) for part in match.groups() if part is not None]
+    return "×".join(_compact_decimal(part) for part in dimensions) + "mm"
+
+
+def embedded_dimension_specification(value: Any) -> str | None:
+    """Read an explicitly written 2D/3D size from descriptive source text."""
+
+    match = _EMBEDDED_DIMENSION_SPECIFICATION.search(str(value or ""))
+    if match is None:
+        return None
     dimensions = [Decimal(part) for part in match.groups() if part is not None]
     return "×".join(_compact_decimal(part) for part in dimensions) + "mm"
 

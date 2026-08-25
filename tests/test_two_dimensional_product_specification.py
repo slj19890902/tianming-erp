@@ -6,6 +6,7 @@ import subprocess
 
 from app.services.product_specification import (
     dimension_specification,
+    embedded_dimension_specification,
     normalized_specification_text,
     resolved_product_specification,
 )
@@ -52,6 +53,14 @@ def test_pure_dimension_snapshots_are_normalized_without_rewriting_custom_text()
     assert normalized_specification_text("778x1137") == "778×1137mm"
     assert normalized_specification_text("520*350*300 mm") == "520×350×300mm"
     assert normalized_specification_text("客户冻结规格 26×45") == "客户冻结规格 26×45"
+
+
+def test_explicit_dimensions_can_be_recovered_from_descriptive_product_text() -> None:
+    assert (
+        embedded_dimension_specification("30入装格挡,规格 ：1139*778*102")
+        == "1139×778×102mm"
+    )
+    assert embedded_dimension_specification("普通产品名称") is None
 
 
 def test_common_box_frontend_does_not_require_height_for_specification() -> None:

@@ -411,6 +411,19 @@ def test_reported_composite_components_keep_task_and_current_label_printing(
             parent.production_label_enabled = True
             parent.production_label_units_per_label = 50
             parent.version = int(parent.version) + 1
+            parent_mode_task_package = (
+                build_composite_requisition_production_package(
+                    db,
+                    requisition,
+                    selected_item_ids={item.id for item in items},
+                )
+            )
+            assert parent_mode_task_package["card_count"] == 2
+            assert {
+                component["production_task_id"]
+                for card in parent_mode_task_package["cards"]
+                for component in card["components"]
+            } == {task.id for task in tasks}
             parent_labels = build_composite_requisition_packaging_label_package(
                 db,
                 requisition,

@@ -4037,6 +4037,8 @@
                           <span v-if="deliveryOperationState.action==='assign' && Number(deliveryOperationState.deliveryId)===Number(row.id) && Number(deliveryOperationState.taskId)===Number(row.pick_task?.id)" class="muted">分配中…</span>
                           <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
                           <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickPrint(row)">打印仓库找货单</button>
+                          <button v-if="hasPermission('orders.view')" class="btn small" data-action="print-product-labels" :disabled="deliveryLabelOpenState.busy" @click="openDeliveryProductLabels(row)">{{ deliveryLabelOpenState.busy && Number(deliveryLabelOpenState.deliveryId)===Number(row.id) ? '核验标签中…' : (row.status==='voided' ? '补打产品标签' : '打印产品标签') }}</button>
+                          <a v-if="deliveryLabelRecoveryUrl && Number(deliveryLabelOpenState.deliveryId)===Number(row.id)" class="btn small" :href="deliveryLabelRecoveryUrl" target="_blank" rel="noopener">重新打开标签页</a>
                           <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small success" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : '直接发货打印' }}</button>
                           <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="editDelivery(row)">编辑</button>
                           <button v-if="canDelivery && row.status==='pending'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
@@ -8515,7 +8517,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "", fluteRuleAction:{action:"",ruleId:null},
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, deliveryReminderState:{loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliveryLabelOpenState:{busy:false,deliveryId:null}, deliveryLabelRecoveryUrl:"", deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, deliveryReminderState:{loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -12982,6 +12984,8 @@
             this.deliveryDetailRequestSequence += 1;
             this.deliveryDetailState = {};
             this.expandedDeliveryRows = {};
+            this.deliveryLabelOpenState = {busy:false,deliveryId:null};
+            this.deliveryLabelRecoveryUrl = "";
             this.deliveryReminderState = {loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null};
             this.receiptForm = {items:[],reminder_drafts:[]};
             this.receiptReminderState = {loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null};
@@ -16307,7 +16311,7 @@
           reportedCompositeGroupRows(row) {
             const key = String(row?.composite_group_key || "");
             return key
-              ? (this.requisitionItems || []).filter(item => String(item.composite_group_key || "") === key && item.status === "有效")
+              ? (this.requisitionItems || []).filter(item => String(item.composite_group_key || "") === key && ["有效","已入库"].includes(item.status))
               : [];
           },
           reportedCompositeGroupSelected(row) {
@@ -18827,8 +18831,66 @@
             return false;
           },
           deliveryHasSecondaryRowActions(row) {
-            if (row?.pick_task || row?.status === "dispatched") return true;
+            if (row?.pick_task || row?.status === "dispatched" || this.hasPermission("orders.view")) return true;
             return !!(this.canDelivery && row?.status === "pending");
+          },
+          async openDeliveryProductLabels(row) {
+            if (this.deliveryLabelOpenState.busy) return false;
+            const deliveryId = Number(row?.id || 0);
+            if (!deliveryId) {
+              this.showToast("当前送货单不能打印产品标签", true);
+              return false;
+            }
+            let opened = null;
+            try { opened=window.open("about:blank","_blank"); if(opened) opened.opener=null; } catch(_error) { opened=null; }
+            const liveUrl = `/production-packaging-label.html?delivery_id=${encodeURIComponent(deliveryId)}`;
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.deliveryLabelRecoveryUrl = "";
+            this.deliveryLabelOpenState = {busy:true,deliveryId};
+            try {
+              let url = liveUrl;
+              let historical = false;
+              try {
+                if (row?.status === "voided") throw Object.assign(new Error("历史补打"), {historicalFallback:true});
+                await axios.get(`/api/deliveries/${deliveryId}/production-packaging-label-package`);
+              } catch(error) {
+                const status = Number(error?.response?.status || 0);
+                if (!error?.historicalFallback && status !== 409) throw error;
+                try {
+                  const {data}=await axios.get(`/api/deliveries/${deliveryId}/production-packaging-label-latest-job`);
+                  const jobId=Number(data?.latest_printed_job?.job_id || data?.latest_printed_job?.id || 0);
+                  if (!jobId) throw new Error("送货单没有可补打的历史产品标签作业");
+                  url=`/production-packaging-label.html?job_id=${encodeURIComponent(jobId)}&delivery_id=${encodeURIComponent(deliveryId)}`;
+                  historical=true;
+                } catch(historyError) {
+                  if (error?.historicalFallback) throw historyError;
+                  throw error;
+                }
+              }
+              if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId || this.activePage !== "deliveries") {
+                try { opened?.close(); } catch(_error) {}
+                return false;
+              }
+              if (opened) {
+                try { opened.location.href=url; }
+                catch(_error) { this.deliveryLabelRecoveryUrl=url; }
+              } else this.deliveryLabelRecoveryUrl=url;
+              if (historical) this.showToast("当前规则不能新建标签，已打开最近一次冻结作业补打");
+              if (this.deliveryLabelRecoveryUrl) this.showToast("浏览器阻止了标签页，请点“重新打开标签页”", true);
+              return true;
+            } catch(error) {
+              try { opened?.close(); } catch(_error) {}
+              if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId) return false;
+              const status = Number(error?.response?.status || 0);
+              if (status === 401 || status === 403) this.resetPagePerformanceState();
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (this.authGeneration === authGeneration && (this.user?.id ?? null) === userId) {
+                this.deliveryLabelOpenState = {busy:false,deliveryId};
+              }
+            }
           },
           deliveryPickExceptionText(row) {
             const task = this.normalizeDeliveryPickTask(row);

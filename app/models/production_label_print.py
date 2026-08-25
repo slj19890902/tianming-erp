@@ -103,8 +103,12 @@ class ProductionPackagingLabelPrintJob(Base):
             name="ck_production_packaging_label_print_jobs_status",
         ),
         CheckConstraint(
-            "((supplier_order_id IS NOT NULL AND material_requisition_id IS NULL) OR "
-            "(supplier_order_id IS NULL AND material_requisition_id IS NOT NULL))",
+            "((supplier_order_id IS NOT NULL AND material_requisition_id IS NULL "
+            "AND delivery_id IS NULL) OR "
+            "(supplier_order_id IS NULL AND material_requisition_id IS NOT NULL "
+            "AND delivery_id IS NULL) OR "
+            "(supplier_order_id IS NULL AND material_requisition_id IS NULL "
+            "AND delivery_id IS NOT NULL))",
             name="ck_production_packaging_label_print_jobs_source",
         ),
         CheckConstraint(
@@ -126,6 +130,11 @@ class ProductionPackagingLabelPrintJob(Base):
             "material_requisition_id",
             "created_at",
         ),
+        Index(
+            "ix_production_packaging_label_print_jobs_delivery_created",
+            "delivery_id",
+            "created_at",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -135,6 +144,10 @@ class ProductionPackagingLabelPrintJob(Base):
     )
     material_requisition_id: Mapped[int | None] = mapped_column(
         ForeignKey("material_requisitions.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    delivery_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_deliveries.id", ondelete="RESTRICT"),
         nullable=True,
     )
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)

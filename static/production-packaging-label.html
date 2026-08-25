@@ -27,6 +27,7 @@
     .print-plan-panel { max-width:1120px; margin:14px auto 0; padding:12px; border:1px solid #94a3b8; border-radius:7px; background:#fff; }
     .print-plan-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
     .print-plan-summary { margin-left:auto; color:#0f172a; font-weight:700; }
+    .excluded-items-summary { margin:0 0 8px; padding:7px 9px; border:1px solid #f59e0b; border-radius:4px; background:#fffbeb; color:#78350f; font-size:12px; line-height:1.45; }
     .print-plan-table-wrap { overflow:auto; }
     .print-plan-table { width:100%; border-collapse:collapse; font-size:13px; }
     .print-plan-table th,.print-plan-table td { padding:7px 8px; border:1px solid #cbd5e1; text-align:left; vertical-align:middle; }
@@ -172,9 +173,10 @@
       <button id="allZeroButton" type="button">全部设为 0</button>
       <span id="printPlanSummary" class="print-plan-summary"></span>
     </div>
+    <div id="excludedItemsSummary" class="excluded-items-summary" hidden></div>
     <div class="print-plan-table-wrap">
       <table class="print-plan-table">
-        <thead><tr><th>客户简称</th><th>存货编码</th><th>产品名称</th><th>计划成品只数</th><th>每张只数</th><th>系统计划张数</th><th>本次打印张数</th><th>结果</th></tr></thead>
+        <thead><tr><th>客户简称</th><th>存货编码</th><th>产品名称</th><th id="totalQuantityHeading">计划成品只数</th><th id="unitsPerLabelHeading">每张只数</th><th>系统计划张数</th><th>本次打印张数</th><th>结果</th></tr></thead>
         <tbody id="printPlanBody"></tbody>
       </table>
     </div>
@@ -240,6 +242,7 @@
       const printPlanPanel = document.getElementById("printPlanPanel");
       const printPlanBody = document.getElementById("printPlanBody");
       const printPlanSummary = document.getElementById("printPlanSummary");
+      const excludedItemsSummary = document.getElementById("excludedItemsSummary");
       const allPlannedButton = document.getElementById("allPlannedButton");
       const allZeroButton = document.getElementById("allZeroButton");
       const labelList = document.getElementById("labelList");
@@ -273,9 +276,12 @@
       const layoutPublishButton = document.getElementById("layoutPublishButton");
       const layoutDefaultButton = document.getElementById("layoutDefaultButton");
       const layoutRollbackButton = document.getElementById("layoutRollbackButton");
+      const totalQuantityHeading = document.getElementById("totalQuantityHeading");
+      const unitsPerLabelHeading = document.getElementById("unitsPerLabelHeading");
       const params = new URLSearchParams(window.location.search);
       const supplierOrderId = Number(params.get("id"));
       const compositeBatchId = Number(params.get("batch_id"));
+      const deliveryId = Number(params.get("delivery_id"));
       const compositeItemIds = [...new Set(
         String(params.get("item_ids") || "")
           .split(",")
@@ -283,6 +289,11 @@
           .filter((value) => Number.isInteger(value) && value > 0)
       )].sort((a, b) => a - b);
       const requestedJobId = Number(params.get("job_id"));
+      const deliverySource = Number.isInteger(deliveryId) && deliveryId > 0;
+      if (deliverySource) {
+        totalQuantityHeading.textContent = "送货总数量";
+        unitsPerLabelHeading.textContent = "每张标签数量";
+      }
       let loadGeneration = 0;
       let activeController = null;
       let loadedPackage = null;
@@ -326,6 +337,13 @@
       const roundedMm = (value) => Math.round(Number(value) * 1000) / 1000;
       const clipped = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
       const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+
+      function planSelectionKey(plan) {
+        const explicit = requiredText(plan?.selection_key);
+        if (explicit) return explicit;
+        const taskId = Number(plan?.production_task_id);
+        return positiveInteger(taskId) ? `task:${taskId}` : "";
+      }
 
       function quantityFixedSuffix(element) {
         if (!element || element.id !== "quantity") return "";
@@ -417,8 +435,8 @@
           return detail.map((item) => item && item.msg ? item.msg : String(item)).join("；");
         }
         if (status === 401) return "登录已失效，请回到 ERP 重新登录后再试";
-        if (status === 403) return "没有查看或打印该报料单包装标签的权限";
-        if (status === 404) return "报料单或打印作业不存在";
+        if (status === 403) return "没有查看或打印该来源单据产品标签的权限";
+        if (status === 404) return "报料单、送货单或打印作业不存在";
         if (status === 409) return "标签计划已变化，请重新加载并核对后再打印";
         return `请求失败（HTTP ${status || "网络连接失败"}）`;
       }
@@ -465,7 +483,7 @@
       }
 
       function validatePackage(packageData) {
-        if (!packageData || typeof packageData !== "object" || !Array.isArray(packageData.labels)) {
+        if (!packageData || typeof packageData !== "object" || !Array.isArray(packageData.labels) || !Array.isArray(packageData.plans)) {
           throw new Error("服务器返回的包装标签数据不完整，请重试");
         }
         if (!TEMPLATE_DEFINITIONS[packageData.template_version]) {
@@ -475,9 +493,16 @@
           throw new Error("生产计划已变化或标签快照不完整，请先核对标签计划");
         }
         if (!packageData.labels.length || Number(packageData.label_count) !== packageData.labels.length) {
-          throw new Error("该报料单没有可打印的生产包装标签");
+          throw new Error(packageData.delivery_id ? "该送货单没有可打印的产品标签" : "该报料单没有可打印的生产包装标签");
+        }
+        const planKeys = packageData.plans.map(planSelectionKey);
+        if (planKeys.some((key) => !key) || planKeys.length !== new Set(planKeys).size) {
+          throw new Error("包装标签打印明细身份缺失或重复，已停止打印");
         }
         packageData.labels.forEach((label) => {
+          if (!planKeys.includes(planSelectionKey(label))) {
+            throw new Error("包装标签与打印明细身份不一致，已停止打印");
+          }
           if (![label.quantity, label.total_quantity, label.units_per_label, label.label_number, label.label_count].every(positiveInteger)) {
             throw new Error("包装标签数量快照不完整，已停止打印");
           }
@@ -513,12 +538,22 @@
       function selectedPrintPackage() {
         if (!plannedPackage) return null;
         const selected = deepClone(plannedPackage);
-        const counts = new Map([...printCounts.entries()].map(([key, value]) => [Number(key), Number(value)]));
-        selected.plans = selected.plans.filter((plan) => (counts.get(Number(plan.production_task_id)) || 0) > 0);
-        selected.labels = selected.labels.filter((label) => Number(label.label_number) <= (counts.get(Number(label.production_task_id)) || 0));
+        const counts = new Map([...printCounts.entries()].map(([key, value]) => [String(key), Number(value)]));
+        selected.plans = selected.plans.filter((plan) => (counts.get(planSelectionKey(plan)) || 0) > 0);
+        selected.labels = selected.labels.filter((label) => Number(label.label_number) <= (counts.get(planSelectionKey(label)) || 0));
         selected.label_count = selected.labels.length;
-        selected.production_task_count = selected.plans.length;
+        if (hasOwn(selected, "production_task_count")) selected.production_task_count = selected.plans.length;
+        if (hasOwn(selected, "print_plan_count")) selected.print_plan_count = selected.plans.length;
         return selected;
+      }
+
+      function setPrepareAttemptLocked(locked) {
+        printPlanBody.querySelectorAll(".print-count-input").forEach((input) => { input.disabled = locked; });
+        allPlannedButton.disabled = locked;
+        allZeroButton.disabled = locked;
+        retryButton.disabled = locked;
+        if (locked) layoutButton.disabled = true;
+        else if (!layoutOperationBusy) layoutButton.disabled = false;
       }
 
       function renderSelectedLabels() {
@@ -534,26 +569,27 @@
 
       function renderPrintPlanEditor(packageData) {
         plannedPackage = deepClone(packageData);
-        printCounts = new Map((packageData.plans || []).map((plan) => [Number(plan.production_task_id), Number(plan.label_count)]));
-        printPlanBody.innerHTML = (packageData.plans || []).map((plan) => `<tr data-task-id="${escapeHtml(plan.production_task_id)}">
+        printCounts = new Map((packageData.plans || []).map((plan) => [planSelectionKey(plan), Number(plan.label_count)]));
+        printPlanBody.innerHTML = (packageData.plans || []).map((plan) => `<tr data-selection-key="${escapeHtml(planSelectionKey(plan))}">
           <td>${escapeHtml(plan.customer_short_name || plan.customer_name || "-")}</td>
           <td>${escapeHtml(plan.product_code || "-")}</td>
           <td>${escapeHtml(plan.product_name || "-")}</td>
           <td>${escapeHtml(plan.total_quantity)}</td>
           <td>${escapeHtml(plan.units_per_label)}</td>
           <td>${escapeHtml(plan.label_count)}</td>
-          <td><input class="print-count-input" type="number" inputmode="numeric" min="0" max="${escapeHtml(plan.label_count)}" step="1" value="${escapeHtml(plan.label_count)}" aria-label="${escapeHtml(plan.product_code || plan.production_task_id)}本次打印标签张数"></td>
+          <td><input class="print-count-input" type="number" inputmode="numeric" min="0" max="${escapeHtml(plan.label_count)}" step="1" value="${escapeHtml(plan.label_count)}" aria-label="${escapeHtml(plan.product_code || planSelectionKey(plan))}本次打印标签张数"></td>
           <td class="print-count-result">按计划打印</td>
         </tr>`).join("");
         printPlanBody.querySelectorAll("tr").forEach((row) => {
-          const taskId = Number(row.dataset.taskId);
-          const plan = packageData.plans.find((item) => Number(item.production_task_id) === taskId);
+          const selectionKey = row.dataset.selectionKey;
+          const plan = packageData.plans.find((item) => planSelectionKey(item) === selectionKey);
           const input = row.querySelector(".print-count-input");
           input.addEventListener("input", () => {
+            if (prepareAttempt?.uncertain) return;
             try {
               const count = parsePrintCount(input.value, Number(plan.label_count));
               input.classList.remove("invalid");
-              printCounts.set(taskId, count);
+              printCounts.set(selectionKey, count);
               row.querySelector(".print-count-result").innerHTML = count === 0 ? '<span class="skip-note">本次跳过</span>' : count < Number(plan.label_count) ? `少印 ${Number(plan.label_count) - count} 张` : "按计划打印";
               prepareAttempt = null;
               renderSelectedLabels();
@@ -564,14 +600,20 @@
             }
           });
         });
+        const excluded = Array.isArray(packageData.excluded_items) ? packageData.excluded_items : [];
+        excludedItemsSummary.hidden = excluded.length === 0;
+        excludedItemsSummary.textContent = excluded.length
+          ? `以下产品未进入本次可选标签：${excluded.map((item) => `${requiredText(item.product_code) || "未编码"} ${requiredText(item.product_name) || "未命名"}（${requiredText(item.reason) || "常用箱未启用打印标签"}）`).join("；")}`
+          : "";
         printPlanPanel.hidden = false;
         renderSelectedLabels();
       }
 
       function setAllPrintCounts(mode) {
+        if (prepareAttempt?.uncertain) return;
         printPlanBody.querySelectorAll("tr").forEach((row) => {
-          const taskId = Number(row.dataset.taskId);
-          const plan = plannedPackage.plans.find((item) => Number(item.production_task_id) === taskId);
+          const selectionKey = row.dataset.selectionKey;
+          const plan = plannedPackage.plans.find((item) => planSelectionKey(item) === selectionKey);
           const input = row.querySelector(".print-count-input");
           input.value = mode === "planned" ? String(plan.label_count) : "0";
           input.dispatchEvent(new Event("input", {bubbles:true}));
@@ -725,6 +767,7 @@
           linkParams.set("batch_id", String(compositeBatchId));
           linkParams.set("item_ids", compositeItemIds.join(","));
         }
+        if (Number.isInteger(deliveryId) && deliveryId > 0) linkParams.set("delivery_id", String(deliveryId));
         latestJobLink.href = `${window.location.pathname}?${linkParams.toString()}`;
         latestJobLink.textContent = latest.template_version === LEGACY_TEMPLATE_VERSION
           ? "补打最近 65 × 45 mm 历史作业"
@@ -1035,6 +1078,8 @@
         plannedPackage = null;
         printCounts = new Map();
         printPlanPanel.hidden = true;
+        excludedItemsSummary.hidden = true;
+        excludedItemsSummary.textContent = "";
         printButton.disabled = true;
         confirmPrintedButton.hidden = true;
         latestJobLink.hidden = true;
@@ -1045,6 +1090,10 @@
       }
 
       async function loadPackage() {
+        if (prepareAttempt?.uncertain) {
+          showMessage("上次冻结送货或生产标签作业的结果尚未确认；请只用原按钮重试，系统会复用原张数和原凭证。", "message error");
+          return;
+        }
         const generation = ++loadGeneration;
         if (activeController) activeController.abort();
         activeController = new AbortController();
@@ -1052,14 +1101,18 @@
         const loadingJob = Number.isInteger(requestedJobId) && requestedJobId > 0;
         const loadingSupplier = Number.isInteger(supplierOrderId) && supplierOrderId > 0;
         const loadingComposite = Number.isInteger(compositeBatchId) && compositeBatchId > 0 && compositeItemIds.length > 0;
-        if (!loadingJob && !loadingSupplier && !loadingComposite) {
-          showMessage("报料单编号无效", "message error");
+        const loadingDelivery = Number.isInteger(deliveryId) && deliveryId > 0;
+        const liveSourceCount = [loadingSupplier, loadingComposite, loadingDelivery].filter(Boolean).length;
+        if (!loadingJob && liveSourceCount !== 1) {
+          showMessage(liveSourceCount > 1 ? "标签实时来源冲突，已停止加载" : "报料单或送货单编号无效", "message error");
           return;
         }
         try {
           const url = loadingJob
             ? `/api/requisition/production-packaging-label-jobs/${requestedJobId}`
-            : loadingComposite
+            : loadingDelivery
+              ? `/api/deliveries/${deliveryId}/production-packaging-label-package`
+              : loadingComposite
               ? `/api/requisition/batches/${compositeBatchId}/production-packaging-label-package?item_ids=${encodeURIComponent(compositeItemIds.join(","))}`
               : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package`;
           const payload = await requestJson(url, {method:"GET", signal:activeController.signal});
@@ -1080,38 +1133,79 @@
       }
 
       async function preparePrintJob() {
+        if (prepareAttempt?.uncertain) {
+          setPrepareAttemptLocked(true);
+          try {
+            const payload = await requestJson(prepareAttempt.url, {
+              method:"POST",
+              body:JSON.stringify(prepareAttempt.body),
+            });
+            const normalized = normalizeResponse(payload);
+            if (!normalized.job || !positiveInteger(normalized.job.id)) throw new Error("服务器未返回冻结打印作业编号，已停止打印");
+            prepareAttempt = null;
+            setPrepareAttemptLocked(false);
+            return normalized;
+          } catch (error) {
+            if (!(error instanceof TypeError) && Number(error?.status) < 500) {
+              prepareAttempt = null;
+              setPrepareAttemptLocked(false);
+            }
+            throw error;
+          }
+        }
         const fingerprint = planFingerprint(loadedPackage);
         if (!fingerprint) throw new Error("标签计划缺少校验指纹，已停止创建打印作业；请重新加载");
-        const items = (plannedPackage?.plans || []).map((plan) => ({
+        const isDelivery = Number.isInteger(deliveryId) && deliveryId > 0;
+        const items = (plannedPackage?.plans || []).map((plan) => isDelivery ? ({
+          selection_key:planSelectionKey(plan),
+          print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
+        }) : ({
           production_task_id:Number(plan.production_task_id),
-          print_label_count:parsePrintCount(printCounts.get(Number(plan.production_task_id)), Number(plan.label_count)),
+          print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
         }));
         if (!items.some((item) => item.print_label_count > 0)) throw new Error("本次未选择需要打印的标签");
-        const sourceSignature = Number.isInteger(compositeBatchId) && compositeBatchId > 0
-          ? `composite:${compositeBatchId}:${compositeItemIds.join(",")}`
-          : `supplier:${supplierOrderId}`;
+        const sourceSignature = isDelivery
+          ? `delivery:${deliveryId}`
+          : Number.isInteger(compositeBatchId) && compositeBatchId > 0
+            ? `composite:${compositeBatchId}:${compositeItemIds.join(",")}`
+            : `supplier:${supplierOrderId}`;
         const signature = `${sourceSignature}|${loadedPackage.template_version}|${fingerprint}|${JSON.stringify(items)}`;
         if (!prepareAttempt || prepareAttempt.signature !== signature) {
-          prepareAttempt = {signature, idempotencyKey:newIdempotencyKey("p150c-label-job")};
+          prepareAttempt = {signature, idempotencyKey:newIdempotencyKey("p1106-label-job"), uncertain:false};
         }
         const isComposite = Number.isInteger(compositeBatchId) && compositeBatchId > 0;
-        const url = isComposite
-          ? `/api/requisition/batches/${compositeBatchId}/production-packaging-label-jobs`
-          : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-jobs`;
-        const payload = await requestJson(url, {
-          method:"POST",
-          body:JSON.stringify({
-            idempotency_key:prepareAttempt.idempotencyKey,
-            confirmed:true,
-            plan_fingerprint:fingerprint,
-            items,
-            ...(isComposite ? {selected_item_ids:compositeItemIds} : {}),
-          }),
-        });
-        const normalized = normalizeResponse(payload);
-        if (!normalized.job || !positiveInteger(normalized.job.id)) throw new Error("服务器未返回冻结打印作业编号，已停止打印");
-        prepareAttempt = null;
-        return normalized;
+        const url = isDelivery
+          ? `/api/deliveries/${deliveryId}/production-packaging-label-jobs`
+          : isComposite
+            ? `/api/requisition/batches/${compositeBatchId}/production-packaging-label-jobs`
+            : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-jobs`;
+        const body = {
+          idempotency_key:prepareAttempt.idempotencyKey,
+          confirmed:true,
+          plan_fingerprint:fingerprint,
+          items,
+          ...(isComposite ? {selected_item_ids:compositeItemIds} : {}),
+        };
+        prepareAttempt.url = url;
+        prepareAttempt.body = deepClone(body);
+        setPrepareAttemptLocked(true);
+        try {
+          const payload = await requestJson(url, {method:"POST", body:JSON.stringify(body)});
+          const normalized = normalizeResponse(payload);
+          if (!normalized.job || !positiveInteger(normalized.job.id)) throw new Error("服务器未返回冻结打印作业编号，已停止打印");
+          prepareAttempt = null;
+          setPrepareAttemptLocked(false);
+          return normalized;
+        } catch (error) {
+          if (error instanceof TypeError || !Number.isFinite(Number(error?.status)) || Number(error?.status) >= 500) {
+            prepareAttempt.uncertain = true;
+            setPrepareAttemptLocked(true);
+          } else {
+            prepareAttempt = null;
+            setPrepareAttemptLocked(false);
+          }
+          throw error;
+        }
       }
 
       async function startPrint() {
@@ -1138,11 +1232,15 @@
           }
         } catch (error) {
           showMessage(error instanceof TypeError
-            ? "无法连接 ERP 服务；本次未登记实际打印，可直接重试"
+            ? "无法连接 ERP 服务；结果暂未确认，重试会复用原张数和原凭证"
             : `${error?.message || "打印准备失败"}；本次未登记实际打印`, "message error");
         } finally {
           printing = false;
           printButton.disabled = !loadedPackage || (!positiveInteger(loadedJob?.id) && !(selectedPrintPackage()?.labels?.length));
+          if (prepareAttempt?.uncertain) {
+            printButton.textContent = "重试核对并继续打印";
+            setPrepareAttemptLocked(true);
+          }
         }
       }
 

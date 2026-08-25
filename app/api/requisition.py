@@ -20632,6 +20632,14 @@ def _require_packaging_label_job_access(
             raise ProductionLabelOperationError("打印作业关联的组合报料单不存在", 404)
         _require_requisition_customer_access(requisition, user, db)
         return
+    if job.delivery_id is not None:
+        if not has_permission(user, "deliveries.view"):
+            raise ProductionLabelOperationError("无送货单查看权限", 403)
+        delivery = db.get(Delivery, job.delivery_id)
+        if delivery is None:
+            raise ProductionLabelOperationError("打印作业关联的送货单不存在", 404)
+        require_customer_access(delivery.customer_id, user, db)
+        return
     raise ProductionLabelOperationError("标签打印作业缺少来源单据")
 
 
@@ -20644,8 +20652,11 @@ def get_production_packaging_label_job_endpoint(
     """Read the exact frozen payload so a historical reprint keeps its size."""
 
     try:
+        job = db.get(ProductionPackagingLabelPrintJob, job_id)
+        if job is None:
+            raise ProductionLabelOperationError("标签打印作业不存在", 404)
+        _require_packaging_label_job_access(db, job, user)
         result = get_packaging_label_job(db, job_id)
-        _require_packaging_label_job_access(db, result.job, user)
         return packaging_label_job_response(result.job, result.package)
     except ProductionLabelOperationError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
@@ -20662,14 +20673,32 @@ def confirm_production_packaging_label_job_endpoint(
     """Record an actual print only after the operator explicitly confirms it."""
 
     try:
-        existing = get_packaging_label_job(db, job_id)
-        _require_packaging_label_job_access(db, existing.job, user)
+        job = db.get(ProductionPackagingLabelPrintJob, job_id)
+        if job is None:
+            raise ProductionLabelOperationError("标签打印作业不存在", 404)
+        _require_packaging_label_job_access(db, job, user)
+        get_packaging_label_job(db, job_id)
         result = confirm_packaging_label_job_printed(
             db,
             job_id=job_id,
             confirmation_key=payload.idempotency_key,
             operator_id=user.id,
         )
+        is_delivery_reprint = False
+        if result.job.delivery_id is not None:
+            is_delivery_reprint = (
+                db.scalar(
+                    select(ProductionPackagingLabelPrintJob.id)
+                    .where(
+                        ProductionPackagingLabelPrintJob.delivery_id
+                        == result.job.delivery_id,
+                        ProductionPackagingLabelPrintJob.status == "printed",
+                        ProductionPackagingLabelPrintJob.id != result.job.id,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
         if not result.replayed:
             append_audit_event(
                 db,
@@ -20688,11 +20717,54 @@ def confirm_production_packaging_label_job_endpoint(
                 description="人工确认生产包装标签已实际打印",
                 details={
                     "supplier_order_id": result.job.supplier_order_id,
+                    "material_requisition_id": result.job.material_requisition_id,
+                    "delivery_id": result.job.delivery_id,
+                    "is_reprint": is_delivery_reprint,
                     "template_version": result.job.template_version,
                     "plan_fingerprint": result.job.plan_fingerprint,
                     "payload_hash": result.job.payload_hash,
                     "label_count": result.package.get("label_count"),
                     "system_label_count": result.package.get("system_label_count"),
+                    "print_selection": result.package.get("print_selection"),
+                    "fulfillment_modes": sorted(
+                        {
+                            str(plan.get("fulfillment_mode") or "")
+                            for plan in result.package.get("plans") or []
+                            if isinstance(plan, dict)
+                        }
+                    ),
+                    "layout_version": (
+                        (result.package.get("label_layout") or {}).get(
+                            "version"
+                        )
+                    ),
+                    "layout_hash": (
+                        (result.package.get("label_layout") or {}).get(
+                            "layout_hash"
+                        )
+                    ),
+                    "lines": [
+                        {
+                            "selection_key": plan.get("selection_key"),
+                            "delivery_item_id": plan.get("delivery_item_id"),
+                            "order_item_id": plan.get("order_item_id"),
+                            "component_snapshot_id": plan.get(
+                                "component_snapshot_id"
+                            ),
+                            "product_id": plan.get("product_id"),
+                            "product_code": plan.get("product_code"),
+                            "product_name": plan.get("product_name"),
+                            "total_quantity": plan.get("total_quantity"),
+                            "units_per_label": plan.get("units_per_label"),
+                            "print_label_count": plan.get(
+                                "print_label_count",
+                                plan.get("label_count"),
+                            ),
+                            "fulfillment_mode": plan.get("fulfillment_mode"),
+                        }
+                        for plan in result.package.get("plans") or []
+                        if isinstance(plan, dict)
+                    ],
                 },
             )
         db.commit()

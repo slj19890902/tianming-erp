@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -27,13 +28,17 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
     WarehouseLocation,
 )
+from app.services import location_candidates
 from app.services.production_workflow import CompletionCommand, complete_production_batch
 from test_n029_production_service import PASSWORD, _add_case, production_app
 
 
 MOVE_BATCH_URL = "/api/warehouse/twin-operations/move-batches"
+CURRENT_MAP_REVISION = "p1-49b-test-map"
 FRONTEND = (
     Path(__file__).resolve().parents[1]
     / "factory_twin"
@@ -85,7 +90,7 @@ def _published_area(
         allowed_inventory_types_json='["finished"]',
         storage_layout="pallet_ground",
         status="published",
-        published_map_revision="p1-49b-test-map",
+        published_map_revision=CURRENT_MAP_REVISION,
         version=1,
     )
     return area
@@ -124,6 +129,53 @@ def _mapped_location(
     return location
 
 
+def _published_ground_plan(
+    db,
+    *,
+    area: WarehouseArea,
+    locations: list[WarehouseLocation],
+    operator_id: int,
+    key: str,
+) -> None:
+    plan = WarehouseGroundLayoutPlan(
+        area_id=area.id,
+        status="published",
+        target_slot_count=len(locations),
+        numbering_origin="south",
+        row_direction="from_aisle_inward",
+        slot_direction="left_to_right",
+        row_start_no=1,
+        slot_start_no=1,
+        draft_map_revision=CURRENT_MAP_REVISION,
+        published_map_revision=CURRENT_MAP_REVISION,
+        preview_fingerprint="a" * 64,
+        version=1,
+        publish_idempotency_key=f"p1-49b-{key}",
+        publish_request_hash="b" * 64,
+        updated_by=operator_id,
+        published_by=operator_id,
+        published_at=_now(),
+    )
+    db.add(plan)
+    db.flush()
+    db.add_all(
+        [
+            WarehouseGroundLayoutSlot(
+                plan_id=plan.id,
+                location_id=location.id,
+                route_sequence=index,
+                row_no=1,
+                slot_no=index,
+                x_mm=Decimal(1000 + index * 1400),
+                y_mm=Decimal("1000"),
+                width_mm=1200,
+                depth_mm=1000,
+            )
+            for index, location in enumerate(locations, start=1)
+        ]
+    )
+
+
 def _inventory_totals(db) -> tuple[int, int, int, int, int]:
     return tuple(
         int(value or 0)
@@ -160,7 +212,30 @@ def _dashboard(client: TestClient) -> dict:
 
 
 @pytest.fixture()
-def dispatch_pallet_app(production_app):
+def dispatch_pallet_app(production_app, monkeypatch: pytest.MonkeyPatch):
+    identities = {
+        1: {
+            "revision": CURRENT_MAP_REVISION,
+            "zones_by_id": {
+                "zone-1f-dispatch": "DISPATCH",
+                "zone-1f-fg": "FG",
+            },
+            "zone_ids_by_area": {
+                "DISPATCH": ("zone-1f-dispatch",),
+                "FG": ("zone-1f-fg",),
+            },
+        },
+        3: {
+            "revision": CURRENT_MAP_REVISION,
+            "zones_by_id": {"zone-3f-fg-004": "FG-004"},
+            "zone_ids_by_area": {"FG-004": ("zone-3f-fg-004",)},
+        },
+    }
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda floor_number: identities.get(int(floor_number)),
+    )
     app, factory, ids = production_app
     app.include_router(warehouse_router, prefix="/api/warehouse")
 
@@ -194,6 +269,33 @@ def dispatch_pallet_app(production_app):
                 granted_by=admin.id,
             )
         )
+
+        _order_a, item_a, task_a = _add_case(
+            db,
+            key="p149b-a",
+            customer=customer_a,
+            product=product_a,
+            quantity=7,
+        )
+        _order_b, item_b, task_b = _add_case(
+            db,
+            key="p149b-b",
+            customer=customer_b,
+            product=product_b,
+            quantity=9,
+        )
+        first = complete_production_batch(
+            db,
+            idempotency_key="p149b-direct-a",
+            commands=[_direct_command(task_a, 7)],
+            operator_id=admin.id,
+        ).completions[0]
+        second = complete_production_batch(
+            db,
+            idempotency_key="p149b-direct-b",
+            commands=[_direct_command(task_b, 9)],
+            operator_id=admin.id,
+        ).completions[0]
 
         floor1 = WarehouseFloor(
             floor_code="1F",
@@ -250,33 +352,21 @@ def dispatch_pallet_app(production_app):
         )
         db.add_all([floor1_target, floor3_target])
         db.flush()
+        _published_ground_plan(
+            db,
+            area=floor1_area,
+            locations=[floor1_target],
+            operator_id=admin.id,
+            key="floor1-target",
+        )
+        _published_ground_plan(
+            db,
+            area=floor3_area,
+            locations=[floor3_target],
+            operator_id=admin.id,
+            key="floor3-target",
+        )
 
-        _order_a, item_a, task_a = _add_case(
-            db,
-            key="p149b-a",
-            customer=customer_a,
-            product=product_a,
-            quantity=7,
-        )
-        _order_b, item_b, task_b = _add_case(
-            db,
-            key="p149b-b",
-            customer=customer_b,
-            product=product_b,
-            quantity=9,
-        )
-        first = complete_production_batch(
-            db,
-            idempotency_key="p149b-direct-a",
-            commands=[_direct_command(task_a, 7)],
-            operator_id=admin.id,
-        ).completions[0]
-        second = complete_production_batch(
-            db,
-            idempotency_key="p149b-direct-b",
-            commands=[_direct_command(task_b, 9)],
-            operator_id=admin.id,
-        ).completions[0]
         first_lot = db.get(InventoryLot, first.inventory_lot_id)
         second_lot = db.get(InventoryLot, second.inventory_lot_id)
         assert first_lot is not None and first_lot.pallet_item is not None

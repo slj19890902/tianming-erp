@@ -332,10 +332,11 @@ def test_pending_production_observes_component_board_preparation_and_double_spli
         db.flush()
         db.add_all(
             [
-                ProductionTask(
-                    order_item_id=component_item.id,
-                    sales_order_item_bom_component_id=snapshot.id,
-                    status="pending",
+                    ProductionTask(
+                        order_item_id=component_item.id,
+                        sales_order_item_bom_component_id=snapshot.id,
+                        task_role="component_internal",
+                        status="pending",
                     planned_quantity=100,
                     ordered_quantity_snapshot=100,
                     material_input_quantity=100,
@@ -432,6 +433,8 @@ def test_pending_production_observes_component_board_preparation_and_double_spli
             "source_ref_id": None,
             "location_code": "P1-09C-SEMI-01",
             "location_name": "P1 semi location",
+            "current_address_name": "P1 semi location",
+            "employee_location_name": "P1 semi location",
             "remaining_sheet_quantity": 100,
             "remaining_product_quantity": 100,
             "stock_yield_per_sheet": 1,

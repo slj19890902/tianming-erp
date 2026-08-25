@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import String, and_, case, cast, delete, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import (
     PermissionChecker,
@@ -61,10 +61,10 @@ from app.models.tianhua_pre_delivery import (
 from app.models.user import User
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
-    Floor3LocationLayout,
     FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryMovement,
+    InventoryPalletItem,
     InventoryReservation,
     OrderItemSemiRequirement,
     UnorderedFinishedDeliveryAllocation,
@@ -74,7 +74,12 @@ from app.models.warehouse_inventory import (
 )
 from app.services.history_orders import build_display_registry, display_order_number
 from app.services.fulfillment_reminders import list_delivery_reminders
-from app.services.location_candidates import is_operational_location
+from app.services.location_candidates import (
+    has_space_ledger,
+    load_warehouse_location_projection_contexts,
+    operational_location_issue,
+    warehouse_location_projection,
+)
 from app.services.warehouse_floor1_candidate_planner import (
     overlay_formal_area_bindings,
 )
@@ -615,7 +620,7 @@ def _pick_task_read_context(
     db: Session,
     items: list[DeliveryPickTaskItem],
 ) -> dict:
-    """Preload stable task references and empty-source facts in batches."""
+    """Preload task, inventory and canonical map facts in bounded batches."""
     delivery_item_ids = {
         item.delivery_item_id for item in items if item.delivery_item_id is not None
     }
@@ -658,11 +663,69 @@ def _pick_task_read_context(
             .distinct()
         ).all()
     ) if order_item_ids else set()
+    reservation_lot_ids = set(
+        db.scalars(
+            select(InventoryReservation.inventory_lot_id)
+            .where(
+                InventoryReservation.order_item_id.in_(order_item_ids),
+                InventoryReservation.status != "cancelled",
+            )
+            .distinct()
+        ).all()
+    ) if order_item_ids else set()
+    unordered_lot_ids = set(
+        db.scalars(
+            select(UnorderedFinishedDeliveryAllocation.inventory_lot_id)
+            .where(
+                UnorderedFinishedDeliveryAllocation.delivery_item_id.in_(
+                    delivery_item_ids
+                ),
+                UnorderedFinishedDeliveryAllocation.status == "planned",
+            )
+            .distinct()
+        ).all()
+    ) if delivery_item_ids else set()
+    lot_ids = {
+        int(lot_id)
+        for lot_id in reservation_lot_ids | unordered_lot_ids
+        if lot_id is not None
+    }
+    lots = {
+        int(row.id): row
+        for row in db.scalars(
+            select(InventoryLot)
+            .options(
+                selectinload(InventoryLot.pallet_item).selectinload(
+                    InventoryPalletItem.pallet
+                )
+            )
+            .where(InventoryLot.id.in_(lot_ids))
+        ).all()
+    } if lot_ids else {}
+    location_ids = {
+        int(row.warehouse_location_id)
+        for row in lots.values()
+        if row.warehouse_location_id is not None
+    }
+    locations = {
+        int(row.id): row
+        for row in db.scalars(
+            select(WarehouseLocation).where(WarehouseLocation.id.in_(location_ids))
+        ).all()
+    } if location_ids else {}
+    location_projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        locations.values(),
+    )
     return {
         "delivery_items": delivery_items,
         "order_items": order_items,
         "composite_order_item_ids": composite_order_item_ids,
         "inventory_source_order_item_ids": inventory_source_order_item_ids,
+        "lots": lots,
+        "locations": locations,
+        "location_projection_contexts": location_projection_contexts,
+        "space_ledger_enabled": has_space_ledger(db),
     }
 
 
@@ -727,6 +790,7 @@ def _pick_unordered_location_plan(
     *,
     item: DeliveryPickTaskItem,
     delivery_item: DeliveryItem,
+    read_context: dict | None = None,
 ) -> tuple[list[dict], bool]:
     allocations = db.scalars(
         select(UnorderedFinishedDeliveryAllocation)
@@ -745,6 +809,7 @@ def _pick_unordered_location_plan(
         location = _pick_source_location(
             db,
             source={"lot_id": allocation.inventory_lot_id},
+            read_context=read_context,
         )
         lines.append(
             {
@@ -769,6 +834,10 @@ def _pick_unordered_location_plan(
                 "area_code": location["area_code"],
                 "location_sort_order": location["location_sort_order"],
                 "placement_status": location["placement_status"],
+                "position_status": location["position_status"],
+                "map_feature_id": location["map_feature_id"],
+                "published_map_revision": location["published_map_revision"],
+                "map_point": location["map_point"],
                 "pallet_id": location["pallet_id"],
                 "pallet_code": allocation.pallet_code_snapshot
                 or location["pallet_code"],
@@ -791,26 +860,69 @@ def _pick_source_location(
     db: Session,
     *,
     source: dict,
+    read_context: dict | None = None,
 ) -> dict:
+    lot_id = int(source["lot_id"]) if source.get("lot_id") is not None else None
     lot = (
-        db.get(InventoryLot, int(source["lot_id"]))
-        if source.get("lot_id") is not None
+        (read_context.get("lots") or {}).get(lot_id)
+        if read_context is not None and lot_id is not None
+        else (db.get(InventoryLot, lot_id) if lot_id is not None else None)
+    )
+    location_id = (
+        int(lot.warehouse_location_id)
+        if lot is not None and lot.warehouse_location_id is not None
         else None
     )
     location = (
-        db.get(WarehouseLocation, lot.warehouse_location_id)
-        if lot is not None
+        (read_context.get("locations") or {}).get(location_id)
+        if read_context is not None and location_id is not None
+        else (
+            db.get(WarehouseLocation, location_id)
+            if location_id is not None
+            else None
+        )
+    )
+    projection_context = (
+        (read_context.get("location_projection_contexts") or {}).get(
+            int(location.id)
+        )
+        if read_context is not None and location is not None
         else None
+    )
+    if location is not None and projection_context is None:
+        projection_context = load_warehouse_location_projection_contexts(
+            db,
+            [location],
+        ).get(int(location.id), {})
+        if read_context is not None:
+            read_context.setdefault("locations", {})[int(location.id)] = location
+            read_context.setdefault("location_projection_contexts", {})[
+                int(location.id)
+            ] = projection_context
+    projection = (
+        warehouse_location_projection(location, **(projection_context or {}))
+        if location is not None
+        else {}
+    )
+    space_ledger_enabled = (
+        bool(read_context.get("space_ledger_enabled"))
+        if read_context is not None
+        else has_space_ledger(db)
+    )
+    operational_projection_context = (
+        projection_context if space_ledger_enabled else None
     )
     pallet_item = lot.pallet_item if lot is not None else None
     pallet = pallet_item.pallet if pallet_item is not None else None
     location_operational = bool(
         location is not None
-        and is_operational_location(
+        and operational_location_issue(
             db,
             location,
             warehouse_types={"finished", "shared"},
+            projection_context=operational_projection_context,
         )
+        is None
     )
     needs_relocation = bool(
         (pallet is not None and pallet.needs_relocation)
@@ -820,11 +932,23 @@ def _pick_source_location(
     return {
         "location_id": location.id if location else None,
         "location_code": location.location_code if location else None,
-        "location_name": employee_location_name(location) if location else None,
+        "location_name": (
+            employee_location_name(
+                location,
+                area=(projection_context or {}).get("area"),
+                floor=(projection_context or {}).get("floor"),
+            )
+            if location
+            else None
+        ),
         "warehouse_floor": location.warehouse_floor if location else None,
         "area_code": location.area_code if location else None,
         "location_sort_order": int(location.sort_order or 0) if location else None,
         "placement_status": location.placement_status if location else None,
+        "position_status": projection.get("position_status", "unlocated"),
+        "map_feature_id": projection.get("map_feature_id"),
+        "published_map_revision": projection.get("published_map_revision"),
+        "map_point": projection.get("map_position"),
         "pallet_id": pallet.id if pallet else None,
         "pallet_code": pallet.pallet_code if pallet else None,
         "location_operational": location_operational,
@@ -837,6 +961,7 @@ def _pick_parent_finished_sources(
     *,
     order_item: OrderItem,
     planned_quantity: int,
+    read_context: dict | None = None,
 ) -> list[dict]:
     """Select unconsumed parent-product reservations for a composite delivery."""
 
@@ -868,7 +993,13 @@ def _pick_parent_finished_sources(
         picked = min(available, remaining)
         if picked <= 0:
             continue
-        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        lot = (
+            (read_context.get("lots") or {}).get(
+                int(reservation.inventory_lot_id)
+            )
+            if read_context is not None
+            else db.get(InventoryLot, reservation.inventory_lot_id)
+        )
         sources.append(
             {
                 "source_type": "finished",
@@ -909,6 +1040,7 @@ def _pick_item_location_plan(
             db,
             item=item,
             delivery_item=delivery_item,
+            read_context=read_context,
         )
     order_item = (
         read_context["order_items"].get(item.order_item_id)
@@ -940,6 +1072,7 @@ def _pick_item_location_plan(
         delivery_item_id=item.delivery_item_id,
         dispatched=False,
         composite_hint=composite_hint,
+        read_context=read_context,
     )
     if component_lines and fulfillment_mode == "parent_delivery":
         raw_sources = [
@@ -947,6 +1080,7 @@ def _pick_item_location_plan(
                 db,
                 order_item=order_item,
                 planned_quantity=planned_quantity,
+                read_context=read_context,
             ),
             *raw_sources,
         ]
@@ -987,7 +1121,11 @@ def _pick_item_location_plan(
             )
         elif source_type == "finished":
             finished_covered += requirement_quantity
-        location = _pick_source_location(db, source=source)
+        location = _pick_source_location(
+            db,
+            source=source,
+            read_context=read_context,
+        )
         is_direct = source_type == "component_direct"
         lines.append(
             {
@@ -1030,6 +1168,16 @@ def _pick_item_location_plan(
                 "placement_status": (
                     None if is_direct else location["placement_status"]
                 ),
+                "position_status": (
+                    None if is_direct else location["position_status"]
+                ),
+                "map_feature_id": (
+                    None if is_direct else location["map_feature_id"]
+                ),
+                "published_map_revision": (
+                    None if is_direct else location["published_map_revision"]
+                ),
+                "map_point": None if is_direct else location["map_point"],
                 "pallet_id": None if is_direct else location["pallet_id"],
                 "pallet_code": None if is_direct else location["pallet_code"],
                 "location_operational": (
@@ -1155,7 +1303,52 @@ def _pick_item_location_plan(
     return lines, not any(line["requires_attention"] for line in lines)
 
 
-def _pick_location_groups(db: Session, item_responses: list[dict]) -> list[dict]:
+def _pick_location_projection_batch(
+    db: Session,
+    location_ids: set[int],
+    *,
+    read_context: dict | None = None,
+) -> tuple[dict[int, WarehouseLocation], dict[int, dict]]:
+    locations = dict((read_context or {}).get("locations") or {})
+    missing_location_ids = location_ids - set(locations)
+    if missing_location_ids:
+        locations.update(
+            {
+                int(row.id): row
+                for row in db.scalars(
+                    select(WarehouseLocation).where(
+                        WarehouseLocation.id.in_(missing_location_ids)
+                    )
+                ).all()
+            }
+        )
+    projection_contexts = dict(
+        (read_context or {}).get("location_projection_contexts") or {}
+    )
+    missing_context_locations = [
+        locations[location_id]
+        for location_id in location_ids
+        if location_id in locations and location_id not in projection_contexts
+    ]
+    if missing_context_locations:
+        projection_contexts.update(
+            load_warehouse_location_projection_contexts(
+                db,
+                missing_context_locations,
+            )
+        )
+    if read_context is not None:
+        read_context["locations"] = locations
+        read_context["location_projection_contexts"] = projection_contexts
+    return locations, projection_contexts
+
+
+def _pick_location_groups(
+    db: Session,
+    item_responses: list[dict],
+    *,
+    read_context: dict | None = None,
+) -> list[dict]:
     groups: dict[tuple, dict] = {}
     for item in item_responses:
         for line in item.get("location_lines") or []:
@@ -1221,28 +1414,78 @@ def _pick_location_groups(db: Session, item_responses: list[dict]) -> list[dict]
         int(group["location_id"])
         for group in ordered
         if group.get("location_id") is not None
-        and not group.get("needs_relocation")
-        and not group.get("requires_attention")
     }
-    layouts = {
-        row.location_id: row
-        for row in db.scalars(
-            select(Floor3LocationLayout).where(
-                Floor3LocationLayout.location_id.in_(location_ids)
-            )
-        ).all()
-    } if location_ids else {}
+    locations, projection_contexts = _pick_location_projection_batch(
+        db,
+        location_ids,
+        read_context=read_context,
+    )
     for sequence, group in enumerate(ordered, start=1):
         group["recommended_sequence"] = sequence
-        layout = layouts.get(group.get("location_id"))
-        if layout is not None:
+        location_id = (
+            int(group["location_id"])
+            if group.get("location_id") is not None
+            else None
+        )
+        location = locations.get(location_id) if location_id is not None else None
+        projection_context = (
+            projection_contexts.get(location_id, {})
+            if location_id is not None
+            else {}
+        )
+        projection = (
+            warehouse_location_projection(location, **projection_context)
+            if location is not None
+            else {}
+        )
+        if location is not None:
+            location_name = employee_location_name(
+                location,
+                area=projection_context.get("area"),
+                floor=projection_context.get("floor"),
+            )
+            group.update(
+                {
+                    "warehouse_floor": location.warehouse_floor,
+                    "area_code": location.area_code,
+                    "location_code": location.location_code,
+                    "location_name": location_name,
+                    "location_sort_order": int(location.sort_order or 0),
+                    "position_status": projection.get("position_status"),
+                    "map_feature_id": projection.get("map_feature_id"),
+                    "published_map_revision": projection.get(
+                        "published_map_revision"
+                    ),
+                }
+            )
+            group["label"] = location_name + (
+                "（待归位）" if group.get("needs_relocation") else ""
+            )
+            for line in group["lines"]:
+                line.update(
+                    {
+                        "warehouse_floor": location.warehouse_floor,
+                        "area_code": location.area_code,
+                        "location_code": location.location_code,
+                        "location_name": location_name,
+                        "placement_status": location.placement_status,
+                        "position_status": projection.get("position_status"),
+                        "map_feature_id": projection.get("map_feature_id"),
+                        "published_map_revision": projection.get(
+                            "published_map_revision"
+                        ),
+                        "map_point": projection.get("map_position"),
+                    }
+                )
+        map_point = projection.get("map_position")
+        if projection.get("position_status") == "mapped" and map_point:
             group["map_status"] = "mapped"
             group["map_point"] = {
-                "left_pct": float(layout.left_pct),
-                "top_pct": float(layout.top_pct),
-                "width_pct": float(layout.width_pct),
-                "height_pct": float(layout.height_pct),
-                "z_index": int(layout.z_index or 0),
+                "left_pct": float(map_point["left_pct"]),
+                "top_pct": float(map_point["top_pct"]),
+                "width_pct": float(map_point["width_pct"]),
+                "height_pct": float(map_point["height_pct"]),
+                "z_index": int(map_point.get("z_index") or 0),
             }
         else:
             group["map_status"] = (
@@ -1304,9 +1547,10 @@ def _pick_task_response(
     task: DeliveryPickTask,
     *,
     include_location_plan: bool = True,
+    read_context: dict | None = None,
 ) -> dict:
     task_items = list(task.items)
-    read_context = _pick_task_read_context(db, task_items)
+    read_context = read_context or _pick_task_read_context(db, task_items)
     item_responses = [
         _pick_item_response(
             db,
@@ -1317,7 +1561,13 @@ def _pick_task_response(
         for item in task_items
     ]
     location_groups = (
-        _pick_location_groups(db, item_responses) if include_location_plan else []
+        _pick_location_groups(
+            db,
+            item_responses,
+            read_context=read_context,
+        )
+        if include_location_plan
+        else []
     )
     print_version_payload = {
         "task_id": task.id,
@@ -1783,19 +2033,29 @@ def _delivery_location_metadata(
     location: WarehouseLocation | None,
     *,
     finished: bool,
+    projection_context: dict | None = None,
+    space_ledger_enabled: bool | None = None,
 ) -> dict:
     warehouse_types = (
         {"finished", "shared"}
         if finished
         else {"semi_finished", "shared"}
     )
+    operational_projection_context = (
+        projection_context if space_ledger_enabled is not False else None
+    )
     return {
         "warehouse_floor": location.warehouse_floor if location else None,
         "area_code": location.area_code if location else None,
-        "location_operational": is_operational_location(
-            db,
-            location,
-            warehouse_types=warehouse_types,
+        "location_operational": bool(
+            location is not None
+            and operational_location_issue(
+                db,
+                location,
+                warehouse_types=warehouse_types,
+                projection_context=operational_projection_context,
+            )
+            is None
         ),
     }
 
@@ -1807,6 +2067,7 @@ def _composite_inventory_sources_for_order_item(
     planned_delivery_quantity: int,
     delivery_item_id: int | None,
     dispatched: bool,
+    read_context: dict | None = None,
 ) -> list[dict]:
     """Expose N039 component pick sources without treating pieces as parent sets."""
     demands = effective_component_demands(db, order_item.id)
@@ -1821,10 +2082,34 @@ def _composite_inventory_sources_for_order_item(
         quantity: int,
         reservation: InventoryReservation | None = None,
     ) -> dict:
-        lot = db.get(InventoryLot, reservation.inventory_lot_id) if reservation else None
+        lot = (
+            (
+                (read_context.get("lots") or {}).get(
+                    int(reservation.inventory_lot_id)
+                )
+                if read_context is not None
+                else db.get(InventoryLot, reservation.inventory_lot_id)
+            )
+            if reservation
+            else None
+        )
         location = (
-            db.get(WarehouseLocation, lot.warehouse_location_id)
+            (
+                (read_context.get("locations") or {}).get(
+                    int(lot.warehouse_location_id)
+                )
+                if read_context is not None
+                else db.get(WarehouseLocation, lot.warehouse_location_id)
+            )
             if lot is not None
+            and lot.warehouse_location_id is not None
+            else None
+        )
+        projection_context = (
+            (read_context.get("location_projection_contexts") or {}).get(
+                int(location.id)
+            )
+            if read_context is not None and location is not None
             else None
         )
         return {
@@ -1834,11 +2119,25 @@ def _composite_inventory_sources_for_order_item(
             "lot_number": lot.lot_number if lot else None,
             "location_id": location.id if location else None,
             "location_code": location.location_code if location else None,
-            "location_name": employee_location_name(location) if location else None,
+            "location_name": (
+                employee_location_name(
+                    location,
+                    area=(projection_context or {}).get("area"),
+                    floor=(projection_context or {}).get("floor"),
+                )
+                if location
+                else None
+            ),
             **_delivery_location_metadata(
                 db,
                 location,
                 finished=source_type == "component_stock",
+                projection_context=projection_context,
+                space_ledger_enabled=(
+                    bool(read_context.get("space_ledger_enabled"))
+                    if read_context is not None
+                    else None
+                ),
             ),
             "component_type": "bom_component",
             "component_snapshot_id": demand.snapshot_id,
@@ -2130,6 +2429,7 @@ def _inventory_sources_for_order_item(
     delivery_item_id: int | None = None,
     dispatched: bool = False,
     composite_hint: bool | None = None,
+    read_context: dict | None = None,
 ) -> list[dict]:
     composite_source_mode = (
         composite_hint
@@ -2143,6 +2443,7 @@ def _inventory_sources_for_order_item(
             planned_delivery_quantity=planned_delivery_quantity,
             delivery_item_id=delivery_item_id,
             dispatched=dispatched,
+            read_context=read_context,
         )
     reservations = db.scalars(
         select(InventoryReservation)
@@ -2261,10 +2562,33 @@ def _inventory_sources_for_order_item(
 
     items: list[dict] = []
     for reservation in reservations:
-        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        lot = (
+            (read_context.get("lots") or {}).get(
+                int(reservation.inventory_lot_id)
+            )
+            if read_context is not None
+            else db.get(InventoryLot, reservation.inventory_lot_id)
+        )
         if lot is None:
             continue
-        location = db.get(WarehouseLocation, lot.warehouse_location_id)
+        location = (
+            (read_context.get("locations") or {}).get(
+                int(lot.warehouse_location_id)
+            )
+            if read_context is not None and lot.warehouse_location_id is not None
+            else (
+                db.get(WarehouseLocation, lot.warehouse_location_id)
+                if lot.warehouse_location_id is not None
+                else None
+            )
+        )
+        projection_context = (
+            (read_context.get("location_projection_contexts") or {}).get(
+                int(location.id)
+            )
+            if read_context is not None and location is not None
+            else None
+        )
         requirement = requirements.get(reservation.semi_requirement_id)
         pick_stock, pick_credit = (
             allocated_by_reservation.get(reservation.id, (0, 0))
@@ -2285,11 +2609,25 @@ def _inventory_sources_for_order_item(
                 "lot_number": lot.lot_number,
                 "location_id": location.id if location else None,
                 "location_code": location.location_code if location else None,
-                "location_name": employee_location_name(location) if location else None,
+                "location_name": (
+                    employee_location_name(
+                        location,
+                        area=(projection_context or {}).get("area"),
+                        floor=(projection_context or {}).get("floor"),
+                    )
+                    if location
+                    else None
+                ),
                 **_delivery_location_metadata(
                     db,
                     location,
                     finished=reservation.reservation_type == "finished_order",
+                    projection_context=projection_context,
+                    space_ledger_enabled=(
+                        bool(read_context.get("space_ledger_enabled"))
+                        if read_context is not None
+                        else None
+                    ),
                 ),
                 "component_type": (
                     requirement.component_type if requirement else "whole"
@@ -2598,9 +2936,30 @@ def _delivery_list_location_payload(
         if lot is not None
         else None
     )
+    projection_context = (
+        context.get("location_projection_contexts", {}).get(int(location.id), {})
+        if location is not None
+        else {}
+    )
+    projection = (
+        warehouse_location_projection(location, **projection_context)
+        if location is not None
+        else {}
+    )
     return lot, location, {
+        "location_name": (
+            employee_location_name(
+                location,
+                area=projection_context.get("area"),
+                floor=projection_context.get("floor"),
+            )
+            if location is not None
+            else None
+        ),
         "warehouse_floor": location.warehouse_floor if location else None,
         "area_code": location.area_code if location else None,
+        "position_status": projection.get("position_status", "unlocated"),
+        "map_issue": projection.get("map_issue"),
         "location_operational": _delivery_list_location_operational(
             context,
             location,
@@ -2796,7 +3155,6 @@ def _delivery_list_composite_inventory_sources(
             "lot_number": lot.lot_number if lot else None,
             "location_id": location.id if location else None,
             "location_code": location.location_code if location else None,
-            "location_name": employee_location_name(location) if location else None,
             **location_metadata,
             "component_type": "bom_component",
             "component_snapshot_id": demand.snapshot_id,
@@ -3063,7 +3421,6 @@ def _delivery_list_standard_inventory_sources(
                 "lot_number": lot.lot_number,
                 "location_id": location.id if location else None,
                 "location_code": location.location_code if location else None,
-                "location_name": employee_location_name(location) if location else None,
                 **location_metadata,
                 "component_type": requirement.component_type if requirement else "whole",
                 "yield_factor": max(int(reservation.yield_factor or 1), 1),
@@ -3334,6 +3691,10 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
             select(WarehouseLocation).where(WarehouseLocation.id.in_(location_ids))
         ).all()
     } if location_ids else {}
+    location_projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        locations.values(),
+    )
     floors = list(db.scalars(select(WarehouseFloor)).all()) if location_ids else []
     floors_by_number = {int(row.floor_number): row for row in floors}
     floor_ids = [int(row.id) for row in floors]
@@ -3581,6 +3942,7 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         "unordered_allocations_by_delivery_item": unordered_allocations_by_delivery_item,
         "lots": lots,
         "locations": locations,
+        "location_projection_contexts": location_projection_contexts,
         "has_space_ledger": bool(floors),
         "floors_by_number": floors_by_number,
         "areas_by_floor_code": areas_by_floor_code,
@@ -4715,7 +5077,12 @@ def _delivery_pick_measured_map_context(
     locations; it must never expand the task into a general inventory view.
     """
 
-    task_payload = _pick_task_response(db, task)
+    read_context = _pick_task_read_context(db, list(task.items))
+    task_payload = _pick_task_response(
+        db,
+        task,
+        read_context=read_context,
+    )
     location_groups = [
         group
         for group in task_payload.get("location_groups") or []
@@ -4723,31 +5090,31 @@ def _delivery_pick_measured_map_context(
         and group.get("warehouse_floor") is not None
         and str(group.get("area_code") or "").strip()
     ]
-    floor_numbers = {
-        int(group["warehouse_floor"])
+    location_ids = {
+        int(group["location_id"])
         for group in location_groups
-        if group.get("warehouse_floor") is not None
+        if group.get("location_id") is not None
     }
-    floor_rows = list(
-        db.scalars(
-            select(WarehouseFloor).where(
-                WarehouseFloor.floor_number.in_(floor_numbers or {-1})
-            )
-        ).all()
+    _locations, projection_contexts = _pick_location_projection_batch(
+        db,
+        location_ids,
+        read_context=read_context,
     )
-    floors_by_number = {int(row.floor_number): row for row in floor_rows}
-    floor_ids = [int(row.id) for row in floor_rows]
-    area_rows = list(
-        db.scalars(
-            select(WarehouseArea).where(
-                WarehouseArea.floor_id.in_(floor_ids or [-1])
-            )
-        ).all()
-    )
-    areas_by_key = {
-        (int(row.floor_id), str(row.area_code or "").strip().upper()): row
-        for row in area_rows
-    }
+    floors_by_number: dict[int, object] = {}
+    areas_by_key: dict[tuple[int, str], object] = {}
+    for location_id in location_ids:
+        context = projection_contexts.get(location_id) or {}
+        floor = context.get("floor")
+        area = context.get("area")
+        if floor is not None:
+            floors_by_number[int(floor.floor_number)] = floor
+        if floor is not None and area is not None:
+            areas_by_key[
+                (
+                    int(floor.id),
+                    str(area.area_code or "").strip().upper(),
+                )
+            ] = area
     return task_payload, location_groups, floors_by_number, areas_by_key
 
 
@@ -6087,6 +6454,10 @@ def unordered_finished_candidates(
     rows = db.execute(
         query.offset((page - 1) * page_size).limit(page_size)
     ).all()
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [location for _lot, _detail, _product, location in rows],
+    )
     pending_by_code = _pending_order_quantities_by_product_code(
         db,
         customer_id=customer_id,
@@ -6123,7 +6494,11 @@ def unordered_finished_candidates(
                 ),
                 "location_id": location.id,
                 "location_code": location.location_code,
-                "location_name": employee_location_name(location),
+                "location_name": employee_location_name(
+                    location,
+                    area=projection_contexts.get(int(location.id), {}).get("area"),
+                    floor=projection_contexts.get(int(location.id), {}).get("floor"),
+                ),
                 "pallet_code": pallet.pallet_code if pallet else None,
                 "order_pending_quantity": int(
                     pending_by_code.get(str(product.product_code or "").strip().casefold(), 0)

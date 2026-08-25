@@ -667,8 +667,12 @@ body.warehouse-twin-page {
 .twin-layout-draft-workflow button:disabled { cursor: not-allowed; opacity: .4; }
 .twin-view-note { padding: 5px 7px; border: 1px solid #d3dde1; border-radius: 3px; color: #627783; background: #fff; font-size: 9px; white-space: nowrap; }
 .twin-toolbar-summary { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
-.twin-toolbar-summary span { padding: 4px 6px; border: 1px solid #d6e0e4; border-radius: 3px; color: #6b7f8b; background: #fff; font-size: 8px; }
+.twin-toolbar-summary span,
+.twin-toolbar-summary button { padding: 4px 6px; border: 1px solid #d6e0e4; border-radius: 3px; color: #6b7f8b; background: #fff; font-size: 8px; }
 .twin-toolbar-summary b { color: #0f766e; font: 800 10px Consolas, monospace; }
+.twin-toolbar-summary .unlocated-blocker { cursor: pointer; border-color: #e4a85c; color: #8a4b0f; background: #fff8e7; font-weight: 800; }
+.twin-toolbar-summary .unlocated-blocker b { color: #b45309; }
+.twin-toolbar-summary .unlocated-blocker:disabled { cursor: default; border-color: #d6e0e4; color: #82929a; background: #fff; opacity: .72; }
 .twin-toolbar-summary .column-conflict { color: #b42318; border-color: #efb4ae; background: #fff1f0; }
 .twin-toolbar-summary .column-conflict b { color: #b42318; }
 .twin-search { min-width: 245px; height: 30px; border-color: #c5d1d7; background: #fff; }
@@ -714,6 +718,17 @@ body.warehouse-twin-page {
 .twin-global-search > input { width: 100%; padding: 7px 8px; box-sizing: border-box; border: 1px solid #b8c9d0; border-radius: 3px; outline: none; color: #263c49; background: #fff; font-size: 10px; }
 .twin-global-search > input:focus { border-color: #0f766e; box-shadow: 0 0 0 2px #0f766e16; }
 .twin-global-search > small { color: #617783; font-size: 11px; line-height: 1.45; }
+.twin-unlocated-finished-blocker { flex: 0 1 auto; min-height: 0; max-height: 190px; display: flex; flex-direction: column; border: 1px solid #e8b66e; background: #fffaf0; }
+.twin-unlocated-finished-blocker > div:first-child { padding: 6px 7px; display: grid; gap: 2px; border-bottom: 1px solid #efd19e; }
+.twin-unlocated-finished-blocker > div:first-child b { color: #9a4f0a; font-size: 11px; }
+.twin-unlocated-finished-blocker > div:first-child span { color: #815b36; font-size: 9px; line-height: 1.4; }
+.twin-unlocated-finished-list { min-height: 0; overflow-y: auto; }
+.twin-unlocated-finished-list > button { width: 100%; padding: 6px 7px; display: grid; gap: 2px; border: 0; border-bottom: 1px solid #f0dcc0; color: #6b4b2d; background: transparent; text-align: left; }
+.twin-unlocated-finished-list > button:hover { background: #fff2d8; }
+.twin-unlocated-finished-list b { color: #8b4507; font: 800 11px Consolas, "Microsoft YaHei", sans-serif; overflow-wrap: anywhere; }
+.twin-unlocated-finished-list strong { color: #563c25; font-size: 10px; }
+.twin-unlocated-finished-list span,
+.twin-unlocated-finished-list small { color: #84674c; font-size: 9px; line-height: 1.35; overflow-wrap: anywhere; }
 .twin-search-result-list { min-height: 0; overflow-y: auto; border-top: 1px solid #dde5e8; scrollbar-color: #9ab0b8 #eef2f4; }
 .twin-search-result-list > button { width: 100%; padding: 7px 5px; display: grid; gap: 2px; border: 0; border-bottom: 1px solid #e1e8eb; border-left: 2px solid transparent; color: #405966; background: transparent; text-align: left; }
 .twin-search-result-list > button:hover { background: #f3f7f8; }
@@ -1044,8 +1059,7 @@ body.warehouse-twin-page {
 @media (max-width: 1180px) {
   .twin-command-bar,
   .twin-command-bar.embedded { grid-template-columns: minmax(470px, 1fr) auto; }
-  .twin-toolbar-summary span:nth-child(2),
-  .twin-toolbar-summary span:nth-child(4) { display: none; }
+  .twin-toolbar-summary > span:nth-child(2) { display: none; }
   .twin-layout-draft-workflow .status { display: none; }
   .twin-workspace.layers-open { grid-template-columns: 115px 190px minmax(360px, 1fr) 260px; }
   .twin-workspace.layers-collapsed { grid-template-columns: 190px minmax(390px, 1fr) 260px; }

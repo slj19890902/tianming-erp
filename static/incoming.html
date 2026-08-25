@@ -885,10 +885,11 @@
               </div>
               <div class="mt-2 grid grid-cols-2 gap-2 text-sm">
                 <div><p class="text-slate-500">订单号</p><p class="font-bold">${escapeHtml(task.order_number || "-")}</p></div>
-                <div><p class="text-slate-500">计划生产</p><p class="font-bold">${escapeHtml(task.planned_output_quantity ?? task.order_quantity ?? 0)} 只</p></div>
+                <div><p class="text-slate-500">${task.receipt_purpose_managed ? "已自动形成" : "计划生产"}</p><p class="font-bold">${escapeHtml(task.receipt_purpose_managed ? (task.actual_output_quantity ?? 0) : (task.planned_output_quantity ?? task.order_quantity ?? 0))} 只</p></div>
                 <div><p class="text-slate-500">当前可生产</p><p class="font-bold">${escapeHtml(task.current_producible_quantity ?? 0)} 只</p></div>
                 <div><p class="text-slate-500">工艺</p><p class="font-bold">${escapeHtml(task.production_process || task.cutting_mode || "-")}</p></div>
               </div>
+              ${task.receipt_purpose_managed && task.completion_block_message ? `<p class="mt-2 rounded-lg bg-blue-50 p-2 text-sm font-bold text-blue-800">${escapeHtml(task.completion_block_message)}</p>` : ""}
             </article>`).join("")
         : `<div class="rounded-xl bg-white p-5 text-center font-bold text-slate-600">${escapeHtml(payload.message || "未生成生产任务")}</div>`;
       $("productionDetailBody").innerHTML = `

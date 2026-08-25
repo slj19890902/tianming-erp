@@ -24,7 +24,10 @@ from app.models.warehouse_inventory import (
     Floor3LocationLayout,
     WarehouseLocation,
 )
-from app.services.location_candidates import operational_location_issue
+from app.services.location_candidates import (
+    claim_active_placed_location,
+    operational_location_issue,
+)
 
 
 class Floor3LocationError(ValueError):
@@ -288,6 +291,23 @@ def _claim_empty_active_location(
     expected_layout_version: int | None = None,
 ) -> None:
     """Serialize occupancy with slot disabling using the SQLite writer lock."""
+    try:
+        floor_claimed = claim_active_placed_location(
+            db,
+            int(location.id),
+            expected_layout_version=expected_layout_version,
+        )
+    except OperationalError as error:
+        raise Floor3LocationError(
+            "目标货位正在被其他入库、移位或布局操作使用，请稍后重试",
+            status_code=409,
+        ) from error
+    if not floor_claimed:
+        raise Floor3LocationError(
+            "目标货位或其当前发布地图版本已经变化，请刷新后重试",
+            status_code=409,
+        )
+
     claim_conditions = [
         WarehouseLocation.id == location.id,
         WarehouseLocation.is_active.is_(True),
@@ -1274,6 +1294,16 @@ def create_pallet(
                 "该货位已有当前栈板，请先移位或清空", status_code=409
             ) from error
         raise
+    if allow_operational_location:
+        # The floor mutex may have waited for a map publish.  Re-evaluate the
+        # target against that now-current published projection before writing
+        # any pallet or inventory fact.
+        location = _operational_pallet_location(
+            db,
+            location_id,
+            require_published=require_published_location,
+            required_inventory_type=required_inventory_type,
+        )
     if not items:
         raise Floor3LocationError("栈板至少需要一条内容")
 
@@ -2113,6 +2143,33 @@ def move_pallet(
             require_no_live_inventory=require_published_target,
             expected_layout_version=expected_target_layout_version,
         )
+        target = db.get(
+            WarehouseLocation,
+            int(to_location_id),
+            populate_existing=True,
+        )
+        if target is None:
+            raise Floor3LocationError("目标货位不存在", status_code=404)
+        post_claim_issue = operational_location_issue(
+            db,
+            target,
+            warehouse_types={"finished", "shared"},
+            pallet_storage_only=True,
+            require_published=require_published_target,
+            require_map_geometry=require_published_target,
+            required_inventory_type=(
+                "finished" if require_published_target else None
+            ),
+            require_empty=require_published_target,
+            capacity_source_location_id=(
+                int(row.location_id) if require_published_target else None
+            ),
+        )
+        if post_claim_issue:
+            raise Floor3LocationError(
+                f"目标货位不可用：{post_claim_issue}",
+                status_code=409,
+            )
 
         # A duplicate may have committed while this request waited for that
         # writer lock. Recheck before claiming the pallet version.

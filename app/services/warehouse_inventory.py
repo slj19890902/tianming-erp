@@ -51,6 +51,8 @@ from app.services.inventory_cost_snapshot import (
 )
 from app.services.location_candidates import (
     claim_active_placed_location,
+    has_space_ledger,
+    load_warehouse_location_projection_contexts,
     operational_location_issue,
 )
 
@@ -528,16 +530,30 @@ def _location(
             raise WarehouseInventoryError(
                 "V11 货位楼层无效，不能办理成品入库", 409
             )
+    require_published_location = has_space_ledger(db)
     if inventory_type == "finished":
         if getattr(location, "placement_status", None) == "unplaced":
             raise WarehouseInventoryError(
                 "该库位尚未完成空间放置，不能办理成品库存业务",
                 409,
             )
+        projection_context = (
+            load_warehouse_location_projection_contexts(db, [location]).get(
+                int(location.id), {}
+            )
+            if require_published_location
+            else None
+        )
         issue = operational_location_issue(
             db,
             location,
             warehouse_types=allowed,
+            require_published=require_published_location,
+            require_map_geometry=require_published_location,
+            required_inventory_type=(
+                "finished" if require_published_location else None
+            ),
+            projection_context=projection_context,
         )
         if issue:
             raise WarehouseInventoryError(f"{issue}，不能办理成品库存业务", 409)
@@ -577,8 +593,26 @@ def _location(
             "该库位尚未完成空间放置，不能入库；请先补齐楼层、区域和存储方式",
             409,
         )
-    if location.warehouse_type not in allowed:
-        raise WarehouseInventoryError("所选库位类型与库存类型不匹配")
+    projection_context = (
+        load_warehouse_location_projection_contexts(db, [location]).get(
+            int(location.id), {}
+        )
+        if require_published_location
+        else None
+    )
+    issue = operational_location_issue(
+        db,
+        location,
+        warehouse_types=allowed,
+        require_published=require_published_location,
+        require_map_geometry=require_published_location,
+        required_inventory_type=(
+            "semi_finished" if require_published_location else None
+        ),
+        projection_context=projection_context,
+    )
+    if issue:
+        raise WarehouseInventoryError(f"{issue}，不能办理半成品库存业务", 409)
     return location
 
 
@@ -1288,6 +1322,23 @@ def manual_finished_in(
 
 
 def active_finished_reserved_qty(db: Session, order_item_id: int) -> int:
+    """Return canonical order coverage: delivered plus unconsumed reservation.
+
+    Consumed reservation credit normally becomes ``delivered_quantity``.  The
+    two facts are kept independent because formal receipt reconciliation and
+    legacy imports can adjust delivery without mutating reservation history.
+    Adding delivered to *remaining* credit avoids both omission and double
+    counting.
+    """
+
+    delivered_quantity = int(
+        db.scalar(
+            select(OrderItem.delivered_quantity).where(
+                OrderItem.id == int(order_item_id)
+            )
+        )
+        or 0
+    )
     rows = db.scalars(
         select(InventoryReservation).where(
             InventoryReservation.order_item_id == order_item_id,
@@ -1296,14 +1347,16 @@ def active_finished_reserved_qty(db: Session, order_item_id: int) -> int:
             InventoryReservation.status != "cancelled",
         )
     ).all()
-    return sum(
+    remaining_reserved = sum(
         max(
             int(row.credited_requirement_quantity or 0)
+            - int(row.consumed_requirement_quantity or 0)
             - int(row.released_requirement_quantity or 0),
             0,
         )
         for row in rows
     )
+    return max(delivered_quantity, 0) + remaining_reserved
 
 
 def active_finished_reservations_by_item_ids(
@@ -1311,6 +1364,14 @@ def active_finished_reservations_by_item_ids(
 ) -> dict[int, int]:
     if not order_item_ids:
         return {}
+    delivered_by_item_id = {
+        int(order_item_id): max(int(delivered_quantity or 0), 0)
+        for order_item_id, delivered_quantity in db.execute(
+            select(OrderItem.id, OrderItem.delivered_quantity).where(
+                OrderItem.id.in_(order_item_ids)
+            )
+        )
+    }
     rows = db.scalars(
         select(InventoryReservation).where(
             InventoryReservation.order_item_id.in_(order_item_ids),
@@ -1319,12 +1380,13 @@ def active_finished_reservations_by_item_ids(
             InventoryReservation.status != "cancelled",
         )
     ).all()
-    result: dict[int, int] = {}
+    result: dict[int, int] = dict(delivered_by_item_id)
     for row in rows:
         if row.order_item_id is None:
             continue
         result[row.order_item_id] = result.get(row.order_item_id, 0) + max(
             int(row.credited_requirement_quantity or 0)
+            - int(row.consumed_requirement_quantity or 0)
             - int(row.released_requirement_quantity or 0),
             0,
         )

@@ -45,6 +45,36 @@ def _error_code(response) -> str:
     return code
 
 
+def _use_p181_published_map_identity(monkeypatch) -> None:
+    import app.services.location_candidates as location_candidates
+
+    identity = {
+        "revision": "p181-anonymous-map-v1",
+        "zones_by_id": {
+            "zone-p181-1f-dispatch": "DISPATCH",
+            "zone-p181-1f-fin-001": "FIN-001",
+            "zone-p181-1f-a1": "A1",
+        },
+        "zone_ids_by_area": {
+            "DISPATCH": ("zone-p181-1f-dispatch",),
+            "FIN-001": ("zone-p181-1f-fin-001",),
+            "A1": ("zone-p181-1f-a1",),
+        },
+    }
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda _floor_number: identity,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _p181_published_map_identity(monkeypatch) -> None:
+    """Keep every isolated P1-81 receipt on one anonymous current map."""
+
+    _use_p181_published_map_identity(monkeypatch)
+
+
 def _seed_material_and_staging(session_factory) -> int:
     from app.models.material import Material
     from app.models.order import OrderItem
@@ -1662,10 +1692,16 @@ def test_composite_reversal_removes_immutable_allocations_from_production_summar
             )
             if int(item["order_item_id"]) == 1
         )
-    assert row["receipt_purpose_summary"] == {
-        "order_purpose_received_sheet_qty": 0,
-        "reserve_purpose_received_sheet_qty": 0,
-        "automatic_finished_output_qty": 0,
+    summary = row["receipt_purpose_summary"]
+    assert row["receipt_purpose_managed"] is True
+    assert row["completion_actionable"] is False
+    assert summary["order_purpose_received_sheet_qty"] == 0
+    assert summary["reserve_purpose_received_sheet_qty"] == 0
+    assert summary["automatic_finished_output_qty"] == 0
+    assert summary["current_theoretical_finished_capacity_qty"] == 0
+    assert {item["component_type"] for item in summary["component_progress"]} == {
+        "cover",
+        "base",
     }
 
 
@@ -2948,6 +2984,467 @@ def test_composite_internal_tasks_never_escape_employee_lists_or_search(
                 ]
             }
         )
+
+
+def test_partial_composite_receipt_has_no_manual_remaining_capacity_or_duplicate_post(
+    requisition_app,
+) -> None:
+    from app.api.production import router as production_router
+    from app.models.production import ProductionCompletion
+    from app.models.warehouse_inventory import InventoryLot
+    from app.services.production_workflow import ensure_receipt_auto_main_task
+
+    app, session_factory = requisition_app
+    app.include_router(production_router, prefix="/api/production")
+    _seed_material_and_staging(session_factory)
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        sources = _create_frozen_sources(
+            client,
+            session_factory,
+            order_quantity=30,
+            purchase_total=30,
+            order_purpose=30,
+            stock_purpose=0,
+            composite=True,
+        )
+        facts: dict[str, dict] = {}
+        for source in sources:
+            frozen = _freeze_receipt_fact(
+                client,
+                source,
+                idempotency_key=f"p1102-partial-price-{source.component_type}",
+            )
+            assert frozen.status_code == 200, frozen.text
+            facts[source.component_type] = frozen.json()
+
+        # Reproduce an already-existing legacy pending task.  Freezing the
+        # purpose source must remove this row from the ordinary fast path before
+        # the first receipt posts any allocation.
+        with session_factory() as session:
+            task = ensure_receipt_auto_main_task(session, order_item_id=1)
+            task.status = "pending"
+            task.planned_quantity = 30
+            task.material_received_quantity = 30
+            task.material_input_quantity = 30
+            task.readiness_basis = "legacy_material_received"
+            session.commit()
+
+        before_first_receipt = client.get(
+            "/api/production/tasks",
+            params={"status": "pending", "page": 1, "page_size": 25},
+        )
+        assert before_first_receipt.status_code == 200, before_first_receipt.text
+        before_first_row = next(
+            item
+            for item in before_first_receipt.json()["items"]
+            if int(item["order_item_id"]) == 1
+        )
+        assert before_first_row["receipt_purpose_managed"] is True
+        assert before_first_row["completion_actionable"] is False
+        assert before_first_row["actual_output_quantity"] == 0
+        before_first_duplicate = client.post(
+            "/api/production/completion-batches",
+            json={
+                "idempotency_key": "p1102-manual-before-first-receipt",
+                "items": [
+                    {
+                        "task_id": before_first_row["id"],
+                        "expected_version": before_first_row["version"],
+                        "disposition": "direct",
+                        "material_input_quantity": 1,
+                        "actual_output_quantity": 1,
+                        "defective_quantity": 0,
+                        "direct_delivery_quantity": 1,
+                    }
+                ],
+            },
+        )
+        assert before_first_duplicate.status_code == 409, before_first_duplicate.text
+
+        by_component = {source.component_type: source for source in sources}
+        cover_received = _receive(
+            client,
+            by_component["cover"],
+            facts["cover"],
+            quantity=10,
+            idempotency_key="p1102-partial-receive-cover",
+        )
+        assert cover_received.status_code == 200, cover_received.text
+
+        zero_output_pending = client.get(
+            "/api/production/tasks",
+            params={"page": 1, "page_size": 25},
+        )
+        assert zero_output_pending.status_code == 200, zero_output_pending.text
+        zero_output_row = next(
+            item
+            for item in zero_output_pending.json()["items"]
+            if int(item["order_item_id"]) == 1
+        )
+        assert zero_output_row["receipt_purpose_managed"] is True
+        assert zero_output_row["actual_output_quantity"] == 0
+        assert zero_output_row["receipt_purpose_summary"][
+            "waiting_component_labels"
+        ] == ["底片"]
+        assert zero_output_row["receipt_purpose_summary"][
+            "waiting_component_gap_quantity"
+        ] == 10
+        assert "底片" in zero_output_row["completion_block_message"]
+        zero_output_duplicate = client.post(
+            "/api/production/completion-batches",
+            json={
+                "idempotency_key": "p1102-manual-before-kit-complete",
+                "items": [
+                    {
+                        "task_id": zero_output_row["id"],
+                        "expected_version": zero_output_row["version"],
+                        "disposition": "direct",
+                        "material_input_quantity": 1,
+                        "actual_output_quantity": 1,
+                        "defective_quantity": 0,
+                        "direct_delivery_quantity": 1,
+                    }
+                ],
+            },
+        )
+        assert zero_output_duplicate.status_code == 409, zero_output_duplicate.text
+        assert "冻结收料用途自动形成成品" in zero_output_duplicate.json()["detail"]
+
+        base_received = _receive(
+            client,
+            by_component["base"],
+            facts["base"],
+            quantity=10,
+            idempotency_key="p1102-partial-receive-base",
+        )
+        assert base_received.status_code == 200, base_received.text
+
+        pending = client.get(
+            "/api/production/tasks",
+            params={"status": "pending", "page": 1, "page_size": 25},
+        )
+        assert pending.status_code == 200, pending.text
+        row = next(
+            item
+            for item in pending.json()["items"]
+            if int(item["order_item_id"]) == 1
+        )
+        assert row["receipt_purpose_managed"] is True
+        assert row["completion_actionable"] is False
+        assert row["completion_block_code"] == "receipt_auto_managed"
+        assert "自动形成" in row["completion_block_message"]
+        assert row["available_material_input_quantity"] == 0
+        assert row["planned_output_quantity"] == 0
+        assert row["actual_output_quantity"] == 10
+        summary = row["receipt_purpose_summary"]
+        assert summary["order_purpose_received_sheet_qty"] == 20
+        assert summary["reserve_purpose_received_sheet_qty"] == 0
+        assert summary["automatic_finished_output_qty"] == 10
+        assert summary["current_theoretical_finished_capacity_qty"] == 10
+        assert summary["currently_unposted_finished_capacity_qty"] == 0
+        assert summary["waiting_component_labels"] == ["盖片", "底片"]
+        assert "盖片、底片" in row["completion_block_message"]
+        assert {
+            item["component_type"]: item["current_finished_capacity_qty"]
+            for item in summary["component_progress"]
+        } == {"cover": 10, "base": 10}
+
+        with session_factory() as session:
+            completion_count = int(
+                session.scalar(select(func.count(ProductionCompletion.id))) or 0
+            )
+            finished_lot_count = int(
+                session.scalar(
+                    select(func.count(InventoryLot.id)).where(
+                        InventoryLot.inventory_type == "finished"
+                    )
+                )
+                or 0
+            )
+
+        duplicate = client.post(
+            "/api/production/completion-batches",
+            json={
+                "idempotency_key": "p1102-manual-duplicate",
+                "items": [
+                    {
+                        "task_id": row["id"],
+                        "expected_version": row["version"],
+                        "disposition": "direct",
+                        "material_input_quantity": 10,
+                        "actual_output_quantity": 10,
+                        "defective_quantity": 0,
+                        "direct_delivery_quantity": 10,
+                    }
+                ],
+            },
+        )
+        assert duplicate.status_code == 409, duplicate.text
+        assert "冻结收料用途自动形成成品" in duplicate.json()["detail"]
+
+    with session_factory() as session:
+        assert int(session.scalar(select(func.count(ProductionCompletion.id))) or 0) == completion_count
+        assert int(
+            session.scalar(
+                select(func.count(InventoryLot.id)).where(
+                    InventoryLot.inventory_type == "finished"
+                )
+            )
+            or 0
+        ) == finished_lot_count
+
+
+def test_receipt_auto_reserves_only_order_quantity_not_already_covered(
+    requisition_app,
+) -> None:
+    from app.models.order import Order, OrderItem
+    from app.models.production import ProductionCompletion, ProductionTask
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryReservation,
+        WarehouseLocation,
+    )
+    from app.services.warehouse_inventory import (
+        active_finished_reserved_qty,
+        manual_finished_in,
+    )
+
+    app, session_factory = requisition_app
+    _seed_material_and_staging(session_factory)
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        source = _create_frozen_sources(
+            client,
+            session_factory,
+            order_quantity=30,
+            purchase_total=30,
+            order_purpose=30,
+            stock_purpose=0,
+        )[0]
+        frozen = _freeze_receipt_fact(
+            client,
+            source,
+            idempotency_key="p1102-existing-coverage-price",
+        )
+        assert frozen.status_code == 200, frozen.text
+
+        # Reproduce two independent facts that appear after the purchase
+        # purpose was frozen but before its receipt posts: five boxes already
+        # delivered and ten boxes still reserved.  This deliberately writes
+        # only the isolated fixture database.
+        with session_factory() as session:
+            item = session.get(OrderItem, 1)
+            assert item is not None
+            order = session.get(Order, item.order_id)
+            location = session.scalar(
+                select(WarehouseLocation).where(
+                    WarehouseLocation.location_code == "F1-FIN-001-L001"
+                )
+            )
+            assert order is not None and location is not None
+            item.delivered_quantity = 5
+            order.status = "partially_delivered"
+            existing_lot = manual_finished_in(
+                session,
+                customer_id=order.customer_id,
+                product_id=item.product_id,
+                location_id=location.id,
+                quantity=10,
+                stock_date=datetime.now().date(),
+                source_type="manual",
+                remarks="P1-102 existing finished coverage",
+                operator_id=1,
+                idempotency_key="p1102-existing-finished-in",
+                expected_layout_version=int(location.floor3_layout.version),
+            )
+            existing_lot.quantity_available = 0
+            existing_lot.quantity_reserved = 10
+            existing_lot.version = int(existing_lot.version or 1) + 1
+            session.add(
+                InventoryReservation(
+                    reservation_number="P1102-EXISTING-COVERAGE",
+                    inventory_lot_id=existing_lot.id,
+                    reservation_type="finished_order",
+                    order_id=order.id,
+                    order_item_id=item.id,
+                    reserved_stock_quantity=10,
+                    credited_requirement_quantity=10,
+                    yield_factor=1,
+                    status="active",
+                    warning_codes="[]",
+                    reserved_by=1,
+                    reserved_at=datetime.now(),
+                    idempotency_key="p1102-existing-finished-reserve",
+                )
+            )
+            session.commit()
+
+        received = _receive(
+            client,
+            source,
+            frozen.json(),
+            quantity=30,
+            idempotency_key="p1102-existing-coverage-receive",
+        )
+        assert received.status_code == 200, received.text
+        replayed = _receive(
+            client,
+            source,
+            frozen.json(),
+            quantity=30,
+            idempotency_key="p1102-existing-coverage-receive",
+        )
+        assert replayed.status_code == 200, replayed.text
+
+    with session_factory() as session:
+        from app.services.production_workflow import (
+            list_production_tasks,
+            production_ready_quantity,
+        )
+        from app.services.receipt_managed_production import (
+            receipt_purpose_summaries_by_order_item_ids,
+        )
+
+        completion = session.scalar(
+            select(ProductionCompletion).where(
+                ProductionCompletion.origin == "receipt_auto",
+                ProductionCompletion.status == "posted",
+            )
+        )
+        assert completion is not None
+        assert int(completion.actual_output_quantity) == 30
+        assert int(completion.order_reserved_quantity) == 15
+        assert int(completion.surplus_finished_quantity) == 15
+        auto_lot = session.get(InventoryLot, completion.inventory_lot_id)
+        task = session.get(ProductionTask, completion.task_id)
+        assert auto_lot is not None and task is not None
+        assert int(auto_lot.quantity_reserved) == 15
+        assert int(auto_lot.quantity_available) == 15
+        assert active_finished_reserved_qty(session, 1) == 30
+        assert int(task.finished_coverage_snapshot) == 30
+        assert task.status == "completed"
+        item = session.get(OrderItem, 1)
+        assert item is not None
+        assert production_ready_quantity(session, item) == 45
+        summary = receipt_purpose_summaries_by_order_item_ids(session, [1])[1]
+        assert summary["automatic_order_reserved_quantity"] == 15
+        assert summary["automatic_surplus_finished_quantity"] == 15
+        rows = list_production_tasks(
+            session,
+            allowed_customer_ids=None,
+            status=None,
+        )
+        row = next(value for value in rows if int(value["order_item_id"]) == 1)
+        assert row["order_reserved_quantity"] == 15
+        assert row["surplus_finished_quantity"] == 15
+        assert int(
+            session.scalar(
+                select(func.count(ProductionCompletion.id)).where(
+                    ProductionCompletion.origin == "receipt_auto"
+                )
+            )
+            or 0
+        ) == 1
+
+
+def test_inactive_frozen_snapshot_keeps_only_received_plan_capacity(
+    requisition_app,
+) -> None:
+    from app.models.purchase_receipt import IncomingReceiptPurposeAllocation
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+    from app.services.receipt_managed_production import (
+        receipt_purpose_summaries_by_order_item_ids,
+    )
+
+    app, session_factory = requisition_app
+    _seed_material_and_staging(session_factory)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        source = _create_frozen_sources(
+            client,
+            session_factory,
+            order_quantity=30,
+            purchase_total=30,
+            order_purpose=30,
+            stock_purpose=0,
+        )[0]
+        fact = _freeze_receipt_fact(
+            client,
+            source,
+            idempotency_key="p1102-inactive-plan-price",
+        )
+        assert fact.status_code == 200, fact.text
+        received = _receive(
+            client,
+            source,
+            fact.json(),
+            quantity=10,
+            idempotency_key="p1102-inactive-plan-receive",
+        )
+        assert received.status_code == 200, received.text
+
+    with session_factory() as session:
+        supplier_item = session.get(
+            SupplierRequisitionOrderItem,
+            source.supplier_item_id,
+        )
+        assert supplier_item is not None
+        supplier_order = session.get(
+            SupplierRequisitionOrder,
+            supplier_item.supplier_order_id,
+        )
+        assert supplier_order is not None
+        supplier_order.status = "voided"
+        supplier_order.voided_at = datetime.now()
+        session.commit()
+
+    with session_factory() as session:
+        summary = receipt_purpose_summaries_by_order_item_ids(session, [1])[1]
+    assert summary["automatic_finished_output_qty"] == 10
+    assert summary["future_planned_finished_capacity_qty"] == 0
+    assert summary["remaining_order_purpose_sheet_qty"] == 0
+    assert len(summary["component_progress"]) == 1
+    component = summary["component_progress"][0]
+    assert component["planned_order_sheet_qty"] == 10
+    assert component["received_order_sheet_qty"] == 10
+    assert component["remaining_order_sheet_qty"] == 0
+
+    with session_factory() as session:
+        allocation = session.scalar(select(IncomingReceiptPurposeAllocation))
+        assert allocation is not None
+        allocation.finished_output_qty_after = 11
+        allocation.finished_output_qty_delta = 11
+        session.commit()
+
+    with session_factory() as session:
+        inconsistent = receipt_purpose_summaries_by_order_item_ids(session, [1])[1]
+    assert inconsistent["automatic_finished_output_qty"] == 11
+    assert inconsistent["current_theoretical_finished_capacity_qty"] == 10
+    assert inconsistent["projection_inconsistent"] is True
+
+
+def test_unposted_receipt_auto_capacity_uses_projection_inconsistency_block() -> None:
+    from app.services.production_workflow import _receipt_managed_completion_block
+
+    code, message = _receipt_managed_completion_block(
+        {
+            "currently_unposted_finished_capacity_qty": 7,
+            "projection_inconsistent": False,
+            "waiting_component_labels": [],
+            "waiting_component_gap_quantity": 0,
+        },
+        automatic_output=10,
+    )
+    assert code == "receipt_auto_projection_inconsistent"
+    assert "7 个配套产能尚未结转" in message
+    assert "停止人工完工" in message
+    assert "当前没有尚未结转" not in message
 
 
 def test_three_line_batch_receipt_continues_after_sibling_dispatch(

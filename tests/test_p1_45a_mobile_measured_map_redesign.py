@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -48,6 +49,7 @@ def _run_node(tmp_path: Path, name: str, source: str) -> None:
 
 def _add_measured_pick_location(
     pick_app,
+    monkeypatch: pytest.MonkeyPatch,
     *,
     floor: int = 3,
     area_code: str = "C1",
@@ -58,9 +60,32 @@ def _add_measured_pick_location(
     from app.models.warehouse_inventory import (
         Floor3LocationLayout,
         InventoryReservation,
+        WarehouseArea,
+        WarehouseAreaStoragePolicy,
+        WarehouseFloor,
         WarehouseLocation,
     )
+    from app.services import location_candidates
     from app.services.warehouse_inventory import manual_finished_in
+
+    current_revision = "p1-45a-current-map"
+    if floor == 3:
+        feature_id = f"zone-p1-45a-{area_code.lower()}"
+        monkeypatch.setattr(
+            location_candidates,
+            "load_warehouse_twin_published_floor_identity",
+            lambda floor_number: (
+                {
+                    "revision": current_revision,
+                    "zones_by_id": {feature_id: area_code},
+                    "zone_ids_by_area": {area_code: (feature_id,)},
+                }
+                if int(floor_number) == floor
+                else None
+            ),
+        )
+    else:
+        feature_id = None
 
     _app, factory, ids, _operation_log = pick_app
     with factory() as db:
@@ -73,8 +98,10 @@ def _add_measured_pick_location(
             warehouse_type="finished",
             warehouse_floor=floor,
             area_code=area_code,
+            storage_type="rack",
             sort_order=8,
             placement_status="placed",
+            source_version="TWIN_V1",
         )
         db.add(location)
         db.flush()
@@ -100,6 +127,7 @@ def _add_measured_pick_location(
             remarks=None,
             operator_id=admin.id,
             idempotency_key="p1-45a-measured-lot",
+            expected_layout_version=1,
         )
         lot.quantity_available = 0
         lot.quantity_reserved = 100
@@ -118,15 +146,43 @@ def _add_measured_pick_location(
                 idempotency_key="p1-45a-map-reservation",
             )
         )
+        floor_row = WarehouseFloor(
+            floor_code=f"{floor}F",
+            floor_name=f"{floor}楼",
+            floor_number=floor,
+            construction_status="enabled",
+        )
+        db.add(floor_row)
+        db.flush()
+        area = WarehouseArea(
+            floor_id=floor_row.id,
+            area_code=area_code,
+            area_name=f"{area_code}区",
+            construction_status="enabled",
+        )
+        db.add(area)
+        db.flush()
+        if feature_id is not None:
+            db.add(
+                WarehouseAreaStoragePolicy(
+                    area_id=area.id,
+                    map_feature_id=feature_id,
+                    allowed_inventory_types_json='["finished"]',
+                    storage_layout="rack",
+                    status="published",
+                    published_map_revision=current_revision,
+                )
+            )
         db.commit()
         return int(location.id), int(lot.id)
 
 
 def test_pick_task_measured_map_is_read_only_scoped_and_picker_accessible(
     pick_app,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, factory, ids, operation_log = pick_app
-    location_id, _lot_id = _add_measured_pick_location(pick_app)
+    location_id, _lot_id = _add_measured_pick_location(pick_app, monkeypatch)
     with TestClient(app) as client:
         _login(client, "admin")
         task = _create_task(client, ids["delivery"])
@@ -174,12 +230,13 @@ def test_pick_task_measured_map_is_read_only_scoped_and_picker_accessible(
 
 def test_measured_map_denies_another_picker_and_never_expands_task_scope(
     pick_app,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.core.security import hash_password
     from app.models.user import User
 
     app, factory, ids, _operation_log = pick_app
-    _add_measured_pick_location(pick_app)
+    _add_measured_pick_location(pick_app, monkeypatch)
     with TestClient(app) as client:
         _login(client, "admin")
         task = _create_task(client, ids["delivery"])
@@ -202,10 +259,14 @@ def test_measured_map_denies_another_picker_and_never_expands_task_scope(
         assert "F3-C1-08" not in hidden.text
 
 
-def test_task_location_without_measured_floor_fails_closed_to_text(pick_app) -> None:
+def test_task_location_without_measured_floor_fails_closed_to_text(
+    pick_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app, _factory, ids, _operation_log = pick_app
     _add_measured_pick_location(
         pick_app,
+        monkeypatch,
         floor=2,
         area_code="B2",
         location_code="F2-B2-08",
@@ -284,7 +345,8 @@ async function request(url){{
   await switching;
   first.resolve({{floor_code:"2F",floor_name:"二楼",area_code:"B2",area_name:"B2",map_status:"ready",guidance:"old",bounds_mm:null,features:[],groups:[{{key:"g2",location_code:"B2-L01",recommended_sequence:1,total_pick_quantity:9,geometry:{{left_pct:10,top_pct:10,width_pct:8,height_pct:8}},lines:[]}}]}});
   await opening;
-  if(mapData.floor_code!=="3F"||!nodes.taskMap.innerHTML.includes("C1-L02")||nodes.taskMap.innerHTML.includes("B2-L01"))throw new Error("old slow map request overwrote the selected floor");
+  const visibleKeys=(mapData.groups||[]).map(group=>group.key);
+  if(mapData.floor_code!=="3F"||!visibleKeys.includes("g3")||visibleKeys.includes("g2"))throw new Error("old slow map request overwrote the selected floor");
 }})().catch(error=>{{console.error(error);process.exit(1)}});
 """
     _run_node(tmp_path, "p1-45a-map-latest-wins.js", harness)

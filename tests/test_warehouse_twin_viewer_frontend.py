@@ -177,7 +177,7 @@ def test_operational_twin_expands_real_area_inventory_with_local_filter_and_sear
     assert 'const selectedAreaActivationLabel = selectedAreaHasPublishedBinding' in SOURCE
     assert "区域已启用，当前没有货物" in SOURCE
     assert "库存为 0 不代表区域未启用" in SOURCE
-    assert "{formatNumber(item.available_quantity ?? item.quantity)} {inventoryUnitLabel(item.unit)}" in SOURCE
+    assert "{formatNumber(inventoryPhysicalQuantity(item))} {inventoryUnitLabel(item.unit)}" in SOURCE
     assert "已预占 {formatNumber(item.reserved_quantity)} {inventoryUnitLabel(item.unit)}" in SOURCE
     assert "visibleSelectedInventory" in SOURCE
     assert "查看全部 ${filteredSelectedInventory.length} 条库存" in SOURCE
@@ -265,7 +265,9 @@ def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location
     assert "searchHighlightAreaCodes(searchHighlightItems, floorCode)" in SOURCE
     assert "highlightFeatureIds={searchHighlightFeatureIds}" in SOURCE
     assert "highlightedPalletIds={searchHighlightPalletIds}" in SOURCE
-    assert "buildMappedLocationPallets(features, visualLocations, floorCode, standardPallet, layout?.id)" in SOURCE
+    assert "buildMappedLocationPallets(" in SOURCE
+    assert 'item.position_status === "mapped"' in SOURCE
+    assert "unlocated_inventory" in SOURCE
     assert "const mappedLocationPallets = useMemo(" in SOURCE
     assert "const movePreviewPallets = useMemo(() =>" in SOURCE
     assert "if (mapMode !== \"move\" || !moveDrafts.length) return mappedLocationPallets" in SOURCE
@@ -488,15 +490,15 @@ def test_p1_42b_uses_only_measured_dispatch_zones_and_keeps_transfer_targets() -
     assert measured_dispatch == {"ZONE-1F-FIN-001", "ZONE-1F-FIN-002", "ZONE-1F-FIN-003"}
 
     assert "isMeasuredDispatchFeature" in SOURCE
-    assert "buildMeasuredDispatchPallets" in SOURCE
-    assert "只使用当前实测地图内已经确认的待送区域轮廓" in SOURCE
-    assert "不向图外补画或扩展区域" in SOURCE
-    assert "散存待送 · 未绑定实体栈板" in SOURCE
-    assert "块真实待送栈板" in SOURCE
-    assert "点击栈板可实时查看产品、客户和数量" in SOURCE
-    assert 'id: `erp-dispatch-pallet-${pallet.pallet_id}`' in (ROOT / "factory_twin/frontend/src/warehouseInventory.mjs").read_text(encoding="utf-8")
-    assert 'entity.id.startsWith("erp-dispatch-pallet-")' in SOURCE
-    assert "移动这块栈板到 1F / 3F" in SOURCE
+    assert "buildMeasuredDispatchPallets" not in SOURCE
+    assert "待定位成品" in SOURCE
+    inventory_source = (ROOT / "factory_twin/frontend/src/warehouseInventory.mjs").read_text(encoding="utf-8")
+    assert "Borrowing a" in inventory_source
+    assert "FIN polygon would falsely tell operators" in inventory_source
+    assert "unlocated_inventory blocker" in inventory_source
+    assert 'id: `erp-dispatch-pallet-${pallet.pallet_id}`' not in inventory_source
+    assert "账上有货，但没有已发布实测格位" in SOURCE
+    assert "不会借用其他区域坐标" in SOURCE
     assert "const switchWarehouseFloor" in SOURCE
     assert "来源 ${moveSource.inventory_code} 仍保留" in SOURCE
     assert 'onClick={() => switchWarehouseFloor("3F")}' in SOURCE

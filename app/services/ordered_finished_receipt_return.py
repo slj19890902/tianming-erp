@@ -14,12 +14,16 @@ from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryMovement,
+    InventoryPallet,
     InventoryReservation,
     OrderedFinishedReceiptReturn,
+    WarehouseLocation,
 )
 from app.services.location_candidates import (
     claim_active_placed_location,
+    has_space_ledger,
     list_operational_locations,
+    operational_location_issue,
 )
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
@@ -134,6 +138,62 @@ def _claim_return_destination(
         raise WarehouseInventoryError(
             "退回库位已停用、尚未落位或状态已变化，请刷新后重试", 409
         )
+
+
+def _return_location_candidates(db: Session) -> dict[int, WarehouseLocation]:
+    """Return empty destinations that pass the current authoritative map gate."""
+
+    rows = list_operational_locations(
+        db,
+        warehouse_types={"finished", "shared"},
+        empty_only=True,
+    )
+    if not has_space_ledger(db):
+        return {int(row.location.id): row.location for row in rows}
+
+    occupied_pallet_counts = {
+        (int(floor_number), str(area_code or "").strip().upper()): int(count)
+        for floor_number, area_code, count in db.execute(
+            select(
+                WarehouseLocation.warehouse_floor,
+                func.upper(WarehouseLocation.area_code),
+                func.count(InventoryPallet.id),
+            )
+            .join(
+                InventoryPallet,
+                InventoryPallet.location_id == WarehouseLocation.id,
+            )
+            .where(InventoryPallet.is_current.is_(True))
+            .group_by(
+                WarehouseLocation.warehouse_floor,
+                func.upper(WarehouseLocation.area_code),
+            )
+        ).all()
+        if floor_number is not None
+    }
+    return {
+        int(row.location.id): row.location
+        for row in rows
+        if operational_location_issue(
+            db,
+            row.location,
+            warehouse_types={"finished", "shared"},
+            require_published=True,
+            require_map_geometry=True,
+            required_inventory_type="finished",
+            require_empty=True,
+            projection_context=row.projection_context,
+            known_occupied=row.occupied,
+            area_occupied_pallet_count=occupied_pallet_counts.get(
+                (
+                    int(row.location.warehouse_floor or 0),
+                    str(row.location.area_code or "").strip().upper(),
+                ),
+                0,
+            ),
+        )
+        is None
+    }
 
 
 def _clone_return_lot(
@@ -389,12 +449,10 @@ def restore_ordered_finished_receipt_shortage(
         return_location_id,
         expected_layout_version=expected_return_layout_version,
     )
-    location_rows = list_operational_locations(
-        db,
-        warehouse_types={"finished", "shared"},
-        empty_only=True,
-    )
-    allowed_locations = {row.location.id: row.location for row in location_rows}
+    # The destination claim serializes this fresh projection read with map and
+    # inventory writers.  Historical/unmapped locations remain valid sources,
+    # but a customer return must never create new stock outside the current map.
+    allowed_locations = _return_location_candidates(db)
     if return_location_id not in allowed_locations:
         raise WarehouseInventoryError("退回库位不可用或已有货物，请重新选择", 409)
 

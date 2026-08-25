@@ -10,6 +10,7 @@ import re
 import socket
 import sqlite3
 from threading import Lock
+from collections.abc import Mapping
 from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
@@ -298,10 +299,13 @@ from app.services.mold_label_template import (
 )
 from app.services.location_candidates import (
     claim_active_placed_location,
+    claim_warehouse_floor_projection,
     has_space_ledger,
     list_operational_locations,
+    load_warehouse_location_projection_contexts,
     operational_location_issue,
     operational_location_payload,
+    warehouse_location_projection,
 )
 from app.services.warehouse_location_address import (
     AddressChangeCommand,
@@ -1957,24 +1961,73 @@ def _require_reservation_customer_access(
         require_customer_access(customer_id, user, db)
 
 
-def _location_map_status(row: WarehouseLocation) -> str:
-    if (
-        row.source_version not in {"V11", AREA_LOCATION_SOURCE_VERSION}
-        or (row.placement_status or "placed") != "placed"
-        or not row.is_active
-        or row.floor3_layout is None
-    ):
-        return "unplaced" if row.source_version in {"V11", AREA_LOCATION_SOURCE_VERSION} else "ledger_only"
-    if row.source_version == "V11" and int(row.warehouse_floor or 0) != 3:
-        return "unplaced"
-    return "floor3_mapped" if row.source_version == "V11" else "twin_mapped"
+def _location_map_status(
+    row: WarehouseLocation,
+    projection_context: Mapping[str, object] | None = None,
+) -> str:
+    """Compatibility field derived only from the canonical published projection."""
+
+    return str(
+        warehouse_location_projection(
+            row,
+            **dict(projection_context or {}),
+        )["map_status"]
+    )
 
 
-def _location_dict(row: WarehouseLocation) -> dict:
+def _location_dict(
+    row: WarehouseLocation | None,
+    projection_context: Mapping[str, object] | None = None,
+) -> dict:
+    if row is None:
+        return {
+            "id": None,
+            "location_code": None,
+            "location_name": "尚未绑定正式位置",
+            "location_master_name": None,
+            "warehouse_type": None,
+            "warehouse_floor": None,
+            "area_code": None,
+            "storage_type": None,
+            "level_no": None,
+            "side_code": None,
+            "sort_order": 0,
+            "is_temporary": False,
+            "source_version": None,
+            "placement_status": "unplaced",
+            "is_active": False,
+            "position_status": "unlocated",
+            "map_status": "ledger_only",
+            "map_position": None,
+            "map_feature_id": None,
+            "published_map_revision": None,
+            "map_issue": "库存批次尚未绑定正式位置",
+            "layout_version": None,
+            "remarks": None,
+            "current_address_code": None,
+            "current_address_name": "尚未绑定正式位置",
+            "employee_location_name": "尚未绑定正式位置",
+            "projection_source": "unlocated",
+        }
+    context = dict(projection_context or {})
+    projection = warehouse_location_projection(row, **context)
+    floor = context.get("floor")
+    area = context.get("area")
+    address_area = area if projection_context is not None else getattr(
+        row, "address_area", None
+    )
+    address_payload = location_address_payload(
+        row,
+        area=address_area,
+        floor=floor,
+        position_status=str(projection["position_status"]),
+    )
+    layout = context.get("layout")
     return {
         "id": row.id,
         "location_code": row.location_code,
-        "location_name": row.location_name,
+        "location_name": address_payload["employee_location_name"],
+        "location_master_name": row.location_name,
         "warehouse_type": row.warehouse_type,
         "warehouse_floor": getattr(row, "warehouse_floor", None),
         "area_code": getattr(row, "area_code", None),
@@ -1984,17 +2037,32 @@ def _location_dict(row: WarehouseLocation) -> dict:
         "sort_order": getattr(row, "sort_order", 0),
         "is_temporary": getattr(row, "is_temporary", False),
         "source_version": getattr(row, "source_version", None),
-        "placement_status": getattr(row, "placement_status", None) or "placed",
+        "placement_status": getattr(row, "placement_status", None) or "unplaced",
         "is_active": row.is_active,
-        "map_status": _location_map_status(row),
+        **projection,
         "layout_version": (
-            int(row.floor3_layout.version)
-            if row.floor3_layout is not None
+            int(layout.version)
+            if isinstance(layout, Floor3LocationLayout)
             else None
         ),
         "remarks": row.remarks,
-        **location_address_payload(row),
+        **address_payload,
     }
+
+
+def _location_dict_for_db(
+    db: Session,
+    row: WarehouseLocation | None,
+) -> dict:
+    """Serialize one public location response with the canonical map context."""
+
+    if row is None:
+        return _location_dict(None)
+    context = load_warehouse_location_projection_contexts(db, [row]).get(
+        int(row.id),
+        {},
+    )
+    return _location_dict(row, context)
 
 
 def _formal_inventory_location_condition():
@@ -2213,8 +2281,9 @@ def _floor3_location_dict(
     pallet: InventoryPallet | None,
     visible_customer_ids: set[int] | None,
     customer_names: dict[int, str],
+    projection_context: Mapping[str, object] | None = None,
 ) -> dict:
-    payload = _location_dict(row)
+    payload = _location_dict(row, projection_context)
     payload["layout"] = _floor3_layout_dict(row.floor3_layout)
     payload["current_pallet"] = (
         _floor3_pallet_dict(
@@ -2344,32 +2413,31 @@ def _floor3_layout_log(
     )
 
 
-def _lot_query():
-    return (
-        select(InventoryLot)
-        .where(
+def _lot_query(*, require_formal_location: bool = True):
+    query = select(InventoryLot)
+    if require_formal_location:
+        query = query.where(
             InventoryLot.warehouse_location_id.in_(
                 select(WarehouseLocation.id).where(
                     _formal_inventory_location_condition()
                 )
             )
         )
-        .options(
-            selectinload(InventoryLot.location).selectinload(
-                WarehouseLocation.address_aliases
-            ),
-            selectinload(InventoryLot.location)
-            .selectinload(WarehouseLocation.address_area)
-            .selectinload(WarehouseArea.floor),
-            selectinload(InventoryLot.finished_detail),
-            selectinload(InventoryLot.semi_finished_detail),
-            selectinload(InventoryLot.allowed_products).selectinload(
-                SemiFinishedLotAllowedProduct.product
-            ),
-            selectinload(InventoryLot.pallet_item).selectinload(
-                InventoryPalletItem.pallet
-            ),
-        )
+    return query.options(
+        selectinload(InventoryLot.location).selectinload(
+            WarehouseLocation.address_aliases
+        ),
+        selectinload(InventoryLot.location)
+        .selectinload(WarehouseLocation.address_area)
+        .selectinload(WarehouseArea.floor),
+        selectinload(InventoryLot.finished_detail),
+        selectinload(InventoryLot.semi_finished_detail),
+        selectinload(InventoryLot.allowed_products).selectinload(
+            SemiFinishedLotAllowedProduct.product
+        ),
+        selectinload(InventoryLot.pallet_item).selectinload(
+            InventoryPalletItem.pallet
+        ),
     )
 
 
@@ -2413,7 +2481,9 @@ def _require_lot_customer_access(
     lot_id: int,
     user: User,
 ) -> InventoryLot:
-    lot = db.scalar(_lot_query().where(InventoryLot.id == lot_id))
+    lot = db.scalar(
+        _lot_query(require_formal_location=False).where(InventoryLot.id == lot_id)
+    )
     if lot is None:
         # Fail closed: callers pass the raw id to mutation services, so a lot
         # outside the visible formal-ledger scope must not fall through.
@@ -2444,7 +2514,12 @@ def _require_lot_customer_access(
     return lot
 
 
-def _lot_dict(row: InventoryLot, time_archive: dict | None = None) -> dict:
+def _lot_dict(
+    row: InventoryLot,
+    time_archive: dict | None = None,
+    *,
+    location_projection_context: Mapping[str, object] | None = None,
+) -> dict:
     warning = inventory_age_warning(row)
     pallet_item = row.pallet_item
     pallet = pallet_item.pallet if pallet_item is not None else None
@@ -2507,7 +2582,10 @@ def _lot_dict(row: InventoryLot, time_archive: dict | None = None) -> dict:
         "id": row.id,
         "lot_number": row.lot_number,
         "inventory_type": row.inventory_type,
-        "location": _location_dict(row.location),
+        "location": _location_dict(
+            row.location,
+            location_projection_context,
+        ),
         "quantity_available": row.quantity_available,
         "quantity_reserved": row.quantity_reserved,
         "quantity_consumed": row.quantity_consumed,
@@ -2538,6 +2616,28 @@ def _lot_dict(row: InventoryLot, time_archive: dict | None = None) -> dict:
         "age_warning_text": warning.text,
         "detail": detail,
     }
+
+
+def _lot_dict_for_db(
+    db: Session,
+    row: InventoryLot,
+    time_archive: dict | None = None,
+) -> dict:
+    """Serialize one public lot response with its canonical map context."""
+
+    context = (
+        load_warehouse_location_projection_contexts(db, [row.location]).get(
+            int(row.warehouse_location_id),
+            {},
+        )
+        if row.location is not None and row.warehouse_location_id is not None
+        else None
+    )
+    return _lot_dict(
+        row,
+        time_archive=time_archive,
+        location_projection_context=context,
+    )
 
 
 def _movement_dict(
@@ -2639,7 +2739,10 @@ def _semi_requirement_dict(row: OrderItemSemiRequirement) -> dict:
     }
 
 
-def _semi_candidate_dict(row: SemiFinishedCandidate) -> dict:
+def _semi_candidate_dict(
+    row: SemiFinishedCandidate,
+    projection_context: Mapping[str, object] | None = None,
+) -> dict:
     lot = row.lot
     detail = lot.semi_finished_detail
     return {
@@ -2650,7 +2753,7 @@ def _semi_candidate_dict(row: SemiFinishedCandidate) -> dict:
         "match_rule_id": row.match_rule_id,
         "available_stock_quantity": row.available_stock_quantity,
         "deductible_requirement_quantity": row.deductible_requirement_quantity,
-        "warehouse_location": _location_dict(lot.location),
+        "warehouse_location": _location_dict(lot.location, projection_context),
         "customer_id": detail.owner_customer_id,
         "customer_name": detail.owner_customer_name_snapshot,
         "board_length_mm": detail.board_length_mm,
@@ -2721,6 +2824,18 @@ def finished_candidates(
         reserved = active_finished_reserved_qty(db, order_item_id)
         rows = finished_inventory_candidates(db, order_item_id)
         rows = _visible_finished_candidate_lots(rows, user, db)
+        projection_contexts = load_warehouse_location_projection_contexts(
+            db,
+            [lot.location for lot in rows],
+        )
+        employee_names = {
+            int(lot.location.id): employee_location_name(
+                lot.location,
+                area=projection_contexts.get(int(lot.location.id), {}).get("area"),
+                floor=projection_contexts.get(int(lot.location.id), {}).get("floor"),
+            )
+            for lot in rows
+        }
         return {
             "order_item_id": order_item_id,
             "order_quantity": item.quantity,
@@ -2753,7 +2868,8 @@ def finished_candidates(
                         if value
                     ),
                     "warehouse_location": (
-                        f"{lot.location.location_code} {lot.location.location_name}"
+                        f"{lot.location.location_code} "
+                        f"{employee_names[int(lot.location.id)]}"
                     ),
                     "quantity_available": lot.quantity_available,
                     "stock_date": lot.stock_date,
@@ -3146,6 +3262,10 @@ def finished_product_candidates(
             product_id=product_id,
         )
         rows = _visible_finished_candidate_lots(rows, user, db)
+        projection_contexts = load_warehouse_location_projection_contexts(
+            db,
+            [lot.location for lot in rows if lot.location is not None],
+        )
         return {
             "customer_id": customer_id,
             "product_id": product_id,
@@ -3156,7 +3276,14 @@ def finished_product_candidates(
                     "version": lot.version,
                     "is_general": lot.finished_detail.is_general,
                     "quantity_available": lot.quantity_available,
-                    "warehouse_location": _location_dict(lot.location),
+                    "warehouse_location": _location_dict(
+                        lot.location,
+                        (
+                            projection_contexts.get(int(lot.warehouse_location_id))
+                            if lot.warehouse_location_id is not None
+                            else None
+                        ),
+                    ),
                     "warning_codes": (
                         ["GENERAL_FINISHED_STOCK"]
                         if lot.finished_detail.is_general
@@ -3286,7 +3413,7 @@ def semi_product_candidates(
         rows = _visible_semi_candidates(rows, user, db)
         return {
             "product_id": product_id,
-            "items": [_semi_candidate_dict(row) for row in rows],
+            "items": _semi_candidate_dicts(db, rows),
         }
     except WarehouseInventoryError as error:
         _handle(error)
@@ -3309,7 +3436,7 @@ def semi_product_inventory_browser(
         rows = _visible_semi_candidates(rows, user, db)
         return {
             "product_id": product_id,
-            "items": [_semi_candidate_dict(row) for row in rows],
+            "items": _semi_candidate_dicts(db, rows),
         }
     except WarehouseInventoryError as error:
         _handle(error)
@@ -3335,7 +3462,7 @@ def semi_requirement_candidates(
             "remaining_requirement_quantity": max(
                 requirement.required_piece_quantity - credited, 0
             ),
-            "items": [_semi_candidate_dict(row) for row in rows],
+            "items": _semi_candidate_dicts(db, rows),
         }
     except WarehouseInventoryError as error:
         _handle(error)
@@ -3351,7 +3478,7 @@ def semi_requirement_inventory_browser(
     try:
         rows = browse_semi_finished_inventory(db, requirement_id)
         rows = _visible_semi_candidates(rows, user, db)
-        return {"items": [_semi_candidate_dict(row) for row in rows]}
+        return {"items": _semi_candidate_dicts(db, rows)}
     except WarehouseInventoryError as error:
         _handle(error)
 
@@ -3817,7 +3944,7 @@ def create_floor3_layout_slot(
         )
         db.commit()
         return {
-            "location": _location_dict(location),
+            "location": _location_dict_for_db(db, location),
             "layout": _floor3_layout_dict(location.floor3_layout),
         }
     except Floor3LocationError as error:
@@ -3871,7 +3998,7 @@ def set_floor3_area_location_count(
                 actions.append(
                     {
                         "action": action,
-                        "location": _location_dict(location),
+                        "location": _location_dict_for_db(db, location),
                         "layout": _floor3_layout_dict(location.floor3_layout),
                     }
                 )
@@ -4785,6 +4912,10 @@ def publish_ground_layout(
 ) -> dict:
     with GROUND_STORAGE_TRANSACTION_LOCK:
         try:
+            _claim_floor_projection_for_layout_write(
+                db,
+                floor_code=floor_code,
+            )
             floor, area, policy = _ground_layout_context(
                 db, floor_code=floor_code, area_code=area_code
             )
@@ -5676,7 +5807,7 @@ def set_activated_area_location_count(
                 actions.append(
                     {
                         "action": action,
-                        "location": _location_dict(location),
+                        "location": _location_dict_for_db(db, location),
                         "layout": _floor3_layout_dict(location.floor3_layout),
                     }
                 )
@@ -6124,7 +6255,7 @@ def disable_activated_area_location(
             **area_location_management_payload(route),
             "policy_version": policy.version,
             "published_map_revision": policy.published_map_revision,
-            "location": _location_dict(location),
+            "location": _location_dict_for_db(db, location),
             "layout": _floor3_layout_dict(location.floor3_layout),
         }
     except (WarehouseAreaActivationError, Floor3LocationError) as error:
@@ -6239,7 +6370,7 @@ def enable_activated_area_location(
             **area_location_management_payload(route),
             "policy_version": policy.version,
             "published_map_revision": policy.published_map_revision,
-            "location": _location_dict(location),
+            "location": _location_dict_for_db(db, location),
             "layout": _floor3_layout_dict(location.floor3_layout),
         }
     except (WarehouseAreaActivationError, Floor3LocationError) as error:
@@ -6285,7 +6416,7 @@ def disable_floor3_layout_slot(
             details={"expected_version": payload.expected_version, "is_active": False},
         )
         db.commit()
-        return {"location": _location_dict(location), "layout": _floor3_layout_dict(location.floor3_layout)}
+        return {"location": _location_dict_for_db(db, location), "layout": _floor3_layout_dict(location.floor3_layout)}
     except Floor3LocationError as error:
         db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
@@ -6323,7 +6454,7 @@ def enable_floor3_layout_slot(
             details={"expected_version": payload.expected_version, "is_active": True},
         )
         db.commit()
-        return {"location": _location_dict(location), "layout": _floor3_layout_dict(location.floor3_layout)}
+        return {"location": _location_dict_for_db(db, location), "layout": _floor3_layout_dict(location.floor3_layout)}
     except Floor3LocationError as error:
         db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
@@ -6443,6 +6574,9 @@ def list_floor3_locations(
     )
     pallets_by_location = {row.location_id: row for row in pallets}
     customer_names = _floor3_customer_names(db, pallets)
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db, locations
+    )
     return {
         "items": [
             _floor3_location_dict(
@@ -6450,6 +6584,7 @@ def list_floor3_locations(
                 pallet=pallets_by_location.get(row.id),
                 visible_customer_ids=visible_customer_ids,
                 customer_names=customer_names,
+                projection_context=projection_contexts.get(int(row.id)),
             )
             for row in locations
         ],
@@ -6528,6 +6663,10 @@ def get_floor3_location(
         if location_ids
         else {}
     )
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [location, *history_locations.values()],
+    )
     history = []
     for movement in history_rows:
         history_pallet = history_pallet_map.get(movement.pallet_id)
@@ -6551,7 +6690,17 @@ def get_floor3_location(
                     else None
                 ),
                 "from_location_name": employee_location_name(
-                    history_locations.get(movement.from_location_id)
+                    history_locations.get(movement.from_location_id),
+                    area=(
+                        projection_contexts.get(
+                            int(movement.from_location_id or 0), {}
+                        ).get("area")
+                    ),
+                    floor=(
+                        projection_contexts.get(
+                            int(movement.from_location_id or 0), {}
+                        ).get("floor")
+                    ),
                 ),
                 "to_location_id": movement.to_location_id,
                 "to_location_code": (
@@ -6560,7 +6709,17 @@ def get_floor3_location(
                     else None
                 ),
                 "to_location_name": employee_location_name(
-                    history_locations.get(movement.to_location_id)
+                    history_locations.get(movement.to_location_id),
+                    area=(
+                        projection_contexts.get(
+                            int(movement.to_location_id or 0), {}
+                        ).get("area")
+                    ),
+                    floor=(
+                        projection_contexts.get(
+                            int(movement.to_location_id or 0), {}
+                        ).get("floor")
+                    ),
                 ),
                 "operator_id": movement.operator_id,
                 "moved_at": beijing_naive_to_api(movement.moved_at),
@@ -6573,6 +6732,7 @@ def get_floor3_location(
             pallet=pallet,
             visible_customer_ids=visible_customer_ids,
             customer_names=customer_names,
+            projection_context=projection_contexts.get(int(location.id)),
         ),
         "movement_history": history,
     }
@@ -7009,6 +7169,7 @@ def place_twin_staging_lot(
             "message": "已将一楼待送产品转入当前货位，库存总数未改变",
             "idempotent_replay": result.replayed,
             "transfer": _lot_location_transfer_dict(
+                db,
                 result.transfer,
                 source_lot=result.source_lot,
                 target_lot=result.target_lot,
@@ -7277,7 +7438,7 @@ def create_twin_semi_finished_inbound(
         return {
             "message": "已从地图确认补录半成品；库存数量与真实位置已保存",
             "idempotent_replay": replayed,
-            "lot": _lot_dict(lot),
+            "lot": _lot_dict_for_db(db, lot),
         }
     except WarehouseInventoryError as error:
         db.rollback()
@@ -7816,7 +7977,7 @@ def correct_twin_inventory_lot_quantity(
         return {
             "message": "货物已受控移除并保留历史流水" if payload.action == "remove" else "库存数量已按管理员确认减少",
             "idempotent_replay": replayed,
-            "lot": _lot_dict(row),
+            "lot": _lot_dict_for_db(db, row),
         }
     except WarehouseInventoryError as error:
         db.rollback()
@@ -8037,7 +8198,7 @@ def promote_floor3_snapshot_to_finished(
         return {
             "message": "已转为正式成品库存",
             "replayed": replayed,
-            "lot": _lot_dict(lot),
+            "lot": _lot_dict_for_db(db, lot),
             "pallet": _floor3_pallet_response(db, row, user),
         }
     except Floor3LocationError as error:
@@ -9364,6 +9525,43 @@ def _zone_asset_and_production_blockers(
     return blockers
 
 
+def _claim_floor_projection_for_layout_write(
+    db: Session,
+    *,
+    floor_code: str,
+) -> None:
+    """Serialize a runtime-map change with every inventory destination write."""
+
+    normalized_floor_code = floor_code.strip().upper()
+    floor_number = db.scalar(
+        select(WarehouseFloor.floor_number).where(
+            func.upper(WarehouseFloor.floor_code) == normalized_floor_code
+        )
+    )
+    if floor_number is None:
+        return
+    try:
+        floor_claimed = claim_warehouse_floor_projection(
+            db,
+            floor_number=int(floor_number),
+        )
+    except OperationalError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="该楼层正在执行入库、移位或地图发布，请稍后刷新重试",
+        ) from error
+    if not floor_claimed:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="仓库楼层台账已变化，请刷新后重新发布",
+        )
+    # All spatial reads below occur after this persistent claim.  Canonical
+    # projection loaders use ``populate_existing`` for their exact objects;
+    # never expire unrelated dirty business rows in this shared transaction.
+
+
 @router.post("/twin-layout/floors/{floor_code}/draft/publish")
 def publish_twin_layout_draft(
     floor_code: str,
@@ -9391,7 +9589,11 @@ def _publish_twin_layout_draft_locked(
     user: User,
     commit: bool = True,
     defer_location_readiness_for_feature_id: str | None = None,
+    floor_projection_claimed: bool = False,
 ) -> dict:
+    if not floor_projection_claimed:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+
     mold_relocations = []
     mold_relocation_warnings: list[str] = []
     if floor_code.strip().upper() == "1F":
@@ -9487,32 +9689,40 @@ def _publish_twin_layout_draft_locked(
             if commit:
                 db.commit()
     except WarehouseTwinLayoutEditError as error:
-        db.rollback()
-        restore_warehouse_twin_publish_state(
-            publish_snapshot,
-            backup_name=(result.value.get("backup_name") if result is not None else None),
-        )
+        try:
+            restore_warehouse_twin_publish_state(
+                publish_snapshot,
+                backup_name=(result.value.get("backup_name") if result is not None else None),
+            )
+        finally:
+            db.rollback()
         _handle_twin_layout_edit_error(error)
     except WarehouseAreaActivationError as error:
-        db.rollback()
-        restore_warehouse_twin_publish_state(
-            publish_snapshot,
-            backup_name=(result.value.get("backup_name") if result is not None else None),
-        )
+        try:
+            restore_warehouse_twin_publish_state(
+                publish_snapshot,
+                backup_name=(result.value.get("backup_name") if result is not None else None),
+            )
+        finally:
+            db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except MoldLocationError as error:
-        db.rollback()
-        restore_warehouse_twin_publish_state(
-            publish_snapshot,
-            backup_name=(result.value.get("backup_name") if result is not None else None),
-        )
+        try:
+            restore_warehouse_twin_publish_state(
+                publish_snapshot,
+                backup_name=(result.value.get("backup_name") if result is not None else None),
+            )
+        finally:
+            db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except Exception:
-        db.rollback()
-        restore_warehouse_twin_publish_state(
-            publish_snapshot,
-            backup_name=(result.value.get("backup_name") if result is not None else None),
-        )
+        try:
+            restore_warehouse_twin_publish_state(
+                publish_snapshot,
+                backup_name=(result.value.get("backup_name") if result is not None else None),
+            )
+        finally:
+            db.rollback()
         raise
     return {
         **result.value,
@@ -10237,6 +10447,7 @@ def confirm_twin_zone_area(
     """Confirm one measured zone and publish its formal storage result atomically."""
 
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
         publish_snapshot = snapshot_warehouse_twin_publish_state()
         result: dict | None = None
         advanced_draft_preserved = False
@@ -10317,6 +10528,7 @@ def confirm_twin_zone_area(
                 user=user,
                 commit=False,
                 defer_location_readiness_for_feature_id=feature_id,
+                floor_projection_claimed=True,
             )
             advanced_draft_preserved = rebase_warehouse_twin_advanced_draft_after_one_step(
                 one_step_context,
@@ -10464,36 +10676,44 @@ def confirm_twin_zone_area(
             db.commit()
             return response_payload
         except HTTPException:
-            db.rollback()
-            restore_warehouse_twin_publish_state(
-                publish_snapshot,
-                backup_name=(result.get('backup_name') if result else None),
-            )
+            try:
+                restore_warehouse_twin_publish_state(
+                    publish_snapshot,
+                    backup_name=(result.get('backup_name') if result else None),
+                )
+            finally:
+                db.rollback()
             raise
         except (WarehouseTwinLayoutEditError, WarehouseAreaActivationError) as error:
-            db.rollback()
-            restore_warehouse_twin_publish_state(
-                publish_snapshot,
-                backup_name=(result.get('backup_name') if result else None),
-            )
+            try:
+                restore_warehouse_twin_publish_state(
+                    publish_snapshot,
+                    backup_name=(result.get('backup_name') if result else None),
+                )
+            finally:
+                db.rollback()
             status_code = getattr(error, 'status_code', 409)
             raise HTTPException(status_code=status_code, detail=str(error)) from error
         except IntegrityError as error:
-            db.rollback()
-            restore_warehouse_twin_publish_state(
-                publish_snapshot,
-                backup_name=(result.get('backup_name') if result else None),
-            )
+            try:
+                restore_warehouse_twin_publish_state(
+                    publish_snapshot,
+                    backup_name=(result.get('backup_name') if result else None),
+                )
+            finally:
+                db.rollback()
             raise HTTPException(
                 status_code=409,
                 detail='货位状态与库存或实体栈板引用发生冲突，请刷新后重试',
             ) from error
         except Exception:
-            db.rollback()
-            restore_warehouse_twin_publish_state(
-                publish_snapshot,
-                backup_name=(result.get('backup_name') if result else None),
-            )
+            try:
+                restore_warehouse_twin_publish_state(
+                    publish_snapshot,
+                    backup_name=(result.get('backup_name') if result else None),
+                )
+            finally:
+                db.rollback()
             raise
 
 
@@ -10667,7 +10887,7 @@ def _twin_dashboard_source_rows(
     set[int] | None,
 ]:
     visible_customer_ids = _twin_locator_visible_customer_ids(db, user)
-    lot_query = _lot_query()
+    lot_query = _lot_query(require_formal_location=False)
     if visible_customer_ids is not None:
         lot_query = lot_query.where(_visible_lot_condition(visible_customer_ids))
     lots = list(db.scalars(lot_query.order_by(InventoryLot.id)).unique().all())
@@ -11120,7 +11340,7 @@ def search_warehouse_twin_inventory(
     if len(effective_keyword) < 2:
         raise HTTPException(status_code=422, detail="全仓查找至少输入2个字符")
     query = (
-        _lot_query()
+        _lot_query(require_formal_location=False)
         .where(InventoryLot.status.in_(("active", "frozen")))
         .options(
             selectinload(InventoryLot.finished_detail).selectinload(
@@ -11144,9 +11364,33 @@ def search_warehouse_twin_inventory(
         lots=lots,
         keyword=effective_keyword,
         as_of=today,
+        location_projection_contexts=load_warehouse_location_projection_contexts(
+            db,
+            [row.location for row in lots if row.location is not None],
+        ),
     )
     try:
-        result["location_match"] = resolve_location_address(db, effective_keyword)
+        location_match = resolve_location_address(db, effective_keyword)
+        matched_location = db.get(
+            WarehouseLocation,
+            int(location_match["location_id"]),
+        )
+        if matched_location is not None:
+            match_context = load_warehouse_location_projection_contexts(
+                db, [matched_location]
+            ).get(int(matched_location.id), {})
+            match_projection = warehouse_location_projection(
+                matched_location,
+                **match_context,
+            )
+            location_match.update(match_projection)
+            location_match["current"] = location_address_payload(
+                matched_location,
+                area=match_context.get("area"),
+                floor=match_context.get("floor"),
+                position_status=str(match_projection["position_status"]),
+            )
+        result["location_match"] = location_match
     except WarehouseLocationAddressError as error:
         result["location_match"] = None
         result["location_lookup_issue"] = (
@@ -11469,7 +11713,7 @@ def locate_warehouse_twin_objects(
     ):
         raise HTTPException(status_code=422, detail="全仓查找至少输入2个字符")
     query = (
-        _lot_query()
+        _lot_query(require_formal_location=False)
         .where(InventoryLot.status.in_(("active", "frozen")))
         .options(
             selectinload(InventoryLot.finished_detail).selectinload(
@@ -11506,6 +11750,10 @@ def locate_warehouse_twin_objects(
         lots=lots,
         keyword=effective_keyword,
         as_of=today,
+        location_projection_contexts=load_warehouse_location_projection_contexts(
+            db,
+            [row.location for row in lots if row.location is not None],
+        ),
     )
     pick_resources: list[dict] = []
     pick_tasks: list[dict] = []
@@ -11912,35 +12160,69 @@ def list_locations(
             )
         ).order_by(WarehouseLocation.location_code)
     ).all()
-    return {"items": [_location_dict(row) for row in rows]}
+    projection_contexts = load_warehouse_location_projection_contexts(db, rows)
+    return {
+        "items": [
+            _location_dict(row, projection_contexts.get(int(row.id)))
+            for row in rows
+        ]
+    }
 
 
-def _require_printable_location_label(row: WarehouseLocation) -> None:
+def _semi_candidate_dicts(
+    db: Session,
+    rows: list[SemiFinishedCandidate],
+) -> list[dict]:
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [row.lot.location for row in rows if row.lot.location is not None],
+    )
+    return [
+        _semi_candidate_dict(
+            row,
+            (
+                projection_contexts.get(int(row.lot.warehouse_location_id))
+                if row.lot.warehouse_location_id is not None
+                else None
+            ),
+        )
+        for row in rows
+    ]
+
+
+def _require_printable_location_label(
+    row: WarehouseLocation,
+    projection_context: Mapping[str, object],
+) -> None:
+    projection = warehouse_location_projection(row, **dict(projection_context))
     if (
         not row.is_active
-        or (row.placement_status or "placed") != "placed"
+        or row.placement_status != "placed"
         or row.is_temporary
         or row.storage_type == "temporary_aisle"
-        or _location_map_status(row) not in {"floor3_mapped", "twin_mapped"}
+        or projection["position_status"] != "mapped"
     ):
         raise HTTPException(
             status_code=409,
-            detail="仅已发布到三楼平面图或一楼仓库地图的正式位置可以打印位置标签",
+            detail="仅已发布到当前实测地图的正式位置可以打印位置标签",
         )
 
 
 def _location_label_dict(
     row: WarehouseLocation,
     request: Request,
+    projection_context: Mapping[str, object],
     lan_ip: str | None = None,
 ) -> dict:
-    _require_printable_location_label(row)
+    _require_printable_location_label(row, projection_context)
+    floor = projection_context.get("floor")
+    area = projection_context.get("area")
     floor_number = int(row.warehouse_floor or 0)
     floor_text = {1: "一楼", 2: "二楼", 3: "三楼", 4: "四楼"}.get(
         floor_number,
         f"{floor_number}楼" if floor_number else "楼层待确认",
     )
-    structured_area = row.address_area
+    structured_area = area
     area_text = (
         f"{structured_area.address_zone_code}{int(structured_area.address_subzone_no)}区"
         if structured_area is not None
@@ -11948,7 +12230,7 @@ def _location_label_dict(
         and structured_area.address_subzone_no
         else (f"{row.area_code}区" if row.area_code else "区域待确认")
     )
-    readable_location = employee_location_name(row)
+    readable_location = employee_location_name(row, area=area, floor=floor)
     port = request.url.port or 8000
     lookup_url = (
         f"http://{lan_ip or _lan_ip()}:{port}/warehouse.html"
@@ -11958,7 +12240,7 @@ def _location_label_dict(
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     return {
-        **_location_dict(row),
+        **_location_dict(row, projection_context),
         "floor_text": floor_text,
         "area_text": area_text,
         "display_path": readable_location,
@@ -11998,11 +12280,25 @@ def get_location_labels(
     if any(location_id not in rows_by_id for location_id in ordered_ids):
         raise HTTPException(status_code=404, detail="所选位置已变化，请返回台账重新选择")
     ordered_rows = [rows_by_id[location_id] for location_id in ordered_ids]
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db, ordered_rows
+    )
     for row in ordered_rows:
-        _require_printable_location_label(row)
+        _require_printable_location_label(
+            row,
+            projection_contexts.get(int(row.id), {}),
+        )
     lan_ip = _lan_ip()
     return {
-        "items": [_location_label_dict(row, request, lan_ip) for row in ordered_rows],
+        "items": [
+            _location_label_dict(
+                row,
+                request,
+                projection_contexts.get(int(row.id), {}),
+                lan_ip,
+            )
+            for row in ordered_rows
+        ],
         "count": len(ordered_rows),
     }
 
@@ -12026,7 +12322,10 @@ def get_location_label(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="位置不存在")
-    return _location_label_dict(row, request)
+    projection_context = load_warehouse_location_projection_contexts(
+        db, [row]
+    ).get(int(row.id), {})
+    return _location_label_dict(row, request, projection_context)
 
 
 @router.get("/location-candidates")
@@ -12051,6 +12350,26 @@ def list_location_candidates(
         pallet_storage_only=pallet_storage_only,
     )
     if published_only:
+        occupied_pallet_counts = {
+            (int(floor_number), str(code or "").strip().upper()): int(count)
+            for floor_number, code, count in db.execute(
+                select(
+                    WarehouseLocation.warehouse_floor,
+                    func.upper(WarehouseLocation.area_code),
+                    func.count(InventoryPallet.id),
+                )
+                .join(
+                    InventoryPallet,
+                    InventoryPallet.location_id == WarehouseLocation.id,
+                )
+                .where(InventoryPallet.is_current.is_(True))
+                .group_by(
+                    WarehouseLocation.warehouse_floor,
+                    func.upper(WarehouseLocation.area_code),
+                )
+            ).all()
+            if floor_number is not None
+        }
         rows = [
             row
             for row in rows
@@ -12063,6 +12382,15 @@ def list_location_candidates(
                 require_map_geometry=True,
                 required_inventory_type=inventory_type,
                 require_empty=empty_only,
+                projection_context=row.projection_context,
+                known_occupied=row.occupied,
+                area_occupied_pallet_count=occupied_pallet_counts.get(
+                    (
+                        int(row.location.warehouse_floor or 0),
+                        str(row.location.area_code or "").strip().upper(),
+                    ),
+                    0,
+                ),
             )
             is None
         ]
@@ -14813,10 +15141,15 @@ def _material_locations_for_task(
             InventoryReservation.sales_order_item_bom_component_id
             == task.sales_order_item_bom_component_id
         )
-    locations: list[dict] = []
-    for reservation, lot, location in db.execute(
+    reservation_rows = db.execute(
         query.order_by(InventoryLot.stock_date, InventoryLot.id)
-    ).all():
+    ).all()
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [location for _reservation, _lot, location in reservation_rows],
+    )
+    locations: list[dict] = []
+    for reservation, lot, location in reservation_rows:
         remaining = max(
             int(reservation.reserved_stock_quantity or 0)
             - int(reservation.consumed_stock_quantity or 0)
@@ -14836,7 +15169,11 @@ def _material_locations_for_task(
         locations.append(
             {
                 "location_code": location.location_code,
-                "location_name": location.location_name,
+                "location_name": employee_location_name(
+                    location,
+                    area=projection_contexts.get(int(location.id), {}).get("area"),
+                    floor=projection_contexts.get(int(location.id), {}).get("floor"),
+                ),
                 "availability_state": (
                     "available" if lot.status == "active" else "frozen"
                 ),
@@ -16960,7 +17297,7 @@ def create_location(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="库位编码已存在") from error
-    return _location_dict(row)
+    return _location_dict_for_db(db, row)
 
 
 @router.put("/locations/{location_id}")
@@ -17039,7 +17376,7 @@ def update_location(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="库位编码已存在") from error
-    return _location_dict(row)
+    return _location_dict_for_db(db, row)
 
 
 @router.put("/locations/{location_id}/enable")
@@ -17054,7 +17391,7 @@ def enable_location(
     _reject_v11_location_configuration(row)
     row.is_active = True
     db.commit()
-    return _location_dict(row)
+    return _location_dict_for_db(db, row)
 
 
 @router.put("/locations/{location_id}/disable")
@@ -17069,7 +17406,7 @@ def disable_location(
     _reject_v11_location_configuration(row)
     row.is_active = False
     db.commit()
-    return _location_dict(row)
+    return _location_dict_for_db(db, row)
 
 
 @router.get("/lots")
@@ -17100,7 +17437,7 @@ def list_lots(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    query = _lot_query()
+    query = _lot_query(require_formal_location=False)
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:
         query = query.where(_visible_lot_condition(visible_customer_ids))
@@ -17346,9 +17683,22 @@ def list_lots(
         .limit(page_size)
     ).all()
     time_archives = build_inventory_lot_time_archives(db, rows)
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [row.location for row in rows if row.location is not None],
+    )
     return {
         "items": [
-            _lot_dict(row, time_archive=time_archives.get(row.id)) for row in rows
+            _lot_dict(
+                row,
+                time_archive=time_archives.get(row.id),
+                location_projection_context=(
+                    projection_contexts.get(int(row.warehouse_location_id))
+                    if row.warehouse_location_id is not None
+                    else None
+                ),
+            )
+            for row in rows
         ],
         "total": total,
         "page": page,
@@ -17627,9 +17977,13 @@ def get_lot(
             ]
     if stocktake_events:
         archive["latest_stocktake_at"] = stocktake_events[0]["occurred_at"]
+    projection_context = load_warehouse_location_projection_contexts(
+        db, [row.location]
+    ).get(int(row.warehouse_location_id or 0), {})
     result = _lot_dict(
         row,
         time_archive=archive,
+        location_projection_context=projection_context,
     )
     result["timeline"] = timeline
     result["movements"] = [
@@ -17694,6 +18048,11 @@ def get_finished_goods_label(
     if row.status == "closed" or physical_quantity <= 0:
         raise HTTPException(status_code=409, detail="当前批次已无在库实物，不能打印货物标签")
     location = row.location
+    if location is None:
+        raise HTTPException(
+            status_code=409,
+            detail="当前批次尚未绑定正式位置，不能打印货物标签",
+        )
     if row.status == "frozen":
         label_status = "异常待确认"
     elif (
@@ -17721,8 +18080,14 @@ def get_finished_goods_label(
     image = qrcode.make(lookup_url)
     buffer = BytesIO()
     image.save(buffer, format="PNG")
+    projection_context = load_warehouse_location_projection_contexts(
+        db, [row.location]
+    ).get(int(row.warehouse_location_id or 0), {})
     return {
-        **_lot_dict(row),
+        **_lot_dict(
+            row,
+            location_projection_context=projection_context,
+        ),
         "label_version": row.version,
         "label_status": label_status,
         "physical_quantity": physical_quantity,
@@ -17804,7 +18169,7 @@ def finished_manual_in(
                 idempotency_key=payload.idempotency_key,
             )
         db.commit()
-        return _lot_dict(row)
+        return _lot_dict_for_db(db, row)
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
@@ -17836,7 +18201,7 @@ def semi_finished_manual_in(
                 idempotency_key=payload.idempotency_key,
             )
         db.commit()
-        return _lot_dict(row)
+        return _lot_dict_for_db(db, row)
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
@@ -17859,7 +18224,7 @@ def edit_semi_finished_inventory_lot(
             expected_version=payload.expected_version, operator_id=user.id,
         )
         db.commit()
-        return _lot_dict(row)
+        return _lot_dict_for_db(db, row)
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
@@ -17880,7 +18245,7 @@ def void_semi_finished_inventory_lot(
             reason=payload.reason, operator_id=user.id,
         )
         db.commit()
-        return _lot_dict(row)
+        return _lot_dict_for_db(db, row)
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
@@ -17908,7 +18273,7 @@ def edit_finished_inventory_lot(
             **payload.model_dump(),
         )
         db.commit()
-        return _lot_dict(row)
+        return _lot_dict_for_db(db, row)
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
@@ -17918,12 +18283,32 @@ def edit_finished_inventory_lot(
 
 
 def _lot_location_transfer_dict(
+    db: Session,
     row: InventoryLotTransfer,
     *,
     source_lot: InventoryLot,
     target_lot: InventoryLot,
     replayed: bool,
 ) -> dict:
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [
+            lot.location
+            for lot in (source_lot, target_lot)
+            if lot.location is not None
+        ],
+    )
+
+    def lot_payload(lot: InventoryLot) -> dict:
+        return _lot_dict(
+            lot,
+            location_projection_context=(
+                projection_contexts.get(int(lot.warehouse_location_id))
+                if lot.warehouse_location_id is not None
+                else None
+            ),
+        )
+
     return {
         "id": row.id,
         "quantity": row.quantity,
@@ -17933,8 +18318,8 @@ def _lot_location_transfer_dict(
         "target_location_id": row.target_location_id,
         "transferred_at": utc_naive_to_api(row.transferred_at),
         "replayed": replayed,
-        "source_lot": _lot_dict(source_lot),
-        "target_lot": _lot_dict(target_lot),
+        "source_lot": lot_payload(source_lot),
+        "target_lot": lot_payload(target_lot),
     }
 
 
@@ -17998,6 +18383,7 @@ def transfer_finished_lot_from_staging(
             )
         db.commit()
         return _lot_location_transfer_dict(
+            db,
             result.transfer,
             source_lot=result.source_lot,
             target_lot=result.target_lot,
@@ -18136,7 +18522,7 @@ def _operate(
                 customer_name=customer_name,
             )
         db.commit()
-        return _lot_dict(row)
+        return _lot_dict_for_db(db, row)
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)

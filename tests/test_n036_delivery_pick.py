@@ -619,7 +619,11 @@ def test_editing_delivery_invalidates_old_pick_snapshot(pick_app) -> None:
         assert client.get("/api/delivery-picks").json()["items"] == []
 
 
-def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> None:
+def test_n083_location_first_plan_and_one_click_normal_completion(
+    pick_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import deliveries as deliveries_api
     from app.models.delivery import Delivery, DeliveryPickTaskItem
     from app.models.order import OrderItem
     from app.models.product import Product
@@ -629,9 +633,43 @@ def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> N
         InventoryPallet,
         InventoryPalletItem,
         InventoryReservation,
+        WarehouseArea,
+        WarehouseAreaStoragePolicy,
+        WarehouseFloor,
         WarehouseLocation,
     )
+    from app.services import location_candidates
     from app.services.warehouse_inventory import manual_finished_in
+
+    current_revision = "n083-current-map"
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda floor_number: (
+            {
+                "revision": current_revision,
+                "zones_by_id": {"zone-3f-b2": "B2"},
+                "zone_ids_by_area": {"B2": ("zone-3f-b2",)},
+            }
+            if int(floor_number) == 3
+            else None
+        ),
+    )
+    projection_batches: list[tuple[int, ...]] = []
+    real_projection_loader = (
+        deliveries_api.load_warehouse_location_projection_contexts
+    )
+
+    def tracking_projection_loader(db: Session, locations) -> dict:
+        rows = list(locations)
+        projection_batches.append(tuple(sorted(int(row.id) for row in rows)))
+        return real_projection_loader(db, rows)
+
+    monkeypatch.setattr(
+        deliveries_api,
+        "load_warehouse_location_projection_contexts",
+        tracking_projection_loader,
+    )
 
     app, factory, ids, operation_log = pick_app
     with factory() as db:
@@ -642,35 +680,50 @@ def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> N
         locations = [
             WarehouseLocation(
                 location_code="B2-L01",
-                location_name="二楼B区01",
+                location_name="LEGACY-B2-L01",
                 warehouse_type="finished",
                 warehouse_floor=3,
                 area_code="B2",
+                storage_type="rack",
                 sort_order=10,
                 placement_status="placed",
+                source_version="TWIN_V1",
             ),
             WarehouseLocation(
                 location_code="E1-L09",
-                location_name="三楼E1区09",
+                location_name="LEGACY-E1-L09",
                 warehouse_type="finished",
                 warehouse_floor=3,
                 area_code="E1",
+                storage_type="rack",
                 sort_order=20,
                 placement_status="placed",
+                source_version="TWIN_V1",
             ),
         ]
         db.add_all(locations)
         db.flush()
-        db.add(
-            Floor3LocationLayout(
-                location_id=locations[0].id,
-                left_pct=Decimal("12"),
-                top_pct=Decimal("18"),
-                width_pct=Decimal("8"),
-                height_pct=Decimal("7"),
-                source_type="manual",
-                created_by=admin.id,
-            )
+        db.add_all(
+            [
+                Floor3LocationLayout(
+                    location_id=locations[0].id,
+                    left_pct=Decimal("12"),
+                    top_pct=Decimal("18"),
+                    width_pct=Decimal("8"),
+                    height_pct=Decimal("7"),
+                    source_type="manual",
+                    created_by=admin.id,
+                ),
+                Floor3LocationLayout(
+                    location_id=locations[1].id,
+                    left_pct=Decimal("72"),
+                    top_pct=Decimal("18"),
+                    width_pct=Decimal("8"),
+                    height_pct=Decimal("7"),
+                    source_type="manual",
+                    created_by=admin.id,
+                ),
+            ]
         )
         lots = []
         for index, (order_item, location, quantity) in enumerate(
@@ -688,7 +741,7 @@ def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> N
                 remarks=None,
                 operator_id=admin.id,
                 idempotency_key=f"n083-lot-{index}",
-                expected_layout_version=(1 if index == 1 else None),
+                expected_layout_version=1,
             )
             lot.quantity_available -= quantity
             lot.quantity_reserved += quantity
@@ -734,11 +787,56 @@ def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> N
                 )
             )
             lots.append(lot)
+        floor = WarehouseFloor(
+            floor_code="3F",
+            floor_name="三楼",
+            floor_number=3,
+            construction_status="enabled",
+        )
+        db.add(floor)
+        db.flush()
+        area = WarehouseArea(
+            floor_id=floor.id,
+            area_code="B2",
+            area_name="成品东区",
+            address_zone_code="B",
+            address_subzone_no=2,
+            construction_status="enabled",
+        )
+        db.add_all(
+            [
+                area,
+                WarehouseArea(
+                    floor_id=floor.id,
+                    area_code="E1",
+                    area_name="成品暂存区",
+                    construction_status="enabled",
+                ),
+            ]
+        )
+        db.flush()
+        db.add(
+            WarehouseAreaStoragePolicy(
+                area_id=area.id,
+                map_feature_id="zone-3f-b2",
+                allowed_inventory_types_json='["finished"]',
+                storage_layout="rack",
+                status="published",
+                published_map_revision=current_revision,
+            )
+        )
+        locations[0].address_kind = "rack_slot"
+        locations[0].address_area_id = area.id
+        locations[0].rack_code = "A"
+        locations[0].level_no = 1
+        locations[0].slot_no = 1
+        location_ids = tuple(sorted(int(location.id) for location in locations))
         db.commit()
 
     with TestClient(app) as client:
         _login(client, "admin")
         task = _create_task(client, ids["delivery"])
+        assert projection_batches == [location_ids]
         groups = task["location_groups"]
         assert [group["source_type"] for group in groups] == [
             "finished_inventory",
@@ -751,6 +849,10 @@ def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> N
         assert groups[0]["recommended_sequence"] == 1
         assert groups[0]["map_status"] == "mapped"
         assert groups[0]["map_point"]["left_pct"] == 12.0
+        assert groups[0]["map_feature_id"] == "zone-3f-b2"
+        assert groups[0]["published_map_revision"] == current_revision
+        assert groups[0]["location_name"] != "LEGACY-B2-L01"
+        assert "A架" in groups[0]["location_name"]
         assert groups[1]["label"] == "生产区直接拿货"
         assert groups[1]["map_status"] == "text_only"
         assert groups[1]["lines"][0]["pick_quantity"] == 40
@@ -758,6 +860,8 @@ def test_n083_location_first_plan_and_one_click_normal_completion(pick_app) -> N
         assert groups[2]["pallet_code"] == "PLT-N083-2"
         assert groups[2]["needs_relocation"] is True
         assert groups[2]["map_status"] == "text_only"
+        assert groups[2]["position_status"] != "mapped"
+        assert groups[2].get("map_point") is None
         assert task["location_plan_complete"] is True
 
         _login(client, "delivery_picker")

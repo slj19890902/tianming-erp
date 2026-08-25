@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+from functools import lru_cache
+from math import isfinite
 from pathlib import Path
 
 
@@ -117,3 +119,96 @@ def load_warehouse_twin_floor(
         "generated_at": payload.get("generated_at"),
         "projection_notice": "仅投影已确认或人工候选空间；正式库存数量仍以 ERP 库存账为准。",
     }
+
+
+@lru_cache(maxsize=8)
+def _published_floor_identity_cached(
+    path_text: str,
+    modified_ns: int,
+    file_size: int,
+    floor_code: str,
+) -> dict:
+    del modified_ns, file_size
+    floor = load_warehouse_twin_floor(floor_code, path=Path(path_text))
+
+    def valid_zone_geometry(feature: dict) -> bool:
+        points = feature.get("points") or []
+        if not isinstance(points, list) or len(points) < 3:
+            return False
+        try:
+            normalized = [
+                (float(point[0]), float(point[1]))
+                for point in points
+                if isinstance(point, (list, tuple)) and len(point) >= 2
+            ]
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if len(normalized) != len(points) or any(
+            not isfinite(x) or not isfinite(y) for x, y in normalized
+        ):
+            return False
+        if len(set(normalized)) < 3:
+            return False
+        twice_area = abs(
+            sum(
+                x1 * y2 - x2 * y1
+                for (x1, y1), (x2, y2) in zip(
+                    normalized,
+                    normalized[1:] + normalized[:1],
+                    strict=True,
+                )
+            )
+        )
+        return twice_area > 0
+
+    zones = [
+        feature
+        for feature in floor.get("features") or []
+        if feature.get("feature_kind") == "zone"
+        and valid_zone_geometry(feature)
+    ]
+    feature_ids = [
+        str(feature.get("id") or "").strip()
+        for feature in zones
+        if str(feature.get("id") or "").strip()
+    ]
+    if len(feature_ids) != len(set(feature_ids)):
+        raise ValueError(f"数字孪生运行地图 {floor_code} 存在重复区域标识")
+    zones_by_id = {
+        str(feature.get("id") or "").strip(): str(
+            feature.get("erp_area_code") or ""
+        ).strip().upper()
+        for feature in zones
+        if str(feature.get("id") or "").strip()
+    }
+    zone_ids_by_area: dict[str, list[str]] = {}
+    for feature_id, area_code in zones_by_id.items():
+        if area_code:
+            zone_ids_by_area.setdefault(area_code, []).append(feature_id)
+    return {
+        "floor_code": floor_code,
+        "revision": str(floor.get("revision") or "").strip(),
+        "feature_ids": frozenset(feature_ids),
+        "erp_area_codes": frozenset(
+            area_code for area_code in zones_by_id.values() if area_code
+        ),
+        "zones_by_id": zones_by_id,
+        "zone_ids_by_area": {
+            area_code: tuple(sorted(ids))
+            for area_code, ids in zone_ids_by_area.items()
+        },
+    }
+
+
+def load_warehouse_twin_published_floor_identity(floor_number: int) -> dict:
+    """Return the current measured-map identity without caching stale files."""
+
+    floor_code = f"{int(floor_number)}F"
+    target = resolve_warehouse_twin_layout_path()
+    stat = target.stat()
+    return _published_floor_identity_cached(
+        str(target),
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+        floor_code,
+    )

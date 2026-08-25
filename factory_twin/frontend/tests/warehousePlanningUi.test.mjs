@@ -36,3 +36,9 @@ test("count changes send the complete location snapshot even when it is empty", 
 test("logical map positions keep a small renderer anchor", () => {
   assert.match(sceneSource, /pallet\.is_logical_anchor \? 180 : 400/);
 });
+
+test("unlocated finished blocker renders the complete backend list with physical quantities", () => {
+  assert.match(source, /unlocatedFinishedItems\.map\(\(item\)/);
+  assert.doesNotMatch(source, /unlocatedFinishedItems\.slice\(/);
+  assert.match(source, /inventoryPhysicalQuantity\(item\)/);
+});

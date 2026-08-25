@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import json
@@ -18,6 +19,7 @@ from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryPallet,
     WarehouseArea,
+    WarehouseAreaStoragePolicy,
     WarehouseFloor,
     WarehouseLocation,
     WarehouseLocationAddressMutation,
@@ -27,6 +29,14 @@ from app.models.warehouse_inventory import (
 
 WAREHOUSE_LOCATION_ADDRESS_LOCK = RLock()
 MANAGED_ADDRESS_KINDS = {"rack_slot", "ground_slot"}
+MEASURED_MAP_LOCATION_SOURCES = {"V11", "TWIN_V1"}
+_V11_SIDE_NAMES = {
+    "L": "左侧",
+    "R": "右侧",
+    "M": "中间",
+    "U": "上侧",
+    "D": "下侧",
+}
 
 
 class WarehouseLocationAddressError(RuntimeError):
@@ -35,6 +45,185 @@ class WarehouseLocationAddressError(RuntimeError):
         self.code = code
         self.message = message
         self.status_code = status_code
+
+
+@dataclass(frozen=True)
+class PublishedMeasuredMapReadiness:
+    position_status: str
+    issue: str | None
+    map_feature_id: str | None = None
+    published_map_revision: str | None = None
+
+
+def _policy_value(
+    policy: WarehouseAreaStoragePolicy | Mapping[str, object] | None,
+    field: str,
+) -> object | None:
+    if policy is None:
+        return None
+    if isinstance(policy, Mapping):
+        return policy.get(field)
+    return getattr(policy, field, None)
+
+
+def published_measured_map_readiness(
+    location: WarehouseLocation,
+    *,
+    floor: WarehouseFloor | None,
+    area: WarehouseArea | None,
+    policy: WarehouseAreaStoragePolicy | Mapping[str, object] | None,
+    published_floor_identity: Mapping[str, object] | None,
+    has_geometry: bool,
+    ground_layout: Mapping[str, object] | None = None,
+    require_geometry: bool = True,
+) -> PublishedMeasuredMapReadiness:
+    """Classify one stable location against the current published measured map."""
+
+    if not location.is_active:
+        return PublishedMeasuredMapReadiness("disabled", "该库位已停用")
+    if location.placement_status != "placed":
+        return PublishedMeasuredMapReadiness(
+            "unplaced",
+            "该库位尚未完成正式平面图布局",
+        )
+    if location.warehouse_floor is None or not str(location.area_code or "").strip():
+        return PublishedMeasuredMapReadiness(
+            "unlocated",
+            "该库位尚未登记楼层和区域",
+        )
+    if floor is None:
+        return PublishedMeasuredMapReadiness(
+            "area_only",
+            "该库位所属楼层尚未建立台账",
+        )
+    if floor.construction_status != "enabled":
+        return PublishedMeasuredMapReadiness(
+            "area_only",
+            "该库位所属楼层尚未启用",
+        )
+    if area is None:
+        return PublishedMeasuredMapReadiness(
+            "area_only",
+            "该库位所属区域尚未建立台账",
+        )
+    if area.construction_status != "enabled":
+        return PublishedMeasuredMapReadiness(
+            "area_only",
+            "该库位所属区域尚未启用",
+        )
+    if published_floor_identity is None:
+        return PublishedMeasuredMapReadiness(
+            "area_only",
+            "当前运行地图不可用",
+        )
+    current_revision = str(
+        published_floor_identity.get("revision") or ""
+    ).strip()
+    if not current_revision:
+        return PublishedMeasuredMapReadiness(
+            "area_only",
+            "当前运行地图缺少正式版本",
+        )
+
+    source_version = str(location.source_version or "").strip().upper()
+    legacy_v11 = bool(
+        policy is None
+        and source_version == "V11"
+        and int(location.warehouse_floor or 0) == 3
+    )
+    if legacy_v11:
+        area_code = str(location.area_code or "").strip().upper()
+        zone_ids_by_area = {
+            str(key).strip().upper(): tuple(
+                str(value).strip()
+                for value in values
+                if str(value).strip()
+            )
+            for key, values in dict(
+                published_floor_identity.get("zone_ids_by_area", {})
+            ).items()
+            if str(key).strip() and isinstance(values, (list, tuple, set, frozenset))
+        }
+        feature_ids = zone_ids_by_area.get(area_code, ())
+        if len(feature_ids) != 1:
+            return PublishedMeasuredMapReadiness(
+                "area_only",
+                "该 V11 库位所属区域无法唯一对应当前运行地图要素",
+            )
+        feature_id = feature_ids[0]
+    else:
+        if source_version != "TWIN_V1":
+            return PublishedMeasuredMapReadiness(
+                "area_only",
+                "该库位不是当前实测地图生成的正式位置",
+            )
+        if policy is None or _policy_value(policy, "status") != "published":
+            return PublishedMeasuredMapReadiness(
+                "area_only",
+                "该库位所属区域尚未发布",
+            )
+        policy_revision = str(
+            _policy_value(policy, "published_map_revision") or ""
+        ).strip()
+        if not policy_revision:
+            return PublishedMeasuredMapReadiness(
+                "area_only",
+                "该库位所属区域缺少已发布地图版本",
+            )
+        if policy_revision != current_revision:
+            return PublishedMeasuredMapReadiness(
+                "area_only",
+                "该库位所属区域的发布版本不是当前运行地图版本",
+            )
+        feature_id = str(_policy_value(policy, "map_feature_id") or "").strip()
+        if not feature_id:
+            return PublishedMeasuredMapReadiness(
+                "area_only",
+                "该库位所属区域缺少已发布地图要素",
+            )
+        zones_by_id = {
+            str(key).strip(): str(value or "").strip().upper()
+            for key, value in dict(
+                published_floor_identity.get("zones_by_id", {})
+            ).items()
+            if str(key).strip()
+        }
+        if zones_by_id.get(feature_id) != str(area.area_code or "").strip().upper():
+            return PublishedMeasuredMapReadiness(
+                "area_only",
+                "该库位所属区域与当前运行地图要素不一致",
+            )
+    if str(location.storage_type or "").strip().lower() in {
+        "ground",
+        "temporary_aisle",
+    }:
+        ground_status = str((ground_layout or {}).get("status") or "")
+        ground_revision = str(
+            (ground_layout or {}).get("published_map_revision") or ""
+        ).strip()
+        ground_area_id = (ground_layout or {}).get("area_id")
+        ground_location_id = (ground_layout or {}).get("location_id")
+        if (
+            ground_status != "published"
+            or ground_revision != current_revision
+            or int(ground_area_id or 0) != int(area.id or 0)
+            or int(ground_location_id or 0) != int(location.id or 0)
+        ):
+            return PublishedMeasuredMapReadiness(
+                "area_only",
+                "该地堆库位缺少当前运行地图的已发布排位",
+            )
+    if require_geometry and not has_geometry:
+        return PublishedMeasuredMapReadiness(
+            "area_only",
+            "该库位缺少已确认的地图几何位置",
+        )
+    return PublishedMeasuredMapReadiness(
+        "mapped",
+        None,
+        map_feature_id=feature_id,
+        published_map_revision=current_revision,
+    )
 
 
 @dataclass(frozen=True)
@@ -112,6 +301,60 @@ def _area_human_name(area: WarehouseArea) -> str | None:
     return None
 
 
+def _location_sequence(location: WarehouseLocation) -> int | None:
+    match = re.search(r"(\d+)$", str(location.location_code or "").strip())
+    if match is None:
+        return None
+    number = int(match.group(1))
+    return number if number > 0 else None
+
+
+def _measured_map_location_name(
+    location: WarehouseLocation,
+    *,
+    area: WarehouseArea | None,
+    floor: WarehouseFloor | None,
+) -> str | None:
+    """Project one published-map location into the employee-facing address.
+
+    V11 intentionally stored the code in ``location_name``.  The measured map
+    already carries the missing floor/area meaning, so all consumers must use
+    this one projection instead of inventing labels independently.
+    """
+
+    if str(location.source_version or "").strip().upper() != "V11":
+        return None
+    floor_number = int(
+        (floor.floor_number if floor is not None else location.warehouse_floor) or 0
+    )
+    area_name = str(
+        (area.area_name if area is not None else None) or location.area_code or ""
+    ).strip()
+    sequence = _location_sequence(location)
+    if not floor_number or not area_name or sequence is None:
+        return None
+
+    prefix = f"{_floor_name(floor_number)} {area_name}"
+    storage_type = str(location.storage_type or "").strip().lower()
+    suffix_match = re.search(
+        r"(?:^|-)([A-Z])?(\d+)$",
+        str(location.location_code or "").strip().upper(),
+    )
+    side_code = str(
+        location.side_code
+        or (suffix_match.group(1) if suffix_match is not None else "")
+        or ""
+    ).strip().upper()
+    side_name = _V11_SIDE_NAMES.get(side_code, "")
+    if storage_type == "temporary_aisle" or side_code == "P":
+        return f"{prefix}·临放第{sequence}位"
+    if storage_type == "rack":
+        level_no = int(location.level_no or 0)
+        level = f"{level_no}层·" if level_no else ""
+        return f"{prefix}·{level}{side_name}第{sequence}格"
+    return f"{prefix}·{side_name}第{sequence}位"
+
+
 def format_location_address(
     location: WarehouseLocation,
     *,
@@ -170,21 +413,57 @@ def format_location_address(
             f"第{int(location.ground_row_no)}排·{int(location.slot_no)}号位"
         )
         return code, human
+    measured_name = _measured_map_location_name(
+        location,
+        area=area,
+        floor=floor,
+    )
+    if measured_name:
+        return location.location_code, measured_name
     return location.location_code, location.location_name
 
 
-def employee_location_name(location: WarehouseLocation | None) -> str:
+def employee_location_name(
+    location: WarehouseLocation | None,
+    *,
+    area: WarehouseArea | None = None,
+    floor: WarehouseFloor | None = None,
+) -> str:
     if location is None:
         return "位置待确认"
-    code, human = format_location_address(location)
+    code, human = format_location_address(location, area=area, floor=floor)
     if human and normalize_location_alias(human) != normalize_location_alias(code):
         return human
     return "位置名称待完善"
 
 
-def location_address_payload(location: WarehouseLocation) -> dict:
-    current_code, current_name = format_location_address(location)
-    area = getattr(location, "address_area", None)
+def location_address_payload(
+    location: WarehouseLocation,
+    *,
+    area: WarehouseArea | None = None,
+    floor: WarehouseFloor | None = None,
+    position_status: str | None = None,
+) -> dict:
+    area = area or getattr(location, "address_area", None)
+    if floor is None and area is not None:
+        floor = getattr(area, "floor", None)
+    current_code, current_name = format_location_address(
+        location,
+        area=area,
+        floor=floor,
+    )
+    if location.address_kind in MANAGED_ADDRESS_KINDS:
+        projection_source = "structured_address"
+    elif _measured_map_location_name(location, area=area, floor=floor):
+        projection_source = (
+            "published_measured_map"
+            if position_status == "mapped"
+            else "measured_map_name_unpublished"
+        )
+    elif current_name and normalize_location_alias(current_name) != normalize_location_alias(current_code):
+        projection_source = "location_master"
+    else:
+        projection_source = "name_pending"
     return {
         "warehouse_floor": location.warehouse_floor,
         "area_code": location.area_code,
@@ -199,7 +478,12 @@ def location_address_payload(location: WarehouseLocation) -> dict:
         "address_version": int(location.address_version or 1),
         "current_address_code": current_code,
         "current_address_name": current_name,
-        "employee_location_name": employee_location_name(location),
+        "employee_location_name": employee_location_name(
+            location,
+            area=area,
+            floor=floor,
+        ),
+        "projection_source": projection_source,
     }
 
 
@@ -953,7 +1237,7 @@ def resolve_location_address(db: Session, value: str) -> dict:
         "matched_by": "legacy_alias" if matched_alias is not None else "current",
         "current": location_address_payload(location),
         "is_active": bool(location.is_active),
-        "placement_status": location.placement_status or "placed",
+        "placement_status": location.placement_status or "unplaced",
         "layout_version": (
             int(location.floor3_layout.version)
             if location.floor3_layout is not None

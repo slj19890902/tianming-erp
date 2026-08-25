@@ -71,10 +71,11 @@ from app.services.history_orders import (
     display_order_number,
     is_history_order_number,
 )
-from app.services.location_candidates import list_operational_locations
-from app.services.warehouse_location_address import (
-    employee_location_name,
-    location_address_payload,
+from app.services.location_candidates import (
+    list_operational_locations,
+    load_warehouse_location_projection_contexts,
+    operational_location_issue,
+    operational_location_payload,
 )
 from app.services.incoming_receipts import (
     IncomingReceiptError,
@@ -129,6 +130,7 @@ from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     automatic_raw_material_staging_location,
 )
+from app.services.warehouse_location_address import employee_location_name
 
 
 router = APIRouter()
@@ -398,9 +400,17 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
     finished_projection = receipt_auto_finished_location_projection(db)
     try:
         reserve_location = automatic_raw_material_staging_location(db)
+        reserve_context = load_warehouse_location_projection_contexts(
+            db,
+            [reserve_location],
+        ).get(int(reserve_location.id), {})
         reserve_projection = {
             "ready": True,
-            "location_name": reserve_location.location_name,
+            "location_name": employee_location_name(
+                reserve_location,
+                area=reserve_context.get("area"),
+                floor=reserve_context.get("floor"),
+            ),
             "issue": None,
         }
     except WarehouseInventoryError as error:
@@ -4078,29 +4088,33 @@ def surplus_inventory_locations(
     _user: User = Depends(can_operate),
 ) -> dict:
     """Return only locations that can receive an incoming surplus transfer."""
+    rows = list_operational_locations(
+        db,
+        warehouse_types={"semi_finished", "shared"},
+    )
     rows = [
-        row.location
-        for row in list_operational_locations(
+        row
+        for row in rows
+        if operational_location_issue(
             db,
+            row.location,
             warehouse_types={"semi_finished", "shared"},
+            require_published=True,
+            require_map_geometry=True,
+            required_inventory_type="semi_finished",
+            projection_context=row.projection_context,
         )
+        is None
     ]
-    rows.sort(key=lambda row: (row.location_code, row.id))
+    rows.sort(key=lambda row: (row.location.location_code, row.location.id))
+    items = [operational_location_payload(row) for row in rows]
     return {
         "items": [
             {
-                "id": row.id,
-                "location_code": row.location_code,
-                "location_name": employee_location_name(row),
-                **location_address_payload(row),
-                "warehouse_type": row.warehouse_type,
-                "layout_version": (
-                    int(row.floor3_layout.version)
-                    if row.floor3_layout is not None
-                    else None
-                ),
+                **item,
             }
-            for row in rows
+            for item in items
+            if item["position_status"] == "mapped"
         ]
     }
 

@@ -39,14 +39,18 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
     WarehouseLocation,
 )
+from app.services import location_candidates
 from app.services.production_workflow import CompletionCommand, complete_production_batch
 from app.services.warehouse_inventory import release_finished_reservation
 from test_n029_production_service import PASSWORD, _add_case, production_app
 
 
 MERGE_BATCH_URL = "/api/warehouse/pallets/merge-batches"
+CURRENT_MAP_REVISION = "p1-49c-test-map"
 FRONTEND = (
     Path(__file__).resolve().parents[1]
     / "factory_twin"
@@ -97,7 +101,7 @@ def _published_area(
         allowed_inventory_types_json='["finished"]',
         storage_layout="pallet_ground",
         status="published",
-        published_map_revision="p1-49c-test-map",
+        published_map_revision=CURRENT_MAP_REVISION,
         version=1,
     )
     return area
@@ -134,6 +138,53 @@ def _mapped_location(
         source_type="manual",
     )
     return location
+
+
+def _published_ground_plan(
+    db,
+    *,
+    area: WarehouseArea,
+    locations: list[WarehouseLocation],
+    operator_id: int,
+    key: str,
+) -> None:
+    plan = WarehouseGroundLayoutPlan(
+        area_id=area.id,
+        status="published",
+        target_slot_count=len(locations),
+        numbering_origin="south",
+        row_direction="from_aisle_inward",
+        slot_direction="left_to_right",
+        row_start_no=1,
+        slot_start_no=1,
+        draft_map_revision=CURRENT_MAP_REVISION,
+        published_map_revision=CURRENT_MAP_REVISION,
+        preview_fingerprint="c" * 64,
+        version=1,
+        publish_idempotency_key=f"p1-49c-{key}",
+        publish_request_hash="d" * 64,
+        updated_by=operator_id,
+        published_by=operator_id,
+        published_at=_now(),
+    )
+    db.add(plan)
+    db.flush()
+    db.add_all(
+        [
+            WarehouseGroundLayoutSlot(
+                plan_id=plan.id,
+                location_id=location.id,
+                route_sequence=index,
+                row_no=1,
+                slot_no=index,
+                x_mm=Decimal(1000 + index * 1400),
+                y_mm=Decimal("1000"),
+                width_mm=1200,
+                depth_mm=1000,
+            )
+            for index, location in enumerate(locations, start=1)
+        ]
+    )
 
 
 def _merge_payload(
@@ -357,7 +408,47 @@ def _write_snapshot(db, pallet_ids: list[int], lot_ids: list[int]) -> dict:
 
 
 @pytest.fixture()
-def pallet_merge_app(production_app):
+def pallet_merge_app(production_app, monkeypatch: pytest.MonkeyPatch):
+    identities = {
+        1: {
+            "revision": CURRENT_MAP_REVISION,
+            "zones_by_id": {
+                "zone-p149c-dispatch": "DISPATCH",
+                "zone-p149c-1f-fg": "P149C-FG",
+            },
+            "zone_ids_by_area": {
+                "DISPATCH": ("zone-p149c-dispatch",),
+                "P149C-FG": ("zone-p149c-1f-fg",),
+            },
+        },
+        2: {
+            "revision": CURRENT_MAP_REVISION,
+            "zones_by_id": {
+                "zone-p149c-2f-out-of-scope": "P149C-2F-OUT-OF-SCOPE"
+            },
+            "zone_ids_by_area": {
+                "P149C-2F-OUT-OF-SCOPE": (
+                    "zone-p149c-2f-out-of-scope",
+                )
+            },
+        },
+        3: {
+            "revision": CURRENT_MAP_REVISION,
+            "zones_by_id": {
+                "zone-p149c-3f-a1": "P149C-A1",
+                "zone-p149c-3f-target": "P149C-TARGET",
+            },
+            "zone_ids_by_area": {
+                "P149C-A1": ("zone-p149c-3f-a1",),
+                "P149C-TARGET": ("zone-p149c-3f-target",),
+            },
+        },
+    }
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda floor_number: identities.get(int(floor_number)),
+    )
     app, factory, base_ids = production_app
     app.include_router(warehouse_router, prefix="/api/warehouse")
 
@@ -407,6 +498,52 @@ def pallet_merge_app(production_app):
             customer_access_mode="all",
         )
         db.add(second_admin)
+
+        cases = []
+        for key, product, quantity in (
+            ("p149c-source-dispatch", product_a, 6),
+            ("p149c-source-1f", product_a3, 7),
+            ("p149c-source-3f", product_a, 8),
+            ("p149c-target", product_a3, 9),
+        ):
+            order, order_item, task = _add_case(
+                db,
+                key=key,
+                customer=customer_a,
+                product=product,
+                quantity=quantity,
+            )
+            completion = complete_production_batch(
+                db,
+                idempotency_key=f"{key}-completion",
+                commands=[_direct_command(task, quantity)],
+                operator_id=admin.id,
+            ).completions[0]
+            lot = db.get(InventoryLot, completion.inventory_lot_id)
+            assert lot is not None
+            assert int(lot.quantity_reserved or 0) == quantity
+            assert db.scalar(
+                select(InventoryReservation.id).where(
+                    InventoryReservation.inventory_lot_id == lot.id,
+                    InventoryReservation.order_item_id == order_item.id,
+                    InventoryReservation.reservation_type == "finished_order",
+                )
+            ) is not None
+            cases.append((order, order_item, completion))
+
+        foreign_order, foreign_item, foreign_task = _add_case(
+            db,
+            key="p149c-foreign",
+            customer=customer_b,
+            product=product_b,
+            quantity=11,
+        )
+        foreign_completion = complete_production_batch(
+            db,
+            idempotency_key="p149c-foreign-completion",
+            commands=[_direct_command(foreign_task, 11)],
+            operator_id=admin.id,
+        ).completions[0]
 
         floor1 = WarehouseFloor(
             floor_code="1F",
@@ -465,7 +602,7 @@ def pallet_merge_app(production_app):
             code="3F-P149C-SOURCE",
             floor=3,
             area_code="P149C-A1",
-            source_version="V11",
+            source_version="TWIN_V1",
             sort_order=14902,
         )
         target_location = _mapped_location(
@@ -486,52 +623,27 @@ def pallet_merge_app(production_app):
             [floor1_source, floor3_source, target_location, orphan_location]
         )
         db.flush()
-
-        cases = []
-        for key, product, quantity in (
-            ("p149c-source-dispatch", product_a, 6),
-            ("p149c-source-1f", product_a3, 7),
-            ("p149c-source-3f", product_a, 8),
-            ("p149c-target", product_a3, 9),
-        ):
-            order, order_item, task = _add_case(
-                db,
-                key=key,
-                customer=customer_a,
-                product=product,
-                quantity=quantity,
-            )
-            completion = complete_production_batch(
-                db,
-                idempotency_key=f"{key}-completion",
-                commands=[_direct_command(task, quantity)],
-                operator_id=admin.id,
-            ).completions[0]
-            lot = db.get(InventoryLot, completion.inventory_lot_id)
-            assert lot is not None
-            assert int(lot.quantity_reserved or 0) == quantity
-            assert db.scalar(
-                select(InventoryReservation.id).where(
-                    InventoryReservation.inventory_lot_id == lot.id,
-                    InventoryReservation.order_item_id == order_item.id,
-                    InventoryReservation.reservation_type == "finished_order",
-                )
-            ) is not None
-            cases.append((order, order_item, completion))
-
-        foreign_order, foreign_item, foreign_task = _add_case(
+        _published_ground_plan(
             db,
-            key="p149c-foreign",
-            customer=customer_b,
-            product=product_b,
-            quantity=11,
-        )
-        foreign_completion = complete_production_batch(
-            db,
-            idempotency_key="p149c-foreign-completion",
-            commands=[_direct_command(foreign_task, 11)],
+            area=floor1_area,
+            locations=[floor1_source, orphan_location],
             operator_id=admin.id,
-        ).completions[0]
+            key="floor1-sources",
+        )
+        _published_ground_plan(
+            db,
+            area=floor3_area,
+            locations=[floor3_source],
+            operator_id=admin.id,
+            key="floor3-source",
+        )
+        _published_ground_plan(
+            db,
+            area=target_area,
+            locations=[target_location],
+            operator_id=admin.id,
+            key="floor3-target",
+        )
 
         placements = [staging, floor1_source, floor3_source, target_location]
         pallet_ids: list[int] = []
@@ -1238,6 +1350,15 @@ def test_published_mapped_2f_twin_location_is_outside_merge_scope_without_write(
         )
         db.add_all([floor2, area2, location2])
         db.flush()
+        admin = db.scalar(select(User).where(User.username == "n029-admin"))
+        assert admin is not None
+        _published_ground_plan(
+            db,
+            area=area2,
+            locations=[location2],
+            operator_id=admin.id,
+            key="floor2-out-of-scope",
+        )
 
         source_pallet = db.get(InventoryPallet, source_pallet_id)
         source_lot = db.get(InventoryLot, source_lot_id)

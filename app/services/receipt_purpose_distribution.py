@@ -48,6 +48,7 @@ from app.services.warehouse_inventory import (
     manual_semi_finished_in,
     mutate_lot,
 )
+from app.services.warehouse_location_address import employee_location_name
 
 
 MONEY = Decimal("0.0001")
@@ -734,10 +735,14 @@ def serialize_receipt_purpose_allocation(
         "finished_inventory_lot_id": allocation.finished_inventory_lot_id,
         "reserve_inventory_lot_id": allocation.semi_finished_inventory_lot_id,
         "finished_location_name": (
-            finished_lot.location.location_name if finished_lot is not None else None
+            employee_location_name(finished_lot.location)
+            if finished_lot is not None
+            else None
         ),
         "reserve_location_name": (
-            reserve_lot.location.location_name if reserve_lot is not None else None
+            employee_location_name(reserve_lot.location)
+            if reserve_lot is not None
+            else None
         ),
         "sheet_cost": allocation.sheet_cost,
         "order_cost": allocation.order_purpose_cost,
@@ -845,8 +850,8 @@ def serialize_receipt_purpose_allocations(
             "reserve_variance_sheet_qty": allocation.cumulative_reserve_purpose_sheet_qty_after - int(allocation.reserve_purpose_plan_sheet_qty_snapshot or 0),
             "finished_inventory_lot_id": allocation.finished_inventory_lot_id,
             "reserve_inventory_lot_id": allocation.semi_finished_inventory_lot_id,
-            "finished_location_name": finished_lot.location.location_name if finished_lot is not None else None,
-            "reserve_location_name": reserve_lot.location.location_name if reserve_lot is not None else None,
+            "finished_location_name": employee_location_name(finished_lot.location) if finished_lot is not None else None,
+            "reserve_location_name": employee_location_name(reserve_lot.location) if reserve_lot is not None else None,
             "sheet_cost": allocation.sheet_cost,
             "order_cost": allocation.order_purpose_cost,
             "reserve_cost": allocation.reserve_purpose_cost,

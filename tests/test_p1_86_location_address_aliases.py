@@ -30,6 +30,9 @@ from app.services.warehouse_location_address import (
     WarehouseLocationAddressError,
     build_address_change_preview,
     confirm_address_change,
+    employee_location_name,
+    format_location_address,
+    location_address_payload,
     location_alias_conflict,
     resolve_location_address,
 )
@@ -142,6 +145,95 @@ def _assign_rack_location(
         ),
         key=key,
     )
+
+
+@pytest.mark.parametrize(
+    ("location_code", "storage_type", "level_no", "side_code", "expected_name"),
+    [
+        ("A1-R04", "ground", None, "R", "三楼 A1成品存放区·右侧第4位"),
+        ("F2-S3-L05", "rack", 3, "L", "三楼 F2成品货架区·3层·左侧第5格"),
+        ("F12-P01", "temporary_aisle", None, "P", "三楼 F12过道临放区·临放第1位"),
+    ],
+)
+def test_v11_measured_map_location_uses_one_employee_projection(
+    location_code: str,
+    storage_type: str,
+    level_no: int | None,
+    side_code: str | None,
+    expected_name: str,
+) -> None:
+    floor = WarehouseFloor(
+        id=3,
+        floor_code="3F",
+        floor_name="三楼成品仓",
+        floor_number=3,
+        construction_status="enabled",
+    )
+    area_name = {
+        "A1": "A1成品存放区",
+        "F2": "F2成品货架区",
+        "F12": "F12过道临放区",
+    }[location_code.split("-", 1)[0]]
+    area = WarehouseArea(
+        id=31,
+        floor_id=floor.id,
+        area_code=location_code.split("-", 1)[0],
+        area_name=area_name,
+        construction_status="enabled",
+    )
+    location = WarehouseLocation(
+        id=301,
+        location_code=location_code,
+        location_name=location_code,
+        warehouse_type="finished",
+        warehouse_floor=3,
+        area_code=area.area_code,
+        storage_type=storage_type,
+        level_no=level_no,
+        side_code=side_code,
+        source_version="V11",
+        placement_status="placed",
+    )
+
+    current_code, current_name = format_location_address(
+        location,
+        area=area,
+        floor=floor,
+    )
+    payload = location_address_payload(location, area=area, floor=floor)
+    published_payload = location_address_payload(
+        location,
+        area=area,
+        floor=floor,
+        position_status="mapped",
+    )
+
+    assert current_code == location_code
+    assert current_name == expected_name
+    assert employee_location_name(location, area=area, floor=floor) == expected_name
+    assert payload["current_address_name"] == expected_name
+    assert payload["employee_location_name"] == expected_name
+    assert payload["projection_source"] == "measured_map_name_unpublished"
+    assert published_payload["projection_source"] == "published_measured_map"
+
+
+def test_address_lookup_never_treats_null_placement_as_published(
+    session_factory,
+) -> None:
+    with session_factory() as db:
+        _floor, _area, location = _seed_floor_area_location(
+            db,
+            floor_number=3,
+            area_code="A1",
+            location_code="NULL-PLACEMENT-01",
+        )
+        location.placement_status = None
+        db.commit()
+
+        result = resolve_location_address(db, "NULL-PLACEMENT-01")
+
+    assert result["placement_status"] == "unplaced"
+    assert result["current"]["projection_source"] != "published_measured_map"
 
 
 def test_floor_scoped_paths_keep_same_short_rack_address_distinct(session_factory) -> None:

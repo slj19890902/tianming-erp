@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier
@@ -258,13 +258,25 @@ def _ensure_location_layout_version(factory, location_id: int, *, left_pct: int 
 
 def test_published_candidates_keep_accepted_v11_map_locations_until_area_policy_exists(
     floor3_app,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.models.warehouse_inventory import (
         Floor3LocationLayout,
         WarehouseArea,
         WarehouseAreaStoragePolicy,
         WarehouseFloor,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
         WarehouseLocation,
+    )
+
+    monkeypatch.setattr(
+        "app.services.location_candidates.load_warehouse_twin_published_floor_identity",
+        lambda _floor_number: {
+            "revision": "legacy-v11-ground-v1",
+            "zones_by_id": {"zone-3f-a1": "A1"},
+            "zone_ids_by_area": {"A1": ("zone-3f-a1",)},
+        },
     )
 
     app, ids, factory = floor3_app
@@ -308,6 +320,40 @@ def test_published_candidates_keep_accepted_v11_map_locations_until_area_policy_
             z_index=0,
             version=1,
             source_type="seeded",
+        )
+        plan = WarehouseGroundLayoutPlan(
+            area_id=area.id,
+            status="published",
+            target_slot_count=1,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="legacy-v11-ground-v1",
+            published_map_revision="legacy-v11-ground-v1",
+            preview_fingerprint="e" * 64,
+            version=1,
+            publish_idempotency_key="legacy-v11-ground",
+            publish_request_hash="f" * 64,
+            updated_by=ids["admin"],
+            published_by=ids["admin"],
+            published_at=datetime.now(),
+        )
+        db.add(plan)
+        db.flush()
+        db.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=plan.id,
+                location_id=accepted.id,
+                route_sequence=1,
+                row_no=1,
+                slot_no=1,
+                x_mm=Decimal("1000"),
+                y_mm=Decimal("1000"),
+                width_mm=1200,
+                depth_mm=1000,
+            )
         )
         db.commit()
         area_id = area.id
@@ -4111,13 +4157,46 @@ def test_p1_34b1_location_labels_are_mapped_read_only_and_fail_closed(
     monkeypatch,
 ) -> None:
     from app.api import warehouse as warehouse_api
-    from app.models.warehouse_inventory import Floor3LocationLayout
+    from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
+        WarehouseLocation,
+    )
+    from app.services import location_candidates
 
     app, ids, factory = floor3_app
     mapped_id = ids["locations"][0]
     temporary_id = ids["locations"][2]
     unmapped_id = ids["locations"][1]
     with factory() as db:
+        floor = WarehouseFloor(
+            floor_code="3F",
+            floor_name="三楼成品仓",
+            floor_number=3,
+            construction_status="enabled",
+        )
+        db.add(floor)
+        db.flush()
+        area_a1 = WarehouseArea(
+            floor_id=floor.id,
+            area_code="A1",
+            area_name="A1成品存放区",
+            construction_status="enabled",
+        )
+        area_f12 = WarehouseArea(
+            floor_id=floor.id,
+            area_code="F12",
+            area_name="F12过道临放区",
+            construction_status="enabled",
+        )
+        db.add_all([area_a1, area_f12])
+        db.flush()
+        db.get(WarehouseLocation, mapped_id).placement_status = "placed"
+        db.get(WarehouseLocation, temporary_id).placement_status = "placed"
+        db.get(WarehouseLocation, unmapped_id).placement_status = "unplaced"
         db.add(
             Floor3LocationLayout(
                 location_id=mapped_id,
@@ -4129,7 +4208,56 @@ def test_p1_34b1_location_labels_are_mapped_read_only_and_fail_closed(
                 source_type="manual",
             )
         )
+        ground_plan = WarehouseGroundLayoutPlan(
+            area_id=area_a1.id,
+            status="published",
+            target_slot_count=1,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="p1-34b1-map-v1",
+            published_map_revision="p1-34b1-map-v1",
+            preview_fingerprint="a" * 64,
+            version=1,
+            publish_idempotency_key="p1-34b1-ground-publish",
+            publish_request_hash="b" * 64,
+            updated_by=ids["admin"],
+            published_by=ids["admin"],
+            published_at=datetime.now(),
+        )
+        db.add(ground_plan)
+        db.flush()
+        db.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=ground_plan.id,
+                location_id=mapped_id,
+                route_sequence=1,
+                row_no=1,
+                slot_no=1,
+                x_mm=Decimal("1000"),
+                y_mm=Decimal("1000"),
+                width_mm=1200,
+                depth_mm=1000,
+            )
+        )
         db.commit()
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda _floor_number: {
+            "revision": "p1-34b1-map-v1",
+            "zones_by_id": {
+                "zone-a1": "A1",
+                "zone-f12": "F12",
+            },
+            "zone_ids_by_area": {
+                "A1": ("zone-a1",),
+                "F12": ("zone-f12",),
+            },
+        },
+    )
     monkeypatch.setattr(warehouse_api, "_lan_ip", lambda: "192.168.3.80")
 
     with TestClient(app) as client:
@@ -4137,7 +4265,8 @@ def test_p1_34b1_location_labels_are_mapped_read_only_and_fail_closed(
         single = client.get(f"/api/warehouse/locations/{mapped_id}/label")
         assert single.status_code == 200, single.text
         assert single.json()["location_code"] == "A1-L01"
-        assert single.json()["display_path"] == "位置名称待完善"
+        assert single.json()["display_path"] == "三楼 A1成品存放区·左侧第1位"
+        assert single.json()["position_status"] == "mapped"
         assert single.json()["layout_version"] == 3
         assert single.json()["lookup_url"].endswith(
             f"/warehouse.html?tab=locations&location_id={mapped_id}"
@@ -4157,7 +4286,7 @@ def test_p1_34b1_location_labels_are_mapped_read_only_and_fail_closed(
                 f"/api/warehouse/locations/{blocked_id}/label"
             )
             assert blocked.status_code == 409, blocked.text
-            assert "已发布到三楼平面图" in blocked.json()["detail"]
+            assert "已发布到当前实测地图" in blocked.json()["detail"]
 
     with factory() as db:
         layout = db.scalar(

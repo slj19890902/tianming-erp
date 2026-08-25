@@ -8,7 +8,7 @@ import json
 from math import ceil
 from typing import Literal, Sequence
 
-from sqlalchemy import String, and_, case, cast, exists, func, or_, select, update
+from sqlalchemy import String, and_, case, cast, exists, func, or_, select, union, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased, selectinload
 
@@ -22,10 +22,6 @@ from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.order import Order, OrderItem
-from app.models.purchase_receipt import (
-    IncomingReceiptPurposeAllocation,
-    IncomingReceiptPurposeReversal,
-)
 from app.models.product import Product
 from app.models.printing_plate import PrintingPlate
 from app.models.product_bom import (
@@ -40,6 +36,11 @@ from app.models.production import (
     ProductionTask,
 )
 from app.models.requisition import RequisitionItem
+from app.models.supplier_requisition_order import (
+    PurchasePurposeSourceSnapshot,
+    SupplierRequisitionOrder,
+    SupplierRequisitionOrderItem,
+)
 from app.models.user import User
 from app.models.warehouse_inventory import (
     InventoryLot,
@@ -71,9 +72,11 @@ from app.services.composite_bom_workflow import (
 from app.services.location_candidates import (
     claim_active_placed_location,
     has_space_ledger,
+    load_warehouse_location_projection_contexts,
     location_has_live_inventory,
     list_operational_locations,
     operational_location_issue,
+    warehouse_location_projection,
 )
 from app.services.order_status_policy import (
     ORDER_ITEM_ACTIVE_ORDER_STATUSES,
@@ -89,6 +92,10 @@ from app.services.production_label_strategy import (
 from app.services.printing_colors import parse_printing_colors
 from app.services.product_specification import resolved_product_specification
 from app.services.requisition_quantities import cutting_factor
+from app.services.receipt_managed_production import (
+    receipt_managed_order_item_ids,
+    receipt_purpose_summaries_by_order_item_ids,
+)
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
@@ -1216,11 +1223,18 @@ def production_ready_quantity(db: Session, order_item: OrderItem | int) -> int:
         )
     ).all()
     if receipt_auto_completions:
-        completion_quantity = sum(
-            normalized_completion_output(item, completion)
+        receipt_auto_surplus = sum(
+            max(int(completion.surplus_finished_quantity or 0), 0)
             for completion in receipt_auto_completions
         )
-        return max(completion_quantity, 0)
+        # Order reservations (including already-consumed delivery credit) and
+        # receipt-auto surplus are separate physical sources.  Their sum is the
+        # one deliverable projection; automatic output alone would omit stock
+        # that covered the order before its frozen receipt arrived.
+        return max(active_finished_reserved_qty(db, item.id), 0) + max(
+            receipt_auto_surplus,
+            0,
+        )
     if is_composite_order_item(db, item.id):
         try:
             return int(kit_availability(db, item.id)["available_sets"])
@@ -1381,6 +1395,10 @@ def _receipt_auto_finished_ground_targets(
             409,
         )
 
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [slot.location for plan in plans for slot in plan.slots],
+    )
     valid_plan_found = False
     targets: list[ReceiptAutoFinishedGroundTarget] = []
     for plan in plans:
@@ -1421,6 +1439,7 @@ def _receipt_auto_finished_ground_targets(
                 # Capacity is advisory for automatic receipt completion.  The
                 # physical slot itself must still be empty and formally mapped.
                 capacity_source_location_id=location.id,
+                projection_context=projection_contexts.get(int(location.id)),
             )
             if issue:
                 continue
@@ -1433,6 +1452,7 @@ def _receipt_auto_finished_ground_targets(
                 require_map_geometry=True,
                 required_inventory_type="finished",
                 require_empty=True,
+                projection_context=projection_contexts.get(int(location.id)),
             )
             targets.append(
                 ReceiptAutoFinishedGroundTarget(
@@ -1464,8 +1484,19 @@ def _receipt_auto_finished_ground_target(
     db: Session,
     *,
     claim: bool,
+    excluded_location_ids: set[int] | None = None,
 ) -> ReceiptAutoFinishedGroundTarget:
-    targets = _receipt_auto_finished_ground_targets(db)
+    excluded = excluded_location_ids or set()
+    targets = [
+        target
+        for target in _receipt_auto_finished_ground_targets(db)
+        if int(target.location.id) not in excluded
+    ]
+    if not targets:
+        raise ProductionWorkflowError(
+            "同一完工批次没有足够的已发布 FIN-001～003 空地堆位置，请先腾空或发布新的真实位置",
+            409,
+        )
     if not claim:
         return targets[0]
     for target in targets:
@@ -1492,6 +1523,10 @@ def _receipt_auto_finished_ground_target(
             required_inventory_type="finished",
             require_empty=True,
             capacity_source_location_id=target.location.id,
+            projection_context=load_warehouse_location_projection_contexts(
+                db,
+                [target.location],
+            ).get(int(target.location.id)),
         )
         if issue is None:
             return target
@@ -1548,6 +1583,29 @@ def _production_direct_staging_location(
     return location
 
 
+def _production_direct_finished_target(
+    db: Session,
+    *,
+    excluded_location_ids: set[int] | None = None,
+) -> tuple[WarehouseLocation, ReceiptAutoFinishedGroundTarget | None]:
+    """Choose the only legal destination for a new direct-delivery completion.
+
+    Current databases with a warehouse space ledger must use one claimed,
+    published FIN ground slot.  The historical F1-DISPATCH-01 fallback exists
+    only for isolated pre-space-ledger databases; it remains a source location
+    for old stock in current databases and is never a new write target there.
+    """
+
+    if has_space_ledger(db):
+        target = _receipt_auto_finished_ground_target(
+            db,
+            claim=True,
+            excluded_location_ids=excluded_location_ids,
+        )
+        return target.location, target
+    return _production_direct_staging_location(db), None
+
+
 def receipt_auto_finished_location_projection(db: Session) -> dict[str, object]:
     """Return the authoritative employee-safe real FIN destination preview."""
 
@@ -1556,14 +1614,29 @@ def receipt_auto_finished_location_projection(db: Session) -> dict[str, object]:
     except ProductionWorkflowError as error:
         return {
             "ready": False,
+            "location_id": None,
+            "location_code": None,
             "location_name": None,
+            "current_address_name": None,
+            "employee_location_name": None,
+            "position_status": "unlocated",
             "layout_version": None,
             "capacity_warning": None,
             "issue": str(error),
         }
+    readable_location_name = employee_location_name(
+        target.location,
+        area=target.plan.area,
+        floor=target.plan.area.floor,
+    )
     return {
         "ready": True,
-        "location_name": target.location.location_name,
+        "location_id": int(target.location.id),
+        "location_code": target.location.location_code,
+        "location_name": readable_location_name,
+        "current_address_name": readable_location_name,
+        "employee_location_name": readable_location_name,
+        "position_status": "mapped",
         "layout_version": target.layout_version,
         "capacity_warning": target.capacity_warning,
         "issue": None,
@@ -1590,10 +1663,9 @@ def _bind_direct_completion_lots_to_system_pallet(
 ) -> InventoryPallet:
     """Bind one direct-production detail to one formal ERP system pallet.
 
-    The first-floor dispatch area is an area-level staging location rather than
-    a one-pallet physical slot.  ``location_occupancy_key`` keeps the existing
-    one-pallet-per-location rule for ordinary locations while allowing one
-    independently traceable pallet for each direct completion in this area.
+    Current writes bind one pallet to one claimed FIN ground slot.  The custom
+    occupancy key remains for historical F1-DISPATCH-01 stock created before
+    the measured-map ledger became authoritative.
     """
 
     is_legacy_dispatch = location.location_code == DIRECT_DELIVERY_STAGING_LOCATION_CODE
@@ -1657,7 +1729,7 @@ def _bind_direct_completion_lots_to_system_pallet(
         location_occupancy_key=occupancy_key,
         status="active",
         is_current=True,
-        needs_relocation=True,
+        needs_relocation=is_legacy_dispatch,
         remarks=f"生产完工明细 {completion.id} 直接待送系统栈板",
         created_by=operator_id,
         updated_by=operator_id,
@@ -1797,6 +1869,7 @@ def list_temporary_locations(db: Session) -> list[dict]:
                 require_published=True,
                 require_map_geometry=True,
                 required_inventory_type="finished",
+                projection_context=candidate.projection_context,
             )
             is None
         ]
@@ -1812,6 +1885,11 @@ def list_temporary_locations(db: Session) -> list[dict]:
         location = candidate.location
         pallet = _current_pallet(db, location.id)
         occupied = candidate.occupied
+        readable_location_name = employee_location_name(
+            location,
+            area=candidate.area,
+            floor=candidate.floor,
+        )
         result.append(
             {
                 "id": location.id,
@@ -1827,9 +1905,9 @@ def list_temporary_locations(db: Session) -> list[dict]:
                 "area_code": location.area_code,
                 "area_name": candidate.area.area_name if candidate.area else None,
                 "location_code": location.location_code,
-                "location_name": employee_location_name(location),
-                "current_address_name": employee_location_name(location),
-                "employee_location_name": employee_location_name(location),
+                "location_name": readable_location_name,
+                "current_address_name": readable_location_name,
+                "employee_location_name": readable_location_name,
                 "layout_version": (
                     int(location.floor3_layout.version)
                     if location.floor3_layout is not None
@@ -2147,7 +2225,7 @@ def _stock_completion_lot(
     operator_id: int | None,
     idempotency_prefix: str,
     location_id_override: int | None = None,
-    receipt_ground_target: ReceiptAutoFinishedGroundTarget | None = None,
+    finished_ground_target: ReceiptAutoFinishedGroundTarget | None = None,
     source_type: str = "production_surplus",
     movement_reason: str = "生产完工入库",
 ) -> InventoryLot:
@@ -2181,16 +2259,19 @@ def _stock_completion_lot(
         elif existing_location_id is not None:
             require_empty_pallet = False
     if location_id_override is not None:
-        if receipt_ground_target is not None:
+        if finished_ground_target is not None:
             if (
-                getattr(completion, "origin", "manual") != "receipt_auto"
-                or receipt_ground_target.location.id != location_id_override
+                finished_ground_target.location.id != location_id_override
+                or str(finished_ground_target.location.area_code or "")
+                .strip()
+                .upper()
+                not in RECEIPT_FIN_STAGING_AREA_CODES
             ):
                 raise ProductionWorkflowError(
-                    "收料自动成品的真实 FIN 位置校验失败，请刷新后重试",
+                    "生产完工的真实 FIN 位置校验失败，请刷新后重试",
                     409,
                 )
-            location = receipt_ground_target.location
+            location = finished_ground_target.location
         else:
             location = _production_direct_staging_location(db)
             if location.id != location_id_override:
@@ -2338,41 +2419,7 @@ def _has_receipt_managed_frozen_source(
     component task would post the same material a second time.
     """
 
-    normalized_ids = sorted({int(item_id) for item_id in order_item_ids})
-    if not normalized_ids:
-        return False
-    allocation_id = db.scalar(
-        select(IncomingReceiptPurposeAllocation.id)
-        .outerjoin(
-            RequisitionItemBomSource,
-            RequisitionItemBomSource.id
-            == IncomingReceiptPurposeAllocation.source_bom_requisition_source_id,
-        )
-        .outerjoin(
-            SalesOrderItemBomComponent,
-            SalesOrderItemBomComponent.id
-            == RequisitionItemBomSource.sales_order_item_bom_component_id,
-        )
-        .where(
-            IncomingReceiptPurposeAllocation.status == "posted",
-            IncomingReceiptPurposeAllocation.purpose_contract_status_snapshot
-            == "frozen",
-            ~exists(
-                select(IncomingReceiptPurposeReversal.id).where(
-                    IncomingReceiptPurposeReversal.incoming_receipt_purpose_allocation_id
-                    == IncomingReceiptPurposeAllocation.id
-                )
-            ),
-            or_(
-                IncomingReceiptPurposeAllocation.source_order_item_id.in_(
-                    normalized_ids
-                ),
-                SalesOrderItemBomComponent.sales_order_item_id.in_(normalized_ids),
-            ),
-        )
-        .limit(1)
-    )
-    return allocation_id is not None
+    return bool(receipt_managed_order_item_ids(db, order_item_ids))
 
 
 def complete_production_batch(
@@ -2397,6 +2444,28 @@ def complete_production_batch(
             db, batch=existing_batch, request_hash=request_hash
         )
 
+    task_ids = [command.task_id for command in commands]
+    initial_rows = db.execute(
+        select(ProductionTask, OrderItem, Order)
+        .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(ProductionTask.id.in_(task_ids))
+        .order_by(ProductionTask.id)
+    ).all()
+    if len(initial_rows) != len(task_ids):
+        raise ProductionWorkflowError("生产任务不存在或已被删除", 404)
+    # This read-only preflight must run before even the destination no-op claim.
+    # A frozen receipt-purpose allocation owns the complete production path,
+    # including the zero-output state while one required component is missing.
+    if _has_receipt_managed_frozen_source(
+        db,
+        order_item_ids=[item.id for _task, item, _order in initial_rows],
+    ):
+        raise ProductionWorkflowError(
+            "该订单已由冻结收料用途自动形成成品，不能再手工确认生产完工",
+            409,
+        )
+
     destination_versions: dict[int, set[int | None]] = {}
     for command in commands:
         if command.location_id is not None:
@@ -2416,16 +2485,6 @@ def complete_production_batch(
             expected_layout_version=next(iter(versions)),
         )
 
-    task_ids = [command.task_id for command in commands]
-    initial_rows = db.execute(
-        select(ProductionTask, OrderItem, Order)
-        .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
-        .join(Order, Order.id == OrderItem.order_id)
-        .where(ProductionTask.id.in_(task_ids))
-        .order_by(ProductionTask.id)
-    ).all()
-    if len(initial_rows) != len(task_ids):
-        raise ProductionWorkflowError("生产任务不存在或已被删除", 404)
     lock_order_rows_for_production_transition(
         db,
         [order.id for _task, _item, order in initial_rows],
@@ -2461,7 +2520,8 @@ def complete_production_batch(
     if len({order.customer_id for _, _, order in rows}) != 1:
         raise ProductionWorkflowError("一个完工批次只能包含同一客户的生产任务", 409)
 
-    prepared: dict[int, dict[str, int | str]] = {}
+    prepared: dict[int, dict[str, object]] = {}
+    claimed_direct_location_ids: set[int] = set()
     for command in commands:
         task, item, order = by_task[command.task_id]
         is_component_task = task.sales_order_item_bom_component_id is not None
@@ -2647,6 +2707,7 @@ def complete_production_batch(
             max(coverage_target_quantity - prior_order_coverage, 0),
         )
         if command.disposition == "stock":
+            direct_ground_target = None
             direct_quantity = 0
             stock_quantity = actual_output
             stored_disposition = "stock"
@@ -2703,7 +2764,12 @@ def complete_production_batch(
             direct_quantity = actual_output
             stock_quantity = 0
             stored_disposition = "direct"
-            location = _production_direct_staging_location(db)
+            location, direct_ground_target = _production_direct_finished_target(
+                db,
+                excluded_location_ids=claimed_direct_location_ids,
+            )
+            if direct_ground_target is not None:
+                claimed_direct_location_ids.add(int(location.id))
         prepared[task.id] = {
             "received": received_now,
             "allowed_input": allowed_input_now,
@@ -2718,6 +2784,8 @@ def complete_production_batch(
             "stock": stock_quantity,
             "stored_disposition": stored_disposition,
             "location_id": location.id,
+            "location": location,
+            "ground_target": direct_ground_target,
             "expected_status": expected_task_status,
         }
 
@@ -2791,11 +2859,14 @@ def complete_production_batch(
                 location_id_override=(
                     int(facts["location_id"]) if is_direct_staging else None
                 ),
+                finished_ground_target=(
+                    facts["ground_target"] if is_direct_staging else None
+                ),
                 source_type=(
                     "production_completion" if is_direct_staging else "production_surplus"
                 ),
                 movement_reason=(
-                    "生产完工整批进入一楼待送区"
+                    "生产完工整批进入已发布 FIN 待送位置"
                     if is_direct_staging
                     else "生产完工入库"
                 ),
@@ -2807,8 +2878,9 @@ def complete_production_batch(
                     completion=completion,
                     order=order,
                     lots=[lot],
-                    location=location,
+                    location=facts["location"],
                     operator_id=operator_id,
+                    ground_target=facts["ground_target"],
                 )
         _consume_completion_semi_reservations(
             db,
@@ -3576,7 +3648,17 @@ def post_automatic_receipt_completion(
     )
     db.add(batch)
     db.flush()
-    order_reserved = min(delta, max(int(item.quantity or 0) - before, 0))
+    # Receipt capacity is an output fact, not the remaining order demand.
+    # Existing finished-stock reservations (including quantities consumed by
+    # delivery) already cover the order and must not be reserved a second time.
+    existing_order_coverage = min(
+        max(active_finished_reserved_qty(db, item.id), 0),
+        int(item.quantity or 0),
+    )
+    order_reserved = min(
+        delta,
+        max(int(item.quantity or 0) - existing_order_coverage, 0),
+    )
     completion = ProductionCompletion(
         batch_id=batch.id,
         task_id=task.id,
@@ -3622,7 +3704,7 @@ def post_automatic_receipt_completion(
         operator_id=operator_id,
         idempotency_prefix=_stable_key("incoming-auto", key),
         location_id_override=location.id,
-        receipt_ground_target=ground_target,
+        finished_ground_target=ground_target,
         source_type="production_completion",
         movement_reason="订单用途来料自动形成成品并进入真实一楼成品待送位置",
     )
@@ -3659,9 +3741,17 @@ def post_automatic_receipt_completion(
     )
     lot.cost_snapshot_at = now
 
-    task.status = COMPLETED if after >= int(item.quantity or 0) else PENDING
+    effective_order_coverage = min(
+        existing_order_coverage + order_reserved,
+        int(item.quantity or 0),
+    )
+    task.status = (
+        COMPLETED
+        if effective_order_coverage >= int(item.quantity or 0)
+        else PENDING
+    )
     task.planned_quantity = max(int(item.quantity or 0), after, 1)
-    task.finished_coverage_snapshot = min(after, int(item.quantity or 0))
+    task.finished_coverage_snapshot = effective_order_coverage
     task.ordered_quantity_snapshot = int(item.quantity or 0)
     task.material_received_quantity = int(material_input_cumulative)
     task.material_input_quantity = int(material_input_cumulative)
@@ -3738,17 +3828,26 @@ def reverse_automatic_receipt_completion(
     completion.reversed_at = now
     completion.reversal_reason = (reason or "").strip() or "撤销来料自动完工"
     remaining = max(int(remaining_theoretical_quantity or 0), 0)
-    if remaining <= 0:
+    effective_order_coverage = min(
+        max(active_finished_reserved_qty(db, item.id), 0),
+        int(item.quantity or 0),
+    )
+    if effective_order_coverage >= int(item.quantity or 0):
+        task.status = COMPLETED
+        task.planned_quantity = max(int(item.quantity or 0), remaining, 1)
+        task.ready_at = task.ready_at or now
+        task.readiness_basis = "automatic_receipt"
+    elif remaining <= 0:
         task.status = WAITING_MATERIAL
         task.planned_quantity = 0
         task.ready_at = None
         task.readiness_basis = None
     else:
-        task.status = COMPLETED if remaining >= int(item.quantity or 0) else PENDING
+        task.status = PENDING
         task.planned_quantity = max(int(item.quantity or 0), remaining, 1)
         task.ready_at = task.ready_at or now
         task.readiness_basis = "automatic_receipt"
-    task.finished_coverage_snapshot = min(remaining, int(item.quantity or 0))
+    task.finished_coverage_snapshot = effective_order_coverage
     task.material_received_quantity = max(int(remaining_material_input_quantity or 0), 0)
     task.material_input_quantity = max(int(remaining_material_input_quantity or 0), 0)
     task.version = max(int(task.version or 1), 1) + 1
@@ -4021,10 +4120,32 @@ def _active_customer_board_preparation_sources(
     item: OrderItem,
 ) -> list[dict]:
     query = (
-        select(InventoryReservation, InventoryLot)
+        select(
+            InventoryReservation,
+            InventoryLot,
+            WarehouseLocation,
+            WarehouseFloor,
+            WarehouseArea,
+        )
         .join(
             InventoryLot,
             InventoryLot.id == InventoryReservation.inventory_lot_id,
+        )
+        .join(
+            WarehouseLocation,
+            WarehouseLocation.id == InventoryLot.warehouse_location_id,
+        )
+        .outerjoin(
+            WarehouseFloor,
+            WarehouseFloor.floor_number == WarehouseLocation.warehouse_floor,
+        )
+        .outerjoin(
+            WarehouseArea,
+            and_(
+                WarehouseArea.floor_id == WarehouseFloor.id,
+                func.upper(WarehouseArea.area_code)
+                == func.upper(WarehouseLocation.area_code),
+            ),
         )
         .where(
             InventoryReservation.order_item_id == item.id,
@@ -4052,9 +4173,8 @@ def _active_customer_board_preparation_sources(
         )
     ).all()
     result: list[dict] = []
-    for reservation, lot in rows:
+    for reservation, lot, location, floor, area in rows:
         detail = lot.semi_finished_detail
-        location = lot.location
         if detail is None or detail.owner_customer_id is None:
             continue
         remaining_sheets = max(
@@ -4071,6 +4191,11 @@ def _active_customer_board_preparation_sources(
         )
         if remaining_sheets <= 0 or remaining_pieces <= 0:
             continue
+        readable_location_name = employee_location_name(
+            location,
+            area=area,
+            floor=floor,
+        )
         result.append(
             {
                 "reservation_id": reservation.id,
@@ -4079,9 +4204,9 @@ def _active_customer_board_preparation_sources(
                 "source_ref_type": lot.source_ref_type,
                 "source_ref_id": lot.source_ref_id,
                 "location_code": location.location_code,
-                "location_name": employee_location_name(location),
-                "current_address_name": employee_location_name(location),
-                "employee_location_name": employee_location_name(location),
+                "location_name": readable_location_name,
+                "current_address_name": readable_location_name,
+                "employee_location_name": readable_location_name,
                 "remaining_sheet_quantity": remaining_sheets,
                 "remaining_product_quantity": remaining_pieces,
                 "stock_yield_per_sheet": int(
@@ -4155,11 +4280,118 @@ def _pending_production_read_context(
             )
         ).all()
     )
-    receipt_item_ids = set(
+    source_requisition_item = aliased(RequisitionItem)
+    frozen_source_candidates = (
+        select(
+            SupplierRequisitionOrderItem.order_item_id.label(
+                "supplier_parent_id"
+            ),
+            RequisitionItem.order_item_id.label("requisition_parent_id"),
+            PurchasePurposeSourceSnapshot.source_order_item_id.label(
+                "snapshot_parent_id"
+            ),
+            source_requisition_item.order_item_id.label(
+                "source_requisition_parent_id"
+            ),
+            SalesOrderItemBomComponent.sales_order_item_id.label("bom_parent_id"),
+        )
+        .select_from(PurchasePurposeSourceSnapshot)
+        .outerjoin(
+            SupplierRequisitionOrderItem,
+            SupplierRequisitionOrderItem.id
+            == PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id,
+        )
+        .outerjoin(
+            SupplierRequisitionOrder,
+            SupplierRequisitionOrder.id
+            == SupplierRequisitionOrderItem.supplier_order_id,
+        )
+        .outerjoin(
+            RequisitionItem,
+            RequisitionItem.id
+            == PurchasePurposeSourceSnapshot.material_requisition_item_id,
+        )
+        .outerjoin(
+            source_requisition_item,
+            source_requisition_item.id
+            == PurchasePurposeSourceSnapshot.source_requisition_item_id,
+        )
+        .outerjoin(
+            RequisitionItemBomSource,
+            RequisitionItemBomSource.id
+            == PurchasePurposeSourceSnapshot.source_bom_requisition_source_id,
+        )
+        .outerjoin(
+            SalesOrderItemBomComponent,
+            SalesOrderItemBomComponent.id
+            == RequisitionItemBomSource.sales_order_item_bom_component_id,
+        )
+        .where(
+            PurchasePurposeSourceSnapshot.order_purpose_sheet_qty > 0,
+            or_(
+                and_(
+                    PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.is_not(
+                        None
+                    ),
+                    SupplierRequisitionOrderItem.status == "active",
+                    SupplierRequisitionOrderItem.purpose_contract_status
+                    == "frozen",
+                    SupplierRequisitionOrder.status == "confirmed",
+                ),
+                and_(
+                    PurchasePurposeSourceSnapshot.material_requisition_item_id.is_not(
+                        None
+                    ),
+                    RequisitionItem.status == "有效",
+                    RequisitionItem.purpose_contract_status == "frozen",
+                ),
+            ),
+            or_(
+                PurchasePurposeSourceSnapshot.source_kind != "bom_component",
+                RequisitionItemBomSource.active_guard == 1,
+                RequisitionItemBomSource.active_guard.is_(None),
+            ),
+        )
+        .subquery("pending_active_frozen_source_candidates")
+    )
+    # Keep this as one request-level SELECT.  A frozen purchase-purpose source
+    # must disqualify the ordinary fast path even before its first receipt;
+    # otherwise the list would expose legacy manual input while the write API
+    # already treats the same order line as receipt-auto managed.
+    receipt_or_frozen_item_ids = set(
         db.scalars(
-            select(IncomingReceiptItem.order_item_id).where(
-                IncomingReceiptItem.order_item_id.in_(candidate_item_ids),
-                IncomingReceiptItem.status == "posted",
+            union(
+                select(
+                    IncomingReceiptItem.order_item_id.label("order_item_id")
+                ).where(
+                    IncomingReceiptItem.order_item_id.in_(candidate_item_ids),
+                    IncomingReceiptItem.status == "posted",
+                ),
+                select(frozen_source_candidates.c.supplier_parent_id).where(
+                    frozen_source_candidates.c.supplier_parent_id.in_(
+                        candidate_item_ids
+                    )
+                ),
+                select(frozen_source_candidates.c.requisition_parent_id).where(
+                    frozen_source_candidates.c.requisition_parent_id.in_(
+                        candidate_item_ids
+                    )
+                ),
+                select(frozen_source_candidates.c.snapshot_parent_id).where(
+                    frozen_source_candidates.c.snapshot_parent_id.in_(
+                        candidate_item_ids
+                    )
+                ),
+                select(
+                    frozen_source_candidates.c.source_requisition_parent_id
+                ).where(
+                    frozen_source_candidates.c.source_requisition_parent_id.in_(
+                        candidate_item_ids
+                    )
+                ),
+                select(frozen_source_candidates.c.bom_parent_id).where(
+                    frozen_source_candidates.c.bom_parent_id.in_(candidate_item_ids)
+                ),
             )
         ).all()
     )
@@ -4179,7 +4411,7 @@ def _pending_production_read_context(
     )
     complex_item_ids = (
         component_item_ids
-        | receipt_item_ids
+        | receipt_or_frozen_item_ids
         | reservation_item_ids
         | {
             task.order_item_id
@@ -4282,72 +4514,55 @@ def _ordinary_pending_task_fast_payload(
 def _receipt_purpose_summaries_by_order_item_ids(
     db: Session,
     order_item_ids: Sequence[int],
-) -> dict[int, dict[str, int]]:
-    normalized_ids = sorted({int(item_id) for item_id in order_item_ids})
-    if not normalized_ids:
-        return {}
-    rows = db.execute(
-        select(
-            IncomingReceiptPurposeAllocation,
-            SalesOrderItemBomComponent.sales_order_item_id,
+) -> dict[int, dict[str, object]]:
+    return receipt_purpose_summaries_by_order_item_ids(db, order_item_ids)
+
+
+def _receipt_managed_completion_block(
+    summary: dict[str, object],
+    *,
+    automatic_output: int,
+) -> tuple[str, str]:
+    unposted_capacity = max(
+        int(summary.get("currently_unposted_finished_capacity_qty") or 0),
+        0,
+    )
+    if summary.get("projection_inconsistent") is True or unposted_capacity > 0:
+        if unposted_capacity > 0:
+            detail = (
+                f"冻结收料用途已有 {unposted_capacity} 个配套产能尚未结转为"
+                "正式自动完工和库存事实"
+            )
+        else:
+            detail = "冻结收料用途来源与组件投影不一致"
+        return (
+            "receipt_auto_projection_inconsistent",
+            f"{detail}；系统已停止人工完工，请核对收料自动投影。",
         )
-        .outerjoin(
-            RequisitionItemBomSource,
-            RequisitionItemBomSource.id
-            == IncomingReceiptPurposeAllocation.source_bom_requisition_source_id,
+
+    waiting_labels = [
+        str(value).strip()
+        for value in summary.get("waiting_component_labels", [])
+        if str(value).strip()
+    ]
+    waiting_gap = max(
+        int(summary.get("waiting_component_gap_quantity") or 0),
+        0,
+    )
+    if waiting_labels:
+        gap_message = f"补齐约 {waiting_gap} 个配套产能" if waiting_gap else "后续来料"
+        progress_message = (
+            f"已自动形成 {automatic_output}；等待"
+            f"{'、'.join(waiting_labels)}{gap_message}。"
         )
-        .outerjoin(
-            SalesOrderItemBomComponent,
-            SalesOrderItemBomComponent.id
-            == RequisitionItemBomSource.sales_order_item_bom_component_id,
+    else:
+        progress_message = (
+            f"已自动形成 {automatic_output}；当前没有尚未结转的新增配套产能。"
         )
-        .where(
-            IncomingReceiptPurposeAllocation.status == "posted",
-            IncomingReceiptPurposeAllocation.purpose_contract_status_snapshot
-            == "frozen",
-            ~exists(
-                select(IncomingReceiptPurposeReversal.id).where(
-                    IncomingReceiptPurposeReversal.incoming_receipt_purpose_allocation_id
-                    == IncomingReceiptPurposeAllocation.id
-                )
-            ),
-            or_(
-                IncomingReceiptPurposeAllocation.source_order_item_id.in_(
-                    normalized_ids
-                ),
-                SalesOrderItemBomComponent.sales_order_item_id.in_(normalized_ids),
-            ),
-        )
-    ).all()
-    result: dict[int, dict[str, int]] = {}
-    for allocation, component_order_item_id in rows:
-        order_item_id = (
-            int(allocation.source_order_item_id)
-            if allocation.source_order_item_id is not None
-            else int(component_order_item_id)
-            if component_order_item_id is not None
-            else None
-        )
-        if order_item_id is None:
-            continue
-        summary = result.setdefault(
-            order_item_id,
-            {
-                "order_purpose_received_sheet_qty": 0,
-                "reserve_purpose_received_sheet_qty": 0,
-                "automatic_finished_output_qty": 0,
-            },
-        )
-        summary["order_purpose_received_sheet_qty"] += int(
-            allocation.receipt_order_purpose_sheet_qty or 0
-        )
-        summary["reserve_purpose_received_sheet_qty"] += int(
-            allocation.receipt_reserve_purpose_sheet_qty or 0
-        )
-        summary["automatic_finished_output_qty"] += int(
-            allocation.finished_output_qty_delta or 0
-        )
-    return result
+    return (
+        "receipt_auto_managed",
+        f"{progress_message}后续收料会继续自动推进，不能手工重复完工。",
+    )
 
 
 def list_production_tasks(
@@ -4372,14 +4587,22 @@ def list_production_tasks(
     if page is not None and page_size is not None:
         query = query.offset((page - 1) * page_size).limit(page_size)
     rows = db.execute(query).all()
-    receipt_purpose_summaries = _receipt_purpose_summaries_by_order_item_ids(
-        db,
-        [item.id for _task, item, _order, _customer, _product in rows],
-    )
     pending_context = (
         _pending_production_read_context(db, rows)
         if status == PENDING
         else _PendingProductionReadContext(frozenset())
+    )
+    receipt_purpose_summaries = _receipt_purpose_summaries_by_order_item_ids(
+        db,
+        [
+            item.id
+            for task, item, _order, _customer, product in rows
+            if not pending_context.is_fast_path(
+                task=task,
+                item=item,
+                product=product,
+            )
+        ],
     )
     result: list[dict] = []
     for task, item, order, customer, product in rows:
@@ -4485,7 +4708,7 @@ def list_production_tasks(
             "output_factor": factor,
             "pieces_per_box": pieces_per_box,
             "planned_output_quantity": production_output_quantity(
-                material_input,
+                available_input,
                 factor,
                 pieces_per_box,
             ),
@@ -4533,14 +4756,58 @@ def list_production_tasks(
             ),
         })
     for row in result:
-        row["receipt_purpose_summary"] = receipt_purpose_summaries.get(
-            int(row["order_item_id"]),
+        order_item_id = int(row["order_item_id"])
+        receipt_purpose_managed = order_item_id in receipt_purpose_summaries
+        summary = receipt_purpose_summaries.get(
+            order_item_id,
             {
                 "order_purpose_received_sheet_qty": 0,
                 "reserve_purpose_received_sheet_qty": 0,
                 "automatic_finished_output_qty": 0,
+                "automatic_order_reserved_quantity": 0,
+                "automatic_surplus_finished_quantity": 0,
             },
         )
+        row["receipt_purpose_summary"] = summary
+        row["receipt_purpose_managed"] = receipt_purpose_managed
+        row["completion_actionable"] = True
+        row["completion_block_code"] = None
+        row["completion_block_message"] = None
+        if receipt_purpose_managed:
+            automatic_output = max(
+                int(summary["automatic_finished_output_qty"] or 0),
+                0,
+            )
+            # Frozen purpose allocations and their min-component capacity are
+            # the only authority for receipt-managed tasks.  Historical task
+            # input counters are retained as facts but never exposed as manual
+            # remaining capacity.
+            row["material_received_quantity"] = max(
+                int(summary["order_purpose_received_sheet_qty"] or 0),
+                0,
+            )
+            row["material_input_quantity"] = 0
+            row["available_material_input_quantity"] = 0
+            row["planned_output_quantity"] = 0
+            row["actual_output_quantity"] = automatic_output
+            row["order_reserved_quantity"] = max(
+                int(summary["automatic_order_reserved_quantity"] or 0),
+                0,
+            )
+            row["surplus_finished_quantity"] = max(
+                int(summary["automatic_surplus_finished_quantity"] or 0),
+                0,
+            )
+            row["can_supplement"] = False
+            row["production_ready_quantity"] = 0
+            row["completion_actionable"] = False
+            (
+                row["completion_block_code"],
+                row["completion_block_message"],
+            ) = _receipt_managed_completion_block(
+                summary,
+                automatic_output=automatic_output,
+            )
     _annotate_printing_plate_current_locations(db, result)
     return result
 
@@ -4922,6 +5189,38 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
         db,
         [item.id for _completion, _task, item, *_rest in rows],
     )
+    receipt_purpose_summaries = _receipt_purpose_summaries_by_order_item_ids(
+        db,
+        [item.id for _completion, _task, item, *_rest in rows],
+    )
+    effective_location_ids = {
+        int(location_id)
+        for completion, _task, _item, _order, _customer, _product, _user, transfer in rows
+        if (
+            location_id := (
+                transfer.warehouse_location_id
+                if transfer is not None
+                else completion.warehouse_location_id
+            )
+        )
+        is not None
+    }
+    locations_by_id = {
+        int(location.id): location
+        for location in (
+            db.scalars(
+                select(WarehouseLocation).where(
+                    WarehouseLocation.id.in_(effective_location_ids)
+                )
+            ).all()
+            if effective_location_ids
+            else []
+        )
+    }
+    location_projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        locations_by_id.values(),
+    )
     result: list[dict] = []
     for completion, task, item, order, customer, product, user, transfer in rows:
         received_now, allowed_input_now = _material_quantity_facts(db, item)
@@ -4944,6 +5243,9 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
             - posted_input,
             0,
         )
+        receipt_purpose_managed = int(item.id) in receipt_purpose_summaries
+        if receipt_purpose_managed:
+            available_input = 0
         effective_location_id = (
             transfer.warehouse_location_id
             if transfer is not None
@@ -4963,9 +5265,27 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
             else None
         )
         location = (
-            db.get(WarehouseLocation, effective_location_id)
+            locations_by_id.get(int(effective_location_id))
             if effective_location_id is not None
             else None
+        )
+        location_context = (
+            location_projection_contexts.get(int(location.id), {})
+            if location is not None
+            else {}
+        )
+        location_projection = (
+            warehouse_location_projection(location, **location_context)
+            if location is not None
+            else {
+                "position_status": "unlocated",
+                "map_issue": "完工记录尚未绑定正式位置",
+            }
+        )
+        readable_location_name = employee_location_name(
+            location,
+            area=location_context.get("area"),
+            floor=location_context.get("floor"),
         )
         result.append(
             {
@@ -5007,6 +5327,8 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                     else production_pieces_per_box(item)
                 ),
                 "can_supplement": (
+                    not receipt_purpose_managed
+                    and
                     completion.status == "posted"
                     and task.status == COMPLETED
                     and available_input > 0
@@ -5014,11 +5336,25 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                     and int(item.delivered_quantity or 0) < int(item.quantity or 0)
                     and not item.is_force_closed
                 ),
+                "receipt_purpose_managed": receipt_purpose_managed,
+                "completion_actionable": not receipt_purpose_managed,
+                "completion_block_code": (
+                    "receipt_auto_managed" if receipt_purpose_managed else None
+                ),
+                "completion_block_message": (
+                    "冻结收料用途自动形成成品，不能补录重复完工。"
+                    if receipt_purpose_managed
+                    else None
+                ),
                 "status": completion.status,
                 "initial_disposition": completion.initial_disposition,
                 "warehouse_location_id": effective_location_id,
                 "warehouse_location_code": location.location_code if location else None,
-                "warehouse_location_name": employee_location_name(location),
+                "warehouse_location_name": readable_location_name,
+                "warehouse_location_position_status": location_projection[
+                    "position_status"
+                ],
+                "warehouse_location_map_issue": location_projection.get("map_issue"),
                 "inventory_lot_id": effective_lot_id,
                 "system_pallet_id": (
                     effective_pallet.id if effective_pallet is not None else None

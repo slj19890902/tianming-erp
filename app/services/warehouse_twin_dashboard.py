@@ -34,6 +34,10 @@ from app.services.warehouse_location_address import (
     employee_location_name,
     location_address_payload,
 )
+from app.services.location_candidates import (
+    load_warehouse_location_projection_contexts,
+    warehouse_location_projection,
+)
 from app.services.product_specification import dimension_specification
 
 
@@ -346,29 +350,15 @@ def _pallet_visible(
     )
 
 
-def _location_position(row: WarehouseLocation) -> tuple[str, dict | None]:
-    if not row.is_active:
-        return "disabled", None
-    if (row.placement_status or "placed") == "unplaced":
-        return "unplaced", None
-    if row.floor3_layout is not None:
-        layout = row.floor3_layout
-        return (
-            "mapped",
-            {
-                "left_pct": _number(layout.left_pct),
-                "top_pct": _number(layout.top_pct),
-                "width_pct": _number(layout.width_pct),
-                "height_pct": _number(layout.height_pct),
-                "z_index": layout.z_index,
-                "version": layout.version,
-                "source_type": layout.source_type,
-                "layout_kind": layout.layout_kind,
-            },
-        )
-    if row.warehouse_floor and row.area_code:
-        return "area_only", None
-    return "unlocated", None
+def _location_position(
+    row: WarehouseLocation,
+    **projection_context: object,
+) -> tuple[str, dict | None]:
+    projection = warehouse_location_projection(row, **projection_context)
+    return (
+        str(projection["position_status"]),
+        projection["map_position"],
+    )
 
 
 def _floor_key(value: int | None) -> str:
@@ -519,11 +509,24 @@ def _location_payload(
     lots: list[InventoryLot],
     pallets: list[InventoryPallet],
     as_of: date,
+    projection_context: dict | None = None,
     allowed_inventory_types: list[str] | None = None,
     composite_projections: dict[int, dict] | None = None,
     stocktake_decrease_issues: dict[int, str | None] | None = None,
 ) -> dict:
-    position_status, map_position = _location_position(row)
+    context = projection_context or {}
+    floor = context.get("floor")
+    area = context.get("area")
+    projection = warehouse_location_projection(row, **context)
+    position_status = str(projection["position_status"])
+    map_position = projection["map_position"]
+    address_payload = location_address_payload(
+        row,
+        area=area,
+        floor=floor,
+        position_status=position_status,
+    )
+    layout = context.get("layout")
     pallet_payloads = []
     for pallet in sorted(pallets, key=lambda item: item.id):
         items = [
@@ -584,11 +587,18 @@ def _location_payload(
     return {
         "location_id": row.id,
         "location_code": row.location_code,
-        "location_name": row.location_name,
-        **location_address_payload(row),
+        "location_name": address_payload["employee_location_name"],
+        "location_master_name": row.location_name,
+        **address_payload,
         "floor_code": _floor_key(row.warehouse_floor),
         "floor_number": row.warehouse_floor,
+        "floor_name": floor.floor_name if floor is not None else None,
         "area_code": row.area_code,
+        "area_name": area.area_name if area is not None else None,
+        "map_feature_id": projection["map_feature_id"],
+        "published_map_revision": projection["published_map_revision"],
+        "map_status": projection["map_status"],
+        "map_issue": projection["map_issue"],
         "warehouse_type": row.warehouse_type,
         "allowed_inventory_types": allowed_inventory_types or [],
         "storage_type": row.storage_type,
@@ -599,16 +609,16 @@ def _location_payload(
         "map_position": map_position,
         "layout_draft_position": (
             {
-                "left_pct": _number(row.floor3_layout.left_pct),
-                "top_pct": _number(row.floor3_layout.top_pct),
-                "width_pct": _number(row.floor3_layout.width_pct),
-                "height_pct": _number(row.floor3_layout.height_pct),
-                "z_index": row.floor3_layout.z_index,
-                "version": row.floor3_layout.version,
-                "source_type": row.floor3_layout.source_type,
-                "layout_kind": row.floor3_layout.layout_kind,
+                "left_pct": _number(layout.left_pct),
+                "top_pct": _number(layout.top_pct),
+                "width_pct": _number(layout.width_pct),
+                "height_pct": _number(layout.height_pct),
+                "z_index": layout.z_index,
+                "version": layout.version,
+                "source_type": layout.source_type,
+                "layout_kind": layout.layout_kind,
             }
-            if row.floor3_layout is not None and position_status == "unplaced"
+            if layout is not None and position_status == "unplaced"
             else None
         ),
         "occupancy_status": "occupied" if occupied else "empty",
@@ -792,52 +802,65 @@ def build_warehouse_twin_dashboard(
         if row.location_id is not None:
             pallets_by_location[row.location_id].append(row)
     visible_location_ids = set(lots_by_location) | set(pallets_by_location)
+    floor_records = {row.floor_number: row for row in floors}
     policy_types_by_area: dict[tuple[int, str], list[str]] = {}
     policy_rows = db.execute(
         select(
             WarehouseFloor.floor_number,
             WarehouseArea.area_code,
             WarehouseAreaStoragePolicy.allowed_inventory_types_json,
+            WarehouseAreaStoragePolicy.status,
+            WarehouseAreaStoragePolicy.published_map_revision,
+            WarehouseAreaStoragePolicy.map_feature_id,
         )
         .join(WarehouseArea, WarehouseArea.floor_id == WarehouseFloor.id)
         .join(
             WarehouseAreaStoragePolicy,
             WarehouseAreaStoragePolicy.area_id == WarehouseArea.id,
         )
-        .where(WarehouseAreaStoragePolicy.status == "published")
     ).all()
-    for floor_number, area_code, raw_types in policy_rows:
+    for (
+        floor_number,
+        area_code,
+        raw_types,
+        status,
+        published_map_revision,
+        map_feature_id,
+    ) in policy_rows:
+        key = (int(floor_number), str(area_code).upper())
+        if status != "published":
+            continue
         try:
             values = json.loads(raw_types)
         except (TypeError, ValueError, json.JSONDecodeError):
             values = []
         if isinstance(values, list):
-            policy_types_by_area[(int(floor_number), str(area_code).upper())] = [
+            policy_types_by_area[key] = [
                 str(value) for value in values if isinstance(value, str) and value
             ]
+    projection_contexts = load_warehouse_location_projection_contexts(db, locations)
     location_rows = []
     for location in locations:
         if visible_customer_ids is not None and location.id not in visible_location_ids:
             continue
+        location_key = (
+            int(location.warehouse_floor or 0),
+            str(location.area_code or "").upper(),
+        )
+        projection_context = projection_contexts.get(int(location.id), {})
         location_rows.append(
             _location_payload(
                 location,
                 lots=lots_by_location.get(location.id, []),
                 pallets=pallets_by_location.get(location.id, []),
                 as_of=as_of,
-                allowed_inventory_types=policy_types_by_area.get(
-                    (
-                        int(location.warehouse_floor or 0),
-                        str(location.area_code or "").upper(),
-                    ),
-                    [],
-                ),
+                projection_context=projection_context,
+                allowed_inventory_types=policy_types_by_area.get(location_key, []),
                 composite_projections=composite_projections,
                 stocktake_decrease_issues=stocktake_decrease_issues,
             )
         )
 
-    floor_records = {row.floor_number: row for row in floors}
     floor_summaries = []
     for floor_number in (1, 3):
         floor = floor_records.get(floor_number)
@@ -929,14 +952,119 @@ def build_warehouse_twin_dashboard(
         for row in current_lots
         if row.id in old_lot_ids and row.pallet_item is not None
     }
-    unresolved_lots = [
+    location_payload_by_id = {
+        int(row["location_id"]): row
+        for row in location_rows
+        if row.get("location_id") is not None
+    }
+    finished_current_lots = [
         row
         for row in current_lots
-        if row.location is None
-        or row.location.warehouse_floor is None
-        or not row.location.area_code
-        or (row.location.placement_status or "placed") == "unplaced"
+        if row.inventory_type == "finished" and _physical_quantity(row) > 0
     ]
+    unresolved_lots = [
+        row
+        for row in finished_current_lots
+        if row.warehouse_location_id is None
+        or location_payload_by_id.get(int(row.warehouse_location_id), {}).get(
+            "position_status"
+        )
+        != "mapped"
+    ]
+    unlocated_inventory = []
+    unlocated_reason = {
+        "disabled": "正式位置已停用",
+        "unplaced": "正式位置尚未完成布局发布",
+        "area_only": "只有区域台账，缺少已发布实测格位",
+        "unlocated": "尚未绑定正式地图位置",
+    }
+    for row in unresolved_lots:
+        location_payload = (
+            location_payload_by_id.get(int(row.warehouse_location_id))
+            if row.warehouse_location_id is not None
+            else None
+        )
+        position_status = (
+            location_payload.get("position_status")
+            if location_payload is not None
+            else "unlocated"
+        )
+        unlocated_inventory.append(
+            {
+                **_lot_payload(
+                    row,
+                    as_of,
+                    composite_projection=composite_projections.get(int(row.id)),
+                    stocktake_decrease_issues=stocktake_decrease_issues,
+                ),
+                "floor_code": (
+                    location_payload.get("floor_code")
+                    if location_payload is not None
+                    else "UNLOCATED"
+                ),
+                "area_code": (
+                    location_payload.get("area_code")
+                    if location_payload is not None
+                    else None
+                ),
+                "location_id": (
+                    location_payload.get("location_id")
+                    if location_payload is not None
+                    else None
+                ),
+                "location_code": (
+                    location_payload.get("location_code")
+                    if location_payload is not None
+                    else None
+                ),
+                "location_name": (
+                    location_payload.get("employee_location_name")
+                    if location_payload is not None
+                    else "尚未绑定正式位置"
+                ),
+                "employee_location_name": (
+                    location_payload.get("employee_location_name")
+                    if location_payload is not None
+                    else "尚未绑定正式位置"
+                ),
+                "position_status": position_status,
+                "unlocated_reason": (
+                    location_payload.get("map_issue")
+                    if location_payload is not None
+                    and location_payload.get("map_issue")
+                    else unlocated_reason.get(
+                        position_status,
+                        "缺少已发布实测格位",
+                    )
+                ),
+                "map_position": None,
+            }
+        )
+    unresolved_lot_ids = {int(row.id) for row in unresolved_lots}
+    finished_map_coverage = {
+        "total_lots": len(finished_current_lots),
+        "mapped_lots": len(finished_current_lots) - len(unresolved_lots),
+        "unlocated_lots": len(unresolved_lots),
+        "total_quantity": sum(_usable_quantity(row) for row in finished_current_lots),
+        "mapped_quantity": sum(
+            _usable_quantity(row)
+            for row in finished_current_lots
+            if int(row.id) not in unresolved_lot_ids
+        ),
+        "unlocated_quantity": sum(_usable_quantity(row) for row in unresolved_lots),
+        "total_physical_quantity": sum(
+            _physical_quantity(row) for row in finished_current_lots
+        ),
+        "mapped_physical_quantity": sum(
+            _physical_quantity(row)
+            for row in finished_current_lots
+            if int(row.id) not in unresolved_lot_ids
+        ),
+        "unlocated_physical_quantity": sum(
+            _physical_quantity(row) for row in unresolved_lots
+        ),
+        "all_located": not unresolved_lots,
+    }
     visible_capacities = [
         floor["capacity"]
         for floor in floor_summaries
@@ -1052,6 +1180,7 @@ def build_warehouse_twin_dashboard(
             "long_age_lots": len(old_lot_ids),
             "long_age_pallets": len(old_pallet_ids),
             "unlocated_lots": len(unresolved_lots),
+            "finished_map_coverage": finished_map_coverage,
             "temporary_occupied_locations": sum(
                 1
                 for row in location_rows
@@ -1089,6 +1218,7 @@ def build_warehouse_twin_dashboard(
         },
         "floors": floor_summaries,
         "locations": location_rows,
+        "unlocated_inventory": unlocated_inventory,
         "distribution": {
             "floors": floor_distribution,
             "areas": area_distribution,
@@ -1103,7 +1233,7 @@ def build_warehouse_twin_dashboard(
                     {
                         "code": "unlocated_inventory",
                         "level": "error",
-                        "message": f"有 {len(unresolved_lots)} 个库存批次缺少可高亮的真实位置。",
+                        "message": f"有 {len(unresolved_lots)} 个成品库存批次缺少已发布实测格位；已列入待定位清单，不会借用其他区域坐标。",
                     }
                 ]
                 if unresolved_lots
@@ -1118,14 +1248,32 @@ def build_inventory_code_search_results(
     lots: list[InventoryLot],
     keyword: str,
     as_of: date,
+    location_projection_contexts: dict[int, dict] | None = None,
 ) -> dict:
     results = []
     floor_counts: dict[str, dict] = {}
     for row in lots:
         payload = _lot_payload(row, as_of)
         location = row.location
+        location_context = (
+            (location_projection_contexts or {}).get(int(location.id), {})
+            if location is not None
+            else {}
+        )
         position_status, map_position = (
-            _location_position(location) if location is not None else ("unlocated", None)
+            _location_position(location, **location_context)
+            if location is not None
+            else ("unlocated", None)
+        )
+        address_payload = (
+            location_address_payload(
+                location,
+                area=location_context.get("area"),
+                floor=location_context.get("floor"),
+                position_status=position_status,
+            )
+            if location is not None
+            else None
         )
         floor_code = _floor_key(location.warehouse_floor if location else None)
         result = {
@@ -1134,11 +1282,19 @@ def build_inventory_code_search_results(
             "area_code": location.area_code if location else None,
             "location_id": location.id if location else None,
             "location_code": location.location_code if location else None,
-            "location_name": employee_location_name(location),
-            "employee_location_name": employee_location_name(location),
+            "location_name": (
+                address_payload["employee_location_name"]
+                if address_payload is not None
+                else "尚未绑定正式位置"
+            ),
+            "employee_location_name": (
+                address_payload["employee_location_name"]
+                if address_payload is not None
+                else "尚未绑定正式位置"
+            ),
             "current_address_code": (
-                location_address_payload(location)["current_address_code"]
-                if location is not None
+                address_payload["current_address_code"]
+                if address_payload is not None
                 else None
             ),
             "position_status": position_status,

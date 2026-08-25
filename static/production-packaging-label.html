@@ -128,12 +128,6 @@
     .layout-field { display:flex; flex-direction:column; gap:4px; color:#334155; font-size:12px; }
     .layout-field.full { grid-column:1 / -1; }
     .layout-field input,.layout-field select { width:100%; border:1px solid #94a3b8; border-radius:4px; background:#fff; padding:7px 8px; color:#111827; font:14px/1.2 inherit; }
-    .layout-inline-control { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; align-items:center; }
-    .layout-field-note { color:#64748b; font-size:11px; line-height:1.4; }
-    .layout-visibility-button { grid-column:1 / -1; border-color:#b91c1c; color:#991b1b; background:#fff; }
-    .layout-visibility-button.restore { border-color:#15803d; color:#166534; }
-    .layout-stage-empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:24px; color:#64748b; font-size:15px; text-align:center; }
-    .layout-preflight-surface { position:fixed; top:0; left:-10000px; z-index:-1; width:40mm; visibility:hidden; pointer-events:none; }
     .layout-actions { display:flex; flex-wrap:wrap; gap:8px; padding-top:4px; }
     .layout-status { min-height:36px; margin:0; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; background:#fff; color:#334155; font-size:12px; line-height:1.45; }
     .layout-status.error { color:#7f1d1d; border-color:#b91c1c; }
@@ -202,15 +196,6 @@
             <label class="layout-field">总体高度<input id="layoutHeight" data-layout-field="height_mm" type="number" min="0.1" max="30" step="0.1"></label>
             <label id="layoutFontField" class="layout-field">字体大小<input id="layoutFontSize" data-layout-field="font_size_mm" type="number" min="1" max="10" step="0.05"></label>
             <label id="layoutAlignField" class="layout-field">文字对齐<select id="layoutAlign" data-layout-field="text_align"><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select></label>
-            <div id="layoutFixedSuffixField" class="layout-field full" hidden>
-              <label for="layoutFixedSuffix">数量后固定说明</label>
-              <div class="layout-inline-control">
-                <input id="layoutFixedSuffix" type="text" maxlength="8" autocomplete="off" placeholder="例如：只/捆、只">
-                <button id="layoutClearFixedSuffixButton" type="button">删除固定说明</button>
-              </div>
-              <span class="layout-field-note">这里只修改实际数量后面的固定文字；留空时只打印实际数量，例如 50。</span>
-            </div>
-            <button id="layoutVisibilityButton" class="layout-visibility-button" type="button">删除显示（可恢复）</button>
           </div>
           <p id="layoutStatus" class="layout-status">尚未修改。</p>
           <div class="layout-actions">
@@ -264,10 +249,6 @@
       const layoutAlign = document.getElementById("layoutAlign");
       const layoutFontField = document.getElementById("layoutFontField");
       const layoutAlignField = document.getElementById("layoutAlignField");
-      const layoutFixedSuffixField = document.getElementById("layoutFixedSuffixField");
-      const layoutFixedSuffix = document.getElementById("layoutFixedSuffix");
-      const layoutClearFixedSuffixButton = document.getElementById("layoutClearFixedSuffixButton");
-      const layoutVisibilityButton = document.getElementById("layoutVisibilityButton");
       const layoutStatus = document.getElementById("layoutStatus");
       const layoutSaveButton = document.getElementById("layoutSaveButton");
       const layoutPublishButton = document.getElementById("layoutPublishButton");
@@ -300,8 +281,6 @@
       let layoutDrag = null;
 
       const LAYOUT_CATALOG_VERSION = "p1-66b-v1";
-      const DEFAULT_QUANTITY_FIXED_SUFFIX = "只/捆";
-      const MAX_FIXED_SUFFIX_LENGTH = 8;
       const LAYOUT_ELEMENT_LABELS = Object.freeze({
         customer_short_name:"客户中文简称",
         product_code:"存货编码",
@@ -325,39 +304,8 @@
       const finiteNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
       const roundedMm = (value) => Math.round(Number(value) * 1000) / 1000;
       const clipped = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
-      const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
-      function quantityFixedSuffix(element) {
-        if (!element || element.id !== "quantity") return "";
-        return hasOwn(element, "fixed_suffix")
-          ? String(element.fixed_suffix)
-          : DEFAULT_QUANTITY_FIXED_SUFFIX;
-      }
-
-      function validFixedSuffix(value) {
-        return typeof value === "string"
-          && value === value.trim()
-          && value.length <= MAX_FIXED_SUFFIX_LENGTH
-          && /^[A-Za-z\u3400-\u9fff/／·_ -]*$/u.test(value)
-          && !/(?:script|javascript|alert|onerror|onload|style|data|https?|www|url)/iu.test(value);
-      }
-
-      function findVisibleLayoutOverlap(layout) {
-        const visible = (layout?.elements || []).filter((element) => element.visible);
-        for (let index = 0; index < visible.length; index += 1) {
-          const first = visible[index];
-          for (const second of visible.slice(index + 1)) {
-            const overlaps = Number(first.x_mm) < Number(second.x_mm) + Number(second.width_mm) - .001
-              && Number(second.x_mm) < Number(first.x_mm) + Number(first.width_mm) - .001
-              && Number(first.y_mm) < Number(second.y_mm) + Number(second.height_mm) - .001
-              && Number(second.y_mm) < Number(first.y_mm) + Number(first.height_mm) - .001;
-            if (overlaps) return [first.id, second.id];
-          }
-        }
-        return null;
-      }
-
-      function validateLayoutEnvelope(envelope, {checkVisibleOverlap=false} = {}) {
+      function validateLayoutEnvelope(envelope) {
         const layout = envelope?.layout;
         if (!layout || layout.catalog_version !== LAYOUT_CATALOG_VERSION) {
           throw new Error("标签布局目录版本不受支持，已停止打印");
@@ -381,26 +329,16 @@
           if ([x, y, width, height].includes(null) || x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 40.001 || y + height > 30.001) {
             throw new Error(`${LAYOUT_ELEMENT_LABELS[element.id]}超出40×30毫米纸张，已停止打印`);
           }
-          if (typeof element.visible !== "boolean") {
-            throw new Error(`${LAYOUT_ELEMENT_LABELS[element.id]}的显示状态无效，已停止打印`);
-          }
           if (element.id !== "product_qr") {
             const fontSize = finiteNumber(element.font_size_mm);
-            if (fontSize === null || fontSize < 1 || fontSize > 10 || ![400, 700, 800, 900].includes(element.font_weight) || !["left", "center", "right"].includes(element.text_align)) {
+            if (element.visible !== true || fontSize === null || fontSize < 1 || fontSize > 10 || ![400, 700, 800, 900].includes(element.font_weight) || !["left", "center", "right"].includes(element.text_align)) {
               throw new Error(`${LAYOUT_ELEMENT_LABELS[element.id]}的布局参数无效，已停止打印`);
             }
           } else if (element.visible) {
             throw new Error("产品二维码数据源尚未启用，已停止打印");
           }
-          if (hasOwn(element, "fixed_suffix") && (element.id !== "quantity" || !validFixedSuffix(element.fixed_suffix))) {
-            throw new Error("数量后的固定说明无效，已停止打印");
-          }
         });
         if (seen.size !== REQUIRED_LAYOUT_IDS.length) throw new Error("标签布局缺少必要元素，已停止打印");
-        const overlap = checkVisibleOverlap ? findVisibleLayoutOverlap(layout) : null;
-        if (overlap) {
-          throw new Error(`${LAYOUT_ELEMENT_LABELS[overlap[0]]}与${LAYOUT_ELEMENT_LABELS[overlap[1]]}不能重叠，请先调整后再保存`);
-        }
         return layout;
       }
 
@@ -626,11 +564,10 @@
             element.id === "product_code" ? "code" : "",
             element.id === "quantity" ? "quantity" : "",
           ].filter(Boolean).join(" ");
-          const suffix = quantityFixedSuffix(element);
           const content = element.id === "quantity"
-            ? `<strong>${escapeHtml(value)}</strong>${suffix ? `<span class="layout-unit">${escapeHtml(suffix)}</span>` : ""}`
+            ? `<strong>${escapeHtml(value)}</strong><span class="layout-unit">只/捆</span>`
             : `<strong>${escapeHtml(value)}</strong>`;
-          return `<div class="${classes}" data-layout-element="${escapeHtml(element.id)}" style="${style}" title="${escapeHtml(`${value}${suffix}`)}">${content}</div>`;
+          return `<div class="${classes}" data-layout-element="${escapeHtml(element.id)}" style="${style}" title="${escapeHtml(value)}">${content}</div>`;
         }).join("");
         return `<article class="label-card layout-driven" aria-label="生产包装标签 ${escapeHtml(label.label_number)}/${escapeHtml(label.label_count)}">${elements}</article>`;
       }
@@ -677,32 +614,6 @@
         }
       }
 
-      async function preflightEditorLayout() {
-        if (!editorLayout || !loadedPackage?.labels?.length) return;
-        const surface = document.createElement("div");
-        surface.className = "layout-preflight-surface";
-        surface.setAttribute("aria-hidden", "true");
-        surface.innerHTML = loadedPackage.labels.map((label) => layoutDrivenLabelHtml(label, editorLayout)).join("");
-        document.body.appendChild(surface);
-        try {
-          if (document.fonts?.ready) await document.fonts.ready;
-          await new Promise((resolve) => requestAnimationFrame(resolve));
-          const overflow = [...surface.querySelectorAll(".layout-print-element")].find((element) =>
-            element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1
-          );
-          if (overflow) {
-            const elementId = overflow.dataset.layoutElement;
-            throw new Error(`${LAYOUT_ELEMENT_LABELS[elementId] || "标签文字"}在当前宽高和字号下无法完整显示，请先调整后再保存`);
-          }
-          const cardOverflow = [...surface.querySelectorAll(".label-card")].some((card) =>
-            card.scrollWidth > card.clientWidth + 1 || card.scrollHeight > card.clientHeight + 1
-          );
-          if (cardOverflow) throw new Error("标签内容超出40×30毫米纸张，请先调整后再保存");
-        } finally {
-          surface.remove();
-        }
-      }
-
       function showMessage(text, className = "message") {
         message.hidden = false;
         message.className = className;
@@ -736,23 +647,10 @@
         layoutStatus.className = `layout-status${kind ? ` ${kind}` : ""}`;
       }
 
-      function showEditorLayoutMutationStatus(message) {
-        const overlap = editorLayout ? findVisibleLayoutOverlap(editorLayout) : null;
-        showLayoutStatus(
-          overlap
-            ? `${LAYOUT_ELEMENT_LABELS[overlap[0]]}与${LAYOUT_ELEMENT_LABELS[overlap[1]]}重叠，请先调整位置。`
-            : message,
-          overlap ? "error" : "",
-        );
-      }
-
       function setLayoutEditorBusy(busy) {
         layoutOperationBusy = busy;
-        [layoutSaveButton, layoutPublishButton, layoutDefaultButton, layoutRollbackButton, layoutCloseButton, layoutVisibilityButton, layoutClearFixedSuffixButton].forEach((button) => {
+        [layoutSaveButton, layoutPublishButton, layoutDefaultButton, layoutRollbackButton, layoutCloseButton].forEach((button) => {
           button.disabled = busy;
-        });
-        [layoutElementSelect, layoutX, layoutY, layoutWidth, layoutHeight, layoutFontSize, layoutAlign, layoutFixedSuffix].forEach((control) => {
-          control.disabled = busy;
         });
         layoutRollbackButton.disabled = busy || !layoutAdminState?.can_rollback;
       }
@@ -785,23 +683,18 @@
           return `<div class="layout-editor-element qr-placeholder${selected}" data-layout-editor-id="${escapeHtml(element.id)}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;opacity:${element.visible ? 1 : .58}">二维码位置<br>数据源待启用</div>`;
         }
         const value = layoutPreviewValue(element.id);
-        const quantity = element.id === "quantity" ? `${value}${quantityFixedSuffix(element)}` : value;
+        const quantity = element.id === "quantity" ? `${value} 只/捆` : value;
         return `<div class="layout-editor-element${selected}" data-layout-editor-id="${escapeHtml(element.id)}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${Number(element.font_size_mm) * 12}px;font-weight:${element.font_weight};justify-content:${element.text_align === "left" ? "flex-start" : element.text_align === "right" ? "flex-end" : "center"};text-align:${element.text_align}">${escapeHtml(quantity)}</div>`;
       }
 
       function renderLayoutEditor() {
         if (!editorLayout || !layoutAdminState) return;
         validateLayoutEnvelope({layout:editorLayout});
-        const stageElements = editorLayout.elements.filter((element) => element.visible || element.kind === "qr");
-        layoutStage.innerHTML = stageElements.length
-          ? stageElements.map(editorElementHtml).join("")
-          : '<div class="layout-stage-empty">当前布局没有显示元素，请从右侧元素列表选择后恢复显示。</div>';
-        const elementOption = (element) => `<option value="${escapeHtml(element.id)}">${escapeHtml(LAYOUT_ELEMENT_LABELS[element.id])}</option>`;
-        const shownOptions = editorLayout.elements.filter((element) => element.visible).map(elementOption).join("");
-        const hiddenOptions = editorLayout.elements.filter((element) => !element.visible).map(elementOption).join("");
-        layoutElementSelect.innerHTML = `${shownOptions ? `<optgroup label="显示中">${shownOptions}</optgroup>` : ""}${hiddenOptions ? `<optgroup label="已隐藏（可恢复）">${hiddenOptions}</optgroup>` : ""}`;
+        layoutStage.innerHTML = editorLayout.elements.map(editorElementHtml).join("");
+        layoutElementSelect.innerHTML = editorLayout.elements.map((element) =>
+          `<option value="${escapeHtml(element.id)}">${escapeHtml(LAYOUT_ELEMENT_LABELS[element.id])}</option>`
+        ).join("");
         layoutElementSelect.value = selectedLayoutElementId;
-        layoutElementSelect.disabled = layoutOperationBusy;
         const element = currentEditorElement();
         if (!element) return;
         layoutX.value = element.x_mm;
@@ -809,22 +702,10 @@
         layoutWidth.value = element.width_mm;
         layoutHeight.value = element.height_mm;
         const isText = element.kind === "text";
-        const editableGeometry = (element.visible || element.kind === "qr") && !layoutOperationBusy;
         layoutFontField.hidden = !isText;
         layoutAlignField.hidden = !isText;
         layoutFontSize.value = isText ? element.font_size_mm : "";
         layoutAlign.value = isText ? element.text_align : "center";
-        [layoutX, layoutY, layoutWidth, layoutHeight, layoutFontSize, layoutAlign].forEach((control) => {
-          control.disabled = !editableGeometry;
-        });
-        layoutFixedSuffixField.hidden = element.id !== "quantity";
-        layoutFixedSuffix.value = element.id === "quantity" ? quantityFixedSuffix(element) : "";
-        layoutFixedSuffix.disabled = !editableGeometry || element.id !== "quantity";
-        layoutClearFixedSuffixButton.disabled = !editableGeometry || element.id !== "quantity" || quantityFixedSuffix(element) === "";
-        layoutVisibilityButton.textContent = element.visible ? "删除显示（可恢复）" : "恢复显示";
-        layoutVisibilityButton.classList.toggle("restore", !element.visible);
-        layoutVisibilityButton.disabled = layoutOperationBusy || element.kind === "qr";
-        layoutVisibilityButton.title = element.kind === "qr" ? "产品二维码数据源尚未启用" : "";
         layoutVersionNote.textContent = `草稿 v${layoutAdminState.draft.version}｜已发布 v${layoutAdminState.published.version}`;
         layoutRollbackButton.disabled = layoutOperationBusy || !layoutAdminState.can_rollback;
       }
@@ -874,7 +755,7 @@
 
       function updateEditorLayoutField(field, rawValue) {
         const element = currentEditorElement();
-        if (!element || layoutOperationBusy || (!element.visible && element.kind !== "qr")) return;
+        if (!element) return;
         if (field === "text_align") {
           if (["left", "center", "right"].includes(rawValue)) element.text_align = rawValue;
         } else {
@@ -886,38 +767,7 @@
           if (field === "height_mm") element.height_mm = roundedMm(clipped(number, .1, 30 - Number(element.y_mm)));
           if (field === "font_size_mm" && element.kind === "text") element.font_size_mm = roundedMm(clipped(number, 1, 10));
         }
-        showEditorLayoutMutationStatus("布局有未保存修改。先保存草稿，再发布给后续打印使用。");
-        renderLayoutEditor();
-      }
-
-      function updateQuantityFixedSuffix(rawValue) {
-        const element = currentEditorElement();
-        if (!element || element.id !== "quantity" || !element.visible || layoutOperationBusy) return;
-        const value = String(rawValue ?? "").trim();
-        if (!validFixedSuffix(value)) {
-          layoutFixedSuffix.value = quantityFixedSuffix(element);
-          showLayoutStatus("数量后的固定说明最多8个字符，只能使用简短中文、英文字母或单位分隔符。", "error");
-          return;
-        }
-        element.fixed_suffix = value;
-        showEditorLayoutMutationStatus(value
-          ? `数量将显示为“实际数量${value}”，真实数量不会被修改。`
-          : "固定说明已删除，标签只显示真实数量。保存草稿后再发布才会生效。");
-        renderLayoutEditor();
-      }
-
-      function toggleCurrentLayoutElementVisibility() {
-        const element = currentEditorElement();
-        if (!element || element.kind === "qr" || layoutOperationBusy) return;
-        element.visible = !element.visible;
-        layoutDrag = null;
-        const overlap = element.visible ? findVisibleLayoutOverlap(editorLayout) : null;
-        showLayoutStatus(overlap
-          ? `${LAYOUT_ELEMENT_LABELS[element.id]}已恢复，但${LAYOUT_ELEMENT_LABELS[overlap[0]]}与${LAYOUT_ELEMENT_LABELS[overlap[1]]}重叠，请先调整位置。`
-          : element.visible
-            ? `${LAYOUT_ELEMENT_LABELS[element.id]}已恢复显示；保存草稿后再发布才会生效。`
-            : `${LAYOUT_ELEMENT_LABELS[element.id]}已从标签中删除显示；业务数据仍保留，可随时恢复。`,
-        overlap ? "error" : "");
+        showLayoutStatus("布局有未保存修改。先保存草稿，再发布给后续打印使用。");
         renderLayoutEditor();
       }
 
@@ -930,11 +780,10 @@
 
       async function saveLayoutDraft({quiet=false} = {}) {
         if (!editorLayout || !layoutAdminState || layoutOperationBusy) return false;
+        validateLayoutEnvelope({layout:editorLayout});
+        const signature = `draft|${layoutAdminState.draft.version}|${JSON.stringify(editorLayout)}`;
         setLayoutEditorBusy(true);
         try {
-          validateLayoutEnvelope({layout:editorLayout}, {checkVisibleOverlap:true});
-          await preflightEditorLayout();
-          const signature = `draft|${layoutAdminState.draft.version}|${JSON.stringify(editorLayout)}`;
           const result = await requestJson("/api/requisition/production-packaging-label-layout/admin/draft", {
             method:"PUT",
             body:JSON.stringify({
@@ -1188,9 +1037,6 @@
         input.addEventListener("change", () => updateEditorLayoutField(input.dataset.layoutField, input.value));
       });
       layoutAlign.addEventListener("change", () => updateEditorLayoutField("text_align", layoutAlign.value));
-      layoutFixedSuffix.addEventListener("change", () => updateQuantityFixedSuffix(layoutFixedSuffix.value));
-      layoutClearFixedSuffixButton.addEventListener("click", () => updateQuantityFixedSuffix(""));
-      layoutVisibilityButton.addEventListener("click", toggleCurrentLayoutElementVisibility);
       layoutStage.addEventListener("pointerdown", (event) => {
         const target = event.target.closest("[data-layout-editor-id]");
         if (!target || !editorLayout || layoutOperationBusy) return;
@@ -1217,7 +1063,7 @@
         const scaleY = rect.height / 30;
         element.x_mm = roundedMm(clipped(layoutDrag.startX + (event.clientX - layoutDrag.startClientX) / scaleX, 0, 40 - Number(element.width_mm)));
         element.y_mm = roundedMm(clipped(layoutDrag.startY + (event.clientY - layoutDrag.startClientY) / scaleY, 0, 30 - Number(element.height_mm)));
-        showEditorLayoutMutationStatus("布局有未保存修改。先保存草稿，再发布给后续打印使用。");
+        showLayoutStatus("布局有未保存修改。先保存草稿，再发布给后续打印使用。");
         renderLayoutEditor();
         event.preventDefault();
       });

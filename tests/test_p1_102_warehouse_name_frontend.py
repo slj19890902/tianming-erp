@@ -54,4 +54,3 @@ def test_legacy_warehouse_page_prefers_backend_employee_area_name() -> None:
     )
     assert '$("warehouseAreaName").value=readableArea(area)' in WAREHOUSE_STATIC
     assert "${readableArea(area)}" in WAREHOUSE_STATIC
-

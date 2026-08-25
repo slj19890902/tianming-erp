@@ -837,11 +837,15 @@ class ProductionPackagingLabelPrintConfirmationRequest(BaseModel):
 
 
 class ProductionPackagingLabelLayoutPaperPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+
     width_mm: float
     height_mm: float
 
 
 class ProductionPackagingLabelLayoutElementPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+
     id: str = Field(min_length=1, max_length=50)
     kind: Literal["text", "qr"]
     x_mm: float
@@ -852,15 +856,20 @@ class ProductionPackagingLabelLayoutElementPayload(BaseModel):
     font_weight: int | None = None
     text_align: Literal["left", "center", "right"] | None = None
     visible: bool
+    fixed_suffix: str | None = Field(default=None, max_length=8)
 
 
 class ProductionPackagingLabelLayoutPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+
     catalog_version: str = Field(min_length=1, max_length=40)
     paper: ProductionPackagingLabelLayoutPaperPayload
     elements: list[ProductionPackagingLabelLayoutElementPayload]
 
 
 class ProductionPackagingLabelLayoutDraftRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     operation_key: str = Field(min_length=1, max_length=120)
     expected_draft_version: int = Field(ge=0)
     layout: ProductionPackagingLabelLayoutPayload
@@ -872,6 +881,8 @@ class ProductionPackagingLabelLayoutDraftRequest(BaseModel):
 
 
 class ProductionPackagingLabelLayoutReleaseRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     operation_key: str = Field(min_length=1, max_length=120)
     expected_draft_version: int = Field(ge=0)
     expected_release_version: int = Field(ge=0)
@@ -19853,7 +19864,7 @@ def _apply_production_packaging_label_layout_write(
                 raise ProductionPackagingLabelLayoutError("标签布局草稿请求无效")
             result = save_production_packaging_label_layout_draft(
                 db,
-                layout=payload.layout.model_dump(),
+                layout=payload.layout.model_dump(exclude_unset=True),
                 expected_draft_version=payload.expected_draft_version,
                 operation_key=payload.operation_key,
                 actor_id=user.id,

@@ -493,6 +493,20 @@
       return !!(item.drawing_path && String(item.drawing_path).trim());
     }
 
+    function receiptExecutionIssue(item) {
+      if (
+        item?.receipt_execution_ready !== false
+        && item?.receipt_location_ready !== false
+        && item?.finished_location_ready !== false
+      ) return "";
+      const purposeIssue = String(item?.purpose_issue || "").trim();
+      if (purposeIssue) return purposeIssue;
+      if (item?.finished_location_ready === false) {
+        return "成品入库位置尚未准备好，请先在仓库实测地图发布可用库位";
+      }
+      return "当前收料位置尚未准备好，请刷新后重试";
+    }
+
     function isPdfPath(path) {
       return String(path || "").toLowerCase().endsWith(".pdf");
     }
@@ -504,6 +518,8 @@
       const isPending = state.activeTab === "pending";
       const key = String(item.history_key || item.item_id);
       const disabled = state.busyItemIds.has(key);
+      const executionIssue = isPending ? receiptExecutionIssue(item) : "";
+      const receiveDisabled = disabled || Boolean(executionIssue);
       const expanded = state.expandedIds.has(key);
       const drawingAvailable = hasDrawing(item);
       const isStockReplenishment = item.source_type === "stock_replenishment";
@@ -542,6 +558,9 @@
       const receiptLocationBlock = isPending && isStockReplenishment
         ? `<div class="mt-2 rounded-lg bg-blue-50 p-2 text-sm font-bold text-blue-900">片料到厂后由系统自动进入一楼 A1 原料暂存区，无需选择具体库位</div>`
         : "";
+      const receiptExecutionBlock = executionIssue
+        ? `<div class="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-900"><p class="font-bold">暂不能实收</p><p>${escapeHtml(executionIssue)}</p></div>`
+        : "";
       const receivedPurposeBlock = !isPending && item.purpose_allocation
         ? `<div class="mt-2 rounded-lg bg-indigo-50 p-2 text-sm text-indigo-950"><p class="font-bold">本次用途分流</p><p>订单用途 ${escapeHtml(item.purpose_allocation.order_sheet_delta || 0)} 张｜片料备库 ${escapeHtml(item.purpose_allocation.reserve_sheet_delta || 0)} 张｜形成成品 ${escapeHtml(item.purpose_allocation.theoretical_finished_delta || 0)} 只</p>${item.purpose_allocation.finished_location_name ? `<p>成品：${escapeHtml(item.purpose_allocation.finished_location_name)}</p>` : ""}${item.purpose_allocation.reserve_location_name ? `<p>片料：${escapeHtml(item.purpose_allocation.reserve_location_name)}</p>` : ""}${item.purpose_reversal ? `<p class="mt-1 font-bold text-red-700">本次收料已撤销</p>` : ""}</div>`
         : "";
@@ -549,7 +568,7 @@
       const primaryAction = !canOperate()
         ? `<div class="rounded-lg bg-slate-100 px-4 py-2 text-center text-sm font-semibold text-slate-500">只读查看</div>`
         : isPending
-          ? `<button data-receive="${key}" ${disabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认实收</button>${item.purpose_status === "legacy_unset" && item.pending_receipt_item_id && !isStockReplenishment ? `<button data-accept-short="${key}" ${disabled ? "disabled" : ""} class="mt-2 min-h-12 w-full rounded-xl bg-amber-700 px-4 text-base font-bold text-white disabled:bg-slate-400">不再补货，短收结单</button>` : ""}`
+          ? `<button data-receive="${key}" ${receiveDisabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认实收</button>${item.purpose_status === "legacy_unset" && item.pending_receipt_item_id && !isStockReplenishment ? `<button data-accept-short="${key}" ${disabled ? "disabled" : ""} class="mt-2 min-h-12 w-full rounded-xl bg-amber-700 px-4 text-base font-bold text-white disabled:bg-slate-400">不再补货，短收结单</button>` : ""}`
           : "";
 
       const expandedSection = expanded ? `
@@ -587,6 +606,7 @@
             <p class="mt-1 text-xs text-slate-600">计划 ${planned}｜已收 ${cumulative}｜待收 ${Math.max(planned-cumulative,0)}</p>
             ${searchMatchBlock}
             ${decisionBlock}
+            ${receiptExecutionBlock}
             ${receiptLocationBlock}
             ${receivedPurposeBlock}
             ${primaryAction ? `<div class="mt-1.5">${primaryAction}</div>` : ""}
@@ -937,6 +957,8 @@
 
     async function ensureAutomaticReceiptFact(item) {
       if (item?.purpose_status !== "frozen" || item.receipt_fact_ready) return;
+      const executionIssue = receiptExecutionIssue(item);
+      if (executionIssue) throw new Error(executionIssue);
       const payload = {
         actual_material_id: Number(item.material_variance_actual_material_id || item.actual_material_id || item.formal_material_id) || null,
         purchase_purpose_source_snapshot_id: Number(item.purchase_purpose_source_snapshot_id || 0),
@@ -963,6 +985,11 @@
       const key = String(itemId);
       if (state.busyItemIds.has(key)) return;
       const item = findItem(itemId);
+      const executionIssue = receiptExecutionIssue(item);
+      if (executionIssue) {
+        showToast(executionIssue, true);
+        return;
+      }
       const quantity = Number(item?.incoming_quantity);
       if (!Number.isInteger(quantity) || quantity <= 0) {
         showToast("入库数量必须是大于0的整数", true);

@@ -381,7 +381,7 @@ def _automatic_receipt_material(
         material = matches[0] if len(matches) == 1 else None
     if material is None or not material.is_active:
         raise PurchaseReceiptFactValidationError(
-            "Material master match is required before normal receipt."
+            "正常收料前必须匹配启用中的材质主档，请先核对报料材质。"
         )
     _material_master_price_contract(material)
     return material
@@ -572,13 +572,12 @@ def confirm_automatic_purchase_receipt_fact(
     db: Session = Depends(get_db),
     user: User = Depends(can_receive_material_variance),
 ):
-    """Create the first receipt fact from material-master maintenance."""
+    """Freeze the current material-master contract for the next receipt.
 
-    if payload.expected_latest_receipt_fact_version != 0:
-        raise _purchase_receipt_fact_error(
-            "PURCHASE_RECEIPT_FACT_ALREADY_FROZEN",
-            "A frozen purchase receipt fact must use the controlled price correction flow.",
-        )
+    A prior fact is immutable history, not a reason to force a normal receipt
+    through the price-correction workflow.  The submitted latest version stays
+    as the CAS guard while the service appends the next fact version.
+    """
     snapshot, source = _current_purchase_purpose_source(
         db,
         source_key=source_key,
@@ -617,7 +616,9 @@ def confirm_automatic_purchase_receipt_fact(
             tax_rate=tax_rate,
             idempotency_key=payload.idempotency_key,
             created_by=user.id,
-            expected_latest_receipt_fact_version=0,
+            expected_latest_receipt_fact_version=(
+                payload.expected_latest_receipt_fact_version
+            ),
         )
         _audit(
             db,
@@ -640,7 +641,7 @@ def confirm_automatic_purchase_receipt_fact(
                 "tax_included": fact.tax_included,
                 "tax_rate": str(fact.tax_rate),
             },
-            description="Auto-freeze receipt material and material-master price contract.",
+            description="按当前材质主档冻结本次收料材质和采购价格合同",
         )
         db.commit()
         db.refresh(fact)

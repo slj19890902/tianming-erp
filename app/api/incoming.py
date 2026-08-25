@@ -833,16 +833,25 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
                 "reserve_location_issue": (
                     reserve_projection.get("issue") if reserve_delta > 0 else None
                 ),
+                # Price/material truth and warehouse readiness are independent
+                # contracts.  A full or unpublished destination must never
+                # make an already-frozen price fact look missing, otherwise the
+                # client incorrectly calls the price-freeze endpoint again.
+                "receipt_execution_ready": bool(
+                    (
+                        finished_after <= finished_before
+                        or finished_projection.get("ready")
+                    )
+                    and (reserve_delta <= 0 or reserve_projection.get("ready"))
+                ),
             }
         )
-        if finished_after > finished_before and not finished_projection.get("ready"):
-            row["receipt_fact_ready"] = False
-            row["purpose_issue"] = str(finished_projection.get("issue") or "成品暂存位置未就绪")
-        elif reserve_delta > 0 and not reserve_projection.get("ready"):
-            row["receipt_fact_ready"] = False
-            row["purpose_issue"] = str(reserve_projection.get("issue") or "片料暂存位置未就绪")
         if not fact_ready:
             row["purpose_issue"] = "请先确认实际材质和正式采购价格"
+        if finished_after > finished_before and not finished_projection.get("ready"):
+            row["purpose_issue"] = str(finished_projection.get("issue") or "成品暂存位置未就绪")
+        elif reserve_delta > 0 and not reserve_projection.get("ready"):
+            row["purpose_issue"] = str(reserve_projection.get("issue") or "片料暂存位置未就绪")
 
 
 def _utc_now() -> datetime:
@@ -1072,7 +1081,10 @@ class BatchReceiveLine(BaseModel):
 
 
 class BatchReceiveRequest(BaseModel):
-    items: list[BatchReceiveLine] = Field(min_length=1, max_length=200)
+    # Keep the upper bound in schema validation.  Empty input is handled by
+    # the route so every client receives the same employee-facing Chinese
+    # business error instead of Pydantic's English list-length text.
+    items: list[BatchReceiveLine] = Field(default_factory=list, max_length=200)
     idempotency_key: str | None = Field(default=None, max_length=80)
 
 
@@ -4467,6 +4479,11 @@ def batch_receive_items(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    if not payload.items:
+        raise HTTPException(
+            status_code=422,
+            detail="本次没有可提交的收料明细，请重新勾选后再试",
+        )
     batch_key = (payload.idempotency_key or "").strip()
     formal_lines = [
         line

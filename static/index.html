@@ -3920,7 +3920,7 @@
                     <td><a v-if="row.drawing_path" class="btn small" :href="row.drawing_path" target="_blank" rel="noopener">图纸</a><span v-else>-</span></td>
                     <td class="incoming-quantity-summary">{{ row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0 }} / {{ row.cumulative_received_quantity || 0 }} / {{ row.remaining_quantity ?? 0 }}</td>
                     <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.received_quantity_this_time ?? row.incoming_quantity ?? 0 }}</strong></td>
-                    <td class="incoming-action-cell"><template v-if="incomingTab==='pending'"><span :class="['status',incomingProjectedVariance(row)===0?'green':'orange']">{{ incomingProjectedVariance(row)===0 ? '数量相符' : (incomingProjectedVariance(row)<0 ? '少收' : '多收') }}</span><details class="incoming-action-menu"><summary>操作</summary><div v-if="row.purpose_status==='legacy_unset'"><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id"><option :value="null">选择余量库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select></div><div v-else class="muted">预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张｜预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张｜预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只<div v-if="row.finished_location_name">成品位置：{{ row.finished_location_name }}</div><div v-if="row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div></div><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button></details></template><template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></div></template></td>
+                    <td class="incoming-action-cell"><template v-if="incomingTab==='pending'"><span :class="['status',incomingProjectedVariance(row)===0?'green':'orange']">{{ incomingProjectedVariance(row)===0 ? '数量相符' : (incomingProjectedVariance(row)<0 ? '少收' : '多收') }}</span><details class="incoming-action-menu"><summary>操作</summary><div v-if="row.purpose_status==='legacy_unset'"><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id"><option :value="null">选择余量库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select></div><div v-else class="muted">预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张｜预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张｜预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只<div v-if="row.finished_location_name">成品位置：{{ row.finished_location_name }}</div><div v-if="row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div></div><div v-if="incomingReceiptExecutionIssue(row)" class="muted incoming-receipt-blocker">暂不能实收：{{ incomingReceiptExecutionIssue(row) }}</div><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button></details></template><template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></div></template></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -11467,7 +11467,20 @@
           errorMessage(error) {
             const detail=error?.response?.data?.detail;
             if (typeof detail === "string") return detail;
-            if (Array.isArray(detail)) return detail.map(row => row?.msg || row?.message || "字段校验失败").join("；");
+            if (Array.isArray(detail)) return detail.map(row => {
+              const location=Array.isArray(row?.loc) ? row.loc : [];
+              const leaf=String(location.at(-1) || "");
+              const message=String(row?.msg || row?.message || "字段校验失败");
+              if (
+                String(row?.type || "") === "too_short"
+                && leaf === "items"
+                && (
+                  (row?.ctx?.actual_length !== undefined && Number(row.ctx.actual_length) === 0)
+                  || /List should have at least 1 item after validation, not 0/i.test(message)
+                )
+              ) return "本次没有可提交的收料明细，请重新勾选后再试";
+              return message;
+            }).join("；");
             if (detail && typeof detail === "object") {
               if (typeof detail.message === "string" && detail.message.trim()) return detail.message.trim();
               if (typeof detail.detail === "string" && detail.detail.trim()) return detail.detail.trim();
@@ -18290,7 +18303,8 @@
             }
           },
           async ensureAutomaticPurchaseReceiptFact(row) {
-            if (row?.purpose_status !== "frozen" || row.receipt_fact_ready) return;
+            if (row?.purpose_status !== "frozen") return;
+            if (row?.receipt_fact_ready) return;
             if (!row?.source_key) throw new Error("缺少正式采购来源，无法按报料材质实收");
             const materialCode=String(row.material_code || row.material || "").trim().toLowerCase();
             const matchedMaterial=(this.allMaterials || []).find(material =>
@@ -18335,8 +18349,15 @@
             const surplusLocation=this.incomingLocations.find(location=>Number(location.id)===Number(row.surplus_location_id));
             return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null,expected_surplus_layout_version:surplusLocation?.layout_version||null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
           },
+          incomingReceiptExecutionIssue(row) {
+            if (row?.receipt_execution_ready !== false && row?.receipt_location_ready !== false && row?.finished_location_ready !== false) return "";
+            const purposeIssue=String(row?.purpose_issue || "").trim();
+            if (purposeIssue) return purposeIssue;
+            if (row?.finished_location_ready === false) return "成品入库位置尚未准备好，请先在仓库实测地图发布可用库位";
+            return "当前收料条件尚未准备好，请刷新后重试";
+          },
           canReceiveIncoming(row) {
-            return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status) && (row.purpose_status==='legacy_unset' || row.purpose_status==='frozen');
+            return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status) && (row.purpose_status==='legacy_unset' || row.purpose_status==='frozen') && !this.incomingReceiptExecutionIssue(row);
           },
           incomingSelectedCount() {
             return this.incomingPending.filter(row => this.canReceiveIncoming(row) && this.incomingSelected[row.item_id]).length;
@@ -18359,61 +18380,79 @@
               }
               return;
             }
+            const previousItems=previousAttempt?.request_payload?.items;
+            const replayablePreviousAttempt=Boolean(previousAttempt && Array.isArray(previousItems) && previousItems.length);
             let rows=[];
             let preparedItems=[];
-            let preparation=previousAttempt;
-            let signature=previousAttempt?.signature || "";
-            if (previousAttempt) {
+            let preparation=null;
+            let preparationFailures=replayablePreviousAttempt && Array.isArray(previousAttempt.preparation_failures)
+              ? previousAttempt.preparation_failures
+              : [];
+            const preparationFailureSummary=() => preparationFailures.slice(0,3).map(failure => `${failure.label}：${failure.message}`).join("；") + (preparationFailures.length>3 ? `；另 ${preparationFailures.length-3} 条请逐行核对` : "");
+            let signature=replayablePreviousAttempt ? (previousAttempt.signature || "") : "";
+            if (replayablePreviousAttempt) {
               if (!confirm("上次批量实收结果尚未确认。系统将忽略当前勾选和修改，使用上次冻结的原数量与原凭证核对；该操作不会重复记账，是否继续？")) return;
             } else {
-              rows=this.incomingPending.filter(row => this.canReceiveIncoming(row) && this.incomingSelected[row.item_id]);
-              if (!rows.length) return;
-              for (const row of rows) {
-                const quantity=Number(row.incoming_quantity);
-                if (!Number.isInteger(quantity) || quantity <= 0) {
-                  this.showToast(`${row.product_code || row.product_name} 的入库数量必须是大于0的整数`, true);
-                  return;
-                }
+              if (previousAttempt && this.incomingBatchReceiveAttempt === previousAttempt) this.incomingBatchReceiveAttempt=null;
+              const selectedRows=this.incomingPending.filter(row => this.incomingSelected[row.item_id]);
+              if (!selectedRows.length) {
+                this.showToast("本次没有可提交的收料明细，请重新勾选后再试",true);
+                return;
               }
               preparation={saving:true,committed:false,preparing:true};
               this.incomingBatchReceiveAttempt=preparation;
-              const quantitySnapshot=new Map(rows.map(row => [String(row.item_id),Number(row.incoming_quantity)]));
-              let preparationError=null;
-              let preparationErrorRow=null;
-              try {
-                for (const row of rows) {
-                  preparationErrorRow=row;
+              const quantitySnapshot=new Map(selectedRows.map(row => [String(row.item_id),Number(row.incoming_quantity)]));
+              for (const row of selectedRows) {
+                const label=String(row.product_code || row.product_name || `第${row.item_id}条`);
+                if (!this.canReceiveIncoming(row)) {
+                  const executionIssue=this.incomingReceiptExecutionIssue?.(row) || String(row.purpose_issue || "").trim();
+                  let message=executionIssue;
+                  if (!message && row.material_status !== "pending") message="该行已不在待收料状态，请刷新后重新选择";
+                  if (!message && !["已报料", "供应商已排单"].includes(row.requisition_status)) message=`当前报料状态“${row.requisition_status || "未知"}”不允许实收`;
+                  if (!message && !["legacy_unset", "frozen"].includes(row.purpose_status)) message="正式收料用途尚未准备好，请刷新后核对";
+                  preparationFailures.push({item_id:String(row.item_id),label,message:message || "该行当前不可实收，请刷新后重新选择"});
+                  continue;
+                }
+                const quantity=quantitySnapshot.get(String(row.item_id));
+                if (!Number.isInteger(quantity) || quantity <= 0) {
+                  preparationFailures.push({item_id:String(row.item_id),label,message:"入库数量必须是大于0的整数"});
+                  continue;
+                }
+                try {
                   await this.ensureAutomaticPurchaseReceiptFact(row);
                   const item=this.incomingPayload(row);
-                  item.received_quantity=quantitySnapshot.get(String(row.item_id));
+                  item.received_quantity=quantity;
                   preparedItems.push(item);
-                }
-              } catch(error) {
-                preparationError=error;
-              } finally {
-                preparation.preparing=false;
-                if (preparationError) {
-                  preparation.saving=false;
-                  if (this.incomingBatchReceiveAttempt === preparation) this.incomingBatchReceiveAttempt=null;
+                  rows.push(row);
+                } catch(error) {
+                  preparationFailures.push({item_id:String(row.item_id),label,message:this.errorMessage(error)});
                 }
               }
-              if (preparationError) {
-                const label=preparationErrorRow?.product_code || preparationErrorRow?.product_name || "所选来料";
-                this.showToast(`${label}：${this.errorMessage(preparationError)}`,true);
+              preparation.preparing=false;
+              if (!preparedItems.length) {
+                preparation.saving=false;
+                if (this.incomingBatchReceiveAttempt === preparation) this.incomingBatchReceiveAttempt=null;
+                this.showToast(`成功 0 条，未提交 ${preparationFailures.length} 条。${preparationFailureSummary() || "请刷新后重新勾选"}`,true);
                 return;
               }
               signature=JSON.stringify(preparedItems);
             }
-            const requestPayload=previousAttempt?.request_payload || {
+            const requestPayload=replayablePreviousAttempt ? previousAttempt.request_payload : {
               idempotency_key:createIdempotencyKey(),
               items:preparedItems.map(item => ({...item,idempotency_key:createIdempotencyKey()})),
             };
-            const attempt=previousAttempt || Object.assign(preparation,{
+            if (!Array.isArray(requestPayload?.items) || !requestPayload.items.length) {
+              if (this.incomingBatchReceiveAttempt === previousAttempt || this.incomingBatchReceiveAttempt === preparation) this.incomingBatchReceiveAttempt=null;
+              this.showToast("本次没有可提交的收料明细，请重新勾选后再试",true);
+              return;
+            }
+            const attempt=replayablePreviousAttempt ? previousAttempt : Object.assign(preparation,{
               signature,
               request_payload:requestPayload,
               page:this.incomingPendingAppliedPage,
               item_ids:preparedItems.map(item => String(item.item_id)),
               order_item_ids:rows.filter(row => row.source_type !== "stock_replenishment").map(row => String(row.item_id)),
+              preparation_failures:preparationFailures,
               preparing:false,
             });
             attempt.saving=true;
@@ -18443,9 +18482,15 @@
               this.incomingSelected = {};
               const refreshed=await this.refreshIncomingAfterWrite();
               if (refreshed && this.incomingBatchReceiveAttempt === attempt) this.incomingBatchReceiveAttempt=null;
-              if (data.failed) {
-                const reasons = (data.results || []).filter(row => !row.success).slice(0, 3).map(row => `第${row.item_id}条：${row.message}`).join("；");
-                this.showToast(`成功 ${data.succeeded} 条，失败 ${data.failed} 条。${reasons}${refreshed ? "" : "；列表刷新失败，请勿重复提交成功项"}`, true);
+              if (data.failed || preparationFailures.length) {
+                const reasons=[];
+                const serverReasons=(data.results || []).filter(row => !row.success).slice(0,3).map(row => `第${row.item_id}条：${row.message}`).join("；");
+                if (serverReasons) reasons.push(serverReasons);
+                if (preparationFailures.length) reasons.push(preparationFailureSummary());
+                const counts=[`成功 ${Number(data.succeeded || 0)} 条`];
+                if (Number(data.failed || 0)>0) counts.push(`提交失败 ${Number(data.failed)} 条`);
+                if (preparationFailures.length) counts.push(`未提交 ${preparationFailures.length} 条`);
+                this.showToast(`${counts.join("，")}。${reasons.join("；")}${refreshed ? "" : "；列表刷新失败，请勿重复提交成功项"}`, true);
               } else if (!refreshed) {
                 this.showToast("批量实收已成功，但列表刷新失败；请点击刷新，勿重复录入",true);
               } else {
@@ -18453,14 +18498,15 @@
               }
             } catch(error) {
               const status=Number(error?.response?.status || 0);
+              const preparationSuffix=preparationFailures.length ? `；另有 ${preparationFailures.length} 条未提交：${preparationFailureSummary()}` : "";
               if (status > 0 && status < 500) {
                 if (this.incomingBatchReceiveAttempt === attempt) this.incomingBatchReceiveAttempt=null;
-                this.showToast(this.errorMessage(error),true);
+                this.showToast(`${this.errorMessage(error)}${preparationSuffix}`,true);
               } else {
                 this.showToast(
                   committed
-                    ? "批量实收已成功，但后续页面刷新失败；请点击刷新，勿重复录入"
-                    : `${this.errorMessage(error)}；批量实收结果暂未确认，重试会复用原凭证，请勿修改数量`,
+                    ? `批量实收已成功，但后续页面刷新失败；请点击刷新，勿重复录入${preparationSuffix}`
+                    : `${this.errorMessage(error)}；批量实收结果暂未确认，重试会复用原凭证，请勿修改数量${preparationSuffix}`,
                   true,
                 );
               }
@@ -18482,6 +18528,11 @@
               } else {
                 this.showToast("实收已成功，但列表刷新失败；请点击刷新，勿重复录入",true);
               }
+              return;
+            }
+            const executionIssue=this.incomingReceiptExecutionIssue?.(row) || "";
+            if (executionIssue) {
+              this.showToast(executionIssue,true);
               return;
             }
             const preparation=previousAttempt || {saving:true,committed:false,preparing:true};

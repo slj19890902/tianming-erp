@@ -99,6 +99,10 @@ from app.services.warehouse_inventory import (
 )
 from app.services.warehouse_inventory import _balances, _movement
 from app.services.warehouse_location_address import employee_location_name
+from app.services.warehouse_twin_layout import (
+    WarehouseTwinLayoutNotFoundError,
+    load_warehouse_twin_floor,
+)
 
 
 Disposition = Literal["direct", "stock"]
@@ -1330,11 +1334,51 @@ def _production_stock_location(
 
 @dataclass(frozen=True)
 class ReceiptAutoFinishedGroundTarget:
-    plan: WarehouseGroundLayoutPlan
-    slot: WarehouseGroundLayoutSlot
+    plan: WarehouseGroundLayoutPlan | None
+    slot: WarehouseGroundLayoutSlot | None
     location: WarehouseLocation
     layout_version: int
     capacity_warning: str | None
+    target_kind: Literal["fin_ground_plan", "floor3_v11"] = "fin_ground_plan"
+    runtime_map_revision: str | None = None
+
+    @property
+    def uses_ground_plan(self) -> bool:
+        return self.plan is not None and self.slot is not None
+
+
+def _receipt_floor3_runtime_identity() -> tuple[str, dict[str, str]]:
+    """Return current runtime revision and unique employee storage area kinds."""
+
+    try:
+        floor = load_warehouse_twin_floor("3F")
+    except (WarehouseTwinLayoutNotFoundError, OSError, ValueError) as error:
+        raise ProductionWorkflowError(
+            "三楼运行地图无法读取，已停止自动选择成品位置；请先恢复当前发布地图",
+            409,
+        ) from error
+    revision = str(floor.get("revision") or "").strip()
+    if not revision:
+        raise ProductionWorkflowError("三楼运行地图缺少发布版本，不能自动选择成品位置", 409)
+    area_kinds: dict[str, list[str]] = {}
+    for feature in floor.get("features") or []:
+        if str(feature.get("feature_kind") or "").strip() != "zone":
+            continue
+        area_code = str(feature.get("erp_area_code") or "").strip().upper()
+        points = feature.get("points") or []
+        if not area_code or not isinstance(points, list) or len(points) < 3:
+            continue
+        subtype = str(feature.get("subtype") or "").strip().lower()
+        storage_mode = str(feature.get("storage_mode") or "").strip().lower()
+        if storage_mode != "floor":
+            continue
+        area_kinds.setdefault(area_code, []).append(subtype)
+    return revision, {
+        code: kinds[0]
+        for code, kinds in area_kinds.items()
+        if len(kinds) == 1
+        and kinds[0] in {"finished_storage", "temporary_turnover"}
+    }
 
 
 def _receipt_auto_finished_ground_targets(
@@ -1375,12 +1419,6 @@ def _receipt_auto_finished_ground_targets(
             )
         ).unique()
     )
-    if not plans:
-        raise ProductionWorkflowError(
-            "一楼成品待送区尚未发布地堆排位；请在区域规划中为 FIN-001～003 至少发布一个地堆排位",
-            409,
-        )
-
     valid_plan_found = False
     targets: list[ReceiptAutoFinishedGroundTarget] = []
     for plan in plans:
@@ -1451,11 +1489,103 @@ def _receipt_auto_finished_ground_targets(
         return targets
     if not valid_plan_found:
         raise ProductionWorkflowError(
-            "FIN-001～003 的地堆排位与区域发布版本不一致；请重新核对并发布地堆排位",
+            "FIN-001～003 尚无与当前区域策略一致的已发布地堆排位，已停止自动收料成品入库",
             409,
         )
+
+    # FIN remains the preferred direct-dispatch destination.  When all of its
+    # real slots are occupied, use a genuinely empty measured three-floor
+    # finished-goods ground location instead of blocking the receipt or
+    # falling back to the legacy area-only dispatch anchor.  V11 is the
+    # accepted measured three-floor ledger only while the area has no policy
+    # row.  Once an area enters the new policy lifecycle it must use that
+    # lifecycle's published plan projection instead of this V11 compatibility
+    # path.
+    runtime_revision, runtime_area_kinds = _receipt_floor3_runtime_identity()
+    floor3_locations = list(
+        db.scalars(
+            select(WarehouseLocation)
+            .join(
+                WarehouseFloor,
+                WarehouseFloor.floor_number == WarehouseLocation.warehouse_floor,
+            )
+            .join(
+                WarehouseArea,
+                and_(
+                    WarehouseArea.floor_id == WarehouseFloor.id,
+                    func.upper(WarehouseArea.area_code)
+                    == func.upper(WarehouseLocation.area_code),
+                ),
+            )
+            .where(
+                WarehouseFloor.floor_number == 3,
+                WarehouseFloor.construction_status == "enabled",
+                WarehouseArea.construction_status == "enabled",
+                ~exists(
+                    select(WarehouseAreaStoragePolicy.id).where(
+                        WarehouseAreaStoragePolicy.area_id == WarehouseArea.id
+                    )
+                ),
+                WarehouseLocation.source_version == "V11",
+                WarehouseLocation.warehouse_type.in_(("finished", "shared")),
+                WarehouseLocation.storage_type.in_(("ground", "temporary_aisle")),
+                WarehouseLocation.is_active.is_(True),
+                WarehouseLocation.placement_status == "placed",
+            )
+            .order_by(
+                case(
+                    (WarehouseLocation.storage_type == "ground", 0),
+                    else_=1,
+                ),
+                WarehouseLocation.sort_order,
+                WarehouseLocation.location_code,
+                WarehouseLocation.id,
+            )
+            .options(selectinload(WarehouseLocation.floor3_layout))
+        ).unique()
+    )
+    for location in floor3_locations:
+        area_kind = runtime_area_kinds.get(
+            str(location.area_code or "").strip().upper()
+        )
+        if (
+            location.storage_type == "ground"
+            and area_kind != "finished_storage"
+        ) or (
+            location.storage_type == "temporary_aisle"
+            and area_kind != "temporary_turnover"
+        ):
+            continue
+        layout = location.floor3_layout
+        if layout is None:
+            continue
+        issue = operational_location_issue(
+            db,
+            location,
+            warehouse_types={"finished", "shared"},
+            pallet_storage_only=True,
+            require_published=True,
+            require_map_geometry=True,
+            required_inventory_type="finished",
+            require_empty=True,
+        )
+        if issue:
+            continue
+        targets.append(
+            ReceiptAutoFinishedGroundTarget(
+                plan=None,
+                slot=None,
+                location=location,
+                layout_version=int(layout.version),
+                capacity_warning=None,
+                target_kind="floor3_v11",
+                runtime_map_revision=runtime_revision,
+            )
+        )
+    if targets:
+        return targets
     raise ProductionWorkflowError(
-        "FIN-001～003 当前没有可用的已发布空地堆位置；请先腾空或发布新的真实位置",
+        "一楼 FIN-001～003 和三楼当前都没有可用的真实空成品位置；请先腾空或发布新的真实位置",
         409,
     )
 
@@ -1477,11 +1607,45 @@ def _receipt_auto_finished_ground_target(
             )
         except OperationalError as error:
             raise ProductionWorkflowError(
-                "一楼待送位置正在被其他入库或地图操作使用，请稍后重试",
+                "成品位置正在被其他入库或地图操作使用，请稍后重试",
                 409,
             ) from error
         if not claimed:
             continue
+        if target.target_kind == "floor3_v11":
+            current_policy_id = db.scalar(
+                select(WarehouseAreaStoragePolicy.id)
+                .join(
+                    WarehouseArea,
+                    WarehouseArea.id == WarehouseAreaStoragePolicy.area_id,
+                )
+                .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
+                .where(
+                    WarehouseFloor.floor_number
+                    == target.location.warehouse_floor,
+                    func.upper(WarehouseArea.area_code)
+                    == str(target.location.area_code or "").strip().upper(),
+                )
+                .limit(1)
+            )
+            if current_policy_id is not None:
+                continue
+            current_revision, current_area_kinds = _receipt_floor3_runtime_identity()
+            current_area_kind = current_area_kinds.get(
+                str(target.location.area_code or "").strip().upper()
+            )
+            if (
+                current_revision != target.runtime_map_revision
+                or (
+                    target.location.storage_type == "ground"
+                    and current_area_kind != "finished_storage"
+                )
+                or (
+                    target.location.storage_type == "temporary_aisle"
+                    and current_area_kind != "temporary_turnover"
+                )
+            ):
+                continue
         issue = operational_location_issue(
             db,
             target.location,
@@ -1491,13 +1655,41 @@ def _receipt_auto_finished_ground_target(
             require_map_geometry=True,
             required_inventory_type="finished",
             require_empty=True,
-            capacity_source_location_id=target.location.id,
+            capacity_source_location_id=(
+                target.location.id
+                if target.target_kind == "fin_ground_plan"
+                else None
+            ),
         )
         if issue is None:
             return target
     raise ProductionWorkflowError(
-        "FIN-001～003 的可用位置刚刚发生变化，请刷新后重新确认收料",
+        "可用成品位置刚刚发生变化，请刷新后重新确认收料",
         409,
+    )
+
+
+def _receipt_auto_location_name(location: WarehouseLocation) -> str:
+    name = employee_location_name(location)
+    if name != "位置名称待完善":
+        return name
+    floor_number = int(location.warehouse_floor or 0)
+    floor_name = {1: "一楼", 2: "二楼", 3: "三楼", 4: "四楼"}.get(
+        floor_number,
+        f"{floor_number}楼" if floor_number else "仓库",
+    )
+    area_code = str(location.area_code or "").strip().upper()
+    location_code = str(location.location_code or "").strip()
+    raw_name = str(location.location_name or "").strip()
+    detail = raw_name if raw_name and raw_name != location_code else location_code
+    return "·".join(
+        value
+        for value in (
+            floor_name,
+            f"{area_code}区" if area_code else None,
+            detail or None,
+        )
+        if value
     )
 
 
@@ -1549,7 +1741,7 @@ def _production_direct_staging_location(
 
 
 def receipt_auto_finished_location_projection(db: Session) -> dict[str, object]:
-    """Return the authoritative employee-safe real FIN destination preview."""
+    """Return the authoritative employee-safe real receipt destination."""
 
     try:
         target = _receipt_auto_finished_ground_target(db, claim=False)
@@ -1563,7 +1755,7 @@ def receipt_auto_finished_location_projection(db: Session) -> dict[str, object]:
         }
     return {
         "ready": True,
-        "location_name": target.location.location_name,
+        "location_name": _receipt_auto_location_name(target.location),
         "layout_version": target.layout_version,
         "capacity_warning": target.capacity_warning,
         "issue": None,
@@ -1598,12 +1790,10 @@ def _bind_direct_completion_lots_to_system_pallet(
 
     is_legacy_dispatch = location.location_code == DIRECT_DELIVERY_STAGING_LOCATION_CODE
     if ground_target is not None:
-        if (
-            ground_target.location.id != location.id
-            or str(location.area_code or "").strip().upper()
-            not in RECEIPT_FIN_STAGING_AREA_CODES
-        ):
-            raise ProductionWorkflowError("收料自动成品的真实 FIN 地堆位置不一致", 409)
+        if ground_target.location.id != location.id:
+            raise ProductionWorkflowError("收料自动成品的真实成品位置不一致", 409)
+        if (ground_target.plan is None) != (ground_target.slot is None):
+            raise ProductionWorkflowError("收料自动成品的地堆排位事实不完整", 409)
     elif not is_legacy_dispatch:
         raise ProductionWorkflowError("直接待送系统栈板缺少真实 FIN 地堆目标", 409)
     occupancy_key = _direct_dispatch_pallet_occupancy_key(completion.id)
@@ -1637,7 +1827,7 @@ def _bind_direct_completion_lots_to_system_pallet(
         expected_ids = {int(lot.id) for lot in normalized_lots}
         if linked_ids != expected_ids:
             raise ProductionWorkflowError("直接待送系统栈板幂等事实不一致", 409)
-        if ground_target is not None:
+        if ground_target is not None and ground_target.uses_ground_plan:
             occupancy = db.scalar(
                 select(WarehouseGroundOccupancy).where(
                     WarehouseGroundOccupancy.pallet_id == existing.id,
@@ -1646,7 +1836,7 @@ def _bind_direct_completion_lots_to_system_pallet(
                 )
             )
             if occupancy is None:
-                raise ProductionWorkflowError("真实 FIN 地堆占用幂等事实不完整", 409)
+                raise ProductionWorkflowError("真实地堆占用幂等事实不完整", 409)
         return existing
     if any(lot.pallet_item is not None for lot in normalized_lots):
         raise ProductionWorkflowError("直接待送库存批次已绑定其他栈板", 409)
@@ -1657,7 +1847,9 @@ def _bind_direct_completion_lots_to_system_pallet(
         location_occupancy_key=occupancy_key,
         status="active",
         is_current=True,
-        needs_relocation=True,
+        needs_relocation=(
+            ground_target is None or location.storage_type == "temporary_aisle"
+        ),
         remarks=f"生产完工明细 {completion.id} 直接待送系统栈板",
         created_by=operator_id,
         updated_by=operator_id,
@@ -1712,9 +1904,11 @@ def _bind_direct_completion_lots_to_system_pallet(
             remarks=f"生产完工明细 {completion.id} 直接待送自动建立系统栈板",
         )
     )
-    if ground_target is not None:
+    if ground_target is not None and ground_target.uses_ground_plan:
+        assert ground_target.plan is not None
+        assert ground_target.slot is not None
         if operator_id is None:
-            raise ProductionWorkflowError("真实 FIN 地堆占用缺少操作人", 409)
+            raise ProductionWorkflowError("真实地堆占用缺少操作人", 409)
         occupied = db.scalar(
             select(WarehouseGroundOccupancySlot.id)
             .join(WarehouseGroundOccupancy)
@@ -1726,7 +1920,7 @@ def _bind_direct_completion_lots_to_system_pallet(
             .limit(1)
         )
         if occupied is not None:
-            raise ProductionWorkflowError("真实 FIN 地堆位置已被占用，请刷新后重试", 409)
+            raise ProductionWorkflowError("真实地堆位置已被占用，请刷新后重试", 409)
         occupancy = WarehouseGroundOccupancy(
             pallet_id=pallet.id,
             primary_location_id=location.id,
@@ -2979,21 +3173,32 @@ def transfer_direct_completion_to_stock(
             or lot.source_ref_type != "production_completion"
             or int(lot.source_ref_id or 0) != completion.id
         ):
-            raise ProductionWorkflowError("一楼待送区成品批次已失效，不能转库存", 409)
+            raise ProductionWorkflowError("当前直接待送成品批次已失效，不能转库存", 409)
         direct_pallet_item = lot.pallet_item
         direct_pallet = (
             direct_pallet_item.pallet if direct_pallet_item is not None else None
         )
-        expected_occupancy_key = _direct_dispatch_pallet_occupancy_key(
-            completion.id
+        source_location = db.get(
+            WarehouseLocation,
+            int(lot.warehouse_location_id),
         )
+        source_is_floor3_v11 = bool(
+            source_location is not None
+            and int(source_location.warehouse_floor or 0) == 3
+            and source_location.source_version == "V11"
+        )
+        allowed_occupancy_keys = {
+            _direct_dispatch_pallet_occupancy_key(completion.id)
+        }
+        if completion.origin == "receipt_auto" and source_is_floor3_v11:
+            allowed_occupancy_keys.add("PRIMARY")
         if direct_pallet_item is not None and (
             direct_pallet is None
             or not direct_pallet.is_current
             or direct_pallet.location_id != lot.warehouse_location_id
-            or direct_pallet.location_occupancy_key != expected_occupancy_key
+            or direct_pallet.location_occupancy_key not in allowed_occupancy_keys
         ):
-            raise ProductionWorkflowError("一楼待送系统栈板状态异常，不能转库存", 409)
+            raise ProductionWorkflowError("当前直接待送系统栈板状态异常，不能转库存", 409)
         if lot.warehouse_location_id == target_location.id:
             raise ProductionWorkflowError("目标库位与当前库位相同", 409)
         before = _balances(lot)
@@ -3024,7 +3229,7 @@ def transfer_direct_completion_to_stock(
                 db,
                 pallet_id=direct_pallet.id,
                 expected_version=int(direct_pallet.version),
-                remarks="一楼直接待送完工整批转入正式库存位",
+                remarks="直接待送完工整批转入正式库存位",
                 operator_id=operator_id,
                 idempotency_key=_stable_key(
                     "production-transfer", completion.id, key, "clear-direct-pallet"
@@ -3057,7 +3262,7 @@ def transfer_direct_completion_to_stock(
             quantity=0,
             before=before,
             operator_id=operator_id,
-            reason="一楼待送区整批转入正式库位",
+            reason="直接待送完工整批转入正式库位",
             remarks=_normalized_text(command.remarks),
             idempotency_key=_stable_key("production-transfer", completion.id, key, "move"),
             related_order_id=order.id,
@@ -3610,7 +3815,7 @@ def post_automatic_receipt_completion(
         material_input_quantity=int(material_input_delta),
         actual_output_quantity=delta,
         direct_delivery_quantity=delta,
-        remarks="收料自动成品进入合并一楼成品暂存区",
+        remarks="收料自动成品进入当前真实成品位置",
     )
     lot = _stock_completion_lot(
         db,
@@ -3624,18 +3829,36 @@ def post_automatic_receipt_completion(
         location_id_override=location.id,
         receipt_ground_target=ground_target,
         source_type="production_completion",
-        movement_reason="订单用途来料自动形成成品并进入真实一楼成品待送位置",
+        movement_reason="订单用途来料自动形成成品并进入当前真实成品位置",
     )
     completion.inventory_lot_id = lot.id
-    _bind_direct_completion_lots_to_system_pallet(
-        db,
-        completion=completion,
-        order=order,
-        lots=[lot],
-        location=location,
-        operator_id=operator_id,
-        ground_target=ground_target,
-    )
+    if ground_target.target_kind == "floor3_v11":
+        pallet_item = lot.pallet_item
+        pallet = pallet_item.pallet if pallet_item is not None else None
+        expected_needs_relocation = bool(
+            location.is_temporary
+            or location.storage_type == "temporary_aisle"
+        )
+        if (
+            pallet is None
+            or not pallet.is_current
+            or pallet.location_id != location.id
+            or bool(pallet.needs_relocation) != expected_needs_relocation
+        ):
+            raise ProductionWorkflowError(
+                "收料自动成品未正确绑定三楼真实栈板位置，本次收料已终止",
+                409,
+            )
+    else:
+        _bind_direct_completion_lots_to_system_pallet(
+            db,
+            completion=completion,
+            order=order,
+            lots=[lot],
+            location=location,
+            operator_id=operator_id,
+            ground_target=ground_target,
+        )
     capitalized = Decimal(str(capitalized_material_cost or 0)).quantize(
         Decimal("0.0001"), rounding=ROUND_HALF_UP
     )

@@ -850,9 +850,49 @@ def test_pending_frozen_preview_uses_live_published_location_facts(
             if str(item["item_id"]) == source.route_key
         )
         assert row["purpose_status"] == "frozen"
-        assert row["receipt_fact_ready"] is False
+        assert row["receipt_fact_ready"] is True
+        assert row["receipt_execution_ready"] is False
         assert row["finished_location_ready"] is False
         assert row["finished_location_issue"]
+
+
+def test_empty_batch_receipt_returns_chinese_error_without_writing(
+    requisition_app,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.purchase_receipt import IncomingReceiptBatchFact
+
+    app, session_factory = requisition_app
+    with session_factory() as session:
+        before = (
+            session.scalar(select(func.count()).select_from(IncomingReceiptItem)),
+            session.scalar(select(func.count()).select_from(IncomingReceiptBatchFact)),
+        )
+    with TestClient(app) as client:
+        _login(client, "admin")
+        response = client.put(
+            "/api/incoming/batch-receive",
+            json={"idempotency_key": "p022-empty-batch", "items": []},
+        )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "本次没有可提交的收料明细，请重新勾选后再试"
+    with TestClient(app) as client:
+        _login(client, "admin")
+        missing_items = client.put(
+            "/api/incoming/batch-receive",
+            json={"idempotency_key": "p022-missing-batch-items"},
+        )
+    assert missing_items.status_code == 422, missing_items.text
+    assert (
+        missing_items.json()["detail"]
+        == "本次没有可提交的收料明细，请重新勾选后再试"
+    )
+    with session_factory() as session:
+        after = (
+            session.scalar(select(func.count()).select_from(IncomingReceiptItem)),
+            session.scalar(select(func.count()).select_from(IncomingReceiptBatchFact)),
+        )
+    assert after == before
 
 
 def test_pending_frozen_preview_reports_capacity_warning_without_blocking(

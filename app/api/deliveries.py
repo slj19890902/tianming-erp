@@ -131,6 +131,8 @@ from app.services.production_workflow import (
     lock_order_rows_for_production_transition,
     normalized_completion_output,
     production_ready_quantity,
+    remaining_finished_order_credit_by_item_ids,
+    remaining_finished_order_credit_expression,
 )
 from app.services.composite_bom_workflow import (
     ACTIVE_RESERVATION_STATUSES,
@@ -161,7 +163,10 @@ from app.services.warehouse_inventory import (
     release_empty_pallets_after_delivery,
     restore_auto_released_pallets_after_delivery_cancel,
 )
-from app.services.warehouse_location_address import employee_location_name
+from app.services.warehouse_location_address import (
+    employee_area_name,
+    employee_location_name,
+)
 from app.services.unordered_finished_delivery import (
     cancel_unordered_finished_dispatch,
     dispatch_unordered_finished_inventory,
@@ -175,18 +180,6 @@ can_read = PermissionChecker("deliveries.view")
 can_operate = PermissionChecker("deliveries.execute")
 can_pick = PermissionChecker("deliveries.pick")
 PICK_TASK_STATUSES = {"pushed", "driver_confirmed", "exception", "applied", "dispatched"}
-
-
-def _employee_warehouse_area_name(area: WarehouseArea | None) -> str:
-    if area is None:
-        return "区域名称待完善"
-    if area.address_zone_code and area.address_subzone_no:
-        return f"{area.address_zone_code}{int(area.address_subzone_no)}区"
-    name = str(area.area_name or "").strip()
-    code = str(area.area_code or "").strip()
-    if name and name.casefold() != code.casefold():
-        return name
-    return "区域名称待完善"
 
 
 def _utc_now() -> datetime:
@@ -369,6 +362,15 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
             int(order_item.quantity or 0) - int(order_item.delivered_quantity or 0),
             0,
         )
+    if has_receipt_auto_finished:
+        return min(
+            _receipt_auto_delivery_ready_quantity(db, order_item.id),
+            max(
+                int(order_item.quantity or 0)
+                - int(order_item.delivered_quantity or 0),
+                0,
+            ),
+        )
     if task is not None:
         if task.status not in {"completed", "not_required"}:
             return 0
@@ -401,6 +403,30 @@ def _has_receipt_auto_finished_fact(db: Session, order_item_id: int) -> bool:
         )
         .limit(1)
     ) is not None
+
+
+def _receipt_auto_ready_quantity_from_facts(
+    *,
+    remaining_finished_reserved: int,
+) -> int:
+    """Return current order-backed receipt-managed finished goods.
+
+    Completion counters are historical facts.  Only unconsumed and unreleased
+    ``finished_order`` reservation credit is safe for the order delivery path;
+    any surplus continues through the separate stock delivery workflow.
+    """
+
+    return max(int(remaining_finished_reserved or 0), 0)
+
+
+def _receipt_auto_delivery_ready_quantity(db: Session, order_item_id: int) -> int:
+    remaining_reserved = remaining_finished_order_credit_by_item_ids(
+        db,
+        [int(order_item_id)],
+    ).get(int(order_item_id), 0)
+    return _receipt_auto_ready_quantity_from_facts(
+        remaining_finished_reserved=remaining_reserved,
+    )
 
 
 def _delivery_quantity_facts(db: Session, order_item: OrderItem) -> dict[str, int]:
@@ -1781,6 +1807,7 @@ class ForceCloseRequest(BaseModel):
 
 def _pending_query(
     *,
+    order_item_id: int | None = None,
     customer_id: int | None = None,
     customer_ids: set[int] | None = None,
     inventory_keyword: str | None = None,
@@ -1818,6 +1845,34 @@ def _pending_query(
         )
         .correlate(OrderItem)
         .scalar_subquery()
+    )
+    receipt_auto_finished = exists(
+        select(ProductionCompletion.id).where(
+            ProductionCompletion.order_item_id == OrderItem.id,
+            ProductionCompletion.status == "posted",
+            ProductionCompletion.origin == "receipt_auto",
+        )
+    )
+    receipt_auto_finished_reserved = (
+        select(
+            func.coalesce(
+                func.sum(remaining_finished_order_credit_expression()),
+                0,
+            )
+        )
+        .where(
+            InventoryReservation.order_item_id == OrderItem.id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            InventoryReservation.status != "cancelled",
+        )
+        .correlate(OrderItem)
+        .scalar_subquery()
+    )
+    receipt_auto_delivery_ready = and_(
+        receipt_auto_finished,
+        receipt_auto_finished_reserved > 0,
+        OrderItem.quantity > OrderItem.delivered_quantity,
     )
     active_semi_for_requirement = (
         select(
@@ -1961,6 +2016,7 @@ def _pending_query(
             external_packaging_gate,
             or_(
                 production_task_ready,
+                receipt_auto_delivery_ready,
                 and_(
                     ~production_task_exists,
                     or_(
@@ -1977,6 +2033,8 @@ def _pending_query(
             Order.status.in_(DELIVERY_CANDIDATE_ORDER_STATUSES),
         )
     )
+    if order_item_id is not None:
+        query = query.where(OrderItem.id == int(order_item_id))
     if customer_id is not None:
         query = query.where(Order.customer_id == customer_id)
     if customer_ids is not None:
@@ -5474,12 +5532,16 @@ def get_delivery_pick_measured_map_floors(
                 "areas": {},
             },
         )
-        employee_area_name = _employee_warehouse_area_name(area_row)
+        projected_area_name = employee_area_name(
+            area_row,
+            area_code=area_code,
+            floor_number=floor_number,
+        )
         area = floor["areas"].setdefault(
             area_code,
             {
                 "area_code": area_code,
-                "area_name": employee_area_name,
+                "area_name": projected_area_name,
                 "task_location_count": 0,
                 "mapped_location_count": 0,
             },
@@ -5613,7 +5675,11 @@ def get_delivery_pick_measured_map_area(
             floor_row.floor_name if floor_row is not None else f"{floor_number}楼"
         ),
         "area_code": normalized_area,
-        "area_name": _employee_warehouse_area_name(area_row),
+        "area_name": employee_area_name(
+            area_row,
+            area_code=normalized_area,
+            floor_number=floor_number,
+        ),
         "map_status": "ready" if measured else "unmeasured",
         "map_status_text": "实测地图已建立" if measured else "未建立实测地图",
         "guidance": (
@@ -6805,6 +6871,7 @@ class _PendingDeliveryReadContext:
         } if order_ids else {}
         if not item_ids:
             self.fast_item_ids: set[int] = set()
+            self.receipt_auto_item_ids: set[int] = set()
             return
 
         self.composite_ids = set(
@@ -6901,6 +6968,7 @@ class _PendingDeliveryReadContext:
             and item_id not in excluded_ids
         }
         completions_by_item: dict[int, list[ProductionCompletion]] = {}
+        self.receipt_auto_item_ids: set[int] = set()
         for completion in db.scalars(
             select(ProductionCompletion).where(
                 ProductionCompletion.order_item_id.in_(item_ids),
@@ -6910,8 +6978,13 @@ class _PendingDeliveryReadContext:
             completions_by_item.setdefault(
                 int(completion.order_item_id), []
             ).append(completion)
+            if completion.origin == "receipt_auto":
+                self.receipt_auto_item_ids.add(int(completion.order_item_id))
         reserved_by_item = active_finished_reservations_by_item_ids(
             db, sorted(item_ids)
+        )
+        remaining_finished_reserved_by_item = (
+            remaining_finished_order_credit_by_item_ids(db, sorted(item_ids))
         )
         semi_credited_by_requirement: dict[int, int] = {}
         semi_requirement_ids = [requirement.id for requirement in semi_requirements]
@@ -6980,9 +7053,20 @@ class _PendingDeliveryReadContext:
                 semi_fully_covered_ids.add(item_id)
         self.remaining_by_item: dict[int, int] = {}
         for item_id, item in self.order_items.items():
+            delivered = max(int(item.delivered_quantity or 0), 0)
+            if item_id in self.receipt_auto_item_ids:
+                ready_quantity = min(
+                    _receipt_auto_ready_quantity_from_facts(
+                        remaining_finished_reserved=int(
+                            remaining_finished_reserved_by_item.get(item_id, 0)
+                        ),
+                    ),
+                    max(int(item.quantity or 0) - delivered, 0),
+                )
+                self.remaining_by_item[item_id] = max(ready_quantity, 0)
+                continue
             if item_id in self.composite_ids:
                 continue
-            delivered = max(int(item.delivered_quantity or 0), 0)
             task = regular_tasks.get(item_id)
             if task is not None:
                 if (
@@ -7047,6 +7131,8 @@ class _PendingDeliveryReadContext:
         return bool(order_item and order_item.id in self.fast_item_ids)
 
     def remaining_quantity(self, db: Session, order_item: OrderItem) -> int:
+        if order_item.id in self.receipt_auto_item_ids:
+            return max(int(self.remaining_by_item.get(order_item.id, 0)), 0)
         if order_item.id in self.composite_ids:
             return max(
                 int(self.composite_available_sets.get(order_item.id, 0)),
@@ -7276,6 +7362,7 @@ def get_delivery_fulfillment_reminders(
 @router.get("/pending-items/search")
 def search_pending_delivery_items(
     customer_id: int = Query(gt=0),
+    order_item_id: int | None = Query(default=None, gt=0),
     inventory_code: str = Query(default="", max_length=150),
     q: str = Query(default="", max_length=150),
     customer_po: str = Query(default="", max_length=150),
@@ -7312,7 +7399,7 @@ def search_pending_delivery_items(
                 product_name_keyword = product_name_keyword or general_keyword
             general_keyword = ""
 
-    if not list_all and not any(
+    if not list_all and order_item_id is None and not any(
         [
             inventory_keyword,
             general_keyword,
@@ -7327,6 +7414,7 @@ def search_pending_delivery_items(
     effective_limit = page_size or limit or (100 if list_all else 20)
     registry = build_display_registry(db)
     base_query = _pending_query(
+        order_item_id=order_item_id,
         customer_id=customer_id,
         inventory_keyword=inventory_keyword,
         customer_po_keyword=customer_po_keyword,

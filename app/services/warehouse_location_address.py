@@ -30,6 +30,32 @@ from app.models.warehouse_inventory import (
 WAREHOUSE_LOCATION_ADDRESS_LOCK = RLock()
 MANAGED_ADDRESS_KINDS = {"rack_slot", "ground_slot"}
 MEASURED_MAP_LOCATION_SOURCES = {"V11", "TWIN_V1"}
+LEGACY_V11_RIGHT_AREA_CODES = frozenset(
+    {
+        "A1",
+        "A2",
+        "AB1",
+        "AB2",
+        "B1",
+        "B2",
+        "C1",
+        "C2",
+        "CD1",
+        "D1",
+        "D2",
+        "DE1",
+        "E1",
+        "E2",
+        "E3",
+        "E4",
+        "F1",
+        "F12",
+        "F2",
+        "F3",
+        "F34",
+        "F4",
+    }
+)
 _V11_SIDE_NAMES = {
     "L": "左侧",
     "R": "右侧",
@@ -301,6 +327,79 @@ def _area_human_name(area: WarehouseArea) -> str | None:
     return None
 
 
+def _area_projection_value(
+    area: WarehouseArea | Mapping[str, object] | None,
+    *keys: str,
+) -> object | None:
+    if area is None:
+        return None
+    if isinstance(area, Mapping):
+        for key in keys:
+            value = area.get(key)
+            if value not in (None, ""):
+                return value
+        return None
+    for key in keys:
+        value = getattr(area, key, None)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _is_generic_legacy_area_name(name: str, area_code: str) -> bool:
+    compact = re.sub(r"\s+", "", name).upper()
+    code = area_code.upper()
+    return compact in {f"{code}区", f"三楼{code}区"}
+
+
+def employee_area_name(
+    area: WarehouseArea | Mapping[str, object] | None = None,
+    *,
+    area_code: str | None = None,
+    floor_number: int | None = None,
+    fallback_name: str | None = None,
+) -> str:
+    """Return the single employee-facing area name without changing its identity.
+
+    The 22 measured V11 areas on the right side historically persisted only
+    generic labels such as ``A1 区``.  Until an administrator publishes a real
+    area name, their employee default is ``右区A1``.  A non-generic formal name
+    always wins, so later area-planning edits flow through every projection.
+    """
+
+    code = str(
+        area_code
+        or _area_projection_value(area, "area_code", "erp_area_code")
+        or ""
+    ).strip().upper()
+    projected_floor_number = int(
+        floor_number
+        or _area_projection_value(area, "floor_number", "warehouse_floor")
+        or getattr(getattr(area, "floor", None), "floor_number", 0)
+        or 0
+    )
+    uses_v11_right_default = bool(
+        code in LEGACY_V11_RIGHT_AREA_CODES
+        and projected_floor_number == 3
+    )
+    formal_name = str(
+        _area_projection_value(area, "formal_area_name", "area_name") or ""
+    ).strip()
+    if formal_name and not (
+        uses_v11_right_default
+        and _is_generic_legacy_area_name(formal_name, code)
+    ):
+        return formal_name
+    if uses_v11_right_default:
+        return f"右区{code}"
+    if formal_name:
+        return formal_name
+    fallback = str(
+        fallback_name or _area_projection_value(area, "name") or ""
+    ).strip()
+    return fallback or code or "区域名称待完善"
+
+
 def _location_sequence(location: WarehouseLocation) -> int | None:
     match = re.search(r"(\d+)$", str(location.location_code or "").strip())
     if match is None:
@@ -327,14 +426,22 @@ def _measured_map_location_name(
     floor_number = int(
         (floor.floor_number if floor is not None else location.warehouse_floor) or 0
     )
-    area_name = str(
-        (area.area_name if area is not None else None) or location.area_code or ""
-    ).strip()
+    area_name = employee_area_name(
+        area,
+        area_code=location.area_code,
+        floor_number=floor_number,
+    )
     sequence = _location_sequence(location)
     if not floor_number or not area_name or sequence is None:
         return None
 
-    prefix = f"{_floor_name(floor_number)} {area_name}"
+    floor_name = _floor_name(floor_number)
+    normalized_area_name = re.sub(r"\s+", "", area_name).upper()
+    has_floor_prefix = any(
+        normalized_area_name.startswith(re.sub(r"\s+", "", marker).upper())
+        for marker in (floor_name, _floor_code(floor_number))
+    )
+    prefix = area_name if has_floor_prefix else f"{floor_name} {area_name}"
     storage_type = str(location.storage_type or "").strip().lower()
     suffix_match = re.search(
         r"(?:^|-)([A-Z])?(\d+)$",
@@ -467,6 +574,14 @@ def location_address_payload(
     return {
         "warehouse_floor": location.warehouse_floor,
         "area_code": location.area_code,
+        "area_name": employee_area_name(
+            area,
+            area_code=location.area_code,
+            floor_number=(
+                floor.floor_number if floor is not None else location.warehouse_floor
+            ),
+        ),
+        "area_master_name": area.area_name if area is not None else None,
         "address_kind": location.address_kind,
         "address_area_id": location.address_area_id,
         "address_zone_code": area.address_zone_code if area is not None else None,

@@ -43,6 +43,9 @@ from app.services.stock_replenishment import (
     product_replenishment_signature,
     stock_policy_dict,
 )
+from app.services.location_candidates import (
+    load_warehouse_location_projection_contexts,
+)
 
 
 router = APIRouter()
@@ -374,9 +377,26 @@ def _common_box_low_stock_warnings(
     )
     if visible_customer_ids is not None:
         query = query.where(Product.customer_id.in_(visible_customer_ids))
+    policies = list(db.scalars(query).all())
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [
+            policy.default_location
+            for policy in policies
+            if policy.default_location is not None
+        ],
+    )
     warnings = []
-    for policy in db.scalars(query).all():
-        item = stock_policy_dict(db, policy)
+    for policy in policies:
+        item = stock_policy_dict(
+            db,
+            policy,
+            projection_context=(
+                projection_contexts.get(int(policy.default_location.id))
+                if policy.default_location is not None
+                else None
+            ),
+        )
         if not item["warning_triggered"]:
             continue
         product = policy.product

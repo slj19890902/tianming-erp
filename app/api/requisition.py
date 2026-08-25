@@ -94,9 +94,12 @@ from app.services.historical_purchase_lookup import (
     search_historical_purchase_database,
 )
 from app.services.location_candidates import (
+    load_warehouse_location_projection_contexts,
     list_operational_locations,
+    operational_location_payload,
     operational_location_issue,
 )
+from app.services.warehouse_location_address import employee_location_name
 from app.services.audit_log import append_audit_event
 from app.services.stock_replenishment import (
     StockReplenishmentError,
@@ -1958,6 +1961,7 @@ class _PendingRequisitionReadContext:
         self._active_semi_reservation_item_ids: set[int] = set()
         self._posted_completion_item_ids: set[int] = set()
         self._finished_lots_by_item_id: dict[int, list[InventoryLot]] = {}
+        self._location_projection_contexts: dict[int, dict] = {}
         self._safe_semi_lots_by_item_component: dict[
             tuple[int, str], list[InventoryLot]
         ] = {}
@@ -2270,6 +2274,16 @@ class _PendingRequisitionReadContext:
                     SemiFinishedInventoryDetail.owner_customer_id.in_(customer_ids),
                 )
             ).all()
+            self._location_projection_contexts = (
+                load_warehouse_location_projection_contexts(
+                    db,
+                    [
+                        lot.location
+                        for lot in [*finished_lots, *semi_lots]
+                        if lot.location is not None
+                    ],
+                )
+            )
             semi_by_customer_component: dict[
                 tuple[int, str], list[InventoryLot]
             ] = {}
@@ -2542,6 +2556,7 @@ class _PendingRequisitionReadContext:
             requirements=requirements,
             candidates=candidates,
             blocked_reason=blocked_reason,
+            projection_contexts=self._location_projection_contexts,
         )
 
     def customer_board_preparation_summary(
@@ -3576,10 +3591,14 @@ def _semi_component_specs_for_requisition(
     return specs
 
 
-def _semi_candidate_dict_for_requisition(row: SemiFinishedCandidate) -> dict:
+def _semi_candidate_dict_for_requisition(
+    row: SemiFinishedCandidate,
+    projection_context: dict | None = None,
+) -> dict:
     lot = row.lot
     detail = lot.semi_finished_detail
     location = lot.location
+    context = projection_context or {}
     return {
         "lot_id": lot.id,
         "lot_number": lot.lot_number,
@@ -3591,7 +3610,12 @@ def _semi_candidate_dict_for_requisition(row: SemiFinishedCandidate) -> dict:
         "warehouse_location": {
             "id": location.id,
             "location_code": location.location_code,
-            "location_name": location.location_name,
+            "location_name": employee_location_name(
+                location,
+                area=context.get("area"),
+                floor=context.get("floor"),
+            ),
+            "location_master_name": location.location_name,
         },
         "board_length_mm": detail.board_length_mm,
         "board_width_mm": detail.board_width_mm,
@@ -3681,6 +3705,14 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
         ]
         if not recommended and not review_candidates:
             continue
+        projection_contexts = load_warehouse_location_projection_contexts(
+            db,
+            [
+                row.lot.location
+                for row in [*recommended, *review_candidates]
+                if row.lot.location is not None
+            ],
+        )
         options.append(
             {
                 "order_item_id": item.id,
@@ -3705,10 +3737,17 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
                 ),
                 "remaining_requirement_quantity": remaining,
                 "recommended_candidates": [
-                    _semi_candidate_dict_for_requisition(row) for row in recommended
+                    _semi_candidate_dict_for_requisition(
+                        row,
+                        projection_contexts.get(int(row.lot.location.id)),
+                    )
+                    for row in recommended
                 ],
                 "review_candidates": [
-                    _semi_candidate_dict_for_requisition(row)
+                    _semi_candidate_dict_for_requisition(
+                        row,
+                        projection_contexts.get(int(row.lot.location.id)),
+                    )
                     for row in review_candidates
                 ],
             }
@@ -3763,6 +3802,7 @@ def _late_finished_inventory_preview_from_facts(
     requirements: dict,
     candidates: list[InventoryLot],
     blocked_reason: str | None,
+    projection_contexts: dict[int, dict] | None = None,
 ) -> dict:
     remaining_order_quantity = int(requirements["production_required_qty"])
     available_quantity = sum(
@@ -3772,9 +3812,20 @@ def _late_finished_inventory_preview_from_facts(
 
     location_map: dict[int | None, dict] = {}
     lots: list[dict] = []
+    contexts = projection_contexts or {}
     for lot in candidates:
         location = lot.location
         location_id = location.id if location is not None else None
+        context = contexts.get(int(location_id), {}) if location_id is not None else {}
+        readable_location_name = (
+            employee_location_name(
+                location,
+                area=context.get("area"),
+                floor=context.get("floor"),
+            )
+            if location is not None
+            else "未设置库位"
+        )
         quantity = max(int(lot.quantity_available or 0), 0)
         location_row = location_map.setdefault(
             location_id,
@@ -3784,7 +3835,10 @@ def _late_finished_inventory_preview_from_facts(
                     location.location_code if location is not None else "未设置"
                 ),
                 "location_name": (
-                    location.location_name if location is not None else "未设置库位"
+                    readable_location_name
+                ),
+                "location_master_name": (
+                    location.location_name if location is not None else None
                 ),
                 "available_quantity": 0,
             },
@@ -3800,6 +3854,7 @@ def _late_finished_inventory_preview_from_facts(
                 "location_id": location_id,
                 "location_code": location_row["location_code"],
                 "location_name": location_row["location_name"],
+                "location_master_name": location_row["location_master_name"],
             }
         )
 
@@ -3853,10 +3908,15 @@ def _late_finished_inventory_preview(
             product=product,
         )
     )
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [lot.location for lot in candidates if lot.location is not None],
+    )
     return _late_finished_inventory_preview_from_facts(
         requirements=_current_requisition_summary(db, item),
         candidates=candidates,
         blocked_reason=blocked_reason,
+        projection_contexts=projection_contexts,
     )
 
 
@@ -13760,7 +13820,19 @@ def _stock_policy_summary(
     policy: InventoryStockPolicy,
     user: User,
 ) -> dict:
-    return stock_policy_dict(db, policy)
+    location = policy.default_location
+    projection_context = (
+        load_warehouse_location_projection_contexts(db, [location]).get(
+            int(location.id)
+        )
+        if location is not None
+        else None
+    )
+    return stock_policy_dict(
+        db,
+        policy,
+        projection_context=projection_context,
+    )
 
 
 def _stock_replenishment_item_customer_id(
@@ -14059,30 +14131,33 @@ def search_stock_replenishment_locations(
         }.get(target)
         if allowed is None:
             raise HTTPException(status_code=400, detail="库存目标类型无效。")
-    rows = [
-        row.location
+    candidate_rows = [
+        row
         for row in list_operational_locations(
             db,
             warehouse_types=allowed,
         )
         if row.location.source_version != "V11"
     ]
+    rows = [operational_location_payload(row) for row in candidate_rows]
     keyword = (q or "").strip().casefold()
     if keyword:
         rows = [
             row
             for row in rows
-            if keyword in str(row.location_code or "").casefold()
-            or keyword in str(row.location_name or "").casefold()
+            if keyword in str(row.get("location_code") or "").casefold()
+            or keyword in str(row.get("location_name") or "").casefold()
+            or keyword in str(row.get("location_master_name") or "").casefold()
         ]
-    rows.sort(key=lambda row: (row.location_code, row.id))
+    rows.sort(key=lambda row: (str(row.get("location_code") or ""), int(row["id"])))
     return {
         "items": [
             {
-                "id": row.id,
-                "location_code": row.location_code,
-                "location_name": row.location_name,
-                "warehouse_type": row.warehouse_type,
+                "id": row["id"],
+                "location_code": row["location_code"],
+                "location_name": row["location_name"],
+                "location_master_name": row["location_master_name"],
+                "warehouse_type": row["warehouse_type"],
             }
             for row in rows
         ]
@@ -14766,7 +14841,7 @@ def create_stock_replenishment_order(
                     user,
                     relationships_loaded=True,
                 )
-                return replenishment_order_dict(existing_order)
+                return replenishment_order_dict(existing_order, db=db)
         items = [
             _build_replenishment_item(
                 db,
@@ -14906,7 +14981,7 @@ def create_stock_replenishment_order(
             _replenishment_order_query().where(StockReplenishmentOrder.id == order.id)
         )
         assert order is not None
-        return replenishment_order_dict(order)
+        return replenishment_order_dict(order, db=db)
     except IntegrityError:
         db.rollback()
         if idempotent_order_number is not None:
@@ -14923,7 +14998,7 @@ def create_stock_replenishment_order(
                     user,
                     relationships_loaded=True,
                 )
-                return replenishment_order_dict(existing_order)
+                return replenishment_order_dict(existing_order, db=db)
         raise
     except HTTPException:
         db.rollback()
@@ -14952,7 +15027,25 @@ def list_stock_replenishment_orders(
             db, row, _user, relationships_loaded=True
         )
     ]
-    return {"items": [replenishment_order_dict(row) for row in rows]}
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [
+            item.location
+            for row in rows
+            for item in row.items
+            if item.location is not None
+        ],
+    )
+    return {
+        "items": [
+            replenishment_order_dict(
+                row,
+                db=db,
+                projection_contexts=projection_contexts,
+            )
+            for row in rows
+        ]
+    }
 
 
 @router.get("/stock-replenishment/orders/{order_id}")
@@ -14969,7 +15062,7 @@ def get_stock_replenishment_order(
     _require_stock_replenishment_order_access(
         db, order, _user, relationships_loaded=True
     )
-    return replenishment_order_dict(order)
+    return replenishment_order_dict(order, db=db)
 
 
 @router.get("/stock-replenishment/orders/{order_id}/print")
@@ -14986,7 +15079,7 @@ def print_stock_replenishment_order(
     _require_stock_replenishment_order_access(
         db, order, _user, relationships_loaded=True
     )
-    payload = replenishment_order_dict(order)
+    payload = replenishment_order_dict(order, db=db)
     payload["sender"] = _company_sender(db)
     return payload
 
@@ -15021,7 +15114,7 @@ def stock_saved_replenishment_order(
             _replenishment_order_query().where(StockReplenishmentOrder.id == order_id)
         )
         assert order is not None
-        return replenishment_order_dict(order)
+        return replenishment_order_dict(order, db=db)
     except (StockReplenishmentError, WarehouseInventoryError) as error:
         db.rollback()
         raise HTTPException(
@@ -15044,7 +15137,7 @@ def void_stock_replenishment_order(
         db, order, user, relationships_loaded=True
     )
     if order.status == "voided":
-        return replenishment_order_dict(order)
+        return replenishment_order_dict(order, db=db)
     received_quantity = sum(int(item.stocked_quantity or 0) for item in order.items)
     receipt_fact_count = int(
         db.scalar(
@@ -15094,7 +15187,7 @@ def void_stock_replenishment_order(
             db, current, user, relationships_loaded=True
         )
         if current.status == "voided":
-            return replenishment_order_dict(current)
+            return replenishment_order_dict(current, db=db)
         raise HTTPException(
             status_code=409,
             detail="该补库单状态已变化，可能已经收货，不能直接撤销报料。",
@@ -15127,7 +15220,7 @@ def void_stock_replenishment_order(
         .execution_options(populate_existing=True)
     )
     assert order is not None
-    return replenishment_order_dict(order)
+    return replenishment_order_dict(order, db=db)
 
 
 @router.get("/historical-purchases/search")
@@ -16838,18 +16931,32 @@ def auto_use_late_finished_inventory(
 
         remaining = int(preview["reservable_quantity"])
         allocation_rows: list[dict] = []
-        for lot in _safe_late_finished_inventory_candidates(
+        allocation_candidates = _safe_late_finished_inventory_candidates(
             db,
             item=item,
             order=order,
             product=product,
-        ):
+        )
+        allocation_contexts = load_warehouse_location_projection_contexts(
+            db,
+            [
+                lot.location
+                for lot in allocation_candidates
+                if lot.location is not None
+            ],
+        )
+        for lot in allocation_candidates:
             if remaining <= 0:
                 break
             quantity = min(max(int(lot.quantity_available or 0), 0), remaining)
             if quantity <= 0:
                 continue
             location = lot.location
+            location_context = (
+                allocation_contexts.get(int(location.id), {})
+                if location is not None
+                else {}
+            )
             reservation = reserve_finished_inventory(
                 db,
                 order_item_id=item.id,
@@ -16871,9 +16978,16 @@ def auto_use_late_finished_inventory(
                         location.location_code if location is not None else "未设置"
                     ),
                     "location_name": (
-                        location.location_name
+                        employee_location_name(
+                            location,
+                            area=location_context.get("area"),
+                            floor=location_context.get("floor"),
+                        )
                         if location is not None
                         else "未设置库位"
+                    ),
+                    "location_master_name": (
+                        location.location_name if location is not None else None
                     ),
                 }
             )

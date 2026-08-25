@@ -15,6 +15,9 @@ from app.api.deps import (
 )
 from app.models.user import User
 from app.services import stocktake as stocktake_service
+from app.services.location_candidates import (
+    load_warehouse_location_projection_contexts,
+)
 
 
 router = APIRouter()
@@ -23,6 +26,13 @@ logger = logging.getLogger(__name__)
 _view_permission = PermissionChecker("warehouse.stocktake.view")
 _submit_permission = PermissionChecker("warehouse.stocktake.submit")
 _review_permission = PermissionChecker("warehouse.stocktake.review")
+
+
+def _order_payload(db: Session, order) -> dict[str, object]:
+    context = load_warehouse_location_projection_contexts(
+        db, [order.location]
+    ).get(int(order.location_id), {})
+    return stocktake_service.order_payload(order, projection_context=context)
 
 
 def _require_unrestricted(user: User, db: Session) -> User:
@@ -247,7 +257,7 @@ def submit_stocktake(
                 error,
             )
     order = stocktake_service.get_order(db, order.id)
-    return stocktake_service.order_payload(order)
+    return _order_payload(db, order)
 
 
 @router.get("/stocktakes")
@@ -261,7 +271,18 @@ def get_stocktakes(
 ) -> dict[str, object]:
     try:
         rows = stocktake_service.list_orders(db, status=stocktake_status)
-        return {"items": [stocktake_service.order_payload(row) for row in rows]}
+        contexts = load_warehouse_location_projection_contexts(
+            db, [row.location for row in rows]
+        )
+        return {
+            "items": [
+                stocktake_service.order_payload(
+                    row,
+                    projection_context=contexts.get(int(row.location_id)),
+                )
+                for row in rows
+            ]
+        }
     except OperationalError as error:
         _raise_sqlite_concurrency_error(error)
 
@@ -273,7 +294,7 @@ def get_stocktake(
     _user: User = Depends(require_stocktake_view),
 ) -> dict[str, object]:
     try:
-        return stocktake_service.order_payload(stocktake_service.get_order(db, order_id))
+        return _order_payload(db, stocktake_service.get_order(db, order_id))
     except stocktake_service.StocktakeError as error:
         _raise_service_error(error)
     except OperationalError as error:
@@ -343,7 +364,7 @@ def _review_response(
                 error,
             )
     order = stocktake_service.get_order(db, order.id)
-    return stocktake_service.order_payload(order)
+    return _order_payload(db, order)
 
 
 @router.post("/stocktakes/{order_id}/approve")

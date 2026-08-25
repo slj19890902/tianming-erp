@@ -4266,6 +4266,8 @@ def test_p1_34b1_location_labels_are_mapped_read_only_and_fail_closed(
         assert single.status_code == 200, single.text
         assert single.json()["location_code"] == "A1-L01"
         assert single.json()["display_path"] == "三楼 A1成品存放区·左侧第1位"
+        assert single.json()["area_text"] == "A1成品存放区"
+        assert single.json()["area_master_name"] == "A1成品存放区"
         assert single.json()["position_status"] == "mapped"
         assert single.json()["layout_version"] == 3
         assert single.json()["lookup_url"].endswith(
@@ -4287,6 +4289,20 @@ def test_p1_34b1_location_labels_are_mapped_read_only_and_fail_closed(
             )
             assert blocked.status_code == 409, blocked.text
             assert "已发布到当前实测地图" in blocked.json()["detail"]
+
+    with factory() as db:
+        area = db.scalar(select(WarehouseArea).where(WarehouseArea.area_code == "A1"))
+        assert area is not None
+        area.area_name = "A1 区"
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "floor3-admin")
+        default_name = client.get(f"/api/warehouse/locations/{mapped_id}/label")
+        assert default_name.status_code == 200, default_name.text
+        assert default_name.json()["area_text"] == "右区A1"
+        assert default_name.json()["area_master_name"] == "A1 区"
+        assert default_name.json()["display_path"] == "三楼 右区A1·左侧第1位"
 
     with factory() as db:
         layout = db.scalar(

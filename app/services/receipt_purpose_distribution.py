@@ -48,6 +48,9 @@ from app.services.warehouse_inventory import (
     manual_semi_finished_in,
     mutate_lot,
 )
+from app.services.location_candidates import (
+    load_warehouse_location_projection_contexts,
+)
 from app.services.warehouse_location_address import employee_location_name
 
 
@@ -719,6 +722,23 @@ def serialize_receipt_purpose_allocation(
             "PURCHASE_RECEIPT_FACT_REQUIRED",
             "收料用途分配关联的正式采购事实不存在。",
         )
+    locations = [
+        lot.location
+        for lot in (finished_lot, reserve_lot)
+        if lot is not None and lot.location is not None
+    ]
+    location_contexts = load_warehouse_location_projection_contexts(db, locations)
+
+    def projected_location_name(lot: InventoryLot | None) -> str | None:
+        if lot is None or lot.location is None:
+            return None
+        context = location_contexts.get(int(lot.location.id), {})
+        return employee_location_name(
+            lot.location,
+            area=context.get("area"),
+            floor=context.get("floor"),
+        )
+
     return {
         "order_sheet_delta": allocation.receipt_order_purpose_sheet_qty,
         "reserve_sheet_delta": allocation.receipt_reserve_purpose_sheet_qty,
@@ -734,16 +754,8 @@ def serialize_receipt_purpose_allocation(
         ),
         "finished_inventory_lot_id": allocation.finished_inventory_lot_id,
         "reserve_inventory_lot_id": allocation.semi_finished_inventory_lot_id,
-        "finished_location_name": (
-            employee_location_name(finished_lot.location)
-            if finished_lot is not None
-            else None
-        ),
-        "reserve_location_name": (
-            employee_location_name(reserve_lot.location)
-            if reserve_lot is not None
-            else None
-        ),
+        "finished_location_name": projected_location_name(finished_lot),
+        "reserve_location_name": projected_location_name(reserve_lot),
         "sheet_cost": allocation.sheet_cost,
         "order_cost": allocation.order_purpose_cost,
         "reserve_cost": allocation.reserve_purpose_cost,
@@ -822,6 +834,19 @@ def serialize_receipt_purpose_allocations(
             .where(InventoryLot.id.in_(lot_ids))
         ).all()
     } if lot_ids else {}
+    locations = [row.location for row in lots.values() if row.location is not None]
+    location_contexts = load_warehouse_location_projection_contexts(db, locations)
+
+    def projected_location_name(lot: InventoryLot | None) -> str | None:
+        if lot is None or lot.location is None:
+            return None
+        context = location_contexts.get(int(lot.location.id), {})
+        return employee_location_name(
+            lot.location,
+            area=context.get("area"),
+            floor=context.get("floor"),
+        )
+
     facts = {
         row.id: row
         for row in db.scalars(
@@ -850,8 +875,8 @@ def serialize_receipt_purpose_allocations(
             "reserve_variance_sheet_qty": allocation.cumulative_reserve_purpose_sheet_qty_after - int(allocation.reserve_purpose_plan_sheet_qty_snapshot or 0),
             "finished_inventory_lot_id": allocation.finished_inventory_lot_id,
             "reserve_inventory_lot_id": allocation.semi_finished_inventory_lot_id,
-            "finished_location_name": employee_location_name(finished_lot.location) if finished_lot is not None else None,
-            "reserve_location_name": employee_location_name(reserve_lot.location) if reserve_lot is not None else None,
+            "finished_location_name": projected_location_name(finished_lot),
+            "reserve_location_name": projected_location_name(reserve_lot),
             "sheet_cost": allocation.sheet_cost,
             "order_cost": allocation.order_purpose_cost,
             "reserve_cost": allocation.reserve_purpose_cost,

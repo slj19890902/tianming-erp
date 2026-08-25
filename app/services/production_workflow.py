@@ -109,7 +109,10 @@ from app.services.warehouse_inventory import (
     _ensure_finished_projection_postcondition,
     _movement,
 )
-from app.services.warehouse_location_address import employee_location_name
+from app.services.warehouse_location_address import (
+    employee_area_name,
+    employee_location_name,
+)
 from app.services.warehouse_twin_layout import (
     WarehouseTwinLayoutNotFoundError,
     load_warehouse_twin_floor,
@@ -1212,6 +1215,54 @@ def refresh_order_production_status(db: Session, order_id: int) -> Order | None:
     return order
 
 
+def remaining_finished_order_credit_expression():
+    """Return one reservation row's current order-backed finished credit.
+
+    Requirement credit is independent from the historical completion counter
+    and from ``OrderItem.delivered_quantity``.  Clamp each reservation before
+    summing so one malformed negative row cannot hide another positive row.
+    """
+
+    remaining = (
+        func.coalesce(InventoryReservation.credited_requirement_quantity, 0)
+        - func.coalesce(InventoryReservation.consumed_requirement_quantity, 0)
+        - func.coalesce(InventoryReservation.released_requirement_quantity, 0)
+    )
+    return case((remaining > 0, remaining), else_=0)
+
+
+def remaining_finished_order_credit_by_item_ids(
+    db: Session,
+    order_item_ids: Sequence[int],
+) -> dict[int, int]:
+    """Batch the current main-order finished credit without delivery history."""
+
+    normalized_ids = sorted(
+        {int(order_item_id) for order_item_id in order_item_ids if order_item_id}
+    )
+    if not normalized_ids:
+        return {}
+    return {
+        int(order_item_id): max(int(quantity or 0), 0)
+        for order_item_id, quantity in db.execute(
+            select(
+                InventoryReservation.order_item_id,
+                func.coalesce(
+                    func.sum(remaining_finished_order_credit_expression()),
+                    0,
+                ),
+            )
+            .where(
+                InventoryReservation.order_item_id.in_(normalized_ids),
+                InventoryReservation.reservation_type == "finished_order",
+                InventoryReservation.sales_order_item_bom_component_id.is_(None),
+                InventoryReservation.status != "cancelled",
+            )
+            .group_by(InventoryReservation.order_item_id)
+        ).all()
+    }
+
+
 def production_ready_quantity(db: Session, order_item: OrderItem | int) -> int:
     item = db.get(OrderItem, order_item) if isinstance(order_item, int) else order_item
     if item is None:
@@ -1357,6 +1408,8 @@ class ReceiptAutoFinishedGroundTarget:
     location: WarehouseLocation
     layout_version: int
     capacity_warning: str | None
+    area: WarehouseArea | None = None
+    floor: WarehouseFloor | None = None
     target_kind: Literal["fin_ground_plan", "floor3_v11"] = "fin_ground_plan"
     runtime_map_revision: str | None = None
 
@@ -1574,6 +1627,8 @@ def _receipt_auto_finished_ground_targets(
                         if capacity_issue == "该区域已达到现场确认的栈板容量"
                         else None
                     ),
+                    area=plan.area,
+                    floor=plan.area.floor,
                 )
             )
     if targets:
@@ -1668,6 +1723,12 @@ def _receipt_auto_finished_ground_targets(
                 location=location,
                 layout_version=int(layout.version),
                 capacity_warning=None,
+                area=(
+                    floor3_projection_contexts.get(int(location.id)) or {}
+                ).get("area"),
+                floor=(
+                    floor3_projection_contexts.get(int(location.id)) or {}
+                ).get("floor"),
                 target_kind="floor3_v11",
                 runtime_map_revision=runtime_revision,
             )
@@ -1778,8 +1839,13 @@ def _receipt_auto_finished_ground_target(
     )
 
 
-def _receipt_auto_location_name(location: WarehouseLocation) -> str:
-    name = employee_location_name(location)
+def _receipt_auto_location_name(
+    location: WarehouseLocation,
+    *,
+    area: WarehouseArea | None = None,
+    floor: WarehouseFloor | None = None,
+) -> str:
+    name = employee_location_name(location, area=area, floor=floor)
     if name != "位置名称待完善":
         return name
     floor_number = int(location.warehouse_floor or 0)
@@ -1787,7 +1853,11 @@ def _receipt_auto_location_name(location: WarehouseLocation) -> str:
         floor_number,
         f"{floor_number}楼" if floor_number else "仓库",
     )
-    area_code = str(location.area_code or "").strip().upper()
+    area_name = employee_area_name(
+        area,
+        area_code=location.area_code,
+        floor_number=floor_number,
+    )
     location_code = str(location.location_code or "").strip()
     raw_name = str(location.location_name or "").strip()
     detail = raw_name if raw_name and raw_name != location_code else location_code
@@ -1795,7 +1865,7 @@ def _receipt_auto_location_name(location: WarehouseLocation) -> str:
         value
         for value in (
             floor_name,
-            f"{area_code}区" if area_code else None,
+            area_name,
             detail or None,
         )
         if value
@@ -1890,15 +1960,19 @@ def receipt_auto_finished_location_projection(db: Session) -> dict[str, object]:
             "capacity_warning": None,
             "issue": str(error),
         }
-    area = target.plan.area if target.plan is not None else None
-    floor = area.floor if area is not None else None
+    area = target.area
+    floor = target.floor
     readable_location_name = employee_location_name(
         target.location,
         area=area,
         floor=floor,
     )
     if readable_location_name == "位置名称待完善":
-        readable_location_name = _receipt_auto_location_name(target.location)
+        readable_location_name = _receipt_auto_location_name(
+            target.location,
+            area=area,
+            floor=floor,
+        )
     return {
         "ready": True,
         "location_id": int(target.location.id),
@@ -2294,7 +2368,18 @@ def list_temporary_locations(db: Session) -> list[dict]:
                 ),
                 "area_id": candidate.area.id if candidate.area else None,
                 "area_code": location.area_code,
-                "area_name": candidate.area.area_name if candidate.area else None,
+                "area_name": employee_area_name(
+                    candidate.area,
+                    area_code=location.area_code,
+                    floor_number=(
+                        candidate.floor.floor_number
+                        if candidate.floor is not None
+                        else location.warehouse_floor
+                    ),
+                ),
+                "area_master_name": (
+                    candidate.area.area_name if candidate.area else None
+                ),
                 "location_code": location.location_code,
                 "location_name": readable_location_name,
                 "current_address_name": readable_location_name,
@@ -4929,6 +5014,8 @@ def _ordinary_pending_task_fast_payload(
             product.production_label_units_per_label
         ),
         "production_ready_quantity": 0,
+        "delivery_ready_quantity": 0,
+        "delivery_actionable": False,
         "customer_board_preparation_sources": [],
     }
 
@@ -5025,6 +5112,10 @@ def list_production_tasks(
                 product=product,
             )
         ],
+    )
+    receipt_managed_delivery_credit = remaining_finished_order_credit_by_item_ids(
+        db,
+        list(receipt_purpose_summaries),
     )
     result: list[dict] = []
     for task, item, order, customer, product in rows:
@@ -5169,6 +5260,8 @@ def list_production_tasks(
                 task.production_label_product_version_snapshot
             ),
             "production_ready_quantity": production_ready_quantity(db, item),
+            "delivery_ready_quantity": 0,
+            "delivery_actionable": False,
             "customer_board_preparation_sources": (
                 _active_customer_board_preparation_sources(
                     db,
@@ -5221,6 +5314,23 @@ def list_production_tasks(
                 0,
             )
             row["can_supplement"] = False
+            order_remaining = max(
+                int(row["order_quantity"] or 0)
+                - int(row["delivered_quantity"] or 0),
+                0,
+            )
+            delivery_ready = min(
+                max(
+                    int(
+                        receipt_managed_delivery_credit.get(order_item_id, 0)
+                        or 0
+                    ),
+                    0,
+                ),
+                order_remaining,
+            )
+            row["delivery_ready_quantity"] = delivery_ready
+            row["delivery_actionable"] = delivery_ready > 0
             row["production_ready_quantity"] = 0
             row["completion_actionable"] = False
             (

@@ -23,11 +23,13 @@ from app.models.warehouse_inventory import (
 from app.services.warehouse_area_activation import (
     AREA_LOCATION_SOURCE_VERSION,
     floor3_v11_map_binding_is_proven,
+    legacy_v11_area_policy_projection,
 )
 from app.services.warehouse_pallet_standard import (
     STANDARD_PALLET_DEPTH_MM,
     STANDARD_PALLET_WIDTH_MM,
 )
+from app.services.warehouse_location_address import employee_area_name
 
 
 LOGICAL_ANCHOR_FOOTPRINT_MM = 400
@@ -1618,6 +1620,12 @@ def overlay_formal_area_bindings(
                 feature["formal_binding_status"] = policy.status
                 feature['formal_area_name'] = policy.area.area_name
             feature['formal_construction_status'] = policy.area.construction_status
+            feature["area_master_name"] = policy.area.area_name
+            feature["employee_area_name"] = employee_area_name(
+                feature,
+                area_code=policy.area.area_code,
+                floor_number=floor.floor_number,
+            )
             feature['planned_location_count'] = policy.area.planned_location_count
             feature['planned_pallet_capacity'] = policy.area.planned_pallet_capacity
             feature['capacity_review_status'] = policy.area.capacity_review_status
@@ -1644,6 +1652,11 @@ def overlay_formal_area_bindings(
                 feature_area_code_count=feature_area_code_counts.get(legacy_code, 0),
             )
             if direct_binding_is_proven and legacy_area is not None:
+                legacy_policy = legacy_v11_area_policy_projection(
+                    db,
+                    floor=floor,
+                    area=legacy_area,
+                )
                 feature["formal_area_id"] = legacy_area.id
                 feature["formal_floor_id"] = legacy_area.floor_id
                 feature["formal_binding_source"] = "formal_area_code"
@@ -1652,7 +1665,22 @@ def overlay_formal_area_bindings(
                     if legacy_area.construction_status == "enabled"
                     else "inactive"
                 )
-                feature["formal_area_name"] = legacy_area.area_name
+                if include_draft:
+                    feature.setdefault("formal_area_name", legacy_area.area_name)
+                else:
+                    feature["formal_area_name"] = legacy_area.area_name
+                feature["area_master_name"] = legacy_area.area_name
+                feature["employee_area_name"] = employee_area_name(
+                    feature,
+                    area_code=legacy_area.area_code,
+                    floor_number=floor.floor_number,
+                )
+                if legacy_policy is not None:
+                    legacy_inventory_types, legacy_storage_layout = legacy_policy
+                    feature.setdefault(
+                        "allowed_inventory_types", legacy_inventory_types
+                    )
+                    feature.setdefault("storage_layout", legacy_storage_layout)
                 feature["formal_construction_status"] = legacy_area.construction_status
                 feature["planned_location_count"] = legacy_area.planned_location_count
                 feature["planned_pallet_capacity"] = legacy_area.planned_pallet_capacity

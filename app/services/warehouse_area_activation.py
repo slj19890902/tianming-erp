@@ -100,10 +100,130 @@ def floor3_v11_map_binding_is_proven(
     )
 
 
+def legacy_v11_name_only_change_is_safe(
+    db: Session,
+    *,
+    floor: WarehouseFloor,
+    area: WarehouseArea | None,
+    feature: dict,
+    feature_area_code_count: int,
+    requested_inventory_types: list[str],
+    requested_storage_layout: str,
+    current_feature: dict | None = None,
+) -> bool:
+    """Prove a legacy V11 edit changes only its employee-facing area name.
+
+    These 22 measured 3F areas intentionally remain outside the storage-policy
+    lifecycle.  Their physical V11 rows are the current usage/layout fact, so a
+    rename may bypass policy creation only when the submitted usage and layout
+    exactly match both those rows and any explicit values already on the map.
+    """
+
+    if not floor3_v11_map_binding_is_proven(
+        db,
+        floor=floor,
+        feature=feature,
+        area=area,
+        feature_area_code_count=feature_area_code_count,
+    ):
+        return False
+    assert area is not None
+    current_policy = legacy_v11_area_policy_projection(
+        db,
+        floor=floor,
+        area=area,
+    )
+    if current_policy is None:
+        return False
+    current_inventory_types, current_storage_layout = current_policy
+    if (
+        set(current_inventory_types) != set(requested_inventory_types)
+        or current_storage_layout != requested_storage_layout
+    ):
+        return False
+    if current_feature is not None:
+        explicit_types = list(current_feature.get("allowed_inventory_types") or [])
+        if explicit_types and set(explicit_types) != set(requested_inventory_types):
+            return False
+        explicit_layout = str(current_feature.get("storage_layout") or "").strip()
+        if explicit_layout and explicit_layout != requested_storage_layout:
+            return False
+    return True
+
+
+def legacy_v11_area_policy_projection(
+    db: Session,
+    *,
+    floor: WarehouseFloor,
+    area: WarehouseArea,
+) -> tuple[list[str], str] | None:
+    """Derive the read-only policy fields of one legacy measured V11 area.
+
+    The V11 location ledger remains authoritative for these policy-less areas.
+    This projection lets the planning form round-trip the existing facts (for
+    example D1's ground plus rack rows become ``mixed``) without materializing
+    a second SQL storage policy.
+    """
+
+    rows = formal_area_location_rows(db, floor=floor, area=area)
+    if not rows or any(row.source_version != "V11" for row in rows):
+        return None
+    warehouse_types = {
+        str(row.warehouse_type or "").strip() for row in rows
+    }
+    inventory_types = (
+        ["finished"]
+        if warehouse_types == {"finished"}
+        else ["semi_finished"]
+        if warehouse_types == {"semi_finished"}
+        else None
+    )
+    if inventory_types is None:
+        return None
+    storage_layouts: set[str] = set()
+    for row in rows:
+        storage_type = str(row.storage_type or "").strip()
+        if storage_type == "rack":
+            storage_layouts.add("rack")
+        elif storage_type in {"ground", "temporary_aisle"}:
+            storage_layouts.add("pallet_ground")
+        else:
+            return None
+    storage_layout = (
+        next(iter(storage_layouts))
+        if len(storage_layouts) == 1
+        else "mixed"
+        if storage_layouts == {"rack", "pallet_ground"}
+        else None
+    )
+    if storage_layout is None:
+        return None
+    return inventory_types, storage_layout
+
+
 class WarehouseAreaActivationError(ValueError):
     def __init__(self, message: str, *, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class PublishedAreaPolicyResult(list[WarehouseAreaStoragePolicy]):
+    """Published policies plus non-policy legacy area-name mutations."""
+
+    def __init__(
+        self,
+        policies: list[WarehouseAreaStoragePolicy],
+        *,
+        legacy_name_updated_area_codes: list[str] | None = None,
+    ) -> None:
+        super().__init__(policies)
+        self.legacy_name_updated_area_codes = tuple(
+            legacy_name_updated_area_codes or []
+        )
+
+    @property
+    def legacy_name_update_count(self) -> int:
+        return len(self.legacy_name_updated_area_codes)
 
 
 @dataclass(frozen=True)
@@ -972,10 +1092,10 @@ def publish_floor_area_policies(
     operator_id: int,
     published_features: list[dict],
     defer_location_readiness_for_feature_id: str | None = None,
-) -> list[WarehouseAreaStoragePolicy]:
+) -> PublishedAreaPolicyResult:
     floor = warehouse_floor_for_code(db, floor_code)
     if floor is None:
-        return []
+        return PublishedAreaPolicyResult([])
     if not str(published_revision or "").strip() or len(str(published_revision)) > 64:
         raise WarehouseAreaActivationError("正式地图修订号无效", status_code=409)
     areas = list(
@@ -1002,6 +1122,9 @@ def publish_floor_area_policies(
     proposals: list[
         tuple[dict, str, str, list[str], str, WarehouseArea | None,
               WarehouseAreaStoragePolicy | None]
+    ] = []
+    legacy_name_updates: list[
+        tuple[dict, str, str, list[str], str, WarehouseArea]
     ] = []
     proposal_area_codes: set[str] = set()
     proposal_feature_ids: set[str] = set()
@@ -1151,6 +1274,44 @@ def publish_floor_area_policies(
             raise WarehouseAreaActivationError(
                 f"{area_code} 正式区域已绑定其他地图区域", status_code=409
             )
+        if feature.get("legacy_v11_name_only") is True:
+            requested_name = str(feature.get("formal_area_name") or "").strip()
+            if (
+                not requested_name
+                or area is None
+                or policy is not None
+                or feature_policy is not None
+                or not has_formal_area_id
+                or not projected_legacy_binding
+                or not legacy_v11_name_only_change_is_safe(
+                    db,
+                    floor=floor,
+                    area=area,
+                    feature=feature,
+                    feature_area_code_count=feature_area_code_counts.get(
+                        area_code, 0
+                    ),
+                    requested_inventory_types=inventory_types,
+                    requested_storage_layout=storage_layout,
+                    current_feature=feature,
+                )
+            ):
+                raise WarehouseAreaActivationError(
+                    f"{area_code} 区域名称草稿已失去旧版实测区域的唯一身份，"
+                    "请刷新后重新保存",
+                    status_code=409,
+                )
+            legacy_name_updates.append(
+                (
+                    feature,
+                    feature_id,
+                    area_code,
+                    inventory_types,
+                    storage_layout,
+                    area,
+                )
+            )
+            continue
         if area is None:
             orphaned = db.scalar(
                 select(WarehouseLocation.id).where(
@@ -1227,6 +1388,55 @@ def publish_floor_area_policies(
         proposals.append(
             (feature, feature_id, area_code, inventory_types, storage_layout, area, policy)
         )
+
+    legacy_name_updated_area_codes: list[str] = []
+    for (
+        feature,
+        _feature_id,
+        area_code,
+        inventory_types,
+        storage_layout,
+        area,
+    ) in legacy_name_updates:
+        if not legacy_v11_name_only_change_is_safe(
+            db,
+            floor=floor,
+            area=area,
+            feature=feature,
+            feature_area_code_count=feature_area_code_counts.get(area_code, 0),
+            requested_inventory_types=inventory_types,
+            requested_storage_layout=storage_layout,
+            current_feature=feature,
+        ):
+            raise WarehouseAreaActivationError(
+                f"{area_code} 区域名称发布前正式身份已变化，请刷新后重试",
+                status_code=409,
+            )
+        old_name = area.area_name
+        new_name = str(feature.get("formal_area_name") or "").strip()
+        if old_name == new_name:
+            continue
+        claim = db.execute(
+            update(WarehouseArea)
+            .where(
+                WarehouseArea.id == area.id,
+                WarehouseArea.floor_id == floor.id,
+                func.upper(WarehouseArea.area_code) == area_code,
+                WarehouseArea.area_name == old_name,
+                ~select(WarehouseAreaStoragePolicy.id)
+                .where(WarehouseAreaStoragePolicy.area_id == area.id)
+                .exists(),
+            )
+            .values(area_name=new_name)
+            .execution_options(synchronize_session=False)
+        )
+        if claim.rowcount != 1:
+            raise WarehouseAreaActivationError(
+                f"{area_code} 区域名称已被其他操作更新，请刷新后重试",
+                status_code=409,
+            )
+        db.expire(area, ["area_name"])
+        legacy_name_updated_area_codes.append(area_code)
 
     published: list[WarehouseAreaStoragePolicy] = []
     for feature, feature_id, area_code, inventory_types, storage_layout, area, policy in proposals:
@@ -1313,4 +1523,7 @@ def publish_floor_area_policies(
         area.construction_status = "enabled"
         published.append(policy)
     db.flush()
-    return published
+    return PublishedAreaPolicyResult(
+        published,
+        legacy_name_updated_area_codes=legacy_name_updated_area_codes,
+    )

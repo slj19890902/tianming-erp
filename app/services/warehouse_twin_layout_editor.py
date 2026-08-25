@@ -942,6 +942,7 @@ def update_warehouse_twin_zone_policy(
     area_name: str | None = None,
     formal_area_id: int | None = None,
     formal_floor_id: int | None = None,
+    legacy_v11_name_only: bool = False,
     path: Path | None = None,
 ) -> LayoutMutation:
     normalized_types = list(dict.fromkeys(str(value).strip() for value in allowed_inventory_types))
@@ -991,6 +992,10 @@ def update_warehouse_twin_zone_policy(
         else:
             feature.pop("formal_area_id", None)
             feature.pop("formal_floor_id", None)
+        if legacy_v11_name_only:
+            feature["legacy_v11_name_only"] = True
+        else:
+            feature.pop("legacy_v11_name_only", None)
         feature["version"] = int(feature.get("version") or 1) + 1
         return dict(feature)
 
@@ -1011,7 +1016,17 @@ def update_warehouse_twin_zone_policy(
             mutation.value.get('formal_area_id') == formal_area_id
             and mutation.value.get('formal_floor_id') == formal_floor_id
         )
-        if not (same_types and same_layout and same_area and same_name and same_identity):
+        same_legacy_name_only = bool(
+            mutation.value.get('legacy_v11_name_only')
+        ) is bool(legacy_v11_name_only)
+        if not (
+            same_types
+            and same_layout
+            and same_area
+            and same_name
+            and same_identity
+            and same_legacy_name_only
+        ):
             raise WarehouseTwinLayoutEditConflictError('该操作键已用于不同的区域策略')
     return mutation
 

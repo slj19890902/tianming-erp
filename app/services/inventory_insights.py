@@ -22,6 +22,9 @@ from app.services.inventory_cost_snapshot import (
     estimate_from_snapshot,
     estimate_inventory_lot_cost,
 )
+from app.services.location_candidates import (
+    load_warehouse_location_projection_contexts,
+)
 from app.services.warehouse_location_address import employee_location_name
 INACTIVE_ORDER_STATUSES = {"completed", "archived", "closed", "dead", "cancelled"}
 NON_DEMAND_ORDER_STATUSES = {"dead", "cancelled"}
@@ -187,6 +190,10 @@ def build_inventory_insights(
             )
         )
     lots = list(db.scalars(lot_query.order_by(InventoryLot.id)).all())
+    location_contexts = load_warehouse_location_projection_contexts(
+        db,
+        (lot.location for lot in lots),
+    )
     assigned_product_ids = _assigned_product_ids_by_lot(
         db, lots, customer_ids
     )
@@ -447,7 +454,19 @@ def build_inventory_insights(
                     "inventory_type": lot.inventory_type,
                     "status": lot.status,
                     "location_code": lot.location.location_code if lot.location else None,
-                    "location_name": employee_location_name(lot.location),
+                    "location_name": employee_location_name(
+                        lot.location,
+                        area=(
+                            location_contexts.get(int(lot.location.id), {}).get("area")
+                            if lot.location is not None
+                            else None
+                        ),
+                        floor=(
+                            location_contexts.get(int(lot.location.id), {}).get("floor")
+                            if lot.location is not None
+                            else None
+                        ),
+                    ),
                     "quantity_available": lot.quantity_available,
                     "unit": lot.unit,
                     "age_days": days,

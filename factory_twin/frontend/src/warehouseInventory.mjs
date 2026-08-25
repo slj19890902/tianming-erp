@@ -220,9 +220,31 @@ export function employeeLocationName(location) {
   return name || "位置名称待完善";
 }
 
-export function employeeAreaName(area) {
-  const name = String(area?.area_name || area?.name || "").trim();
-  return name || "区域名称待完善";
+const LEGACY_V11_RIGHT_AREA_CODES = new Set([
+  "A1", "A2", "AB1", "AB2", "B1", "B2", "C1", "C2", "CD1", "D1", "D2",
+  "DE1", "E1", "E2", "E3", "E4", "F1", "F12", "F2", "F3", "F34", "F4"
+]);
+
+function isFloorThree(value) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  return normalized === "3" || normalized === "3F" || normalized === "三楼";
+}
+
+function isGenericLegacyAreaName(name, areaCode) {
+  const compact = String(name || "").replace(/\s+/g, "").toUpperCase();
+  return compact === `${areaCode}区` || compact === `三楼${areaCode}区`;
+}
+
+export function employeeAreaName(area, context = {}) {
+  const projected = String(area?.employee_area_name || "").trim();
+  if (projected) return projected;
+  const code = String(area?.area_code || area?.erp_area_code || "").trim().toUpperCase();
+  const floor = context.floorCode ?? context.floorNumber ?? area?.floor_code ?? area?.floor_number ?? area?.warehouse_floor;
+  const formalName = String(area?.formal_area_name || area?.area_name || "").trim();
+  const usesRightDefault = isFloorThree(floor) && LEGACY_V11_RIGHT_AREA_CODES.has(code);
+  if (formalName && !(usesRightDefault && isGenericLegacyAreaName(formalName, code))) return formalName;
+  if (usesRightDefault) return `右区${code}`;
+  return formalName || String(area?.name || "").trim() || code || "区域名称待完善";
 }
 
 export function normalizeStandardPalletContract(value) {

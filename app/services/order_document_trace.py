@@ -41,6 +41,9 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseLocation,
 )
+from app.services.location_candidates import (
+    load_warehouse_location_projection_contexts,
+)
 from app.services.warehouse_location_address import employee_location_name
 from app.services.order_business_status import BUSINESS_STATUS_LABELS
 from app.services.product_specification import resolved_product_specification
@@ -222,7 +225,18 @@ def build_order_item_document_trace(
     product = db.get(Product, item.product_id) if item.product_id is not None else None
     events: list[dict[str, Any]] = []
     lot_ids: set[int] = set()
+    location_contexts: dict[int, dict[str, Any]] = {}
     sequence = 0
+
+    def projected_location_name(location: WarehouseLocation | None) -> str | None:
+        if location is None:
+            return None
+        context = location_contexts.get(int(location.id), {})
+        return employee_location_name(
+            location,
+            area=context.get("area"),
+            floor=context.get("floor"),
+        )
 
     def add_event(
         *,
@@ -524,6 +538,9 @@ def build_order_item_document_trace(
         else []
     )
     locations = {row.id: row for row in location_rows}
+    location_contexts.update(
+        load_warehouse_location_projection_contexts(db, location_rows)
+    )
     for completion in completion_rows:
         if completion.inventory_lot_id is not None:
             lot_ids.add(completion.inventory_lot_id)
@@ -544,7 +561,7 @@ def build_order_item_document_trace(
                 else None
             ),
             location_name=(
-                employee_location_name(location)
+                projected_location_name(location)
                 if location is not None and "warehouse.view" in permissions
                 else None
             ),
@@ -587,7 +604,7 @@ def build_order_item_document_trace(
         if row.warehouse_location_id is not None
     }
     if transfer_location_ids:
-        for location in db.scalars(
+        transfer_locations = db.scalars(
             select(WarehouseLocation)
             .options(
                 selectinload(WarehouseLocation.address_area).selectinload(
@@ -595,8 +612,12 @@ def build_order_item_document_trace(
                 )
             )
             .where(WarehouseLocation.id.in_(transfer_location_ids))
-        ).all():
+        ).all()
+        for location in transfer_locations:
             locations[location.id] = location
+        location_contexts.update(
+            load_warehouse_location_projection_contexts(db, transfer_locations)
+        )
     for transfer in transfer_rows:
         if transfer.inventory_lot_id is not None:
             lot_ids.add(transfer.inventory_lot_id)
@@ -610,7 +631,7 @@ def build_order_item_document_trace(
             status=transfer.status,
             occurred_at=transfer.transferred_at,
             location_code=location.location_code if location else None,
-            location_name=employee_location_name(location) if location else None,
+            location_name=projected_location_name(location),
             is_effective=effective,
         )
         if transfer.reversed_at is not None:
@@ -849,6 +870,12 @@ def build_order_item_document_trace(
                 .where(WarehouseLocation.id.in_(lot_location_ids))
             ).all()
         }
+        location_contexts.update(
+            load_warehouse_location_projection_contexts(
+                db,
+                lot_locations.values(),
+            )
+        )
         pallet_rows = db.execute(
             select(InventoryPalletItem, InventoryPallet)
             .join(InventoryPallet, InventoryPallet.id == InventoryPalletItem.pallet_id)
@@ -881,7 +908,7 @@ def build_order_item_document_trace(
                     "quantity_consumed": lot.quantity_consumed,
                     "unit": lot.unit,
                     "location_code": location.location_code if location else None,
-                    "location_name": employee_location_name(location) if location else None,
+                    "location_name": projected_location_name(location),
                     "pallet_code": pallet.pallet_code if pallet else None,
                     "last_movement_at": _api_datetime(lot.last_movement_at),
                 }

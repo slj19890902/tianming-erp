@@ -195,8 +195,8 @@ def test_asset_detail_timeline_uses_persisted_facts_and_deduplicates_mirrors(
         )
         assert same_lot_move["label"] == "库存位置移位"
         assert same_lot_move["direction"] == "move"
-        assert same_lot_move["from_location"] == source.location_code
-        assert same_lot_move["to_location"] == target.location_code
+        assert same_lot_move["from_location"] == source.location_name
+        assert same_lot_move["to_location"] == target.location_name
         assert not any(
             item.get("movement_number") == "TL-MIRROR" for item in lot_timeline
         )

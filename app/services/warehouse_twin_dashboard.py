@@ -32,6 +32,7 @@ from app.models.order import Order, OrderItem
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.services.warehouse_pallet_standard import standard_pallet_contract
 from app.services.warehouse_location_address import (
+    employee_area_name,
     employee_location_name,
     location_address_payload,
 )
@@ -664,7 +665,12 @@ def _location_payload(
         "floor_number": row.warehouse_floor,
         "floor_name": floor.floor_name if floor is not None else None,
         "area_code": row.area_code,
-        "area_name": area.area_name if area is not None else None,
+        "area_name": employee_area_name(
+            area,
+            area_code=row.area_code,
+            floor_number=(floor.floor_number if floor is not None else row.warehouse_floor),
+        ),
+        "area_master_name": area.area_name if area is not None else None,
         "map_feature_id": projection["map_feature_id"],
         "published_map_revision": projection["published_map_revision"],
         "map_status": projection["map_status"],

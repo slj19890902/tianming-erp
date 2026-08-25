@@ -21,13 +21,14 @@ from app.models.warehouse_inventory import (
 )
 from app.services.location_candidates import (
     claim_active_placed_location,
+    load_warehouse_location_projection_contexts,
     list_operational_locations,
     operational_location_issue,
 )
 from app.services.product_specification import dimension_specification
 from app.services.warehouse_location_address import (
+    employee_area_name,
     employee_location_name,
-    format_location_address,
     location_address_payload,
 )
 
@@ -130,28 +131,21 @@ def _get_countable_location(db: Session, location_id: int) -> WarehouseLocation:
 
 
 def _stocktake_address_payload(location: WarehouseLocation, candidate) -> dict:
-    area = (
-        candidate.area
-        if candidate.area is not None and location.address_area_id == candidate.area.id
-        else None
-    )
-    current_code, current_name = format_location_address(
+    payload = location_address_payload(
         location,
-        area=area,
-        floor=candidate.floor if area is not None else None,
-    )
-    employee_name = (
-        current_name
-        if str(current_name or "").strip().casefold()
-        != str(current_code or "").strip().casefold()
-        else "位置名称待完善"
+        area=candidate.area,
+        floor=candidate.floor,
     )
     return {
-        "address_zone_code": area.address_zone_code if area is not None else None,
-        "address_subzone_no": area.address_subzone_no if area is not None else None,
-        "current_address_code": current_code,
-        "current_address_name": current_name,
-        "employee_location_name": employee_name,
+        "address_zone_code": (
+            candidate.area.address_zone_code if candidate.area is not None else None
+        ),
+        "address_subzone_no": (
+            candidate.area.address_subzone_no if candidate.area is not None else None
+        ),
+        "current_address_code": payload["current_address_code"],
+        "current_address_name": payload["current_address_name"],
+        "employee_location_name": payload["employee_location_name"],
     }
 
 
@@ -207,40 +201,53 @@ def list_locations(db: Session) -> list[dict[str, object]]:
             ).where(Floor3LocationLayout.location_id.in_(candidate_by_id))
         ).all()
     }
-    return [
-        {
+    result: list[dict[str, object]] = []
+    for location, active_lot_count, frozen_lot_count, current_on_hand in rows:
+        candidate = candidate_by_id[location.id]
+        address_payload = _stocktake_address_payload(location, candidate)
+        result.append({
             "id": location.id,
             "location_code": location.location_code,
-            "location_name": location.location_name,
+            "location_name": address_payload["employee_location_name"],
+            "location_master_name": location.location_name,
             "warehouse_type": location.warehouse_type,
             "warehouse_floor": location.warehouse_floor,
             "floor_id": (
-                candidate_by_id[location.id].floor.id
-                if candidate_by_id[location.id].floor
+                candidate.floor.id
+                if candidate.floor
                 else None
             ),
             "floor_code": (
-                candidate_by_id[location.id].floor.floor_code
-                if candidate_by_id[location.id].floor
+                candidate.floor.floor_code
+                if candidate.floor
                 else None
             ),
             "floor_name": (
-                candidate_by_id[location.id].floor.floor_name
-                if candidate_by_id[location.id].floor
+                candidate.floor.floor_name
+                if candidate.floor
                 else None
             ),
             "area_id": (
-                candidate_by_id[location.id].area.id
-                if candidate_by_id[location.id].area
+                candidate.area.id
+                if candidate.area
                 else None
             ),
             "area_code": location.area_code,
-            "area_name": (
-                candidate_by_id[location.id].area.area_name
-                if candidate_by_id[location.id].area
+            "area_name": employee_area_name(
+                candidate.area,
+                area_code=location.area_code,
+                floor_number=(
+                    candidate.floor.floor_number
+                    if candidate.floor is not None
+                    else location.warehouse_floor
+                ),
+            ),
+            "area_master_name": (
+                candidate.area.area_name
+                if candidate.area is not None
                 else None
             ),
-            **_stocktake_address_payload(location, candidate_by_id[location.id]),
+            **address_payload,
             "placement_status": location.placement_status or "placed",
             "layout_version": layout_versions.get(int(location.id)),
             "is_temporary": location.is_temporary,
@@ -248,9 +255,8 @@ def list_locations(db: Session) -> list[dict[str, object]]:
             "frozen_lot_count": int(frozen_lot_count),
             "lot_count": int(active_lot_count) + int(frozen_lot_count),
             "current_on_hand": int(current_on_hand),
-        }
-        for location, active_lot_count, frozen_lot_count, current_on_hand in rows
-    ]
+        })
+    return result
 
 
 def _lot_identity(lot: InventoryLot) -> dict[str, object]:
@@ -311,7 +317,14 @@ def lot_payload(lot: InventoryLot) -> dict[str, object]:
 
 def get_location_detail(db: Session, location_id: int) -> dict[str, object]:
     location = _get_countable_location(db, location_id)
-    current_address = location_address_payload(location)
+    projection_context = load_warehouse_location_projection_contexts(
+        db, [location]
+    ).get(int(location.id), {})
+    current_address = location_address_payload(
+        location,
+        area=projection_context.get("area"),
+        floor=projection_context.get("floor"),
+    )
     layout_version = db.scalar(
         select(Floor3LocationLayout.version).where(
             Floor3LocationLayout.location_id == location_id
@@ -331,7 +344,8 @@ def get_location_detail(db: Session, location_id: int) -> dict[str, object]:
     return {
         "id": location.id,
         "location_code": location.location_code,
-        "location_name": employee_location_name(location),
+        "location_name": current_address["employee_location_name"],
+        "location_master_name": location.location_name,
         **current_address,
         "warehouse_type": location.warehouse_type,
         "area_code": location.area_code,
@@ -345,7 +359,12 @@ def get_location_detail(db: Session, location_id: int) -> dict[str, object]:
         "current_on_hand": sum(int(row["on_hand"]) for row in lot_rows),
         "lots": lot_rows,
         "pending_stocktake": (
-            order_payload(pending_order) if pending_order is not None else None
+            order_payload(
+                pending_order,
+                projection_context=projection_context,
+            )
+            if pending_order is not None
+            else None
         ),
     }
 
@@ -973,8 +992,17 @@ def reject_stocktake(
     return order
 
 
-def order_payload(order: StocktakeOrder) -> dict[str, object]:
-    current_address = location_address_payload(order.location)
+def order_payload(
+    order: StocktakeOrder,
+    *,
+    projection_context: dict | None = None,
+) -> dict[str, object]:
+    context = projection_context or {}
+    current_address = location_address_payload(
+        order.location,
+        area=context.get("area"),
+        floor=context.get("floor"),
+    )
     items = [
         {
             "id": item.id,
@@ -1004,8 +1032,9 @@ def order_payload(order: StocktakeOrder) -> dict[str, object]:
         "location_id": order.location_id,
         "location_layout_version": order.location_layout_version,
         "location_code": order.location.location_code,
-        "location_name": employee_location_name(order.location),
-        "employee_location_name": employee_location_name(order.location),
+        "location_name": current_address["employee_location_name"],
+        "location_master_name": order.location.location_name,
+        "employee_location_name": current_address["employee_location_name"],
         "current_address_code": current_address["current_address_code"],
         "current_address_name": current_address["current_address_name"],
         "status": order.status,

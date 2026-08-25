@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildMeasuredDispatchPallets,
   buildMappedLocationPallets,
+  employeeAreaName,
   employeeLocationName,
   expandAreaInventory,
   findPalletColumnConflicts,
@@ -24,6 +25,7 @@ import {
   warehouseSearchProductKey,
   singleLocationPallet
 } from "../src/warehouseInventory.mjs";
+
 import {
   buildMoveBatchPayload,
   intersectMappedMoveTargets,
@@ -48,6 +50,51 @@ import {
   upsertStocktakeDraft,
   validateStocktakeDraft
 } from "../src/warehouseStocktakeDraft.mjs";
+
+const LEGACY_RIGHT_AREA_CODES = [
+  "A1", "A2", "AB1", "AB2", "B1", "B2", "C1", "C2", "CD1", "D1", "D2",
+  "DE1", "E1", "E2", "E3", "E4", "F1", "F12", "F2", "F3", "F34", "F4"
+];
+
+test("employee area labels use one 3F right-side default and preserve formal overrides", () => {
+  for (const areaCode of LEGACY_RIGHT_AREA_CODES) {
+    assert.equal(
+      employeeAreaName(
+        { area_code: areaCode, formal_area_name: `${areaCode} 区` },
+        { floorCode: "3F" }
+      ),
+      `右区${areaCode}`
+    );
+  }
+  assert.equal(
+    employeeAreaName(
+      { area_code: "A1", formal_area_name: "三楼北侧成品区" },
+      { floorCode: "3F" }
+    ),
+    "三楼北侧成品区"
+  );
+  assert.equal(
+    employeeAreaName(
+      { area_code: "RAW-001", formal_area_name: "左区L3 原料区（上段）" },
+      { floorCode: "3F" }
+    ),
+    "左区L3 原料区（上段）"
+  );
+  assert.equal(
+    employeeAreaName(
+      { area_code: "A1", formal_area_name: "A1 区" },
+      { floorCode: "1F" }
+    ),
+    "A1 区"
+  );
+  assert.equal(
+    employeeAreaName(
+      { employee_area_name: "右区A1", area_code: "A1", area_name: "A1 区" },
+      { floorCode: "3F" }
+    ),
+    "右区A1"
+  );
+});
 
 const STANDARD_PALLET = {
   contract_version: "standard-pallet-v1",

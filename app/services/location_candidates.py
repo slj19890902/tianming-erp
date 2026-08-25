@@ -22,6 +22,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.warehouse_location_address import (
+    employee_area_name,
     employee_location_name,
     format_location_address,
     location_address_payload,
@@ -839,7 +840,12 @@ def operational_location_payload(row: OperationalLocationRow) -> dict:
         "floor_name": floor.floor_name if floor else None,
         "area_id": area.id if area else None,
         "area_code": location.area_code,
-        "area_name": area.area_name if area else None,
+        "area_name": employee_area_name(
+            area,
+            area_code=location.area_code,
+            floor_number=(floor.floor_number if floor is not None else location.warehouse_floor),
+        ),
+        "area_master_name": area.area_name if area else None,
         "storage_type": location.storage_type,
         "is_temporary": bool(location.is_temporary),
         "placement_status": location.placement_status or "unplaced",

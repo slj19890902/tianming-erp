@@ -33,6 +33,11 @@ from app.models.warehouse_inventory import (
 )
 from app.services import warehouse_twin_layout_editor as editor
 from app.services.warehouse_area_activation import WarehouseAreaActivationError
+from app.services.warehouse_location_address import location_address_payload
+from app.services.location_candidates import warehouse_location_projection
+from app.services.warehouse_twin_dashboard import (
+    _location_payload as warehouse_twin_location_payload,
+)
 from app.services.warehouse_twin_production import WarehouseTwinProductionError
 from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditConflictError,
@@ -2143,6 +2148,335 @@ def test_published_area_policy_draft_and_discard_preserve_formal_employee_state(
         engine.dispose()
 
 
+def test_legacy_v11_area_name_draft_survives_overlay_and_publish_keeps_identity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding="utf-8"))
+    feature = document["floors"]["3F"]["features"][0]
+    feature["allowed_inventory_types"] = ["finished"]
+    feature["storage_layout"] = "pallet_ground"
+    document["floors"]["3F"]["revision"] = _floor_revision(
+        document["floors"]["3F"]
+    )
+    published.write_text(
+        json.dumps(document, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+
+    def load_published_floor(floor_code: str) -> dict:
+        source = runtime if runtime.exists() else published
+        return json.loads(source.read_text(encoding="utf-8"))["floors"][
+            floor_code.upper()
+        ]
+
+    monkeypatch.setattr(
+        warehouse_api,
+        "list_production_projection_mappings",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        "load_warehouse_twin_floor",
+        load_published_floor,
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        "load_warehouse_twin_layout_draft",
+        lambda _floor_code: editor.load_warehouse_twin_layout_draft("3F"),
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-47b-admin"))
+            floor = db.scalar(
+                select(WarehouseFloor).where(WarehouseFloor.floor_code == "3F")
+            )
+            assert admin is not None and floor is not None
+            area = WarehouseArea(
+                floor_id=floor.id,
+                area_code="F1",
+                area_name="F1 区",
+                planned_location_count=1,
+                planned_pallet_capacity=1,
+                construction_status="enabled",
+                capacity_review_status="pending",
+                capacity_eligible=False,
+                confirmed_pallet_capacity=None,
+            )
+            db.add(area)
+            db.flush()
+            location = WarehouseLocation(
+                location_code="F1-L01",
+                location_name="F1-L01",
+                warehouse_type="finished",
+                is_active=True,
+                warehouse_floor=3,
+                area_code="F1",
+                storage_type="ground",
+                sort_order=1,
+                source_version="V11",
+                placement_status="placed",
+            )
+            location.floor3_layout = Floor3LocationLayout(
+                left_pct=5,
+                top_pct=5,
+                width_pct=10,
+                height_pct=10,
+                version=1,
+                source_type="manual",
+                created_by=admin.id,
+                updated_by=admin.id,
+            )
+            db.add(location)
+            db.flush()
+            lot = InventoryLot(
+                lot_number="P1-102-NAME-LOT-001",
+                inventory_type="finished",
+                warehouse_location_id=location.id,
+                quantity_available=12,
+                quantity_reserved=3,
+                quantity_consumed=0,
+                quantity_damaged=1,
+                quantity_scrapped=0,
+                unit="boxes",
+                status="active",
+                source_type="stocktake",
+                stock_date=date(2026, 8, 25),
+                stock_date_accuracy="exact",
+                last_movement_at=datetime(2026, 8, 25, 9, 0),
+                version=1,
+            )
+            db.add(lot)
+            db.commit()
+            area_id = area.id
+            location_id = location.id
+            lot_id = lot.id
+            published_revision = _revision(published)
+
+            formal_before = warehouse_api.get_warehouse_twin_floor_layout(
+                "3F", db, admin
+            )
+            formal_before_feature = next(
+                item for item in formal_before["features"] if item["id"] == "zone-f1"
+            )
+            assert formal_before_feature["formal_area_id"] == area_id
+            assert formal_before_feature["employee_area_name"] == "右区F1"
+
+            changed = warehouse_api.update_twin_zone_storage_policy(
+                "3F",
+                "zone-f1",
+                warehouse_api.TwinZoneStoragePolicyPayload(
+                    expected_revision=published_revision,
+                    expected_version=1,
+                    operation_key="p1-102-v11-name-only-draft",
+                    allowed_inventory_types=["finished"],
+                    storage_layout="pallet_ground",
+                    erp_area_code="F1",
+                    area_name="三楼右侧成品整箱区",
+                    existing_area_id=area_id,
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert changed["applied"] is True
+            assert changed["item"]["formal_area_name"] == "三楼右侧成品整箱区"
+            assert changed["item"]["employee_area_name"] == "三楼右侧成品整箱区"
+            assert changed["item"]["legacy_v11_name_only"] is True
+            assert db.get(WarehouseArea, area_id).area_name == "F1 区"
+
+            draft_overlay = warehouse_api.get_warehouse_twin_floor_layout_draft(
+                "3F", db, admin
+            )
+            draft_feature = next(
+                item
+                for item in draft_overlay["features"]
+                if item["id"] == "zone-f1"
+            )
+            assert draft_feature["formal_area_name"] == "三楼右侧成品整箱区"
+            assert draft_feature["employee_area_name"] == "三楼右侧成品整箱区"
+
+            validated = warehouse_api.validate_twin_layout_draft(
+                "3F",
+                warehouse_api.TwinLayoutDraftValidatePayload(
+                    expected_revision=changed["revision"]
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert validated["status"] == "validated"
+            publish_payload = warehouse_api.TwinLayoutDraftPublishPayload(
+                expected_published_revision=published_revision,
+                expected_draft_revision=changed["revision"],
+                operation_key="p1-102-v11-name-only-publish",
+            )
+            file_only_publish = editor.publish_warehouse_twin_layout_draft(
+                "3F",
+                expected_published_revision=published_revision,
+                expected_draft_revision=changed["revision"],
+                operation_key=publish_payload.operation_key,
+            )
+            assert file_only_publish.applied is True
+            assert db.get(WarehouseArea, area_id).area_name == "F1 区"
+
+            result = warehouse_api.publish_twin_layout_draft(
+                "3F",
+                publish_payload,
+                _request(),
+                db,
+                admin,
+            )
+            assert result["applied"] is False
+            assert result["legacy_area_name_update_count"] == 1
+            publish_log_count = db.scalar(
+                select(func.count(OperationLog.id)).where(
+                    OperationLog.action == "TWIN_LAYOUT_PUBLISH"
+                )
+            )
+            assert publish_log_count == 1
+
+            replay = warehouse_api.publish_twin_layout_draft(
+                "3F",
+                publish_payload,
+                _request(),
+                db,
+                admin,
+            )
+            assert replay["applied"] is False
+            assert replay["legacy_area_name_update_count"] == 0
+            assert db.scalar(
+                select(func.count(OperationLog.id)).where(
+                    OperationLog.action == "TWIN_LAYOUT_PUBLISH"
+                )
+            ) == publish_log_count
+
+            db.expire_all()
+            restored_area = db.get(WarehouseArea, area_id)
+            restored_location = db.get(WarehouseLocation, location_id)
+            restored_lot = db.get(InventoryLot, lot_id)
+            assert restored_area is not None
+            assert restored_location is not None
+            assert restored_lot is not None
+            assert restored_area.id == area_id
+            assert restored_area.area_code == "F1"
+            assert restored_area.area_name == "三楼右侧成品整箱区"
+            assert restored_location.id == location_id
+            assert restored_location.location_code == "F1-L01"
+            assert restored_location.area_code == "F1"
+            assert restored_lot.warehouse_location_id == location_id
+            assert restored_lot.quantity_available == Decimal("12")
+            assert restored_area.storage_policy is None
+            assert db.scalar(
+                select(func.count(WarehouseAreaStoragePolicy.id)).where(
+                    WarehouseAreaStoragePolicy.area_id == area_id
+                )
+            ) == 0
+
+            published_feature = next(
+                item
+                for item in load_published_floor("3F")["features"]
+                if item["id"] == "zone-f1"
+            )
+            assert published_feature["formal_area_name"] == "三楼右侧成品整箱区"
+            assert published_feature["legacy_v11_name_only"] is True
+            projection = warehouse_location_projection(
+                restored_location,
+                floor=floor,
+                area=restored_area,
+                policy=None,
+                published_floor_identity={
+                    "revision": result["published_revision"],
+                    "zone_ids_by_area": {"F1": ["zone-f1"]},
+                },
+                layout=restored_location.floor3_layout,
+            )
+            assert projection["position_status"] == "mapped"
+            assert projection["map_feature_id"] == "zone-f1"
+
+            area_payload = warehouse_api._warehouse_area_dict(db, restored_area)
+            location_payload = warehouse_api.list_location_candidates(
+                inventory_type="finished",
+                empty_only=False,
+                pallet_storage_only=False,
+                include_hierarchy=False,
+                db=db,
+                _user=admin,
+            )
+            candidate = next(
+                item
+                for item in location_payload["items"]
+                if item["id"] == location_id
+            )
+            twin_payload = warehouse_twin_location_payload(
+                restored_location,
+                lots=[],
+                pallets=[],
+                as_of=date(2026, 8, 25),
+                projection_context={
+                    "floor": floor,
+                    "area": restored_area,
+                    "policy": None,
+                },
+            )
+            address_payload = location_address_payload(
+                restored_location,
+                area=restored_area,
+                floor=floor,
+                position_status="mapped",
+            )
+            assert area_payload["employee_area_name"] == "三楼右侧成品整箱区"
+            assert candidate["area_name"] == "三楼右侧成品整箱区"
+            assert twin_payload["area_name"] == "三楼右侧成品整箱区"
+            assert address_payload["area_name"] == "三楼右侧成品整箱区"
+            assert candidate["employee_location_name"].startswith(
+                "三楼右侧成品整箱区·"
+            )
+            assert twin_payload["employee_location_name"] == candidate[
+                "employee_location_name"
+            ]
+            assert address_payload["employee_location_name"] == candidate[
+                "employee_location_name"
+            ]
+            assert "位置名称待完善" not in candidate["employee_location_name"]
+
+            runtime_before_semantic_edit = runtime.read_bytes()
+            draft_before_semantic_edit = (
+                draft.read_bytes() if draft.exists() else None
+            )
+            with pytest.raises(warehouse_api.HTTPException) as semantic_error:
+                warehouse_api.update_twin_zone_storage_policy(
+                    "3F",
+                    "zone-f1",
+                    warehouse_api.TwinZoneStoragePolicyPayload(
+                        expected_revision=result["published_revision"],
+                        expected_version=int(published_feature["version"]),
+                        operation_key="p1-102-v11-semantic-change-blocked",
+                        allowed_inventory_types=["finished"],
+                        storage_layout="rack",
+                        erp_area_code="F1",
+                        area_name="不应发布的货架区名称",
+                        existing_area_id=area_id,
+                    ),
+                    _request(),
+                    db,
+                    admin,
+                )
+            assert semantic_error.value.status_code == 409
+            assert runtime.read_bytes() == runtime_before_semantic_edit
+            assert (
+                draft.read_bytes() if draft.exists() else None
+            ) == draft_before_semantic_edit
+            db.expire_all()
+            assert db.get(WarehouseArea, area_id).storage_policy is None
+            assert db.get(WarehouseArea, area_id).area_name == "三楼右侧成品整箱区"
+    finally:
+        engine.dispose()
+
+
 def test_new_area_policy_stays_json_only_until_publish_creates_formal_ledger(
     tmp_path: Path,
     monkeypatch,
@@ -2802,6 +3136,79 @@ def test_formal_area_capacity_is_projected_live_to_the_unique_measured_map_zone(
             )
             assert refreshed_feature['confirmed_pallet_capacity'] == 8
             assert refreshed_feature['planned_pallet_capacity'] == 9
+    finally:
+        engine.dispose()
+
+
+def test_legacy_v11_overlay_derives_d1_mixed_layout_from_formal_locations(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, _draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding="utf-8"))
+    feature = document["floors"]["3F"]["features"][0]
+    feature["feature_code"] = "ZONE-3F-ERP-D1"
+    feature["name"] = "D1"
+    feature["erp_area_code"] = "D1"
+    document["floors"]["3F"]["revision"] = _floor_revision(
+        document["floors"]["3F"]
+    )
+    published.write_text(
+        json.dumps(document, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        "load_warehouse_twin_floor",
+        lambda _floor_code: json.loads(published.read_text(encoding="utf-8"))[
+            "floors"
+        ]["3F"],
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-47b-admin"))
+            floor = db.scalar(
+                select(WarehouseFloor).where(WarehouseFloor.floor_code == "3F")
+            )
+            assert admin is not None and floor is not None
+            db.add(
+                WarehouseArea(
+                    floor_id=floor.id,
+                    area_code="D1",
+                    area_name="D1 区",
+                    construction_status="enabled",
+                    planned_location_count=2,
+                )
+            )
+            db.add_all(
+                [
+                    WarehouseLocation(
+                        location_code=f"D1-L0{serial}",
+                        location_name=f"D1-L0{serial}",
+                        warehouse_type="finished",
+                        is_active=True,
+                        warehouse_floor=3,
+                        area_code="D1",
+                        storage_type=storage_type,
+                        source_version="V11",
+                        placement_status="placed",
+                    )
+                        for serial, storage_type in enumerate(
+                            ("ground", "rack"), start=1
+                        )
+                ]
+            )
+            db.commit()
+
+            result = warehouse_api.get_warehouse_twin_floor_layout("3F", db, admin)
+            projected = next(
+                item for item in result["features"] if item["id"] == "zone-f1"
+            )
+            assert projected["formal_binding_source"] == "formal_area_code"
+            assert projected["allowed_inventory_types"] == ["finished"]
+            assert projected["storage_layout"] == "mixed"
+            assert projected["employee_area_name"] == "右区D1"
     finally:
         engine.dispose()
 

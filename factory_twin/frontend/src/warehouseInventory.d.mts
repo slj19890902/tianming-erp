@@ -153,7 +153,18 @@ export function employeeLocationName(
 ): string;
 
 export function employeeAreaName(
-  area?: { area_name?: string | null; name?: string | null } | null
+  area?: {
+    employee_area_name?: string | null;
+    formal_area_name?: string | null;
+    area_name?: string | null;
+    area_code?: string | null;
+    erp_area_code?: string | null;
+    floor_code?: string | null;
+    floor_number?: number | null;
+    warehouse_floor?: number | null;
+    name?: string | null;
+  } | null,
+  context?: { floorCode?: string | null; floorNumber?: number | null }
 ): string;
 
 export interface StandardPalletContract {

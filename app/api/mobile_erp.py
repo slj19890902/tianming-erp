@@ -76,7 +76,10 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
     WarehouseLocationDiscrepancy,
 )
-from app.services.warehouse_location_address import location_address_payload
+from app.services.warehouse_location_address import (
+    employee_area_name,
+    location_address_payload,
+)
 from app.services.audit_log import append_audit_event
 from app.services.location_candidates import (
     current_same_location_pallet,
@@ -2837,15 +2840,15 @@ def _mobile_floor_code(row) -> str:
 
 
 def _mobile_area_name(row) -> str:
-    area = row.area
-    if area is not None and area.address_zone_code and area.address_subzone_no:
-        return f"{area.address_zone_code}{int(area.address_subzone_no)}区"
-    if area is not None:
-        name = str(area.area_name or "").strip()
-        code = str(area.area_code or "").strip()
-        if name and name.casefold() != code.casefold():
-            return name
-    return "区域名称待完善"
+    return employee_area_name(
+        row.area,
+        area_code=row.location.area_code,
+        floor_number=(
+            row.floor.floor_number
+            if row.floor is not None
+            else row.location.warehouse_floor
+        ),
+    )
 
 
 @router.get("/warehouse/map/floors")
@@ -2875,6 +2878,7 @@ def mobile_warehouse_map_floors(
             {
                 "area_code": area_code,
                 "area_name": _mobile_area_name(row),
+                "area_master_name": row.area.area_name if row.area else None,
                 "published_location_count": 0,
             },
         )
@@ -2924,6 +2928,7 @@ def mobile_warehouse_map_area(
     ]
     if not rows:
         raise HTTPException(status_code=404, detail="仓库楼层或区域不存在或尚未启用")
+    area_name = _mobile_area_name(rows[0])
     locations = [row.location for row in rows]
     location_ids = [int(location.id) for location in locations]
     lots = list(
@@ -2969,7 +2974,11 @@ def mobile_warehouse_map_area(
                     {
                         "id": raw.get("id"),
                         "feature_kind": kind,
-                        "name": raw.get("name"),
+                        "name": (
+                            area_name
+                            if kind == "zone"
+                            else raw.get("name")
+                        ),
                         "points": raw.get("points") or [],
                     }
                 )
@@ -3016,12 +3025,12 @@ def mobile_warehouse_map_area(
         )
     has_geometry = any(item["geometry"] is not None for item in location_payloads)
     floor_name = rows[0].floor.floor_name if rows[0].floor else "楼层名称待完善"
-    area_name = _mobile_area_name(rows[0])
     return {
         "floor_code": normalized_floor,
         "floor_name": floor_name,
         "area_code": normalized_area,
         "area_name": area_name,
+        "area_master_name": rows[0].area.area_name if rows[0].area else None,
         "map_status": "ready" if has_geometry else "unmeasured",
         "map_status_text": "实测地图已建立" if has_geometry else "未建立实测地图",
         "guidance": (

@@ -89,6 +89,8 @@ type TwinFeature = LayoutFeature & {
   formal_floor_id?: number | null;
   erp_area_code?: string | null;
   formal_area_name?: string | null;
+  area_master_name?: string | null;
+  employee_area_name?: string | null;
   formal_binding_status?: string | null;
   formal_policy_status?: "draft" | "published" | null;
   formal_construction_status?: string | null;
@@ -119,6 +121,8 @@ interface FormalWarehouseAreaOption {
   floor_number: number;
   area_code: string;
   area_name: string;
+  area_master_name?: string | null;
+  employee_area_name?: string | null;
   planned_pallet_capacity: number;
   capacity_review_status: string;
   confirmed_pallet_capacity?: number | null;
@@ -1813,7 +1817,7 @@ export function WarehouseTwinApp() {
     for (const item of moveCandidates) {
       if (item.floor_code !== moveTargetFloorCode) continue;
       const code = item.area_code || "未分区";
-      if (!names.has(code)) names.set(code, employeeAreaName(item));
+      if (!names.has(code)) names.set(code, employeeAreaName(item, { floorCode: item.floor_code }));
     }
     return names;
   }, [moveCandidates, moveTargetFloorCode]);
@@ -1926,9 +1930,14 @@ export function WarehouseTwinApp() {
   const visualLayout = useMemo(
     () => layout ? {
       ...layout,
-      features: layout.features.map((feature) => zoneGeometryDrafts[feature.id]
-        ? { ...feature, points: zoneGeometryDrafts[feature.id] }
-        : feature),
+      features: layout.features.map((feature) => {
+        const projected = zoneGeometryDrafts[feature.id]
+          ? { ...feature, points: zoneGeometryDrafts[feature.id] }
+          : feature;
+        return projected.feature_kind === "zone"
+          ? { ...projected, name: employeeAreaName(projected, { floorCode }) }
+          : projected;
+      }),
       racks: layout.racks.map((rack) => rackDrafts[rack.id] || rack),
       // The operational map renders only ERP inventory projections.  Historical
       // editor/demo pallets remain in the measured source for provenance, but can
@@ -1948,7 +1957,7 @@ export function WarehouseTwinApp() {
         }))
       ]
     } : null,
-    [layout, zoneGeometryDrafts, rackDrafts, groundCandidatePallets, palletColumnConflicts]
+    [layout, zoneGeometryDrafts, rackDrafts, groundCandidatePallets, palletColumnConflicts, floorCode]
   );
   const searchProductGroups = useMemo(
     () => groupSearchProducts(searchResponse?.items || []),
@@ -2114,7 +2123,7 @@ export function WarehouseTwinApp() {
         setMoveTargetAreaCode(areaCode || "");
         setMoveDraftTargetLocationId("");
         setWarehouseOperationMessage(areaCode && targets.length
-          ? `已选 ${floorCode} · ${isMeasuredDispatchFeature(feature) ? "一楼成品合并暂存区" : employeeAreaName(feature)}；来源栈板仍保留，请继续点地图中的具体空货位。`
+          ? `已选 ${floorCode} · ${isMeasuredDispatchFeature(feature) ? "一楼成品合并暂存区" : employeeAreaName(feature, { floorCode })}；来源栈板仍保留，请继续点地图中的具体空货位。`
           : `当前区域没有可用空货位；来源栈板仍保留，可切换其他楼层或区域继续选择。`);
       }
       setSelected(entity);
@@ -2402,7 +2411,7 @@ export function WarehouseTwinApp() {
       .toUpperCase()
       .slice(0, 30);
     setFormalAreaCodeDraft(selectedAreaFeature.erp_area_code || suggested);
-    setFormalAreaNameDraft(selectedAreaFeature.formal_area_name || selectedAreaFeature.name || suggested);
+    setFormalAreaNameDraft(employeeAreaName(selectedAreaFeature, { floorCode }) || suggested);
     const currentUsage = (selectedAreaFeature.allowed_inventory_types || [])[0] as InventoryUsage | undefined;
     setSimpleAreaUsage(currentUsage || "finished");
     setSimpleAreaLayout(selectedAreaFeature.storage_layout === "rack" ? "rack" : "pallet_ground");
@@ -2413,7 +2422,7 @@ export function WarehouseTwinApp() {
     ));
     setAdvancedAreaMaintenanceOpen(false);
     setSelectedExistingAreaId("");
-  }, [selectedAreaFeature?.id, selectedAreaFeature?.erp_area_code, selectedAreaFeature?.formal_area_name, selectedAreaFeature?.name]);
+  }, [selectedAreaFeature?.id, selectedAreaFeature?.erp_area_code, selectedAreaFeature?.formal_area_name, selectedAreaFeature?.employee_area_name, selectedAreaFeature?.name, floorCode]);
   const shouldLoadFormalAreaOptions = formalAreaOptionsEffectEnabled({
     canEditLocations,
     locationEditMode,
@@ -2454,13 +2463,14 @@ export function WarehouseTwinApp() {
         .toUpperCase()
         .slice(0, 30) || "";
       setFormalAreaCodeDraft(selectedAreaFeature?.erp_area_code || suggested);
-      setFormalAreaNameDraft(selectedAreaFeature?.formal_area_name || selectedAreaFeature?.name || suggested);
+      setFormalAreaNameDraft(employeeAreaName(selectedAreaFeature, { floorCode }) || suggested);
       setLocationEditMessage("已取消选用现有区域；请核对下方正式区域编号后再保存草稿。");
       return;
     }
     setFormalAreaCodeDraft(area.area_code);
-    setFormalAreaNameDraft(area.area_name);
-    setLocationEditMessage(`已选用现有区域 ${area.floor_code} · ${area.area_code} ${area.area_name}；保存后仍是地图草稿，校验并发布才会建立绑定。`);
+    const readableAreaName = employeeAreaName(area, { floorCode: area.floor_code });
+    setFormalAreaNameDraft(readableAreaName);
+    setLocationEditMessage(`已选用现有区域 ${area.floor_code} · ${area.area_code} ${readableAreaName}；保存后仍是地图草稿，校验并发布才会建立绑定。`);
   };
   const focusedRack = rackFocusId ? layout?.racks.find((item) => item.id === rackFocusId) || null : null;
   const moldRackQueryRack = focusedRack?.mold_rack_code
@@ -4134,7 +4144,7 @@ export function WarehouseTwinApp() {
           expected_version: selectedAreaFeature.version,
           operation_key: operationKey("zone-policy"),
           erp_area_code: formalAreaCodeDraft.trim().toUpperCase(),
-          area_name: formalAreaNameDraft.trim() || selectedAreaFeature.name,
+          area_name: formalAreaNameDraft.trim() || employeeAreaName(selectedAreaFeature, { floorCode }),
           existing_area_id: existingAreaId,
           ...selectedZonePolicy
         }
@@ -4208,7 +4218,7 @@ export function WarehouseTwinApp() {
     } as Record<InventoryUsage, string>)[simpleAreaUsage];
     const layoutLabel = simpleAreaLayout === "rack" ? "货架区" : "栈板区";
     if (!window.confirm(
-      `确认启用 ${formalAreaCodeDraft.trim().toUpperCase()} ${formalAreaNameDraft.trim() || selectedAreaFeature.name}？\n\n` +
+      `确认启用 ${formalAreaCodeDraft.trim().toUpperCase()} ${formalAreaNameDraft.trim() || employeeAreaName(selectedAreaFeature, { floorCode })}？\n\n` +
       `用途：${usageLabel}\n存储方式：${layoutLabel}\n最大栈板数：${capacity}\n\n` +
       "系统会自动保存、校验并启用该区域；不会移动库存、栈板或产品。"
     )) return;
@@ -4227,7 +4237,7 @@ export function WarehouseTwinApp() {
           storage_layout: simpleAreaLayout,
           max_pallet_capacity: capacity,
           erp_area_code: formalAreaCodeDraft.trim().toUpperCase(),
-          area_name: formalAreaNameDraft.trim() || selectedAreaFeature.name,
+          area_name: formalAreaNameDraft.trim() || employeeAreaName(selectedAreaFeature, { floorCode }),
           existing_area_id: existingAreaId,
           confirmed: true
         }
@@ -4342,7 +4352,7 @@ export function WarehouseTwinApp() {
       <div className="twin-brand"><div><small>TIANMING WAREHOUSE</small><h1>天明智慧仓储</h1></div><nav className="twin-floor-switch" aria-label="楼层切换">
         <button type="button" className={floorCode === "1F" ? "active" : ""} onClick={() => switchWarehouseFloor("1F")}><b>1F</b><span>生产车间</span></button>
         <button type="button" className={floorCode === "3F" ? "active" : ""} onClick={() => switchWarehouseFloor("3F")}><b>3F</b><span>成品仓库</span></button>
-      </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{selectedAreaFeature?.name || "区域名称待完善"}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorTitle} · 正式仓库作业层</p></div>
+      </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorTitle} · 正式仓库作业层</p></div>
       <div className="twin-command-status"><span className="live">{mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : advancedAreaMaintenanceOpen ? "区域规划 · 高级维护" : "区域规划 · 一次确认" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
       <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
     </header>
@@ -4498,7 +4508,7 @@ export function WarehouseTwinApp() {
               {selectedProductionTask && layout && mapMode === "planning" && <div className="twin-production-bind">
               <b>{selectedProductionTask.order_number} · ERP只读</b><small>{selectedProductionTask.customer_name} / {selectedProductionTask.product_name}</small>
               <label>定位对象<select value={productionTargetKind} onChange={(event) => { const kind = event.target.value as "pallet" | "zone"; setProductionTargetKind(kind); setProductionTargetId(kind === "pallet" ? layout.pallets[0]?.id || "" : layout.features.find((item) => item.feature_kind === "zone")?.id || ""); }}><option value="pallet">现有栈板</option><option value="zone">现有区域</option></select></label>
-              <label>人工选择<select value={productionTargetId} onChange={(event) => setProductionTargetId(event.target.value)}>{productionTargetKind === "pallet" ? layout.pallets.map((item) => <option key={item.id} value={item.id}>{item.pallet_code} · {item.zone_code}</option>) : layout.features.filter((item) => item.feature_kind === "zone").map((item) => <option key={item.id} value={item.id}>{item.feature_code} · {item.name}</option>)}</select></label>
+              <label>人工选择<select value={productionTargetId} onChange={(event) => setProductionTargetId(event.target.value)}>{productionTargetKind === "pallet" ? layout.pallets.map((item) => <option key={item.id} value={item.id}>{item.pallet_code} · {item.zone_code}</option>) : layout.features.filter((item) => item.feature_kind === "zone").map((item) => <option key={item.id} value={item.id}>{item.feature_code} · {employeeAreaName(item, { floorCode })}</option>)}</select></label>
               <button type="button" className="twin-primary-action" disabled={productionBusy || !productionTargetId} onClick={saveProductionMapping}>{selectedProductionTask.mapping ? "更新人工定位" : "确认投影到地图"}</button>
               {selectedProductionTask.mapping && <button type="button" className="twin-production-remove" disabled={productionBusy} onClick={removeProductionMapping}>移回待定位</button>}
               <small>只保存隔离地图库的任务ID与位置关系。</small>
@@ -4765,7 +4775,7 @@ export function WarehouseTwinApp() {
         </section>}
         {(selectedFeature || (locationEditMode && selectedRack)) && <section className="twin-inventory-card">
           {selectedAreaFeature ? <>
-            <div className="twin-inventory-title"><div><small>{locationEditMode && canEditLocations ? `当前规划区域 · ${selectedAreaCode || selectedAreaFeature.feature_code}` : "当前区域"}</small><b>{selectedAreaFeature.name || "区域名称待完善"}</b></div><span>{selectedAreaActivationLabel}</span></div>
+            <div className="twin-inventory-title"><div><small>{locationEditMode && canEditLocations ? `当前规划区域 · ${selectedAreaCode || selectedAreaFeature.feature_code}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b></div><span>{selectedAreaActivationLabel}</span></div>
             <div className="twin-selection-summary area"><span><small>区域状态</small><b>{selectedAreaActivationLabel}</b></span><span><small>最大容量</small><b>{selectedAreaCapacitySummary}</b></span><span><small>{selectedAreaIsMold ? "当前模具" : "当前库存"}</small><b>{selectedAreaIsMold ? `${moldAreaResponse?.total || 0} 件` : selectedAreaQuantitySummary === "0" ? "0 · 当前无货" : selectedAreaQuantitySummary}</b></span></div>
             {(areaInventorySearch || (selectedAreaIsMold ? (moldAreaResponse?.total || 0) > 5 : selectedInventory.length > 5)) && <label className="twin-area-filter twin-area-filter-prominent">
               <span>{selectedAreaIsMold ? "当前区域模具筛选" : "当前区域库存筛选"}</span>
@@ -4781,8 +4791,8 @@ export function WarehouseTwinApp() {
             {locationEditMode && canEditLocations && selectedAreaFeature.capacity_review_status === 'confirmed' && !selectedAreaFeature.capacity_eligible && <div className="twin-location-readonly-note"><b>不计入长期容量</b></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature.capacity_review_status === 'excluded' && <div className="twin-location-readonly-note"><b>不计入长期容量</b></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature && <div className="twin-zone-simple-planner">
-              <header><div><small>当前规划区域</small><b>{formalAreaCodeDraft || selectedAreaFeature.feature_code} · {formalAreaNameDraft || selectedAreaFeature.name}</b></div>{selectedAreaHasPublishedBinding && <span>已启用，可核对后更新</span>}</header>
-              {!selectedAreaFeature.formal_area_id && formalAreaOptions.length > 0 && <label><span>已有同楼层区域（如之前已建，可直接选）</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">使用地图规划编号，新建正式区域</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.area_code} · {area.area_name}</option>)}</select></label>}
+              <header><div><small>当前规划区域</small><b>{formalAreaCodeDraft || selectedAreaFeature.feature_code} · {formalAreaNameDraft || employeeAreaName(selectedAreaFeature, { floorCode })}</b></div>{selectedAreaHasPublishedBinding && <span>已启用，可核对后更新</span>}</header>
+              {!selectedAreaFeature.formal_area_id && formalAreaOptions.length > 0 && <label><span>已有同楼层区域（如之前已建，可直接选）</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">使用地图规划编号，新建正式区域</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.area_code} · {employeeAreaName(area, { floorCode: area.floor_code })}</option>)}</select></label>}
               <label><span>主要用来堆放</span><select value={simpleAreaUsage} onChange={(event) => setSimpleAreaUsage(event.target.value as InventoryUsage)}><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="raw_material">原材料</option><option value="mold">模具</option><option value="print_plate">印刷版</option><option value="temporary_turnover">临时周转</option></select></label>
               <label><span>区域形式</span><select value={simpleAreaLayout} onChange={(event) => setSimpleAreaLayout(event.target.value as Exclude<StorageLayout, "mixed">)}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
               <label><span>最大可放栈板数</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /><small>不放栈板的模具架、印版架等区域可填 0。</small></label>
@@ -4845,9 +4855,9 @@ export function WarehouseTwinApp() {
                 }} /></label>)}
               </div><div><button type="button" className="primary" disabled={spatialEditBusy || !zoneGeometryDrafts[selectedAreaFeature.id]} onClick={saveSelectedZoneGeometry}>保存实测边界草稿</button><button type="button" disabled={!zoneGeometryDrafts[selectedAreaFeature.id]} onClick={() => setZoneGeometryDrafts((current) => { const next = { ...current }; delete next[selectedAreaFeature.id]; return next; })}>取消边界草稿</button></div></>}
               <div><b>正式区域绑定</b><small>区域编号保存后不可与其他地图区域重复；发布前仍不会进入员工入库候选。</small></div>
-              {!selectedAreaFeature.formal_area_id && <label><span>选用现有未绑定区域</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">不选，按下方编号建立新区域</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.floor_code} · {area.area_code} {area.area_name} · {area.capacity_review_status === "confirmed" ? `已确认 ${area.confirmed_pallet_capacity || 0} 栈板` : area.capacity_review_status === "excluded" ? "不计长期容量" : "容量待复核"}</option>)}</select>{formalAreaOptionsError && <small>现有区域读取失败：{formalAreaOptionsError}</small>} {!formalAreaOptionsError && formalAreaOptions.length === 0 && <small>当前楼层没有可选的未绑定区域；可使用下方新编号。</small>}</label>}
+              {!selectedAreaFeature.formal_area_id && <label><span>选用现有未绑定区域</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">不选，按下方编号建立新区域</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.floor_code} · {area.area_code} {employeeAreaName(area, { floorCode: area.floor_code })} · {area.capacity_review_status === "confirmed" ? `已确认 ${area.confirmed_pallet_capacity || 0} 栈板` : area.capacity_review_status === "excluded" ? "不计长期容量" : "容量待复核"}</option>)}</select>{formalAreaOptionsError && <small>现有区域读取失败：{formalAreaOptionsError}</small>} {!formalAreaOptionsError && formalAreaOptions.length === 0 && <small>当前楼层没有可选的未绑定区域；可使用下方新编号。</small>}</label>}
               <label><span>正式区域编号</span><input maxLength={30} disabled={Boolean(selectedExistingAreaId)} value={formalAreaCodeDraft} onChange={(event) => setFormalAreaCodeDraft(event.target.value.toUpperCase())} placeholder="例如 FIN-001" /></label>
-              <label><span>区域名称</span><input maxLength={100} disabled={Boolean(selectedExistingAreaId)} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 一楼成品待送区" /></label>
+              <label><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 三楼右区A1" /></label>
               <div><b>区域允许存放类型</b><small>可多选；只保存区域策略，不自动转换现有库存</small></div>
               <div className="twin-zone-policy-options">{([[
                 "finished", "成品"
@@ -4888,7 +4898,7 @@ export function WarehouseTwinApp() {
                   <div><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(inventoryPhysicalQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>
                   <strong>{item.product_name || "待补充库存名称"}</strong>
                   <span>{item.customer_name || "客户待确认"} · {item.location_name || "位置待补充"}</span>
-                  {areaInventoryDetailsOpen && <div className="twin-area-lot-details"><span>{selectedAreaFeature.name || "区域名称待完善"} · {item.location_name || "位置名称待完善"} · {item.pallet_code || "地堆/散存"}</span><span>{item.lot_number || "批次待补充"} · {inventoryAgeLabel(item.age_days)}</span>{(item.reserved_quantity || 0) > 0 && <small>已预占 {formatNumber(item.reserved_quantity)} {inventoryUnitLabel(item.unit)}</small>}</div>}
+                  {areaInventoryDetailsOpen && <div className="twin-area-lot-details"><span>{employeeAreaName(selectedAreaFeature, { floorCode })} · {item.location_name || "位置名称待完善"} · {item.pallet_code || "地堆/散存"}</span><span>{item.lot_number || "批次待补充"} · {inventoryAgeLabel(item.age_days)}</span>{(item.reserved_quantity || 0) > 0 && <small>已预占 {formatNumber(item.reserved_quantity)} {inventoryUnitLabel(item.unit)}</small>}</div>}
                 </article>)}
               </div>
               {filteredSelectedInventory.length > 0 && <button type="button" className="twin-detail-toggle" aria-expanded={areaInventoryDetailsOpen} onClick={() => setAreaInventoryDetailsOpen((current) => !current)}>{areaInventoryDetailsOpen ? "收起完整台账" : filteredSelectedInventory.length > 5 && !areaInventorySearch.trim() ? `查看全部 ${filteredSelectedInventory.length} 条库存` : "批次与预占详情"}</button>}

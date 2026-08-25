@@ -29,6 +29,7 @@ from app.services.warehouse_floor1_candidate_planner import (
     Floor1CandidatePlanningError,
     measured_pallet_slots_for_zone,
 )
+from app.services.warehouse_location_address import employee_location_name
 
 
 GROUND_LAYOUT_SOURCE_VERSION = "P1-87"
@@ -542,7 +543,12 @@ def ground_candidate_rows(
         rows.append(
             {
                 "location_id": location.id,
-                "location_name": location.location_name,
+                "location_name": employee_location_name(
+                    location,
+                    area=plan.area,
+                    floor=plan.area.floor,
+                ),
+                "location_master_name": location.location_name,
                 "row_no": slot.row_no,
                 "slot_no": slot.slot_no,
                 "route_sequence": slot.route_sequence,

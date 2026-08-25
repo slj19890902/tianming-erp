@@ -3964,7 +3964,7 @@
 	                    <td style="white-space:normal"><div class="production-quantity-summary"><div>订单 <strong>{{ row.order_quantity ?? 0 }}</strong>{{ productionOutputUnit(row) }}｜已到纸板 <strong>{{ row.material_received_quantity ?? 0 }}</strong>张</div><div>本次做 <strong>{{ row.planned_output_quantity ?? 0 }}</strong>{{ productionOutputUnit(row) }}<span v-if="productionCuttingModeLabel(row)" class="muted">｜{{ productionCuttingModeLabel(row) }}</span></div><div v-if="row.receipt_purpose_managed" class="status blue" style="display:block;margin-top:5px">已自动形成 {{ row.actual_output_quantity ?? 0 }}{{ productionOutputUnit(row) }}</div></div></td>
 	                    <td style="white-space:normal"><div v-if="row?.completion_actionable === false" class="status blue" style="display:block;white-space:normal">{{ row.completion_block_message || '该任务由收料用途自动推进，不能手工重复完工。' }}</div><template v-else><div class="production-input-line"><label class="muted">用纸板</label><input class="input" type="number" min="1" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">做成品</label><input class="input" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></template></td>
 	                    <td style="white-space:normal"><div>用于订单 <strong>{{ productionOrderCoverage(row) }}</strong></div><div :class="productionSurplusQuantity(row)>0?'status orange':'muted'" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }}</div></td>
-	                    <td v-if="canProductionExecute" class="production-destination-cell" style="white-space:normal"><div v-if="row.completion_actionable === false" class="muted">成品由收料流水自动进入真实 FIN 成员位置；无需再次选择去向。</div><template v-else><select class="select" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">订单内直接待送</option><option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option></select><div v-if="productionNeedsLocation(row)" class="production-location-picker" style="margin-top:4px"><div v-if="productionLocationsLoading" class="muted">正在读取可用库位…</div><div v-else-if="productionLocationsError" class="status orange" style="display:block">{{ productionLocationsError }} <button class="btn small" @click="ensureProductionLocations({force:true})">重试</button></div><template v-else><select class="select" v-model.number="row.location_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'location_floor_number','location_area_code','location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.location_area_code" :disabled="productionBusy || !row.location_floor_number" @change="onProductionAreaChange(row,'location_floor_number','location_area_code','location_id')"><option value="">{{ row.location_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.location_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.location_id" :disabled="productionBusy || !row.location_area_code" @change="onProductionLocationSelection(row)"><option :value="null">{{ row.location_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.location_floor_number,row.location_area_code)" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></template></div><div v-if="row.completion_mode==='direct'" class="muted" style="margin-top:4px">合格品整批进入一楼待送区</div><div v-else-if="productionSurplusQuantity(row)>0" class="muted" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }} 个，随整批入库</div><div v-if="row._direct_submitting" class="status blue" style="display:block;margin-top:6px">正在确认…</div><div v-else-if="productionSelected[row.id]" class="status blue" style="display:block;margin-top:6px">已选入库；点顶部“批量确认入库”</div><div v-else-if="row.completion_mode==='stock'" class="status orange" style="display:block;margin-top:6px">请选择入库位置</div></template></td>
+	                    <td v-if="canProductionExecute" class="production-destination-cell" style="white-space:normal"><div v-if="row.completion_actionable === false"><div class="muted">成品由收料流水自动进入真实成品库位；不能重复完工。</div><button v-if="canDelivery && pageAllowed('deliveries') && receiptManagedDeliveryQuantity(row) > 0" type="button" class="btn small primary" style="margin-top:6px" :disabled="productionBusy || row._delivery_opening" @click="openReceiptManagedDelivery(row)">{{ row._delivery_opening ? '正在打开…' : `订单内送货（${receiptManagedDeliveryQuantity(row)}）` }}</button><div v-else-if="!canDelivery || !pageAllowed('deliveries')" class="muted" style="margin-top:6px">请由有送货权限的账号开送货单</div><div v-else class="muted" style="margin-top:6px">当前没有可送的已自动成品</div></div><template v-else><select class="select" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">订单内直接待送</option><option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option></select><div v-if="productionNeedsLocation(row)" class="production-location-picker" style="margin-top:4px"><div v-if="productionLocationsLoading" class="muted">正在读取可用库位…</div><div v-else-if="productionLocationsError" class="status orange" style="display:block">{{ productionLocationsError }} <button class="btn small" @click="ensureProductionLocations({force:true})">重试</button></div><template v-else><select class="select" v-model.number="row.location_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'location_floor_number','location_area_code','location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.location_area_code" :disabled="productionBusy || !row.location_floor_number" @change="onProductionAreaChange(row,'location_floor_number','location_area_code','location_id')"><option value="">{{ row.location_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.location_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.location_id" :disabled="productionBusy || !row.location_area_code" @change="onProductionLocationSelection(row)"><option :value="null">{{ row.location_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.location_floor_number,row.location_area_code)" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></template></div><div v-if="row.completion_mode==='direct'" class="muted" style="margin-top:4px">合格品整批进入一楼待送区</div><div v-else-if="productionSurplusQuantity(row)>0" class="muted" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }} 个，随整批入库</div><div v-if="row._direct_submitting" class="status blue" style="display:block;margin-top:6px">正在确认…</div><div v-else-if="productionSelected[row.id]" class="status blue" style="display:block;margin-top:6px">已选入库；点顶部“批量确认入库”</div><div v-else-if="row.completion_mode==='stock'" class="status orange" style="display:block;margin-top:6px">请选择入库位置</div></template></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -17304,6 +17304,56 @@
               this.productionSelected[row.id] = false;
             }
           },
+          receiptManagedDeliveryQuantity(row) {
+            if (
+              row?.completion_actionable !== false
+              || !row?.receipt_purpose_managed
+              || row?.delivery_actionable !== true
+            ) return 0;
+            return Math.max(Number(row.delivery_ready_quantity || 0), 0);
+          },
+          async openReceiptManagedDelivery(row) {
+            if (!this.canDelivery || !this.pageAllowed("deliveries")) {
+              this.showToast("当前账号没有送货操作权限", true);
+              return false;
+            }
+            const customerId = Number(row?.customer_id || 0);
+            const orderItemId = Number(row?.order_item_id || 0);
+            if (!customerId || !orderItemId || this.receiptManagedDeliveryQuantity(row) <= 0) {
+              this.showToast("当前没有可送的已自动成品", true);
+              return false;
+            }
+            row._delivery_opening = true;
+            try {
+              await this.openDelivery(customerId);
+              if (
+                this.modal?.type !== "delivery"
+                || Number(this.deliveryForm.customer_id || 0) !== customerId
+              ) {
+                this.showToast("当前客户没有可开的送货单", true);
+                return false;
+              }
+              const { data } = await axios.get("/api/deliveries/pending-items/search", {
+                params: {customer_id: customerId, order_item_id: orderItemId},
+              });
+              const candidate = (data.items || []).find(
+                item => Number(item.order_item_id) === orderItemId,
+              );
+              if (!candidate) {
+                this.showToast("当前成品已不可送，请刷新待生产列表", true);
+                return false;
+              }
+              const line = this.createDeliveryLine();
+              this.deliveryForm.lines = [line];
+              this.applyDeliveryCandidate(line, candidate);
+              return true;
+            } catch (error) {
+              this.showToast("打开送货单失败：" + this.errorMessage(error), true);
+              return false;
+            } finally {
+              row._delivery_opening = false;
+            }
+          },
           canConfirmProductionRow(row) {
             if (row?.completion_actionable === false) return false;
             if (!this.canProductionExecute || row?.status !== "pending") return false;
@@ -29989,7 +30039,7 @@
           },
           applyDeliveryBatchItemToLine(line, item) {
             this.applyDeliveryCandidate(line, item);
-            line.delivered_quantity = Number(item.order_remaining_quantity ?? item.remaining_quantity ?? 0) || null;
+            line.delivered_quantity = this.deliveryDefaultQuantity(item) || null;
           },
           importSelectedDeliveryBatchItems() {
             const selectedItems = Object.values(this.deliveryBatchPicker.selected || {}).filter(item =>
@@ -30516,6 +30566,17 @@
             const candidate = (line.candidate_options || []).find(item => Number(item.order_item_id) === targetId);
             if (candidate) this.applyDeliveryCandidate(line, candidate);
           },
+          deliveryDefaultQuantity(candidate) {
+            const orderRemaining = Math.max(
+              Number(candidate?.order_remaining_quantity ?? candidate?.remaining_quantity ?? 0),
+              0,
+            );
+            const deliverable = Math.max(
+              Number(candidate?.deliverable_quantity ?? candidate?.remaining_quantity ?? 0),
+              0,
+            );
+            return Math.min(orderRemaining, deliverable);
+          },
           applyDeliveryCandidate(line, candidate) {
             const duplicateLine = (this.deliveryForm.lines || []).find(item =>
               item.key !== line.key && Number(item.order_item_id) === Number(candidate.order_item_id)
@@ -30546,7 +30607,7 @@
               order_remaining_quantity: candidate.order_remaining_quantity ?? candidate.remaining_quantity,
               deliverable_quantity: candidate.deliverable_quantity ?? candidate.remaining_quantity,
               over_delivery_quantity: candidate.over_delivery_quantity || 0,
-              delivered_quantity: candidate.order_remaining_quantity ?? candidate.remaining_quantity,
+              delivered_quantity: this.deliveryDefaultQuantity(candidate),
               over_delivery_confirmed: false,
               over_delivery_reason: "",
               remarks: line.remarks || "",

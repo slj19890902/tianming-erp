@@ -121,6 +121,7 @@ from app.services.warehouse_area_activation import (
     formal_area_location_rows,
     floor3_v11_map_binding_is_proven,
     formal_area,
+    legacy_v11_name_only_change_is_safe,
     location_warehouse_type_for_inventory_types,
     policy_location_transition_blockers,
     policy_inventory_types,
@@ -315,6 +316,7 @@ from app.services.warehouse_location_address import (
     WarehouseLocationAddressError,
     build_address_change_preview,
     confirm_address_change,
+    employee_area_name,
     employee_location_name,
     location_address_payload,
     location_alias_conflict,
@@ -4776,7 +4778,12 @@ def _ground_slot_preview_for_area(
             {
                 **slot,
                 "location_code": closest.location_code,
-                "location_name": closest.location_name,
+                "location_name": employee_location_name(
+                    closest,
+                    area=area,
+                    floor=floor,
+                ),
+                "location_master_name": closest.location_name,
                 "existing_location_id": int(closest.id),
                 "existing_layout_version": int(closest.floor3_layout.version),
             }
@@ -4832,6 +4839,9 @@ def _ground_published_plan_payload(
         select(WarehouseGroundLayoutPlan)
         .where(WarehouseGroundLayoutPlan.id == plan.id)
         .options(
+            selectinload(WarehouseGroundLayoutPlan.area).selectinload(
+                WarehouseArea.floor
+            ),
             selectinload(WarehouseGroundLayoutPlan.slots)
             .selectinload(WarehouseGroundLayoutSlot.location)
             .selectinload(WarehouseLocation.floor3_layout)
@@ -4850,7 +4860,12 @@ def _ground_published_plan_payload(
         "slots": [
             {
                 "location_id": row.location_id,
-                "location_name": row.location.location_name,
+                "location_name": employee_location_name(
+                    row.location,
+                    area=current.area,
+                    floor=current.area.floor,
+                ),
+                "location_master_name": row.location.location_name,
                 "row_no": row.row_no,
                 "slot_no": row.slot_no,
                 "route_sequence": row.route_sequence,
@@ -5215,7 +5230,11 @@ def list_ground_storage_candidates(
         )
         return {
             "floor_name": plan.area.floor.floor_name,
-            "area_name": plan.area.area_name,
+            "area_name": employee_area_name(
+                plan.area,
+                floor_number=plan.area.floor.floor_number,
+            ),
+            "area_master_name": plan.area.area_name,
             "plan_version": plan.version,
             "published_map_revision": plan.published_map_revision,
             "incoming_quantity": incoming_quantity,
@@ -5297,13 +5316,33 @@ def _ground_mutation_replay(
         raise WarehouseGroundSlotError(
             "GROUND_REPLAY_FACT_MISSING", "地图存放重放事实不完整，请管理员核对。"
         )
+    primary_location = occupancy.primary_location
+    primary_context = (
+        load_warehouse_location_projection_contexts(
+            db, [primary_location]
+        ).get(int(primary_location.id), {})
+        if primary_location is not None
+        else {}
+    )
+    readable_location_name = (
+        employee_location_name(
+            primary_location,
+            area=primary_context.get("area"),
+            floor=primary_context.get("floor"),
+        )
+        if primary_location is not None
+        else None
+    )
     return mutation, {
         "message": "相同请求已成功处理，本次返回原结果。",
         "idempotent_replay": True,
         "lot_id": lot.id,
         "lot_number": lot.lot_number,
         "quantity": int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0),
-        "location_name": occupancy.primary_location.location_name if occupancy.primary_location else None,
+        "location_name": readable_location_name,
+        "location_master_name": (
+            primary_location.location_name if primary_location is not None else None
+        ),
         "occupancy": ground_occupancy_payload(occupancy),
     }
 
@@ -5559,7 +5598,12 @@ def ground_finished_inbound(
                 "lot_id": lot.id,
                 "lot_number": lot.lot_number,
                 "quantity": payload.quantity,
-                "location_name": primary_slot.location.location_name,
+                "location_name": employee_location_name(
+                    primary_slot.location,
+                    area=plan.area,
+                    floor=plan.area.floor,
+                ),
+                "location_master_name": primary_slot.location.location_name,
                 "occupancy": ground_occupancy_payload(occupancy),
             }
         except (WarehouseGroundSlotError, WarehouseInventoryError) as error:
@@ -5756,7 +5800,12 @@ def ground_finished_lot_transfer(
                 "lot_id": result.target_lot.id,
                 "lot_number": result.target_lot.lot_number,
                 "quantity": payload.quantity,
-                "location_name": primary_slot.location.location_name,
+                "location_name": employee_location_name(
+                    primary_slot.location,
+                    area=plan.area,
+                    floor=plan.area.floor,
+                ),
+                "location_master_name": primary_slot.location.location_name,
                 "occupancy": ground_occupancy_payload(occupancy),
             }
         except (WarehouseGroundSlotError, WarehouseInventoryError) as error:
@@ -7142,6 +7191,19 @@ def twin_location_product_candidates(
     rows = db.execute(
         query.order_by(InventoryLot.stock_date.desc(), InventoryLot.id.desc()).limit(limit)
     ).all()
+    projection_contexts = load_warehouse_location_projection_contexts(
+        db,
+        [location, *[row[2] for row in rows]],
+    )
+
+    def readable_location_name(row: WarehouseLocation) -> str:
+        context = projection_contexts.get(int(row.id), {})
+        return employee_location_name(
+            row,
+            area=context.get("area"),
+            floor=context.get("floor"),
+        )
+
     items = []
     for lot, detail, source_location, customer, product in rows:
         available = int(lot.quantity_available or 0)
@@ -7166,7 +7228,8 @@ def twin_location_product_candidates(
                 "unit": lot.unit,
                 "source_location_id": source_location.id,
                 "source_location_code": source_location.location_code,
-                "source_location_name": source_location.location_name,
+                "source_location_name": readable_location_name(source_location),
+                "source_location_master_name": source_location.location_name,
                 "stock_date": lot.stock_date,
             }
         )
@@ -7174,7 +7237,8 @@ def twin_location_product_candidates(
         "target_location": {
             "location_id": location.id,
             "location_code": location.location_code,
-            "location_name": location.location_name,
+            "location_name": readable_location_name(location),
+            "location_master_name": location.location_name,
             "area_code": location.area_code,
         },
         "items": items,
@@ -8719,6 +8783,10 @@ def _warehouse_area_stats(db: Session, area: WarehouseArea) -> dict:
 
 def _warehouse_area_dict(db: Session, row: WarehouseArea) -> dict:
     policy = row.storage_policy
+    readable_area_name = employee_area_name(
+        row,
+        floor_number=row.floor.floor_number,
+    )
     return {
         "id": row.id,
         "floor_id": row.floor_id,
@@ -8727,6 +8795,8 @@ def _warehouse_area_dict(db: Session, row: WarehouseArea) -> dict:
         "floor_number": row.floor.floor_number,
         "area_code": row.area_code,
         "area_name": row.area_name,
+        "area_master_name": row.area_name,
+        "employee_area_name": readable_area_name,
         "address_zone_code": row.address_zone_code,
         "address_subzone_no": row.address_subzone_no,
         "address_version": int(row.address_version or 1),
@@ -8738,7 +8808,7 @@ def _warehouse_area_dict(db: Session, row: WarehouseArea) -> dict:
         "current_address_name": (
             f"{row.floor.floor_name} {row.address_zone_code}{int(row.address_subzone_no)}区"
             if row.address_zone_code and row.address_subzone_no
-            else row.area_name
+            else readable_area_name
         ),
         "planned_location_count": row.planned_location_count,
         "planned_pallet_capacity": row.planned_pallet_capacity,
@@ -9418,6 +9488,40 @@ def _formal_area_publish_blockers(
                 area=area,
                 feature_area_code_count=feature_area_code_counts.get(area_code, 0),
             )
+            if feature.get("legacy_v11_name_only") is True:
+                try:
+                    marker_area_id = int(feature.get("formal_area_id"))
+                    marker_floor_id = int(feature.get("formal_floor_id"))
+                except (TypeError, ValueError):
+                    marker_area_id = marker_floor_id = 0
+                marker_safe = bool(
+                    projected_legacy_binding
+                    and marker_area_id == area.id
+                    and marker_floor_id == floor.id
+                    and str(feature.get("formal_area_name") or "").strip()
+                    and legacy_v11_name_only_change_is_safe(
+                        db,
+                        floor=floor,
+                        area=area,
+                        feature=feature,
+                        feature_area_code_count=feature_area_code_counts.get(
+                            area_code, 0
+                        ),
+                        requested_inventory_types=list(
+                            feature.get("allowed_inventory_types") or []
+                        ),
+                        requested_storage_layout=str(
+                            feature.get("storage_layout") or ""
+                        ),
+                        current_feature=feature,
+                    )
+                )
+                if marker_safe:
+                    continue
+                blockers.append(
+                    f"{area_code} 区域名称草稿已失去旧版实测区域的唯一身份"
+                )
+                continue
             has_explicit_policy_change = bool(
                 feature.get("allowed_inventory_types")
                 or feature.get("formal_area_id") not in (None, "")
@@ -9458,12 +9562,6 @@ def _formal_area_publish_blockers(
             set(policy_inventory_types(area.storage_policy)) != set(requested_types)
             or area.storage_policy.storage_layout != requested_layout
             or area.storage_policy.map_feature_id != feature_id
-            or area.area_name
-            != (
-                str(feature.get("formal_area_name") or "").strip()
-                or str(feature.get("name") or "").strip()
-                or area_code
-            )
         )
         if semantic_change:
             blockers.extend(
@@ -9755,7 +9853,13 @@ def _publish_twin_layout_draft_locked(
             floor_code=floor_code,
             deferred_feature_id=defer_location_readiness_for_feature_id,
         )
-        if result.applied or published_policies:
+        legacy_name_update_count = int(
+            getattr(published_policies, "legacy_name_update_count", 0)
+        )
+        formal_master_changed = bool(
+            published_policies or legacy_name_update_count
+        )
+        if result.applied or formal_master_changed:
             _twin_layout_asset_log(
             db,
             request=request,
@@ -9775,7 +9879,15 @@ def _publish_twin_layout_draft_locked(
                     }
                     for policy in published_policies
                 ],
-                "location_master_changed": bool(published_policies),
+                "legacy_area_name_update_count": legacy_name_update_count,
+                "legacy_area_name_updated_codes": list(
+                    getattr(
+                        published_policies,
+                        "legacy_name_updated_area_codes",
+                        (),
+                    )
+                ),
+                "location_master_changed": formal_master_changed,
                 "inventory_changed": False,
             },
             )
@@ -9821,6 +9933,9 @@ def _publish_twin_layout_draft_locked(
         **result.value,
         "applied": result.applied,
         "formal_area_count": len(published_policies),
+        "legacy_area_name_update_count": int(
+            getattr(published_policies, "legacy_name_update_count", 0)
+        ),
     }
 
 
@@ -10058,6 +10173,7 @@ def _update_twin_zone_storage_policy_locked(
     db: Session,
     user: User,
     commit: bool = True,
+    allow_legacy_v11_name_only: bool = True,
 ) -> dict:
     requested_area_code = str(payload.erp_area_code or "").strip().upper()
     formal_area: WarehouseArea | None = None
@@ -10143,16 +10259,44 @@ def _update_twin_zone_storage_policy_locked(
     formal_layout = (
         str(formal_policy.storage_layout or "") if formal_policy is not None else ""
     )
+    same_code_feature_count = sum(
+        1
+        for item in effective_floor.get("features") or []
+        if item.get("feature_kind") == "zone"
+        and str(item.get("erp_area_code") or "").strip().upper()
+        == requested_area_code
+    )
+    legacy_v11_name_only = bool(
+        allow_legacy_v11_name_only
+        and formal_area is not None
+        and formal_area.storage_policy is None
+        and payload.existing_area_id == formal_area.id
+        and current_area_code == requested_area_code
+        and payload.area_name
+        and legacy_v11_name_only_change_is_safe(
+            db,
+            floor=floor,
+            area=formal_area,
+            feature=effective_feature,
+            feature_area_code_count=same_code_feature_count,
+            requested_inventory_types=list(payload.allowed_inventory_types),
+            requested_storage_layout=payload.storage_layout,
+            current_feature=effective_feature,
+        )
+    )
     semantic_change = (
-        set(current_types) != set(payload.allowed_inventory_types)
-        or current_layout != payload.storage_layout
-        or bool(requested_area_code and requested_area_code != current_area_code)
-        or (
-            formal_policy is not None
-            and (
-                set(formal_types) != set(payload.allowed_inventory_types)
-                or formal_layout != payload.storage_layout
-                or formal_policy.map_feature_id != feature_id
+        not legacy_v11_name_only
+        and (
+            set(current_types) != set(payload.allowed_inventory_types)
+            or current_layout != payload.storage_layout
+            or bool(requested_area_code and requested_area_code != current_area_code)
+            or (
+                formal_policy is not None
+                and (
+                    set(formal_types) != set(payload.allowed_inventory_types)
+                    or formal_layout != payload.storage_layout
+                    or formal_policy.map_feature_id != feature_id
+                )
             )
         )
     )
@@ -10247,7 +10391,11 @@ def _update_twin_zone_storage_policy_locked(
                 status_code=409,
                 detail='区域用途修改被阻止：' + '；'.join(blockers),
             )
-    if formal_area is not None and formal_area.storage_policy is None:
+    if (
+        formal_area is not None
+        and formal_area.storage_policy is None
+        and not legacy_v11_name_only
+    ):
         blockers = unbound_area_location_transition_blockers(
             db,
             floor=floor,
@@ -10275,6 +10423,7 @@ def _update_twin_zone_storage_policy_locked(
             area_name=payload.area_name,
             formal_area_id=selected_existing_area_id,
             formal_floor_id=(formal_area.floor_id if formal_area is not None else None),
+            legacy_v11_name_only=legacy_v11_name_only,
         )
         mapped_area_code = str(mutation.value.get("erp_area_code") or "").strip().upper()
         if mapped_area_code != requested_area_code:
@@ -10286,7 +10435,12 @@ def _update_twin_zone_storage_policy_locked(
             else None
         )
         if selected_existing_area_id is not None:
-            mutation.value["formal_area_name"] = formal_area.area_name
+            mutation.value["area_master_name"] = formal_area.area_name
+            mutation.value["employee_area_name"] = employee_area_name(
+                mutation.value,
+                area_code=formal_area.area_code,
+                floor_number=floor.floor_number,
+            )
             mutation.value["formal_construction_status"] = formal_area.construction_status
             mutation.value["planned_pallet_capacity"] = formal_area.planned_pallet_capacity
             mutation.value["capacity_review_status"] = formal_area.capacity_review_status
@@ -10592,6 +10746,7 @@ def confirm_twin_zone_area(
                 db=db,
                 user=user,
                 commit=False,
+                allow_legacy_v11_name_only=False,
             )
             draft_revision = str(policy_result.get('revision') or '')
             identity_blockers = _formal_area_identity_blockers(db, floor_code)
@@ -12318,13 +12473,11 @@ def _location_label_dict(
         floor_number,
         f"{floor_number}楼" if floor_number else "楼层待确认",
     )
-    structured_area = area
-    area_text = (
-        f"{structured_area.address_zone_code}{int(structured_area.address_subzone_no)}区"
-        if structured_area is not None
-        and structured_area.address_zone_code
-        and structured_area.address_subzone_no
-        else (f"{row.area_code}区" if row.area_code else "区域待确认")
+    area_text = employee_area_name(
+        area,
+        area_code=row.area_code,
+        floor_number=floor_number,
+        fallback_name="区域待确认",
     )
     readable_location = employee_location_name(row, area=area, floor=floor)
     port = request.url.port or 8000
@@ -12339,6 +12492,7 @@ def _location_label_dict(
         **_location_dict(row, projection_context),
         "floor_text": floor_text,
         "area_text": area_text,
+        "area_master_name": area.area_name if area is not None else None,
         "display_path": readable_location,
         "layout_version": row.floor3_layout.version if row.floor3_layout else None,
         "lookup_url": lookup_url,

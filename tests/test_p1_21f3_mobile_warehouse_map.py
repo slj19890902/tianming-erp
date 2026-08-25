@@ -219,6 +219,81 @@ def test_mobile_map_uses_published_geometry_without_pallet_identifiers(
         )
 
 
+def test_all_mobile_and_employee_location_lists_share_the_area_projection(
+    mobile_erp_app,
+) -> None:
+    from app.models.product import Product
+    from app.models.user import User
+    from app.models.warehouse_inventory import WarehouseArea
+    from app.api import warehouse as warehouse_api
+    from app.services.production_workflow import list_temporary_locations
+    from app.services.stocktake import list_locations as list_stocktake_locations
+
+    app, _ids, factory = mobile_erp_app
+    _add_map_target(factory)
+    with factory() as db:
+        area = db.scalar(select(WarehouseArea).where(WarehouseArea.area_code == "C1"))
+        product = db.scalar(select(Product).where(Product.product_code == "MOBILE-BOX-001"))
+        admin = db.scalar(select(User).where(User.username == "mobile-admin"))
+        assert area is not None and product is not None and admin is not None
+        area.area_name = "C1 区"
+        db.commit()
+        customer_id = int(product.customer_id)
+        product_id = int(product.id)
+
+        stocktake_location = next(
+            row
+            for row in list_stocktake_locations(db)
+            if row["area_code"] == "C1"
+        )
+        production_location = next(
+            row
+            for row in list_temporary_locations(db)
+            if row["area_code"] == "C1"
+        )
+        assert stocktake_location["area_name"] == "右区C1"
+        assert stocktake_location["area_master_name"] == "C1 区"
+        assert production_location["area_name"] == "右区C1"
+        assert production_location["area_master_name"] == "C1 区"
+        ground = warehouse_api.list_ground_storage_candidates(
+            floor_code="3F",
+            area_code="C1",
+            customer_id=customer_id,
+            product_id=product_id,
+            incoming_quantity=1,
+            db=db,
+            user=admin,
+        )
+        assert ground["area_name"] == "右区C1"
+        assert ground["area_master_name"] == "C1 区"
+
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        floors = client.get("/api/mobile/erp/warehouse/map/floors")
+        assert floors.status_code == 200, floors.text
+        mobile_area = next(
+            area
+            for floor in floors.json()["floors"]
+            if floor["floor_code"] == "3F"
+            for area in floor["areas"]
+            if area["area_code"] == "C1"
+        )
+        assert mobile_area["area_name"] == "右区C1"
+        assert mobile_area["area_master_name"] == "C1 区"
+
+        detail = client.get(
+            "/api/mobile/erp/warehouse/map/floors/3F",
+            params={"area_code": "C1"},
+        )
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["area_name"] == "右区C1"
+        assert detail.json()["area_master_name"] == "C1 区"
+        assert any(
+            feature["feature_kind"] == "zone" and feature["name"] == "右区C1"
+            for feature in detail.json()["features"]
+        )
+
+
 def test_confirmed_partial_move_preserves_total_age_reservations_and_idempotency(
     mobile_erp_app,
 ) -> None:

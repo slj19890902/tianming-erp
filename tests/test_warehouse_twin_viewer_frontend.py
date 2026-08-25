@@ -456,7 +456,7 @@ def test_right_side_area_summary_hides_duplicate_labels_but_keeps_full_ledger_ac
     assert "当前区域 · {selectedAreaCode || selectedAreaFeature.feature_code}" not in SOURCE
     assert "当前规划区域 · ${selectedAreaCode || selectedAreaFeature.feature_code}" in SOURCE
     assert 'mapMode === "planning" && canEditLocations' in SOURCE
-    assert "selectedAreaFeature.name" in SOURCE
+    assert "employeeAreaName(selectedAreaFeature, { floorCode })" in SOURCE
     assert "区域状态" in SOURCE
     assert "最大容量" in SOURCE
     assert "当前库存" in SOURCE

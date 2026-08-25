@@ -453,8 +453,6 @@ def test_receipt_falls_back_to_current_empty_floor3_position_when_fin_is_full(
     _mock_floor3_runtime(monkeypatch, area_codes=("E2",))
 
     with session_factory() as session:
-        from app.services.production_workflow import _receipt_auto_location_name
-
         projection = receipt_auto_finished_location_projection(session)
         assert projection["ready"] is True
         assert projection["layout_version"] == 3
@@ -466,7 +464,8 @@ def test_receipt_falls_back_to_current_empty_floor3_position_when_fin_is_full(
             floor3_location_id,
         )
         assert fallback_location is not None
-        assert projection["location_name"] == _receipt_auto_location_name(fallback_location)
+        assert "匿名三楼 E2 成品区" in str(projection["location_name"])
+        assert projection["location_name"] != "位置名称待完善"
 
     with TestClient(app) as client:
         _login(client, "admin")
@@ -979,15 +978,15 @@ def test_floor3_fallback_respects_confirmed_area_capacity(
         session.commit()
 
     with session_factory() as session:
-        from app.services.production_workflow import _receipt_auto_location_name
-
         projection = receipt_auto_finished_location_projection(session)
         full_location = session.get(WarehouseLocation, full_location_id)
         safe_location = session.get(WarehouseLocation, safe_location_id)
         assert full_location is not None and safe_location is not None
         assert projection["ready"] is True
-        assert projection["location_name"] == _receipt_auto_location_name(safe_location)
-        assert projection["location_name"] != _receipt_auto_location_name(full_location)
+        assert projection["location_id"] == safe_location_id
+        assert projection["location_id"] != full_location_id
+        assert "匿名三楼 E2 成品区" in str(projection["location_name"])
+        assert projection["location_name"] != "位置名称待完善"
 
 
 def test_floor3_fallback_rejects_wrong_zone_unplaced_full_and_policy_bound_locations(

@@ -26,7 +26,11 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.flute_mapping import seven_layer_code_error
-from app.services.location_candidates import operational_location_issue
+from app.services.location_candidates import (
+    load_warehouse_location_projection_contexts,
+    operational_location_issue,
+)
+from app.services.warehouse_location_address import employee_location_name
 from app.services.requisition_quantities import (
     cutting_factor,
     normalize_cutting_mode,
@@ -567,7 +571,12 @@ def customer_board_preparation_coverage(
     }
 
 
-def stock_policy_dict(db: Session, policy: InventoryStockPolicy) -> dict:
+def stock_policy_dict(
+    db: Session,
+    policy: InventoryStockPolicy,
+    *,
+    projection_context: dict | None = None,
+) -> dict:
     finished_summary: dict[str, int] = {}
     if (
         policy.target_inventory_type == "finished"
@@ -587,6 +596,7 @@ def stock_policy_dict(db: Session, policy: InventoryStockPolicy) -> dict:
     target = int(policy.target_quantity or 0)
     warning = int(policy.warning_quantity or 0)
     location = policy.default_location
+    location_context = projection_context or {}
     board_coverage = {
         "customer_board_preparation_available_sheet_quantity": 0,
         "customer_board_preparation_finished_capacity": 0,
@@ -679,7 +689,12 @@ def stock_policy_dict(db: Session, policy: InventoryStockPolicy) -> dict:
             {
                 "id": location.id,
                 "location_code": location.location_code,
-                "location_name": location.location_name,
+                "location_name": employee_location_name(
+                    location,
+                    area=location_context.get("area"),
+                    floor=location_context.get("floor"),
+                ),
+                "location_master_name": location.location_name,
                 "warehouse_type": location.warehouse_type,
             }
             if location
@@ -763,9 +778,14 @@ def next_replenishment_order_number() -> str:
     return f"SR-{beijing_now_naive():%Y%m%d}-{uuid4().hex[:8].upper()}"
 
 
-def replenishment_item_dict(item: StockReplenishmentOrderItem) -> dict:
+def replenishment_item_dict(
+    item: StockReplenishmentOrderItem,
+    *,
+    projection_context: dict | None = None,
+) -> dict:
     location = item.location
     lot = item.inventory_lot
+    location_context = projection_context or {}
     allowed_products = (
         [
             {
@@ -807,7 +827,12 @@ def replenishment_item_dict(item: StockReplenishmentOrderItem) -> dict:
             {
                 "id": location.id,
                 "location_code": location.location_code,
-                "location_name": location.location_name,
+                "location_name": employee_location_name(
+                    location,
+                    area=location_context.get("area"),
+                    floor=location_context.get("floor"),
+                ),
+                "location_master_name": location.location_name,
             }
             if location
             else None
@@ -844,7 +869,20 @@ def replenishment_item_dict(item: StockReplenishmentOrderItem) -> dict:
     }
 
 
-def replenishment_order_dict(order: StockReplenishmentOrder) -> dict:
+def replenishment_order_dict(
+    order: StockReplenishmentOrder,
+    *,
+    db: Session | None = None,
+    projection_contexts: dict[int, dict] | None = None,
+) -> dict:
+    contexts = projection_contexts if projection_contexts is not None else (
+        load_warehouse_location_projection_contexts(
+            db,
+            [item.location for item in order.items if item.location is not None],
+        )
+        if db is not None
+        else {}
+    )
     return {
         "id": order.id,
         "order_number": order.order_number,
@@ -861,7 +899,17 @@ def replenishment_order_dict(order: StockReplenishmentOrder) -> dict:
         "stocked_at": utc_naive_to_api(order.stocked_at) if order.stocked_at else None,
         "total_quantity": sum(item.quantity for item in order.items),
         "stocked_quantity": sum(item.stocked_quantity for item in order.items),
-        "items": [replenishment_item_dict(item) for item in order.items],
+        "items": [
+            replenishment_item_dict(
+                item,
+                projection_context=(
+                    contexts.get(int(item.location.id))
+                    if item.location is not None
+                    else None
+                ),
+            )
+            for item in order.items
+        ],
     }
 
 

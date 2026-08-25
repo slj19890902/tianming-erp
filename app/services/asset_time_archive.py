@@ -7,7 +7,7 @@ import json
 from typing import Iterable, Literal
 
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.core.time_contract import beijing_naive_to_api, beijing_today, utc_naive_to_api
 from app.models.customer import Customer
@@ -26,8 +26,10 @@ from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryLotTransfer,
     InventoryMovement,
-    WarehouseArea,
     WarehouseLocation,
+)
+from app.services.location_candidates import (
+    load_warehouse_location_projection_contexts,
 )
 from app.services.warehouse_location_address import employee_location_name
 
@@ -197,17 +199,18 @@ def build_inventory_lot_time_archives(
 def _location_labels(db: Session, location_ids: set[int]) -> dict[int, str]:
     if not location_ids:
         return {}
+    rows = db.scalars(
+        select(WarehouseLocation)
+        .where(WarehouseLocation.id.in_(location_ids))
+    ).all()
+    contexts = load_warehouse_location_projection_contexts(db, rows)
     return {
-        row.id: employee_location_name(row)
-        for row in db.scalars(
-            select(WarehouseLocation)
-            .options(
-                selectinload(WarehouseLocation.address_area).selectinload(
-                    WarehouseArea.floor
-                )
-            )
-            .where(WarehouseLocation.id.in_(location_ids))
-        ).all()
+        row.id: employee_location_name(
+            row,
+            area=contexts.get(int(row.id), {}).get("area"),
+            floor=contexts.get(int(row.id), {}).get("floor"),
+        )
+        for row in rows
     }
 
 

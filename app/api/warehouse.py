@@ -15,7 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import qrcode
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
@@ -43,6 +43,7 @@ from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryPickTask
 from app.models.mold_tool import (
+    MoldLabelLayoutRevision,
     MoldLabelPrintJob,
     MoldLabelPrintJobItem,
     MoldLocationMovement,
@@ -329,6 +330,18 @@ from app.services.mold_identity import (
     normalize_mold_chinese_short_name,
     normalize_mold_label_name,
 )
+from app.services.mold_label_layout import (
+    MoldLabelLayoutConflict,
+    MoldLabelLayoutError,
+    admin_state as mold_label_layout_admin_state,
+    canonical_json as canonical_mold_label_layout_json,
+    effective_layout as effective_mold_label_layout,
+    layout_diff_summary as mold_label_layout_diff_summary,
+    load_snapshot as load_mold_label_layout_snapshot,
+    restore_default as restore_default_mold_label_layout,
+    rollback_release as rollback_mold_label_layout,
+    save_and_publish as save_and_publish_mold_label_layout,
+)
 from app.core.config import load_settings
 from app.services.mold_location import (
     MOLD_ARCHIVE_AREA_CODE,
@@ -372,6 +385,7 @@ from app.services.printing_plate_resin_reuse import (
 router = APIRouter()
 GROUND_STORAGE_TRANSACTION_LOCK = Lock()
 _MOLD_CODE_WRITE_LOCK = Lock()
+_MOLD_LABEL_LAYOUT_WRITE_LOCK = Lock()
 # Configuration/master-data operations have no N028 permission equivalent and
 # intentionally retain their legacy admin-only boundary.
 admin_only = RoleChecker(["admin"])
@@ -1523,6 +1537,67 @@ class MoldLabelPrintRegisterPayload(BaseModel):
         if self.source == "single" and len(self.mold_ids) != 1:
             raise ValueError("单个打印一次只能选择一件模具")
         return self
+
+
+class MoldLabelLayoutPaperPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    width_mm: float
+    height_mm: float
+
+
+class MoldLabelLayoutElementPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=50)
+    kind: Literal["text", "qr"]
+    x_mm: float
+    y_mm: float
+    width_mm: float
+    height_mm: float
+    font_size_mm: float | None = None
+    font_weight: int | None = None
+    text_align: Literal["left", "center", "right"] | None = None
+    visible: bool
+
+
+class MoldLabelLayoutPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    catalog_version: str = Field(min_length=1, max_length=40)
+    paper: MoldLabelLayoutPaperPayload
+    elements: list[MoldLabelLayoutElementPayload]
+
+
+class MoldLabelLayoutSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_key: str = Field(min_length=8, max_length=120)
+    expected_release_version: int = Field(ge=0)
+    layout: MoldLabelLayoutPayload
+
+    @field_validator("operation_key")
+    @classmethod
+    def strip_mold_layout_operation_key(cls, value: str) -> str:
+        text = value.strip()
+        if len(text) < 8:
+            raise ValueError("操作编号去除首尾空白后至少需要8个字符")
+        return text
+
+
+class MoldLabelLayoutReleaseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_key: str = Field(min_length=8, max_length=120)
+    expected_release_version: int = Field(ge=0)
+
+    @field_validator("operation_key")
+    @classmethod
+    def strip_mold_layout_release_operation_key(cls, value: str) -> str:
+        text = value.strip()
+        if len(text) < 8:
+            raise ValueError("操作编号去除首尾空白后至少需要8个字符")
+        return text
 
 
 class MoldScanEventPayload(BaseModel):
@@ -14264,6 +14339,18 @@ def _label_mold_number(row: MoldTool, products: list[Product]) -> str:
     )
 
 
+def _label_mold_name(row: MoldTool, products: list[Product]) -> str:
+    """Return the physical handwritten mold label without merging its short name."""
+
+    if row.identity_status == "frozen" and row.label_name:
+        return str(row.label_name).strip()
+    return ""
+
+
+def _label_mold_chinese_short_name(row: MoldTool) -> str:
+    return str(row.chinese_short_name or "").strip()
+
+
 def _label_identity(row: MoldTool, products: list[Product]) -> str:
     if row.identity_status == "frozen":
         return _mold_display_name(row, None)
@@ -14416,118 +14503,53 @@ def _mold_label_printability_error(
         if row.identity_status == "frozen"
         else 24
     )
-    if len(identity) > identity_limit:
+    if (
+        template_version == MOLD_LABEL_TEMPLATE_40X30
+        and len(identity) > identity_limit
+    ):
         return (
             f"模具 {display_name} 的标签内容过长，"
             "请核对客户简称、标签名称和中文简写"
         )
     if template_version == MOLD_LABEL_TEMPLATE_80X40:
+        mold_label_name = _label_mold_name(row, products)
+        if not mold_label_name:
+            return (
+                f"模具 {display_name} 尚未维护实体侧面手写标签名称，"
+                "请先在“模具位置”中维护后再打印40×80标签"
+            )
         customer_rows = _label_customer_rows(row, products)
-        customer_values = _ordered_label_values(customer_rows)
-        customer = "/".join(customer_values)
-        if len(products) > 1:
-            mold_number = _label_mold_number(row, products)
-            product_size_rows = _label_dimension_rows(products, "specification")
-            board_size_rows = _label_dimension_rows(
-                products,
-                "report_specification",
-            )
-            flute_rows = _label_flute_rows(products)
-            cutting_rows = _label_cutting_rows(products)
-            missing = [
-                label
-                for label, value in (
-                    ("客户中文简称", all(customer_rows)),
-                    ("模具标签名称", mold_number if mold_number != "待完善" else ""),
-                    (
-                        "存货编码",
-                        all(str(product.product_code or "").strip() for product in products),
-                    ),
-                    (
-                        "产品名称",
-                        all(str(product.product_name or "").strip() for product in products),
-                    ),
-                    ("产品尺寸", all(product_size_rows)),
-                    ("片料尺寸", all(board_size_rows)),
-                    ("楞型", all(flute_rows)),
-                    ("开料方式", all(cutting_rows)),
-                )
-                if not value
-            ]
-            if missing:
-                return (
-                    f"模具 {display_name} 的{'、'.join(missing)}待完善，"
-                    "不能打印 40×80 共用模具标签"
-                )
-            product_sizes = " / ".join(
-                _ordered_label_values(product_size_rows)
-            )
-            board_sizes = " / ".join(
-                _ordered_label_values(board_size_rows)
-            )
-            flute_types = "/".join(_ordered_label_values(flute_rows))
-            cutting_modes = "/".join(_ordered_label_values(cutting_rows))
-            if (
-                len(products) > 12
-                or len(customer) > 14
-                or len(mold_number) > 34
-                or any(len(str(product.product_code or "")) > 18 for product in products)
-                or (
-                    len(products) <= 5
-                    and any(
-                        len(str(product.product_name or "")) > 30
-                        or len(str(product.product_code or ""))
-                        + len(str(product.product_name or ""))
-                        > 44
-                        for product in products
-                    )
-                )
-                or len(product_sizes) > 52
-                or len(board_sizes) > 34
-                or len(flute_types) > 8
-                or len(cutting_modes) > 8
-            ):
-                return (
-                    f"模具 {display_name} 的40×80标签内容超出已验证版式，"
-                    "请先人工核对，系统不会静默裁切"
-                )
-            return None
-        product = products[0]
-        inventory_code = str(product.product_code or "").strip()
-        product_name = str(product.product_name or "").strip()
-        product_size = _label_dimension(products, "specification")
-        board_size = _label_dimension(products, "report_specification")
-        flute_type = _label_flute_type(products)
-        cutting_mode = _label_cutting_mode(products)
+        product_size_rows = _label_dimension_rows(products, "specification")
+        board_size_rows = _label_dimension_rows(
+            products,
+            "report_specification",
+        )
+        flute_rows = _label_flute_rows(products)
+        cutting_rows = _label_cutting_rows(products)
         missing = [
             label
             for label, value in (
                 ("客户中文简称", all(customer_rows)),
-                ("存货编码", inventory_code),
-                ("产品名称", product_name),
-                ("产品尺寸", product_size),
-                ("片料尺寸", board_size),
-                ("楞型", flute_type),
-                ("开料方式", cutting_mode),
+                (
+                    "存货编码",
+                    all(str(product.product_code or "").strip() for product in products),
+                ),
+                ("产品尺寸", all(product_size_rows)),
+                ("片料尺寸", all(board_size_rows)),
+                ("楞型", all(flute_rows)),
+                ("开料方式", all(cutting_rows)),
             )
             if not value
         ]
         if missing:
-            return f"模具 {display_name} 的{'、'.join(missing)}待完善，不能打印 40×80 标签"
-        if (
-            len(customer) > 14
-            or len(inventory_code) > 18
-            or len(product_name) > 30
-            or len(inventory_code) + len(product_name) > 44
-            or len(product_size) > 24
-            or len(board_size) > 22
-            or len(flute_type) > 8
-            or len(cutting_mode) > 8
-        ):
             return (
-                f"模具 {display_name} 的40×80标签内容超出已验证版式，"
-                "请先人工核对，系统不会静默裁切"
+                f"模具 {display_name} 的{'、'.join(missing)}待完善，"
+                "不能打印40×80实体模具标签"
             )
+        # Text fitting is performed against the released millimetre layout on
+        # the print page.  Do not reject invisible product-name facts or reuse
+        # the retired P1-100 fixed-grid character caps here.
+        return None
     return None
 
 
@@ -14613,6 +14635,10 @@ def _mold_label_dict(
                 "template_label": mold_label_template_label(template_version),
                 "label_projection_mode": (
                     "shared_mold" if shared_mold else "single_product"
+                ),
+                "label_mold_name": _label_mold_name(row, products),
+                "label_mold_chinese_short_name": _label_mold_chinese_short_name(
+                    row
                 ),
                 "label_customer_names": customer_names,
                 "label_customer_name": "/".join(customer_names),
@@ -15823,10 +15849,248 @@ def register_mold_scan_event(
     return {"replayed": False, "event": _mold_scan_event_dict(event)}
 
 
+def _execute_mold_label_layout_operation(
+    db: Session,
+    *,
+    user: User,
+    operation_kind: Literal["save_and_publish", "restore_default", "rollback"],
+    payload: MoldLabelLayoutSaveRequest | MoldLabelLayoutReleaseRequest,
+) -> dict:
+    if operation_kind == "save_and_publish":
+        if not isinstance(payload, MoldLabelLayoutSaveRequest):
+            raise MoldLabelLayoutError("模具标签布局保存请求无效")
+        return save_and_publish_mold_label_layout(
+            db,
+            layout=payload.layout.model_dump(),
+            expected_release_version=payload.expected_release_version,
+            operation_key=payload.operation_key,
+            actor_id=user.id,
+        )
+    if not isinstance(payload, MoldLabelLayoutReleaseRequest):
+        raise MoldLabelLayoutError("模具标签布局版本请求无效")
+    common = {
+        "expected_release_version": payload.expected_release_version,
+        "operation_key": payload.operation_key,
+        "actor_id": user.id,
+    }
+    return (
+        restore_default_mold_label_layout(db, **common)
+        if operation_kind == "restore_default"
+        else rollback_mold_label_layout(db, **common)
+    )
+
+
+def _apply_mold_label_layout_write(
+    db: Session,
+    *,
+    request: Request,
+    user: User,
+    operation_kind: Literal["save_and_publish", "restore_default", "rollback"],
+    payload: MoldLabelLayoutSaveRequest | MoldLabelLayoutReleaseRequest,
+) -> dict:
+    with _MOLD_LABEL_LAYOUT_WRITE_LOCK:
+        try:
+            before = effective_mold_label_layout(db)
+        except MoldLabelLayoutError as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        try:
+            result = _execute_mold_label_layout_operation(
+                db,
+                user=user,
+                operation_kind=operation_kind,
+                payload=payload,
+            )
+            if not result["replayed"]:
+                descriptions = {
+                    "save_and_publish": "保存并发布40×80模具标签布局",
+                    "restore_default": "恢复并发布40×80模具标签默认布局",
+                    "rollback": "回滚并发布上一版40×80模具标签布局",
+                }
+                after = result["published"]
+                append_audit_event(
+                    db,
+                    event_category="business",
+                    result="success",
+                    source="web",
+                    module_code="warehouse",
+                    action_code=f"warehouse.mold_label_layout.{operation_kind}",
+                    legacy_action="MOLD_LABEL_LAYOUT",
+                    resource="MoldLabelLayoutRevision",
+                    request=request,
+                    actor=user,
+                    entity_type="mold_label_layout",
+                    object_ref="mold_label_layout:40x80",
+                    batch_id=payload.operation_key,
+                    description=descriptions[operation_kind],
+                    details={
+                        "operation_kind": operation_kind,
+                        "before_version": before["version"],
+                        "release_version": after["version"],
+                        "layout_hash": after["layout_hash"],
+                        "diff": mold_label_layout_diff_summary(
+                            before["layout"], after["layout"]
+                        ),
+                    },
+                )
+            db.commit()
+            return result
+        except MoldLabelLayoutConflict as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except MoldLabelLayoutError as error:
+            db.rollback()
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except IntegrityError as error:
+            db.rollback()
+            try:
+                replay = _execute_mold_label_layout_operation(
+                    db,
+                    user=user,
+                    operation_kind=operation_kind,
+                    payload=payload,
+                )
+                if replay.get("replayed"):
+                    return replay
+                db.rollback()
+            except MoldLabelLayoutConflict as replay_error:
+                db.rollback()
+                raise HTTPException(status_code=409, detail=str(replay_error)) from error
+            except MoldLabelLayoutError as replay_error:
+                db.rollback()
+                raise HTTPException(status_code=422, detail=str(replay_error)) from error
+            raise HTTPException(status_code=409, detail="模具标签布局已被其他请求更新，请重新加载") from error
+        except Exception:
+            db.rollback()
+            raise
+
+
+@router.get("/molds/label-layout")
+def get_effective_mold_label_layout(
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    try:
+        return effective_mold_label_layout(db)
+    except MoldLabelLayoutError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.get("/molds/label-layout/admin")
+def get_mold_label_layout_admin_state(
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    try:
+        return mold_label_layout_admin_state(db)
+    except MoldLabelLayoutError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/molds/label-layout/admin/publish")
+def post_mold_label_layout_publish(
+    payload: MoldLabelLayoutSaveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    return _apply_mold_label_layout_write(
+        db,
+        request=request,
+        user=user,
+        operation_kind="save_and_publish",
+        payload=payload,
+    )
+
+
+@router.post("/molds/label-layout/admin/restore-default")
+def post_mold_label_layout_restore_default(
+    payload: MoldLabelLayoutReleaseRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    return _apply_mold_label_layout_write(
+        db,
+        request=request,
+        user=user,
+        operation_kind="restore_default",
+        payload=payload,
+    )
+
+
+@router.post("/molds/label-layout/admin/rollback")
+def post_mold_label_layout_rollback(
+    payload: MoldLabelLayoutReleaseRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    return _apply_mold_label_layout_write(
+        db,
+        request=request,
+        user=user,
+        operation_kind="rollback",
+        payload=payload,
+    )
+
+
+def _mold_label_print_job_layout(job: MoldLabelPrintJob) -> dict | None:
+    if job.template_version == MOLD_LABEL_TEMPLATE_40X30:
+        if any(
+            value is not None
+            for value in (
+                job.label_layout_version,
+                job.label_layout_payload_json,
+                job.label_layout_payload_hash,
+            )
+        ):
+            raise HTTPException(status_code=409, detail="40×30模具标签打印任务布局快照异常")
+        return None
+    try:
+        return load_mold_label_layout_snapshot(
+            version=job.label_layout_version,
+            payload_json=job.label_layout_payload_json,
+            payload_hash=job.label_layout_payload_hash,
+        )
+    except MoldLabelLayoutError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "该历史40×80模具标签任务没有可验证的冻结布局，"
+                "不能按当前新版式冒充补打，请重新登记打印"
+            ),
+        ) from error
+
+
+def _mold_label_print_job_for_replay(
+    db: Session,
+    *,
+    print_job_id: int,
+    template_version: str,
+    mold_ids: list[int],
+) -> MoldLabelPrintJob:
+    job = db.scalar(
+        select(MoldLabelPrintJob)
+        .options(selectinload(MoldLabelPrintJob.items))
+        .where(MoldLabelPrintJob.id == print_job_id)
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="模具标签打印任务不存在")
+    stored_ids = [item.mold_tool_id for item in job.items]
+    if job.template_version != template_version or stored_ids != mold_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="打印任务的模具、顺序或纸型与当前页面不一致，请从仓库重新打开",
+        )
+    return job
+
+
 @router.get("/molds/labels")
 def get_mold_labels(
     response: Response,
     mold_ids: str = Query(min_length=1, max_length=1200),
+    print_job_id: int | None = Query(default=None, gt=0),
     template_version: Literal["mold_40x30_v1", "mold_80x40_v1"] = Query(
         default=MOLD_LABEL_TEMPLATE_40X30
     ),
@@ -15842,6 +16106,24 @@ def get_mold_labels(
     ordered_ids = list(dict.fromkeys(int(part) for part in raw_ids))
     if len(ordered_ids) > 100:
         raise HTTPException(status_code=422, detail="一次最多打印 100 件模具")
+    if (
+        template_version == MOLD_LABEL_TEMPLATE_80X40
+        and print_job_id is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="40×80模具标签必须从已登记的冻结打印任务打开",
+        )
+    print_job = None
+    frozen_layout = None
+    if print_job_id is not None:
+        print_job = _mold_label_print_job_for_replay(
+            db,
+            print_job_id=print_job_id,
+            template_version=template_version,
+            mold_ids=ordered_ids,
+        )
+        frozen_layout = _mold_label_print_job_layout(print_job)
     rows = db.scalars(
         select(MoldTool)
         .options(
@@ -15873,6 +16155,12 @@ def get_mold_labels(
         ],
         "count": len(ordered_rows),
         "template_version": template_version,
+        "label_layout": frozen_layout,
+        "print_job": (
+            _mold_label_print_job_dict(print_job, replayed=True)
+            if print_job is not None
+            else None
+        ),
     }
 
 
@@ -15881,6 +16169,7 @@ def _mold_label_print_job_dict(
     *,
     replayed: bool,
 ) -> dict:
+    layout = _mold_label_print_job_layout(job)
     return {
         "print_job_id": job.id,
         "source": job.source,
@@ -15891,6 +16180,7 @@ def _mold_label_print_job_dict(
         "printed_at": utc_naive_to_api(job.printed_at) if job.printed_at else None,
         "printed_by": job.printed_by_username,
         "replayed": replayed,
+        "label_layout": layout,
     }
 
 
@@ -15947,11 +16237,30 @@ def register_mold_label_print(
         # when any selected label is invalid.
         _mold_label_dict(row, allowed_customer_ids, payload.template_version)
 
+    layout_envelope = None
+    if payload.template_version == MOLD_LABEL_TEMPLATE_80X40:
+        try:
+            layout_envelope = effective_mold_label_layout(db)
+        except MoldLabelLayoutError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
     job = MoldLabelPrintJob(
         idempotency_key=payload.idempotency_key,
         source=payload.source,
         item_count=len(ordered_rows),
         template_version=payload.template_version,
+        label_layout_version=(
+            int(layout_envelope["version"]) if layout_envelope is not None else None
+        ),
+        label_layout_payload_json=(
+            canonical_mold_label_layout_json(layout_envelope["layout"])
+            if layout_envelope is not None
+            else None
+        ),
+        label_layout_payload_hash=(
+            str(layout_envelope["layout_hash"])
+            if layout_envelope is not None
+            else None
+        ),
         printed_by=user.id,
         printed_by_username=user.username,
     )
@@ -15986,6 +16295,16 @@ def register_mold_label_print(
                         "template_version": payload.template_version,
                         "mold_ids": payload.mold_ids,
                         "mold_codes": [row.mold_code for row in ordered_rows],
+                        "label_layout_version": (
+                            layout_envelope["version"]
+                            if layout_envelope is not None
+                            else None
+                        ),
+                        "label_layout_hash": (
+                            layout_envelope["layout_hash"]
+                            if layout_envelope is not None
+                            else None
+                        ),
                         "idempotency_key": payload.idempotency_key,
                     },
                     ensure_ascii=False,
@@ -16034,6 +16353,7 @@ def register_mold_label_print(
 def get_mold_label(
     mold_id: int,
     response: Response,
+    print_job_id: int | None = Query(default=None, gt=0),
     template_version: Literal["mold_40x30_v1", "mold_80x40_v1"] = Query(
         default=MOLD_LABEL_TEMPLATE_40X30
     ),
@@ -16063,7 +16383,33 @@ def get_mold_label(
             detail="实体模具标签仅允许全客户范围的仓库账号打印",
         )
     _require_mold_customer_scope(row, allowed_customer_ids)
-    return _mold_label_dict(row, allowed_customer_ids, template_version)
+    if (
+        template_version == MOLD_LABEL_TEMPLATE_80X40
+        and print_job_id is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="40×80模具标签必须从已登记的冻结打印任务打开",
+        )
+    print_job = None
+    frozen_layout = None
+    if print_job_id is not None:
+        print_job = _mold_label_print_job_for_replay(
+            db,
+            print_job_id=print_job_id,
+            template_version=template_version,
+            mold_ids=[mold_id],
+        )
+        frozen_layout = _mold_label_print_job_layout(print_job)
+    result = _mold_label_dict(row, allowed_customer_ids, template_version)
+    if template_version == MOLD_LABEL_TEMPLATE_80X40:
+        assert print_job is not None
+        result["label_layout"] = frozen_layout
+        result["print_job"] = _mold_label_print_job_dict(
+            print_job,
+            replayed=True,
+        )
+    return result
 
 
 @router.get("/molds/code-preview")

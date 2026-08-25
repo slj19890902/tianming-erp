@@ -42,10 +42,9 @@ def test_mold_label_keeps_only_complete_on_label_identification_fields() -> None
     assert "report_specification" in LABEL
     assert "specification" in LABEL
     assert "shortLocation" not in LABEL
-    assert "第一排单独显示片料尺寸" in LABEL
-    assert "第二排并列显示产品尺寸与楞型" in LABEL
-    assert "模具标签名称按长度自动紧排缩小" in LABEL
-    assert "不打印位置和外围边框" in LABEL
+    assert "内部版式沿80mm长边阅读" in LABEL
+    assert "底部约15mm主识别带与二维码平齐" in LABEL
+    assert "只调整业务字段的位置、宽高、字号和对齐" in LABEL
     assert "共 ${total} 款见扫码" not in LABEL
     assert "label_product_specification" in LABEL
     assert "label_report_specification" in LABEL
@@ -84,7 +83,7 @@ def test_p1_24a_keeps_authentication_and_role_based_return_links() -> None:
     assert 'prototypeMode?"/api/auth/me"' in LABEL
     assert "onUnauthorized:loginNext" in LABEL
     assert "/api/warehouse/molds/${id}/label" in LABEL
-    assert "扫码后登录 ERP 查看实时订单、收料和材料位置" in LABEL
+    assert "扫码后登录 ERP 查看实时信息" in LABEL
     live = (ROOT / "static" / "mobile_mold_live.html").read_text(
         encoding="utf-8"
     )

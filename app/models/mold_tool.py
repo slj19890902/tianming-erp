@@ -492,6 +492,57 @@ class MoldScanEvent(Base):
     scanner: Mapped["User | None"] = relationship(foreign_keys=[scanned_by])
 
 
+class MoldLabelLayoutRevision(Base):
+    """Append-only released layout for the physical 40x80 mold label."""
+
+    __tablename__ = "mold_label_layout_revisions"
+    __table_args__ = (
+        UniqueConstraint("version", name="uq_mold_label_layout_revisions_version"),
+        UniqueConstraint(
+            "operation_key", name="uq_mold_label_layout_revisions_operation_key"
+        ),
+        CheckConstraint(
+            "version >= 1", name="ck_mold_label_layout_revisions_version"
+        ),
+        CheckConstraint(
+            "operation_kind IN ('save_and_publish','restore_default','rollback')",
+            name="ck_mold_label_layout_revisions_operation_kind",
+        ),
+        CheckConstraint(
+            "length(payload_hash) = 64 AND length(request_hash) = 64",
+            name="ck_mold_label_layout_revisions_hashes",
+        ),
+        CheckConstraint(
+            "source_release_version IS NULL OR source_release_version >= 1",
+            name="ck_mold_label_layout_revisions_source_version",
+        ),
+        CheckConstraint(
+            "((operation_kind = 'rollback' AND source_release_version IS NOT NULL) "
+            "OR (operation_kind <> 'rollback' AND source_release_version IS NULL))",
+            name="ck_mold_label_layout_revisions_source_kind",
+        ),
+        Index("ix_mold_label_layout_revisions_version", "version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    catalog_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    operation_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    operation_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_release_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+
 class MoldLabelPrintJob(Base):
     """Immutable operator action recording one single or batch label print."""
 
@@ -525,6 +576,11 @@ class MoldLabelPrintJob(Base):
         default="mold_40x30_v1",
         server_default="mold_40x30_v1",
         nullable=False,
+    )
+    label_layout_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    label_layout_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    label_layout_payload_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
     )
     printed_by: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"),

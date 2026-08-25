@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import subprocess
 
 from fastapi.testclient import TestClient
 from pypdf import PdfReader
@@ -19,6 +21,12 @@ from tests.test_mold_label_print_pdf import (
 
 ROOT = Path(__file__).resolve().parents[1]
 LABEL = (ROOT / "static" / "mold-label.html").read_text(encoding="utf-8")
+LAYOUT_CSS = (ROOT / "static" / "assets" / "mold-label-layout.css").read_text(
+    encoding="utf-8"
+)
+LAYOUT_JS = (ROOT / "static" / "assets" / "mold-label-layout.js").read_text(
+    encoding="utf-8"
+)
 WAREHOUSE = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
 
 
@@ -30,6 +38,9 @@ def _complete_mold(factory, *, suffix: str = "1") -> int:
         mold = MoldTool(
             mold_code=f"P162-M-{suffix}",
             mold_name=f"思迈尔 P162-{suffix}",
+            label_name=f"P162-{suffix}",
+            chinese_short_name=f"样例{suffix}",
+            identity_status="frozen",
             rack_location="1F-M-R01-L1-G01",
         )
         db.add(mold)
@@ -54,6 +65,162 @@ def _complete_mold(factory, *, suffix: str = "1") -> int:
         return mold.id
 
 
+def _layout_driven_label(index: int, qr: str) -> str:
+    return f'''<article class="mold-label-page"><div class="label template-80x40 layout-driven">
+      <div class="mold-layout-element mold-layout-text" data-layout-id="board_specification" style="left:1.5mm;top:1.2mm;width:61.5mm;height:8.6mm;font-size:6mm;font-weight:900">片料 1100 × 760</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="inventory_code" style="left:1.5mm;top:10.5mm;width:38mm;height:12mm;font-size:4.6mm;font-weight:900">纸箱 SME-LONG-CODE-{index:03d}</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="flute_type" style="left:40.3mm;top:10.5mm;width:22.7mm;height:5.5mm;font-size:3.8mm;font-weight:800">楞 BC</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="cutting_mode" style="left:40.3mm;top:17mm;width:22.7mm;height:5.5mm;font-size:3.4mm;font-weight:800">开 一开二</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="customer_name" style="left:1.5mm;top:24.2mm;width:14mm;height:6.4mm;font-size:4mm;font-weight:900">思迈尔</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_label_name" style="left:16.1mm;top:24.2mm;width:46.9mm;height:6.4mm;font-size:5mm;font-weight:900">P162-{index:03d}</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_chinese_short_name" style="left:1.5mm;top:31.2mm;width:17.5mm;height:7mm;font-size:4mm;font-weight:800">中文 加强箱</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="product_specification" style="left:19.7mm;top:31.2mm;width:43.3mm;height:7mm;font-size:4.5mm;font-weight:800">尺寸 520 × 350 × 300</div>
+      <img class="mold-layout-element mold-layout-qr" data-layout-id="mold_qr" style="left:64.3mm;top:24.6mm;width:14.2mm;height:14.2mm" src="{qr}" alt="二维码">
+    </div></article>'''
+
+
+def _dump_rendered_dom(browser: Path, fixture: Path, work_dir: Path) -> str:
+    failures: list[str] = []
+    for attempt, headless_flag in enumerate(("--headless=new", "--headless"), start=1):
+        profile_dir = work_dir / f"dom-browser-profile-{attempt}"
+        try:
+            result = subprocess.run(
+                [
+                    str(browser),
+                    headless_flag,
+                    "--disable-gpu",
+                    "--disable-extensions",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--virtual-time-budget=1500",
+                    f"--user-data-dir={profile_dir}",
+                    "--dump-dom",
+                    fixture.resolve().as_uri(),
+                ],
+                cwd=work_dir,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            failures.append(f"{headless_flag}: 120 秒超时")
+            continue
+        if result.returncode == 0 and result.stdout:
+            return result.stdout
+        failures.append(
+            f"{headless_flag}: exit={result.returncode}; "
+            f"{(result.stderr or result.stdout or '无诊断输出')[-800:]}"
+        )
+    pytest.fail("Edge/Chromium 无法运行模具标签 DOM 回归：\n" + "\n".join(failures))
+
+
+def test_layout_editor_frozen_job_and_overflow_preflight_fail_closed(
+    headless_browser: Path,
+    tmp_path: Path,
+) -> None:
+    from app.services.mold_label_layout import default_layout
+
+    state = {
+        "published": {
+            "version": 0,
+            "layout": default_layout(),
+            "layout_hash": "0" * 64,
+        },
+        "can_rollback": False,
+    }
+    sample = {
+        "label_customer_name": "超长客户名称联测",
+        "label_mold_name": "现场手写模具标签名称",
+        "label_mold_chinese_short_name": "短侧板",
+        "label_inventory_code": "X" * 500,
+        "label_product_specification": "430 × 280 × 160",
+        "label_report_specification": "920 × 610",
+        "label_flute_type": "AB",
+        "label_cutting_mode": "一开二",
+    }
+    layout_script = LAYOUT_JS.replace("</script>", r"<\/script>")
+    fixture = tmp_path / "mold-layout-editor-behavior.html"
+    fixture.write_text(
+        f'''<!doctype html><html><head><meta charset="utf-8"><style>
+        *{{box-sizing:border-box}}{LAYOUT_CSS}
+        </style></head><body>
+        <main id="result"></main>
+        <button id="moldLayoutOpen" hidden type="button">调整</button>
+        <section id="moldLayoutEditor" hidden>
+          <button id="moldLayoutClose" type="button">关闭</button>
+          <span id="moldLayoutVersion"></span>
+          <div id="moldLayoutStage"></div>
+          <select id="moldLayoutElement"></select>
+          <input id="moldLayoutX" data-mold-layout-field="x_mm">
+          <input id="moldLayoutY" data-mold-layout-field="y_mm">
+          <input id="moldLayoutWidth" data-mold-layout-field="width_mm">
+          <input id="moldLayoutHeight" data-mold-layout-field="height_mm">
+          <label id="moldLayoutFontField"><input id="moldLayoutFont" data-mold-layout-field="font_size_mm"></label>
+          <label id="moldLayoutAlignField"><select id="moldLayoutAlign" data-mold-layout-field="text_align"><option>left</option><option>center</option><option>right</option></select></label>
+          <p id="moldLayoutStatus"></p>
+          <button id="moldLayoutSave" type="button">保存</button>
+          <button id="moldLayoutDefault" type="button">默认</button>
+          <button id="moldLayoutRollback" type="button">回滚</button>
+        </section>
+        <script>{layout_script}</script>
+        <script>
+        const result=document.getElementById("result");
+        const adminState={json.dumps(state, ensure_ascii=False)};
+        const sampleRow={json.dumps(sample, ensure_ascii=False)};
+        let fetchCalls=0,postCalls=0,confirmCalls=0;
+        window.fetch=async(url,options={{}})=>{{
+          fetchCalls+=1;
+          if((options.method||"GET").toUpperCase()==="POST")postCalls+=1;
+          return {{ok:true,status:200,json:async()=>JSON.parse(JSON.stringify(adminState))}};
+        }};
+        window.confirm=()=>{{confirmCalls+=1;return true}};
+        (async()=>{{
+          const frozenInit=await TmMoldLabelLayout.initializeEditor({{
+            wideTemplate:true,prototypeMode:true,printJobId:77,
+            sampleRow:()=>sampleRow,onPublished:async()=>{{}},
+          }});
+          result.dataset.frozenInit=String(frozenInit);
+          result.dataset.frozenFetches=String(fetchCalls);
+          result.dataset.frozenOpenHidden=String(document.getElementById("moldLayoutOpen").hidden);
+
+          const editableInit=await TmMoldLabelLayout.initializeEditor({{
+            wideTemplate:true,prototypeMode:true,printJobId:null,
+            sampleRow:()=>sampleRow,onPublished:async()=>{{}},
+          }});
+          result.dataset.editableInit=String(editableInit);
+          document.getElementById("moldLayoutOpen").click();
+          const selector=document.getElementById("moldLayoutElement");
+          selector.value="inventory_code";
+          selector.dispatchEvent(new Event("change",{{bubbles:true}}));
+          const width=document.getElementById("moldLayoutWidth");
+          width.value="0.5";
+          width.dispatchEvent(new Event("input",{{bubbles:true}}));
+          document.getElementById("moldLayoutSave").click();
+          await new Promise(resolve=>setTimeout(resolve,150));
+          result.dataset.postCalls=String(postCalls);
+          result.dataset.confirmCalls=String(confirmCalls);
+          result.dataset.status=document.getElementById("moldLayoutStatus").textContent;
+          result.dataset.done="true";
+        }})().catch(error=>{{result.dataset.failure=String(error?.stack||error)}});
+        </script></body></html>''',
+        encoding="utf-8",
+    )
+
+    dom = _dump_rendered_dom(headless_browser, fixture, tmp_path)
+    assert 'data-frozen-init="false"' in dom
+    assert 'data-frozen-fetches="0"' in dom
+    assert 'data-frozen-open-hidden="true"' in dom
+    assert 'data-editable-init="true"' in dom
+    assert 'data-post-calls="0"' in dom
+    assert 'data-confirm-calls="0"' in dom
+    assert 'data-done="true"' in dom
+    assert "纸箱存货编码在当前样例中无法完整显示" in dom
+    assert "data-failure=" not in dom
+
+
 def test_80x40_projection_and_print_fact_are_explicit_and_idempotent(mold_app) -> None:
     from app.models.mold_tool import MoldLabelPrintJob
 
@@ -62,9 +229,20 @@ def test_80x40_projection_and_print_fact_are_explicit_and_idempotent(mold_app) -
     with TestClient(app) as client:
         _login(client, "workshop")
         legacy = client.get(f"/api/warehouse/molds/{mold_id}/label")
+        payload = {
+            "mold_ids": [mold_id],
+            "source": "single",
+            "template_version": "mold_80x40_v1",
+            "idempotency_key": "p1-62-wide-print-0001",
+        }
+        created = client.post("/api/warehouse/molds/label-prints", json=payload)
+        assert created.status_code == 200, created.text
         wide = client.get(
             f"/api/warehouse/molds/{mold_id}/label",
-            params={"template_version": "mold_80x40_v1"},
+            params={
+                "template_version": "mold_80x40_v1",
+                "print_job_id": created.json()["print_job_id"],
+            },
         )
         assert legacy.status_code == wide.status_code == 200
         assert "template_version" not in legacy.json()
@@ -80,14 +258,6 @@ def test_80x40_projection_and_print_fact_are_explicit_and_idempotent(mold_app) -
         assert body["lookup_url"] == legacy.json()["lookup_url"]
         assert body["qr_data_url"] == legacy.json()["qr_data_url"]
 
-        payload = {
-            "mold_ids": [mold_id],
-            "source": "single",
-            "template_version": "mold_80x40_v1",
-            "idempotency_key": "p1-62-wide-print-0001",
-        }
-        created = client.post("/api/warehouse/molds/label-prints", json=payload)
-        assert created.status_code == 200, created.text
         assert created.json()["template_version"] == "mold_80x40_v1"
         replay = client.post("/api/warehouse/molds/label-prints", json=payload)
         assert replay.status_code == 200
@@ -133,9 +303,23 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
         legacy = client.get(f"/api/warehouse/molds/{mold_id}/label")
         assert legacy.status_code == 200
         assert legacy.json()["label_product_specification"] == "多款见扫码"
+        created = client.post(
+            "/api/warehouse/molds/label-prints",
+            json={
+                "mold_ids": [mold_id],
+                "source": "single",
+                "template_version": "mold_80x40_v1",
+                "idempotency_key": "p1-98-multi-print-0001",
+            },
+        )
+        assert created.status_code == 200, created.text
+        print_job_id = created.json()["print_job_id"]
         wide = client.get(
             f"/api/warehouse/molds/{mold_id}/label",
-            params={"template_version": "mold_80x40_v1"},
+            params={
+                "template_version": "mold_80x40_v1",
+                "print_job_id": print_job_id,
+            },
         )
         assert wide.status_code == 200, wide.text
         body = wide.json()
@@ -162,22 +346,13 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
             params={
                 "mold_ids": str(mold_id),
                 "template_version": "mold_80x40_v1",
+                "print_job_id": print_job_id,
             },
         )
         assert batch.status_code == 200, batch.text
         assert batch.json()["items"][0]["label_projection_mode"] == "shared_mold"
         assert batch.json()["items"][0]["label_shared_summary"] == "共用 2 款"
 
-        created = client.post(
-            "/api/warehouse/molds/label-prints",
-            json={
-                "mold_ids": [mold_id],
-                "source": "single",
-                "template_version": "mold_80x40_v1",
-                "idempotency_key": "p1-98-multi-print-0001",
-            },
-        )
-        assert created.status_code == 200, created.text
         assert created.json()["template_version"] == "mold_80x40_v1"
     with factory() as db:
         assert db.scalar(select(func.count(MoldLabelPrintJob.id))) == 1
@@ -200,6 +375,9 @@ def test_rm9_hash_name_uses_verified_short_customer_and_prints_wide_label(mold_a
         mold = MoldTool(
             mold_code="RM-9",
             mold_name="瑞明#9",
+            label_name="9#",
+            chinese_short_name="纸箱",
+            identity_status="frozen",
             rack_location="1F-M-R01-L3-G01",
         )
         db.add_all((customer, mold))
@@ -225,15 +403,29 @@ def test_rm9_hash_name_uses_verified_short_customer_and_prints_wide_label(mold_a
 
     with TestClient(app) as client:
         _login(client, "workshop")
+        created = client.post(
+            "/api/warehouse/molds/label-prints",
+            json={
+                "mold_ids": [mold_id],
+                "source": "single",
+                "template_version": "mold_80x40_v1",
+                "idempotency_key": "p1-62-rm9-print-0001",
+            },
+        )
+        assert created.status_code == 200, created.text
         response = client.get(
             f"/api/warehouse/molds/{mold_id}/label",
-            params={"template_version": "mold_80x40_v1"},
+            params={
+                "template_version": "mold_80x40_v1",
+                "print_job_id": created.json()["print_job_id"],
+            },
         )
 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["label_customer_name"] == "瑞明"
-    assert body["label_mold_number"] == "9"
+    assert body["label_mold_name"] == "9#"
+    assert body["label_mold_chinese_short_name"] == "纸箱"
     assert body["label_inventory_code"] == "9#"
     assert body["label_product_name"] == "纸箱19*10.5*13.5"
     assert body["label_product_specification"] == "190 × 105 × 135"
@@ -245,7 +437,7 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
     for marker in (
         'value="mold_40x30_v1"',
         'value="mold_80x40_v1"',
-        "80×40（40宽卷纸横向）",
+        "40×80（80mm走纸方向）",
         "template_version:attempt.templateVersion",
         "moldLabelPrintSignature(source,ids,templateVersion)",
         "不能更换模具或纸型",
@@ -254,32 +446,96 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
     for marker in (
         'const TEMPLATE_40X30="mold_40x30_v1",TEMPLATE_80X40="mold_80x40_v1"',
         "@page{size:${wideTemplate?\"40mm 80mm\":\"40mm 30mm\"};margin:0}",
-        ".label.template-80x40{width:80mm;height:40mm",
         "width:13.9mm;height:13.9mm",
         "transform:translateX(40mm) rotate(90deg)!important",
         'WIDE_PRINTER_QUEUE="Gprinter GP-3120TU - 40x80纵向标签"',
-        "真实 40×80 纵向纸型",
-        ".template-80x40 .wide-board-row{grid-column:1;grid-row:1",
-        ".template-80x40 .wide-customer{grid-column:2;grid-row:1",
-        "label_projection_mode",
-        "label_products",
-        "label_product_specification",
-        "label_report_specification",
-        "wide-product-facts",
-        "wide-mold",
-        "wide-products-list",
-        "wide-code-grid",
-        "label_cutting_mode",
+        "内部版式沿80mm长边阅读",
+        "调整40×80标签布局",
+        "保存并用于以后打印",
+        "TmMoldLabelLayout.labelHtml",
+        "print_job_id",
         "waitForQrImages",
         "window.print()",
     ):
         assert marker in LABEL
+    for marker in (
+        ".label.template-80x40.layout-driven",
+        ".mold-layout-text",
+        ".mold-layout-qr",
+        "translateX(40mm) rotate(90deg)",
+    ):
+        assert marker in LAYOUT_CSS
+    for marker in (
+        "board_specification",
+        "inventory_code",
+        "customer_name",
+        "mold_label_name",
+        "mold_chinese_short_name",
+        "product_specification",
+        "fitAndValidate",
+    ):
+        assert marker in LAYOUT_JS
     assert "40mm 80mm" in LABEL
     assert "rotate(90deg)" in LABEL
     assert "--print-x-compensation:2mm" in LABEL
     assert 'product=shared?null:products[0]||null' not in LABEL
-    assert "多款见扫码" not in LABEL.split("function labelHtml80", 1)[1]
+    assert "多款见扫码" not in LAYOUT_JS
     assert "body,html{width:40mm;height:auto" in LABEL
+
+
+@pytest.mark.parametrize("product_count", (5, 11))
+def test_actual_layout_javascript_fits_shared_mold_facts_without_clipping(
+    product_count: int,
+    headless_browser: Path,
+    tmp_path: Path,
+) -> None:
+    from app.services.mold_label_layout import default_layout
+
+    product_codes = [
+        f"SME-VERY-LONG-CODE-{index:02d}"
+        for index in range(1, product_count + 1)
+    ]
+    product_sizes = ["520 × 350 × 300" for _index in range(product_count)]
+    board_sizes = ["1100 × 760" for _index in range(product_count)]
+    row = {
+        "label_report_specification": " / ".join(board_sizes),
+        "label_inventory_code": " / ".join(product_codes),
+        "label_flute_type": "BC",
+        "label_cutting_mode": "一开二",
+        "label_customer_name": "苏州思迈尔包装科技有限公司",
+        "label_mold_name": "3D30268-超长现场手写标签",
+        "label_mold_chinese_short_name": "" if product_count == 5 else "加强箱",
+        "label_product_specification": " / ".join(product_sizes),
+        "qr_data_url": _qr_data_url(),
+        "products": [
+            {"product_code": code, "product_name": f"共用模具纸箱{index:02d}"}
+            for index, code in enumerate(product_codes, start=1)
+        ],
+    }
+    envelope = {"version": 0, "layout": default_layout()}
+    fixture = tmp_path / f"p1-103-layout-js-{product_count}.html"
+    fixture.write_text(
+        '<!doctype html><html><head><meta charset="utf-8">'
+        + _current_print_styles()
+        + "</head><body><main id=\"labels\"></main><script>"
+        + LAYOUT_JS.replace("</script>", "<\\/script>")
+        + "</script><script>"
+        + f"const row={json.dumps(row, ensure_ascii=False)};"
+        + f"const envelope={json.dumps(envelope, ensure_ascii=False)};"
+        + 'const labels=document.getElementById("labels");'
+        + "labels.innerHTML=TmMoldLabelLayout.labelHtml(row,envelope);"
+        + "const failures=TmMoldLabelLayout.fitAndValidate(labels);"
+        + 'document.body.dataset.fitFailures=failures.join("|");'
+        + 'document.body.dataset.elementCount=String(labels.querySelectorAll("[data-layout-id]").length);'
+        + "</script></body></html>",
+        encoding="utf-8",
+    )
+    rendered = _dump_rendered_dom(headless_browser, fixture, tmp_path)
+    assert 'data-fit-failures=""' in rendered
+    assert 'data-element-count="9"' in rendered
+    assert product_codes[-1] in rendered
+    if product_count == 5:
+        assert "中文 待完善" in rendered
 
 
 @pytest.mark.parametrize("label_count", (1, 2, 100))
@@ -290,13 +546,7 @@ def test_40x80_feed_uses_one_portrait_page_with_one_inner_rotation(
 ) -> None:
     qr = _qr_data_url()
     labels = "".join(
-        f'''<article class="label template-80x40">
-        <div class="wide-board-row"><span class="wide-label-key">片料</span><strong class="wide-board-value">1100 × 760</strong></div>
-        <div class="wide-customer">思迈尔</div>
-        <div class="wide-product-facts"><div class="wide-inline-fact"><span class="wide-label-key">纸箱</span><strong class="wide-inline-value">520 × 350 × 300</strong></div><div class="wide-inline-fact compact"><span class="wide-label-key">楞</span><strong class="wide-inline-value">BC</strong></div><div class="wide-inline-fact compact"><span class="wide-label-key">开</span><strong class="wide-inline-value">一开二</strong></div></div>
-        <div class="wide-mold"><span class="wide-label-key">模具</span><strong class="wide-mold-value">P162-{index:03d}</strong></div>
-        <div class="wide-products"><div class="wide-products-title">对应纸箱</div><div class="wide-products-list count-1"><div class="wide-product-line"><strong class="wide-product-code">SME-LONG-CODE-{index:03d}</strong><span class="wide-product-name">五层加强纸箱横向标签样例</span></div></div></div>
-        <img class="qr" src="{qr}" alt="二维码"></article>'''
+        _layout_driven_label(index, qr)
         for index in range(1, label_count + 1)
     )
     fixture = tmp_path / f"p1-62-{label_count}.html"
@@ -318,6 +568,7 @@ def test_40x80_feed_uses_one_portrait_page_with_one_inner_rotation(
         assert height_mm == pytest.approx(80.0, abs=0.25)
         assert height_mm > width_mm
         text = " ".join((page.extract_text() or "").split())
+        compact_text = "".join(text.split())
         for expected in (
             "1100 × 760",
             "520 × 350 × 300",
@@ -325,9 +576,10 @@ def test_40x80_feed_uses_one_portrait_page_with_one_inner_rotation(
             "一开二",
             f"SME-LONG-CODE-{page_number:03d}",
             "思迈尔",
-            "五层加强纸箱横向标签样例",
+            f"P162-{page_number:03d}",
+            "加强箱",
         ):
-            assert expected in text
+            assert "".join(expected.split()) in compact_text
 
 
 def test_40x80_portrait_pixels_keep_rotated_content_inside_physical_page(
@@ -342,15 +594,7 @@ def test_40x80_portrait_pixels_keep_rotated_content_inside_physical_page(
         '<!doctype html><html class="template-80x40"><head><meta charset="utf-8">'
         + _current_print_styles()
         + '<style>@page{size:40mm 80mm;margin:0}</style></head>'
-        + f'''<body class="template-80x40"><section id="previewContent"><main id="labels" class="labels">
-        <article class="label template-80x40">
-          <div class="wide-board-row"><span class="wide-label-key">片料</span><strong class="wide-board-value">705 × 700</strong></div>
-          <div class="wide-customer">高泰</div>
-          <div class="wide-product-facts"><div class="wide-inline-fact"><span class="wide-label-key">纸箱</span><strong class="wide-inline-value">180 × 160 × 110</strong></div><div class="wide-inline-fact compact"><span class="wide-label-key">楞</span><strong class="wide-inline-value">B</strong></div><div class="wide-inline-fact compact"><span class="wide-label-key">开</span><strong class="wide-inline-value">一开二</strong></div></div>
-          <div class="wide-mold"><span class="wide-label-key">模具</span><strong class="wide-mold-value">3.D30257</strong></div>
-          <div class="wide-products"><div class="wide-products-title">对应纸箱</div><div class="wide-products-list count-1"><div class="wide-product-line"><strong class="wide-product-code">3.D30257</strong><span class="wide-product-name">纸箱16×18×11内箱</span></div></div></div>
-          <img class="qr" src="{qr}" alt="二维码">
-        </article></main></section></body></html>''',
+        + f'<body class="template-80x40"><section id="previewContent"><main id="labels" class="labels">{_layout_driven_label(257, qr)}</main></section></body></html>',
         encoding="utf-8",
     )
     _print_to_pdf(headless_browser, fixture, output, tmp_path)

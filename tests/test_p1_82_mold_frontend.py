@@ -77,7 +77,8 @@ def test_employee_pages_render_display_name_and_never_render_internal_mold_code(
     assert "line.mold_display_name || line.mold_name" in production_print
     assert "escapeHtml(line.mold_code)" not in production_print
     assert "模具名称与现场位置" in production_print
-    assert "模具标签名称按长度" in label
+    assert "调整40×80标签布局" in label
+    assert "不允许修改业务文字或二维码内容" in label
 
 
 def test_mold_changed_inline_javascript_is_syntax_valid() -> None:

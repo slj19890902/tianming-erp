@@ -65,9 +65,9 @@ def test_mold_label_keeps_formal_and_prototype_sources() -> None:
     assert "sourceRows=batchMode?(data.items||[]):[data]" in LABEL
     assert "打印匿名测试标签" in LABEL
     assert "40×30 mm 模具侧面标签" in LABEL
-    assert "第一排单独显示片料尺寸" in LABEL
-    assert "第二排并列显示产品尺寸与楞型" in LABEL
-    assert "模具标签名称按长度自动紧排缩小" in LABEL
+    assert "内部版式沿80mm长边阅读" in LABEL
+    assert "底部约15mm主识别带与二维码平齐" in LABEL
+    assert "只影响以后新登记的打印任务" in LABEL
 
 
 def test_batch_controls_cannot_unlock_print_before_current_data_and_qr_are_ready() -> None:
@@ -80,6 +80,72 @@ def test_batch_controls_cannot_unlock_print_before_current_data_and_qr_are_ready
     assert '$("batchSort").disabled=true' in LABEL
     assert '$("copyCount").disabled=true' in LABEL
     assert "await refreshRenderedLabels()" in LABEL
+    assert '#labels img.qr,#labels img.mold-layout-qr' in LABEL
+
+
+def test_wide_qr_pending_and_failure_keep_print_disabled(tmp_path: Path) -> None:
+    wait_start = LABEL.index("async function waitForQrImages")
+    wait_end = LABEL.index("let renderGeneration=0;", wait_start)
+    refresh_start = LABEL.index("async function refreshRenderedLabels")
+    refresh_end = LABEL.index("async function renderMoldLabel", refresh_start)
+    wait_source = LABEL[wait_start:wait_end]
+    refresh_source = LABEL[refresh_start:refresh_end]
+    harness = f"""
+const expect=(value,message)=>{{if(!value)throw new Error(message)}};
+let resolveDecode=null;
+let images=[{{
+  complete:false,
+  naturalWidth:0,
+  decode:()=>new Promise(resolve=>{{resolveDecode=resolve}}),
+}}];
+global.document={{querySelectorAll:selector=>{{
+  expect(selector==="#labels img.qr,#labels img.mold-layout-qr","wrong QR selector");
+  return images;
+}}}};
+const nodes={{
+  printButton:{{disabled:false}},
+  errorBox:{{hidden:true,textContent:""}},
+  labels:{{}},
+}};
+const $=id=>nodes[id];
+let renderGeneration=0;
+let labelDataReady=true;
+let sourceRows=[{{}}];
+const wideTemplate=true;
+const TmMoldLabelLayout={{fitAndValidate:()=>[]}};
+function rebuildLabelRows(){{}}
+{wait_source}
+{refresh_source}
+(async()=>{{
+  let settled=false;
+  const pending=refreshRenderedLabels().then(()=>{{settled=true}});
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(nodes.printButton.disabled,"pending QR unlocked print");
+  expect(!settled,"pending QR completed early");
+  images[0].complete=true;
+  images[0].naturalWidth=33;
+  resolveDecode();
+  await pending;
+  expect(!nodes.printButton.disabled,"ready QR did not unlock print");
+
+  nodes.printButton.disabled=false;
+  nodes.errorBox.hidden=true;
+  nodes.errorBox.textContent="";
+  images=[{{
+    complete:false,
+    naturalWidth:0,
+    decode:()=>Promise.reject(new Error("二维码解码失败")),
+  }}];
+  let rejected=false;
+  try{{await refreshRenderedLabels()}}catch(error){{rejected=true}}
+  expect(rejected,"QR decode failure was swallowed");
+  expect(nodes.printButton.disabled,"failed QR unlocked print");
+  expect(nodes.errorBox.hidden===false,"failed QR did not show error");
+  expect(nodes.errorBox.textContent.includes("二维码解码失败"),"failed QR error lost");
+}})().catch(error=>{{console.error(error);process.exit(1)}});
+"""
+    _run_node(harness, tmp_path, "mold-label-wide-qr-behavior.js")
 
 
 def test_shared_recovery_redirects_unauthorized_and_labels_render_failures(

@@ -31,6 +31,7 @@ from app.models.master_data_object_version import (  # noqa: E402,F401
     MasterDataObjectVersion,
 )
 from app.models.mold_tool import (  # noqa: E402,F401
+    MoldLabelLayoutRevision,
     MoldLabelPrintJob,
     MoldLabelPrintJobItem,
     MoldLocationMovement,

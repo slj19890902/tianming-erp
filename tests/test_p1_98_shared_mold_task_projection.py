@@ -66,9 +66,22 @@ def test_reported_gaotai_shape_prints_frozen_shared_mold_identity(mold_app) -> N
 
     with TestClient(app) as client:
         _login(client, "workshop")
+        created = client.post(
+            "/api/warehouse/molds/label-prints",
+            json={
+                "mold_ids": [mold_id],
+                "source": "single",
+                "template_version": "mold_80x40_v1",
+                "idempotency_key": "p1-98-gaotai-label-0001",
+            },
+        )
+        assert created.status_code == 200, created.text
         response = client.get(
             f"/api/warehouse/molds/{mold_id}/label",
-            params={"template_version": "mold_80x40_v1"},
+            params={
+                "template_version": "mold_80x40_v1",
+                "print_job_id": created.json()["print_job_id"],
+            },
         )
     assert response.status_code == 200, response.text
     body = response.json()

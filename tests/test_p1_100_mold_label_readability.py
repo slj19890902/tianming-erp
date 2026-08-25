@@ -11,6 +11,37 @@ from tests.test_p1_62_mold_40x80_label import _complete_mold
 
 ROOT = Path(__file__).resolve().parents[1]
 LABEL_PAGE = (ROOT / "static" / "mold-label.html").read_text(encoding="utf-8")
+LAYOUT_JS = (ROOT / "static" / "assets" / "mold-label-layout.js").read_text(
+    encoding="utf-8"
+)
+LAYOUT_CSS = (ROOT / "static" / "assets" / "mold-label-layout.css").read_text(
+    encoding="utf-8"
+)
+
+
+def _registered_wide_response(
+    client: TestClient,
+    *,
+    mold_id: int,
+    idempotency_key: str,
+):
+    created = client.post(
+        "/api/warehouse/molds/label-prints",
+        json={
+            "mold_ids": [mold_id],
+            "source": "single",
+            "template_version": "mold_80x40_v1",
+            "idempotency_key": idempotency_key,
+        },
+    )
+    assert created.status_code == 200, created.text
+    return client.get(
+        f"/api/warehouse/molds/{mold_id}/label",
+        params={
+            "template_version": "mold_80x40_v1",
+            "print_job_id": created.json()["print_job_id"],
+        },
+    )
 
 
 def test_shared_80x40_label_projects_every_real_fact_without_scan_placeholders(
@@ -45,9 +76,10 @@ def test_shared_80x40_label_projects_every_real_fact_without_scan_placeholders(
 
     with TestClient(app) as client:
         _login(client, "workshop")
-        response = client.get(
-            f"/api/warehouse/molds/{mold_id}/label",
-            params={"template_version": "mold_80x40_v1"},
+        response = _registered_wide_response(
+            client,
+            mold_id=mold_id,
+            idempotency_key="p1-100-shared-facts-0001",
         )
 
     assert response.status_code == 200, response.text
@@ -130,9 +162,10 @@ def test_shared_80x40_label_lists_every_customer_short_name(mold_app) -> None:
 
     with TestClient(app) as client:
         _login(client, "workshop")
-        response = client.get(
-            f"/api/warehouse/molds/{mold_id}/label",
-            params={"template_version": "mold_80x40_v1"},
+        response = _registered_wide_response(
+            client,
+            mold_id=mold_id,
+            idempotency_key="p1-100-shared-customer-0001",
         )
 
     assert response.status_code == 200, response.text
@@ -179,9 +212,10 @@ def test_shared_80x40_label_accepts_current_archive_maximum_of_11_products(
 
     with TestClient(app) as client:
         _login(client, "workshop")
-        response = client.get(
-            f"/api/warehouse/molds/{mold_id}/label",
-            params={"template_version": "mold_80x40_v1"},
+        response = _registered_wide_response(
+            client,
+            mold_id=mold_id,
+            idempotency_key="p1-100-shared-max-0001",
         )
 
     assert response.status_code == 200, response.text
@@ -192,25 +226,23 @@ def test_shared_80x40_label_accepts_current_archive_maximum_of_11_products(
     assert body["label_products"][-1]["product_code"] == "SME-MAX-11"
 
 
-def test_80x40_page_uses_isolated_qr_and_complete_product_list_layout() -> None:
-    wide_renderer = LABEL_PAGE.split("function labelHtml80", 1)[1].split(
-        "function waitForQrImages", 1
-    )[0]
+def test_80x40_page_keeps_complete_api_facts_but_prints_the_side_identity_layout() -> None:
     for marker in (
-        "wide-board-row",
-        "wide-customer",
-        "wide-product-facts",
-        "wide-mold",
-        "wide-products-list",
-        "wide-code-grid",
-        "label_products",
+        "board_specification",
+        "inventory_code",
+        "flute_type",
+        "cutting_mode",
+        "customer_name",
+        "mold_label_name",
+        "mold_chinese_short_name",
+        "product_specification",
+        "mold_qr",
     ):
-        assert marker in LABEL_PAGE
-    assert "product=shared?null:products[0]||null" not in wide_renderer
-    assert "if(count>5)" in LABEL_PAGE
-    assert "product.product_name" in LABEL_PAGE
-    assert "多款见扫码" not in wide_renderer
-    assert "扫码按订单存货" not in wide_renderer
-    assert "white-space:nowrap" not in LABEL_PAGE.split(
-        ".template-80x40 .wide-products", 1
-    )[1].split("@media print", 1)[0]
+        assert marker in LAYOUT_JS
+    assert "TmMoldLabelLayout.labelHtml" in LABEL_PAGE
+    assert "label_product_name" not in LAYOUT_JS
+    assert "product.product_name" not in LAYOUT_JS
+    assert "多款见扫码" not in LAYOUT_JS
+    assert ".mold-layout-qr" in LAYOUT_CSS
+    assert ".mold-layout-text" in LAYOUT_CSS
+    assert "fitAndValidate" in LAYOUT_JS

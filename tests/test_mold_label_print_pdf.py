@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover - exercised only on minimal environments
 
 ROOT = Path(__file__).resolve().parents[1]
 MOLD_LABEL_HTML = ROOT / "static" / "mold-label.html"
+MOLD_LABEL_LAYOUT_CSS = ROOT / "static" / "assets" / "mold-label-layout.css"
 POINTS_TO_MM = 25.4 / 72.0
 
 
@@ -72,7 +73,8 @@ def _current_print_styles() -> str:
     source = MOLD_LABEL_HTML.read_text(encoding="utf-8")
     styles = re.findall(r"<style\b[^>]*>.*?</style>", source, flags=re.IGNORECASE | re.DOTALL)
     assert styles, f"{MOLD_LABEL_HTML} 未找到可用于打印回归的内联样式"
-    return "\n".join(styles)
+    layout_css = MOLD_LABEL_LAYOUT_CSS.read_text(encoding="utf-8")
+    return "\n".join((*styles, f"<style>{layout_css}</style>"))
 
 
 def _qr_data_url() -> str:

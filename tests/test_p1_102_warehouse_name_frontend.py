@@ -15,7 +15,8 @@ WAREHOUSE_STATIC = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-
 
 def test_map_and_formal_area_options_use_the_employee_area_projection() -> None:
     assert "LEGACY_V11_RIGHT_AREA_CODES" in TWIN_INVENTORY
-    assert "if (usesRightDefault) return `右区${code}`" in TWIN_INVENTORY
+    assert "const rightLabel = `右区${code}`" in TWIN_INVENTORY
+    assert "return description ? `${rightLabel}·${description}` : rightLabel" in TWIN_INVENTORY
     assert (
         "{ ...projected, name: employeeAreaName(projected, { floorCode }) }"
         in TWIN_APP

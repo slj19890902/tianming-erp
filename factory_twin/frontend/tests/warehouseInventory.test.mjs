@@ -56,7 +56,7 @@ const LEGACY_RIGHT_AREA_CODES = [
   "DE1", "E1", "E2", "E3", "E4", "F1", "F12", "F2", "F3", "F34", "F4"
 ];
 
-test("employee area labels use one 3F right-side default and preserve formal overrides", () => {
+test("employee area labels always identify 3F A-F as right-side and keep descriptions", () => {
   for (const areaCode of LEGACY_RIGHT_AREA_CODES) {
     assert.equal(
       employeeAreaName(
@@ -71,7 +71,7 @@ test("employee area labels use one 3F right-side default and preserve formal ove
       { area_code: "A1", formal_area_name: "三楼北侧成品区" },
       { floorCode: "3F" }
     ),
-    "三楼北侧成品区"
+    "右区A1·北侧成品区"
   );
   assert.equal(
     employeeAreaName(

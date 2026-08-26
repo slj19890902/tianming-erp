@@ -29,6 +29,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.models.order import Order, OrderItem
+from app.models.production import ProductionCompletion
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.services.warehouse_pallet_standard import standard_pallet_contract
 from app.services.warehouse_location_address import (
@@ -55,6 +56,8 @@ AGE_BUCKETS = (
 EXTERNAL_INBOUND_MOVEMENTS = {"manual_in", "return_in"}
 EXTERNAL_OUTBOUND_MOVEMENTS = {"consume", "return_reconsume", "scrap"}
 CAPACITY_THRESHOLDS = {"attention": 0.80, "warning": 0.90, "critical": 0.95}
+DIRECT_DISPATCH_LOCATION_CODE = "F1-DISPATCH-01"
+DELAYED_DISPATCH_LEFT_AREA_CODE = "SEMI-008"
 
 
 def _number(value: Decimal | int | float | None) -> float:
@@ -401,6 +404,170 @@ def _pallet_has_projectable_physical_goods(
         if current_pallet is not None and int(current_pallet.id) == int(pallet.id):
             return True
     return False
+
+
+def _delayed_direct_dispatch_projection(
+    db: Session,
+    *,
+    pallets: list[InventoryPallet],
+    positive_lots_by_id: dict[int, InventoryLot],
+    location_payloads: list[dict],
+    as_of: date,
+    idle_days: int,
+    hide_empty_targets: bool,
+) -> dict:
+    """Recommend, but never execute, a physical move for delayed direct stock."""
+
+    target_rows = [] if hide_empty_targets else [
+        row
+        for row in location_payloads
+        if row.get("floor_code") == "3F"
+        and str(row.get("area_code") or "").upper()
+        == DELAYED_DISPATCH_LEFT_AREA_CODE
+        and row.get("position_status") == "mapped"
+        and row.get("occupancy_status") == "empty"
+        and row.get("can_receive_pallet") is True
+        and "finished" in (row.get("allowed_inventory_types") or [])
+    ]
+    targets = [
+        {
+            "location_id": int(row["location_id"]),
+            "location_code": row["location_code"],
+            "location_name": row["employee_location_name"],
+            "layout_version": int(row["map_position"]["version"]),
+        }
+        for row in target_rows
+        if row.get("map_position") and int(row["map_position"].get("version") or 0) > 0
+    ]
+
+    dispatch_pallets = [
+        pallet
+        for pallet in pallets
+        if pallet.location is not None
+        and pallet.location.location_code == DIRECT_DISPATCH_LOCATION_CODE
+    ]
+    completion_ids = {
+        int(lot.source_ref_id)
+        for pallet in dispatch_pallets
+        for item in pallet.items
+        if item.inventory_lot_id is not None
+        and (lot := positive_lots_by_id.get(int(item.inventory_lot_id))) is not None
+        and lot.source_ref_type == "production_completion"
+        and lot.source_ref_id is not None
+    }
+    completion_facts = {
+        int(completion.id): (completion, item, order)
+        for completion, item, order in db.execute(
+            select(ProductionCompletion, OrderItem, Order)
+            .join(OrderItem, OrderItem.id == ProductionCompletion.order_item_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(ProductionCompletion.id.in_(completion_ids))
+        ).all()
+    } if completion_ids else {}
+
+    terminal_order_statuses = {
+        "delivered", "completed", "archived", "closed", "dead", "cancelled"
+    }
+    candidates = []
+    for pallet in dispatch_pallets:
+        pallet_lots: list[InventoryLot] = []
+        invalid = not pallet.items
+        for item in pallet.items:
+            if item.inventory_lot_id is None:
+                invalid = invalid or float(item.quantity or 0) > 0
+                continue
+            lot = positive_lots_by_id.get(int(item.inventory_lot_id))
+            if lot is None:
+                invalid = True
+                continue
+            if (
+                item.match_status != "matched"
+                or lot.inventory_type != "finished"
+                or lot.status != "active"
+                or int(lot.quantity_damaged or 0) > 0
+                or _usable_quantity(lot) <= 0
+                or lot.warehouse_location_id != pallet.location_id
+                or lot.source_ref_type != "production_completion"
+                or lot.source_ref_id is None
+            ):
+                invalid = True
+                continue
+            pallet_lots.append(lot)
+        source_ids = {int(lot.source_ref_id) for lot in pallet_lots}
+        if invalid or not pallet_lots or len(source_ids) != 1:
+            continue
+        completion_fact = completion_facts.get(next(iter(source_ids)))
+        if completion_fact is None:
+            continue
+        completion, order_item, order = completion_fact
+        if (
+            completion.status != "posted"
+            or completion.initial_disposition != "direct"
+            or order.status in terminal_order_statuses
+            or any(
+                int(lot.source_ref_id or 0) != int(completion.id)
+                for lot in pallet_lots
+            )
+        ):
+            continue
+        completion_date = utc_naive_to_beijing_date(completion.completed_at)
+        age_days = max(0, (as_of - completion_date).days)
+        if age_days < idle_days:
+            continue
+        item_payloads = [_lot_payload(lot, as_of) for lot in pallet_lots]
+        candidates.append(
+            {
+                "pallet_id": int(pallet.id),
+                "pallet_code": pallet.pallet_code,
+                "version": int(pallet.version),
+                "source_location_id": int(pallet.location_id),
+                "source_location_code": pallet.location.location_code,
+                "source_location_name": employee_location_name(pallet.location),
+                "completion_id": int(completion.id),
+                "completed_date": completion_date.isoformat(),
+                "idle_days": age_days,
+                "order_id": int(order.id),
+                "order_number": order.order_number,
+                "order_item_id": int(order_item.id),
+                "delivery_date": (
+                    order.delivery_date.isoformat() if order.delivery_date else None
+                ),
+                "quantity": sum(_physical_quantity(lot) for lot in pallet_lots),
+                "unit": pallet_lots[0].unit,
+                "customer_id": item_payloads[0].get("customer_id"),
+                "customer_name": item_payloads[0].get("customer_name"),
+                "product_names": sorted(
+                    {
+                        str(item.get("product_name") or "产品名称待补充")
+                        for item in item_payloads
+                    }
+                ),
+                "lot_ids": [int(lot.id) for lot in pallet_lots],
+                "recommended_floor_code": "3F",
+                "recommended_area_code": DELAYED_DISPATCH_LEFT_AREA_CODE,
+                "can_plan_move": bool(targets),
+            }
+        )
+    candidates.sort(key=lambda row: (-int(row["idle_days"]), int(row["pallet_id"])))
+    return {
+        "policy": {
+            "idle_days": idle_days,
+            "minimum_idle_days": 1,
+            "maximum_idle_days": 30,
+            "source_location_code": DIRECT_DISPATCH_LOCATION_CODE,
+            "recommended_floor_code": "3F",
+            "recommended_area_code": DELAYED_DISPATCH_LEFT_AREA_CODE,
+            "writes_inventory": False,
+            "notice": (
+                "这里只列出可整理的真实待送栈板，不会自动改库存位置；"
+                "请先完成现场搬运，再使用现有移货确认提交。"
+            ),
+        },
+        "candidate_count": len(candidates),
+        "available_target_count": len(targets),
+        "targets": targets,
+        "items": candidates,
+    }
 
 
 def _location_position(
@@ -866,6 +1033,7 @@ def build_warehouse_twin_dashboard(
     visible_customer_ids: set[int] | None,
     days: int,
     as_of: date,
+    dispatch_idle_days: int = 3,
     stocktake_decrease_issues: dict[int, str | None] | None = None,
 ) -> dict:
     """Build one read-only projection from formal lots, pallets, locations and movements."""
@@ -1475,6 +1643,16 @@ def build_warehouse_twin_dashboard(
             }
         )
 
+    delayed_dispatch = _delayed_direct_dispatch_projection(
+        db,
+        pallets=visible_pallets,
+        positive_lots_by_id=positive_lots_by_id,
+        location_payloads=location_rows,
+        as_of=as_of,
+        idle_days=dispatch_idle_days,
+        hide_empty_targets=visible_customer_ids is not None,
+    )
+
     return {
         "schema_version": "P1-29-v1",
         "mode": "erp_business_twin",
@@ -1483,6 +1661,7 @@ def build_warehouse_twin_dashboard(
         "generated_at": utc_naive_to_api(utc_now_naive()),
         "as_of_date": as_of.isoformat(),
         "days": days,
+        "delayed_dispatch_relocation": delayed_dispatch,
         "scope": {
             "customer_restricted": visible_customer_ids is not None,
             "notice": (

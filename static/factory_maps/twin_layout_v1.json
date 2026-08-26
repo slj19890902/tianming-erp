@@ -10821,9 +10821,9 @@
         {
           "id": "26849258-36f1-4620-815d-29d50e683578",
           "feature_code": "ZONE-3F-SEMI-008",
-          "name": "左区L9 半成品区（最南整合）",
+          "name": "左区·延期待送周转区",
           "feature_kind": "zone",
-          "subtype": "semi_finished",
+          "subtype": "temporary_turnover",
           "points": [
             [
               -16610.0,
@@ -10856,21 +10856,23 @@
           "storage_mode": "floor",
           "elevation_mm": 0.0,
           "storage_height_mm": 1000.0,
-          "color": "#60a5fa",
+          "color": "#8b5cf6",
           "area_mm2": 53478949.0,
           "source": "manual",
           "status": "confirmed",
           "is_locked": true,
-          "version": 4,
+          "version": 5,
           "erp_area_code": "SEMI-008",
           "allowed_inventory_types": [
+            "finished",
             "semi_finished"
           ],
           "storage_layout": "pallet_ground",
-          "formal_area_name": "左区L9 半成品区（最南整合）",
+          "formal_area_name": "左区·延期待送周转区",
           "formal_area_id": 40,
           "formal_floor_id": 1,
-          "measurement_source": "current_map_confirmed_2026-08-26"
+          "measurement_source": "owner_confirmed_2026-08-27",
+          "usage_notice": "仅供延期待送成品栈板与少量半成品周转；系统只推荐空位，现场搬运后才确认移货。"
         },
         {
           "id": "a939e56e-f616-4048-bc4c-28127304fb3f",
@@ -11627,8 +11629,8 @@
         "SEMI-011"
       ],
       "pallets_inventory_linked": false,
-      "layout_edited_at": "2026-08-26T21:30:00+08:00",
-      "revision": "e5f192ba605185db",
+      "layout_edited_at": "2026-08-27T12:00:00+08:00",
+      "revision": "3994317ae14a7f18",
       "site_layout_receipt": "P1-16D-2-20260808",
       "layout_edit_receipts": [
         {
@@ -12579,6 +12581,36 @@
           ],
           "measurement_source": "owner_confirmed_2026-08-26",
           "previous_revision": "626699b76d91de90"
+        },
+        {
+          "action": "p1_107.third_floor_right_left_delayed_dispatch",
+          "changed_area_codes": [
+            "A1",
+            "A2",
+            "AB1",
+            "AB2",
+            "B1",
+            "B2",
+            "C1",
+            "C2",
+            "CD1",
+            "D1",
+            "D2",
+            "DE1",
+            "E1",
+            "E2",
+            "E3",
+            "F1",
+            "F12",
+            "F2",
+            "F3",
+            "F34",
+            "F4",
+            "SEMI-008"
+          ],
+          "measurement_source": "owner_confirmed_2026-08-27",
+          "inventory_effect": "none_until_confirmed_physical_move",
+          "previous_revision": "e5f192ba605185db"
         }
       ]
     }
@@ -12629,5 +12661,35 @@
       "SEMI-010",
       "SEMI-011"
     ]
+  },
+  "p1_107_delayed_dispatch_relocation": {
+    "measurement_source": "owner_confirmed_2026-08-27",
+    "previous_floor3_revision": "e5f192ba605185db",
+    "floor3_revision": "3994317ae14a7f18",
+    "right_area_codes": [
+      "A1",
+      "A2",
+      "AB1",
+      "AB2",
+      "B1",
+      "B2",
+      "C1",
+      "C2",
+      "CD1",
+      "D1",
+      "D2",
+      "DE1",
+      "E1",
+      "E2",
+      "E3",
+      "F1",
+      "F12",
+      "F2",
+      "F3",
+      "F34",
+      "F4"
+    ],
+    "left_delayed_dispatch_area_code": "SEMI-008",
+    "physical_move_required_before_inventory_write": true
   }
 }

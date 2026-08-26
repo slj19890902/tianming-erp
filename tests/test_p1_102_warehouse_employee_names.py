@@ -74,7 +74,7 @@ def test_every_legacy_v11_right_area_uses_one_floor_scoped_default() -> None:
         assert employee_area_name(area, floor_number=3) == f"右区{code}"
 
 
-def test_custom_area_name_wins_and_other_floor_or_left_area_is_not_rewritten() -> None:
+def test_custom_right_area_keeps_description_and_other_areas_are_not_rewritten() -> None:
     floor3 = _floor(3)
     floor1 = _floor(1)
 
@@ -82,7 +82,7 @@ def test_custom_area_name_wins_and_other_floor_or_left_area_is_not_rewritten() -
     left = _area(floor3, area_code="RAW-001", area_name="左区L3 原料区（上段）")
     floor1_a1 = _area(floor1, area_code="A1", area_name="A1 区")
 
-    assert employee_area_name(custom, floor_number=3) == "三楼北侧成品区"
+    assert employee_area_name(custom, floor_number=3) == "右区A1·北侧成品区"
     assert employee_area_name(left, floor_number=3) == "左区L3 原料区（上段）"
     assert employee_area_name(floor1_a1, floor_number=1) == "A1 区"
 
@@ -98,7 +98,7 @@ def test_custom_area_name_with_floor_prefix_is_not_duplicated_in_location() -> N
     )
 
     assert employee_location_name(location, area=area, floor=floor) == (
-        "三楼北侧成品区·左侧第1位"
+        "三楼 右区A1·北侧成品区·左侧第1位"
     )
 
 

@@ -261,6 +261,53 @@ interface DashboardLocation {
   loose_items: InventoryItem[];
 }
 
+interface DelayedDispatchCandidate {
+  pallet_id: number;
+  pallet_code: string;
+  version: number;
+  source_location_id: number;
+  source_location_code: string;
+  source_location_name: string;
+  completion_id: number;
+  completed_date: string;
+  idle_days: number;
+  order_id: number;
+  order_number: string;
+  order_item_id: number;
+  delivery_date?: string | null;
+  quantity: number;
+  unit: string;
+  customer_id?: number | null;
+  customer_name?: string | null;
+  product_names: string[];
+  lot_ids: number[];
+  recommended_floor_code: "3F";
+  recommended_area_code: "SEMI-008";
+  can_plan_move: boolean;
+}
+
+interface DelayedDispatchRelocation {
+  policy: {
+    idle_days: number;
+    minimum_idle_days: number;
+    maximum_idle_days: number;
+    source_location_code: string;
+    recommended_floor_code: "3F";
+    recommended_area_code: "SEMI-008";
+    writes_inventory: false;
+    notice: string;
+  };
+  candidate_count: number;
+  available_target_count: number;
+  targets: Array<{
+    location_id: number;
+    location_code: string;
+    location_name: string;
+    layout_version: number;
+  }>;
+  items: DelayedDispatchCandidate[];
+}
+
 type LocationLayoutGeometry = NonNullable<ReturnType<typeof locationLayoutGeometry>>;
 
 interface AuthResponse {
@@ -291,6 +338,7 @@ interface TwinDashboard {
   };
   floors: Array<{ floor_code: string; occupied_locations: number; active_lots: number }>;
   locations: DashboardLocation[];
+  delayed_dispatch_relocation?: DelayedDispatchRelocation;
   unlocated_inventory?: SearchItem[];
   distribution: { areas: AreaDistribution[] };
 }
@@ -1523,12 +1571,17 @@ export function WarehouseTwinApp() {
   const [groundStorageBusy, setGroundStorageBusy] = useState(false);
   const [groundStorageMessage, setGroundStorageMessage] = useState("");
   const [groundStorageIdempotencyKey, setGroundStorageIdempotencyKey] = useState(() => operationKey("ground-storage"));
+  const [dispatchIdleDays, setDispatchIdleDays] = useState(3);
 
   const refreshDashboard = useCallback(async () => {
-    const value = await requestJson<TwinDashboard>("/api/warehouse/twin-dashboard/overview?days=30");
+    const params = new URLSearchParams({
+      days: "30",
+      dispatch_idle_days: String(dispatchIdleDays)
+    });
+    const value = await requestJson<TwinDashboard>(`/api/warehouse/twin-dashboard/overview?${params.toString()}`);
     setDashboard(value);
     return value;
-  }, []);
+  }, [dispatchIdleDays]);
 
   useEffect(() => {
     refreshDashboard().catch((reason: Error) => setError(reason.message));
@@ -3030,6 +3083,29 @@ export function WarehouseTwinApp() {
     setMoveDraftTargetLocationId("");
     setMoveTargetFloorCode((current) => current || source.source_floor_code);
     setWarehouseOperationMessage(`已选货物：${source.source_floor_code} · ${source.source_location_name}；请选择要移动到的空货位。`);
+  };
+
+  const prepareDelayedDispatchMove = async (candidate: DelayedDispatchCandidate) => {
+    if (!canExecuteWarehouse || !dispatchStagingLocation) {
+      setWarehouseOperationMessage("当前账号不能执行仓库移货，或待送位置尚未加载；请刷新后重试。");
+      return;
+    }
+    const pallet = dispatchStagingPallets.find((item) => item.pallet_id === candidate.pallet_id);
+    const source = pallet ? palletMoveSource(dispatchStagingLocation, pallet) : null;
+    if (!source) {
+      setWarehouseOperationMessage("这块待送栈板已变化，请刷新后按最新库存重新选择。");
+      return;
+    }
+    if (mapMode !== "move") await enterWarehouseMoveMode();
+    setMoveAction("relocate");
+    chooseMoveSource(source);
+    setFloorCode("3F");
+    setMoveTargetFloorCode("3F");
+    setMoveTargetAreaCode(candidate.recommended_area_code);
+    setMoveDraftTargetLocationId("");
+    setWarehouseOperationMessage(
+      `已选择 ${candidate.pallet_code}；请先把真实栈板搬到三楼左区，再选择一个空货位加入草稿并确认提交。当前尚未改库存位置。`
+    );
   };
 
   const queueMoveDraft = (source: WarehouseMoveSource, target: DashboardLocation) => {
@@ -4608,6 +4684,21 @@ export function WarehouseTwinApp() {
           </div>
           <div className="twin-layout-editor-actions"><button type="button" onClick={() => updateRackDraft(selectedRackEditDraft.id, { rotation_deg: ((selectedRackEditDraft.rotation_deg + 90) % 360) as Rack["rotation_deg"] })}>旋转 90°</button><button type="button" className="primary" disabled={spatialEditBusy} onClick={saveSelectedRack}>保存到草稿</button><button type="button" disabled={spatialEditBusy} onClick={() => setRackDrafts((current) => { const next = { ...current }; delete next[selectedRackEditDraft.id]; return next; })}>取消本次修改</button><button type="button" className="danger" disabled={spatialEditBusy || selectedRackEditDraft.is_locked} onClick={deleteSelectedRack}>从草稿删除</button></div>
           <p>保存后仍是管理员草稿；校验并发布前，员工地图、库存数量、栈板和正式库位均不改变。</p>
+        </section>}
+        {dashboard?.delayed_dispatch_relocation && <section className="twin-location-card twin-delayed-dispatch-board">
+          <div className="twin-location-card-title"><div><small>三楼左区 · 延期待送整理</small><b>超过几天未送货</b></div><em className={dashboard.delayed_dispatch_relocation.candidate_count ? "occupied" : "empty"}>{dashboard.delayed_dispatch_relocation.candidate_count} 块</em></div>
+          <label className="twin-delayed-days"><span>未送货天数</span><select value={dispatchIdleDays} onChange={(event) => setDispatchIdleDays(Number(event.target.value))}>{Array.from({ length: 30 }, (_, index) => index + 1).map((value) => <option value={value} key={value}>{value} 天</option>)}</select></label>
+          <div className="twin-dispatch-summary"><b>{dashboard.delayed_dispatch_relocation.available_target_count}</b><span>个左区可用空栈板位</span><small>{dashboard.delayed_dispatch_relocation.policy.notice}</small></div>
+          <div className="twin-dispatch-label-list">
+            {dashboard.delayed_dispatch_relocation.items.map((candidate) => <button type="button" key={`delayed-dispatch-${candidate.pallet_id}`} disabled={!canExecuteWarehouse || !candidate.can_plan_move} onClick={() => prepareDelayedDispatchMove(candidate)}>
+              <small>{candidate.order_number} · 已等待 {candidate.idle_days} 天</small>
+              <b>{formatNumber(candidate.quantity)} {inventoryUnitLabel(candidate.unit)}</b>
+              <strong>{candidate.pallet_code} · {candidate.product_names.join("、")}</strong>
+              <span>{candidate.customer_name || "客户待确认"} · 完工 {candidate.completed_date}</span>
+            </button>)}
+            {!dashboard.delayed_dispatch_relocation.candidate_count && <p>当前没有达到所选天数、且仍在一楼待送区的订单栈板。</p>}
+          </div>
+          {dashboard.delayed_dispatch_relocation.candidate_count > 0 && dashboard.delayed_dispatch_relocation.available_target_count === 0 && <p className="twin-dispatch-weather-note">三楼左区目前没有通过实测地图门禁的空栈板位，因此只提示、不允许形成移货草稿。</p>}
         </section>}
         {selectedDispatchPallet && dispatchStagingLocation && <section className="twin-location-card twin-dispatch-board">
           {(() => {

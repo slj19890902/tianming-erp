@@ -242,8 +242,17 @@ export function employeeAreaName(area, context = {}) {
   const floor = context.floorCode ?? context.floorNumber ?? area?.floor_code ?? area?.floor_number ?? area?.warehouse_floor;
   const formalName = String(area?.formal_area_name || area?.area_name || "").trim();
   const usesRightDefault = isFloorThree(floor) && LEGACY_V11_RIGHT_AREA_CODES.has(code);
-  if (formalName && !(usesRightDefault && isGenericLegacyAreaName(formalName, code))) return formalName;
-  if (usesRightDefault) return `右区${code}`;
+  if (usesRightDefault) {
+    const rightLabel = `右区${code}`;
+    if (!formalName || isGenericLegacyAreaName(formalName, code)) return rightLabel;
+    if (formalName.replace(/\s+/g, "").includes(rightLabel)) return formalName;
+    const escapedCode = code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const description = formalName
+      .replace(new RegExp(`^(?:三楼\\s*)?(?:${escapedCode}(?:\\s*区)?\\s*)?`, "i"), "")
+      .replace(/^[\s·-]+|[\s·-]+$/g, "");
+    return description ? `${rightLabel}·${description}` : rightLabel;
+  }
+  if (formalName) return formalName;
   return formalName || String(area?.name || "").trim() || code || "区域名称待完善";
 }
 

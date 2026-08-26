@@ -227,8 +227,14 @@ def dispatch_pallet_app(production_app, monkeypatch: pytest.MonkeyPatch):
         },
         3: {
             "revision": CURRENT_MAP_REVISION,
-            "zones_by_id": {"zone-3f-fg-004": "FG-004"},
-            "zone_ids_by_area": {"FG-004": ("zone-3f-fg-004",)},
+            "zones_by_id": {
+                "zone-3f-fg-004": "FG-004",
+                "zone-3f-semi-008": "SEMI-008",
+            },
+            "zone_ids_by_area": {
+                "FG-004": ("zone-3f-fg-004",),
+                "SEMI-008": ("zone-3f-semi-008",),
+            },
         },
     }
     monkeypatch.setattr(
@@ -324,7 +330,23 @@ def dispatch_pallet_app(production_app, monkeypatch: pytest.MonkeyPatch):
             area_code="FG-004",
             feature_id="zone-3f-fg-004",
         )
-        db.add_all([floor1, floor3, dispatch_area, floor1_area, floor3_area])
+        delayed_dispatch_area = _published_area(
+            floor3,
+            area_code="SEMI-008",
+            feature_id="zone-3f-semi-008",
+        )
+        delayed_dispatch_area.area_name = "左区·延期待送周转区"
+        delayed_dispatch_area.storage_policy.allowed_inventory_types_json = (
+            '["finished","semi_finished"]'
+        )
+        db.add_all([
+            floor1,
+            floor3,
+            dispatch_area,
+            floor1_area,
+            floor3_area,
+            delayed_dispatch_area,
+        ])
         db.flush()
         staging.floor3_layout = Floor3LocationLayout(
             left_pct=4,
@@ -350,7 +372,16 @@ def dispatch_pallet_app(production_app, monkeypatch: pytest.MonkeyPatch):
             source_version="TWIN_V1",
             sort_order=102,
         )
-        db.add_all([floor1_target, floor3_target])
+        delayed_dispatch_target = _mapped_location(
+            code="3F-SEMI008-P149B-01",
+            floor_number=3,
+            area_code="SEMI-008",
+            source_version="CURRENT_MAP",
+            sort_order=103,
+        )
+        delayed_dispatch_target.warehouse_type = "shared"
+        delayed_dispatch_target.floor3_layout.layout_kind = "physical_pallet"
+        db.add_all([floor1_target, floor3_target, delayed_dispatch_target])
         db.flush()
         _published_ground_plan(
             db,
@@ -365,6 +396,13 @@ def dispatch_pallet_app(production_app, monkeypatch: pytest.MonkeyPatch):
             locations=[floor3_target],
             operator_id=admin.id,
             key="floor3-target",
+        )
+        _published_ground_plan(
+            db,
+            area=delayed_dispatch_area,
+            locations=[delayed_dispatch_target],
+            operator_id=admin.id,
+            key="delayed-dispatch-target",
         )
 
         first_lot = db.get(InventoryLot, first.inventory_lot_id)
@@ -417,6 +455,7 @@ def dispatch_pallet_app(production_app, monkeypatch: pytest.MonkeyPatch):
             "legacy_loose": legacy_loose.id,
             "floor1_target": floor1_target.id,
             "floor3_target": floor3_target.id,
+            "delayed_dispatch_target": delayed_dispatch_target.id,
         }
     yield app, factory, result
 

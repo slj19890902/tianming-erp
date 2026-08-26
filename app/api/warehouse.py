@@ -11651,6 +11651,7 @@ def _twin_dashboard_source_rows(
 @router.get("/twin-dashboard/overview")
 def get_warehouse_twin_dashboard(
     days: int = Query(default=30),
+    dispatch_idle_days: int = Query(default=3, ge=1, le=30),
     db: Session = Depends(get_db),
     user: User = Depends(_can_locate_twin),
 ) -> dict:
@@ -11669,6 +11670,7 @@ def get_warehouse_twin_dashboard(
         visible_customer_ids=visible_customer_ids,
         days=days,
         as_of=beijing_today(),
+        dispatch_idle_days=dispatch_idle_days,
         stocktake_decrease_issues=decrease_issues,
     )
 

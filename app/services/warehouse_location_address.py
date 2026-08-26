@@ -370,10 +370,10 @@ def employee_area_name(
 ) -> str:
     """Return the single employee-facing area name without changing its identity.
 
-    The 22 measured V11 areas on the right side historically persisted only
-    generic labels such as ``A1 区``.  Until an administrator publishes a real
-    area name, their employee default is ``右区A1``.  A non-generic formal name
-    always wins, so later area-planning edits flow through every projection.
+    The 22 measured A--F areas are all on the third floor's right side.  Their
+    employee name therefore always begins with ``右区{code}``; a useful formal
+    description is retained after the stable zone label instead of hiding the
+    right/left orientation.
     """
 
     code = str(
@@ -394,13 +394,20 @@ def employee_area_name(
     formal_name = str(
         _area_projection_value(area, "formal_area_name", "area_name") or ""
     ).strip()
-    if formal_name and not (
-        uses_v11_right_default
-        and _is_generic_legacy_area_name(formal_name, code)
-    ):
-        return formal_name
     if uses_v11_right_default:
-        return f"右区{code}"
+        right_label = f"右区{code}"
+        if not formal_name or _is_generic_legacy_area_name(formal_name, code):
+            return right_label
+        if right_label in formal_name.replace(" ", ""):
+            return formal_name
+        description = re.sub(
+            rf"^(?:三楼\s*)?(?:{re.escape(code)}(?:\s*区)?\s*)?",
+            "",
+            formal_name,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip(" ·-")
+        return f"{right_label}·{description}" if description else right_label
     if formal_name:
         return formal_name
     fallback = str(

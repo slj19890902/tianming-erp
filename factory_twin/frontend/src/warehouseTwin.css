@@ -927,6 +927,10 @@ body.warehouse-twin-page {
 .twin-dispatch-summary b { color: #0f766e; font: 900 17px Consolas, monospace; }
 .twin-dispatch-summary span { color: #294653; font-size: 9px; font-weight: 800; }
 .twin-dispatch-summary small { grid-column: 1 / -1; color: #718590; font-size: 7px; line-height: 1.4; }
+.twin-delayed-dispatch-board { border-left: 3px solid #2563eb; }
+.twin-delayed-days { margin: 7px 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.twin-delayed-days span { color: #294653; font-size: 8px; font-weight: 800; }
+.twin-delayed-days select { min-width: 82px; }
 .twin-dispatch-label-list { margin-top: 7px; max-height: 270px; display: grid; gap: 5px; overflow-y: auto; scrollbar-color: #9ab0b8 #eef2f4; }
 .twin-dispatch-label-list > button { padding: 7px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 7px; border: 1px solid #cbdadf; border-left: 3px solid #d49314; border-radius: 3px; color: #294653; background: #fff; text-align: left; }
 .twin-dispatch-label-list > button:hover,

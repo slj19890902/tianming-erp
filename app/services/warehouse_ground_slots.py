@@ -37,7 +37,7 @@ from app.services.warehouse_location_address import employee_location_name
 
 
 GROUND_LAYOUT_SOURCE_VERSION = "P1-87"
-GROUND_LOCATION_SOURCE_VERSION = "TWIN_V1"
+GROUND_LOCATION_SOURCE_VERSION = "CURRENT_MAP"
 NUMBERING_ORIGINS = {"south", "north", "west", "east"}
 ROW_DIRECTIONS = {"from_aisle_inward", "from_inside_outward"}
 SLOT_DIRECTIONS = {"left_to_right", "right_to_left"}

@@ -29,7 +29,7 @@ from app.models.warehouse_inventory import (
 
 WAREHOUSE_LOCATION_ADDRESS_LOCK = RLock()
 MANAGED_ADDRESS_KINDS = {"rack_slot", "ground_slot"}
-MEASURED_MAP_LOCATION_SOURCES = {"V11", "TWIN_V1"}
+MEASURED_MAP_LOCATION_SOURCES = {"V11", "TWIN_V1", "CURRENT_MAP"}
 LEGACY_V11_RIGHT_AREA_CODES = frozenset(
     {
         "A1",
@@ -181,7 +181,7 @@ def published_measured_map_readiness(
             )
         feature_id = feature_ids[0]
     else:
-        if not legacy_v11 and source_version != "TWIN_V1":
+        if not legacy_v11 and source_version not in {"TWIN_V1", "CURRENT_MAP"}:
             return PublishedMeasuredMapReadiness(
                 "area_only",
                 "该库位不是当前实测地图生成的正式位置",
@@ -222,10 +222,16 @@ def published_measured_map_readiness(
                 "area_only",
                 "该库位所属区域与当前运行地图要素不一致",
             )
-    if not legacy_v11 and str(location.storage_type or "").strip().lower() in {
+    if (
+        not legacy_v11
+        and str(location.address_kind or "").strip().lower() != "functional"
+        and str(_policy_value(policy, "storage_layout") or "").strip().lower()
+        != "functional"
+        and str(location.storage_type or "").strip().lower() in {
         "ground",
         "temporary_aisle",
-    }:
+        }
+    ):
         ground_status = str((ground_layout or {}).get("status") or "")
         ground_revision = str(
             (ground_layout or {}).get("published_map_revision") or ""

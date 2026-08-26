@@ -2070,6 +2070,8 @@ def _location_dict(
             "warehouse_floor": None,
             "area_code": None,
             "storage_type": None,
+            "storage_layout": None,
+            "can_receive_pallet": False,
             "level_no": None,
             "side_code": None,
             "sort_order": 0,
@@ -2104,6 +2106,12 @@ def _location_dict(
         position_status=str(projection["position_status"]),
     )
     layout = context.get("layout")
+    policy = context.get("policy")
+    storage_layout = (
+        policy.storage_layout
+        if isinstance(policy, WarehouseAreaStoragePolicy)
+        else None
+    )
     return {
         "id": row.id,
         "location_code": row.location_code,
@@ -2113,6 +2121,13 @@ def _location_dict(
         "warehouse_floor": getattr(row, "warehouse_floor", None),
         "area_code": getattr(row, "area_code", None),
         "storage_type": getattr(row, "storage_type", None),
+        "storage_layout": storage_layout,
+        "can_receive_pallet": bool(
+            row.address_kind != "functional"
+            and storage_layout in {"pallet_ground", "mixed"}
+            and isinstance(layout, Floor3LocationLayout)
+            and layout.layout_kind == "physical_pallet"
+        ),
         "level_no": getattr(row, "level_no", None),
         "side_code": getattr(row, "side_code", None),
         "sort_order": getattr(row, "sort_order", 0),
@@ -3968,7 +3983,7 @@ def _floor3_get_pallet(db: Session, pallet_id: int) -> InventoryPallet:
         if (
             location is None
             or location.warehouse_floor != 3
-            or location.source_version != "V11"
+            or location.source_version not in {"V11", "CURRENT_MAP"}
         ):
             raise HTTPException(status_code=404, detail="三楼实测区域栈板不存在")
     return row
@@ -4732,7 +4747,7 @@ def _legacy_fin_ground_locations(
                 WarehouseLocation.is_active.is_(True),
                 WarehouseLocation.placement_status == "placed",
                 WarehouseLocation.storage_type == "ground",
-                WarehouseLocation.source_version == "TWIN_V1",
+                WarehouseLocation.source_version.in_(("TWIN_V1", "CURRENT_MAP")),
                 Floor3LocationLayout.layout_kind.in_(("physical_pallet", "unknown")),
             )
             .order_by(WarehouseLocation.sort_order, WarehouseLocation.id)
@@ -5157,7 +5172,7 @@ def publish_ground_layout(
                         storage_type="ground",
                         sort_order=int(slot["route_sequence"]),
                         is_temporary=False,
-                        source_version="TWIN_V1",
+                        source_version=AREA_LOCATION_SOURCE_VERSION,
                         address_kind="ground_slot",
                         address_area_id=area.id,
                         ground_row_no=int(slot["row_no"]),
@@ -6713,7 +6728,7 @@ def list_floor3_locations(
         selectinload(WarehouseLocation.address_area).selectinload(WarehouseArea.floor),
     ).where(
         WarehouseLocation.warehouse_floor == 3,
-        WarehouseLocation.source_version == "V11",
+        WarehouseLocation.source_version.in_(("V11", "CURRENT_MAP")),
     )
     if not include_inactive:
         query = query.where(WarehouseLocation.is_active.is_(True))
@@ -6836,7 +6851,7 @@ def get_floor3_location(
         ).where(
             WarehouseLocation.id == location_id,
             WarehouseLocation.warehouse_floor == 3,
-            WarehouseLocation.source_version == "V11",
+            WarehouseLocation.source_version.in_(("V11", "CURRENT_MAP")),
         )
     )
     if location is None:
@@ -8172,7 +8187,7 @@ def correct_twin_inventory_lot_quantity(
     if (
         location is None
         or location.warehouse_floor != 3
-        or location.source_version != "V11"
+        or location.source_version not in {"V11", "CURRENT_MAP"}
     ):
         raise HTTPException(status_code=409, detail="地图库存纠偏只允许三楼已接入库位")
     if payload.action == "remove":
@@ -9137,7 +9152,7 @@ class TwinZoneStoragePolicyPayload(BaseModel):
             "temporary_turnover",
         ]
     ] = Field(min_length=1, max_length=6)
-    storage_layout: Literal["rack", "pallet_ground", "mixed"]
+    storage_layout: Literal["rack", "pallet_ground", "mixed", "functional"]
     erp_area_code: str = Field(min_length=1, max_length=30)
     area_name: str | None = Field(default=None, max_length=100)
     existing_area_id: int | None = Field(default=None, ge=1)
@@ -9173,7 +9188,7 @@ class TwinZoneConfirmAreaPayload(BaseModel):
         "print_plate",
         "temporary_turnover",
     ]
-    storage_layout: Literal["rack", "pallet_ground"]
+    storage_layout: Literal["rack", "pallet_ground", "functional"]
     max_pallet_capacity: int = Field(ge=0, le=500)
     erp_area_code: str = Field(min_length=1, max_length=30)
     area_name: str | None = Field(default=None, max_length=100)
@@ -10615,6 +10630,7 @@ def _ensure_one_step_pallet_locations(
     } - {""}
     if len(existing_sources) > 1 or existing_sources - {
         "V11",
+        "TWIN_V1",
         AREA_LOCATION_SOURCE_VERSION,
     }:
         raise WarehouseAreaActivationError(
@@ -11238,7 +11254,7 @@ def confirm_twin_zone_area(
                 created_locations = []
                 planned_location_count = payload.max_pallet_capacity
                 location_layout_result = {
-                    "source_version": "TWIN_V1",
+                    "source_version": AREA_LOCATION_SOURCE_VERSION,
                     "enabled_ids": [],
                     "disabled_ids": [],
                     "reflow": None,

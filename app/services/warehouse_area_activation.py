@@ -26,7 +26,7 @@ from app.services.floor3_locations import (
 )
 
 
-AREA_LOCATION_SOURCE_VERSION = "TWIN_V1"
+AREA_LOCATION_SOURCE_VERSION = "CURRENT_MAP"
 FORMAL_INVENTORY_USAGES = frozenset({"finished", "semi_finished"})
 AREA_POLICY_INVENTORY_USAGES = frozenset(
     {
@@ -304,11 +304,11 @@ def resolve_area_location_management(
         str(value).strip() for value in raw_sources if str(value or "").strip()
     }
     has_unversioned_rows = any(not str(value or "").strip() for value in raw_sources)
-    supported_sources = {"V11", AREA_LOCATION_SOURCE_VERSION}
+    supported_sources = {"V11", "TWIN_V1", AREA_LOCATION_SOURCE_VERSION}
     if (
         has_unversioned_rows
         or source_versions - supported_sources
-        or source_versions == supported_sources
+        or len(source_versions) > 1
     ):
         raise WarehouseAreaActivationError(
             f"{normalized_area} 区库位来源冲突，请停止操作并核对正式区域台账",
@@ -318,7 +318,7 @@ def resolve_area_location_management(
     if (
         floor.floor_number == 3
         and normalized_area in FLOOR3_LAYOUT_AREA_CODES
-        and AREA_LOCATION_SOURCE_VERSION not in source_versions
+        and source_versions == {"V11"}
     ):
         return AreaLocationManagementRoute(
             floor_code=floor.floor_code.upper(),
@@ -410,15 +410,20 @@ def location_warehouse_type(policy: WarehouseAreaStoragePolicy) -> str | None:
     return location_warehouse_type_for_inventory_types(policy_inventory_types(policy))
 
 
-def location_storage_type_for_layout(storage_layout: str) -> str:
+def location_storage_type_for_layout(storage_layout: str) -> str | None:
     if storage_layout == 'rack':
         return "rack"
+    if storage_layout == "functional":
+        # Functional zones still need a placed address for the inventory
+        # integrity gate, but are never pallet destinations.  The area policy
+        # and functional address kind provide that fail-closed distinction.
+        return "temporary_aisle"
     # A mixed area can contain separately modelled racks; automatically
     # generated positions are ground/pallet positions and never fake rack bays.
     return "ground"
 
 
-def location_storage_type(policy: WarehouseAreaStoragePolicy) -> str:
+def location_storage_type(policy: WarehouseAreaStoragePolicy) -> str | None:
     return location_storage_type_for_layout(policy.storage_layout)
 
 
@@ -819,13 +824,37 @@ def adjust_area_location_count(
         )
     normalized_floor = floor.floor_code.upper()
     normalized_area = area.area_code.upper()
+    existing_sources = {
+        str(value).strip()
+        for value in db.scalars(
+            select(WarehouseLocation.source_version)
+            .where(
+                WarehouseLocation.warehouse_floor == floor.floor_number,
+                func.upper(WarehouseLocation.area_code) == normalized_area,
+            )
+            .distinct()
+        ).all()
+        if str(value or "").strip()
+    }
+    if existing_sources == {"TWIN_V1"}:
+        # Keep an isolated pre-migration area's existing identity while it is
+        # being edited.  The P0-26 data migration converts every formal row to
+        # CURRENT_MAP atomically, so production never remains in this state.
+        location_source_version = "TWIN_V1"
+    elif not existing_sources or existing_sources == {AREA_LOCATION_SOURCE_VERSION}:
+        location_source_version = AREA_LOCATION_SOURCE_VERSION
+    else:
+        raise WarehouseAreaActivationError(
+            f"{normalized_area} 区库位来源冲突，请停止操作并核对正式区域台账",
+            status_code=409,
+        )
     all_rows = list(
         db.scalars(
             select(WarehouseLocation)
             .options(selectinload(WarehouseLocation.floor3_layout))
             .where(
                 WarehouseLocation.warehouse_floor == floor.floor_number,
-                WarehouseLocation.source_version == AREA_LOCATION_SOURCE_VERSION,
+                WarehouseLocation.source_version == location_source_version,
                 func.upper(WarehouseLocation.area_code) == normalized_area,
             )
             .order_by(WarehouseLocation.sort_order, WarehouseLocation.id)
@@ -909,7 +938,7 @@ def adjust_area_location_count(
                     storage_type=location_storage_type(policy),
                     sort_order=next_sort,
                     is_temporary=False,
-                    source_version=AREA_LOCATION_SOURCE_VERSION,
+                    source_version=location_source_version,
                     placement_status="placed" if was_published else "unplaced",
                 )
                 row.floor3_layout = Floor3LocationLayout(
@@ -1224,7 +1253,12 @@ def publish_floor_area_policies(
         if (
             not inventory_types
             or any(value not in AREA_POLICY_INVENTORY_USAGES for value in inventory_types)
-            or storage_layout not in {"rack", "pallet_ground", "mixed"}
+            or storage_layout not in {
+                "rack",
+                "pallet_ground",
+                "mixed",
+                "functional",
+            }
         ):
             raise WarehouseAreaActivationError(
                 f"{area_code} 区发布策略不完整，请返回区域规划补充后重试",

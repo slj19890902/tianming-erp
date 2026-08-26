@@ -274,7 +274,7 @@ def _supported_formal_location(
     supported = bool(
         (location.source_version == "V11" and location.warehouse_floor == 3)
         or (
-            location.source_version == "TWIN_V1"
+            location.source_version in {"TWIN_V1", "CURRENT_MAP"}
             and location.warehouse_floor in {1, 3}
         )
     )
@@ -455,7 +455,7 @@ def stocktake_decrease_issues(
                 and blockers.warehouse_floor == 3
             )
             or (
-                blockers.source_version == "TWIN_V1"
+                blockers.source_version in {"TWIN_V1", "CURRENT_MAP"}
                 and blockers.warehouse_floor in {1, 3}
             )
         ):

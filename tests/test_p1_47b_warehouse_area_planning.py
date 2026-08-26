@@ -3742,7 +3742,7 @@ def test_floor_one_pallet_area_confirmation_creates_real_empty_move_locations(
             assert [row.location_code for row in rows] == [
                 f'F1-FIN-001-L{serial:03d}' for serial in range(1, 7)
             ]
-            assert all(row.source_version == 'TWIN_V1' for row in rows)
+            assert all(row.source_version == 'CURRENT_MAP' for row in rows)
             assert all(row.placement_status == 'placed' for row in rows)
             assert all(row.floor3_layout is not None for row in rows)
             assert all(row.warehouse_type == 'finished' for row in rows)

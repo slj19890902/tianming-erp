@@ -29,7 +29,7 @@ ALLOWED_INVENTORY_TYPES = {
     "print_plate",
     "temporary_turnover",
 }
-ALLOWED_STORAGE_LAYOUTS = {"rack", "pallet_ground", "mixed"}
+ALLOWED_STORAGE_LAYOUTS = {"rack", "pallet_ground", "mixed", "functional"}
 ALLOWED_ACCESS_SIDES = {"north", "south", "east", "west", "both"}
 _LAYOUT_EDIT_LOCK = RLock()
 WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK = _LAYOUT_EDIT_LOCK
@@ -949,7 +949,9 @@ def update_warehouse_twin_zone_policy(
     if not normalized_types or any(value not in ALLOWED_INVENTORY_TYPES for value in normalized_types):
         raise WarehouseTwinLayoutEditError("区域至少选择一种有效存放类型")
     if storage_layout not in ALLOWED_STORAGE_LAYOUTS:
-        raise WarehouseTwinLayoutEditError("区域展示形式必须是货架、栈板地堆或混合")
+        raise WarehouseTwinLayoutEditError(
+            "区域展示形式必须是货架、栈板地堆、混合或无栈板功能区"
+        )
     normalized_area_code = str(erp_area_code or "").strip().upper() or None
     normalized_area_name = str(area_name or "").strip() or None
     if (formal_area_id is None) != (formal_floor_id is None):

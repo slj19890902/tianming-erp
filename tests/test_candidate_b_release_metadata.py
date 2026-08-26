@@ -4,13 +4,13 @@ from app.version import APP_CHANGES, APP_EXTERNAL_ACCEPTANCE_REQUIRED, APP_VERIF
 def test_current_release_is_visible_in_release_acceptance_card() -> None:
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     assert any(
-        "SO383" in item
-        and "已绑定其它业务栈板" in item
-        and "不是员工操作错误" in item
+        "SEMI-011" in item
+        and "5.30×1.20米" in item
+        and "4个标准栈板位" in item
         for item in APP_CHANGES
     )
     assert any(
-        "SO383" in item
-        and "87张" in item
+        "零散区" in item
+        and "不得出现可选栈板位" in item
         for item in APP_VERIFICATION_STEPS
     )

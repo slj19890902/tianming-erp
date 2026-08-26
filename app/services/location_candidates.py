@@ -262,8 +262,8 @@ def warehouse_location_projection(
         }
     source_version = str(location.source_version or "").strip().upper()
     if readiness.position_status == "mapped":
-        map_status = "floor3_mapped" if source_version == "V11" else "twin_mapped"
-    elif source_version in {"V11", "TWIN_V1"}:
+        map_status = "current_map_mapped"
+    elif source_version in {"V11", "TWIN_V1", "CURRENT_MAP"}:
         map_status = "unplaced"
     else:
         map_status = "ledger_only"
@@ -499,6 +499,7 @@ def operational_location_condition(
         conditions.append(
             WarehouseLocation.storage_type.in_(("ground", "temporary_aisle"))
         )
+        conditions.append(WarehouseLocation.address_kind != "functional")
     return and_(*conditions)
 
 
@@ -828,6 +829,12 @@ def operational_location_payload(row: OperationalLocationRow) -> dict:
         floor=floor,
     )
     layout = context.get("layout")
+    policy = context.get("policy")
+    storage_layout = (
+        policy.storage_layout
+        if isinstance(policy, WarehouseAreaStoragePolicy)
+        else None
+    )
     return {
         "id": location.id,
         "location_code": location.location_code,
@@ -847,6 +854,13 @@ def operational_location_payload(row: OperationalLocationRow) -> dict:
         ),
         "area_master_name": area.area_name if area else None,
         "storage_type": location.storage_type,
+        "storage_layout": storage_layout,
+        "can_receive_pallet": bool(
+            location.address_kind != "functional"
+            and storage_layout in {"pallet_ground", "mixed"}
+            and isinstance(layout, Floor3LocationLayout)
+            and layout.layout_kind == "physical_pallet"
+        ),
         "is_temporary": bool(location.is_temporary),
         "placement_status": location.placement_status or "unplaced",
         "is_active": bool(location.is_active),

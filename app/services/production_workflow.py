@@ -1522,13 +1522,19 @@ def _receipt_auto_finished_ground_targets(
             .join(WarehouseArea, WarehouseArea.id == WarehouseGroundLayoutPlan.area_id)
             .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
             .where(
-                WarehouseFloor.floor_number == 1,
                 WarehouseFloor.construction_status == "enabled",
-                WarehouseArea.area_code.in_(RECEIPT_FIN_STAGING_AREA_CODES),
                 WarehouseArea.construction_status == "enabled",
                 WarehouseGroundLayoutPlan.status == "published",
+                or_(
+                    and_(
+                        WarehouseFloor.floor_number == 1,
+                        WarehouseArea.area_code.in_(RECEIPT_FIN_STAGING_AREA_CODES),
+                    ),
+                    WarehouseFloor.floor_number == 3,
+                ),
             )
             .order_by(
+                case((WarehouseFloor.floor_number == 1, 0), else_=1),
                 case(
                     *[
                         (WarehouseArea.area_code == code, index)
@@ -1553,7 +1559,7 @@ def _receipt_auto_finished_ground_targets(
     )
     if not plans:
         raise ProductionWorkflowError(
-            "一楼成品待送区尚未发布地堆排位；请在区域规划中为 FIN-001～003 至少发布一个地堆排位",
+            "FIN-001～003 成品待送区和三楼当前地图均未发布可用地堆排位；请先发布一个真实栈板位",
             409,
         )
 
@@ -1635,7 +1641,7 @@ def _receipt_auto_finished_ground_targets(
         return targets
     if not valid_plan_found:
         raise ProductionWorkflowError(
-            "FIN-001～003 尚无与当前区域策略一致的已发布地堆排位，已停止自动收料成品入库",
+            "一楼成品待送区和三楼当前地图均无与区域策略一致的已发布地堆排位，已停止自动收料成品入库",
             409,
         )
 
@@ -2748,8 +2754,15 @@ def _stock_completion_lot(
             target_kind_is_valid = (
                 finished_ground_target.target_kind == "fin_ground_plan"
                 and finished_ground_target.uses_ground_plan
-                and str(target_location.area_code or "").strip().upper()
-                in RECEIPT_FIN_STAGING_AREA_CODES
+                and (
+                    str(target_location.area_code or "").strip().upper()
+                    in RECEIPT_FIN_STAGING_AREA_CODES
+                    or (
+                        int(target_location.warehouse_floor or 0) == 3
+                        and str(target_location.source_version or "").strip().upper()
+                        == "CURRENT_MAP"
+                    )
+                )
             ) or (
                 finished_ground_target.target_kind == "floor3_v11"
                 and not finished_ground_target.uses_ground_plan
@@ -3566,7 +3579,7 @@ def transfer_direct_completion_to_stock(
         source_is_managed_map_position = bool(
             source_location is not None
             and str(source_location.source_version or "").strip().upper()
-            in {"V11", "TWIN_V1"}
+            in {"V11", "TWIN_V1", "CURRENT_MAP"}
         )
         allowed_occupancy_keys = {
             _direct_dispatch_pallet_occupancy_key(completion.id)

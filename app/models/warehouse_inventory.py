@@ -220,7 +220,7 @@ class WarehouseAreaStoragePolicy(Base):
     __tablename__ = "warehouse_area_storage_policies"
     __table_args__ = (
         CheckConstraint(
-            "storage_layout IN ('rack','pallet_ground','mixed')",
+            "storage_layout IN ('rack','pallet_ground','mixed','functional')",
             name="ck_warehouse_area_storage_policies_layout",
         ),
         CheckConstraint(
@@ -504,7 +504,7 @@ class Floor3LocationLayout(Base):
             name="ck_floor3_location_layouts_source_type",
         ),
         CheckConstraint(
-            "layout_kind IN ('unknown','physical_pallet','logical_anchor')",
+            "layout_kind IN ('unknown','physical_pallet','physical_rack','logical_anchor')",
             name="ck_floor3_location_layouts_layout_kind",
         ),
         UniqueConstraint("location_id", name="uq_floor3_location_layouts_location"),

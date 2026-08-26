@@ -1076,7 +1076,7 @@ def _resolve_exported_existing_lot(
             target is not None
             and target.is_active
             and target.placement_status == "placed"
-            and target.source_version == "V11"
+            and target.source_version in {"V11", "CURRENT_MAP"}
             and target.warehouse_floor == 3
             and target.warehouse_type in {"finished", "shared"}
         ):

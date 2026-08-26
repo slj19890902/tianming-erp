@@ -149,7 +149,7 @@ def load_movable_pallet(db: Session, pallet_id: int) -> InventoryPallet:
     supported_source = bool(
         (source.source_version == "V11" and source.warehouse_floor == 3)
         or (
-            source.source_version == "TWIN_V1"
+            source.source_version in {"TWIN_V1", "CURRENT_MAP"}
             and source.warehouse_floor in {1, 3}
         )
         or (

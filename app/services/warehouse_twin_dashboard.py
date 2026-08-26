@@ -580,6 +580,15 @@ def _location_payload(
         position_status=position_status,
     )
     layout = context.get("layout")
+    policy = context.get("policy")
+    storage_layout = (
+        policy.storage_layout
+        if isinstance(policy, WarehouseAreaStoragePolicy)
+        else None
+    )
+    is_functional_loose_area = (
+        storage_layout == "functional" or row.address_kind == "functional"
+    )
     current_pallet_ids = {
         int(pallet.id)
         for pallet in pallets
@@ -647,8 +656,16 @@ def _location_payload(
                 composite_projection=(composite_projections or {}).get(int(lot.id)),
                 stocktake_decrease_issues=stocktake_decrease_issues,
             ),
-            "pallet_projection_status": "missing_current_pallet",
-            "pallet_projection_issue": "该正数库存批次缺少同库位当前真实栈板",
+            "pallet_projection_status": (
+                "functional_loose_inventory"
+                if is_functional_loose_area
+                else "missing_current_pallet"
+            ),
+            "pallet_projection_issue": (
+                "本区依法存放少量零散库存，无需绑定栈板"
+                if is_functional_loose_area
+                else "该正数库存批次缺少同库位当前真实栈板"
+            ),
         }
         for lot in lots
         if current_same_location_pallet(lot) is None
@@ -678,6 +695,14 @@ def _location_payload(
         "warehouse_type": row.warehouse_type,
         "allowed_inventory_types": allowed_inventory_types or [],
         "storage_type": row.storage_type,
+        "storage_layout": storage_layout,
+        "can_receive_pallet": bool(
+            not is_functional_loose_area
+            and row.address_kind != "functional"
+            and storage_layout in {"pallet_ground", "mixed"}
+            and layout is not None
+            and layout.layout_kind == "physical_pallet"
+        ),
         "source_version": row.source_version,
         "is_temporary": row.is_temporary,
         "is_active": row.is_active,
@@ -1083,12 +1108,24 @@ def build_warehouse_twin_dashboard(
             "position_status"
         )
         == "mapped"
+        and location_payload_by_id.get(int(row.warehouse_location_id), {}).get(
+            "storage_layout"
+        )
+        != "functional"
+        and row.location is not None
+        and row.location.address_kind != "functional"
     ]
     twin_ground_lots_on_current_pallet = [
         row
         for row in finished_lots_on_current_pallet
         if row.location is not None
-        and str(row.location.source_version or "").strip().upper() == "TWIN_V1"
+        and str(row.location.source_version or "").strip().upper()
+        in {"TWIN_V1", "CURRENT_MAP"}
+        and row.location.address_kind != "functional"
+        and location_payload_by_id.get(int(row.warehouse_location_id), {}).get(
+            "storage_layout"
+        )
+        != "functional"
         and str(row.location.storage_type or "").strip().lower()
         in {"ground", "temporary_aisle"}
         and location_payload_by_id.get(int(row.warehouse_location_id), {}).get(

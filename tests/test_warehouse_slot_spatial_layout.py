@@ -196,7 +196,7 @@ def spatial_contract_app(tmp_path, monkeypatch):
                 storage_type="ground",
                 sort_order=sort_order,
                 is_temporary=False,
-                source_version="TWIN_V1",
+                source_version="CURRENT_MAP",
                 placement_status="placed",
             )
             location.floor3_layout = Floor3LocationLayout(

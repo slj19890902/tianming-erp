@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-08T07:56:51.800359+00:00",
+  "generated_at": "2026-08-26T21:30:00+08:00",
   "source": "factory_twin_candidate_read_only_export",
   "inventory_source": "ERP inventory_lots remains authoritative; layout pallets are isolated visual targets only",
   "floors": {
@@ -2893,8 +2893,15 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 6,
-          "erp_area_code": null
+          "version": 9,
+          "erp_area_code": "FIN-001",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "成品待送堆放区",
+          "formal_area_id": 31,
+          "formal_floor_id": 2
         },
         {
           "id": "a5312753-a309-4196-a85c-af99f33f0243",
@@ -2931,8 +2938,13 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 7,
-          "erp_area_code": null
+          "version": 8,
+          "erp_area_code": "FIN-002",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "成品待送堆放区"
         },
         {
           "id": "8d5f69c9-c9f6-44b8-b2a0-4ada26b18c14",
@@ -2969,8 +2981,13 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 7,
-          "erp_area_code": null
+          "version": 8,
+          "erp_area_code": "FIN-003",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "成品待送堆放区"
         },
         {
           "id": "outdoor-dispatch-east-001",
@@ -3279,8 +3296,13 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 7,
-          "erp_area_code": null
+          "version": 8,
+          "erp_area_code": "RAW-002",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "原料堆放区"
         },
         {
           "id": "a22dae96-48c6-4db3-b4ce-906d676414ab",
@@ -3317,8 +3339,13 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 11,
-          "erp_area_code": null
+          "version": 12,
+          "erp_area_code": "RAW-003",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "原料堆放区"
         },
         {
           "id": "e5f261da-29e8-4f9e-9bd7-f6b55b4000e6",
@@ -3393,8 +3420,13 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 6,
-          "erp_area_code": null
+          "version": 7,
+          "erp_area_code": "RAW-005",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "原料堆放区"
         },
         {
           "id": "fb63b477-779b-4546-9681-26ff937eb603",
@@ -3431,8 +3463,13 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 5,
-          "erp_area_code": null
+          "version": 6,
+          "erp_area_code": "RAW-006",
+          "allowed_inventory_types": [
+            "raw_material"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "原料堆放区"
         },
         {
           "id": "f4a0c53d-a876-405f-8173-5d584ac82003",
@@ -3507,8 +3544,13 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 4,
-          "erp_area_code": null
+          "version": 5,
+          "erp_area_code": "SEMI-001",
+          "allowed_inventory_types": [
+            "semi_finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "半成品堆放区"
         },
         {
           "id": "10ce51b0-b313-4511-93b2-7e60b54dbd3c",
@@ -3545,8 +3587,13 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 5,
-          "erp_area_code": null
+          "version": 6,
+          "erp_area_code": "SEMI-002",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "半成品堆放区"
         },
         {
           "id": "1b933867-042e-400a-beab-1c0383860b02",
@@ -3583,8 +3630,13 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 8,
-          "erp_area_code": null
+          "version": 9,
+          "erp_area_code": "SEMI-003",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "半成品堆放区"
         },
         {
           "id": "4f8344ff-ff8d-4e5a-909d-ae9faa704b8b",
@@ -3621,8 +3673,13 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 7,
-          "erp_area_code": null
+          "version": 8,
+          "erp_area_code": "TEMP-001",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "临时周转堆放区"
         },
         {
           "id": "b90606e7-df56-4979-935f-4836d5d0f586",
@@ -3659,8 +3716,13 @@
           "source": "ai",
           "status": "confirmed",
           "is_locked": false,
-          "version": 4,
-          "erp_area_code": null
+          "version": 5,
+          "erp_area_code": "TEMP-002",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "临时周转堆放区"
         },
         {
           "id": "d675139a-47b8-4385-bfcc-6cc3706f45cd",
@@ -3960,24 +4022,24 @@
           "x_mm": -3353.6663575916955,
           "y_mm": -13441.557022516077,
           "z_mm": 0,
-          "width_mm": 2200,
-          "depth_mm": 1370,
-          "height_mm": 3500,
+          "width_mm": 2600.0,
+          "depth_mm": 1370.0,
+          "height_mm": 2600.0,
           "levels": 3,
           "level_heights_mm": [
-            1300,
-            2400
+            866.0,
+            1732.0
           ],
           "cargo_rows": 3,
           "bays": 1,
           "access_side": "both",
-          "min_aisle_width_mm": 1200,
+          "min_aisle_width_mm": 1200.0,
           "rotation_deg": 90,
           "color": "#f59e0b",
           "source": "manual",
           "status": "candidate",
           "is_locked": false,
-          "version": 2,
+          "version": 5,
           "area_feature_id": "c94e7b64-7671-4e70-9eb5-3ee9eee785e4",
           "area_code": "ZONE-1F-MOLD-002",
           "measurement_status": "footprint_visual_candidate_pending_measurement",
@@ -3987,7 +4049,13 @@
             "第三层：模板"
           ],
           "formal_location_mapping": false,
-          "mold_rack_code": "R01"
+          "mold_rack_code": "R01",
+          "level_cell_counts": [
+            0,
+            4,
+            3
+          ],
+          "cell_plan_status": "configured"
         },
         {
           "id": "8893d9bb-7080-58fd-bd36-c7d20dfbd866",
@@ -3997,23 +4065,23 @@
           "x_mm": -3274.2148167867363,
           "y_mm": -16871.523706308042,
           "z_mm": 0,
-          "width_mm": 3200,
-          "depth_mm": 1370,
-          "height_mm": 3500,
+          "width_mm": 3200.0,
+          "depth_mm": 1370.0,
+          "height_mm": 3500.0,
           "levels": 2,
           "level_heights_mm": [
-            1500
+            1500.0
           ],
           "cargo_rows": 3,
           "bays": 1,
           "access_side": "both",
-          "min_aisle_width_mm": 1200,
+          "min_aisle_width_mm": 1200.0,
           "rotation_deg": 90,
           "color": "#f59e0b",
           "source": "manual",
           "status": "candidate",
           "is_locked": false,
-          "version": 2,
+          "version": 3,
           "area_feature_id": "c94e7b64-7671-4e70-9eb5-3ee9eee785e4",
           "area_code": "ZONE-1F-MOLD-002",
           "measurement_status": "footprint_visual_candidate_pending_measurement",
@@ -4022,34 +4090,39 @@
             "第二层：模板"
           ],
           "formal_location_mapping": false,
-          "mold_rack_code": "R02"
+          "mold_rack_code": "R02",
+          "level_cell_counts": [
+            0,
+            5
+          ],
+          "cell_plan_status": "configured"
         },
         {
           "id": "3d4e21a9-1764-5a72-98a2-fcdcb86fa146",
           "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
           "rack_code": "RACK-1F-MOLD-R03-001",
           "name": "R03 右架（模具001）",
-          "x_mm": -3480,
-          "y_mm": -20825,
+          "x_mm": -3480.0,
+          "y_mm": -20825.0,
           "z_mm": 0,
-          "width_mm": 4000,
-          "depth_mm": 1400,
-          "height_mm": 3500,
+          "width_mm": 4000.0,
+          "depth_mm": 1400.0,
+          "height_mm": 3500.0,
           "levels": 3,
           "level_heights_mm": [
-            1200,
-            2400
+            1200.0,
+            2400.0
           ],
           "cargo_rows": 3,
           "bays": 1,
           "access_side": "both",
-          "min_aisle_width_mm": 1200,
+          "min_aisle_width_mm": 1200.0,
           "rotation_deg": 90,
           "color": "#f59e0b",
           "source": "manual",
           "status": "candidate",
           "is_locked": false,
-          "version": 2,
+          "version": 6,
           "area_feature_id": "21921d96-287d-4160-b7af-08ae76cf2a68",
           "area_code": "ZONE-1F-MOLD-001",
           "measurement_status": "footprint_visual_candidate_pending_measurement",
@@ -4059,7 +4132,13 @@
             "第三层：模板"
           ],
           "formal_location_mapping": false,
-          "mold_rack_code": "R03"
+          "mold_rack_code": "R03",
+          "level_cell_counts": [
+            5,
+            5,
+            4
+          ],
+          "cell_plan_status": "configured"
         },
         {
           "id": "fb413762-0d32-5efd-9a00-e824d6cbdc14",
@@ -4349,9 +4428,1066 @@
       "source_updated_at": "2026-08-06T04:05:34+00:00",
       "erp_area_codes": [],
       "pallets_inventory_linked": false,
-      "revision": "4ea4140e8139cea1",
-      "layout_edited_at": "2026-08-08T07:56:51.800359+00:00",
-      "site_layout_receipt": "P1-16D-2-20260808"
+      "revision": "d27ae0261368c38c",
+      "layout_edited_at": "2026-08-22T03:25:34.077241+00:00",
+      "site_layout_receipt": "P1-16D-2-20260808",
+      "layout_edit_receipts": [
+        {
+          "operation_key": "rack-update-1786410493566-597747b63d617",
+          "action": "rack.update",
+          "result": {
+            "id": "b473f407-dee7-576b-9489-57cd5127e7f8",
+            "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+            "rack_code": "RACK-1F-MOLD-R01-001",
+            "name": "R01 左架（模具002，小模切机上方）",
+            "x_mm": -3353.6663575916955,
+            "y_mm": -13441.557022516077,
+            "z_mm": 0,
+            "width_mm": 2600.0,
+            "depth_mm": 1370.0,
+            "height_mm": 2600.0,
+            "levels": 2,
+            "level_heights_mm": [
+              1300.0
+            ],
+            "cargo_rows": 3,
+            "bays": 1,
+            "access_side": "both",
+            "min_aisle_width_mm": 1200.0,
+            "rotation_deg": 90,
+            "color": "#f59e0b",
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 3,
+            "area_feature_id": "c94e7b64-7671-4e70-9eb5-3ee9eee785e4",
+            "area_code": "ZONE-1F-MOLD-002",
+            "measurement_status": "footprint_visual_candidate_pending_measurement",
+            "level_usage": [
+              "底层：小模切机（不可入库）",
+              "第二层：模板",
+              "第三层：模板"
+            ],
+            "formal_location_mapping": false,
+            "mold_rack_code": "R01",
+            "level_cell_counts": [
+              3,
+              3
+            ],
+            "cell_plan_status": "configured"
+          },
+          "applied_at": "2026-08-11T01:08:15.802023+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786674172865-0f66f7f0d8b55-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "ffee34fd-2546-45f5-b861-4e8d565403d9",
+            "feature_code": "ZONE-1F-RAW-002",
+            "name": "原料堆放区",
+            "feature_kind": "zone",
+            "subtype": "raw_material",
+            "points": [
+              [
+                -15700,
+                -6700
+              ],
+              [
+                -14250,
+                -6700
+              ],
+              [
+                -14250,
+                -2000
+              ],
+              [
+                -15700,
+                -2000
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 6815000.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 8,
+            "erp_area_code": "RAW-002",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "原料堆放区"
+          },
+          "applied_at": "2026-08-14T02:22:55.119235+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786678643004-7ec5902a0d117-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "a22dae96-48c6-4db3-b4ce-906d676414ab",
+            "feature_code": "ZONE-1F-RAW-003",
+            "name": "原料堆放区",
+            "feature_kind": "zone",
+            "subtype": "raw_material",
+            "points": [
+              [
+                -12263.0,
+                -7150.0
+              ],
+              [
+                -9313.0,
+                -7150.0
+              ],
+              [
+                -9313.0,
+                -50.0
+              ],
+              [
+                -12263.0,
+                -50.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 20945000.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 12,
+            "erp_area_code": "RAW-003",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "原料堆放区"
+          },
+          "applied_at": "2026-08-14T03:37:23.055765+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786693644860-b66abf565af8e-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "4f8344ff-ff8d-4e5a-909d-ae9faa704b8b",
+            "feature_code": "ZONE-1F-TEMP-001",
+            "name": "临时周转堆放区",
+            "feature_kind": "zone",
+            "subtype": "temporary_turnover",
+            "points": [
+              [
+                -1272.0,
+                -21628.0
+              ],
+              [
+                1128.0,
+                -21628.0
+              ],
+              [
+                1128.0,
+                -13828.0
+              ],
+              [
+                -1272.0,
+                -13828.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 18720000.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 8,
+            "erp_area_code": "TEMP-001",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "临时周转堆放区"
+          },
+          "applied_at": "2026-08-14T07:47:24.922242+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786693653360-d437c5d0db4088-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "a5312753-a309-4196-a85c-af99f33f0243",
+            "feature_code": "ZONE-1F-FIN-002",
+            "name": "成品待送堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_wait_delivery",
+            "points": [
+              [
+                -1397.0,
+                -2455.0
+              ],
+              [
+                1053.0,
+                -2455.0
+              ],
+              [
+                1053.0,
+                -355.0
+              ],
+              [
+                -1397.0,
+                -355.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 5145000.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 8,
+            "erp_area_code": "FIN-002",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品待送堆放区"
+          },
+          "applied_at": "2026-08-14T07:47:33.410000+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786693660926-71f5ccf5faba4-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "8d5f69c9-c9f6-44b8-b2a0-4ada26b18c14",
+            "feature_code": "ZONE-1F-FIN-003",
+            "name": "成品待送堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_wait_delivery",
+            "points": [
+              [
+                -11092.0,
+                854.0
+              ],
+              [
+                -4492.0,
+                854.0
+              ],
+              [
+                -4492.0,
+                4204.0
+              ],
+              [
+                -11092.0,
+                4204.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 22110000.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 8,
+            "erp_area_code": "FIN-003",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品待送堆放区"
+          },
+          "applied_at": "2026-08-14T07:47:40.980482+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709691876-ed085d164dd2f-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "ca08c858-5787-4c34-80de-a9bf0d2617d1",
+            "feature_code": "ZONE-1F-RAW-005",
+            "name": "原料堆放区",
+            "feature_kind": "zone",
+            "subtype": "raw_material",
+            "points": [
+              [
+                -21966.0,
+                -10896.0
+              ],
+              [
+                -16216.0,
+                -10896.0
+              ],
+              [
+                -16216.0,
+                -8546.0
+              ],
+              [
+                -21966.0,
+                -8546.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 13512500.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 7,
+            "erp_area_code": "RAW-005",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "原料堆放区"
+          },
+          "applied_at": "2026-08-14T12:14:54.118768+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709708019-60bda78992e78-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "10ce51b0-b313-4511-93b2-7e60b54dbd3c",
+            "feature_code": "ZONE-1F-SEMI-002",
+            "name": "半成品堆放区",
+            "feature_kind": "zone",
+            "subtype": "semi_finished",
+            "points": [
+              [
+                -14381.0,
+                -10665.0
+              ],
+              [
+                -9281.0,
+                -10665.0
+              ],
+              [
+                -9281.0,
+                -9165.0
+              ],
+              [
+                -14381.0,
+                -9165.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 7650000.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 6,
+            "erp_area_code": "SEMI-002",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "半成品堆放区"
+          },
+          "applied_at": "2026-08-14T12:15:08.116542+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709717388-3ea83a45ed129-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "fb63b477-779b-4546-9681-26ff937eb603",
+            "feature_code": "ZONE-1F-RAW-006",
+            "name": "原料堆放区",
+            "feature_kind": "zone",
+            "subtype": "raw_material",
+            "points": [
+              [
+                -23254.0,
+                -13228.0
+              ],
+              [
+                -20154.0,
+                -13228.0
+              ],
+              [
+                -20154.0,
+                -11928.0
+              ],
+              [
+                -23254.0,
+                -11928.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 4030000.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 6,
+            "erp_area_code": "RAW-006",
+            "allowed_inventory_types": [
+              "raw_material"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "原料堆放区"
+          },
+          "applied_at": "2026-08-14T12:15:17.475993+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786693633309-710c72e5fcc22-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "25437caa-aef0-4979-8c66-7168a652489d",
+            "feature_code": "ZONE-1F-FIN-001",
+            "name": "成品待送堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_wait_delivery",
+            "points": [
+              [
+                -1350.0,
+                -13730.0
+              ],
+              [
+                1100.0,
+                -13730.0
+              ],
+              [
+                1100.0,
+                -7980.0
+              ],
+              [
+                -1350.0,
+                -7980.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 14087500.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 7,
+            "erp_area_code": "FIN-001",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品待送堆放区"
+          },
+          "applied_at": "2026-08-14T07:47:13.391561+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786693906380-6a36a6c786a3b8-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "25437caa-aef0-4979-8c66-7168a652489d",
+            "feature_code": "ZONE-1F-FIN-001",
+            "name": "成品待送堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_wait_delivery",
+            "points": [
+              [
+                -1350.0,
+                -13730.0
+              ],
+              [
+                1100.0,
+                -13730.0
+              ],
+              [
+                1100.0,
+                -7980.0
+              ],
+              [
+                -1350.0,
+                -7980.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 14087500.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 8,
+            "erp_area_code": "FIN-001",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品待送堆放区",
+            "formal_area_id": 31,
+            "formal_floor_id": 2
+          },
+          "applied_at": "2026-08-14T07:51:46.427372+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709731677-918ae63024f468-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "25437caa-aef0-4979-8c66-7168a652489d",
+            "feature_code": "ZONE-1F-FIN-001",
+            "name": "成品待送堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_wait_delivery",
+            "points": [
+              [
+                -1350.0,
+                -13730.0
+              ],
+              [
+                1100.0,
+                -13730.0
+              ],
+              [
+                1100.0,
+                -7980.0
+              ],
+              [
+                -1350.0,
+                -7980.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 14087500.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 9,
+            "erp_area_code": "FIN-001",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品待送堆放区",
+            "formal_area_id": 31,
+            "formal_floor_id": 2
+          },
+          "applied_at": "2026-08-14T12:15:31.738673+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709746261-0868a6efa7d21-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "af8c97f7-44cd-45be-ad42-07219a6059c5",
+            "feature_code": "ZONE-1F-SEMI-001",
+            "name": "半成品堆放区",
+            "feature_kind": "zone",
+            "subtype": "semi_finished",
+            "points": [
+              [
+                -9300,
+                -25000
+              ],
+              [
+                -6300,
+                -25000
+              ],
+              [
+                -6300,
+                -21150
+              ],
+              [
+                -9300,
+                -21150
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 11550000.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 5,
+            "erp_area_code": "SEMI-001",
+            "allowed_inventory_types": [
+              "semi_finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "半成品堆放区"
+          },
+          "applied_at": "2026-08-14T12:15:46.321079+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709753869-3c590081bb4fc-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "1b933867-042e-400a-beab-1c0383860b02",
+            "feature_code": "ZONE-1F-SEMI-003",
+            "name": "半成品堆放区",
+            "feature_kind": "zone",
+            "subtype": "semi_finished",
+            "points": [
+              [
+                -6700,
+                -5850
+              ],
+              [
+                -5400,
+                -5850
+              ],
+              [
+                -5400,
+                -3400
+              ],
+              [
+                -6700,
+                -3400
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 3185000.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 9,
+            "erp_area_code": "SEMI-003",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "半成品堆放区"
+          },
+          "applied_at": "2026-08-14T12:15:54.051431+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709761323-520edbdee1129-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "b90606e7-df56-4979-935f-4836d5d0f586",
+            "feature_code": "ZONE-1F-TEMP-002",
+            "name": "临时周转堆放区",
+            "feature_kind": "zone",
+            "subtype": "temporary_turnover",
+            "points": [
+              [
+                -15850,
+                2200
+              ],
+              [
+                -14450,
+                2200
+              ],
+              [
+                -14450,
+                3900
+              ],
+              [
+                -15850,
+                3900
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 2380000.0,
+            "source": "ai",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 5,
+            "erp_area_code": "TEMP-002",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "临时周转堆放区"
+          },
+          "applied_at": "2026-08-14T12:16:01.384155+00:00"
+        },
+        {
+          "operation_key": "rack-update-1787301040706-59bc4aab46b4c8",
+          "action": "rack.update",
+          "result": {
+            "id": "3d4e21a9-1764-5a72-98a2-fcdcb86fa146",
+            "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+            "rack_code": "RACK-1F-MOLD-R03-001",
+            "name": "R03 右架（模具001）",
+            "x_mm": -3480.0,
+            "y_mm": -20825.0,
+            "z_mm": 0,
+            "width_mm": 4000.0,
+            "depth_mm": 1400.0,
+            "height_mm": 3500.0,
+            "levels": 3,
+            "level_heights_mm": [
+              1200.0,
+              2400.0
+            ],
+            "cargo_rows": 3,
+            "bays": 1,
+            "access_side": "both",
+            "min_aisle_width_mm": 1200.0,
+            "rotation_deg": 90,
+            "color": "#f59e0b",
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 3,
+            "area_feature_id": "21921d96-287d-4160-b7af-08ae76cf2a68",
+            "area_code": "ZONE-1F-MOLD-001",
+            "measurement_status": "footprint_visual_candidate_pending_measurement",
+            "level_usage": [
+              "第一层：大模板",
+              "第二层：模板",
+              "第三层：模板"
+            ],
+            "formal_location_mapping": false,
+            "mold_rack_code": "R03",
+            "level_cell_counts": [
+              5,
+              5,
+              4
+            ],
+            "cell_plan_status": "configured"
+          },
+          "applied_at": "2026-08-21T08:30:40.725000+00:00"
+        },
+        {
+          "operation_key": "rack-update-1787301042207-dc3beb9685f428",
+          "action": "rack.update",
+          "result": {
+            "id": "3d4e21a9-1764-5a72-98a2-fcdcb86fa146",
+            "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+            "rack_code": "RACK-1F-MOLD-R03-001",
+            "name": "R03 右架（模具001）",
+            "x_mm": -3480.0,
+            "y_mm": -20825.0,
+            "z_mm": 0,
+            "width_mm": 4000.0,
+            "depth_mm": 1400.0,
+            "height_mm": 3500.0,
+            "levels": 3,
+            "level_heights_mm": [
+              1200.0,
+              2400.0
+            ],
+            "cargo_rows": 3,
+            "bays": 1,
+            "access_side": "both",
+            "min_aisle_width_mm": 1200.0,
+            "rotation_deg": 90,
+            "color": "#f59e0b",
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 4,
+            "area_feature_id": "21921d96-287d-4160-b7af-08ae76cf2a68",
+            "area_code": "ZONE-1F-MOLD-001",
+            "measurement_status": "footprint_visual_candidate_pending_measurement",
+            "level_usage": [
+              "第一层：大模板",
+              "第二层：模板",
+              "第三层：模板"
+            ],
+            "formal_location_mapping": false,
+            "mold_rack_code": "R03",
+            "level_cell_counts": [
+              5,
+              5,
+              4
+            ],
+            "cell_plan_status": "configured"
+          },
+          "applied_at": "2026-08-21T08:30:42.220946+00:00"
+        },
+        {
+          "operation_key": "rack-update-1787306111184-9e6861f1f4de6",
+          "action": "rack.update",
+          "result": {
+            "id": "3d4e21a9-1764-5a72-98a2-fcdcb86fa146",
+            "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+            "rack_code": "RACK-1F-MOLD-R03-001",
+            "name": "R03 右架（模具001）",
+            "x_mm": -3480.0,
+            "y_mm": -20825.0,
+            "z_mm": 0,
+            "width_mm": 4000.0,
+            "depth_mm": 1400.0,
+            "height_mm": 3500.0,
+            "levels": 3,
+            "level_heights_mm": [
+              1200.0,
+              2400.0
+            ],
+            "cargo_rows": 3,
+            "bays": 1,
+            "access_side": "both",
+            "min_aisle_width_mm": 1200.0,
+            "rotation_deg": 90,
+            "color": "#f59e0b",
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 5,
+            "area_feature_id": "21921d96-287d-4160-b7af-08ae76cf2a68",
+            "area_code": "ZONE-1F-MOLD-001",
+            "measurement_status": "footprint_visual_candidate_pending_measurement",
+            "level_usage": [
+              "第一层：大模板",
+              "第二层：模板",
+              "第三层：模板"
+            ],
+            "formal_location_mapping": false,
+            "mold_rack_code": "R03",
+            "level_cell_counts": [
+              5,
+              5,
+              4
+            ],
+            "cell_plan_status": "configured"
+          },
+          "applied_at": "2026-08-21T09:55:11.206260+00:00"
+        },
+        {
+          "operation_key": "rack-update-1787306153217-d19e6256836e4",
+          "action": "rack.update",
+          "result": {
+            "id": "b473f407-dee7-576b-9489-57cd5127e7f8",
+            "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+            "rack_code": "RACK-1F-MOLD-R01-001",
+            "name": "R01 左架（模具002，小模切机上方）",
+            "x_mm": -3353.6663575916955,
+            "y_mm": -13441.557022516077,
+            "z_mm": 0,
+            "width_mm": 2600.0,
+            "depth_mm": 1370.0,
+            "height_mm": 2600.0,
+            "levels": 3,
+            "level_heights_mm": [
+              866.0,
+              1732.0
+            ],
+            "cargo_rows": 3,
+            "bays": 1,
+            "access_side": "both",
+            "min_aisle_width_mm": 1200.0,
+            "rotation_deg": 90,
+            "color": "#f59e0b",
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 4,
+            "area_feature_id": "c94e7b64-7671-4e70-9eb5-3ee9eee785e4",
+            "area_code": "ZONE-1F-MOLD-002",
+            "measurement_status": "footprint_visual_candidate_pending_measurement",
+            "level_usage": [
+              "底层：小模切机（不可入库）",
+              "第二层：模板",
+              "第三层：模板"
+            ],
+            "formal_location_mapping": false,
+            "mold_rack_code": "R01",
+            "level_cell_counts": [
+              0,
+              4,
+              3
+            ],
+            "cell_plan_status": "configured"
+          },
+          "applied_at": "2026-08-21T09:55:53.239333+00:00"
+        },
+        {
+          "operation_key": "rack-update-1787306181283-208f5d579857f",
+          "action": "rack.update",
+          "result": {
+            "id": "8893d9bb-7080-58fd-bd36-c7d20dfbd866",
+            "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+            "rack_code": "RACK-1F-MOLD-R02-001",
+            "name": "R02 中架（模具002，中模切机上方）",
+            "x_mm": -3274.2148167867363,
+            "y_mm": -16871.523706308042,
+            "z_mm": 0,
+            "width_mm": 3200.0,
+            "depth_mm": 1370.0,
+            "height_mm": 3500.0,
+            "levels": 2,
+            "level_heights_mm": [
+              1500.0
+            ],
+            "cargo_rows": 3,
+            "bays": 1,
+            "access_side": "both",
+            "min_aisle_width_mm": 1200.0,
+            "rotation_deg": 90,
+            "color": "#f59e0b",
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 3,
+            "area_feature_id": "c94e7b64-7671-4e70-9eb5-3ee9eee785e4",
+            "area_code": "ZONE-1F-MOLD-002",
+            "measurement_status": "footprint_visual_candidate_pending_measurement",
+            "level_usage": [
+              "底层：中模切机（不可入库）",
+              "第二层：模板"
+            ],
+            "formal_location_mapping": false,
+            "mold_rack_code": "R02",
+            "level_cell_counts": [
+              0,
+              5
+            ],
+            "cell_plan_status": "configured"
+          },
+          "applied_at": "2026-08-21T09:56:21.302086+00:00"
+        },
+        {
+          "operation_key": "rack-update-1787369106446-66c4931b8d71d",
+          "action": "rack.update",
+          "result": {
+            "id": "3d4e21a9-1764-5a72-98a2-fcdcb86fa146",
+            "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+            "rack_code": "RACK-1F-MOLD-R03-001",
+            "name": "R03 右架（模具001）",
+            "x_mm": -3480.0,
+            "y_mm": -20825.0,
+            "z_mm": 0,
+            "width_mm": 4000.0,
+            "depth_mm": 1400.0,
+            "height_mm": 3500.0,
+            "levels": 3,
+            "level_heights_mm": [
+              1200.0,
+              2400.0
+            ],
+            "cargo_rows": 3,
+            "bays": 1,
+            "access_side": "both",
+            "min_aisle_width_mm": 1200.0,
+            "rotation_deg": 90,
+            "color": "#f59e0b",
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 6,
+            "area_feature_id": "21921d96-287d-4160-b7af-08ae76cf2a68",
+            "area_code": "ZONE-1F-MOLD-001",
+            "measurement_status": "footprint_visual_candidate_pending_measurement",
+            "level_usage": [
+              "第一层：大模板",
+              "第二层：模板",
+              "第三层：模板"
+            ],
+            "formal_location_mapping": false,
+            "mold_rack_code": "R03",
+            "level_cell_counts": [
+              5,
+              5,
+              4
+            ],
+            "cell_plan_status": "configured"
+          },
+          "applied_at": "2026-08-22T03:25:06.466384+00:00"
+        },
+        {
+          "operation_key": "rack-update-1787369134063-e2bc0cd9264ed8",
+          "action": "rack.update",
+          "result": {
+            "id": "b473f407-dee7-576b-9489-57cd5127e7f8",
+            "layout_id": "756bcfa7-74d8-48f2-ba64-a4a23c9984ae",
+            "rack_code": "RACK-1F-MOLD-R01-001",
+            "name": "R01 左架（模具002，小模切机上方）",
+            "x_mm": -3353.6663575916955,
+            "y_mm": -13441.557022516077,
+            "z_mm": 0,
+            "width_mm": 2600.0,
+            "depth_mm": 1370.0,
+            "height_mm": 2600.0,
+            "levels": 3,
+            "level_heights_mm": [
+              866.0,
+              1732.0
+            ],
+            "cargo_rows": 3,
+            "bays": 1,
+            "access_side": "both",
+            "min_aisle_width_mm": 1200.0,
+            "rotation_deg": 90,
+            "color": "#f59e0b",
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 5,
+            "area_feature_id": "c94e7b64-7671-4e70-9eb5-3ee9eee785e4",
+            "area_code": "ZONE-1F-MOLD-002",
+            "measurement_status": "footprint_visual_candidate_pending_measurement",
+            "level_usage": [
+              "底层：小模切机（不可入库）",
+              "第二层：模板",
+              "第三层：模板"
+            ],
+            "formal_location_mapping": false,
+            "mold_rack_code": "R01",
+            "level_cell_counts": [
+              0,
+              4,
+              3
+            ],
+            "cell_plan_status": "configured"
+          },
+          "applied_at": "2026-08-22T03:25:34.077241+00:00"
+        }
+      ]
     },
     "3F": {
       "layout_id": "edfd9fd4-f013-41cf-b491-cd9d5dce6f52",
@@ -8051,20 +9187,20 @@
           "subtype": "finished_storage",
           "points": [
             [
-              30333.0,
-              -4010.0
+              30229.0,
+              -3678.0
             ],
             [
-              33433.0,
-              -4010.0
+              33329.0,
+              -3678.0
             ],
             [
-              33433.0,
-              4084.0
+              33329.0,
+              3752.0
             ],
             [
-              30333.0,
-              4084.0
+              30229.0,
+              3752.0
             ]
           ],
           "width_mm": null,
@@ -8074,12 +9210,20 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 25091400.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 11,
-          "erp_area_code": "A1"
+          "area_mm2": 23033000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 12,
+          "erp_area_code": "A1",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 1,
+          "formal_floor_id": 1,
+          "formal_area_name": "A1 成品存放区（主通道北侧）",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "9617506b-9c95-449a-9c76-c5f87d192238",
@@ -8089,20 +9233,20 @@
           "subtype": "finished_storage",
           "points": [
             [
-              30539.0,
-              -19721.0
+              30229.0,
+              -19615.5
             ],
             [
-              33627.0,
-              -19721.0
+              33329.0,
+              -19615.5
             ],
             [
-              33627.0,
-              -5510.0
+              33329.0,
+              -5615.5
             ],
             [
-              30539.0,
-              -5510.0
+              30229.0,
+              -5615.5
             ]
           ],
           "width_mm": null,
@@ -8112,34 +9256,42 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 43883568.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 10,
-          "erp_area_code": "A2"
+          "area_mm2": 43400000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 11,
+          "erp_area_code": "A2",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 2,
+          "formal_floor_id": 1,
+          "formal_area_name": "A2 成品存放区（主通道南侧）",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "bbf91868-304c-4bf6-8475-4b7c7a460b1a",
           "feature_code": "ZONE-3F-ERP-AB1",
-          "name": "AB1 成品存放区（允许临时半成品/原料）",
+          "name": "AB1 成品存放区",
           "feature_kind": "zone",
           "subtype": "finished_storage",
           "points": [
             [
-              30735.0,
+              25929.0,
               -25750.0
             ],
             [
-              28135.0,
+              28529.0,
               -25750.0
             ],
             [
-              28135.0,
+              28529.0,
               -21650.0
             ],
             [
-              30735.0,
+              25929.0,
               -21650.0
             ]
           ],
@@ -8151,34 +9303,42 @@
           "storage_height_mm": 1800.0,
           "color": "#eab308",
           "area_mm2": 10660000.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 10,
-          "erp_area_code": "AB1"
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 11,
+          "erp_area_code": "AB1",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 3,
+          "formal_floor_id": 1,
+          "formal_area_name": "AB1 成品存放区",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "8d9ada1a-06e0-4f42-9154-a73565d42a43",
           "feature_code": "ZONE-3F-ERP-AB2",
-          "name": "AB2 成品存放区（允许临时半成品/原料）",
+          "name": "AB2 成品存放区",
           "feature_kind": "zone",
           "subtype": "finished_storage",
           "points": [
             [
-              30659.0,
-              -28391.0
+              25929.0,
+              -28465.0
             ],
             [
-              28070.0,
-              -28391.0
+              28529.0,
+              -28465.0
             ],
             [
-              28070.0,
-              -26939.0
+              28529.0,
+              -26865.0
             ],
             [
-              30659.0,
-              -26939.0
+              25929.0,
+              -26865.0
             ]
           ],
           "width_mm": null,
@@ -8188,12 +9348,20 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 3759228.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 8,
-          "erp_area_code": "AB2"
+          "area_mm2": 4160000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 9,
+          "erp_area_code": "AB2",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 4,
+          "formal_floor_id": 1,
+          "formal_area_name": "AB2 成品存放区",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "63f9b124-89b4-42ad-b476-7891228f7e5d",
@@ -8203,20 +9371,20 @@
           "subtype": "finished_storage",
           "points": [
             [
-              25676.0,
-              -4010.0
+              25729.0,
+              -3698.5
             ],
             [
-              28664.0,
-              -4010.0
+              28729.0,
+              -3698.5
             ],
             [
-              28664.0,
-              7413.0
+              28729.0,
+              7101.5
             ],
             [
-              25676.0,
-              7413.0
+              25729.0,
+              7101.5
             ]
           ],
           "width_mm": null,
@@ -8226,12 +9394,20 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 34131924.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 13,
-          "erp_area_code": "B1"
+          "area_mm2": 32400000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 14,
+          "erp_area_code": "B1",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 5,
+          "formal_floor_id": 1,
+          "formal_area_name": "B1 成品存放区（主通道北侧）",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "2a25e98b-7ccf-4882-b574-2565c1fb2b9e",
@@ -8241,20 +9417,20 @@
           "subtype": "finished_storage",
           "points": [
             [
-              25783.0,
-              -19778.0
+              25729.0,
+              -19644.0
             ],
             [
-              28771.0,
-              -19778.0
+              28729.0,
+              -19644.0
             ],
             [
-              28771.0,
-              -5510.0
+              28729.0,
+              -5644.0
             ],
             [
-              25783.0,
-              -5510.0
+              25729.0,
+              -5644.0
             ]
           ],
           "width_mm": null,
@@ -8264,12 +9440,20 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 42632784.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 13,
-          "erp_area_code": "B2"
+          "area_mm2": 42000000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 14,
+          "erp_area_code": "B2",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 6,
+          "formal_floor_id": 1,
+          "formal_area_name": "B2 成品存放区（主通道南侧）",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "b78bad82-b86f-43fb-adb7-88e7cb551da4",
@@ -8279,20 +9463,20 @@
           "subtype": "finished_storage",
           "points": [
             [
-              20742.0,
-              -4010.0
+              20729.0,
+              -3870.0
             ],
             [
-              24228.0,
-              -4010.0
+              24229.0,
+              -3870.0
             ],
             [
-              24228.0,
-              9970.0
+              24229.0,
+              9830.0
             ],
             [
-              20742.0,
-              9970.0
+              20729.0,
+              9830.0
             ]
           ],
           "width_mm": null,
@@ -8302,12 +9486,20 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 48734280.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 11,
-          "erp_area_code": "C1"
+          "area_mm2": 47950000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 12,
+          "erp_area_code": "C1",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 7,
+          "formal_floor_id": 1,
+          "formal_area_name": "C1 成品存放区（主通道北侧）",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "97f9c9d3-5c6f-42c8-94fa-9d13b82c3e2a",
@@ -8317,20 +9509,20 @@
           "subtype": "finished_storage",
           "points": [
             [
-              20681.0,
-              -19853.0
+              20729.0,
+              -19681.5
             ],
             [
-              24167.0,
-              -19853.0
+              24229.0,
+              -19681.5
             ],
             [
-              24167.0,
-              -5510.0
+              24229.0,
+              -5681.5
             ],
             [
-              20681.0,
-              -5510.0
+              20729.0,
+              -5681.5
             ]
           ],
           "width_mm": null,
@@ -8340,35 +9532,43 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 49999698.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 9,
-          "erp_area_code": "C2"
+          "area_mm2": 49000000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 10,
+          "erp_area_code": "C2",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 8,
+          "formal_floor_id": 1,
+          "formal_area_name": "C2 成品存放区（主通道南侧）",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "3f473721-94ca-4c36-8c98-5d2e6448d279",
           "feature_code": "ZONE-3F-ERP-CD1",
-          "name": "CD1 成品存放区（允许临时半成品/原料）",
+          "name": "CD1 成品存放区",
           "feature_kind": "zone",
           "subtype": "finished_storage",
           "points": [
             [
-              24276.0,
-              10692.0
+              17629.0,
+              10507.5
             ],
             [
-              17703.0,
-              10692.0
+              24229.0,
+              10507.5
             ],
             [
-              17703.0,
-              14323.0
+              24229.0,
+              14507.5
             ],
             [
-              24276.0,
-              14323.0
+              17629.0,
+              14507.5
             ]
           ],
           "width_mm": null,
@@ -8378,12 +9578,20 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 23866563.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 5,
-          "erp_area_code": "CD1"
+          "area_mm2": 26400000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 6,
+          "erp_area_code": "CD1",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 9,
+          "formal_floor_id": 1,
+          "formal_area_name": "CD1 成品存放区",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "a2ec14a6-ecda-40c1-9eef-177339e50aed",
@@ -8393,20 +9601,20 @@
           "subtype": "finished_storage",
           "points": [
             [
-              16684.0,
-              -4010.0
+              16679.0,
+              -5042.0
             ],
             [
-              19273.0,
-              -4010.0
+              19229.0,
+              -5042.0
             ],
             [
-              19273.0,
-              8926.0
+              19229.0,
+              9958.0
             ],
             [
-              16684.0,
-              8926.0
+              16679.0,
+              9958.0
             ]
           ],
           "width_mm": null,
@@ -8416,12 +9624,20 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#3b82f6",
-          "area_mm2": 33491304.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 15,
-          "erp_area_code": "D1"
+          "area_mm2": 38250000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 16,
+          "erp_area_code": "D1",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 10,
+          "formal_floor_id": 1,
+          "formal_area_name": "D1 栈板成品存放区（无货架）",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "3b662b8e-a457-4544-9ccb-98dacdafd835",
@@ -8431,20 +9647,20 @@
           "subtype": "rack_storage",
           "points": [
             [
-              16703.0,
-              -19690.0
+              16629.0,
+              -19600.0
             ],
             [
-              19243.0,
-              -19690.0
+              19229.0,
+              -19600.0
             ],
             [
-              19243.0,
-              -5510.0
+              19229.0,
+              -5600.0
             ],
             [
-              16703.0,
-              -5510.0
+              16629.0,
+              -5600.0
             ]
           ],
           "width_mm": null,
@@ -8454,35 +9670,43 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 2600.0,
           "color": "#8b5cf6",
-          "area_mm2": 36017200.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 17,
-          "erp_area_code": "D2"
+          "area_mm2": 36400000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 19,
+          "erp_area_code": "D2",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "mixed",
+          "formal_area_name": "D2 货架为主·栈板混合存放区",
+          "formal_area_id": 11,
+          "formal_floor_id": 1,
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "58068eb6-d94b-4e24-9173-a16146806303",
           "feature_code": "ZONE-3F-ERP-DE1",
-          "name": "DE1 成品存放区（允许临时半成品/原料）",
+          "name": "DE1 成品存放区",
           "feature_kind": "zone",
           "subtype": "finished_storage",
           "points": [
             [
-              18171.0,
-              9197.0
+              8879.0,
+              9142.0
             ],
             [
-              11897.0,
-              9197.0
+              15179.0,
+              9142.0
             ],
             [
-              11897.0,
-              10287.0
+              15179.0,
+              10342.0
             ],
             [
-              18171.0,
-              10287.0
+              8879.0,
+              10342.0
             ]
           ],
           "width_mm": null,
@@ -8492,12 +9716,20 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 6838660.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 8,
-          "erp_area_code": "DE1"
+          "area_mm2": 7560000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 9,
+          "erp_area_code": "DE1",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 12,
+          "formal_floor_id": 1,
+          "formal_area_name": "DE1 成品存放区",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "cd40e190-223f-4407-a586-e79b323941ad",
@@ -8507,20 +9739,20 @@
           "subtype": "finished_storage",
           "points": [
             [
-              10236.0,
-              -4010.0
+              10179.0,
+              -4374.5
             ],
             [
-              15215.0,
-              -4010.0
+              15179.0,
+              -4374.5
             ],
             [
-              15215.0,
-              7261.0
+              15179.0,
+              7625.5
             ],
             [
-              10236.0,
-              7261.0
+              10179.0,
+              7625.5
             ]
           ],
           "width_mm": null,
@@ -8530,12 +9762,20 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 56118309.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 10,
-          "erp_area_code": "E1"
+          "area_mm2": 60000000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 11,
+          "erp_area_code": "E1",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 13,
+          "formal_floor_id": 1,
+          "formal_area_name": "E1 成品存放区（主通道北侧）",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "0d284916-63cd-4a03-85ef-1e93e36725c5",
@@ -8545,20 +9785,20 @@
           "subtype": "finished_storage",
           "points": [
             [
-              10174.0,
-              -19795.0
+              10129.0,
+              -19652.5
             ],
             [
-              15154.0,
-              -19795.0
+              15129.0,
+              -19652.5
             ],
             [
-              15154.0,
-              -5510.0
+              15129.0,
+              -5652.5
             ],
             [
-              10174.0,
-              -5510.0
+              10129.0,
+              -5652.5
             ]
           ],
           "width_mm": null,
@@ -8568,35 +9808,43 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 71139300.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 9,
-          "erp_area_code": "E2"
+          "area_mm2": 70000000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 10,
+          "erp_area_code": "E2",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 14,
+          "formal_floor_id": 1,
+          "formal_area_name": "E2 成品存放区（主通道南侧）",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "c5302a99-abb0-427d-879d-30153e5ebf54",
           "feature_code": "ZONE-3F-ERP-E3",
-          "name": "E3 成品存放区（允许临时半成品/原料）",
+          "name": "E3 成品存放区",
           "feature_kind": "zone",
           "subtype": "finished_storage",
           "points": [
             [
-              13157.0,
-              -25276.0
+              11229.0,
+              -25460.5
             ],
             [
-              10368.0,
-              -25276.0
+              14029.0,
+              -25460.5
             ],
             [
-              10368.0,
-              -21645.0
+              14029.0,
+              -21460.5
             ],
             [
-              13157.0,
-              -21645.0
+              11229.0,
+              -21460.5
             ]
           ],
           "width_mm": null,
@@ -8606,12 +9854,20 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1800.0,
           "color": "#eab308",
-          "area_mm2": 10126859.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 8,
-          "erp_area_code": "E3"
+          "area_mm2": 11200000.0,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 9,
+          "erp_area_code": "E3",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 15,
+          "formal_floor_id": 1,
+          "formal_area_name": "E3 成品存放区",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "a9825b6e-60f6-455d-9e09-db91f0ec5ff6",
@@ -8645,12 +9901,19 @@
           "storage_height_mm": 2600.0,
           "color": "#8b5cf6",
           "area_mm2": 12982200.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 13,
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 14,
           "erp_area_code": "F1",
-          "storage_layout": "rack"
+          "storage_layout": "rack",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "formal_area_id": 17,
+          "formal_floor_id": 1,
+          "formal_area_name": "F1 两排2货架区（货架可独立移动）",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "0a1c6bf6-c0d9-4217-b9a0-2527db20b9d9",
@@ -8684,11 +9947,19 @@
           "storage_height_mm": 1800.0,
           "color": "#f59e0b",
           "area_mm2": 8850000.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 14,
-          "erp_area_code": "F12"
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 15,
+          "erp_area_code": "F12",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 18,
+          "formal_floor_id": 1,
+          "formal_area_name": "F1/F2之间临时周转区",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "289e5e49-a3b5-4661-ad9f-a493452f967b",
@@ -8722,11 +9993,19 @@
           "storage_height_mm": 2600.0,
           "color": "#8b5cf6",
           "area_mm2": 6491100.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 10,
-          "erp_area_code": "F2"
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 11,
+          "erp_area_code": "F2",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "rack",
+          "formal_area_id": 19,
+          "formal_floor_id": 1,
+          "formal_area_name": "F2 货架区",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "8909683d-a64e-4af1-8089-c53b33532c31",
@@ -8760,11 +10039,19 @@
           "storage_height_mm": 2600.0,
           "color": "#8b5cf6",
           "area_mm2": 6491100.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 10,
-          "erp_area_code": "F3"
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 11,
+          "erp_area_code": "F3",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "rack",
+          "formal_area_id": 20,
+          "formal_floor_id": 1,
+          "formal_area_name": "F3 货架区",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "d068d43e-58a5-40d8-bb7f-0ea88d714e2e",
@@ -8798,11 +10085,19 @@
           "storage_height_mm": 1800.0,
           "color": "#f59e0b",
           "area_mm2": 14752500.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 12,
-          "erp_area_code": "F34"
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 13,
+          "erp_area_code": "F34",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_id": 21,
+          "formal_floor_id": 1,
+          "formal_area_name": "F3/F4之间临时周转区",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "89c04b37-18c1-46a5-8998-b3913f7e9ea4",
@@ -8836,16 +10131,24 @@
           "storage_height_mm": 2600.0,
           "color": "#8b5cf6",
           "area_mm2": 12760000.0,
-          "source": "ai",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 22,
-          "erp_area_code": "F4"
+          "source": "manual",
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 23,
+          "erp_area_code": "F4",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "rack",
+          "formal_area_id": 22,
+          "formal_floor_id": 1,
+          "formal_area_name": "F4 货架区（双排1100mm）",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "c399826c-0049-41bc-a687-04993152608f",
           "feature_code": "ZONE-3F-FG-001",
-          "name": "送剩零头纸箱长期存放区（待同订单续配）",
+          "name": "送货剩余零散库存暂存区（无栈板）",
           "feature_kind": "zone",
           "subtype": "delivery_surplus",
           "points": [
@@ -8868,17 +10171,26 @@
           ],
           "width_mm": null,
           "direction": null,
-          "no_stacking": false,
+          "no_stacking": true,
           "storage_mode": "floor",
           "elevation_mm": 0.0,
           "storage_height_mm": 1000.0,
           "color": "#f97316",
           "area_mm2": 1601854.5,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 2,
-          "erp_area_code": "E4"
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 4,
+          "erp_area_code": "FIN-LOOSE-001",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "functional",
+          "formal_area_name": "送货剩余零散库存暂存区（无栈板）",
+          "formal_area_id": 16,
+          "formal_floor_id": 1,
+          "usage_notice": "仅少量送货剩余零散库存；本区无栈板位。数量多时请选择正常成品栈板位。",
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "3836c2bd-e77a-401d-88d8-6bbac0efa57c",
@@ -9001,10 +10313,20 @@
           "color": "#60a5fa",
           "area_mm2": 12687472.0,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 1,
-          "erp_area_code": null
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 3,
+          "erp_area_code": "FG-004",
+          "allowed_inventory_types": [
+            "finished",
+            "semi_finished",
+            "raw_material"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "成品存放（可临时混放）堆放区",
+          "formal_area_id": 26,
+          "formal_floor_id": 1,
+          "measurement_source": "current_map_confirmed_2026-08-26"
         },
         {
           "id": "3259069c-6462-43e4-9293-c33f8b7b765f",
@@ -9039,10 +10361,18 @@
           "color": "#60a5fa",
           "area_mm2": 24606017.5,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 1,
-          "erp_area_code": null
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 3,
+          "erp_area_code": "FG-005",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "成品存放（可临时混放）堆放区",
+          "formal_area_id": 37,
+          "formal_floor_id": 1,
+          "measurement_source": "current_map_confirmed_2026-08-26"
         },
         {
           "id": "94888628-fe97-442d-9e22-2609be0d296e",
@@ -9077,10 +10407,18 @@
           "color": "#60a5fa",
           "area_mm2": 11597924.5,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 1,
-          "erp_area_code": null
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 3,
+          "erp_area_code": "FG-006",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "成品存放（可临时混放）堆放区",
+          "formal_area_id": 38,
+          "formal_floor_id": 1,
+          "measurement_source": "current_map_confirmed_2026-08-26"
         },
         {
           "id": "0d579673-47c9-47df-9a80-a281526752c1",
@@ -9115,10 +10453,18 @@
           "color": "#60a5fa",
           "area_mm2": 12190832.0,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 1,
-          "erp_area_code": null
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 3,
+          "erp_area_code": "FG-007",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "成品存放（可临时混放）堆放区",
+          "formal_area_id": 39,
+          "formal_floor_id": 1,
+          "measurement_source": "current_map_confirmed_2026-08-26"
         },
         {
           "id": "d89b19bb-a899-4949-98ef-fdc11e7c8c30",
@@ -9153,10 +10499,18 @@
           "color": "#60a5fa",
           "area_mm2": 15788230.0,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 1,
-          "erp_area_code": null
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 4,
+          "erp_area_code": "FG-008",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "成品存放（可临时混放）堆放区",
+          "formal_area_id": 56,
+          "formal_floor_id": 1,
+          "measurement_source": "current_map_confirmed_2026-08-26"
         },
         {
           "id": "700d8903-5387-45ef-b5e8-9593cbd31c03",
@@ -9200,9 +10554,17 @@
           "area_mm2": 60830805.5,
           "source": "manual",
           "status": "confirmed",
-          "is_locked": false,
-          "version": 2,
-          "erp_area_code": null
+          "is_locked": true,
+          "version": 5,
+          "erp_area_code": "FG-009",
+          "allowed_inventory_types": [
+            "finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "成品存放（可临时混放）堆放区",
+          "formal_area_id": 35,
+          "formal_floor_id": 1,
+          "measurement_source": "current_map_confirmed_2026-08-26"
         },
         {
           "id": "436a6229-b15c-417a-b0d1-054597f0fd4a",
@@ -9313,10 +10675,18 @@
           "color": "#60a5fa",
           "area_mm2": 2378762.0,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 2,
-          "erp_area_code": null
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 5,
+          "erp_area_code": "RAW-001",
+          "allowed_inventory_types": [
+            "raw_material"
+          ],
+          "storage_layout": "rack",
+          "formal_area_name": "左区L3 原料区（上段）",
+          "formal_area_id": 25,
+          "formal_floor_id": 1,
+          "measurement_source": "current_map_confirmed_2026-08-26"
         },
         {
           "id": "a3d3482a-ae61-415d-b848-14a22c27b509",
@@ -9389,10 +10759,18 @@
           "color": "#60a5fa",
           "area_mm2": 23537579.5,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 2,
-          "erp_area_code": null
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 4,
+          "erp_area_code": "RAW-004",
+          "allowed_inventory_types": [
+            "raw_material"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "左区L8 原料区（南侧）",
+          "formal_area_id": 41,
+          "formal_floor_id": 1,
+          "measurement_source": "current_map_confirmed_2026-08-26"
         },
         {
           "id": "8c9b4318-8697-4f89-befb-427e2c8982d2",
@@ -9427,10 +10805,18 @@
           "color": "#60a5fa",
           "area_mm2": 49843200.0,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 2,
-          "erp_area_code": null
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 4,
+          "erp_area_code": "SEMI-006",
+          "allowed_inventory_types": [
+            "semi_finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "左区L5 半成品区（西中整合）",
+          "formal_area_id": 27,
+          "formal_floor_id": 1,
+          "measurement_source": "current_map_confirmed_2026-08-26"
         },
         {
           "id": "26849258-36f1-4620-815d-29d50e683578",
@@ -9473,10 +10859,18 @@
           "color": "#60a5fa",
           "area_mm2": 53478949.0,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 2,
-          "erp_area_code": null
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 4,
+          "erp_area_code": "SEMI-008",
+          "allowed_inventory_types": [
+            "semi_finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "左区L9 半成品区（最南整合）",
+          "formal_area_id": 40,
+          "formal_floor_id": 1,
+          "measurement_source": "current_map_confirmed_2026-08-26"
         },
         {
           "id": "a939e56e-f616-4048-bc4c-28127304fb3f",
@@ -9511,33 +10905,41 @@
           "color": "#60a5fa",
           "area_mm2": 71668674.0,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 3,
-          "erp_area_code": null
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 6,
+          "erp_area_code": "SEMI-010",
+          "allowed_inventory_types": [
+            "semi_finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "左区L7 半成品区（中部整合）",
+          "formal_area_id": 36,
+          "formal_floor_id": 1,
+          "measurement_source": "current_map_confirmed_2026-08-26"
         },
         {
           "id": "502a6fbf-c5c2-486c-bd42-e7e96320c135",
           "feature_code": "ZONE-3F-SEMI-011",
-          "name": "半成品堆放区",
+          "name": "SEMI-011 半成品堆放区",
           "feature_kind": "zone",
           "subtype": "semi_finished",
           "points": [
             [
-              8688.0,
-              -26019.0
+              9979.0,
+              -27929.0
             ],
             [
-              17024.0,
-              -26098.0
+              15279.0,
+              -27929.0
             ],
             [
-              16905.0,
-              -28639.0
+              15279.0,
+              -26729.0
             ],
             [
-              8609.0,
-              -28559.0
+              9979.0,
+              -26729.0
             ]
           ],
           "width_mm": null,
@@ -9547,12 +10949,20 @@
           "elevation_mm": 0.0,
           "storage_height_mm": 1000.0,
           "color": "#60a5fa",
-          "area_mm2": 21134668.5,
+          "area_mm2": 6360000.0,
           "source": "manual",
-          "status": "candidate",
-          "is_locked": false,
-          "version": 1,
-          "erp_area_code": null
+          "status": "confirmed",
+          "is_locked": true,
+          "version": 3,
+          "erp_area_code": "SEMI-011",
+          "allowed_inventory_types": [
+            "semi_finished"
+          ],
+          "storage_layout": "pallet_ground",
+          "formal_area_name": "SEMI-011 半成品堆放区",
+          "formal_area_id": 48,
+          "formal_floor_id": 1,
+          "measurement_source": "owner_confirmed_2026-08-26"
         },
         {
           "id": "9ebfbdb7-2172-48b1-a6c4-4324e920ad6c",
@@ -10196,18 +11606,981 @@
         "E1",
         "E2",
         "E3",
-        "E4",
         "F1",
         "F12",
         "F2",
         "F3",
         "F34",
-        "F4"
+        "F4",
+        "FG-004",
+        "FG-005",
+        "FG-006",
+        "FG-007",
+        "FG-008",
+        "FG-009",
+        "FIN-LOOSE-001",
+        "RAW-001",
+        "RAW-004",
+        "SEMI-006",
+        "SEMI-008",
+        "SEMI-010",
+        "SEMI-011"
       ],
       "pallets_inventory_linked": false,
-      "layout_edited_at": "2026-08-08T07:56:51.800359+00:00",
-      "revision": "1555039bb1b9e3a2",
-      "site_layout_receipt": "P1-16D-2-20260808"
+      "layout_edited_at": "2026-08-26T21:30:00+08:00",
+      "revision": "e5f192ba605185db",
+      "site_layout_receipt": "P1-16D-2-20260808",
+      "layout_edit_receipts": [
+        {
+          "operation_key": "A1-100-TO-3F-FG004-MAP-20260814-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "36330234-afbf-4e25-979f-19b835d81541",
+            "feature_code": "ZONE-3F-FG-004",
+            "name": "成品存放（可临时混放）堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_storage",
+            "points": [
+              [
+                -23647.0,
+                -6798.0
+              ],
+              [
+                -23647.0,
+                -10179.0
+              ],
+              [
+                -19930.0,
+                -10165.0
+              ],
+              [
+                -19874.0,
+                -6770.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 12687472.0,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 2,
+            "erp_area_code": "FG-004",
+            "allowed_inventory_types": [
+              "finished",
+              "semi_finished",
+              "raw_material"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品存放（可临时混放）堆放区",
+            "formal_area_id": 26,
+            "formal_floor_id": 1
+          },
+          "applied_at": "2026-08-14T05:11:01.518965+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709387376-4b455104d44a7-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "8c9b4318-8697-4f89-befb-427e2c8982d2",
+            "feature_code": "ZONE-3F-SEMI-006",
+            "name": "左区L5 半成品区（西中整合）",
+            "feature_kind": "zone",
+            "subtype": "semi_finished",
+            "points": [
+              [
+                -23636.0,
+                -14987.0
+              ],
+              [
+                -13252.0,
+                -14987.0
+              ],
+              [
+                -13252.0,
+                -10187.0
+              ],
+              [
+                -23636.0,
+                -10187.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 3000.0,
+            "color": "#60a5fa",
+            "area_mm2": 49843200.0,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 3,
+            "erp_area_code": "SEMI-006",
+            "allowed_inventory_types": [
+              "semi_finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "左区L5 半成品区（西中整合）",
+            "formal_area_id": 27,
+            "formal_floor_id": 1
+          },
+          "applied_at": "2026-08-14T12:09:47.441970+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709397296-3669f5c256a2a8-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "700d8903-5387-45ef-b5e8-9593cbd31c03",
+            "feature_code": "ZONE-3F-FG-009",
+            "name": "成品存放（可临时混放）堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_storage",
+            "points": [
+              [
+                -20778.0,
+                -16468.0
+              ],
+              [
+                -13185.0,
+                -16546.0
+              ],
+              [
+                -13146.0,
+                -25457.0
+              ],
+              [
+                -19303.0,
+                -25457.0
+              ],
+              [
+                -19303.0,
+                -20520.0
+              ],
+              [
+                -20769.0,
+                -20520.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 60830805.5,
+            "source": "manual",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 3,
+            "erp_area_code": "FG-009",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品存放（可临时混放）堆放区"
+          },
+          "applied_at": "2026-08-14T12:09:59.532923+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709407060-fc83f89b3d17d-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "a939e56e-f616-4048-bc4c-28127304fb3f",
+            "feature_code": "ZONE-3F-SEMI-010",
+            "name": "左区L7 半成品区（中部整合）",
+            "feature_kind": "zone",
+            "subtype": "semi_finished",
+            "points": [
+              [
+                -11737.0,
+                -21861.0
+              ],
+              [
+                -7376.0,
+                -21861.0
+              ],
+              [
+                -7376.0,
+                -5427.0
+              ],
+              [
+                -11737.0,
+                -5427.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 71668674.0,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 4,
+            "erp_area_code": "SEMI-010",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "左区L7 半成品区（中部整合）"
+          },
+          "applied_at": "2026-08-14T12:10:07.123968+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709479546-d13b2c63fca968-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "3259069c-6462-43e4-9293-c33f8b7b765f",
+            "feature_code": "ZONE-3F-FG-005",
+            "name": "成品存放（可临时混放）堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_storage",
+            "points": [
+              [
+                -7368.0,
+                -6561.0
+              ],
+              [
+                -5825.0,
+                -6524.0
+              ],
+              [
+                -5715.0,
+                -21863.0
+              ],
+              [
+                -7386.0,
+                -21845.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 24606017.5,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 2,
+            "erp_area_code": "FG-005",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品存放（可临时混放）堆放区"
+          },
+          "applied_at": "2026-08-14T12:11:19.609078+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709486668-709a16c87d8598-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "94888628-fe97-442d-9e22-2609be0d296e",
+            "feature_code": "ZONE-3F-FG-006",
+            "name": "成品存放（可临时混放）堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_storage",
+            "points": [
+              [
+                -4291.0,
+                -6631.0
+              ],
+              [
+                -2571.0,
+                -6659.0
+              ],
+              [
+                -2552.0,
+                -13564.0
+              ],
+              [
+                -4188.0,
+                -13551.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 11597924.5,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 2,
+            "erp_area_code": "FG-006",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品存放（可临时混放）堆放区"
+          },
+          "applied_at": "2026-08-14T12:11:26.727922+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709492719-3d1cc3eafd4f88-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "0d579673-47c9-47df-9a80-a281526752c1",
+            "feature_code": "ZONE-3F-FG-007",
+            "name": "成品存放（可临时混放）堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_storage",
+            "points": [
+              [
+                -4170.0,
+                -16131.0
+              ],
+              [
+                -2558.0,
+                -16141.0
+              ],
+              [
+                -2586.0,
+                -23867.0
+              ],
+              [
+                -4138.0,
+                -23817.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 12190832.0,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 2,
+            "erp_area_code": "FG-007",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品存放（可临时混放）堆放区"
+          },
+          "applied_at": "2026-08-14T12:11:32.779276+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709500377-41305ff806092-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "26849258-36f1-4620-815d-29d50e683578",
+            "feature_code": "ZONE-3F-SEMI-008",
+            "name": "左区L9 半成品区（最南整合）",
+            "feature_kind": "zone",
+            "subtype": "semi_finished",
+            "points": [
+              [
+                -16610.0,
+                -30014.0
+              ],
+              [
+                -2468.0,
+                -30014.0
+              ],
+              [
+                -2468.0,
+                -26483.0
+              ],
+              [
+                -13173.0,
+                -26483.0
+              ],
+              [
+                -13173.0,
+                -25452.0
+              ],
+              [
+                -16610.0,
+                -25452.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 53478949.0,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 3,
+            "erp_area_code": "SEMI-008",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "左区L9 半成品区（最南整合）"
+          },
+          "applied_at": "2026-08-14T12:11:40.459224+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709506204-bf8090a4b4988-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "210984c6-23ef-4784-afc1-82162b758993",
+            "feature_code": "ZONE-3F-RAW-004",
+            "name": "左区L8 原料区（南侧）",
+            "feature_kind": "zone",
+            "subtype": "raw_material",
+            "points": [
+              [
+                -11528.0,
+                -23747.0
+              ],
+              [
+                -2483.0,
+                -23933.0
+              ],
+              [
+                -2483.0,
+                -26491.0
+              ],
+              [
+                -11454.0,
+                -26416.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 23537579.5,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 3,
+            "erp_area_code": "RAW-004",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "左区L8 原料区（南侧）"
+          },
+          "applied_at": "2026-08-14T12:11:46.262304+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709524576-bd30e476332c78-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "98ddeb13-805f-4a63-83e1-120ebf38b27f",
+            "feature_code": "ZONE-3F-RAW-001",
+            "name": "左区L3 原料区（上段）",
+            "feature_kind": "zone",
+            "subtype": "raw_material",
+            "points": [
+              [
+                -5801.0,
+                -5395.0
+              ],
+              [
+                -5863.0,
+                -6238.0
+              ],
+              [
+                -8863.0,
+                -6113.0
+              ],
+              [
+                -8894.0,
+                -5395.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 2378762.0,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 3,
+            "erp_area_code": "RAW-001",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "rack",
+            "formal_area_name": "左区L3 原料区（上段）",
+            "formal_area_id": 25,
+            "formal_floor_id": 1
+          },
+          "applied_at": "2026-08-14T12:12:06.814096+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709533906-5df0c3e97d9d28-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "98ddeb13-805f-4a63-83e1-120ebf38b27f",
+            "feature_code": "ZONE-3F-RAW-001",
+            "name": "左区L3 原料区（上段）",
+            "feature_kind": "zone",
+            "subtype": "raw_material",
+            "points": [
+              [
+                -5801.0,
+                -5395.0
+              ],
+              [
+                -5863.0,
+                -6238.0
+              ],
+              [
+                -8863.0,
+                -6113.0
+              ],
+              [
+                -8894.0,
+                -5395.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 2378762.0,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 4,
+            "erp_area_code": "RAW-001",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "rack",
+            "formal_area_name": "左区L3 原料区（上段）",
+            "formal_area_id": 25,
+            "formal_floor_id": 1
+          },
+          "applied_at": "2026-08-14T12:12:13.961332+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709814995-eefe4f57a72118-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "502a6fbf-c5c2-486c-bd42-e7e96320c135",
+            "feature_code": "ZONE-3F-SEMI-011",
+            "name": "半成品堆放区",
+            "feature_kind": "zone",
+            "subtype": "semi_finished",
+            "points": [
+              [
+                8688.0,
+                -26019.0
+              ],
+              [
+                17024.0,
+                -26098.0
+              ],
+              [
+                16905.0,
+                -28639.0
+              ],
+              [
+                8609.0,
+                -28559.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 21134668.5,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 2,
+            "erp_area_code": "SEMI-011",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "半成品堆放区"
+          },
+          "applied_at": "2026-08-14T12:16:55.060199+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786709831812-8f625ffd030f1-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "3b662b8e-a457-4544-9ccb-98dacdafd835",
+            "feature_code": "ZONE-3F-ERP-D2",
+            "name": "D2 货架为主·栈板混合存放区",
+            "feature_kind": "zone",
+            "subtype": "rack_storage",
+            "points": [
+              [
+                16703.0,
+                -19690.0
+              ],
+              [
+                19243.0,
+                -19690.0
+              ],
+              [
+                19243.0,
+                -5510.0
+              ],
+              [
+                16703.0,
+                -5510.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 2600.0,
+            "color": "#8b5cf6",
+            "area_mm2": 36017200.0,
+            "source": "ai",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 18,
+            "erp_area_code": "D2",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "D2 区",
+            "formal_area_id": 11,
+            "formal_floor_id": 1
+          },
+          "applied_at": "2026-08-14T12:17:11.889059+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786752165185-28740e54affb2-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "a939e56e-f616-4048-bc4c-28127304fb3f",
+            "feature_code": "ZONE-3F-SEMI-010",
+            "name": "左区L7 半成品区（中部整合）",
+            "feature_kind": "zone",
+            "subtype": "semi_finished",
+            "points": [
+              [
+                -11737.0,
+                -21861.0
+              ],
+              [
+                -7376.0,
+                -21861.0
+              ],
+              [
+                -7376.0,
+                -5427.0
+              ],
+              [
+                -11737.0,
+                -5427.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 71668674.0,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 5,
+            "erp_area_code": "SEMI-010",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "左区L7 半成品区（中部整合）",
+            "formal_area_id": 36,
+            "formal_floor_id": 1
+          },
+          "applied_at": "2026-08-15T00:02:45.245556+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786752181159-e614cba43eac88-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "d89b19bb-a899-4949-98ef-fdc11e7c8c30",
+            "feature_code": "ZONE-3F-FG-008",
+            "name": "成品存放（可临时混放）堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_storage",
+            "points": [
+              [
+                -23650.0,
+                -15032.0
+              ],
+              [
+                -20758.0,
+                -14993.0
+              ],
+              [
+                -20798.0,
+                -20500.0
+              ],
+              [
+                -23650.0,
+                -20520.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 15788230.0,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 2,
+            "erp_area_code": "FG-008",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品存放（可临时混放）堆放区"
+          },
+          "applied_at": "2026-08-15T00:03:01.217684+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786752235916-41d0fb9b269848-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "d89b19bb-a899-4949-98ef-fdc11e7c8c30",
+            "feature_code": "ZONE-3F-FG-008",
+            "name": "成品存放（可临时混放）堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_storage",
+            "points": [
+              [
+                -23650.0,
+                -15032.0
+              ],
+              [
+                -20758.0,
+                -14993.0
+              ],
+              [
+                -20798.0,
+                -20500.0
+              ],
+              [
+                -23650.0,
+                -20520.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 15788230.0,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 3,
+            "erp_area_code": "FG-008",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品存放（可临时混放）堆放区",
+            "formal_area_id": 56,
+            "formal_floor_id": 1
+          },
+          "applied_at": "2026-08-15T00:03:55.967306+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786752271469-1983a71e6bd9e8-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "700d8903-5387-45ef-b5e8-9593cbd31c03",
+            "feature_code": "ZONE-3F-FG-009",
+            "name": "成品存放（可临时混放）堆放区",
+            "feature_kind": "zone",
+            "subtype": "finished_storage",
+            "points": [
+              [
+                -20778.0,
+                -16468.0
+              ],
+              [
+                -13185.0,
+                -16546.0
+              ],
+              [
+                -13146.0,
+                -25457.0
+              ],
+              [
+                -19303.0,
+                -25457.0
+              ],
+              [
+                -19303.0,
+                -20520.0
+              ],
+              [
+                -20769.0,
+                -20520.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#60a5fa",
+            "area_mm2": 60830805.5,
+            "source": "manual",
+            "status": "confirmed",
+            "is_locked": false,
+            "version": 4,
+            "erp_area_code": "FG-009",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "成品存放（可临时混放）堆放区",
+            "formal_area_id": 35,
+            "formal_floor_id": 1
+          },
+          "applied_at": "2026-08-15T00:04:31.523075+00:00"
+        },
+        {
+          "operation_key": "zone-one-step-confirm-1786942655074-e39d83a59365f-policy",
+          "action": "zone.policy.update",
+          "result": {
+            "id": "c399826c-0049-41bc-a687-04993152608f",
+            "feature_code": "ZONE-3F-FG-001",
+            "name": "送剩零头纸箱长期存放区（待同订单续配）",
+            "feature_kind": "zone",
+            "subtype": "delivery_surplus",
+            "points": [
+              [
+                3873.0,
+                -3515.0
+              ],
+              [
+                3862.0,
+                -3799.0
+              ],
+              [
+                8969.0,
+                -3826.0
+              ],
+              [
+                8969.0,
+                -3482.0
+              ]
+            ],
+            "width_mm": null,
+            "direction": null,
+            "no_stacking": false,
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1000.0,
+            "color": "#f97316",
+            "area_mm2": 1601854.5,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": false,
+            "version": 3,
+            "erp_area_code": "E4",
+            "allowed_inventory_types": [
+              "finished"
+            ],
+            "storage_layout": "pallet_ground",
+            "formal_area_name": "E4 区",
+            "formal_area_id": 16,
+            "formal_floor_id": 1
+          },
+          "applied_at": "2026-08-17T04:57:35.142106+00:00"
+        },
+        {
+          "action": "p0_26.owner_measured_ae_and_e4_semantics",
+          "changed_area_codes": [
+            "A1",
+            "A2",
+            "AB1",
+            "AB2",
+            "B1",
+            "B2",
+            "C1",
+            "C2",
+            "CD1",
+            "D1",
+            "D2",
+            "DE1",
+            "E1",
+            "E2",
+            "E3",
+            "F1",
+            "F12",
+            "F2",
+            "F3",
+            "F34",
+            "F4",
+            "FG-004",
+            "FG-005",
+            "FG-006",
+            "FG-007",
+            "FG-008",
+            "FG-009",
+            "FIN-LOOSE-001",
+            "RAW-001",
+            "RAW-004",
+            "SEMI-006",
+            "SEMI-008",
+            "SEMI-010",
+            "SEMI-011"
+          ],
+          "measurement_source": "owner_confirmed_2026-08-26",
+          "previous_revision": "626699b76d91de90"
+        }
+      ]
     }
   },
   "site_layout_receipt": {
@@ -10215,5 +12588,46 @@
     "inventory_effect": "none",
     "formal_location_effect": "none",
     "unmeasured_geometry": "visual_candidate_only"
+  },
+  "p0_26_current_map_migration": {
+    "measurement_source": "owner_confirmed_2026-08-26",
+    "previous_floor3_revision": "626699b76d91de90",
+    "floor3_revision": "e5f192ba605185db",
+    "changed_area_codes": [
+      "A1",
+      "A2",
+      "AB1",
+      "AB2",
+      "B1",
+      "B2",
+      "C1",
+      "C2",
+      "CD1",
+      "D1",
+      "D2",
+      "DE1",
+      "E1",
+      "E2",
+      "E3",
+      "F1",
+      "F12",
+      "F2",
+      "F3",
+      "F34",
+      "F4",
+      "FG-004",
+      "FG-005",
+      "FG-006",
+      "FG-007",
+      "FG-008",
+      "FG-009",
+      "FIN-LOOSE-001",
+      "RAW-001",
+      "RAW-004",
+      "SEMI-006",
+      "SEMI-008",
+      "SEMI-010",
+      "SEMI-011"
+    ]
   }
 }

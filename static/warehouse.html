@@ -2203,7 +2203,7 @@
     }
     function locationLabelEligible(row){return row.is_active!==false&&row.position_status==="mapped"&&!row.is_temporary&&row.storage_type!=="temporary_aisle"}
     function renderLocations(){
-      $("locationBody").innerHTML=state.locations.map(x=>{const placed=x.placement_status==="placed",mapped=x.position_status==="mapped",managed=["V11","TWIN_V1"].includes(String(x.source_version||"").toUpperCase()),printable=locationLabelEligible(x),status=!x.is_active?"已退役":mapped?"已发布":placed?"待地图发布":"待布局",selector=`<input type="checkbox" aria-label="选择位置 ${h(readableLocation(x))}" ${printable?"":"disabled"} ${state.locationLabelSelection.has(x.id)?"checked":""} onchange="toggleLocationLabel(${x.id},this.checked)">`,label=printable?`<button class="btn" onclick="window.open('/location-label.html?location_id=${x.id}','_blank')">打印位置标签</button>`:"",address=`<button class="btn" type="button" onclick="openLocationAddress(${x.id})">统一地址</button>`,mapAction=mapped?`<button class="btn" onclick="openTwinFloor('${Number(x.warehouse_floor||3)}F',${x.id})">实测地图定位</button>${label}${address}`:managed?`${address}<span class="tag warn">请在实测地图完成发布</span>`:`<button class="btn" onclick="editLocation(${x.id})">编辑</button>${address}<button class="btn ${x.is_active?"danger":""}" onclick="toggleLocation(${x.id},${x.is_active})">${x.is_active?"退役":"恢复"}</button>`;return `<tr><td>${selector}</td><td>${h(x.current_address_code||x.location_code)}</td><td>${h(readableLocation(x))}</td><td>${h(labels[x.warehouse_type]||x.warehouse_type)}</td><td>${h(locationAreaLabel(x))}${mapped?'<br><span class="tag">当前实测地图已发布</span>':!x.is_active?'<br><span class="tag">保留历史关联</span>':placed?'<br><span class="tag warn">当前实测地图未发布</span>':'<br><span class="tag warn">待布局，禁止入库</span>'}</td><td>${h(status)}</td><td>${h(x.remarks||"-")}</td><td>${mapAction}</td></tr>`}).join("")||`<tr><td colspan="8" class="empty">暂无库位</td></tr>`;updateLocationLabelControls();refreshLocationAddressLocationOptions()
+      $("locationBody").innerHTML=state.locations.map(x=>{const placed=x.placement_status==="placed",mapped=x.position_status==="mapped",managed=["V11","TWIN_V1","CURRENT_MAP"].includes(String(x.source_version||"").toUpperCase()),printable=locationLabelEligible(x),status=!x.is_active?"已退役":mapped?"已发布":placed?"待地图发布":"待布局",selector=`<input type="checkbox" aria-label="选择位置 ${h(readableLocation(x))}" ${printable?"":"disabled"} ${state.locationLabelSelection.has(x.id)?"checked":""} onchange="toggleLocationLabel(${x.id},this.checked)">`,label=printable?`<button class="btn" onclick="window.open('/location-label.html?location_id=${x.id}','_blank')">打印位置标签</button>`:"",address=`<button class="btn" type="button" onclick="openLocationAddress(${x.id})">统一地址</button>`,mapAction=mapped?`<button class="btn" onclick="openTwinFloor('${Number(x.warehouse_floor||3)}F',${x.id})">实测地图定位</button>${label}${address}`:managed?`${address}<span class="tag warn">请在实测地图完成发布</span>`:`<button class="btn" onclick="editLocation(${x.id})">编辑</button>${address}<button class="btn ${x.is_active?"danger":""}" onclick="toggleLocation(${x.id},${x.is_active})">${x.is_active?"退役":"恢复"}</button>`;return `<tr><td>${selector}</td><td>${h(x.current_address_code||x.location_code)}</td><td>${h(readableLocation(x))}</td><td>${h(labels[x.warehouse_type]||x.warehouse_type)}</td><td>${h(locationAreaLabel(x))}${mapped?'<br><span class="tag">当前实测地图已发布</span>':!x.is_active?'<br><span class="tag">保留历史关联</span>':placed?'<br><span class="tag warn">当前实测地图未发布</span>':'<br><span class="tag warn">待布局，禁止入库</span>'}</td><td>${h(status)}</td><td>${h(x.remarks||"-")}</td><td>${mapAction}</td></tr>`}).join("")||`<tr><td colspan="8" class="empty">暂无库位</td></tr>`;updateLocationLabelControls();refreshLocationAddressLocationOptions()
     }
     function updateLocationLabelControls(){const printable=state.locations.filter(locationLabelEligible),count=state.locationLabelSelection.size;$("locationBatchCount").textContent=`已选 ${count} 个正式位置`;$("locationBatchPrint").disabled=count===0;$("locationLabelSelectAll").checked=printable.length>0&&count===printable.length;$("locationLabelSelectAll").indeterminate=count>0&&count<printable.length}
     function toggleLocationLabel(id,checked){if(checked){if(state.locationLabelSelection.size>=100){toast("一次最多选择 100 个位置",true);renderLocations();return}state.locationLabelSelection.add(id)}else state.locationLabelSelection.delete(id);updateLocationLabelControls()}
@@ -2388,7 +2388,7 @@
     const FLOOR3_AREA_OPTIONS=[
       ["A1","A1 区"],["A2","A2 区"],["AB1","AB1 区"],["AB2","AB2 区"],["B1","B1 区"],["B2","B2 区"],
       ["C1","C1 区"],["C2","C2 区"],["CD1","CD1 区"],["D1","D1 区"],["D2","D2 区"],["DE1","DE1 区"],
-      ["E1","E1 区"],["E2","E2 区"],["E3","E3 区"],["E4","E4 区"],["F1","F1 区"],["F2","F2 区"],
+      ["E1","E1 区"],["E2","E2 区"],["E3","E3 区"],["SEMI-011","SEMI-011 半成品堆放区"],["F1","F1 区"],["F2","F2 区"],
       ["F3","F3 区"],["F4","F4 区"],["F12","F12 过道临放"],["F34","F34 过道临放"]
     ];
     // 三楼实尺模型：单位为米。页面坐标全部由这组实尺换算，不再依赖 PNG 像素热区。
@@ -2400,12 +2400,12 @@
     const FLOOR3_ZONES=[
       {id:"A2",x:0,y:8.7,w:3.1,h:14,kind:"floor",group:"a",allowPallets:true},{id:"B2",x:4.6,y:8.7,w:3,h:14,kind:"floor",group:"b",allowPallets:true},{id:"C2",x:9.1,y:8.7,w:3.5,h:14,kind:"floor",group:"c",allowPallets:true},{id:"D2",x:14.1,y:8.7,w:2.6,h:14,kind:"floor",group:"d",allowPallets:true},{id:"E2",x:18.2,y:8.7,w:5,h:14,kind:"floor",group:"e",allowPallets:true},
       {id:"A1",x:0,y:24.6,w:3.1,h:7.43,kind:"floor",group:"a",allowPallets:true},{id:"B1",x:4.6,y:24.6,w:3,h:10.8,kind:"floor",group:"b",allowPallets:true},{id:"C1",x:9.1,y:24.6,w:3.5,h:13.7,kind:"floor",group:"c",allowPallets:true},{id:"D1",x:14.1,y:24.6,w:2.55,h:15,kind:"rack-floor",group:"d",allowPallets:true},{id:"E1",x:18.15,y:24.6,w:5,h:12,kind:"floor",group:"e",allowPallets:true},
-      {id:"AB2",x:4.8,y:0,w:2.6,h:1.6,kind:"floor",group:"ab",allowPallets:true},{id:"AB1",x:4.8,y:3.1,w:2.6,h:4.1,kind:"floor",group:"ab",allowPallets:true},{id:"E4",x:18.05,y:.5,w:5.3,h:1.2,kind:"rack-floor",group:"e",allowPallets:true},{id:"E3",x:19.3,y:3.2,w:2.8,h:4,kind:"floor",group:"e",allowPallets:true},
+      {id:"AB2",x:4.8,y:0,w:2.6,h:1.6,kind:"floor",group:"ab",allowPallets:true},{id:"AB1",x:4.8,y:3.1,w:2.6,h:4.1,kind:"floor",group:"ab",allowPallets:true},{id:"SEMI-011",x:18.05,y:.5,w:5.3,h:1.2,kind:"floor",group:"semi",allowPallets:true},{id:"E3",x:19.3,y:3.2,w:2.8,h:4,kind:"floor",group:"e",allowPallets:true},
       {id:"CD1",x:9.1,y:41.1,w:6.6,h:4,kind:"floor",group:"cd",allowPallets:true},{id:"DE1",x:18.15,y:38.1,w:6.3,h:1.2,kind:"floor",group:"de",allowPallets:true},
       {id:"F1",x:24.7,y:16.2,w:1.8,h:6.5,kind:"rack-floor",group:"f",allowPallets:true},{id:"F12",x:26.5,y:16.2,w:2.9,h:6.5,kind:"temp",group:"f",allowPallets:true,temporary:true},{id:"F2",x:29.4,y:16.2,w:1.2,h:6.5,kind:"rack-only",group:"f",allowPallets:false},{id:"F3",x:30.6,y:16.2,w:1.2,h:6.5,kind:"rack-only",group:"f",allowPallets:false},{id:"F34",x:31.8,y:15.9,w:1.5,h:6.8,kind:"temp",group:"f",allowPallets:true,temporary:true},{id:"F4",x:33.3,y:16.2,w:1.2,h:6.5,kind:"rack-only",group:"f",allowPallets:false}
     ];
     const FLOOR3_RACK_DEFS=[
-      {id:"D1-RACK",zoneId:"D1",cellCapacity:8,side:"left"},{id:"E4-RACK",zoneId:"E4",cellCapacity:4,full:true},{id:"F1-RACK",zoneId:"F1",cellCapacity:12,full:true},{id:"F2-RACK",zoneId:"F2",cellCapacity:30,full:true},{id:"F3-RACK",zoneId:"F3",cellCapacity:30,full:true},{id:"F4-RACK",zoneId:"F4",cellCapacity:30,full:true}
+      {id:"F1-RACK",zoneId:"F1",cellCapacity:12,full:true},{id:"F2-RACK",zoneId:"F2",cellCapacity:30,full:true},{id:"F3-RACK",zoneId:"F3",cellCapacity:30,full:true},{id:"F4-RACK",zoneId:"F4",cellCapacity:30,full:true}
     ];
     const FLOOR3_SCALE_CONFIG={palletW:1.2,palletH:1,gap:.05,margin:.05};
     function floor3WorldPctX(value){return ((value-FLOOR3_OVERVIEW_WORLD.x)/FLOOR3_OVERVIEW_WORLD.w)*100}
@@ -2535,7 +2535,7 @@
     function floor3IsRack(row){return floor3StorageType(row)==="rack"}
     function floor3CanMoveSelectedPallet(row){const pallet=floor3CurrentPallet(row);return Boolean(row&&row.is_active!==false&&!floor3IsRack(row)&&pallet&&!floor3PalletRestricted(pallet)&&canOperate())}
     function floor3CanMovePallet(row){return Boolean(state.floor3.moveMode&&floor3CanMoveSelectedPallet(row))}
-    function floor3CanReceivePallet(row){return Boolean(row&&row.is_active!==false&&row.position_status==="mapped"&&!floor3IsRack(row)&&!floor3LocationOccupied(row))}
+    function floor3CanReceivePallet(row){return Boolean(row&&row.can_receive_pallet===true&&row.is_active!==false&&row.position_status==="mapped"&&!floor3LocationOccupied(row))}
     function floor3Zone(areaCode){const normalized=String(areaCode||"").trim().toUpperCase();return FLOOR3_ZONES.find(zone=>zone.id===normalized)||null}
     function floor3PackZone(zone){
       if(!zone?.allowPallets)return {count:0,slots:[]};
@@ -2560,7 +2560,7 @@
     function floor3TheoreticalCapacity(areaCode){
       if(areaCode==="F")return FLOOR3_F_AREA_CODES.reduce((sum,code)=>sum+floor3TheoreticalCapacity(code),0);
       if(areaCode==="D1")return 28;
-      if(areaCode==="E4")return 16;
+      if(areaCode==="SEMI-011")return 4;
       if(areaCode==="DE1")return 5;
       const zone=floor3Zone(areaCode),ground=floor3PackZone(zone).count,rack=FLOOR3_RACK_DEFS.filter(item=>item.zoneId===areaCode).reduce((sum,item)=>sum+item.cellCapacity,0);
       return ground+rack;
@@ -2571,7 +2571,7 @@
       const aisle=`<div class="floor3-scale-aisle" style="${floor3RectStyle(FLOOR3_MAIN_AISLE)}">主通道 1.90m · 禁止堆货</div>`;
       const overviewZones=FLOOR3_ZONES.filter(zone=>!FLOOR3_F_AREA_CODES.includes(zone.id));
       const zones=overviewZones.map(zone=>`<div class="floor3-scale-zone group-${zone.group} ${zone.temporary?"temp":""} ${zone.kind==="rack-only"?"rack-only":""}" style="${floor3RectStyle(zone)}"></div>`).join("");
-      const structuredAreas=new Set(["D1","E4","DE1"]);
+      const structuredAreas=new Set([]);
       const theory=overviewZones.flatMap(zone=>structuredAreas.has(zone.id)?[]:floor3PackZone(zone).slots.map(slot=>`<div class="floor3-scale-slot ${zone.kind==="rack-floor"?"rack-bottom":""}" style="${floor3RectStyle(slot)}"></div>`)).join("");
       const racks=FLOOR3_RACK_DEFS.filter(definition=>!FLOOR3_F_AREA_CODES.includes(definition.zoneId)&&!structuredAreas.has(definition.zoneId)).map(definition=>{const rect=floor3RackRect(definition);return rect?`<div class="floor3-scale-rack" style="${floor3RectStyle(rect)}" title="${definition.zoneId} 货架 · ${definition.cellCapacity} 个登记格"></div>`:""}).join("");
       base.innerHTML=zones+theory+racks+aisle;
@@ -2592,17 +2592,11 @@
       if(!state.floor3.layoutDraft[row.id]&&base.source_type==="seeded"){const display=floor3StructuredDefaultDisplayLayout(row);return display?{...floor3UnrotateLocalLayout(display),z_index:display.z_index,version:base.version,source_type:base.source_type}:base}
       return base;
     }
-    function floor3StructuredDefaultDisplayLayout(row){return floor3D1DefaultDisplayLayout(row)||floor3E4DefaultDisplayLayout(row)||floor3DE1DefaultDisplayLayout(row)}
+    function floor3StructuredDefaultDisplayLayout(row){return floor3D1DefaultDisplayLayout(row)||floor3DE1DefaultDisplayLayout(row)}
     function floor3D1DefaultDisplayLayout(row){
       const code=String(row?.location_code||row?.code||"").toUpperCase(),rack=code.match(/^D1-S2-(\d{2})$/),ground=code.match(/^D1-([LR])(\d{2})$/);
       if(rack){const index=Number(rack[1])-1;if(index>=0&&index<8)return {left_pct:1+index*12.25,top_pct:4,width_pct:11.5,height_pct:30,z_index:6}}
       if(ground){const index=Number(ground[2])-1;if(index>=0&&index<10)return {left_pct:.8+index*9.85,top_pct:ground[1]==="L"?41:70,width_pct:9.1,height_pct:25,z_index:5}}
-      return null;
-    }
-    function floor3E4DefaultDisplayLayout(row){
-      const code=String(row?.location_code||row?.code||"").toUpperCase(),rack=code.match(/^E4-S2-(\d{2})$/),ground=code.match(/^E4-([LR])(\d{2})$/);
-      if(rack){const index=Number(rack[1])-1;if(index>=0&&index<4)return {left_pct:2,top_pct:2+index*24,width_pct:27,height_pct:21,z_index:6}}
-      if(ground){const index=Number(ground[2])-1;if(index>=0&&index<6)return {left_pct:ground[1]==="L"?58:128,top_pct:2+index*16,width_pct:63,height_pct:13.5,z_index:5}}
       return null;
     }
     function floor3DE1DefaultDisplayLayout(row){
@@ -2621,11 +2615,9 @@
       const target=$("floor3AreaSlotMap");if(!target)return;
       target.classList.toggle("floor3-f-group-map",areaCode==="F");
       target.classList.toggle("floor3-d1-map",areaCode==="D1");
-      target.classList.toggle("floor3-vertical-structure-map",areaCode==="E4"||areaCode==="DE1");
+      target.classList.toggle("floor3-vertical-structure-map",false);
       $("floor3AreaFocus").classList.toggle("floor3-f-mode",areaCode==="F");
       if(areaCode==="F"){target.dataset.areaCode="F";target.dataset.storageKind="rack-group";target.style.aspectRatio="auto";return}
-      if(areaCode==="D1"){target.dataset.areaCode="D1";target.dataset.storageKind="rack-floor";target.style.aspectRatio="auto";return}
-      if(areaCode==="E4"||areaCode==="DE1"){target.dataset.areaCode=areaCode;target.dataset.storageKind=areaCode==="E4"?"rack-floor":"ground";target.style.aspectRatio="auto";return}
       const zone=floor3Zone(areaCode);if(!zone)return;
       target.dataset.areaCode=zone.id;target.dataset.storageKind=zone.kind;
       target.style.aspectRatio=FLOOR3_DISPLAY_ROTATED?`${zone.h}/${zone.w}`:`${zone.w}/${zone.h}`;
@@ -2679,7 +2671,7 @@
     }
     function floor3SlotMarker(row,areaFocus=false){
       const layout=floor3MarkerLayout(row,areaFocus),pallet=floor3CurrentPallet(row),occupied=floor3LocationOccupied(row),restricted=floor3PalletRestricted(pallet),selected=Number(state.floor3.mapPopoverLocationId)===Number(row.id),matches=floor3IsSearching()&&(state.floor3.locations||[]).some(item=>Number(item.id)===Number(row.id));
-      const classes=["floor3-slot-marker",`area-${floor3AreaCode(row).toLowerCase()}`,floor3IsRack(row)?"rack-cell":"",!areaFocus&&floor3AreaCode(row)==="E4"&&floor3IsRack(row)?"overview-e4-rack":"",floor3IsTemporary(row)?"temporary-slot":"",occupied?"occupied":"",row.is_active===false?"disabled":"",floor3NeedsRelocation(row,pallet)?"relocation":"",selected?"selected":"",matches?"search-match":"",Number(state.floor3.searchFocusLocationId)===Number(row.id)?"search-focus":"",state.floor3.layoutEdit?"layout-edit":""].filter(Boolean).join(" ");
+      const classes=["floor3-slot-marker",`area-${floor3AreaCode(row).toLowerCase()}`,floor3IsRack(row)?"rack-cell":"",floor3IsTemporary(row)?"temporary-slot":"",occupied?"occupied":"",row.is_active===false?"disabled":"",floor3NeedsRelocation(row,pallet)?"relocation":"",selected?"selected":"",matches?"search-match":"",Number(state.floor3.searchFocusLocationId)===Number(row.id)?"search-focus":"",state.floor3.layoutEdit?"layout-edit":""].filter(Boolean).join(" ");
       const style=`left:${layout.left_pct}%;top:${layout.top_pct}%;width:${layout.width_pct}%;height:${layout.height_pct}%;z-index:${layout.z_index}`;
       const edit=state.floor3.layoutEdit&&floor3CanEditLayout();
       const draggable=edit||floor3CanMovePallet(row);
@@ -2721,16 +2713,12 @@
     function floor3VerticalStructureHtml(areaCode,rows){
       const sorted=values=>values.sort((a,b)=>String(a.location_code||a.code||"").localeCompare(String(b.location_code||b.code||""),"zh-CN",{numeric:true})),cells=(values,bottom=false)=>values.map(row=>floor3FRackCell(row,bottom)).join("")||'<span class="muted">暂无登记位</span>';
       const rack=sorted(rows.filter(row=>floor3IsRack(row))),ground=sorted(rows.filter(row=>!floor3IsRack(row)));
-      if(areaCode==="E4"){
-        const left=sorted(ground.filter(row=>String(row.location_code||row.code||"").toUpperCase().startsWith("E4-L"))),right=sorted(ground.filter(row=>String(row.location_code||row.code||"").toUpperCase().startsWith("E4-R")));
-        return `<div class="floor3-vertical-layout"><h3>E4 区 · 一列货架 / 两列栈板</h3><div class="floor3-vertical-frame floor3-e4-columns"><div class="floor3-vertical-section"><span class="floor3-vertical-title">左侧货架（从上到下 4 格）</span><div class="floor3-vertical-list">${cells(rack)}</div></div><div class="floor3-vertical-section"><span class="floor3-vertical-title">右侧栈板 L 列（6 位）</span><div class="floor3-vertical-list ground">${cells(left,true)}</div></div><div class="floor3-vertical-section"><span class="floor3-vertical-title">右侧栈板 R 列（6 位）</span><div class="floor3-vertical-list ground">${cells(right,true)}</div></div></div></div>`;
-      }
       return `<div class="floor3-vertical-layout"><h3>${h(areaCode)} 区 · 现场纵向排列</h3><div class="floor3-vertical-frame"><div class="floor3-vertical-section"><span class="floor3-vertical-title">栈板位（从上到下）</span><div class="floor3-vertical-list ground">${cells(ground,true)}</div></div></div></div>`;
     }
     function renderFloor3AreaSlots(){
       const area=state.floor3.selectedAreaCode,rows=floor3SlotsForArea(area);
       floor3SetAreaBackdrop(area);
-      $("floor3AreaSlotMap").innerHTML=area==="F"?floor3FGroupHtml(rows):(area==="D1"?floor3D1LayoutHtml(rows):((area==="E4"||area==="DE1")?floor3VerticalStructureHtml(area,rows):floor3AreaBackdropHtml(area)+(rows.map(row=>floor3SlotMarker(row,true)).join("")||'<div class="empty">该区域暂无已配置物理货位</div>')));
+      $("floor3AreaSlotMap").innerHTML=area==="F"?floor3FGroupHtml(rows):floor3AreaBackdropHtml(area)+(rows.map(row=>floor3SlotMarker(row,true)).join("")||'<div class="empty">该区域暂无已配置物理货位</div>');
       if(area==="F")$("floor3FSecondaryPanel").innerHTML=floor3FSecondaryHtml(rows);else $("floor3FSecondaryPanel").innerHTML="";
       floor3PlaceContextPanels();
       if(!state.floor3.detail){
@@ -2797,7 +2785,7 @@
       selectionPanel.innerHTML=selected?floor3OverviewSelectionHtml(selected):"";renderFloor3SearchResults();
       if(selected)return;
       stats.innerHTML=`<div class="floor3-overview-metric"><span class="muted">启用货位</span><b>${enabled.length}</b></div><div class="floor3-overview-metric"><span class="muted">已占用</span><b>${occupied.length}</b></div><div class="floor3-overview-metric"><span class="muted">空闲</span><b>${Math.max(0,enabled.length-occupied.length)}</b></div><div class="floor3-overview-metric"><span class="muted">待归位</span><b>${relocation.length}</b></div>`;
-      const groups=[["A / B 区",["A1","A2","AB1","AB2","B1","B2"]],["C / D 区",["C1","C2","CD1","D1","D2","DE1"]],["E 区",["E1","E2","E3","E4"]],["F 区",["F"]]];
+      const groups=[["A / B 区",["A1","A2","AB1","AB2","B1","B2"]],["C / D 区",["C1","C2","CD1","D1","D2","DE1"]],["E 区",["E1","E2","E3"]],["半成品区",["SEMI-011"]],["F 区",["F"]]];
       zones.innerHTML=groups.map(([label,codes])=>`<div class="floor3-nav-group"><div class="floor3-nav-group-title"><span>${label}</span></div><div class="floor3-nav-group-grid">${codes.map(code=>{const area=floor3AreaStats(code),classes=["floor3-overview-zone",code==="F"?"temporary":"",searching&&matched.has(code)?"matched":""].filter(Boolean).join(" ");return `<button type="button" class="${classes}" onclick="selectFloor3Area('${code}',true)"><strong>${h(code)}</strong><small>${area.occupied}/${area.enabled} 占用 · ${area.utilization}%</small></button>`}).join("")}</div></div>`).join("");
     }
     async function selectFloor3Area(areaCode,fromMap=false){

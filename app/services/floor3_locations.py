@@ -39,7 +39,7 @@ class Floor3LocationError(ValueError):
 FLOOR3_LAYOUT_AREA_CODES = frozenset(
     {
         "A1", "A2", "AB1", "AB2", "B1", "B2", "C1", "C2", "CD1", "D1", "D2",
-        "DE1", "E1", "E2", "E3", "E4", "F1", "F2", "F3", "F4", "F12", "F34",
+        "DE1", "E1", "E2", "E3", "E4", "SEMI-011", "F1", "F2", "F3", "F4", "F12", "F34",
     }
 )
 
@@ -117,10 +117,28 @@ def _location(db: Session, location_id: int) -> WarehouseLocation:
         raise Floor3LocationError("货位不存在", status_code=404)
     if not row.is_active:
         raise Floor3LocationError("货位已停用，不能绑定或移入栈板", status_code=409)
-    if row.warehouse_floor != 3 or row.source_version != "V11":
+    if row.warehouse_floor != 3 or row.source_version not in {"V11", "CURRENT_MAP"}:
         raise Floor3LocationError(
             "当前操作只允许已启用的三楼实测货位", status_code=409
         )
+    if row.source_version == "CURRENT_MAP":
+        current_pallet_id = db.scalar(
+            select(InventoryPallet.id)
+            .where(
+                InventoryPallet.location_id == row.id,
+                InventoryPallet.is_current.is_(True),
+            )
+            .limit(1)
+        )
+        issue = operational_location_issue(
+            db,
+            row,
+            pallet_storage_only=current_pallet_id is None,
+            require_published=True,
+            require_map_geometry=True,
+        )
+        if issue:
+            raise Floor3LocationError(f"{issue}，不能办理当前栈板操作", status_code=409)
     return row
 
 
@@ -448,7 +466,12 @@ def create_layout_slot(
     ) + 1
     if placement_status not in {"placed", "unplaced"}:
         raise Floor3LocationError("库位布局状态无效")
-    if layout_kind not in {"unknown", "physical_pallet", "logical_anchor"}:
+    if layout_kind not in {
+        "unknown",
+        "physical_pallet",
+        "physical_rack",
+        "logical_anchor",
+    }:
         raise Floor3LocationError("货位点位类型无效")
     if source_type not in {"manual", "seeded"}:
         raise Floor3LocationError("货位点位来源无效")

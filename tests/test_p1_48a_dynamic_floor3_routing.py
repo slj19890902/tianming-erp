@@ -169,7 +169,7 @@ def test_dynamic_floor3_area_uses_formal_lifecycle_and_keeps_location_ids(
             "floor_code": "3F",
             "area_code": "FG-004",
             "management_mode": "formal_area",
-            "source_version": "TWIN_V1",
+            "source_version": "CURRENT_MAP",
                 "available_actions": [
                     "location_count",
                     "layout",
@@ -197,7 +197,7 @@ def test_dynamic_floor3_area_uses_formal_lifecycle_and_keeps_location_ids(
         assert created_body["created_count"] == 2
         location_ids = [item["location"]["id"] for item in created_body["items"]]
         assert {item["location"]["source_version"] for item in created_body["items"]} == {
-            "TWIN_V1"
+            "CURRENT_MAP"
         }
         assert {item["location"]["placement_status"] for item in created_body["items"]} == {
             "unplaced"

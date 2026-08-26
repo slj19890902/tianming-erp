@@ -42,7 +42,7 @@ def test_order_quantity_can_be_received_before_optional_reserve_has_a_location(
     desktop_body = _function_body(
         INDEX,
         "incomingReceiptExecutionIssue(row) {",
-        "canReceiveIncoming(row) {",
+        "toggleAllIncoming(checked) {",
     )
     mobile = (ROOT / "static" / "incoming.html").read_text(encoding="utf-8")
     mobile_body = _function_body(

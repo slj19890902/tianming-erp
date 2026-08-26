@@ -3110,11 +3110,21 @@ def test_partial_composite_receipt_has_no_manual_remaining_capacity_or_duplicate
             params={"status": "pending", "page": 1, "page_size": 25},
         )
         assert before_first_receipt.status_code == 200, before_first_receipt.text
+        assert not any(
+            int(item["order_item_id"]) == 1
+            for item in before_first_receipt.json()["items"]
+        )
+        before_first_waiting = client.get(
+            "/api/production/tasks",
+            params={"status": "waiting_material", "page": 1, "page_size": 25},
+        )
+        assert before_first_waiting.status_code == 200, before_first_waiting.text
         before_first_row = next(
             item
-            for item in before_first_receipt.json()["items"]
+            for item in before_first_waiting.json()["items"]
             if int(item["order_item_id"]) == 1
         )
+        assert before_first_row["status"] == "waiting_material"
         assert before_first_row["receipt_purpose_managed"] is True
         assert before_first_row["completion_actionable"] is False
         assert before_first_row["actual_output_quantity"] == 0
@@ -3149,14 +3159,24 @@ def test_partial_composite_receipt_has_no_manual_remaining_capacity_or_duplicate
 
         zero_output_pending = client.get(
             "/api/production/tasks",
-            params={"page": 1, "page_size": 25},
+            params={"status": "pending", "page": 1, "page_size": 25},
         )
         assert zero_output_pending.status_code == 200, zero_output_pending.text
+        assert not any(
+            int(item["order_item_id"]) == 1
+            for item in zero_output_pending.json()["items"]
+        )
+        zero_output_waiting = client.get(
+            "/api/production/tasks",
+            params={"status": "waiting_material", "page": 1, "page_size": 25},
+        )
+        assert zero_output_waiting.status_code == 200, zero_output_waiting.text
         zero_output_row = next(
             item
-            for item in zero_output_pending.json()["items"]
+            for item in zero_output_waiting.json()["items"]
             if int(item["order_item_id"]) == 1
         )
+        assert zero_output_row["status"] == "waiting_material"
         assert zero_output_row["receipt_purpose_managed"] is True
         assert zero_output_row["actual_output_quantity"] == 0
         assert zero_output_row["receipt_purpose_summary"][
@@ -3200,11 +3220,20 @@ def test_partial_composite_receipt_has_no_manual_remaining_capacity_or_duplicate
             params={"status": "pending", "page": 1, "page_size": 25},
         )
         assert pending.status_code == 200, pending.text
+        assert not any(
+            int(item["order_item_id"]) == 1 for item in pending.json()["items"]
+        )
+        waiting = client.get(
+            "/api/production/tasks",
+            params={"status": "waiting_material", "page": 1, "page_size": 25},
+        )
+        assert waiting.status_code == 200, waiting.text
         row = next(
             item
-            for item in pending.json()["items"]
+            for item in waiting.json()["items"]
             if int(item["order_item_id"]) == 1
         )
+        assert row["status"] == "waiting_material"
         assert row["receipt_purpose_managed"] is True
         assert row["completion_actionable"] is False
         assert row["completion_block_code"] == "receipt_auto_managed"

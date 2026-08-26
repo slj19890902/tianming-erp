@@ -4381,46 +4381,141 @@ def _task_query(db: Session, allowed_customer_ids: set[int] | None):
     return query
 
 
-def _effective_task_status_condition(status: str):
-    """Classify receipt-auto tasks by their current employee action.
+def _active_frozen_receipt_parent_ids_query():
+    """Return parent order-item IDs currently owned by frozen receipt purpose.
 
-    A receipt-auto completion is immutable, while its finished-order credit is
-    consumed and restored by delivery/cancellation.  Persisting ``pending`` on
-    the task therefore cannot be the production-page queue authority: after
-    the current credit is fully delivered it would leave a permanent empty
-    row, and a cancellation would require a second mutable status repair.
-
-    Keep the stable task and its history intact, but project it as pending only
-    while current finished-order credit exists.  With no current credit and an
-    otherwise forward-eligible order it belongs to waiting-material.  A later
-    receipt or delivery cancellation restores credit and makes the same task
-    pending again without creating a second task or rewriting history.
+    This is the SQL-side companion to the richer receipt-purpose summary.  It
+    is intentionally fail-closed for queue classification: a task whose active
+    procurement source is already frozen for automatic receipt must not appear
+    as manual pending production before the first receipt posts a completion.
     """
 
-    receipt_auto_exists = exists().where(
-        ProductionCompletion.task_id == ProductionTask.id,
-        ProductionCompletion.status == "posted",
-        ProductionCompletion.origin == "receipt_auto",
+    source_requisition_item = aliased(RequisitionItem)
+    frozen_source_candidates = (
+        select(
+            SupplierRequisitionOrderItem.order_item_id.label(
+                "supplier_parent_id"
+            ),
+            RequisitionItem.order_item_id.label("requisition_parent_id"),
+            PurchasePurposeSourceSnapshot.source_order_item_id.label(
+                "snapshot_parent_id"
+            ),
+            source_requisition_item.order_item_id.label(
+                "source_requisition_parent_id"
+            ),
+            SalesOrderItemBomComponent.sales_order_item_id.label("bom_parent_id"),
+        )
+        .select_from(PurchasePurposeSourceSnapshot)
+        .outerjoin(
+            SupplierRequisitionOrderItem,
+            SupplierRequisitionOrderItem.id
+            == PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id,
+        )
+        .outerjoin(
+            SupplierRequisitionOrder,
+            SupplierRequisitionOrder.id
+            == SupplierRequisitionOrderItem.supplier_order_id,
+        )
+        .outerjoin(
+            RequisitionItem,
+            RequisitionItem.id
+            == PurchasePurposeSourceSnapshot.material_requisition_item_id,
+        )
+        .outerjoin(
+            source_requisition_item,
+            source_requisition_item.id
+            == PurchasePurposeSourceSnapshot.source_requisition_item_id,
+        )
+        .outerjoin(
+            RequisitionItemBomSource,
+            RequisitionItemBomSource.id
+            == PurchasePurposeSourceSnapshot.source_bom_requisition_source_id,
+        )
+        .outerjoin(
+            SalesOrderItemBomComponent,
+            SalesOrderItemBomComponent.id
+            == RequisitionItemBomSource.sales_order_item_bom_component_id,
+        )
+        .where(
+            PurchasePurposeSourceSnapshot.order_purpose_sheet_qty > 0,
+            or_(
+                and_(
+                    PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.is_not(
+                        None
+                    ),
+                    SupplierRequisitionOrderItem.status == "active",
+                    SupplierRequisitionOrderItem.purpose_contract_status
+                    == "frozen",
+                    SupplierRequisitionOrder.status == "confirmed",
+                ),
+                and_(
+                    PurchasePurposeSourceSnapshot.material_requisition_item_id.is_not(
+                        None
+                    ),
+                    RequisitionItem.status == "有效",
+                    RequisitionItem.purpose_contract_status == "frozen",
+                ),
+            ),
+            or_(
+                PurchasePurposeSourceSnapshot.source_kind != "bom_component",
+                RequisitionItemBomSource.active_guard == 1,
+                RequisitionItemBomSource.active_guard.is_(None),
+            ),
+        )
+        .subquery("active_frozen_receipt_source_candidates")
     )
-    remaining_credit_exists = exists().where(
-        InventoryReservation.order_item_id == ProductionTask.order_item_id,
-        InventoryReservation.reservation_type == "finished_order",
-        InventoryReservation.sales_order_item_bom_component_id.is_(None),
-        InventoryReservation.status != "cancelled",
-        remaining_finished_order_credit_expression() > 0,
+    return union(
+        select(
+            frozen_source_candidates.c.supplier_parent_id.label("order_item_id")
+        ).where(frozen_source_candidates.c.supplier_parent_id.is_not(None)),
+        select(
+            frozen_source_candidates.c.requisition_parent_id.label("order_item_id")
+        ).where(frozen_source_candidates.c.requisition_parent_id.is_not(None)),
+        select(
+            frozen_source_candidates.c.snapshot_parent_id.label("order_item_id")
+        ).where(frozen_source_candidates.c.snapshot_parent_id.is_not(None)),
+        select(
+            frozen_source_candidates.c.source_requisition_parent_id.label(
+                "order_item_id"
+            )
+        ).where(
+            frozen_source_candidates.c.source_requisition_parent_id.is_not(None)
+        ),
+        select(
+            frozen_source_candidates.c.bom_parent_id.label("order_item_id")
+        ).where(frozen_source_candidates.c.bom_parent_id.is_not(None)),
+    )
+
+
+def _effective_task_status_condition(status: str):
+    """Keep production work separate from finished-stock delivery work.
+
+    Once a posted receipt-auto completion exists, the received cardboard has
+    already been converted into finished inventory.  Its live reservation can
+    be consumed or restored by delivery, but that is no longer a production
+    action and must not repopulate the pending-production queue.  An unfinished
+    stable task therefore stays in waiting-material while its finished stock
+    remains discoverable through inventory and delivery projections.  A task
+    whose persisted state is already completed remains completed history.
+    """
+
+    receipt_managed_exists = or_(
+        exists().where(
+            ProductionCompletion.task_id == ProductionTask.id,
+            ProductionCompletion.status == "posted",
+            ProductionCompletion.origin == "receipt_auto",
+        ),
+        ProductionTask.order_item_id.in_(_active_frozen_receipt_parent_ids_query()),
     )
     if status == PENDING:
-        return or_(
-            and_(receipt_auto_exists, remaining_credit_exists),
-            and_(~receipt_auto_exists, ProductionTask.status == PENDING),
+        return and_(
+            ~receipt_managed_exists,
+            ProductionTask.status == PENDING,
         )
     if status == WAITING_MATERIAL:
         return or_(
-            and_(receipt_auto_exists, ~remaining_credit_exists),
-            and_(
-                ~receipt_auto_exists,
-                ProductionTask.status == WAITING_MATERIAL,
-            ),
+            ProductionTask.status == WAITING_MATERIAL,
+            and_(receipt_managed_exists, ProductionTask.status == PENDING),
         )
     return ProductionTask.status == status
 
@@ -4831,79 +4926,8 @@ def _pending_production_read_context(
             )
         ).all()
     )
-    source_requisition_item = aliased(RequisitionItem)
-    frozen_source_candidates = (
-        select(
-            SupplierRequisitionOrderItem.order_item_id.label(
-                "supplier_parent_id"
-            ),
-            RequisitionItem.order_item_id.label("requisition_parent_id"),
-            PurchasePurposeSourceSnapshot.source_order_item_id.label(
-                "snapshot_parent_id"
-            ),
-            source_requisition_item.order_item_id.label(
-                "source_requisition_parent_id"
-            ),
-            SalesOrderItemBomComponent.sales_order_item_id.label("bom_parent_id"),
-        )
-        .select_from(PurchasePurposeSourceSnapshot)
-        .outerjoin(
-            SupplierRequisitionOrderItem,
-            SupplierRequisitionOrderItem.id
-            == PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id,
-        )
-        .outerjoin(
-            SupplierRequisitionOrder,
-            SupplierRequisitionOrder.id
-            == SupplierRequisitionOrderItem.supplier_order_id,
-        )
-        .outerjoin(
-            RequisitionItem,
-            RequisitionItem.id
-            == PurchasePurposeSourceSnapshot.material_requisition_item_id,
-        )
-        .outerjoin(
-            source_requisition_item,
-            source_requisition_item.id
-            == PurchasePurposeSourceSnapshot.source_requisition_item_id,
-        )
-        .outerjoin(
-            RequisitionItemBomSource,
-            RequisitionItemBomSource.id
-            == PurchasePurposeSourceSnapshot.source_bom_requisition_source_id,
-        )
-        .outerjoin(
-            SalesOrderItemBomComponent,
-            SalesOrderItemBomComponent.id
-            == RequisitionItemBomSource.sales_order_item_bom_component_id,
-        )
-        .where(
-            PurchasePurposeSourceSnapshot.order_purpose_sheet_qty > 0,
-            or_(
-                and_(
-                    PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.is_not(
-                        None
-                    ),
-                    SupplierRequisitionOrderItem.status == "active",
-                    SupplierRequisitionOrderItem.purpose_contract_status
-                    == "frozen",
-                    SupplierRequisitionOrder.status == "confirmed",
-                ),
-                and_(
-                    PurchasePurposeSourceSnapshot.material_requisition_item_id.is_not(
-                        None
-                    ),
-                    RequisitionItem.status == "有效",
-                    RequisitionItem.purpose_contract_status == "frozen",
-                ),
-            ),
-            or_(
-                PurchasePurposeSourceSnapshot.source_kind != "bom_component",
-                RequisitionItemBomSource.active_guard == 1,
-                RequisitionItemBomSource.active_guard.is_(None),
-            ),
-        )
-        .subquery("pending_active_frozen_source_candidates")
+    active_frozen_parent_ids = _active_frozen_receipt_parent_ids_query().subquery(
+        "pending_active_frozen_parent_ids"
     )
     # Keep this as one request-level SELECT.  A frozen purchase-purpose source
     # must disqualify the ordinary fast path even before its first receipt;
@@ -4918,30 +4942,8 @@ def _pending_production_read_context(
                     IncomingReceiptItem.order_item_id.in_(candidate_item_ids),
                     IncomingReceiptItem.status == "posted",
                 ),
-                select(frozen_source_candidates.c.supplier_parent_id).where(
-                    frozen_source_candidates.c.supplier_parent_id.in_(
-                        candidate_item_ids
-                    )
-                ),
-                select(frozen_source_candidates.c.requisition_parent_id).where(
-                    frozen_source_candidates.c.requisition_parent_id.in_(
-                        candidate_item_ids
-                    )
-                ),
-                select(frozen_source_candidates.c.snapshot_parent_id).where(
-                    frozen_source_candidates.c.snapshot_parent_id.in_(
-                        candidate_item_ids
-                    )
-                ),
-                select(
-                    frozen_source_candidates.c.source_requisition_parent_id
-                ).where(
-                    frozen_source_candidates.c.source_requisition_parent_id.in_(
-                        candidate_item_ids
-                    )
-                ),
-                select(frozen_source_candidates.c.bom_parent_id).where(
-                    frozen_source_candidates.c.bom_parent_id.in_(candidate_item_ids)
+                select(active_frozen_parent_ids.c.order_item_id).where(
+                    active_frozen_parent_ids.c.order_item_id.in_(candidate_item_ids)
                 ),
             )
         ).all()
@@ -5375,10 +5377,8 @@ def list_production_tasks(
             )
             row["delivery_ready_quantity"] = delivery_ready
             row["delivery_actionable"] = delivery_ready > 0
-            if automatic_output > 0:
-                row["status"] = (
-                    PENDING if delivery_ready > 0 else WAITING_MATERIAL
-                )
+            if task.status in {PENDING, WAITING_MATERIAL}:
+                row["status"] = WAITING_MATERIAL
             row["production_ready_quantity"] = 0
             row["completion_actionable"] = False
             (

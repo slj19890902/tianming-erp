@@ -7075,8 +7075,8 @@
                     </div>
                   </div>
                 </div>
-                <div class="field"><label>供应商（手工可改）</label><select class="select" v-model="requisitionMaterialForm.supplier_name" @change="requisitionMaterialForm.material_id=null; clearRequisitionMaterialCandidate()"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
-                <div class="field"><label>材质代码（手工可选）</label><search-select v-model="requisitionMaterialForm.material_id" :options="requisitionMaterialOptions" label-key="_label" value-key="id" placeholder="按代码、供应商、克重、报价搜索" @change="onRequisitionMaterialSelected"></search-select></div>
+                <div class="field"><label>供应商（手工可改）</label><select class="select" v-model="requisitionMaterialForm.supplier_name" @change="requisitionMaterialForm.material_id=null; requisitionMaterialSearch=''; clearRequisitionMaterialCandidate()"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
+                <div class="field"><label>材质代码（手工可选）</label><search-select v-model="requisitionMaterialForm.material_id" :options="requisitionMaterialOptions" label-key="_label" value-key="id" placeholder="按代码、供应商、克重、报价搜索" @search="requisitionMaterialSearch=$event" @change="onRequisitionMaterialSelected"></search-select></div>
                 <div class="field"><label>层数</label><select class="select" v-model.number="requisitionMaterialForm.layer_count" @change="onRequisitionLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
                 <div class="field"><label>楞型</label><select class="select" v-model="requisitionMaterialForm.flute_type" @change="clearRequisitionMaterialCandidate"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(requisitionMaterialForm.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
                 <div class="field wide"><label>选择说明（可选）</label><input class="input" v-model.trim="requisitionMaterialForm.selection_reason" placeholder="可补充本次选择原因" /></div>
@@ -8587,6 +8587,7 @@
             requisitionHoldCandidates: {}, requisitionHoldCandidateLoading: {},
             requisitionSupplierFilter: "", requisitionSupplierCounts: [],
             requisitionMaterialForm: { item_id:null, bom_snapshot_id:null, is_bom_component:false, supplier_name:"", material_id:null, layer_count:null, flute_type:null, sync_product:false, customer_material_code:"", original_material_confidence:"", candidate_options:[], candidate_loading:false, candidate_error:"", candidate_id:null, source_type:"manual", source_reference:null, selection_reason:"", selection_history:[], history_loading:false, history_error:"" },
+            requisitionMaterialSearch: "",
             mergeSuggestions: [], mergeSuggestionsLoading: false, mergeSuggestionsError: "", mergeSuggestionsExpanded: {}, mergeSuggestionsDeduction: {}, requisitionMergeExpanded: {}, requisitionComponentExpanded: {},
             supplierOrders: [],
             supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [], supplierRequisitionPreviewLoading:false,
@@ -8972,11 +8973,25 @@
           },
           requisitionMaterialOptions() {
             const form = this.requisitionMaterialForm || {};
-            return this.materialSelectOptions(
+            const keyword = String(this.requisitionMaterialSearch || "").trim();
+            const rows = this.filteredMaterialOptions(
               form.supplier_name,
               form.layer_count,
               form.flute_type,
             );
+            const filtered = keyword
+              ? this.filteredMaterialOptions(form.supplier_name, form.layer_count, form.flute_type, keyword)
+              : rows;
+            const limited = filtered.slice(0, 50);
+            if (!keyword && form.material_id != null) {
+              const selected = rows.find(row => String(row.id) === String(form.material_id));
+              if (selected && !limited.some(row => String(row.id) === String(selected.id))) {
+                limited.unshift(selected);
+                if (limited.length > 50) limited.pop();
+              }
+            }
+            const projected = limited.map(row => this.materialSelectOption(row));
+            return typeof Vue.markRaw === "function" ? Vue.markRaw(projected) : projected;
           },
           // 列表展示：后端已按 sort 排序，前端仅按楞型 tab 做子集过滤（组合楞 BE 同时匹配 B/E）
           displayedMaterials() {
@@ -14612,8 +14627,8 @@
             return rows;
           },
           // 构建 search-select 选项对象（含可搜索字段）
-          materialSelectOptions(supplierName, layerCount, fluteType) {
-            return this.filteredMaterialOptions(supplierName, layerCount, fluteType, "").map(m => ({
+          materialSelectOption(m) {
+            return {
               ...m,
               id: m.id,
               _label: this.formatMaterialOption(m),
@@ -14627,7 +14642,11 @@
               _supplier: m.supplier_name || "",
               _weight: this.materialWeightStructure(m),
               _price: m.quote_price != null ? String(m.quote_price) : ""
-            }));
+            };
+          },
+          materialSelectOptions(supplierName, layerCount, fluteType) {
+            return this.filteredMaterialOptions(supplierName, layerCount, fluteType, "")
+              .map(m => this.materialSelectOption(m));
           },
           materialMatchesSupplier(material, supplierName) {
             const target = String(supplierName || "").trim();
@@ -23781,6 +23800,7 @@
               history_loading: false,
               history_error: "",
             };
+            this.requisitionMaterialSearch = "";
             this.modal = { type:"requisitionMaterial", title:isBomComponent ? "更换组件供应商 / 材质" : "更换供应商 / 材质" };
             if (isBomComponent) {
               this.requisitionMaterialForm.candidate_error = "组件按当前订单快照修改";
@@ -23883,6 +23903,7 @@
           },
           onRequisitionLayerChange() {
             const form = this.requisitionMaterialForm;
+            this.requisitionMaterialSearch = "";
             this.clearRequisitionMaterialCandidate();
             const allowed = this.orderItemFluteOptions(form.layer_count);
             const current = String(form.flute_type || "").toUpperCase();

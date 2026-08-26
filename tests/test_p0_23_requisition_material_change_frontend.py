@@ -22,6 +22,9 @@ def test_requisition_material_modal_uses_one_cached_option_projection() -> None:
         not in modal
     )
     assert "requisitionMaterialOptions()" in INDEX
+    assert "filtered.slice(0, 50)" in INDEX
+    assert 'Vue.markRaw(projected)' in INDEX
+    assert '@search="requisitionMaterialSearch=$event"' in modal
 
 
 def test_search_select_does_not_write_the_same_label_on_every_option_refresh() -> None:
@@ -29,6 +32,48 @@ def test_search_select_does_not_write_the_same_label_on_every_option_refresh() -
         'options() { if (!this.open && this.query !== this.selectedLabel) '
         'this.query=this.selectedLabel; }'
     ) in INDEX
+
+
+def test_requisition_material_projection_caps_large_master_and_keeps_selection(
+    tmp_path: Path,
+) -> None:
+    body = _function_body(
+        INDEX,
+        "requisitionMaterialOptions() {",
+        "// 列表展示：",
+    )
+    node = shutil.which("node")
+    assert node is not None
+    script = f"""
+global.Vue={{markRaw:value=>value}};
+const rows=Array.from({{length:630}},(_,index)=>({{id:index+1,code:`M${{index+1}}`}}));
+const vm={{
+  requisitionMaterialForm:{{supplier_name:"YL",layer_count:5,flute_type:"AB",material_id:630}},
+  requisitionMaterialSearch:"",
+  filteredMaterialOptions(supplier,layer,flute,keyword){{
+    return keyword ? rows.filter(row=>row.code.includes(keyword)) : rows;
+  }},
+  materialSelectOption(row){{return {{...row,_label:row.code}};}}
+}};
+const project=new Function({json.dumps(body, ensure_ascii=False)});
+const initial=project.call(vm);
+if(initial.length!==50)throw new Error(`expected 50 visible options, got ${{initial.length}}`);
+if(!initial.some(row=>row.id===630))throw new Error("selected material was dropped");
+vm.requisitionMaterialSearch="M62";
+const searched=project.call(vm);
+if(searched.length>50||!searched.every(row=>row.code.includes("M62")))throw new Error("search projection escaped its bounded filtered result");
+"""
+    target = tmp_path / "p0-23-requisition-material-projection.js"
+    target.write_text(script, encoding="utf-8")
+    result = subprocess.run(
+        [node, str(target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _function_body(source: str, signature: str, next_signature: str) -> str:

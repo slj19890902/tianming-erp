@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.183"
-    assert APP_VERSION_NAME == "供应商材质弹窗与纸板分用途安全收料"
+    assert APP_VERSION == "v0.22.184"
+    assert APP_VERSION_NAME == "供应商材质弹窗浏览器卡顿修复"
     assert APP_BUILD_DATE == "2026-08-26"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,13 +49,15 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "更改供应商材质" in item and "稳定缓存" in item for item in current_release)
-    assert any("本次更新｜" in item and "订单用途" in item and "片料备库用途" in item for item in current_release)
-    assert any("本次更新｜" in item and "A1/1FA" in item and "隐藏或未发布库位" in item for item in current_release)
+    assert any("本次更新｜" in item and "真实Chrome" in item and "最多50条" in item for item in current_release)
+    assert any("本次更新｜" in item and "已选材质" in item and "稳定保留" in item for item in current_release)
+    assert any("本次更新｜" in item and "YL订单" in item and "600张订单用途" in item for item in current_release)
     assert any("本次更新｜" in item and "无数据库迁移" in item and "ef41v8x9z30" in item for item in current_release)
-    assert any("如何验证｜" in item and "更改供应商材质" in item and "页面不再空白" in item for item in current_release)
+    assert any("如何验证｜" in item and "连续三次" in item and "页面不空白" in item for item in current_release)
     assert any("如何验证｜" in item and "TM20260825003" in item and "600张" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.183" in item and "ef41v8x9z30" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.184" in item and "ef41v8x9z30" in item for item in current_release)
+    assert any(item.startswith("v0.22.183：本次更新｜") and "更改供应商材质" in item and "稳定缓存" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.183：如何验证｜") and "v0.22.183" in item and "ef41v8x9z30" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.182：本次更新｜") and "21301850 等11款" in item and "实时计算" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.182：如何验证｜") and "v0.22.182" in item and "ef41v8x9z30" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.181：本次更新｜") and "21301850 等10款" in item and "全部完整存货编码" in item for item in APP_CHANGELOG)
@@ -331,7 +333,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.183" in item and "ef41" in item
+        "如何验证｜" in item and "v0.22.184" in item and "ef41" in item
         for item in current_release
     )
     assert any(

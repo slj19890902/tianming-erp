@@ -4778,3 +4778,10 @@ legacy_ruida_* 原始层
 - 弹窗明确标记历史供应商当前不可用于新采购，并保留历史材质只作核对；员工必须改选当前启用供应商及有效材质后再保存。没有启用、猜测映射或改写历史供应商、材质、价格、订单、收料和库存事实。
 - 本版无 migration，唯一 Alembic head 与正式库 revision 保持 `ef41v8x9z30`。两阶段报告 `docs/migration_reports/release_runtime_20260826_134949.json` 状态 `completed`；备份 `data/backups/carton_erp_before_release_20260826_134951.sqlite3` 与隔离演练完整性正常、外键异常 0、15 张核心表计数一致，正式数据库发布前后 SHA-256 不变。
 - 发布后本机健康和正式首页均 HTTP 200，线上首页已包含历史供应商提示；正式库 mode=ro/query_only 复核 `TM20260825004` 仍为未报料、0 收料，旧采购行仍作废，数据库字节未变化。自动回归通过；Chrome 扩展读取超时，员工真实点击验收仍待老板强制刷新后完成。
+
+## 2026-08-26 v0.22.187 供应商材质历史时间契约与弹窗白屏修复正式发布
+
+- 更正上一版诊断：正式主档中的“胜源”供应商与 `G527A` 材质均为启用状态；`TM20260825004` 点击“更换供应商/材质”后整页空白的真实原因，是材质选择历史接口返回了不带时区的 `selected_at`，严格 RFC3339 时间解析器抛错并中断 Vue 根组件渲染。
+- 正式业务代码 SHA 为 `efa45dbed6bf6cba9ace23a1f0012397dd991c0b`；接口现用既有 `utc_naive_to_api` 输出带 `Z` 的 RFC3339 时间，前端继续按北京时间显示。隔离正式库副本 Chrome 实测弹窗、胜源、G527A、五层 AB、选择历史、搜索选择和取消关闭均正常，控制台错误为 0，未点击保存。
+- 本版无 migration，唯一 Alembic head 与正式库 revision 保持 `ef41v8x9z30`。两阶段报告 `docs/migration_reports/release_runtime_20260826_154336.json` 状态 `completed`；备份 `data/backups/carton_erp_before_release_20260826_154337.sqlite3` 完整性正常、外键异常 0、核心表计数一致，正式数据库发布前后 SHA-256 均为 `37E7ABBC5FD5F781D1C18805F32910AC6815E5CFCCC52CE152789B90B2A99F2A`。
+- 发布后本机健康检查 HTTP 200，版本为 `v0.22.187`。正式库 mode=ro/query_only 复核胜源 id 4、G527A id 420 仍启用，历史选择行与时间原值保持不变，`total_changes=0`；本次没有修改供应商、材质、价格、订单、报料、收料或库存事实。

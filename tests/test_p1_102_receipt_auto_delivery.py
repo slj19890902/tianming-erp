@@ -154,6 +154,43 @@ def test_pending_receipt_auto_finished_inventory_is_directly_deliverable(
             ) == completion_count
 
 
+def test_receipt_auto_credit_stays_pending_when_historical_task_is_completed(
+    requisition_app,
+) -> None:
+    from app.api.production import router as production_router
+    from app.models.production import ProductionTask
+
+    app, session_factory = requisition_app
+    app.include_router(production_router, prefix="/api/production")
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        _seed_pending_receipt_auto(
+            client,
+            session_factory,
+            ordered_quantity=100,
+            received_quantity=62,
+        )
+        with session_factory() as session:
+            task = session.scalar(select(ProductionTask))
+            assert task is not None
+            task.status = "completed"
+            session.commit()
+            task_id = int(task.id)
+
+        pending = client.get(
+            "/api/production/tasks",
+            params={"status": "pending", "page": 1, "page_size": 25},
+        )
+        assert pending.status_code == 200, pending.text
+        assert pending.json()["total"] == 1
+        row = pending.json()["items"][0]
+        assert row["id"] == task_id
+        assert row["status"] == "pending"
+        assert row["delivery_ready_quantity"] == 62
+        assert row["delivery_actionable"] is True
+
+
 def test_partial_then_full_dispatch_uses_current_credit_without_surplus_replay(
     requisition_app,
 ) -> None:
@@ -252,11 +289,45 @@ def test_partial_then_full_dispatch_uses_current_credit_without_surplus_replay(
             params={"status": "pending", "page": 1, "page_size": 25},
         )
         assert production.status_code == 200, production.text
-        production_row = next(
-            row for row in production.json()["items"] if row["order_item_id"] == 1
+        assert production.json()["items"] == []
+        assert production.json()["total"] == 0
+
+        waiting = client.get(
+            "/api/production/tasks",
+            params={"status": "waiting_material", "page": 1, "page_size": 25},
         )
-        assert production_row["delivery_ready_quantity"] == 0
-        assert production_row["delivery_actionable"] is False
+        assert waiting.status_code == 200, waiting.text
+        assert waiting.json()["total"] == 1
+        waiting_row = waiting.json()["items"][0]
+        assert waiting_row["order_item_id"] == 1
+        assert waiting_row["status"] == "waiting_material"
+        assert waiting_row["delivery_ready_quantity"] == 0
+        assert waiting_row["delivery_actionable"] is False
+
+        cancelled = client.put(
+            f"/api/deliveries/{final_created.json()['id']}/cancel"
+        )
+        assert cancelled.status_code == 200, cancelled.text
+
+        restored_pending = client.get(
+            "/api/production/tasks",
+            params={"status": "pending", "page": 1, "page_size": 25},
+        )
+        assert restored_pending.status_code == 200, restored_pending.text
+        assert restored_pending.json()["total"] == 1
+        restored_row = restored_pending.json()["items"][0]
+        assert restored_row["order_item_id"] == 1
+        assert restored_row["status"] == "pending"
+        assert restored_row["delivery_ready_quantity"] == 42
+        assert restored_row["delivery_actionable"] is True
+
+        waiting_after_cancel = client.get(
+            "/api/production/tasks",
+            params={"status": "waiting_material", "page": 1, "page_size": 25},
+        )
+        assert waiting_after_cancel.status_code == 200, waiting_after_cancel.text
+        assert waiting_after_cancel.json()["items"] == []
+        assert waiting_after_cancel.json()["total"] == 0
 
 
 def test_receipt_auto_order_path_caps_credit_at_current_order_remainder(

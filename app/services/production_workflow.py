@@ -4381,6 +4381,50 @@ def _task_query(db: Session, allowed_customer_ids: set[int] | None):
     return query
 
 
+def _effective_task_status_condition(status: str):
+    """Classify receipt-auto tasks by their current employee action.
+
+    A receipt-auto completion is immutable, while its finished-order credit is
+    consumed and restored by delivery/cancellation.  Persisting ``pending`` on
+    the task therefore cannot be the production-page queue authority: after
+    the current credit is fully delivered it would leave a permanent empty
+    row, and a cancellation would require a second mutable status repair.
+
+    Keep the stable task and its history intact, but project it as pending only
+    while current finished-order credit exists.  With no current credit and an
+    otherwise forward-eligible order it belongs to waiting-material.  A later
+    receipt or delivery cancellation restores credit and makes the same task
+    pending again without creating a second task or rewriting history.
+    """
+
+    receipt_auto_exists = exists().where(
+        ProductionCompletion.task_id == ProductionTask.id,
+        ProductionCompletion.status == "posted",
+        ProductionCompletion.origin == "receipt_auto",
+    )
+    remaining_credit_exists = exists().where(
+        InventoryReservation.order_item_id == ProductionTask.order_item_id,
+        InventoryReservation.reservation_type == "finished_order",
+        InventoryReservation.sales_order_item_bom_component_id.is_(None),
+        InventoryReservation.status != "cancelled",
+        remaining_finished_order_credit_expression() > 0,
+    )
+    if status == PENDING:
+        return or_(
+            and_(receipt_auto_exists, remaining_credit_exists),
+            and_(~receipt_auto_exists, ProductionTask.status == PENDING),
+        )
+    if status == WAITING_MATERIAL:
+        return or_(
+            and_(receipt_auto_exists, ~remaining_credit_exists),
+            and_(
+                ~receipt_auto_exists,
+                ProductionTask.status == WAITING_MATERIAL,
+            ),
+        )
+    return ProductionTask.status == status
+
+
 def _filtered_task_query(
     db: Session,
     *,
@@ -4405,7 +4449,7 @@ def _filtered_task_query(
         ),
     )
     if status:
-        query = query.where(ProductionTask.status == status)
+        query = query.where(_effective_task_status_condition(status))
     return query
 
 
@@ -5331,6 +5375,10 @@ def list_production_tasks(
             )
             row["delivery_ready_quantity"] = delivery_ready
             row["delivery_actionable"] = delivery_ready > 0
+            if automatic_output > 0:
+                row["status"] = (
+                    PENDING if delivery_ready > 0 else WAITING_MATERIAL
+                )
             row["production_ready_quantity"] = 0
             row["completion_actionable"] = False
             (

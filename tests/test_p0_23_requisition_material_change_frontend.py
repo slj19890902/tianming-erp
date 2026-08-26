@@ -76,6 +76,54 @@ if(searched.length>50||!searched.every(row=>row.code.includes("M62")))throw new 
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_historical_supplier_snapshot_stays_visible_without_becoming_selectable(
+    tmp_path: Path,
+) -> None:
+    modal_marker = '<div v-else-if="modal.type === \'requisitionMaterial\'">'
+    start = INDEX.index(modal_marker)
+    end = INDEX.index('<div v-else-if="modal.type === \'mobileEntry\'"', start)
+    modal = INDEX[start:end]
+    assert "requisitionMaterialSupplierIsHistorical" in modal
+    assert "历史供应商，当前不可用于新采购" in modal
+    assert "请改选启用供应商及其有效材质" in modal
+
+    body = _function_body(
+        INDEX,
+        "requisitionMaterialOptions() {",
+        "displayedMaterials() {",
+    )
+    node = shutil.which("node")
+    assert node is not None
+    script = f"""
+global.Vue={{markRaw:value=>value}};
+const historical={{
+  id:420,code:"G527A",supplier_name:"胜源",layer_count:5,is_active:true,
+  basis_weight_description:"120/85/45/110/85",quote_price:2.04
+}};
+const vm={{
+  requisitionMaterialForm:{{supplier_name:"胜源",layer_count:5,flute_type:"AB",material_id:420}},
+  requisitionMaterialSearch:"",
+  allMaterials:[historical],materials:[],
+  filteredMaterialOptions(){{return []; }},
+  materialSelectOption(row){{return {{...row,_label:`${{row.code}}｜${{row.supplier_name}}`}};}}
+}};
+const project=new Function({json.dumps(body, ensure_ascii=False)});
+const rows=project.call(vm);
+if(rows.length!==1||rows[0].id!==420)throw new Error("historical selected material became blank");
+"""
+    target = tmp_path / "p0-23b-historical-supplier-material.js"
+    target.write_text(script, encoding="utf-8")
+    result = subprocess.run(
+        [node, str(target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def _function_body(source: str, signature: str, next_signature: str) -> str:
     assert signature in source and next_signature in source
     return source.split(signature, 1)[1].split(next_signature, 1)[0].rsplit("}", 1)[0]

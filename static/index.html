@@ -7075,8 +7075,9 @@
                     </div>
                   </div>
                 </div>
-                <div class="field"><label>供应商（手工可改）</label><select class="select" v-model="requisitionMaterialForm.supplier_name" @change="requisitionMaterialForm.material_id=null; requisitionMaterialSearch=''; clearRequisitionMaterialCandidate()"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
+                <div class="field"><label>供应商（手工可改）</label><select class="select" v-model="requisitionMaterialForm.supplier_name" @change="requisitionMaterialForm.material_id=null; requisitionMaterialSearch=''; clearRequisitionMaterialCandidate()"><option value="">请选择供应商</option><option v-if="requisitionMaterialSupplierIsHistorical" :value="requisitionMaterialForm.supplier_name" disabled>{{ supplierDisplayName(requisitionMaterialForm.supplier_name) }}（历史供应商，当前不可用于新采购）</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
                 <div class="field"><label>材质代码（手工可选）</label><search-select v-model="requisitionMaterialForm.material_id" :options="requisitionMaterialOptions" label-key="_label" value-key="id" placeholder="按代码、供应商、克重、报价搜索" @search="requisitionMaterialSearch=$event" @change="onRequisitionMaterialSelected"></search-select></div>
+                <div v-if="requisitionMaterialSupplierIsHistorical" class="field wide status orange" style="display:block;white-space:normal">当前报料快照使用历史供应商“{{ requisitionMaterialForm.supplier_name }}”，已保留原材质供核对；请改选启用供应商及其有效材质后再保存。</div>
                 <div class="field"><label>层数</label><select class="select" v-model.number="requisitionMaterialForm.layer_count" @change="onRequisitionLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
                 <div class="field"><label>楞型</label><select class="select" v-model="requisitionMaterialForm.flute_type" @change="clearRequisitionMaterialCandidate"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(requisitionMaterialForm.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
                 <div class="field wide"><label>选择说明（可选）</label><input class="input" v-model.trim="requisitionMaterialForm.selection_reason" placeholder="可补充本次选择原因" /></div>
@@ -8971,6 +8972,10 @@
           materialSupplierSelectOptions() {
             return ["全部供应商", ...this.activeSupplierNames];
           },
+          requisitionMaterialSupplierIsHistorical() {
+            const supplierName = String(this.requisitionMaterialForm?.supplier_name || "").trim();
+            return !!supplierName && !this.isActiveMaterialSupplier(supplierName);
+          },
           requisitionMaterialOptions() {
             const form = this.requisitionMaterialForm || {};
             const keyword = String(this.requisitionMaterialSearch || "").trim();
@@ -8984,7 +8989,11 @@
               : rows;
             const limited = filtered.slice(0, 50);
             if (!keyword && form.material_id != null) {
-              const selected = rows.find(row => String(row.id) === String(form.material_id));
+              const materialSource = (this.allMaterials || []).length
+                ? this.allMaterials
+                : (this.materials || []);
+              const selected = rows.find(row => String(row.id) === String(form.material_id))
+                || materialSource.find(row => String(row.id) === String(form.material_id));
               if (selected && !limited.some(row => String(row.id) === String(selected.id))) {
                 limited.unshift(selected);
                 if (limited.length > 50) limited.pop();

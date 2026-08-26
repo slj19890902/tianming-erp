@@ -4785,3 +4785,10 @@ legacy_ruida_* 原始层
 - 正式业务代码 SHA 为 `efa45dbed6bf6cba9ace23a1f0012397dd991c0b`；接口现用既有 `utc_naive_to_api` 输出带 `Z` 的 RFC3339 时间，前端继续按北京时间显示。隔离正式库副本 Chrome 实测弹窗、胜源、G527A、五层 AB、选择历史、搜索选择和取消关闭均正常，控制台错误为 0，未点击保存。
 - 本版无 migration，唯一 Alembic head 与正式库 revision 保持 `ef41v8x9z30`。两阶段报告 `docs/migration_reports/release_runtime_20260826_154336.json` 状态 `completed`；备份 `data/backups/carton_erp_before_release_20260826_154337.sqlite3` 完整性正常、外键异常 0、核心表计数一致，正式数据库发布前后 SHA-256 均为 `37E7ABBC5FD5F781D1C18805F32910AC6815E5CFCCC52CE152789B90B2A99F2A`。
 - 发布后本机健康检查 HTTP 200，版本为 `v0.22.187`。正式库 mode=ro/query_only 复核胜源 id 4、G527A id 420 仍启用，历史选择行与时间原值保持不变，`total_changes=0`；本次没有修改供应商、材质、价格、订单、报料、收料或库存事实。
+
+## 2026-08-26 v0.22.188 纸板入库空栈板复用归属修复正式发布
+
+- 正式运行/发布代码 SHA 为 `2263f8280f173064d0545ca8f0f571596addff76`，业务修复候选 SHA 为 `b7042e61091275681eceb4b9842152529e6f94bc`；SO383 失败不是员工操作错误，而是系统复用已释放空栈板时遗漏清除上一轮直接待送归属键，随后被自身归属保护误判为其它业务栈板。
+- 空栈板受控复用现于同一原子更新中恢复 `PRIMARY`，再由当前合法流程建立本轮归属；真正跨业务混栈、分散多板、异位和异常状态继续 fail-closed 并回滚，员工提示不再暴露内部栈板术语。
+- 本版无 migration，代码与正式库保持唯一 Alembic head `ef41v8x9z30`。两阶段报告 `docs/migration_reports/release_runtime_20260826_191816.json` 状态 `completed`；备份 `data/backups/carton_erp_before_release_20260826_191817.sqlite3` 完整性正常、外键异常 0、核心表计数一致。
+- 正式数据库发布前后 SHA-256 均为 `71BE71227A35A6EF65B3CDB7A2A66D77D0CBC23D6E519C4551F08AC13A9B11E8`，收料主/明细保持 `272/272`，发布没有代替员工确认 SO383。发布后本机与局域网健康均 HTTP 200；Chrome 扩展页面控制连续超时且未执行任何业务点击，老板强制刷新后按 87 张完成现场人工验收。

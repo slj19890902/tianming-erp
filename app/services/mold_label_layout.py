@@ -62,10 +62,10 @@ class MoldLabelLayoutConflict(MoldLabelLayoutError):
 def default_layout() -> dict[str, Any]:
     """Return the verified 80 mm long-edge layout in millimetres.
 
-    The lower 15.6 mm band is the mold-side identity strip: the first line is
-    customer short name plus the handwritten mold label, and the second line
-    is the optional Chinese label.  Product dimensions remain in the frozen
-    business payload but are intentionally hidden from new physical labels.
+    The lower identity strip stays within the 14.2 mm QR height: the first
+    line is customer short name plus the optional Chinese label, and the
+    second line is the handwritten mold label.  Product dimensions remain in
+    the frozen business payload but are intentionally hidden from new labels.
     """
 
     return {
@@ -124,10 +124,10 @@ def default_layout() -> dict[str, Any]:
                 "id": "customer_name",
                 "kind": "text",
                 "x_mm": 1.2,
-                "y_mm": 23.2,
+                "y_mm": 24.6,
                 "width_mm": 21.8,
-                "height_mm": 7.0,
-                "font_size_mm": 4.2,
+                "height_mm": 6.4,
+                "font_size_mm": 4.0,
                 "font_weight": 900,
                 "text_align": "left",
                 "visible": True,
@@ -135,11 +135,11 @@ def default_layout() -> dict[str, Any]:
             {
                 "id": "mold_label_name",
                 "kind": "text",
-                "x_mm": 23.4,
-                "y_mm": 23.2,
-                "width_mm": 39.6,
-                "height_mm": 7.0,
-                "font_size_mm": 5.2,
+                "x_mm": 1.2,
+                "y_mm": 31.2,
+                "width_mm": 61.8,
+                "height_mm": 6.8,
+                "font_size_mm": 5.0,
                 "font_weight": 900,
                 "text_align": "left",
                 "visible": True,
@@ -147,10 +147,10 @@ def default_layout() -> dict[str, Any]:
             {
                 "id": "mold_chinese_short_name",
                 "kind": "text",
-                "x_mm": 1.2,
-                "y_mm": 30.6,
-                "width_mm": 61.8,
-                "height_mm": 8.0,
+                "x_mm": 23.4,
+                "y_mm": 24.6,
+                "width_mm": 39.6,
+                "height_mm": 6.4,
                 "font_size_mm": 4.0,
                 "font_weight": 800,
                 "text_align": "left",

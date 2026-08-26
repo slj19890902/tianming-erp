@@ -66,15 +66,43 @@ def _complete_mold(factory, *, suffix: str = "1") -> int:
         return mold.id
 
 
+def _frozen_v2_layout() -> dict:
+    """Recreate the pre-P1-103E geometry used by frozen v1/v2 jobs."""
+
+    from app.services.mold_label_layout import default_layout
+
+    legacy = deepcopy(default_layout())
+    legacy["catalog_version"] = "p1-103-v2"
+    geometry = {
+        "customer_name": (1.2, 23.2, 21.8, 7.0, 4.2),
+        "mold_label_name": (23.4, 23.2, 39.6, 7.0, 5.2),
+        "mold_chinese_short_name": (1.2, 30.6, 23.0, 8.0, 4.0),
+        "product_specification": (24.6, 30.6, 38.4, 8.0, 4.4),
+    }
+    for element in legacy["elements"]:
+        values = geometry.get(element["id"])
+        if values is not None:
+            (
+                element["x_mm"],
+                element["y_mm"],
+                element["width_mm"],
+                element["height_mm"],
+                element["font_size_mm"],
+            ) = values
+        if element["id"] == "product_specification":
+            element["visible"] = True
+    return legacy
+
+
 def _layout_driven_label(index: int, qr: str) -> str:
     return f'''<article class="mold-label-page" data-layout-catalog="p1-103-v3"><div class="label template-80x40 layout-driven">
       <div class="mold-layout-element mold-layout-text" data-layout-id="board_specification" style="left:1.2mm;top:.8mm;width:61.8mm;height:7mm;font-size:5.6mm;font-weight:900">1100 × 760</div>
       <div class="mold-layout-element mold-layout-text" data-layout-id="inventory_code" style="left:1.2mm;top:8.4mm;width:61.8mm;height:7mm;font-size:4.8mm;font-weight:900">SME-LONG-CODE-{index:03d}</div>
       <div class="mold-layout-element mold-layout-text" data-layout-id="flute_type" style="left:1.2mm;top:15.7mm;width:12mm;height:7mm;font-size:4mm;font-weight:800">BC</div>
       <div class="mold-layout-element mold-layout-text" data-layout-id="cutting_mode" style="left:13.6mm;top:15.7mm;width:49.4mm;height:7mm;font-size:3.8mm;font-weight:800">一开二</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="customer_name" style="left:1.2mm;top:23.2mm;width:21.8mm;height:7mm;font-size:4.2mm;font-weight:900">思迈尔</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_label_name" style="left:23.4mm;top:23.2mm;width:39.6mm;height:7mm;font-size:5.2mm;font-weight:900">P162-{index:03d}</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_chinese_short_name" style="left:1.2mm;top:30.6mm;width:61.8mm;height:8mm;font-size:4mm;font-weight:800">加强箱</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="customer_name" style="left:1.2mm;top:24.6mm;width:21.8mm;height:6.4mm;font-size:4mm;font-weight:900">思迈尔</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_chinese_short_name" style="left:23.4mm;top:24.6mm;width:39.6mm;height:6.4mm;font-size:4mm;font-weight:800">加强箱</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_label_name" style="left:1.2mm;top:31.2mm;width:61.8mm;height:6.8mm;font-size:5mm;font-weight:900">P162-{index:03d}</div>
       <img class="mold-layout-element mold-layout-qr" data-layout-id="mold_qr" style="left:64.4mm;top:24.6mm;width:14.2mm;height:14.2mm" src="{qr}" alt="二维码">
     </div></article>'''
 
@@ -691,7 +719,7 @@ def test_actual_layout_javascript_fits_shared_mold_facts_without_clipping(
         assert ">待完善</div>" not in rendered
 
 
-def test_v3_uses_two_identity_lines_while_v1_v2_snapshots_stay_frozen(
+def test_current_identity_order_changes_while_v1_v2_snapshots_stay_frozen(
     headless_browser: Path,
     tmp_path: Path,
 ) -> None:
@@ -710,13 +738,7 @@ def test_v3_uses_two_identity_lines_while_v1_v2_snapshots_stay_frozen(
         "products": [],
     }
     v3 = default_layout()
-    v2 = deepcopy(v3)
-    v2["catalog_version"] = "p1-103-v2"
-    for element in v2["elements"]:
-        if element["id"] == "mold_chinese_short_name":
-            element["width_mm"] = 23.0
-        if element["id"] == "product_specification":
-            element["visible"] = True
+    v2 = _frozen_v2_layout()
     v1 = deepcopy(v2)
     v1["catalog_version"] = "p1-103-v1"
     fixture = tmp_path / "p1-103-values-only-versioned-renderer.html"
@@ -771,18 +793,13 @@ def test_job52_like_v2_layout_fits_compact_ten_product_projection(
         "qr_data_url": _qr_data_url(),
         "products": [],
     }
-    v2 = default_layout()
-    v2["catalog_version"] = "p1-103-v2"
+    v2 = _frozen_v2_layout()
     for element in v2["elements"]:
         if element["id"] == "customer_name":
             element["width_mm"] = 21.0
         if element["id"] == "mold_label_name":
             element["x_mm"] = 22.6
             element["width_mm"] = 40.4
-        if element["id"] == "mold_chinese_short_name":
-            element["width_mm"] = 23.0
-        if element["id"] == "product_specification":
-            element["visible"] = True
     fixture = tmp_path / "p1-103d-job52-v2-compact.html"
     fixture.write_text(
         '<!doctype html><html><head><meta charset="utf-8">'

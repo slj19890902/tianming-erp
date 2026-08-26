@@ -18,6 +18,34 @@ LAYOUT_JS = (ROOT / "static" / "assets" / "mold-label-layout.js").read_text(
 )
 
 
+def _frozen_v1_layout() -> dict:
+    """Build the pre-P1-103E geometry instead of mutating the new default."""
+
+    from app.services.mold_label_layout import default_layout
+
+    legacy = deepcopy(default_layout())
+    legacy["catalog_version"] = "p1-103-v1"
+    geometry = {
+        "customer_name": (1.2, 23.2, 21.8, 7.0, 4.2),
+        "mold_label_name": (23.4, 23.2, 39.6, 7.0, 5.2),
+        "mold_chinese_short_name": (1.2, 30.6, 23.0, 8.0, 4.0),
+        "product_specification": (24.6, 30.6, 38.4, 8.0, 4.4),
+    }
+    for element in legacy["elements"]:
+        values = geometry.get(element["id"])
+        if values is not None:
+            (
+                element["x_mm"],
+                element["y_mm"],
+                element["width_mm"],
+                element["height_mm"],
+                element["font_size_mm"],
+            ) = values
+        if element["id"] == "product_specification":
+            element["visible"] = True
+    return legacy
+
+
 def _complete_named_mold(
     factory,
     *,
@@ -64,7 +92,7 @@ def _complete_named_mold(
         return int(mold.id)
 
 
-def test_default_layout_is_80x40_with_two_line_identity_and_hidden_product_size() -> None:
+def test_default_layout_swaps_mold_name_and_chinese_short_name_within_qr_height() -> None:
     from app.services.mold_label_layout import default_layout, normalize_layout
 
     layout = normalize_layout(default_layout())
@@ -107,9 +135,18 @@ def test_default_layout_is_80x40_with_two_line_identity_and_hidden_product_size(
     )
     assert board["width_mm"] >= 61.5
     assert inventory["width_mm"] >= 61.5
-    assert customer["y_mm"] == mold_name["y_mm"] == 23.2
-    assert short_name["y_mm"] == product_size["y_mm"] == 30.6
-    assert short_name["width_mm"] >= 61.5
+    assert customer["y_mm"] == short_name["y_mm"] == qr["y_mm"]
+    assert customer["x_mm"] < short_name["x_mm"]
+    assert mold_name["y_mm"] > short_name["y_mm"]
+    assert mold_name["x_mm"] == customer["x_mm"]
+    assert mold_name["width_mm"] >= 61.5
+    identity_height = (
+        mold_name["y_mm"] + mold_name["height_mm"] - customer["y_mm"]
+    )
+    assert identity_height <= qr["height_mm"]
+    assert mold_name["y_mm"] + mold_name["height_mm"] <= (
+        qr["y_mm"] + qr["height_mm"]
+    )
     assert product_size["visible"] is False
     assert qr["y_mm"] >= 24.0
 
@@ -132,13 +169,7 @@ def test_v1_snapshot_hash_and_prefix_catalog_remain_frozen_after_v2_default() ->
         load_snapshot,
     )
 
-    legacy = deepcopy(default_layout())
-    legacy["catalog_version"] = "p1-103-v1"
-    for element in legacy["elements"]:
-        if element["id"] == "mold_chinese_short_name":
-            element["width_mm"] = 23.0
-        if element["id"] == "product_specification":
-            element["visible"] = True
+    legacy = _frozen_v1_layout()
     frozen_hash = layout_hash(legacy)
 
     snapshot = load_snapshot(
@@ -164,13 +195,7 @@ def test_current_v1_release_is_projected_to_v3_without_mutating_history(
     )
 
     _app, factory = mold_app
-    legacy = deepcopy(default_layout())
-    legacy["catalog_version"] = "p1-103-v1"
-    for element in legacy["elements"]:
-        if element["id"] == "mold_chinese_short_name":
-            element["width_mm"] = 23.0
-        if element["id"] == "product_specification":
-            element["visible"] = True
+    legacy = _frozen_v1_layout()
     with factory() as db:
         db.add(
             MoldLabelLayoutRevision(

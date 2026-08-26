@@ -89,7 +89,8 @@ def test_reported_gaotai_shape_prints_frozen_shared_mold_identity(mold_app) -> N
     assert body["label_customer_name"] == "高泰"
     assert body["label_customer_names"] == ["高泰"]
     assert body["label_mold_number"] == "3D30268 19*19*16加强"
-    assert body["label_inventory_code"] == "3D30151 / 3D30268"
+    assert body["label_inventory_code"] == "3D30151 等2款"
+    assert body["label_inventory_codes"] == ["3D30151", "3D30268"]
     assert body["label_shared_summary"] == "共用 2 款"
     assert body["label_products"] == [
         {"product_code": "3D30151", "product_name": "纸箱190*190*160"},

@@ -15396,22 +15396,35 @@ def _label_dimension(products: list[Product], field: str) -> str:
     return ""
 
 
-def _label_representative_report_specification(products: list[Product]) -> str:
-    """Choose one stable board size for a shared mold's physical label.
+def _label_representative_dimension(
+    products: list[Product],
+    field: Literal["specification", "report_specification"],
+) -> tuple[str, Product | None]:
+    """Choose one stable dimension and its representative product.
 
-    The most common report specification wins.  When counts tie (including
-    exactly two different bound products), prefer the specification with the
-    longer board edge, then larger area, and finally the lowest stable product
-    code.  All bound products remain available through the QR/detail payload.
+    The most common dimension wins.  When counts tie (including exactly two
+    different bound products), prefer the longer edge, then larger footprint,
+    and finally the lowest stable product code.  All products and dimensions
+    remain available through the QR/detail payload.
     """
 
-    rows = _label_dimension_rows(products, "report_specification")
+    rows = _label_dimension_rows(products, field)
     grouped: dict[str, dict[str, object]] = {}
     for product, value in zip(products, rows, strict=True):
         if not value:
             continue
-        length = Decimal(str(product.report_length_mm or 0))
-        width = Decimal(str(product.report_width_mm or 0))
+        if field == "specification":
+            dimensions = (
+                Decimal(str(product.length_mm or 0)),
+                Decimal(str(product.width_mm or 0)),
+                Decimal(str(product.height_mm or 0)),
+            )
+        else:
+            dimensions = (
+                Decimal(str(product.report_length_mm or 0)),
+                Decimal(str(product.report_width_mm or 0)),
+            )
+        length, width = dimensions[:2]
         entry = grouped.setdefault(
             value,
             {
@@ -15419,20 +15432,22 @@ def _label_representative_report_specification(products: list[Product]) -> str:
                 "long_edge": Decimal("0"),
                 "area": Decimal("0"),
                 "product_code": str(product.product_code or "").strip().casefold(),
+                "products": [],
             },
         )
         entry["count"] = int(entry["count"]) + 1
         entry["long_edge"] = max(
-            Decimal(str(entry["long_edge"])), length, width
+            Decimal(str(entry["long_edge"])), *dimensions
         )
         entry["area"] = max(Decimal(str(entry["area"])), length * width)
+        entry["products"].append(product)
         product_code = str(product.product_code or "").strip().casefold()
         if product_code and (
             not entry["product_code"] or product_code < entry["product_code"]
         ):
             entry["product_code"] = product_code
     if not grouped:
-        return ""
+        return "", None
     ranked = sorted(
         grouped.items(),
         key=lambda item: (
@@ -15443,7 +15458,42 @@ def _label_representative_report_specification(products: list[Product]) -> str:
             item[0],
         ),
     )
-    return ranked[0][0]
+    selected_value, selected_entry = ranked[0]
+    selected_products = sorted(
+        selected_entry["products"],
+        key=lambda product: (
+            str(product.product_code or "").strip().casefold(),
+            int(product.id or 0),
+        ),
+    )
+    return selected_value, (selected_products[0] if selected_products else None)
+
+
+def _label_representative_report_specification(products: list[Product]) -> str:
+    return _label_representative_dimension(products, "report_specification")[0]
+
+
+def _label_representative_product_specification(products: list[Product]) -> str:
+    _, representative = _label_representative_dimension(
+        products,
+        "report_specification",
+    )
+    if representative is None:
+        return ""
+    return _label_dimension_rows([representative], "specification")[0]
+
+
+def _label_compact_inventory_code(products: list[Product]) -> str:
+    _, representative = _label_representative_dimension(
+        products,
+        "report_specification",
+    )
+    if representative is None:
+        return ""
+    product_code = str(representative.product_code or "").strip()
+    if len(products) <= 1:
+        return product_code
+    return f"{product_code} 等{len(products)}款"
 
 
 def _label_flute_rows(products: list[Product]) -> list[str]:
@@ -15651,21 +15701,22 @@ def _mold_label_dict(
                 "label_customer_names": customer_names,
                 "label_customer_name": "/".join(customer_names),
                 "label_product_specifications": product_specifications,
+                "label_inventory_codes": [
+                    product["product_code"] for product in label_products
+                ],
                 "label_report_specifications": report_specifications,
                 "label_flute_types": flute_types,
                 "label_cutting_modes": cutting_modes,
                 "label_products": label_products,
-                "label_product_specification": " / ".join(
-                    product_specifications
+                "label_product_specification": (
+                    _label_representative_product_specification(products)
                 ),
                 "label_report_specification": (
                     _label_representative_report_specification(products)
                 ),
                 "label_flute_type": "/".join(flute_types),
                 "label_cutting_mode": "/".join(cutting_modes),
-                "label_inventory_code": " / ".join(
-                    product["product_code"] for product in label_products
-                ),
+                "label_inventory_code": _label_compact_inventory_code(products),
                 "label_product_name": " / ".join(
                     product["product_name"] for product in label_products
                 ),

@@ -103,12 +103,12 @@ def test_shared_80x40_label_projects_every_real_fact_without_scan_placeholders(
             "product_name": "第二款完整产品名称",
         },
     ]
-    assert body["label_inventory_code"] == (
-        "SME-LONG-CODE-100 / SME-SECOND-100"
-    )
-    assert body["label_product_specification"] == (
-        "520 × 350 × 300 / 400 × 300 × 200"
-    )
+    assert body["label_inventory_code"] == "SME-LONG-CODE-100 等2款"
+    assert body["label_inventory_codes"] == [
+        "SME-LONG-CODE-100",
+        "SME-SECOND-100",
+    ]
+    assert body["label_product_specification"] == "520 × 350 × 300"
     assert body["label_report_specification"] == "1100 × 760"
     assert body["label_flute_type"] == "BC/B"
     assert body["label_cutting_mode"] == "一开二/一开一"

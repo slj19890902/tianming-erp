@@ -325,11 +325,13 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
         body = wide.json()
         assert body["product_count"] == 2
         assert body["label_projection_mode"] == "shared_mold"
-        assert body["label_inventory_code"] == "SME-LONG-CODE-2 / SME-SECOND"
+        assert body["label_inventory_code"] == "SME-LONG-CODE-2 等2款"
+        assert body["label_inventory_codes"] == [
+            "SME-LONG-CODE-2",
+            "SME-SECOND",
+        ]
         assert body["label_shared_summary"] == "共用 2 款"
-        assert body["label_product_specification"] == (
-            "520 × 350 × 300 / 400 × 300"
-        )
+        assert body["label_product_specification"] == "520 × 350 × 300"
         assert body["label_report_specification"] == "1100 × 760"
         assert body["label_flute_type"] == "BC/B"
         assert body["label_cutting_mode"] == "一开二/一开一"
@@ -409,6 +411,64 @@ def test_shared_mold_uses_most_common_report_specification(mold_app) -> None:
             "900 × 650",
         ]
         assert printed.json()["label_report_specification"] == "900 × 650"
+        assert printed.json()["label_inventory_code"] == "SME-MAJORITY-1 等3款"
+
+
+def test_shared_mold_many_codes_use_one_representative_and_keep_full_qr_facts(
+    mold_app,
+) -> None:
+    from app.models.product import Product
+
+    app, factory = mold_app
+    mold_id = _complete_mold(factory, suffix="many-codes")
+    with factory() as db:
+        db.add_all(
+            [
+                Product(
+                    customer_id=1,
+                    product_code=f"SME-CODE-{index:02d}",
+                    customer_material_code=f"SME-CODE-{index:02d}",
+                    product_name=f"共用模具产品{index:02d}",
+                    length_mm=520,
+                    width_mm=350,
+                    height_mm=300,
+                    report_length_mm=1100,
+                    report_width_mm=760,
+                    flute_type="BC",
+                    default_cutting_mode="一开二",
+                    mold_tool_id=mold_id,
+                )
+                for index in range(2, 11)
+            ]
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        created = client.post(
+            "/api/warehouse/molds/label-prints",
+            json={
+                "mold_ids": [mold_id],
+                "source": "single",
+                "template_version": "mold_80x40_v1",
+                "idempotency_key": "p1-103d-many-codes-0001",
+            },
+        )
+        assert created.status_code == 200, created.text
+        printed = client.get(
+            f"/api/warehouse/molds/{mold_id}/label",
+            params={
+                "template_version": "mold_80x40_v1",
+                "print_job_id": created.json()["print_job_id"],
+            },
+        )
+        assert printed.status_code == 200, printed.text
+        body = printed.json()
+        assert body["product_count"] == 10
+        assert body["label_inventory_code"] == "SME-CODE-02 等10款"
+        assert len(body["label_inventory_codes"]) == 10
+        assert len(body["label_products"]) == 10
+        assert "SME-LONG-CODE-many-codes" in body["label_inventory_codes"]
 
 
 def test_v3_allows_missing_hidden_product_dimensions(mold_app) -> None:
@@ -691,6 +751,59 @@ def test_v3_uses_two_identity_lines_while_v1_v2_snapshots_stay_frozen(
         'data-v1-text="片料 890 × 650|纸箱 22700002|楞 E|开 一开一|瑞明|9#|'
         '中文 防静电单回路|尺寸 290 × 140 × 120"'
     ) in rendered
+
+
+def test_job52_like_v2_layout_fits_compact_ten_product_projection(
+    headless_browser: Path,
+    tmp_path: Path,
+) -> None:
+    from app.services.mold_label_layout import default_layout
+
+    row = {
+        "label_report_specification": "1292 × 1061",
+        "label_inventory_code": "21301850 等10款",
+        "label_flute_type": "BE",
+        "label_cutting_mode": "一开一",
+        "label_customer_name": "瑞华",
+        "label_mold_name": "935*620*23/26",
+        "label_mold_chinese_short_name": "24*36天地盒",
+        "label_product_specification": "935 × 620 × 25",
+        "qr_data_url": _qr_data_url(),
+        "products": [],
+    }
+    v2 = default_layout()
+    v2["catalog_version"] = "p1-103-v2"
+    for element in v2["elements"]:
+        if element["id"] == "customer_name":
+            element["width_mm"] = 21.0
+        if element["id"] == "mold_label_name":
+            element["x_mm"] = 22.6
+            element["width_mm"] = 40.4
+        if element["id"] == "mold_chinese_short_name":
+            element["width_mm"] = 23.0
+        if element["id"] == "product_specification":
+            element["visible"] = True
+    fixture = tmp_path / "p1-103d-job52-v2-compact.html"
+    fixture.write_text(
+        '<!doctype html><html><head><meta charset="utf-8">'
+        + _current_print_styles()
+        + '</head><body><main id="labels"></main><script>'
+        + LAYOUT_JS.replace("</script>", "<\\/script>")
+        + "</script><script>"
+        + f"const row={json.dumps(row, ensure_ascii=False)};"
+        + f"const envelope={{version:0,layout:{json.dumps(v2, ensure_ascii=False)}}};"
+        + 'const labels=document.getElementById("labels");'
+        + "labels.innerHTML=TmMoldLabelLayout.labelHtml(row,envelope);"
+        + "const failures=TmMoldLabelLayout.fitAndValidate(labels);"
+        + 'document.body.dataset.fitFailures=failures.join("|");'
+        + 'document.body.dataset.renderedText=[...labels.querySelectorAll(".mold-layout-text")].map(node=>node.textContent).join("|");'
+        + "</script></body></html>",
+        encoding="utf-8",
+    )
+    rendered = _dump_rendered_dom(headless_browser, fixture, tmp_path)
+    assert 'data-fit-failures=""' in rendered
+    assert "21301850 等10款" in rendered
+    assert "935 × 620 × 25" in rendered
 
 
 @pytest.mark.parametrize("label_count", (1, 2, 100))

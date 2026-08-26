@@ -114,6 +114,16 @@ def test_default_layout_is_80x40_with_two_line_identity_and_hidden_product_size(
     assert qr["y_mm"] >= 24.0
 
 
+def test_historical_wide_job_offers_explicit_current_layout_reregistration() -> None:
+    assert 'CURRENT_WIDE_CATALOG="p1-103-v3"' in LABEL_PAGE
+    assert 'id="recreateCurrentLayout"' in LABEL_PAGE
+    assert "按当前紧凑版式重新登记" in LABEL_PAGE
+    assert "历史作业不会被改写" in LABEL_PAGE
+    assert 'method:"POST"' in LABEL_PAGE
+    assert '"/api/warehouse/molds/label-prints"' in LABEL_PAGE
+    assert 'next.searchParams.set("print_job_id",registered.print_job_id)' in LABEL_PAGE
+
+
 def test_v1_snapshot_hash_and_prefix_catalog_remain_frozen_after_v2_default() -> None:
     from app.services.mold_label_layout import (
         canonical_json,

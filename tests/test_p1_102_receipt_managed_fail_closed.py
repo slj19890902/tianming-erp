@@ -107,12 +107,22 @@ def test_active_frozen_source_identity_conflict_blocks_every_candidate(
             params={"status": "pending", "page": 1, "page_size": 25},
         )
         assert pending.status_code == 200, pending.text
+        assert not {
+            int(item["order_item_id"]) for item in pending.json()["items"]
+        }.intersection({1, conflicting_source_item_id})
+
+        waiting = client.get(
+            "/api/production/tasks",
+            params={"status": "waiting_material", "page": 1, "page_size": 25},
+        )
+        assert waiting.status_code == 200, waiting.text
         rows_by_item_id = {
-            int(item["order_item_id"]): item for item in pending.json()["items"]
+            int(item["order_item_id"]): item for item in waiting.json()["items"]
         }
         for order_item_id in (1, conflicting_source_item_id):
             row = rows_by_item_id[order_item_id]
             assert int(row["id"]) == task_facts[order_item_id][0]
+            assert row["status"] == "waiting_material"
             assert row["receipt_purpose_managed"] is True
             assert row["completion_actionable"] is False
             assert (

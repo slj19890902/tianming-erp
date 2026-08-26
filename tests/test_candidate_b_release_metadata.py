@@ -4,13 +4,13 @@ from app.version import APP_CHANGES, APP_EXTERNAL_ACCEPTANCE_REQUIRED, APP_VERIF
 def test_current_release_is_visible_in_release_acceptance_card() -> None:
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     assert any(
-        "TM20260825004" in item
-        and "胜源供应商" in item
-        and "不带时区" in item
+        "SO383" in item
+        and "已绑定其它业务栈板" in item
+        and "不是员工操作错误" in item
         for item in APP_CHANGES
     )
     assert any(
-        "TM20260825004" in item
-        and "G527A" in item
+        "SO383" in item
+        and "87张" in item
         for item in APP_VERIFICATION_STEPS
     )

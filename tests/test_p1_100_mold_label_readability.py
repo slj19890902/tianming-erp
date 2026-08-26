@@ -109,7 +109,7 @@ def test_shared_80x40_label_projects_every_real_fact_without_scan_placeholders(
     assert body["label_product_specification"] == (
         "520 × 350 × 300 / 400 × 300 × 200"
     )
-    assert body["label_report_specification"] == "1100 × 760 / 900 × 650"
+    assert body["label_report_specification"] == "1100 × 760"
     assert body["label_flute_type"] == "BC/B"
     assert body["label_cutting_mode"] == "一开二/一开一"
     rendered = json.dumps(body, ensure_ascii=False)

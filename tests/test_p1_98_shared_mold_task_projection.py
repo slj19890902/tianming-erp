@@ -96,7 +96,8 @@ def test_reported_gaotai_shape_prints_frozen_shared_mold_identity(mold_app) -> N
         {"product_code": "3D30268", "product_name": "纸箱190*190*160"},
     ]
     assert body["label_product_specification"] == "190 × 190 × 160"
-    assert body["label_report_specification"] == "800 × 375 / 795 × 375"
+    assert body["label_report_specifications"] == ["800 × 375", "795 × 375"]
+    assert body["label_report_specification"] == "800 × 375"
     assert body["label_flute_type"] == "AB"
     assert body["label_cutting_mode"] == "一开一"
 

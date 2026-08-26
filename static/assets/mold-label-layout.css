@@ -41,6 +41,17 @@
   letter-spacing: -.08mm;
 }
 
+.mold-label-page[data-layout-catalog="p1-103-v3"]
+  .mold-layout-text[data-layout-id="customer_name"],
+.mold-label-page[data-layout-catalog="p1-103-v3"]
+  .mold-layout-text[data-layout-id="mold_label_name"],
+.mold-label-page[data-layout-catalog="p1-103-v3"]
+  .mold-layout-text[data-layout-id="mold_chinese_short_name"] {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
 .mold-layout-qr {
   display: block;
   object-fit: contain;

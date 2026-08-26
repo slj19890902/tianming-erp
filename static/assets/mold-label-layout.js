@@ -7,6 +7,7 @@
   const MIN_TEXT_SIZE_MM = 1.2;
   const V1_CATALOG_VERSION = "p1-103-v1";
   const V2_CATALOG_VERSION = "p1-103-v2";
+  const V3_CATALOG_VERSION = "p1-103-v3";
   const ELEMENT_LABELS = Object.freeze({
     board_specification: "片料尺寸",
     inventory_code: "纸箱存货编码",
@@ -83,7 +84,7 @@
     if (!Number.isInteger(version) || version < 0 || !layout || typeof layout !== "object") {
       throw new Error("40×80模具标签布局版本无效");
     }
-    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION].includes(layout.catalog_version)) {
+    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION, V3_CATALOG_VERSION].includes(layout.catalog_version)) {
       throw new Error("40×80模具标签元素目录不受支持");
     }
     if (
@@ -110,9 +111,23 @@
         || x < 0 || y < 0 || width <= 0 || height <= 0
         || x + width > PAPER_WIDTH_MM + .001
         || y + height > PAPER_HEIGHT_MM + .001
-        || element.visible !== true
       ) {
         throw new Error(`${ELEMENT_LABELS[element.id]}的位置或尺寸无效`);
+      }
+      const productSizeHidden = (
+        layout.catalog_version === V3_CATALOG_VERSION
+        && element.id === "product_specification"
+        && element.visible === false
+      );
+      if (
+        layout.catalog_version === V3_CATALOG_VERSION
+        && element.id === "product_specification"
+        && !productSizeHidden
+      ) {
+        throw new Error("当前40×80版式暂不显示产品尺寸");
+      }
+      if (!productSizeHidden && element.visible !== true) {
+        throw new Error(`${ELEMENT_LABELS[element.id]}不能隐藏`);
       }
       if (element.kind === "qr") {
         if (width !== 14.2 || height !== 14.2) {
@@ -131,6 +146,7 @@
     for (let index = 0; index < layout.elements.length; index += 1) {
       const left = layout.elements[index];
       for (const right of layout.elements.slice(index + 1)) {
+        if (left.visible === false || right.visible === false) continue;
         const overlap = !(
           Number(left.x_mm) + Number(left.width_mm) <= Number(right.x_mm) + .04
           || Number(right.x_mm) + Number(right.width_mm) <= Number(left.x_mm) + .04
@@ -145,7 +161,7 @@
     return envelope;
   }
 
-  function valueForElement(row, elementId, catalogVersion = V2_CATALOG_VERSION) {
+  function valueForElement(row, elementId, catalogVersion = V3_CATALOG_VERSION) {
     const product = Array.isArray(row?.products) ? row.products[0] : null;
     const values = {
       board_specification: String(row?.label_report_specification ?? product?.report_specification ?? "").trim() || "待完善",
@@ -154,7 +170,8 @@
       cutting_mode: String(row?.label_cutting_mode ?? product?.default_cutting_mode ?? "").trim() || "待完善",
       customer_name: String(row?.label_customer_name ?? product?.customer_short_name ?? "").trim() || "待完善",
       mold_label_name: String(row?.label_mold_name ?? "").trim() || "待完善",
-      mold_chinese_short_name: String(row?.label_mold_chinese_short_name ?? "").trim() || "待完善",
+      mold_chinese_short_name: String(row?.label_mold_chinese_short_name ?? "").trim()
+        || (catalogVersion === V3_CATALOG_VERSION ? "" : "待完善"),
       product_specification: String(row?.label_product_specification ?? product?.specification ?? "").trim() || "待完善",
     };
     const value = values[elementId] || "";
@@ -191,7 +208,7 @@
   function labelHtml(row, envelope, options = {}) {
     validateEnvelope(envelope);
     const prototypeMode = options.prototypeMode === true;
-    const elements = envelope.layout.elements.map((element) => {
+    const elements = envelope.layout.elements.filter((element) => element.visible !== false).map((element) => {
       const style = elementInlineStyle(element);
       if (element.kind === "qr") {
         return row?.qr_data_url
@@ -201,7 +218,7 @@
       const value = valueForElement(row, element.id, envelope.layout.catalog_version);
       return `<div class="mold-layout-element mold-layout-text${value.includes("待完善") ? " missing" : ""}" data-layout-id="${escapeHtml(element.id)}" data-layout-label="${escapeHtml(ELEMENT_LABELS[element.id])}" data-max-font-mm="${Number(element.font_size_mm)}" style="${style}">${escapeHtml(value)}</div>`;
     }).join("");
-    return `<article class="mold-label-page"><div class="label template-80x40 layout-driven">${elements}${prototypeMode ? '<span class="prototype-mark">样例</span>' : ""}</div></article>`;
+    return `<article class="mold-label-page" data-layout-catalog="${escapeHtml(envelope.layout.catalog_version)}"><div class="label template-80x40 layout-driven">${elements}${prototypeMode ? '<span class="prototype-mark">样例</span>' : ""}</div></article>`;
   }
 
   function fitAndValidate(container) {
@@ -289,9 +306,10 @@
   function renderEditor() {
     if (!editorLayout || !adminState) return;
     validateEnvelope({version: adminState.published.version, layout: editorLayout});
-    byId("moldLayoutStage").innerHTML = editorLayout.elements.map(stageElementHtml).join("");
+    const visibleElements = editorLayout.elements.filter((element) => element.visible !== false);
+    byId("moldLayoutStage").innerHTML = visibleElements.map(stageElementHtml).join("");
     const select = byId("moldLayoutElement");
-    select.innerHTML = editorLayout.elements.map((element) => (
+    select.innerHTML = visibleElements.map((element) => (
       `<option value="${escapeHtml(element.id)}">${escapeHtml(ELEMENT_LABELS[element.id])}</option>`
     )).join("");
     select.value = selectedElementId;

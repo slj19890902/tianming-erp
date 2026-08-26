@@ -64,11 +64,11 @@ def _complete_named_mold(
         return int(mold.id)
 
 
-def test_default_layout_is_80x40_with_nine_non_overlapping_registered_elements() -> None:
+def test_default_layout_is_80x40_with_two_line_identity_and_hidden_product_size() -> None:
     from app.services.mold_label_layout import default_layout, normalize_layout
 
     layout = normalize_layout(default_layout())
-    assert layout["catalog_version"] == "p1-103-v2"
+    assert layout["catalog_version"] == "p1-103-v3"
     assert layout["paper"] == {"width_mm": 80.0, "height_mm": 40.0}
     assert [item["id"] for item in layout["elements"]] == [
         "board_specification",
@@ -109,6 +109,8 @@ def test_default_layout_is_80x40_with_nine_non_overlapping_registered_elements()
     assert inventory["width_mm"] >= 61.5
     assert customer["y_mm"] == mold_name["y_mm"] == 23.2
     assert short_name["y_mm"] == product_size["y_mm"] == 30.6
+    assert short_name["width_mm"] >= 61.5
+    assert product_size["visible"] is False
     assert qr["y_mm"] >= 24.0
 
 
@@ -122,6 +124,11 @@ def test_v1_snapshot_hash_and_prefix_catalog_remain_frozen_after_v2_default() ->
 
     legacy = deepcopy(default_layout())
     legacy["catalog_version"] = "p1-103-v1"
+    for element in legacy["elements"]:
+        if element["id"] == "mold_chinese_short_name":
+            element["width_mm"] = 23.0
+        if element["id"] == "product_specification":
+            element["visible"] = True
     frozen_hash = layout_hash(legacy)
 
     snapshot = load_snapshot(
@@ -135,7 +142,7 @@ def test_v1_snapshot_hash_and_prefix_catalog_remain_frozen_after_v2_default() ->
     assert snapshot["layout_hash"] == frozen_hash
 
 
-def test_current_v1_release_is_projected_to_v2_without_mutating_history(
+def test_current_v1_release_is_projected_to_v3_without_mutating_history(
     mold_app,
 ) -> None:
     from app.models.mold_tool import MoldLabelLayoutRevision
@@ -149,6 +156,11 @@ def test_current_v1_release_is_projected_to_v2_without_mutating_history(
     _app, factory = mold_app
     legacy = deepcopy(default_layout())
     legacy["catalog_version"] = "p1-103-v1"
+    for element in legacy["elements"]:
+        if element["id"] == "mold_chinese_short_name":
+            element["width_mm"] = 23.0
+        if element["id"] == "product_specification":
+            element["visible"] = True
     with factory() as db:
         db.add(
             MoldLabelLayoutRevision(
@@ -168,7 +180,12 @@ def test_current_v1_release_is_projected_to_v2_without_mutating_history(
         stored = db.scalar(select(MoldLabelLayoutRevision))
 
         assert current["version"] == 1
-        assert current["layout"]["catalog_version"] == "p1-103-v2"
+        assert current["layout"]["catalog_version"] == "p1-103-v3"
+        assert next(
+            item
+            for item in current["layout"]["elements"]
+            if item["id"] == "product_specification"
+        )["visible"] is False
         assert stored is not None
         assert stored.catalog_version == "p1-103-v1"
         assert '"catalog_version":"p1-103-v1"' in stored.payload_json

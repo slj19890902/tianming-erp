@@ -15396,6 +15396,56 @@ def _label_dimension(products: list[Product], field: str) -> str:
     return ""
 
 
+def _label_representative_report_specification(products: list[Product]) -> str:
+    """Choose one stable board size for a shared mold's physical label.
+
+    The most common report specification wins.  When counts tie (including
+    exactly two different bound products), prefer the specification with the
+    longer board edge, then larger area, and finally the lowest stable product
+    code.  All bound products remain available through the QR/detail payload.
+    """
+
+    rows = _label_dimension_rows(products, "report_specification")
+    grouped: dict[str, dict[str, object]] = {}
+    for product, value in zip(products, rows, strict=True):
+        if not value:
+            continue
+        length = Decimal(str(product.report_length_mm or 0))
+        width = Decimal(str(product.report_width_mm or 0))
+        entry = grouped.setdefault(
+            value,
+            {
+                "count": 0,
+                "long_edge": Decimal("0"),
+                "area": Decimal("0"),
+                "product_code": str(product.product_code or "").strip().casefold(),
+            },
+        )
+        entry["count"] = int(entry["count"]) + 1
+        entry["long_edge"] = max(
+            Decimal(str(entry["long_edge"])), length, width
+        )
+        entry["area"] = max(Decimal(str(entry["area"])), length * width)
+        product_code = str(product.product_code or "").strip().casefold()
+        if product_code and (
+            not entry["product_code"] or product_code < entry["product_code"]
+        ):
+            entry["product_code"] = product_code
+    if not grouped:
+        return ""
+    ranked = sorted(
+        grouped.items(),
+        key=lambda item: (
+            -int(item[1]["count"]),
+            -Decimal(str(item[1]["long_edge"])),
+            -Decimal(str(item[1]["area"])),
+            str(item[1]["product_code"]),
+            item[0],
+        ),
+    )
+    return ranked[0][0]
+
+
 def _label_flute_rows(products: list[Product]) -> list[str]:
     return [
         str(
@@ -15479,7 +15529,6 @@ def _mold_label_printability_error(
                 "请先在“模具位置”中维护后再打印40×80标签"
             )
         customer_rows = _label_customer_rows(row, products)
-        product_size_rows = _label_dimension_rows(products, "specification")
         board_size_rows = _label_dimension_rows(
             products,
             "report_specification",
@@ -15494,7 +15543,6 @@ def _mold_label_printability_error(
                     "存货编码",
                     all(str(product.product_code or "").strip() for product in products),
                 ),
-                ("产品尺寸", all(product_size_rows)),
                 ("片料尺寸", all(board_size_rows)),
                 ("楞型", all(flute_rows)),
                 ("开料方式", all(cutting_rows)),
@@ -15610,8 +15658,8 @@ def _mold_label_dict(
                 "label_product_specification": " / ".join(
                     product_specifications
                 ),
-                "label_report_specification": " / ".join(
-                    report_specifications
+                "label_report_specification": (
+                    _label_representative_report_specification(products)
                 ),
                 "label_flute_type": "/".join(flute_types),
                 "label_cutting_mode": "/".join(cutting_modes),

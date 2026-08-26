@@ -67,15 +67,14 @@ def _complete_mold(factory, *, suffix: str = "1") -> int:
 
 
 def _layout_driven_label(index: int, qr: str) -> str:
-    return f'''<article class="mold-label-page"><div class="label template-80x40 layout-driven">
+    return f'''<article class="mold-label-page" data-layout-catalog="p1-103-v3"><div class="label template-80x40 layout-driven">
       <div class="mold-layout-element mold-layout-text" data-layout-id="board_specification" style="left:1.2mm;top:.8mm;width:61.8mm;height:7mm;font-size:5.6mm;font-weight:900">1100 × 760</div>
       <div class="mold-layout-element mold-layout-text" data-layout-id="inventory_code" style="left:1.2mm;top:8.4mm;width:61.8mm;height:7mm;font-size:4.8mm;font-weight:900">SME-LONG-CODE-{index:03d}</div>
       <div class="mold-layout-element mold-layout-text" data-layout-id="flute_type" style="left:1.2mm;top:15.7mm;width:12mm;height:7mm;font-size:4mm;font-weight:800">BC</div>
       <div class="mold-layout-element mold-layout-text" data-layout-id="cutting_mode" style="left:13.6mm;top:15.7mm;width:49.4mm;height:7mm;font-size:3.8mm;font-weight:800">一开二</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="customer_name" style="left:1.2mm;top:23.2mm;width:21mm;height:7mm;font-size:4.2mm;font-weight:900">思迈尔</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_label_name" style="left:22.6mm;top:23.2mm;width:40.4mm;height:7mm;font-size:5.2mm;font-weight:900">P162-{index:03d}</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_chinese_short_name" style="left:1.2mm;top:30.6mm;width:23mm;height:8mm;font-size:4mm;font-weight:800">加强箱</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="product_specification" style="left:24.6mm;top:30.6mm;width:38.4mm;height:8mm;font-size:4.4mm;font-weight:800">520 × 350 × 300</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="customer_name" style="left:1.2mm;top:23.2mm;width:21.8mm;height:7mm;font-size:4.2mm;font-weight:900">思迈尔</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_label_name" style="left:23.4mm;top:23.2mm;width:39.6mm;height:7mm;font-size:5.2mm;font-weight:900">P162-{index:03d}</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_chinese_short_name" style="left:1.2mm;top:30.6mm;width:61.8mm;height:8mm;font-size:4mm;font-weight:800">加强箱</div>
       <img class="mold-layout-element mold-layout-qr" data-layout-id="mold_qr" style="left:64.4mm;top:24.6mm;width:14.2mm;height:14.2mm" src="{qr}" alt="二维码">
     </div></article>'''
 
@@ -331,7 +330,7 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
         assert body["label_product_specification"] == (
             "520 × 350 × 300 / 400 × 300"
         )
-        assert body["label_report_specification"] == "1100 × 760 / 900 × 650"
+        assert body["label_report_specification"] == "1100 × 760"
         assert body["label_flute_type"] == "BC/B"
         assert body["label_cutting_mode"] == "一开二/一开一"
         assert body["label_products"] == [
@@ -357,6 +356,98 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
         assert created.json()["template_version"] == "mold_80x40_v1"
     with factory() as db:
         assert db.scalar(select(func.count(MoldLabelPrintJob.id))) == 1
+
+
+def test_shared_mold_uses_most_common_report_specification(mold_app) -> None:
+    from app.models.product import Product
+
+    app, factory = mold_app
+    mold_id = _complete_mold(factory, suffix="majority")
+    with factory() as db:
+        db.add_all(
+            [
+                Product(
+                    customer_id=1,
+                    product_code=f"SME-MAJORITY-{index}",
+                    customer_material_code=f"SME-MAJORITY-{index}",
+                    product_name=f"多数规格产品{index}",
+                    length_mm=400,
+                    width_mm=300,
+                    report_length_mm=900,
+                    report_width_mm=650,
+                    flute_type="BC",
+                    default_cutting_mode="一开二",
+                    mold_tool_id=mold_id,
+                )
+                for index in (1, 2)
+            ]
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        created = client.post(
+            "/api/warehouse/molds/label-prints",
+            json={
+                "mold_ids": [mold_id],
+                "source": "single",
+                "template_version": "mold_80x40_v1",
+                "idempotency_key": "p1-103c-majority-spec-0001",
+            },
+        )
+        assert created.status_code == 200, created.text
+        printed = client.get(
+            f"/api/warehouse/molds/{mold_id}/label",
+            params={
+                "template_version": "mold_80x40_v1",
+                "print_job_id": created.json()["print_job_id"],
+            },
+        )
+        assert printed.status_code == 200, printed.text
+        assert printed.json()["label_report_specifications"] == [
+            "1100 × 760",
+            "900 × 650",
+        ]
+        assert printed.json()["label_report_specification"] == "900 × 650"
+
+
+def test_v3_allows_missing_hidden_product_dimensions(mold_app) -> None:
+    from app.models.product import Product
+
+    app, factory = mold_app
+    mold_id = _complete_mold(factory, suffix="no-product-size")
+    with factory() as db:
+        product = db.scalar(select(Product).where(Product.mold_tool_id == mold_id))
+        assert product is not None
+        product.length_mm = None
+        product.width_mm = None
+        product.height_mm = None
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        created = client.post(
+            "/api/warehouse/molds/label-prints",
+            json={
+                "mold_ids": [mold_id],
+                "source": "single",
+                "template_version": "mold_80x40_v1",
+                "idempotency_key": "p1-103c-hidden-product-size-0001",
+            },
+        )
+        assert created.status_code == 200, created.text
+        assert created.json()["label_layout"]["layout"]["catalog_version"] == (
+            "p1-103-v3"
+        )
+        printed = client.get(
+            f"/api/warehouse/molds/{mold_id}/label",
+            params={
+                "template_version": "mold_80x40_v1",
+                "print_job_id": created.json()["print_job_id"],
+            },
+        )
+        assert printed.status_code == 200, printed.text
+        assert printed.json()["label_product_specification"] == ""
 
 
 def test_rm9_hash_name_uses_verified_short_customer_and_prints_wide_label(mold_app) -> None:
@@ -497,9 +588,8 @@ def test_actual_layout_javascript_fits_shared_mold_facts_without_clipping(
         for index in range(1, product_count + 1)
     ]
     product_sizes = ["520 × 350 × 300" for _index in range(product_count)]
-    board_sizes = ["1100 × 760" for _index in range(product_count)]
     row = {
-        "label_report_specification": " / ".join(board_sizes),
+        "label_report_specification": "1100 × 760",
         "label_inventory_code": " / ".join(product_codes),
         "label_flute_type": "BC",
         "label_cutting_mode": "一开二",
@@ -528,18 +618,20 @@ def test_actual_layout_javascript_fits_shared_mold_facts_without_clipping(
         + "const failures=TmMoldLabelLayout.fitAndValidate(labels);"
         + 'document.body.dataset.fitFailures=failures.join("|");'
         + 'document.body.dataset.elementCount=String(labels.querySelectorAll("[data-layout-id]").length);'
+        + 'document.body.dataset.productSizeCount=String(labels.querySelectorAll("[data-layout-id=product_specification]").length);'
         + "</script></body></html>",
         encoding="utf-8",
     )
     rendered = _dump_rendered_dom(headless_browser, fixture, tmp_path)
     assert 'data-fit-failures=""' in rendered
-    assert 'data-element-count="9"' in rendered
+    assert 'data-element-count="8"' in rendered
+    assert 'data-product-size-count="0"' in rendered
     assert product_codes[-1] in rendered
     if product_count == 5:
-        assert ">待完善</div>" in rendered
+        assert ">待完善</div>" not in rendered
 
 
-def test_v2_prints_values_only_while_v1_snapshot_keeps_legacy_prefixes(
+def test_v3_uses_two_identity_lines_while_v1_v2_snapshots_stay_frozen(
     headless_browser: Path,
     tmp_path: Path,
 ) -> None:
@@ -557,27 +649,40 @@ def test_v2_prints_values_only_while_v1_snapshot_keeps_legacy_prefixes(
         "qr_data_url": _qr_data_url(),
         "products": [],
     }
-    v2 = default_layout()
+    v3 = default_layout()
+    v2 = deepcopy(v3)
+    v2["catalog_version"] = "p1-103-v2"
+    for element in v2["elements"]:
+        if element["id"] == "mold_chinese_short_name":
+            element["width_mm"] = 23.0
+        if element["id"] == "product_specification":
+            element["visible"] = True
     v1 = deepcopy(v2)
     v1["catalog_version"] = "p1-103-v1"
     fixture = tmp_path / "p1-103-values-only-versioned-renderer.html"
     fixture.write_text(
         '<!doctype html><html><head><meta charset="utf-8">'
         + _current_print_styles()
-        + '</head><body><main id="v2"></main><main id="v1"></main><script>'
+        + '</head><body><main id="v3"></main><main id="v2"></main><main id="v1"></main><script>'
         + LAYOUT_JS.replace("</script>", "<\\/script>")
         + "</script><script>"
         + f"const row={json.dumps(row, ensure_ascii=False)};"
-        + f"const v2={{version:0,layout:{json.dumps(v2, ensure_ascii=False)}}};"
+        + f"const v3={{version:0,layout:{json.dumps(v3, ensure_ascii=False)}}};"
+        + f"const v2={{version:1,layout:{json.dumps(v2, ensure_ascii=False)}}};"
         + f"const v1={{version:1,layout:{json.dumps(v1, ensure_ascii=False)}}};"
+        + 'document.getElementById("v3").innerHTML=TmMoldLabelLayout.labelHtml(row,v3);'
         + 'document.getElementById("v2").innerHTML=TmMoldLabelLayout.labelHtml(row,v2);'
         + 'document.getElementById("v1").innerHTML=TmMoldLabelLayout.labelHtml(row,v1);'
+        + 'document.body.dataset.v3Text=[...document.querySelectorAll("#v3 .mold-layout-text")].map(node=>node.textContent).join("|");'
         + 'document.body.dataset.v2Text=[...document.querySelectorAll("#v2 .mold-layout-text")].map(node=>node.textContent).join("|");'
         + 'document.body.dataset.v1Text=[...document.querySelectorAll("#v1 .mold-layout-text")].map(node=>node.textContent).join("|");'
         + "</script></body></html>",
         encoding="utf-8",
     )
     rendered = _dump_rendered_dom(headless_browser, fixture, tmp_path)
+    assert (
+        'data-v3-text="890 × 650|22700002|E|一开一|瑞明|9#|防静电单回路"'
+    ) in rendered
     assert (
         'data-v2-text="890 × 650|22700002|E|一开一|瑞明|9#|'
         '防静电单回路|290 × 140 × 120"'
@@ -621,7 +726,6 @@ def test_40x80_feed_uses_one_portrait_page_with_one_inner_rotation(
         compact_text = "".join(text.split())
         for expected in (
             "1100 × 760",
-            "520 × 350 × 300",
             "BC",
             "一开二",
             f"SME-LONG-CODE-{page_number:03d}",

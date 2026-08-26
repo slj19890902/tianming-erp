@@ -11177,7 +11177,7 @@ def pending_material_history(
                 )
                 if row.selected_by in actors
                 else None,
-                "selected_at": row.selected_at,
+                "selected_at": utc_naive_to_api(row.selected_at),
             }
             for row in rows
         ]

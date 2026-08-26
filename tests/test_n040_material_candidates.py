@@ -594,8 +594,10 @@ def test_manual_selection_preserves_original_snapshot_appends_history_and_syncs_
         assert history[0]["selection_reason"] == "customer-approved Supplier A stock"
         assert history[0]["sync_product"] is True
         assert history[0]["selected_by_name"] == "N040 Admin"
+        assert history[0]["selected_at"].endswith("Z")
         assert history[1]["candidate_id"] == candidate_b
         assert history[1]["selected_material_id"] == ids["supplier_b_material"]
+        assert history[1]["selected_at"].endswith("Z")
 
     with factory() as db:
         from app.models.order import OrderItem

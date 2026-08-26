@@ -4737,3 +4737,10 @@ legacy_ruida_* 原始层
 - 仓库地图、入库候选、标签、手机、收料、生产、送货、盘点和追溯统一使用当前发布实测地图及员工位置名称；三楼旧A-F区域默认显示为“右区+区域码”，区域规划发布自定义名称后各入口同源更新。
 - 本版无 migration，唯一 Alembic head 与正式库 revision 保持 `ef41v8x9z30`。发布报告 `docs/migration_reports/release_runtime_20260826_013448.json` 状态 `completed`；备份 `data/backups/carton_erp_before_release_20260826_013449.sqlite3` 完整性正常、外键异常0、核心表计数一致，正式库发布前后 SHA-256 不变。
 - 发布后只读审计确认正数成品254批/84166全部映射、同位当前栈板完整、TWIN地堆占用10批/741完整、空栈板残留0，`projection_complete=true`；本机、局域网健康及桌面/仓库/收料/手机入口均 HTTP 200。技术发布完成，待老板强刷后进行送货与区域改名现场验收。
+
+## 2026-08-26 v0.22.178 已送自动成品退出待生产与待来料回流正式发布
+
+- 正式运行/业务代码 SHA 为 `237679610e7ff62f7a15c9ea3a2d5834aeb66dda`；收料自动成品任务改按当前有效成品预占实时分类，当前批次已全部送完后退出待生产并进入待来料，取消送货或后续收料恢复可送量后回到原唯一待生产任务。
+- 正式只读核对任务335、337在待生产查询中均为0条，在待来料中各保留1条，`delivery_ready_quantity=0`、`completion_actionable=false`；不是前端按任务ID隐藏，也未删除或改写历史任务、完工、库存、预占及送货事实。
+- 本版无 migration，唯一 Alembic head 与正式库 revision 保持 `ef41v8x9z30`。发布报告 `docs/migration_reports/release_runtime_20260826_085011.json` 状态 `completed`；备份 `data/backups/carton_erp_before_release_20260826_085013.sqlite3` 完整性正常、外键异常0、核心表计数一致，正式库发布前后 SHA-256 不变。
+- 单 worker 服务恢复后，本机、局域网健康及桌面、仓库、收料、手机入口均 HTTP 200。技术发布与只读验收完成，老板可强制刷新后核对待生产/待来料页面。

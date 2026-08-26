@@ -151,7 +151,7 @@ def _database(path: Path) -> None:
                 placement_status TEXT
             );
             INSERT INTO warehouse_locations VALUES
-                (1, '1F-FIN-01', 1, 1, 'FIN', 'rack', 'TWIN_V1', 'placed'),
+                (1, '1F-FIN-01', 1, 1, 'FIN', 'rack', 'CURRENT_MAP', 'placed'),
                 (2, '1F-OLD-01', 1, 1, 'OLD', 'rack', 'TWIN_V1', 'placed'),
                 (3, '3F-A1-01', 1, 3, 'A1', 'rack', 'V11', 'placed'),
                 (4, '3F-B1-01', 1, 3, 'B1', 'rack', 'V11', 'placed'),

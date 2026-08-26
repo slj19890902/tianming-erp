@@ -55,7 +55,8 @@ def test_old_direct_dispatch_pallet_is_recommended_without_writing_location(
         "idle_days": 3,
         "minimum_idle_days": 1,
         "maximum_idle_days": 30,
-        "source_location_code": "F1-DISPATCH-01",
+        "source_rule": "已发布地图中的直接完工当前栈板",
+        "legacy_source_location_code": "F1-DISPATCH-01",
         "recommended_floor_code": "3F",
         "recommended_area_code": "SEMI-008",
         "writes_inventory": False,
@@ -114,6 +115,51 @@ def test_idle_days_filter_and_customer_scope_fail_closed(
     assert delayed["items"][0]["can_plan_move"] is False
     assert too_low.status_code == 422
     assert too_high.status_code == 422
+
+
+def test_current_map_direct_completion_pallet_is_recommended_not_only_legacy_staging(
+    dispatch_pallet_app,
+) -> None:
+    app, factory, ids = dispatch_pallet_app
+    with factory() as db:
+        completion = db.get(ProductionCompletion, ids["first_completion"])
+        pallet = db.get(InventoryPallet, ids["first_pallet"])
+        lot = db.get(InventoryLot, ids["first_lot"])
+        target = db.get(WarehouseLocation, ids["floor3_target"])
+        assert all(row is not None for row in (completion, pallet, lot, target))
+        completion.completed_at = _now() - timedelta(days=5)
+        # This mirrors current receipt-auto direct completions: the pallet and
+        # finished lot are in a published physical map slot, not F1-DISPATCH-01.
+        pallet.location_id = target.id
+        lot.warehouse_location_id = target.id
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "n029-admin")
+        delayed = _overview(client)["delayed_dispatch_relocation"]
+
+    assert delayed["candidate_count"] == 1
+    assert delayed["items"][0]["pallet_id"] == ids["first_pallet"]
+    assert delayed["items"][0]["source_location_id"] == ids["floor3_target"]
+
+
+def test_unmapped_direct_completion_pallet_is_not_offered_as_a_move_candidate(
+    dispatch_pallet_app,
+) -> None:
+    app, factory, ids = dispatch_pallet_app
+    with factory() as db:
+        completion = db.get(ProductionCompletion, ids["first_completion"])
+        staging = db.get(WarehouseLocation, ids["staging"])
+        assert completion is not None and staging is not None
+        completion.completed_at = _now() - timedelta(days=5)
+        staging.placement_status = "unplaced"
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "n029-admin")
+        delayed = _overview(client)["delayed_dispatch_relocation"]
+
+    assert delayed["candidate_count"] == 0
 
 
 def test_confirmed_physical_move_reuses_audited_pallet_flow(

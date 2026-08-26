@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -9,10 +9,16 @@ from fastapi.testclient import TestClient
 
 from app.services.production_workflow import receipt_auto_finished_location_projection
 from tests.test_p1_81_receipt_purpose_flow import (
+    FrozenSource,
     _create_frozen_sources,
+    _created_order_id,
     _freeze_receipt_fact,
     _receive,
     _seed_material_and_staging,
+    _preview_supplier_order_draft,
+    _save_draft,
+    _selection,
+    _set_purpose_plan,
 )
 from tests.test_phase11_requisition import _login, requisition_app
 
@@ -1281,6 +1287,33 @@ def test_receipt_posts_lot_pallet_and_ground_occupancy_to_real_fin_then_releases
                 )
             ) is not None
 
+            # receipt_auto direct completions are written to a physical FIN
+            # slot.  They must remain eligible for delayed-dispatch discovery;
+            # the historical F1-DISPATCH-01 anchor is not the sole origin.
+            completion.completed_at = datetime.now() - timedelta(days=5)
+            session.commit()
+            from app.services.warehouse_twin_dashboard import (
+                _delayed_direct_dispatch_projection,
+            )
+
+            delayed = _delayed_direct_dispatch_projection(
+                session,
+                pallets=[pallet],
+                positive_lots_by_id={int(lot.id): lot},
+                location_payloads=[
+                    {
+                        "location_id": int(expected_location_id),
+                        "position_status": "mapped",
+                    }
+                ],
+                as_of=date.today(),
+                idle_days=3,
+                hide_empty_targets=False,
+            )
+            assert delayed["candidate_count"] == 1
+            assert delayed["items"][0]["pallet_id"] == pallet.id
+            assert delayed["items"][0]["can_plan_move"] is False
+
         reverted = client.put(
             f"/api/incoming/receipt-items/{receipt_item_id}/revert",
             json={},
@@ -1299,3 +1332,195 @@ def test_receipt_posts_lot_pallet_and_ground_occupancy_to_real_fin_then_releases
                 )
             )
             assert released is not None
+
+
+def test_api_created_order_receipt_auto_fin_and_reserve_purposes_end_to_end(
+    requisition_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The order fact is created by /api/orders, never inserted by this test."""
+    from app.api.orders import router as orders_router
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.production import ProductionCompletion, ProductionTask
+    from app.models.purchase_receipt import IncomingReceiptPurposeAllocation
+    from app.models.supplier_requisition_order import (
+        PurchasePurposeSourceSnapshot,
+        SupplierRequisitionOrderItem,
+    )
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryPallet,
+        InventoryPalletItem,
+        WarehouseGroundOccupancy,
+    )
+
+    app, session_factory = requisition_app
+    app.include_router(orders_router, prefix="/api/orders")
+    _seed_material_and_staging(session_factory)
+    _mock_fin_runtime_identity(session_factory, monkeypatch)
+    # The published FIN identity used by the existing receipt fixture must
+    # also expose the pre-seeded reserve-material area; this is configuration
+    # setup, not an order or inventory business-fact write.
+    from app.models.warehouse_inventory import WarehouseAreaStoragePolicy
+    from app.services import location_candidates
+    with session_factory() as session:
+        raw_policy = session.scalar(
+            select(WarehouseAreaStoragePolicy)
+            .join(WarehouseAreaStoragePolicy.area)
+            .where(WarehouseAreaStoragePolicy.area.has(area_code="A1"))
+        )
+        assert raw_policy is not None
+        raw_feature = str(raw_policy.map_feature_id)
+    fin_identity = location_candidates.load_warehouse_twin_published_floor_identity
+    def combined_identity(floor_number: int):
+        identity = fin_identity(floor_number)
+        if int(floor_number) != 1:
+            return identity
+        return {
+            **identity,
+            "zones_by_id": {**identity["zones_by_id"], raw_feature: "A1"},
+            "zone_ids_by_area": {
+                **identity["zone_ids_by_area"],
+                "A1": (raw_feature,),
+            },
+        }
+    monkeypatch.setattr(location_candidates, "load_warehouse_twin_published_floor_identity", combined_identity)
+    with session_factory() as session:
+        from app.models.product import Product
+
+        product = session.get(Product, 1)
+        assert product is not None and product.material_id is not None
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post(
+            "/api/orders",
+            json={
+                "customer_id": 1,
+                "customer_po": "P1-107-API-ORDER",
+                "order_date": date.today().isoformat(),
+                "items": [
+                    {
+                        "client_line_id": "p1-107-api-line",
+                        "product_id": 1,
+                        "quantity": 10,
+                        "unit_price": "1.00",
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        order_item_id = int(created.json()["items"][0]["id"])
+        draft = _preview_supplier_order_draft(client, [_selection(item_id=order_item_id)])
+        line = draft["supplier_groups"][0]["lines"][0]
+        _set_purpose_plan(line, purchase_total=12, order_purpose=10, stock_purpose=2)
+        saved = _save_draft(client, draft)
+        assert saved.status_code == 201, saved.text
+        supplier_order_id = _created_order_id(saved)
+
+        with session_factory() as session:
+            snapshot = session.scalar(
+                select(PurchasePurposeSourceSnapshot)
+                .join(SupplierRequisitionOrderItem)
+                .where(SupplierRequisitionOrderItem.supplier_order_id == supplier_order_id)
+            )
+            assert snapshot is not None
+            supplier_item = session.get(
+                SupplierRequisitionOrderItem,
+                snapshot.supplier_requisition_order_item_id,
+            )
+            assert supplier_item is not None and supplier_item.material_id is not None
+            source = FrozenSource(
+                source_key=snapshot.source_key, route_key=f"so{supplier_item.id}",
+                supplier_item_id=supplier_item.id, source_version=supplier_item.version,
+                purpose_snapshot_id=snapshot.id, purpose_snapshot_version=snapshot.snapshot_version,
+                receipt_plan_fingerprint=snapshot.preview_fingerprint,
+                component_type=snapshot.component_type, material_id=supplier_item.material_id,
+            )
+        frozen = _freeze_receipt_fact(client, source, idempotency_key="p1107-api-price")
+        assert frozen.status_code == 200, frozen.text
+        received = _receive(client, source, frozen.json(), quantity=12, idempotency_key="p1107-api-receive")
+        assert received.status_code == 200, received.text
+        replay = _receive(client, source, frozen.json(), quantity=12, idempotency_key="p1107-api-receive")
+        assert replay.status_code == 200 and replay.json() == received.json()
+        receipt_item_id = int(received.json()["receipt_item_id"])
+
+        with session_factory() as session:
+            allocation = session.scalar(
+                select(IncomingReceiptPurposeAllocation).where(
+                    IncomingReceiptPurposeAllocation.incoming_receipt_item_id
+                    == receipt_item_id
+                )
+            )
+            assert allocation is not None
+            assert (
+                allocation.receipt_order_purpose_sheet_qty,
+                allocation.receipt_reserve_purpose_sheet_qty,
+            ) == (10, 2)
+            completion = session.scalar(
+                select(ProductionCompletion).where(
+                    ProductionCompletion.id == allocation.production_completion_id
+                )
+            )
+            assert completion is not None and completion.status == "posted"
+            finished = session.get(InventoryLot, completion.inventory_lot_id)
+            assert finished is not None and finished.inventory_type == "finished"
+            assert (
+                finished.quantity_available
+                + finished.quantity_reserved
+                + finished.quantity_damaged
+            ) == 10
+            assert finished.pallet_item is not None
+            pallet = session.get(InventoryPallet, finished.pallet_item.pallet_id)
+            assert pallet is not None and pallet.is_current and pallet.location_id == finished.warehouse_location_id
+            assert session.scalar(
+                select(WarehouseGroundOccupancy.id).where(
+                    WarehouseGroundOccupancy.pallet_id == pallet.id,
+                    WarehouseGroundOccupancy.status == "active",
+                )
+            ) is not None
+            reserve = session.get(InventoryLot, allocation.semi_finished_inventory_lot_id)
+            assert reserve is not None and reserve.warehouse_location_id != finished.warehouse_location_id
+            assert reserve.inventory_type == "semi_finished" and reserve.quantity_available == 2
+            assert session.scalar(
+                select(func.count(ProductionTask.id)).where(
+                    ProductionTask.order_item_id == order_item_id
+                )
+            ) == 1
+            completion_id, finished_lot_id, reserve_lot_id, pallet_id = (
+                completion.id,
+                finished.id,
+                reserve.id,
+                pallet.id,
+            )
+
+        reverted = client.put(f"/api/incoming/receipt-items/{receipt_item_id}/revert", json={})
+        assert reverted.status_code == 200, reverted.text
+        with session_factory() as session:
+            assert session.get(IncomingReceiptItem, receipt_item_id) is not None
+            reverted_completion = session.get(ProductionCompletion, completion_id)
+            reverted_finished = session.get(InventoryLot, finished_lot_id)
+            reverted_reserve = session.get(InventoryLot, reserve_lot_id)
+            assert reverted_completion is not None and reverted_completion.status != "posted"
+            assert reverted_finished is not None and reverted_finished.quantity_available == 0
+            assert reverted_reserve is not None and reverted_reserve.quantity_available == 0
+            assert session.scalar(
+                select(WarehouseGroundOccupancy.id).where(
+                    WarehouseGroundOccupancy.pallet_id == pallet_id,
+                    WarehouseGroundOccupancy.status == "active",
+                )
+            ) is None
+            reverted_pallet = session.get(InventoryPallet, pallet_id)
+            assert reverted_pallet is not None
+            assert not (
+                reverted_pallet.is_current and reverted_pallet.status == "active"
+            )
+            assert session.scalar(
+                select(InventoryPalletItem.id)
+                .join(InventoryPallet)
+                .where(
+                    InventoryPalletItem.inventory_lot_id == finished_lot_id,
+                    InventoryPallet.is_current.is_(True),
+                    InventoryPallet.status == "active",
+                )
+            ) is None

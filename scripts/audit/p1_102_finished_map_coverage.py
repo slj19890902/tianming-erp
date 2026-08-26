@@ -358,8 +358,11 @@ def _classification(
         if len(feature_ids) != 1:
             return "unlocated", "v11_area_not_unique"
     else:
-        if source_version != "TWIN_V1":
-            return "unlocated", "source_not_twin_v1"
+        # fg42 migrated the published physical locations to CURRENT_MAP.  It is
+        # the same published-map contract as TWIN_V1, not an unverified legacy
+        # source: retain every policy, revision, feature and geometry gate below.
+        if source_version not in {"TWIN_V1", "CURRENT_MAP"}:
+            return "unlocated", "source_not_current_map"
         if row["policy_id"] is None or str(row["policy_status"] or "") != "published":
             return "unlocated", "policy_not_published"
         policy_revision = str(row["policy_published_map_revision"] or "").strip()
@@ -407,7 +410,8 @@ def _requires_twin_ground_occupancy(row: Mapping[str, Any]) -> bool:
     return bool(
         row.get("classification") == "mapped"
         and _has_current_same_location_pallet(row)
-        and str(row["source_version"] or "").strip().upper() == "TWIN_V1"
+        and str(row["source_version"] or "").strip().upper()
+        in {"TWIN_V1", "CURRENT_MAP"}
         and str(row["storage_type"] or "").strip().lower()
         in {"ground", "temporary_aisle"}
     )
@@ -684,7 +688,7 @@ def collect(database: Path, runtime_map: Path) -> dict[str, Any]:
                 "active current pallet at the same authoritative lot location"
             ),
             "ground_occupancy_projection": (
-                "mapped TWIN_V1 ground/temporary lots with a current same-location "
+                "mapped TWIN_V1/CURRENT_MAP ground/temporary lots with a current same-location "
                 "pallet require exactly one active same-location occupancy whose "
                 "capacity covers physical quantity; V11 no-policy compatibility "
                 "does not require a ground plan or occupancy"

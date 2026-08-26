@@ -440,11 +440,47 @@ def _delayed_direct_dispatch_projection(
         if row.get("map_position") and int(row["map_position"].get("version") or 0) > 0
     ]
 
+    source_locations = {
+        int(row["location_id"]): row
+        for row in location_payloads
+        if row.get("location_id") is not None
+    }
+
+    def is_eligible_source_location(pallet: InventoryPallet) -> bool:
+        location = pallet.location
+        if location is None:
+            return False
+        # Pre-space-ledger direct stock may remain on the audited F1 staging
+        # location.  It has no current-map feature, so retain this narrowly
+        # defined legacy compatibility instead of accepting arbitrary unmapped
+        # locations.
+        if (
+            location.location_code == DIRECT_DISPATCH_LOCATION_CODE
+            and location.source_version == "P1-25C"
+            and location.is_active
+            and location.placement_status == "placed"
+        ):
+            return True
+        return (
+            source_locations.get(int(location.id), {}).get("position_status")
+            == "mapped"
+        )
+
+    # New direct completions use a published, physical FIN/3F map slot when
+    # the space ledger is available.  F1-DISPATCH-01 remains a valid legacy
+    # origin, but it must not be the only way to discover direct stock.
     dispatch_pallets = [
         pallet
         for pallet in pallets
         if pallet.location is not None
-        and pallet.location.location_code == DIRECT_DISPATCH_LOCATION_CODE
+        and pallet.is_current
+        and pallet.status == "active"
+        and is_eligible_source_location(pallet)
+        and not (
+            pallet.location.warehouse_floor == 3
+            and str(pallet.location.area_code or "").upper()
+            == DELAYED_DISPATCH_LEFT_AREA_CODE
+        )
     ]
     completion_ids = {
         int(lot.source_ref_id)
@@ -554,7 +590,8 @@ def _delayed_direct_dispatch_projection(
             "idle_days": idle_days,
             "minimum_idle_days": 1,
             "maximum_idle_days": 30,
-            "source_location_code": DIRECT_DISPATCH_LOCATION_CODE,
+            "source_rule": "已发布地图中的直接完工当前栈板",
+            "legacy_source_location_code": DIRECT_DISPATCH_LOCATION_CODE,
             "recommended_floor_code": "3F",
             "recommended_area_code": DELAYED_DISPATCH_LEFT_AREA_CODE,
             "writes_inventory": False,

@@ -14,6 +14,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import create_sqlite_engine
 from app.core.security import hash_password
+from app.services.warehouse_twin_layout import (
+    load_warehouse_twin_published_floor_identity,
+)
 from app.models import Base
 from app.models.audit import OperationLog
 from app.models.customer import Customer
@@ -31,6 +34,8 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
     WarehouseLocation,
 )
 
@@ -57,12 +62,25 @@ def _published_area(
         area_name=f"{floor.floor_code}-{area_code}",
         construction_status="enabled",
     )
+    published_identity = load_warehouse_twin_published_floor_identity(
+        int(floor.floor_number)
+    )
+    current_feature_ids = tuple(
+        published_identity.get("zone_ids_by_area", {}).get(area_code, ())
+    )
+    map_feature_id = f"zone-{floor.floor_code.lower()}-{area_code.lower()}"
+    published_map_revision = "p1-47c-test-map"
+    if len(current_feature_ids) == 1:
+        map_feature_id = current_feature_ids[0]
+        published_map_revision = str(published_identity["revision"])
     area.storage_policy = WarehouseAreaStoragePolicy(
-        map_feature_id=f"zone-{floor.floor_code.lower()}-{area_code.lower()}",
+        map_feature_id=map_feature_id,
         allowed_inventory_types_json=json.dumps(list(inventory_types)),
         storage_layout="pallet_ground",
         status="published",
-        published_map_revision="p1-47c-test-map",
+        # Movement validates every published target against the live map.  Keep
+        # the fixture aligned when a later map revision becomes the runtime map.
+        published_map_revision=published_map_revision,
         version=1,
     )
     return area
@@ -218,8 +236,8 @@ def move_batch_app(tmp_path: Path):
             construction_status="enabled",
         )
         areas = [
-            _published_area(floor1, area_code="DISPATCH"),
-            _published_area(floor1, area_code="FG"),
+            _published_area(floor1, area_code="TEMP-001"),
+            _published_area(floor1, area_code="FIN-001"),
             _published_area(floor3, area_code="A1"),
             _published_area(floor3, area_code="BADTYPE", inventory_types=("semi_finished",)),
         ]
@@ -243,18 +261,18 @@ def move_batch_app(tmp_path: Path):
         dispatch = _location(
             code="F1-DISPATCH-01",
             floor=1,
-            area="DISPATCH",
+            area="TEMP-001",
             source_version="P1-25C",
             storage_type="temporary_aisle",
         )
         floor1_source = _location(
-            code="1F-FG-SOURCE", floor=1, area="FG", source_version="TWIN_V1"
+            code="1F-FG-SOURCE", floor=1, area="FIN-001", source_version="TWIN_V1"
         )
         floor1_target = _location(
-            code="1F-FG-TARGET", floor=1, area="FG", source_version="TWIN_V1"
+            code="1F-FG-TARGET", floor=1, area="FIN-001", source_version="TWIN_V1"
         )
         floor1_target_2 = _location(
-            code="1F-FG-TARGET-2", floor=1, area="FG", source_version="TWIN_V1"
+            code="1F-FG-TARGET-2", floor=1, area="FIN-001", source_version="TWIN_V1"
         )
         floor3_source = _location(
             code="3F-A1-SOURCE", floor=3, area="A1", source_version="V11"
@@ -314,6 +332,48 @@ def move_batch_app(tmp_path: Path):
                 wrong_type_target,
                 draft_target,
                 occupied_target,
+            ]
+        )
+        db.flush()
+
+        floor1_identity = load_warehouse_twin_published_floor_identity(1)
+        floor1_plan = WarehouseGroundLayoutPlan(
+            area_id=areas[1].id,
+            status="published",
+            target_slot_count=3,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision=str(floor1_identity["revision"]),
+            published_map_revision=str(floor1_identity["revision"]),
+            preview_fingerprint="a" * 64,
+            version=1,
+            publish_idempotency_key="p1-47c-fin-001-publish",
+            publish_request_hash="b" * 64,
+            updated_by=admin.id,
+            published_by=admin.id,
+            published_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        db.add(floor1_plan)
+        db.flush()
+        db.add_all(
+            [
+                WarehouseGroundLayoutSlot(
+                    plan_id=floor1_plan.id,
+                    location_id=location.id,
+                    route_sequence=index,
+                    row_no=1,
+                    slot_no=index,
+                    x_mm=Decimal(1000 + index * 1400),
+                    y_mm=Decimal("1000"),
+                    width_mm=1200,
+                    depth_mm=1000,
+                )
+                for index, location in enumerate(
+                    (floor1_source, floor1_target, floor1_target_2), start=1
+                )
             ]
         )
         db.flush()

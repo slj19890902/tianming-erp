@@ -5,6 +5,8 @@
   const PAPER_HEIGHT_MM = 40;
   const STAGE_SCALE = 8;
   const MIN_TEXT_SIZE_MM = 1.2;
+  const V1_CATALOG_VERSION = "p1-103-v1";
+  const V2_CATALOG_VERSION = "p1-103-v2";
   const ELEMENT_LABELS = Object.freeze({
     board_specification: "片料尺寸",
     inventory_code: "纸箱存货编码",
@@ -81,6 +83,9 @@
     if (!Number.isInteger(version) || version < 0 || !layout || typeof layout !== "object") {
       throw new Error("40×80模具标签布局版本无效");
     }
+    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION].includes(layout.catalog_version)) {
+      throw new Error("40×80模具标签元素目录不受支持");
+    }
     if (
       Number(layout.paper?.width_mm) !== PAPER_WIDTH_MM
       || Number(layout.paper?.height_mm) !== PAPER_HEIGHT_MM
@@ -140,19 +145,29 @@
     return envelope;
   }
 
-  function valueForElement(row, elementId) {
+  function valueForElement(row, elementId, catalogVersion = V2_CATALOG_VERSION) {
     const product = Array.isArray(row?.products) ? row.products[0] : null;
     const values = {
-      board_specification: `片料 ${String(row?.label_report_specification ?? product?.report_specification ?? "").trim() || "待完善"}`,
-      inventory_code: `纸箱 ${String(row?.label_inventory_code ?? product?.product_code ?? "").trim() || "待完善"}`,
-      flute_type: `楞 ${String(row?.label_flute_type ?? product?.flute_type ?? "").trim() || "待完善"}`,
-      cutting_mode: `开 ${String(row?.label_cutting_mode ?? product?.default_cutting_mode ?? "").trim() || "待完善"}`,
+      board_specification: String(row?.label_report_specification ?? product?.report_specification ?? "").trim() || "待完善",
+      inventory_code: String(row?.label_inventory_code ?? product?.product_code ?? "").trim() || "待完善",
+      flute_type: String(row?.label_flute_type ?? product?.flute_type ?? "").trim() || "待完善",
+      cutting_mode: String(row?.label_cutting_mode ?? product?.default_cutting_mode ?? "").trim() || "待完善",
       customer_name: String(row?.label_customer_name ?? product?.customer_short_name ?? "").trim() || "待完善",
       mold_label_name: String(row?.label_mold_name ?? "").trim() || "待完善",
-      mold_chinese_short_name: `中文 ${String(row?.label_mold_chinese_short_name ?? "").trim() || "待完善"}`,
-      product_specification: `尺寸 ${String(row?.label_product_specification ?? product?.specification ?? "").trim() || "待完善"}`,
+      mold_chinese_short_name: String(row?.label_mold_chinese_short_name ?? "").trim() || "待完善",
+      product_specification: String(row?.label_product_specification ?? product?.specification ?? "").trim() || "待完善",
     };
-    return values[elementId] || "";
+    const value = values[elementId] || "";
+    if (catalogVersion !== V1_CATALOG_VERSION) return value;
+    const legacyPrefixes = {
+      board_specification: "片料 ",
+      inventory_code: "纸箱 ",
+      flute_type: "楞 ",
+      cutting_mode: "开 ",
+      mold_chinese_short_name: "中文 ",
+      product_specification: "尺寸 ",
+    };
+    return `${legacyPrefixes[elementId] || ""}${value}`;
   }
 
   function elementInlineStyle(element, scale = 1) {
@@ -183,7 +198,7 @@
           ? `<img class="mold-layout-element mold-layout-qr" data-layout-id="mold_qr" style="${style}" src="${escapeHtml(row.qr_data_url)}" alt="扫码查看模具实时信息">`
           : `<div class="mold-layout-element mold-layout-qr-missing" data-layout-id="mold_qr" style="${style}">二维码<br>待生成</div>`;
       }
-      const value = valueForElement(row, element.id);
+      const value = valueForElement(row, element.id, envelope.layout.catalog_version);
       return `<div class="mold-layout-element mold-layout-text${value.includes("待完善") ? " missing" : ""}" data-layout-id="${escapeHtml(element.id)}" data-layout-label="${escapeHtml(ELEMENT_LABELS[element.id])}" data-max-font-mm="${Number(element.font_size_mm)}" style="${style}">${escapeHtml(value)}</div>`;
     }).join("");
     return `<article class="mold-label-page"><div class="label template-80x40 layout-driven">${elements}${prototypeMode ? '<span class="prototype-mark">样例</span>' : ""}</div></article>`;
@@ -268,7 +283,7 @@
       return `<div class="mold-layout-element mold-layout-qr-missing${selected}" data-editor-element="${element.id}" style="${style}">二维码<br>14.2mm</div>`;
     }
     const sample = editorConfig?.sampleRow?.() || {};
-    return `<div class="mold-layout-element mold-layout-text${selected}" data-editor-element="${element.id}" style="${style}">${escapeHtml(valueForElement(sample, element.id))}</div>`;
+    return `<div class="mold-layout-element mold-layout-text${selected}" data-editor-element="${element.id}" style="${style}">${escapeHtml(valueForElement(sample, element.id, editorLayout?.catalog_version))}</div>`;
   }
 
   function renderEditor() {

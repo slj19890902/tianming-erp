@@ -31,12 +31,18 @@ V1_ELEMENT_CATALOG = (
 )
 _V1_CATALOG_BY_ID = {item["id"]: item for item in V1_ELEMENT_CATALOG}
 
+V2_CATALOG_VERSION = "p1-103-v2"
+V2_PAPER_WIDTH_MM = 80.0
+V2_PAPER_HEIGHT_MM = 40.0
+V2_ELEMENT_CATALOG = V1_ELEMENT_CATALOG
+_V2_CATALOG_BY_ID = {item["id"]: item for item in V2_ELEMENT_CATALOG}
+
 # These aliases describe the catalog accepted for new writes.  Historical
 # print snapshots use their own version-pinned decoder below.
-CATALOG_VERSION = V1_CATALOG_VERSION
-PAPER_WIDTH_MM = V1_PAPER_WIDTH_MM
-PAPER_HEIGHT_MM = V1_PAPER_HEIGHT_MM
-ELEMENT_CATALOG = V1_ELEMENT_CATALOG
+CATALOG_VERSION = V2_CATALOG_VERSION
+PAPER_WIDTH_MM = V2_PAPER_WIDTH_MM
+PAPER_HEIGHT_MM = V2_PAPER_HEIGHT_MM
+ELEMENT_CATALOG = V2_ELEMENT_CATALOG
 
 
 class MoldLabelLayoutError(ValueError):
@@ -50,7 +56,7 @@ class MoldLabelLayoutConflict(MoldLabelLayoutError):
 def default_layout() -> dict[str, Any]:
     """Return the verified 80 mm long-edge layout in millimetres.
 
-    The lower 14.4 mm band is the mold-side identity strip: its two text rows
+    The lower 15.6 mm band is the mold-side identity strip: its two text rows
     are aligned with the QR code so the facts used while finding a mold stay
     visible on the approximately 15 mm mold edge.
     """
@@ -62,11 +68,11 @@ def default_layout() -> dict[str, Any]:
             {
                 "id": "board_specification",
                 "kind": "text",
-                "x_mm": 1.5,
-                "y_mm": 1.2,
-                "width_mm": 61.5,
-                "height_mm": 8.6,
-                "font_size_mm": 6.0,
+                "x_mm": 1.2,
+                "y_mm": 0.8,
+                "width_mm": 61.8,
+                "height_mm": 7.0,
+                "font_size_mm": 5.6,
                 "font_weight": 900,
                 "text_align": "left",
                 "visible": True,
@@ -74,11 +80,11 @@ def default_layout() -> dict[str, Any]:
             {
                 "id": "inventory_code",
                 "kind": "text",
-                "x_mm": 1.5,
-                "y_mm": 10.5,
-                "width_mm": 38.0,
-                "height_mm": 12.0,
-                "font_size_mm": 4.6,
+                "x_mm": 1.2,
+                "y_mm": 8.4,
+                "width_mm": 61.8,
+                "height_mm": 7.0,
+                "font_size_mm": 4.8,
                 "font_weight": 900,
                 "text_align": "left",
                 "visible": True,
@@ -86,35 +92,35 @@ def default_layout() -> dict[str, Any]:
             {
                 "id": "flute_type",
                 "kind": "text",
-                "x_mm": 40.3,
-                "y_mm": 10.5,
-                "width_mm": 22.7,
-                "height_mm": 5.5,
-                "font_size_mm": 3.8,
+                "x_mm": 1.2,
+                "y_mm": 15.7,
+                "width_mm": 12.0,
+                "height_mm": 7.0,
+                "font_size_mm": 4.0,
                 "font_weight": 800,
-                "text_align": "center",
+                "text_align": "left",
                 "visible": True,
             },
             {
                 "id": "cutting_mode",
                 "kind": "text",
-                "x_mm": 40.3,
-                "y_mm": 17.0,
-                "width_mm": 22.7,
-                "height_mm": 5.5,
-                "font_size_mm": 3.4,
+                "x_mm": 13.6,
+                "y_mm": 15.7,
+                "width_mm": 49.4,
+                "height_mm": 7.0,
+                "font_size_mm": 3.8,
                 "font_weight": 800,
-                "text_align": "right",
+                "text_align": "left",
                 "visible": True,
             },
             {
                 "id": "customer_name",
                 "kind": "text",
-                "x_mm": 1.5,
-                "y_mm": 24.2,
-                "width_mm": 14.0,
-                "height_mm": 6.4,
-                "font_size_mm": 4.0,
+                "x_mm": 1.2,
+                "y_mm": 23.2,
+                "width_mm": 21.0,
+                "height_mm": 7.0,
+                "font_size_mm": 4.2,
                 "font_weight": 900,
                 "text_align": "left",
                 "visible": True,
@@ -122,11 +128,11 @@ def default_layout() -> dict[str, Any]:
             {
                 "id": "mold_label_name",
                 "kind": "text",
-                "x_mm": 16.1,
-                "y_mm": 24.2,
-                "width_mm": 46.9,
-                "height_mm": 6.4,
-                "font_size_mm": 5.0,
+                "x_mm": 22.6,
+                "y_mm": 23.2,
+                "width_mm": 40.4,
+                "height_mm": 7.0,
+                "font_size_mm": 5.2,
                 "font_weight": 900,
                 "text_align": "left",
                 "visible": True,
@@ -134,10 +140,10 @@ def default_layout() -> dict[str, Any]:
             {
                 "id": "mold_chinese_short_name",
                 "kind": "text",
-                "x_mm": 1.5,
-                "y_mm": 31.2,
-                "width_mm": 17.5,
-                "height_mm": 7.0,
+                "x_mm": 1.2,
+                "y_mm": 30.6,
+                "width_mm": 23.0,
+                "height_mm": 8.0,
                 "font_size_mm": 4.0,
                 "font_weight": 800,
                 "text_align": "left",
@@ -146,11 +152,11 @@ def default_layout() -> dict[str, Any]:
             {
                 "id": "product_specification",
                 "kind": "text",
-                "x_mm": 19.7,
-                "y_mm": 31.2,
-                "width_mm": 43.3,
-                "height_mm": 7.0,
-                "font_size_mm": 4.5,
+                "x_mm": 24.6,
+                "y_mm": 30.6,
+                "width_mm": 38.4,
+                "height_mm": 8.0,
+                "font_size_mm": 4.4,
                 "font_weight": 800,
                 "text_align": "left",
                 "visible": True,
@@ -158,7 +164,7 @@ def default_layout() -> dict[str, Any]:
             {
                 "id": "mold_qr",
                 "kind": "qr",
-                "x_mm": 64.3,
+                "x_mm": 64.4,
                 "y_mm": 24.6,
                 "width_mm": 14.2,
                 "height_mm": 14.2,
@@ -322,10 +328,79 @@ def _normalize_layout_v1(payload: object) -> dict[str, Any]:
 _SNAPSHOT_NORMALIZERS = {V1_CATALOG_VERSION: _normalize_layout_v1}
 
 
+def _normalize_layout_v2(payload: object) -> dict[str, Any]:
+    """Decode the values-only catalog used for new saves and print jobs."""
+
+    if not isinstance(payload, dict):
+        raise MoldLabelLayoutError("模具标签布局必须是对象")
+    if payload.get("catalog_version") != V2_CATALOG_VERSION:
+        raise MoldLabelLayoutError("标签元素目录版本已变化，请重新加载默认布局")
+    paper = payload.get("paper")
+    if not isinstance(paper, dict):
+        raise MoldLabelLayoutError("标签纸张定义无效")
+    if (
+        _finite_number(paper.get("width_mm"), name="纸张宽度")
+        != V2_PAPER_WIDTH_MM
+        or _finite_number(paper.get("height_mm"), name="纸张高度")
+        != V2_PAPER_HEIGHT_MM
+    ):
+        raise MoldLabelLayoutError("本布局只允许80×40毫米内容区")
+    raw_elements = payload.get("elements")
+    if not isinstance(raw_elements, list):
+        raise MoldLabelLayoutError("标签元素必须是列表")
+    normalized_elements: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_elements:
+        normalized = _normalize_element_v1(raw)
+        if normalized["id"] in seen:
+            raise MoldLabelLayoutError(f"布局中存在重复元素 {normalized['id']}")
+        seen.add(normalized["id"])
+        normalized_elements.append(normalized)
+    missing = [
+        item["id"] for item in V2_ELEMENT_CATALOG if item["id"] not in seen
+    ]
+    if missing:
+        raise MoldLabelLayoutError(f"布局缺少已登记元素：{','.join(missing)}")
+    for index, left in enumerate(normalized_elements):
+        for right in normalized_elements[index + 1 :]:
+            if _rectangles_overlap(left, right):
+                raise MoldLabelLayoutError(
+                    f"{_V2_CATALOG_BY_ID[left['id']]['label']}与"
+                    f"{_V2_CATALOG_BY_ID[right['id']]['label']}发生重叠"
+                )
+    order = {
+        item["id"]: index for index, item in enumerate(V2_ELEMENT_CATALOG)
+    }
+    normalized_elements.sort(key=lambda item: order[item["id"]])
+    return {
+        "catalog_version": V2_CATALOG_VERSION,
+        "paper": {
+            "width_mm": V2_PAPER_WIDTH_MM,
+            "height_mm": V2_PAPER_HEIGHT_MM,
+        },
+        "elements": normalized_elements,
+    }
+
+
+_SNAPSHOT_NORMALIZERS[V2_CATALOG_VERSION] = _normalize_layout_v2
+
+
 def normalize_layout(payload: object) -> dict[str, Any]:
     """Validate a layout submitted for the currently published catalog."""
 
-    return _normalize_layout_v1(payload)
+    return _normalize_layout_v2(payload)
+
+
+def _upgrade_to_current_catalog(layout: dict[str, Any]) -> dict[str, Any]:
+    """Project a current v1 release to v2 without changing frozen snapshots."""
+
+    if layout.get("catalog_version") == V2_CATALOG_VERSION:
+        return _normalize_layout_v2(layout)
+    if layout.get("catalog_version") == V1_CATALOG_VERSION:
+        upgraded = dict(layout)
+        upgraded["catalog_version"] = V2_CATALOG_VERSION
+        return _normalize_layout_v2(upgraded)
+    raise MoldLabelLayoutError("保存的模具标签目录版本不受支持")
 
 
 def _normalize_snapshot_layout(payload: object) -> dict[str, Any]:
@@ -376,8 +451,10 @@ def _envelope(
     *,
     layout: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    effective = layout if layout is not None else (
-        _row_layout(row) if row is not None else normalize_layout(default_layout())
+    effective = _upgrade_to_current_catalog(layout) if layout is not None else (
+        _upgrade_to_current_catalog(_row_layout(row))
+        if row is not None
+        else normalize_layout(default_layout())
     )
     return {
         "version": int(row.version) if row is not None else 0,
@@ -560,7 +637,7 @@ def rollback_release(
     source = history[1]
     return _replace(
         db,
-        replacement=_row_layout(source),
+        replacement=_upgrade_to_current_catalog(_row_layout(source)),
         expected_release_version=expected_release_version,
         operation_key=operation_key,
         actor_id=actor_id,

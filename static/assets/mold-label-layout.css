@@ -24,10 +24,11 @@
 .mold-layout-text {
   display: flex;
   align-items: center;
-  padding: .12mm .2mm;
-  line-height: .94;
+  padding: .08mm .14mm;
+  line-height: 1.08;
   letter-spacing: -.035mm;
   overflow: hidden;
+  white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
 }

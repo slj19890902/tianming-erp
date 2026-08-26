@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from pathlib import Path
 import subprocess
@@ -67,15 +68,15 @@ def _complete_mold(factory, *, suffix: str = "1") -> int:
 
 def _layout_driven_label(index: int, qr: str) -> str:
     return f'''<article class="mold-label-page"><div class="label template-80x40 layout-driven">
-      <div class="mold-layout-element mold-layout-text" data-layout-id="board_specification" style="left:1.5mm;top:1.2mm;width:61.5mm;height:8.6mm;font-size:6mm;font-weight:900">片料 1100 × 760</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="inventory_code" style="left:1.5mm;top:10.5mm;width:38mm;height:12mm;font-size:4.6mm;font-weight:900">纸箱 SME-LONG-CODE-{index:03d}</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="flute_type" style="left:40.3mm;top:10.5mm;width:22.7mm;height:5.5mm;font-size:3.8mm;font-weight:800">楞 BC</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="cutting_mode" style="left:40.3mm;top:17mm;width:22.7mm;height:5.5mm;font-size:3.4mm;font-weight:800">开 一开二</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="customer_name" style="left:1.5mm;top:24.2mm;width:14mm;height:6.4mm;font-size:4mm;font-weight:900">思迈尔</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_label_name" style="left:16.1mm;top:24.2mm;width:46.9mm;height:6.4mm;font-size:5mm;font-weight:900">P162-{index:03d}</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_chinese_short_name" style="left:1.5mm;top:31.2mm;width:17.5mm;height:7mm;font-size:4mm;font-weight:800">中文 加强箱</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="product_specification" style="left:19.7mm;top:31.2mm;width:43.3mm;height:7mm;font-size:4.5mm;font-weight:800">尺寸 520 × 350 × 300</div>
-      <img class="mold-layout-element mold-layout-qr" data-layout-id="mold_qr" style="left:64.3mm;top:24.6mm;width:14.2mm;height:14.2mm" src="{qr}" alt="二维码">
+      <div class="mold-layout-element mold-layout-text" data-layout-id="board_specification" style="left:1.2mm;top:.8mm;width:61.8mm;height:7mm;font-size:5.6mm;font-weight:900">1100 × 760</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="inventory_code" style="left:1.2mm;top:8.4mm;width:61.8mm;height:7mm;font-size:4.8mm;font-weight:900">SME-LONG-CODE-{index:03d}</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="flute_type" style="left:1.2mm;top:15.7mm;width:12mm;height:7mm;font-size:4mm;font-weight:800">BC</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="cutting_mode" style="left:13.6mm;top:15.7mm;width:49.4mm;height:7mm;font-size:3.8mm;font-weight:800">一开二</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="customer_name" style="left:1.2mm;top:23.2mm;width:21mm;height:7mm;font-size:4.2mm;font-weight:900">思迈尔</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_label_name" style="left:22.6mm;top:23.2mm;width:40.4mm;height:7mm;font-size:5.2mm;font-weight:900">P162-{index:03d}</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_chinese_short_name" style="left:1.2mm;top:30.6mm;width:23mm;height:8mm;font-size:4mm;font-weight:800">加强箱</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="product_specification" style="left:24.6mm;top:30.6mm;width:38.4mm;height:8mm;font-size:4.4mm;font-weight:800">520 × 350 × 300</div>
+      <img class="mold-layout-element mold-layout-qr" data-layout-id="mold_qr" style="left:64.4mm;top:24.6mm;width:14.2mm;height:14.2mm" src="{qr}" alt="二维码">
     </div></article>'''
 
 
@@ -535,7 +536,56 @@ def test_actual_layout_javascript_fits_shared_mold_facts_without_clipping(
     assert 'data-element-count="9"' in rendered
     assert product_codes[-1] in rendered
     if product_count == 5:
-        assert "中文 待完善" in rendered
+        assert ">待完善</div>" in rendered
+
+
+def test_v2_prints_values_only_while_v1_snapshot_keeps_legacy_prefixes(
+    headless_browser: Path,
+    tmp_path: Path,
+) -> None:
+    from app.services.mold_label_layout import default_layout
+
+    row = {
+        "label_report_specification": "890 × 650",
+        "label_inventory_code": "22700002",
+        "label_flute_type": "E",
+        "label_cutting_mode": "一开一",
+        "label_customer_name": "瑞明",
+        "label_mold_name": "9#",
+        "label_mold_chinese_short_name": "防静电单回路",
+        "label_product_specification": "290 × 140 × 120",
+        "qr_data_url": _qr_data_url(),
+        "products": [],
+    }
+    v2 = default_layout()
+    v1 = deepcopy(v2)
+    v1["catalog_version"] = "p1-103-v1"
+    fixture = tmp_path / "p1-103-values-only-versioned-renderer.html"
+    fixture.write_text(
+        '<!doctype html><html><head><meta charset="utf-8">'
+        + _current_print_styles()
+        + '</head><body><main id="v2"></main><main id="v1"></main><script>'
+        + LAYOUT_JS.replace("</script>", "<\\/script>")
+        + "</script><script>"
+        + f"const row={json.dumps(row, ensure_ascii=False)};"
+        + f"const v2={{version:0,layout:{json.dumps(v2, ensure_ascii=False)}}};"
+        + f"const v1={{version:1,layout:{json.dumps(v1, ensure_ascii=False)}}};"
+        + 'document.getElementById("v2").innerHTML=TmMoldLabelLayout.labelHtml(row,v2);'
+        + 'document.getElementById("v1").innerHTML=TmMoldLabelLayout.labelHtml(row,v1);'
+        + 'document.body.dataset.v2Text=[...document.querySelectorAll("#v2 .mold-layout-text")].map(node=>node.textContent).join("|");'
+        + 'document.body.dataset.v1Text=[...document.querySelectorAll("#v1 .mold-layout-text")].map(node=>node.textContent).join("|");'
+        + "</script></body></html>",
+        encoding="utf-8",
+    )
+    rendered = _dump_rendered_dom(headless_browser, fixture, tmp_path)
+    assert (
+        'data-v2-text="890 × 650|22700002|E|一开一|瑞明|9#|'
+        '防静电单回路|290 × 140 × 120"'
+    ) in rendered
+    assert (
+        'data-v1-text="片料 890 × 650|纸箱 22700002|楞 E|开 一开一|瑞明|9#|'
+        '中文 防静电单回路|尺寸 290 × 140 × 120"'
+    ) in rendered
 
 
 @pytest.mark.parametrize("label_count", (1, 2, 100))

@@ -31,7 +31,7 @@ def test_replenishment_form_always_saves_a_draft_before_stocking() -> None:
     assert "stockReplenishmentForm.idempotency_key || createIdempotencyKey()" in INDEX
     assert "stockLocationsForType(line.target_inventory_type)" not in INDEX
     assert "defaultStockLocation" not in INDEX
-    assert "系统自动进入一楼 A1 原料暂存区" in INDEX
+    assert "系统自动进入一楼当前已发布原料区的真实排位" in INDEX
     assert "item.location_id = null" in INDEX
     assert 'v-model="line.target_inventory_type" disabled' in INDEX
     assert '<option value="finished">成品</option>' not in INDEX

@@ -494,6 +494,15 @@
     }
 
     function receiptExecutionIssue(item) {
+      const reserveQuantity = Math.max(Number(item?.remaining_reserve_purpose_sheet_qty ?? item?.expected_reserve_purpose_sheet_qty ?? 0), 0);
+      const orderQuantity = Math.max(Number(item?.remaining_order_purpose_sheet_qty ?? item?.expected_order_purpose_sheet_qty ?? 0), 0);
+      const reserveNeeded = reserveQuantity > 0 && Number(item?.incoming_quantity || 0) > orderQuantity;
+      if (
+        item?.receipt_execution_ready === false
+        && item?.reserve_location_ready === false
+        && !reserveNeeded
+        && item?.finished_location_ready !== false
+      ) return "";
       if (
         item?.receipt_execution_ready !== false
         && item?.receipt_location_ready !== false
@@ -547,7 +556,7 @@
         .join("");
       const frozenPurpose = item.purpose_status !== "legacy_unset";
       const decisionBlock = !isPending ? "" : frozenPurpose
-        ? `<div class="mt-2 rounded-lg ${item.receipt_fact_ready ? "bg-green-50 text-green-900" : "bg-amber-50 text-amber-900"} p-2 text-sm"><p class="font-bold">${escapeHtml(item.receipt_fact_ready ? "用途与采购价格已冻结" : "默认按报料材质和已维护价格实收")}</p><p>预计订单用途 ${escapeHtml(item.expected_order_purpose_sheet_qty || 0)} 张</p><p>预计片料备库 ${escapeHtml(item.expected_reserve_purpose_sheet_qty || 0)} 张</p><p>预计形成成品 ${escapeHtml(item.expected_finished_output_qty || 0)} 只</p>${item.finished_location_name ? `<p>成品：${escapeHtml(item.finished_location_name)}</p>` : ""}${item.finished_capacity_warning ? `<p class="mt-1 font-bold text-amber-800">容量提醒：${escapeHtml(item.finished_capacity_warning)}</p>` : ""}${item.reserve_location_name ? `<p>片料：${escapeHtml(item.reserve_location_name)}</p>` : ""}</div>`
+        ? `<div class="mt-2 rounded-lg ${item.receipt_fact_ready ? "bg-green-50 text-green-900" : "bg-amber-50 text-amber-900"} p-2 text-sm"><p class="font-bold">${escapeHtml(item.receipt_fact_ready ? "用途与采购价格已冻结" : "默认按报料材质和已维护价格实收")}</p><p>预计订单用途 ${escapeHtml(item.expected_order_purpose_sheet_qty || 0)} 张</p><p>预计片料备库 ${escapeHtml(item.expected_reserve_purpose_sheet_qty || 0)} 张</p><p>预计形成成品 ${escapeHtml(item.expected_finished_output_qty || 0)} 只</p>${item.finished_location_name ? `<p>成品：${escapeHtml(item.finished_location_name)}</p>` : ""}${item.finished_capacity_warning ? `<p class="mt-1 font-bold text-amber-800">容量提醒：${escapeHtml(item.finished_capacity_warning)}</p>` : ""}${item.reserve_location_name ? `<p>片料：${escapeHtml(item.reserve_location_name)}</p>` : ""}${item.receipt_quantity_notice ? `<p class="mt-1 font-bold text-amber-800">${escapeHtml(item.receipt_quantity_notice)}</p>` : ""}</div>`
         : projected < 0
           ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">还差 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">少收怎么处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等补货</option>${isStockReplenishment ? "" : `<option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按已收数结单</option>`}</select></div>`
           : projected > 0
@@ -556,7 +565,7 @@
               : `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">多收 ${projected} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">多收怎么处理</option><option value="all_to_production" ${item.resolution_action === "all_to_production" ? "selected" : ""}>全部用于本单</option><option value="transfer_to_semi_inventory" ${item.resolution_action === "transfer_to_semi_inventory" ? "selected" : ""}>余量存半成品仓</option></select>${item.resolution_action === "transfer_to_semi_inventory" ? `<select data-surplus-location="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">余量放哪个库位</option>${locations}</select>` : ""}</div>`
             : `<div class="mt-2 rounded-lg bg-green-50 p-2 text-sm font-bold text-green-800">数量刚好</div>`;
       const receiptLocationBlock = isPending && isStockReplenishment
-        ? `<div class="mt-2 rounded-lg bg-blue-50 p-2 text-sm font-bold text-blue-900">片料到厂后由系统自动进入一楼 A1 原料暂存区，无需选择具体库位</div>`
+        ? `<div class="mt-2 rounded-lg bg-blue-50 p-2 text-sm font-bold text-blue-900">片料到厂后由系统自动进入一楼当前已发布原料区的真实排位，无需手工猜选库位</div>`
         : "";
       const receiptExecutionBlock = executionIssue
         ? `<div class="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-900"><p class="font-bold">暂不能实收</p><p>${escapeHtml(executionIssue)}</p></div>`

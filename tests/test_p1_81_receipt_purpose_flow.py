@@ -2457,6 +2457,72 @@ def test_unavailable_required_location_fails_entire_receipt_without_fallback(
     assert _active_semi_quantity(session_factory) == 0
 
 
+def test_pending_receipt_defaults_to_order_quantity_when_only_reserve_location_is_missing(
+    requisition_app,
+) -> None:
+    from app.models.warehouse_inventory import WarehouseLocation
+
+    app, session_factory = requisition_app
+    _seed_material_and_staging(session_factory)
+    with session_factory() as session:
+        staging = session.scalar(
+            select(WarehouseLocation).where(
+                WarehouseLocation.location_code == "P181-RAW-STAGE"
+            )
+        )
+        assert staging is not None
+        staging.is_active = False
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        source = _create_frozen_sources(
+            client,
+            session_factory,
+            order_quantity=600,
+            purchase_total=602,
+            order_purpose=600,
+            stock_purpose=2,
+        )[0]
+        pending = client.get("/api/incoming/pending")
+        assert pending.status_code == 200, pending.text
+        row = next(
+            item
+            for item in pending.json()["items"]
+            if item["item_id"] == source.route_key
+        )
+        assert row["incoming_quantity"] == 600
+        assert row["expected_order_purpose_sheet_qty"] == 600
+        assert row["expected_reserve_purpose_sheet_qty"] == 0
+        assert row["remaining_order_purpose_sheet_qty"] == 600
+        assert row["remaining_reserve_purpose_sheet_qty"] == 2
+        assert row["receipt_execution_ready"] is True
+        assert "其余 2 张片料备库" in row["receipt_quantity_notice"]
+        frozen = _freeze_receipt_fact(
+            client,
+            source,
+            idempotency_key="p181-order-only-price-600-602",
+        )
+        assert frozen.status_code == 200, frozen.text
+        received = _receive(
+            client,
+            source,
+            frozen.json(),
+            quantity=600,
+            idempotency_key="p181-order-only-receive-600-602",
+        )
+        _assert_allocation(
+            received,
+            order_delta=600,
+            reserve_delta=0,
+            order_cumulative=600,
+            reserve_cumulative=0,
+            finished_delta=600,
+            finished_cumulative=600,
+        )
+        assert _active_semi_quantity(session_factory) == 0
+
+
 def test_legacy_unset_keeps_old_receive_contract_without_new_auto_finished(
     requisition_app,
 ) -> None:

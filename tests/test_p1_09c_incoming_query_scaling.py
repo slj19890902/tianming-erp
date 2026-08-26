@@ -364,7 +364,11 @@ def test_pending_incoming_receipt_and_component_rows_use_batch_summary(
         } == {
             key: expected_summary.get(key) for key in summary_keys
         }
-    assert _select_count(statements) <= 15
+    # The receipt/source/component facts are fixed-size batch queries.  The
+    # current strict map projection adds constant joins but must never scale
+    # with the number of rows; P0-23 also keeps the unused location projections
+    # lazy, reducing this mixed shape from the v0.22.180 baseline of 21 to 19.
+    assert _select_count(statements) <= 19
     assert all(
         not statement.startswith(("insert", "update", "delete"))
         for statement in statements

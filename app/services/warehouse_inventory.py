@@ -756,37 +756,83 @@ def _number(prefix: str) -> str:
 def _is_raw_material_staging_location(
     db: Session,
     location: WarehouseLocation,
+    *,
+    projection_context: dict[str, object] | None = None,
 ) -> bool:
-    """Return whether a location is the explicitly allowed board staging point."""
+    """Return whether a location is an explicit first-floor board staging point."""
 
     location_code = (location.location_code or "").strip().upper()
     if (
         not location.is_active
         or location.warehouse_type not in RAW_MATERIAL_STAGING_WAREHOUSE_TYPES
         or location.warehouse_floor != 1
-        or (location.area_code or "").strip().upper() != "A1"
         or location.storage_type not in RAW_MATERIAL_STAGING_STORAGE_TYPES
         or location.placement_status != "placed"
         or location.source_version == "V11"
         or location_code == "F1-DISPATCH-01"
     ):
         return False
-    floor = db.scalar(
-        select(WarehouseFloor).where(
-            WarehouseFloor.floor_number == location.warehouse_floor
+    context = projection_context or {}
+    floor = context.get("floor")
+    if floor is None:
+        floor = db.scalar(
+            select(WarehouseFloor).where(
+                WarehouseFloor.floor_number == location.warehouse_floor
+            )
         )
-    )
     if floor is None or floor.construction_status != "enabled":
         return False
-    area = db.scalar(
-        select(WarehouseArea).where(
-            WarehouseArea.floor_id == floor.id,
-            WarehouseArea.area_code == location.area_code,
+    area = context.get("area")
+    if area is None:
+        area = db.scalar(
+            select(WarehouseArea).where(
+                WarehouseArea.floor_id == floor.id,
+                WarehouseArea.area_code == location.area_code,
+            )
         )
-    )
     if area is None or area.construction_status != "enabled":
         return False
     return True
+
+
+def _raw_material_staging_policy_inventory_type(
+    projection_context: dict[str, object] | None,
+) -> str | None:
+    """Return the policy usage that authorizes customer board staging."""
+
+    policy = (projection_context or {}).get("policy")
+    if policy is None or getattr(policy, "status", None) != "published":
+        return None
+    try:
+        values = json.loads(policy.allowed_inventory_types_json)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        return None
+    allowed = {value.strip() for value in values if value.strip()}
+    if "raw_material" in allowed:
+        return "raw_material"
+    if "semi_finished" in allowed:
+        return "semi_finished"
+    return None
+
+
+def _raw_material_staging_write_authorized(
+    *,
+    source_type: str | None,
+    source_ref_type: str | None,
+    source_ref_id: int | None,
+) -> bool:
+    if int(source_ref_id or 0) <= 0:
+        return False
+    if source_type == "purchase_reserve":
+        return source_ref_type == "incoming_receipt_item"
+    if source_type == "replenishment":
+        return source_ref_type in {
+            "stock_replenishment_receipt",
+            "stock_replenishment_item",
+        }
+    return False
 
 
 def automatic_raw_material_staging_location(db: Session) -> WarehouseLocation:
@@ -796,22 +842,29 @@ def automatic_raw_material_staging_location(db: Session) -> WarehouseLocation:
         select(WarehouseLocation).where(
             WarehouseLocation.is_active.is_(True),
             WarehouseLocation.warehouse_floor == 1,
-            WarehouseLocation.area_code == "A1",
             WarehouseLocation.warehouse_type.in_(
                 RAW_MATERIAL_STAGING_WAREHOUSE_TYPES
             ),
         )
     ).all()
-    candidates = [row for row in rows if _is_raw_material_staging_location(db, row)]
     require_published_location = has_space_ledger(db)
     projection_contexts = (
-        load_warehouse_location_projection_contexts(db, candidates)
+        load_warehouse_location_projection_contexts(db, rows)
         if require_published_location
         else {}
     )
-    candidates = [
-        row
-        for row in candidates
+    candidates: list[tuple[WarehouseLocation, str | None]] = []
+    for row in rows:
+        context = projection_contexts.get(int(row.id), {})
+        if not _is_raw_material_staging_location(
+            db,
+            row,
+            projection_context=context,
+        ):
+            continue
+        policy_inventory_type = _raw_material_staging_policy_inventory_type(context)
+        if require_published_location and policy_inventory_type is None:
+            continue
         if operational_location_issue(
             db,
             row,
@@ -819,25 +872,24 @@ def automatic_raw_material_staging_location(db: Session) -> WarehouseLocation:
             require_published=require_published_location,
             require_map_geometry=require_published_location,
             required_inventory_type=(
-                "semi_finished" if require_published_location else None
+                policy_inventory_type if require_published_location else None
             ),
-            projection_context=projection_contexts.get(int(row.id)),
-        )
-        is None
-    ]
+            projection_context=context,
+        ) is None:
+            candidates.append((row, policy_inventory_type))
     candidates.sort(
-        key=lambda row: (
-            0 if row.location_code == "1FA" else 1,
-            row.location_code,
-            row.id,
+        key=lambda candidate: (
+            0 if candidate[1] == "raw_material" else 1,
+            candidate[0].location_code,
+            candidate[0].id,
         )
     )
     if not candidates:
         raise WarehouseInventoryError(
-            "未配置已发布且可在地图操作的一楼 A1 原料暂存位置，请先完成区域与库位发布；系统不会改用一楼待送区。",
+            "未配置已发布且可在地图操作的一楼原料区域位置，请先完成原料区域与真实排位发布；系统不会改用一楼待送区。",
             409,
         )
-    return candidates[0]
+    return candidates[0][0]
 
 
 def _location(
@@ -908,14 +960,39 @@ def _location(
         if require_published_location
         else None
     )
+    raw_staging_inventory_type: str | None = None
+    if allow_raw_material_staging and _raw_material_staging_write_authorized(
+        source_type=raw_material_staging_source_type,
+        source_ref_type=raw_material_staging_source_ref_type,
+        source_ref_id=raw_material_staging_source_ref_id,
+    ):
+        context = projection_context or {}
+        if _is_raw_material_staging_location(
+            db,
+            location,
+            projection_context=context,
+        ):
+            raw_staging_inventory_type = (
+                _raw_material_staging_policy_inventory_type(context)
+                if require_published_location
+                else "semi_finished"
+            )
     issue = operational_location_issue(
         db,
         location,
-        warehouse_types=allowed,
+        warehouse_types=(
+            RAW_MATERIAL_STAGING_WAREHOUSE_TYPES
+            if raw_staging_inventory_type is not None
+            else allowed
+        ),
         require_published=require_published_location,
         require_map_geometry=require_published_location,
         required_inventory_type=(
-            "semi_finished" if require_published_location else None
+            (
+                raw_staging_inventory_type or "semi_finished"
+                if require_published_location
+                else None
+            )
         ),
         projection_context=projection_context,
     )

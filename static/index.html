@@ -3904,7 +3904,7 @@
               </div>
               <div v-if="incomingTab==='pending' && incomingPendingLoading" class="status blue" style="display:block;margin:8px 0">正在读取当前页待入库，已显示的记录不会被清空。</div>
               <div v-if="incomingTab==='pending' && incomingPendingError" class="status orange" style="display:block;margin:8px 0">{{ incomingPendingError }} <button class="btn small" :disabled="incomingPendingLoading" @click="retryIncomingPendingPage">重试</button></div>
-              <div v-if="incomingTab==='pending' && incomingPending.some(row=>row.source_type==='stock_replenishment')" class="status blue" style="display:block;margin:8px 0">补库片料到厂后由系统自动进入一楼 A1 原料暂存区，无需选择具体库位。</div>
+              <div v-if="incomingTab==='pending' && incomingPending.some(row=>row.source_type==='stock_replenishment')" class="status blue" style="display:block;margin:8px 0">补库片料到厂后由系统自动进入一楼当前已发布原料区的真实排位，无需手工猜选库位。</div>
               <div v-if="incomingTab==='pending' && incomingLocationsLoading" class="status blue" style="display:block;margin:8px 0">正在读取余量转半成品所需库位…</div>
               <div v-if="incomingTab==='pending' && incomingLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingLocationsError }} <button class="btn small" @click="ensureIncomingLocations()">重试</button></div>
               <data-panel :empty="!incomingRowsForTab().length && !(incomingTab==='pending' && (incomingPendingLoading || incomingPendingError)) && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
@@ -3920,7 +3920,7 @@
                     <td><a v-if="row.drawing_path" class="btn small" :href="row.drawing_path" target="_blank" rel="noopener">图纸</a><span v-else>-</span></td>
                     <td class="incoming-quantity-summary">{{ row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0 }} / {{ row.cumulative_received_quantity || 0 }} / {{ row.remaining_quantity ?? 0 }}</td>
                     <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.received_quantity_this_time ?? row.incoming_quantity ?? 0 }}</strong></td>
-                    <td class="incoming-action-cell"><template v-if="incomingTab==='pending'"><span :class="['status',incomingProjectedVariance(row)===0?'green':'orange']">{{ incomingProjectedVariance(row)===0 ? '数量相符' : (incomingProjectedVariance(row)<0 ? '少收' : '多收') }}</span><details class="incoming-action-menu"><summary>操作</summary><div v-if="row.purpose_status==='legacy_unset'"><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id"><option :value="null">选择余量库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select></div><div v-else class="muted">预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张｜预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张｜预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只<div v-if="row.finished_location_name">成品位置：{{ row.finished_location_name }}</div><div v-if="row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div></div><div v-if="incomingReceiptExecutionIssue(row)" class="muted incoming-receipt-blocker">暂不能实收：{{ incomingReceiptExecutionIssue(row) }}</div><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button></details></template><template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></div></template></td>
+                    <td class="incoming-action-cell"><template v-if="incomingTab==='pending'"><span :class="['status',incomingProjectedVariance(row)===0?'green':'orange']">{{ incomingProjectedVariance(row)===0 ? '数量相符' : (incomingProjectedVariance(row)<0 ? '少收' : '多收') }}</span><details class="incoming-action-menu"><summary>操作</summary><div v-if="row.purpose_status==='legacy_unset'"><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id"><option :value="null">选择余量库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select></div><div v-else class="muted">预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张｜预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张｜预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只<div v-if="row.finished_location_name">成品位置：{{ row.finished_location_name }}</div><div v-if="row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div><div v-if="row.receipt_quantity_notice" class="status orange" style="display:block;white-space:normal;margin-top:5px">{{ row.receipt_quantity_notice }}</div></div><div v-if="incomingReceiptExecutionIssue(row)" class="muted incoming-receipt-blocker">暂不能实收：{{ incomingReceiptExecutionIssue(row) }}</div><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button></details></template><template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></div></template></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -7076,7 +7076,7 @@
                   </div>
                 </div>
                 <div class="field"><label>供应商（手工可改）</label><select class="select" v-model="requisitionMaterialForm.supplier_name" @change="requisitionMaterialForm.material_id=null; clearRequisitionMaterialCandidate()"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
-                <div class="field"><label>材质代码（手工可选）</label><search-select v-model="requisitionMaterialForm.material_id" :options="materialSelectOptions(requisitionMaterialForm.supplier_name,requisitionMaterialForm.layer_count,requisitionMaterialForm.flute_type)" label-key="_label" value-key="id" placeholder="按代码、供应商、克重、报价搜索" @change="onRequisitionMaterialSelected"></search-select></div>
+                <div class="field"><label>材质代码（手工可选）</label><search-select v-model="requisitionMaterialForm.material_id" :options="requisitionMaterialOptions" label-key="_label" value-key="id" placeholder="按代码、供应商、克重、报价搜索" @change="onRequisitionMaterialSelected"></search-select></div>
                 <div class="field"><label>层数</label><select class="select" v-model.number="requisitionMaterialForm.layer_count" @change="onRequisitionLayerChange"><option :value="3">三层</option><option :value="5">五层</option><option :value="7">七层</option></select></div>
                 <div class="field"><label>楞型</label><select class="select" v-model="requisitionMaterialForm.flute_type" @change="clearRequisitionMaterialCandidate"><option value="">请选择楞型</option><option v-for="opt in orderItemFluteOptions(requisitionMaterialForm.layer_count)" :key="opt" :value="opt">{{ opt }}</option></select></div>
                 <div class="field wide"><label>选择说明（可选）</label><input class="input" v-model.trim="requisitionMaterialForm.selection_reason" placeholder="可补充本次选择原因" /></div>
@@ -7120,7 +7120,7 @@
               <div class="form-grid" style="margin-bottom:10px">
                 <div class="field"><label>补库来源</label><input class="input" :value="stockReplenishmentForm.source_type==='stock_warning' ? '库存预警' : '手动库存补库'" disabled /></div>
                 <div class="field"><label>供应商（随材质联动）</label><select class="select" v-model="stockReplenishmentForm.supplier_name" :disabled="stockReplenishmentMaterialSuppliers().length === 1"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select><div v-if="stockReplenishmentMaterialSuppliers().length === 1" class="muted">已按材质主数据自动确定</div><div v-else-if="stockReplenishmentMaterialSuppliers().length > 1" class="status orange">存在多个材质供应商，请拆分补库单</div></div>
-                <div class="status green">只保存报料草稿；到料后进入客户专用纸板备料，不直接增加成品库存</div>
+                <div class="status green">只保存报料草稿；到料后进入客户专用纸板备料，并落在一楼当前已发布原料区的真实排位，不直接增加成品库存</div>
               </div>
               <div v-if="!stockReplenishmentForm.items.length" class="empty">点击“新增补库行”，再选择客户和常用箱。</div>
               <div v-else class="stock-replenishment-lines">
@@ -7146,7 +7146,7 @@
                     <div class="field stock-span-2"><label>压线类型</label><select class="select" v-model="line.crease_type" @change="onStockCreaseTypeChanged(line)"><option :value="null">未指定</option><option value="压线">压线</option><option value="净料">净</option><option value="毛片">毛</option></select></div>
                     <div class="field stock-span-6"><label>压线尺寸</label><div v-if="line.crease_type==='压线'" class="stock-crease-inputs"><label>上摇盖<input class="input" type="number" min="0" v-model.number="line.crease_left_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>高<input class="input" type="number" min="1" v-model.number="line.crease_middle_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>下摇盖<input class="input" type="number" min="0" v-model.number="line.crease_right_mm" @input="syncStockReportWidthFromCrease(line)" /></label></div><div v-else class="muted">{{ line.crease_type || '无需压线分段' }}</div></div>
                     <div v-if="stockCreaseMismatch(line)" class="status orange stock-span-full" style="white-space:normal">{{ stockCreaseMismatch(line) }}</div>
-                    <div class="field stock-span-4"><label>片料到厂去向</label><div class="status blue">系统自动进入一楼 A1 原料暂存区，无需在报料时选择库位。</div></div>
+                    <div class="field stock-span-4"><label>片料到厂去向</label><div class="status blue">系统自动进入一楼当前已发布原料区的真实排位，无需在报料时手工猜选库位。</div></div>
                     <div class="field stock-span-4"><label>库存预警</label><button class="btn" type="button" @click="saveStockPolicyFromLine(line)">保存为预警模板</button></div>
                     </div>
                   </details>
@@ -8969,6 +8969,14 @@
           // 新业务只允许选择供应商主数据中启用的标准名称。
           materialSupplierSelectOptions() {
             return ["全部供应商", ...this.activeSupplierNames];
+          },
+          requisitionMaterialOptions() {
+            const form = this.requisitionMaterialForm || {};
+            return this.materialSelectOptions(
+              form.supplier_name,
+              form.layer_count,
+              form.flute_type,
+            );
           },
           // 列表展示：后端已按 sort 排序，前端仅按楞型 tab 做子集过滤（组合楞 BE 同时匹配 B/E）
           displayedMaterials() {
@@ -18412,6 +18420,15 @@
             return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null,expected_surplus_layout_version:surplusLocation?.layout_version||null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
           },
           incomingReceiptExecutionIssue(row) {
+            const reserveQuantity = Math.max(Number(row?.remaining_reserve_purpose_sheet_qty ?? row?.expected_reserve_purpose_sheet_qty ?? 0), 0);
+            const orderQuantity = Math.max(Number(row?.remaining_order_purpose_sheet_qty ?? row?.expected_order_purpose_sheet_qty ?? 0), 0);
+            const reserveNeeded = reserveQuantity > 0 && Number(row?.incoming_quantity || 0) > orderQuantity;
+            if (
+              row?.receipt_execution_ready === false
+              && row?.reserve_location_ready === false
+              && !reserveNeeded
+              && row?.finished_location_ready !== false
+            ) return "";
             if (row?.receipt_execution_ready !== false && row?.receipt_location_ready !== false && row?.finished_location_ready !== false) return "";
             const purposeIssue=String(row?.purpose_issue || "").trim();
             if (purposeIssue) return purposeIssue;
@@ -33083,7 +33100,7 @@
         },
         watch: {
           modelValue() { if (!this.open) this.query=this.selectedLabel; },
-          options() { if (!this.open) this.query=this.selectedLabel; },
+          options() { if (!this.open && this.query !== this.selectedLabel) this.query=this.selectedLabel; },
           disabled(value) { if (value) this.open = false; }
         },
         mounted() { this.componentMounted=true; this.query=this.selectedLabel; },

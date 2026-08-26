@@ -397,29 +397,6 @@ class _PendingIncomingReadContext:
 def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
     """Attach a server-authoritative P1-81 preview to pending formal sources."""
 
-    finished_projection = receipt_auto_finished_location_projection(db)
-    try:
-        reserve_location = automatic_raw_material_staging_location(db)
-        reserve_context = load_warehouse_location_projection_contexts(
-            db,
-            [reserve_location],
-        ).get(int(reserve_location.id), {})
-        reserve_projection = {
-            "ready": True,
-            "location_name": employee_location_name(
-                reserve_location,
-                area=reserve_context.get("area"),
-                floor=reserve_context.get("floor"),
-            ),
-            "issue": None,
-        }
-    except WarehouseInventoryError as error:
-        reserve_projection = {
-            "ready": False,
-            "location_name": None,
-            "issue": str(error),
-        }
-
     supplier_ids = {
         int(row["supplier_order_item_id"])
         for row in rows
@@ -609,6 +586,82 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
         if order_item_id is not None:
             allocations_by_order_item.setdefault(order_item_id, []).append(allocation)
 
+    requires_finished_projection = False
+    requires_reserve_projection = False
+    for row in rows:
+        supplier_id = row.get("supplier_order_item_id")
+        requisition_id = row.get("requisition_item_id")
+        if supplier_id is not None:
+            source_key = ("supplier", int(supplier_id))
+            source = supplier_sources.get(int(supplier_id))
+        elif requisition_id is not None:
+            source_key = ("requisition", int(requisition_id))
+            source = requisition_sources.get(int(requisition_id))
+        else:
+            continue
+        source_snapshots = snapshots_by_source.get(source_key, [])
+        if (
+            source is None
+            or str(getattr(source, "purpose_contract_status", "legacy_unset"))
+            != "frozen"
+            or len(source_snapshots) != 1
+        ):
+            continue
+        snapshot = source_snapshots[0]
+        prior_source = allocations_by_snapshot.get(snapshot.id, [])
+        before_order = sum(
+            int(item.receipt_order_purpose_sheet_qty) for item in prior_source
+        )
+        before_reserve = sum(
+            int(item.receipt_reserve_purpose_sheet_qty) for item in prior_source
+        )
+        remaining_order = max(
+            int(snapshot.order_purpose_sheet_qty or 0) - before_order,
+            0,
+        )
+        remaining_reserve = max(
+            int(snapshot.reserve_purpose_sheet_qty or 0) - before_reserve,
+            0,
+        )
+        proposed_quantity = max(int(row.get("incoming_quantity") or 0), 0)
+        if proposed_quantity > 0 and remaining_order > 0:
+            requires_finished_projection = True
+        if proposed_quantity > remaining_order and remaining_reserve > 0:
+            requires_reserve_projection = True
+
+    finished_projection = (
+        receipt_auto_finished_location_projection(db)
+        if requires_finished_projection
+        else {"ready": True, "location_name": None, "issue": None}
+    )
+    reserve_projection: dict[str, object | None] = {
+        "ready": True,
+        "location_name": None,
+        "issue": None,
+    }
+    if requires_reserve_projection:
+        try:
+            reserve_location = automatic_raw_material_staging_location(db)
+            reserve_context = load_warehouse_location_projection_contexts(
+                db,
+                [reserve_location],
+            ).get(int(reserve_location.id), {})
+            reserve_projection = {
+                "ready": True,
+                "location_name": employee_location_name(
+                    reserve_location,
+                    area=reserve_context.get("area"),
+                    floor=reserve_context.get("floor"),
+                ),
+                "issue": None,
+            }
+        except WarehouseInventoryError as error:
+            reserve_projection = {
+                "ready": False,
+                "location_name": None,
+                "issue": str(error),
+            }
+
     for row in rows:
         supplier_id = row.get("supplier_order_item_id")
         requisition_id = row.get("requisition_item_id")
@@ -656,10 +709,24 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
         before_reserve = sum(
             int(item.receipt_reserve_purpose_sheet_qty) for item in prior_source
         )
-        quantity = max(int(row.get("incoming_quantity") or 0), 0)
-        after_total = before_total + quantity
         order_plan = int(snapshot.order_purpose_sheet_qty or 0)
         reserve_plan = int(snapshot.reserve_purpose_sheet_qty or 0)
+        remaining_order_plan = max(order_plan - before_order, 0)
+        remaining_reserve_plan = max(reserve_plan - before_reserve, 0)
+        quantity = max(int(row.get("incoming_quantity") or 0), 0)
+        if (
+            remaining_order_plan > 0
+            and remaining_reserve_plan > 0
+            and not bool(reserve_projection.get("ready"))
+            and quantity > remaining_order_plan
+        ):
+            quantity = remaining_order_plan
+            row["incoming_quantity"] = quantity
+            row["receipt_quantity_notice"] = (
+                f"已预填本单可直接收的 {remaining_order_plan} 张；"
+                f"其余 {remaining_reserve_plan} 张片料备库须等一楼原料真实排位发布后再收。"
+            )
+        after_total = before_total + quantity
         after_order = after_total if reserve_plan == 0 else min(after_total, order_plan)
         after_reserve = after_total - after_order
         order_delta = max(after_order - before_order, 0)
@@ -811,6 +878,8 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
                 ),
                 "expected_order_purpose_sheet_qty": order_delta,
                 "expected_reserve_purpose_sheet_qty": reserve_delta,
+                "remaining_order_purpose_sheet_qty": remaining_order_plan,
+                "remaining_reserve_purpose_sheet_qty": remaining_reserve_plan,
                 "expected_finished_output_qty": max(
                     finished_after - finished_before, 0
                 ),

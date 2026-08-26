@@ -528,7 +528,14 @@ def post_receipt_purpose_allocation(
             )
         except (ProductionWorkflowError, WarehouseInventoryError) as error:
             message = str(error)
-            location_issue_markers = ("待送区", "暂存", "FIN-", "地堆位置")
+            location_issue_markers = (
+                "待送区",
+                "暂存",
+                "FIN-",
+                "地堆位置",
+                "一楼原料区域",
+                "真实排位",
+            )
             code = (
                 "AUTO_FINISHED_LOCATION_UNAVAILABLE"
                 if any(marker in message for marker in location_issue_markers)
@@ -603,12 +610,22 @@ def post_receipt_purpose_allocation(
             reserve_lot.cost_snapshot_at = utc_now_naive()
             reserve_movement = _initial_movement(db, reserve_lot.id)
         except WarehouseInventoryError as error:
+            message = str(error)
             code = (
                 "RESERVE_STAGING_LOCATION_UNAVAILABLE"
-                if "暂存" in str(error) or "A1" in str(error) or "库位" in str(error)
+                if any(
+                    marker in message
+                    for marker in (
+                        "暂存",
+                        "A1",
+                        "库位",
+                        "一楼原料区域",
+                        "真实排位",
+                    )
+                )
                 else "RESERVE_INVENTORY_POSTING_FAILED"
             )
-            raise ReceiptPurposeFlowError(code, str(error), error.status_code) from error
+            raise ReceiptPurposeFlowError(code, message, error.status_code) from error
 
     request_hash = canonical_purchase_receipt_hash(
         {

@@ -68,6 +68,7 @@ def test_default_layout_is_80x40_with_nine_non_overlapping_registered_elements()
     from app.services.mold_label_layout import default_layout, normalize_layout
 
     layout = normalize_layout(default_layout())
+    assert layout["catalog_version"] == "p1-103-v2"
     assert layout["paper"] == {"width_mm": 80.0, "height_mm": 40.0}
     assert [item["id"] for item in layout["elements"]] == [
         "board_specification",
@@ -98,9 +99,79 @@ def test_default_layout_is_80x40_with_nine_non_overlapping_registered_elements()
         for item in layout["elements"]
         if item["id"] == "product_specification"
     )
-    assert customer["y_mm"] == mold_name["y_mm"] == 24.2
-    assert short_name["y_mm"] == product_size["y_mm"] == 31.2
+    board = next(
+        item for item in layout["elements"] if item["id"] == "board_specification"
+    )
+    inventory = next(
+        item for item in layout["elements"] if item["id"] == "inventory_code"
+    )
+    assert board["width_mm"] >= 61.5
+    assert inventory["width_mm"] >= 61.5
+    assert customer["y_mm"] == mold_name["y_mm"] == 23.2
+    assert short_name["y_mm"] == product_size["y_mm"] == 30.6
     assert qr["y_mm"] >= 24.0
+
+
+def test_v1_snapshot_hash_and_prefix_catalog_remain_frozen_after_v2_default() -> None:
+    from app.services.mold_label_layout import (
+        canonical_json,
+        default_layout,
+        layout_hash,
+        load_snapshot,
+    )
+
+    legacy = deepcopy(default_layout())
+    legacy["catalog_version"] = "p1-103-v1"
+    frozen_hash = layout_hash(legacy)
+
+    snapshot = load_snapshot(
+        version=7,
+        payload_json=canonical_json(legacy),
+        payload_hash=frozen_hash,
+    )
+
+    assert snapshot["version"] == 7
+    assert snapshot["layout"]["catalog_version"] == "p1-103-v1"
+    assert snapshot["layout_hash"] == frozen_hash
+
+
+def test_current_v1_release_is_projected_to_v2_without_mutating_history(
+    mold_app,
+) -> None:
+    from app.models.mold_tool import MoldLabelLayoutRevision
+    from app.services.mold_label_layout import (
+        canonical_json,
+        default_layout,
+        effective_layout,
+        layout_hash,
+    )
+
+    _app, factory = mold_app
+    legacy = deepcopy(default_layout())
+    legacy["catalog_version"] = "p1-103-v1"
+    with factory() as db:
+        db.add(
+            MoldLabelLayoutRevision(
+                version=1,
+                catalog_version="p1-103-v1",
+                payload_json=canonical_json(legacy),
+                payload_hash=layout_hash(legacy),
+                operation_kind="save_and_publish",
+                operation_key="p1-103-current-v1-upgrade",
+                request_hash="1" * 64,
+                created_by=1,
+            )
+        )
+        db.commit()
+
+        current = effective_layout(db)
+        stored = db.scalar(select(MoldLabelLayoutRevision))
+
+        assert current["version"] == 1
+        assert current["layout"]["catalog_version"] == "p1-103-v2"
+        assert stored is not None
+        assert stored.catalog_version == "p1-103-v1"
+        assert '"catalog_version":"p1-103-v1"' in stored.payload_json
 
 
 def test_layout_validator_rejects_overlap_qr_resize_and_unknown_fields() -> None:

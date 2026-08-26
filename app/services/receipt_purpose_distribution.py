@@ -547,7 +547,11 @@ def post_receipt_purpose_allocation(
     reserve_movement: InventoryMovement | None = None
     if reserve_delta > 0:
         try:
-            location = automatic_raw_material_staging_location(db)
+            location = automatic_raw_material_staging_location(
+                db,
+                repair_operator_id=operator_id,
+                repair_idempotency_key=f"receipt-purpose:{idempotency_key}",
+            )
             order_item = db.get(OrderItem, order_item_id)
             reserve_lot = manual_semi_finished_in(
                 db,

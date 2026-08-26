@@ -24,6 +24,7 @@ from app.models.product_bom import (
 )
 from app.models.production import ProductionCompletion
 from app.models.requisition import RequisitionItem
+from app.models.user import User
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     Floor3LocationLayout,
@@ -39,6 +40,7 @@ from app.models.warehouse_inventory import (
     SemiFinishedInventoryDetail,
     SemiFinishedLotAllowedProduct,
     WarehouseArea,
+    WarehouseAreaStoragePolicy,
     WarehouseGroundOccupancy,
     WarehouseGroundOccupancySlot,
     WarehouseGroundPlacementMutation,
@@ -57,6 +59,15 @@ from app.services.location_candidates import (
     has_space_ledger,
     load_warehouse_location_projection_contexts,
     operational_location_issue,
+)
+from app.services.audit_log import append_audit_event
+from app.services.warehouse_area_activation import WarehouseAreaActivationError
+from app.services.warehouse_ground_plan_materialization import (
+    ensure_one_step_ground_plan,
+)
+from app.services.warehouse_twin_layout import (
+    WarehouseTwinLayoutNotFoundError,
+    load_warehouse_twin_floor,
 )
 
 
@@ -835,7 +846,175 @@ def _raw_material_staging_write_authorized(
     return False
 
 
-def automatic_raw_material_staging_location(db: Session) -> WarehouseLocation:
+def _repairable_legacy_raw_material_staging_location(
+    db: Session,
+    *,
+    rows: list[WarehouseLocation],
+    projection_contexts: dict[int, dict[str, object | None]],
+    operator_id: int | None = None,
+    repair_idempotency_key: str | None = None,
+) -> WarehouseLocation | None:
+    """Project or repair an exact legacy measured ground-plan omission.
+
+    This is deliberately narrower than an operational-location fallback.  It
+    only accepts an already enabled and published TWIN_V1 area whose saved
+    rectangles round-trip to the standard pallet size on the current runtime
+    map.  Any logical anchor, stale map binding, or non-standard geometry still
+    fails closed.
+    """
+
+    try:
+        floor_layout = load_warehouse_twin_floor("1F")
+    except (OSError, ValueError, WarehouseTwinLayoutNotFoundError):
+        return None
+
+    grouped: dict[
+        int,
+        tuple[
+            WarehouseArea,
+            WarehouseAreaStoragePolicy,
+            str,
+            list[WarehouseLocation],
+        ],
+    ] = {}
+    for row in rows:
+        context = projection_contexts.get(int(row.id), {})
+        if not _is_raw_material_staging_location(
+            db,
+            row,
+            projection_context=context,
+        ):
+            continue
+        policy_inventory_type = _raw_material_staging_policy_inventory_type(context)
+        area = context.get("area")
+        policy = context.get("policy")
+        if (
+            policy_inventory_type is None
+            or not isinstance(area, WarehouseArea)
+            or not isinstance(policy, WarehouseAreaStoragePolicy)
+        ):
+            continue
+        area_id = int(area.id)
+        if area_id not in grouped:
+            grouped[area_id] = (area, policy, policy_inventory_type, [])
+        grouped[area_id][3].append(row)
+
+    ordered_groups = sorted(
+        grouped.values(),
+        key=lambda item: (
+            0 if item[2] == "raw_material" else 1,
+            str(item[0].area_code),
+            int(item[0].id),
+        ),
+    )
+    should_materialize = operator_id is not None and bool(repair_idempotency_key)
+    for area, policy, _inventory_type, area_rows in ordered_groups:
+        location_ids = sorted(int(row.id) for row in area_rows)
+        live_lot = db.scalar(
+            select(InventoryLot.id)
+            .where(
+                InventoryLot.warehouse_location_id.in_(location_ids),
+                InventoryLot.status.in_(("active", "frozen")),
+                (
+                    InventoryLot.quantity_available
+                    + InventoryLot.quantity_reserved
+                    + InventoryLot.quantity_damaged
+                )
+                > 0,
+            )
+            .limit(1)
+        )
+        current_pallet = db.scalar(
+            select(InventoryPallet.id)
+            .where(
+                InventoryPallet.location_id.in_(location_ids),
+                InventoryPallet.is_current.is_(True),
+            )
+            .limit(1)
+        )
+        active_ground_occupancy = db.scalar(
+            select(WarehouseGroundOccupancySlot.id)
+            .join(WarehouseGroundOccupancy)
+            .where(
+                WarehouseGroundOccupancySlot.location_id.in_(location_ids),
+                WarehouseGroundOccupancySlot.status == "active",
+                WarehouseGroundOccupancy.status == "active",
+            )
+            .limit(1)
+        )
+        if any(
+            value is not None
+            for value in (live_lot, current_pallet, active_ground_occupancy)
+        ):
+            continue
+        operation_key = (
+            f"legacy-ground-plan:{int(area.id)}:"
+            f"{str(getattr(policy, 'published_map_revision', '') or '').strip()}"
+        )
+        try:
+            result = ensure_one_step_ground_plan(
+                db,
+                floor_layout=floor_layout,
+                feature_id=str(getattr(policy, "map_feature_id", "") or ""),
+                area=area,
+                storage_layout=str(getattr(policy, "storage_layout", "") or ""),
+                location_count=len(area_rows),
+                operation_key=operation_key,
+                operator_id=int(operator_id or 0),
+                materialize=should_materialize,
+            )
+        except WarehouseAreaActivationError:
+            continue
+        if result.get("ground_plan_status") not in {"repairable", "published"}:
+            continue
+        repaired_ids = [int(value) for value in result.get("location_ids") or []]
+        if repaired_ids != location_ids:
+            continue
+        if should_materialize:
+            actor = db.get(User, int(operator_id))
+            if actor is None:
+                raise WarehouseInventoryError(
+                    "当前收料人员不存在，系统未修复原料位置台账，也未写入库存",
+                    409,
+                )
+            append_audit_event(
+                db,
+                event_category="system",
+                result="success",
+                source="system",
+                module_code="warehouse",
+                action_code="warehouse.legacy_ground_plan.auto_repair",
+                resource="WarehouseGroundLayoutPlan",
+                legacy_action="AUTO_REPAIR",
+                actor=actor,
+                entity_type="warehouse_area",
+                entity_id=int(area.id),
+                object_ref=f"warehouse-area:{int(area.id)}",
+                description="收料时修复旧版已实测原料区缺失的地堆排位台账",
+                details={
+                    "area_code": area.area_code,
+                    "map_revision": getattr(policy, "published_map_revision", None),
+                    "ground_plan_id": result.get("ground_plan_id"),
+                    "location_ids": repaired_ids,
+                    "legacy_layout_repaired_count": result.get(
+                        "legacy_layout_repaired_count", 0
+                    ),
+                    "trigger_fingerprint": sha256(
+                        str(repair_idempotency_key).encode("utf-8")
+                    ).hexdigest(),
+                },
+            )
+        return next(row for row in area_rows if int(row.id) == repaired_ids[0])
+    return None
+
+
+def automatic_raw_material_staging_location(
+    db: Session,
+    *,
+    allow_repairable_legacy: bool = False,
+    repair_operator_id: int | None = None,
+    repair_idempotency_key: str | None = None,
+) -> WarehouseLocation:
     """Resolve the legal staging point for actual replenishment receipts."""
 
     rows = db.scalars(
@@ -884,6 +1063,21 @@ def automatic_raw_material_staging_location(db: Session) -> WarehouseLocation:
             candidate[0].id,
         )
     )
+    if not candidates and (allow_repairable_legacy or repair_operator_id is not None):
+        repairable = _repairable_legacy_raw_material_staging_location(
+            db,
+            rows=rows,
+            projection_contexts=projection_contexts,
+            operator_id=repair_operator_id,
+            repair_idempotency_key=repair_idempotency_key,
+        )
+        if repairable is not None:
+            if repair_operator_id is None:
+                return repairable
+            # Re-run the canonical strict classifier after the plan and slots
+            # have been flushed.  A repair is never itself enough to authorize
+            # the subsequent inventory write.
+            return automatic_raw_material_staging_location(db)
     if not candidates:
         raise WarehouseInventoryError(
             "未配置已发布且可在地图操作的一楼原料区域位置，请先完成原料区域与真实排位发布；系统不会改用一楼待送区。",

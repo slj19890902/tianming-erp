@@ -714,6 +714,76 @@ def test_direct_completion_56_creates_one_formal_system_pallet_and_replays(
         assert db.get(InventoryLot, lot_id).pallet_item.pallet_id == pallet_id
 
 
+def test_reused_released_direct_pallet_resets_previous_completion_key(
+    production_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A released pallet begins its next inbound cycle as PRIMARY again."""
+
+    _app, factory, _ids = production_app
+    with factory() as db:
+        _seed_current_fin_target(db, monkeypatch, count=2)
+        _first_order, _first_item, first_task = _new_direct_case(
+            db, key="p1-49a-reuse-old-cycle", quantity=7
+        )
+        first_completion = complete_production_batch(
+            db,
+            idempotency_key="p1-49a-reuse-old-cycle",
+            commands=[_direct_command(first_task, quantity=7)],
+            operator_id=1,
+        ).completions[0]
+        first_lot = db.get(InventoryLot, first_completion.inventory_lot_id)
+        assert first_lot is not None and first_lot.pallet_item is not None
+        released_pallet = first_lot.pallet_item.pallet
+        assert released_pallet is not None
+        assert released_pallet.location_occupancy_key == (
+            f"PRODUCTION_COMPLETION:{first_completion.id}"
+        )
+
+        # Model the post-delivery released state: the old lot is zero balance
+        # and its physical pallet is closed with no current location.  Its
+        # previous completion key must not leak into the next receipt cycle.
+        first_lot.quantity_available = 0
+        first_lot.quantity_reserved = 0
+        first_lot.quantity_damaged = 0
+        released_pallet.location_id = None
+        released_pallet.status = "closed"
+        released_pallet.is_current = False
+        released_pallet.closed_at = datetime.now()
+        prior_occupancy = db.scalar(
+            select(WarehouseGroundOccupancy).where(
+                WarehouseGroundOccupancy.pallet_id == released_pallet.id,
+                WarehouseGroundOccupancy.status == "active",
+            )
+        )
+        assert prior_occupancy is not None
+        for slot in list(prior_occupancy.slots):
+            slot.status = "released"
+            slot.released_at = datetime.now()
+        prior_occupancy.status = "released"
+        prior_occupancy.released_at = datetime.now()
+        prior_occupancy.released_by = 1
+        db.flush()
+
+        _second_order, _second_item, second_task = _new_direct_case(
+            db, key="p1-49a-reuse-new-cycle", quantity=9
+        )
+        second_completion = complete_production_batch(
+            db,
+            idempotency_key="p1-49a-reuse-new-cycle",
+            commands=[_direct_command(second_task, quantity=9)],
+            operator_id=1,
+        ).completions[0]
+        second_lot = db.get(InventoryLot, second_completion.inventory_lot_id)
+        assert second_lot is not None and second_lot.pallet_item is not None
+        assert second_lot.pallet_item.pallet_id == released_pallet.id
+        reused = second_lot.pallet_item.pallet
+        assert reused.location_occupancy_key == (
+            f"PRODUCTION_COMPLETION:{second_completion.id}"
+        )
+        assert {row.inventory_lot_id for row in reused.items} == {second_lot.id}
+
+
 def test_two_direct_completion_details_share_location_but_never_share_pallet(
     production_app,
 ) -> None:
@@ -805,6 +875,79 @@ def test_direct_completion_failure_rolls_back_production_inventory_and_pallet(
                 select(func.count()).select_from(InventoryLocationMovement)
             ),
             "audit": db.scalar(select(func.count()).select_from(OperationLog)),
+        }
+        assert after == before
+        persisted_task = db.get(ProductionTask, task_id)
+        assert persisted_task is not None
+        assert persisted_task.status == "pending"
+        assert persisted_task.version == 1
+
+
+def test_cross_business_pallet_conflict_is_actionable_and_rolls_back(
+    production_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import production_workflow
+
+    _app, factory, _ids = production_app
+    with factory() as db:
+        _seed_current_fin_target(db, monkeypatch, count=1)
+        _order, _item, task = _new_direct_case(
+            db, key="p0-24-cross-business-pallet", quantity=11
+        )
+        task_id = int(task.id)
+        db.commit()
+        before = {
+            "batches": db.scalar(
+                select(func.count()).select_from(ProductionCompletionBatch)
+            ),
+            "completions": db.scalar(
+                select(func.count()).select_from(ProductionCompletion)
+            ),
+            "lots": db.scalar(select(func.count()).select_from(InventoryLot)),
+            "pallets": db.scalar(select(func.count()).select_from(InventoryPallet)),
+            "items": db.scalar(select(func.count()).select_from(InventoryPalletItem)),
+        }
+        original_finished_in = production_workflow.manual_finished_in
+
+        def bind_to_unrelated_cycle(*args, **kwargs):
+            lot = original_finished_in(*args, **kwargs)
+            assert lot.pallet_item is not None
+            pallet = lot.pallet_item.pallet
+            assert pallet is not None
+            pallet.location_occupancy_key = "PRODUCTION_COMPLETION:999999"
+            db.flush()
+            return lot
+
+        monkeypatch.setattr(
+            production_workflow,
+            "manual_finished_in",
+            bind_to_unrelated_cycle,
+        )
+        with pytest.raises(ProductionWorkflowError) as caught:
+            complete_production_batch(
+                db,
+                idempotency_key="p0-24-cross-business-pallet",
+                commands=[_direct_command(task, quantity=11)],
+                operator_id=1,
+            )
+        message = str(caught.value)
+        assert "系统发现本次成品的栈板记录不一致" in message
+        assert "已安全取消本条入库" in message
+        assert "请刷新后重试" in message
+        assert "业务栈板" not in message
+        assert "库存投影" not in message
+        db.rollback()
+        after = {
+            "batches": db.scalar(
+                select(func.count()).select_from(ProductionCompletionBatch)
+            ),
+            "completions": db.scalar(
+                select(func.count()).select_from(ProductionCompletion)
+            ),
+            "lots": db.scalar(select(func.count()).select_from(InventoryLot)),
+            "pallets": db.scalar(select(func.count()).select_from(InventoryPallet)),
+            "items": db.scalar(select(func.count()).select_from(InventoryPalletItem)),
         }
         assert after == before
         persisted_task = db.get(ProductionTask, task_id)

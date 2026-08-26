@@ -1084,6 +1084,7 @@ def _reuse_released_pallet(
             status="active",
             is_current=True,
             needs_relocation=False,
+            location_occupancy_key="PRIMARY",
             version=InventoryPallet.version + 1,
             closed_at=None,
             remarks=_trim(remarks),

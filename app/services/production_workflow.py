@@ -2080,10 +2080,18 @@ def _bind_direct_completion_lots_to_system_pallet(
         if len(prebound_pallets) != 1 or any(
             lot.pallet_item is None for lot in normalized_lots
         ):
-            raise ProductionWorkflowError("直接待送库存批次已分散绑定其它栈板", 409)
+            raise ProductionWorkflowError(
+                "系统发现本次成品分到了多块栈板，已安全取消本条入库；"
+                "请刷新后重试，若仍失败请联系管理员。",
+                409,
+            )
         existing = next(iter(prebound_pallets.values()))
         if existing.location_occupancy_key not in {"PRIMARY", occupancy_key}:
-            raise ProductionWorkflowError("直接待送库存批次已绑定其它业务栈板", 409)
+            raise ProductionWorkflowError(
+                "系统发现本次成品的栈板记录不一致，已安全取消本条入库；"
+                "请刷新后重试，若仍失败请联系管理员。",
+                409,
+            )
 
     if existing is not None:
         if (
@@ -3572,6 +3580,11 @@ def transfer_direct_completion_to_stock(
             or direct_pallet.location_occupancy_key not in allowed_occupancy_keys
         ):
             raise ProductionWorkflowError("当前直接待送系统栈板状态异常，不能转库存", 409)
+        source_pallet_occupancy_key = (
+            direct_pallet.location_occupancy_key
+            if direct_pallet is not None
+            else "PRIMARY"
+        )
         if lot.warehouse_location_id == target_location.id:
             raise ProductionWorkflowError("目标库位与当前库位相同", 409)
         before = _balances(lot)
@@ -3626,6 +3639,18 @@ def transfer_direct_completion_to_stock(
             pallet_code=_normalized_text(command.pallet_code),
             require_empty_pallet=True,
         )
+        target_pallet = (
+            lot.pallet_item.pallet if lot.pallet_item is not None else None
+        )
+        if (
+            target_pallet is None
+            or not target_pallet.is_current
+            or target_pallet.location_id != target_location.id
+        ):
+            raise ProductionWorkflowError("成品转库存后未能建立当前真实栈板，事务已停止", 409)
+        target_pallet.location_occupancy_key = source_pallet_occupancy_key
+        target_pallet.updated_by = operator_id
+        db.flush()
         _movement(
             db,
             lot=lot,

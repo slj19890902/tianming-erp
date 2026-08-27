@@ -55,6 +55,7 @@ from app.services.invoice_tax_template import (
     generate_invoice_tax_template,
 )
 from app.services.product_specification import resolved_product_specification
+from app.services.customer_price_tax import VALID_PRICE_TAX_MODES
 
 
 router = APIRouter()
@@ -107,7 +108,7 @@ class InvoiceProfilePayload(BaseModel):
     bank_account: str | None = Field(default=None, max_length=200)
     default_seller_id: int | None = Field(default=None, ge=1)
     price_tax_mode: Literal["tax_inclusive", "tax_exclusive"] = "tax_inclusive"
-    default_tax_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    default_tax_rate: Decimal | None = Field(default=Decimal("0.13"), ge=0, le=1)
     is_enabled: bool = True
     confirmation_status: Literal["pending", "confirmed"] = "pending"
     expected_version: int = Field(ge=1)
@@ -119,7 +120,9 @@ class InvoiceRulePayload(BaseModel):
     tax_classification_code: str | None = Field(default=None, max_length=80)
     unit: str | None = Field(default=None, max_length=40)
     tax_rate: Decimal | None = Field(default=None, ge=0, le=1)
-    spec_source: Literal["product_snapshot", "blank"] = "product_snapshot"
+    spec_source: Literal[
+        "product_snapshot", "product_code_snapshot", "blank"
+    ] = "product_code_snapshot"
     fill_unit_price: bool = False
     effective_from: date | None = None
     effective_to: date | None = None
@@ -247,6 +250,8 @@ def _profile_missing_items(
     ):
         if not _text(value):
             missing.append(name)
+    if profile.default_tax_rate is None:
+        missing.append("默认税率")
     missing.extend(_seller_missing_items(seller))
     return list(dict.fromkeys(missing))
 
@@ -263,7 +268,7 @@ def _profile_response(profile: CustomerInvoiceProfile | None) -> dict[str, Any]:
             "bank_account": "",
             "default_seller_id": None,
             "price_tax_mode": "tax_inclusive",
-            "default_tax_rate": None,
+            "default_tax_rate": Decimal("0.13"),
             "is_enabled": True,
             "confirmation_status": "pending",
             "version": 1,
@@ -323,6 +328,22 @@ def _rule_response(rule: CustomerInvoiceItemRule) -> dict[str, Any]:
         "effective_to": rule.effective_to,
         "confirmation_status": rule.confirmation_status,
         "version": rule.version,
+    }
+
+
+def _default_rule_response() -> dict[str, Any]:
+    return {
+        "product_id": None,
+        "project_name": "纸箱",
+        "tax_classification_code": "1060105010000000000",
+        "unit": "PCS",
+        "tax_rate": Decimal("0.13"),
+        "spec_source": "product_code_snapshot",
+        "fill_unit_price": True,
+        "effective_from": None,
+        "effective_to": None,
+        "confirmation_status": "pending",
+        "version": 1,
     }
 
 
@@ -484,6 +505,25 @@ def list_customer_invoice_rules(
     return {"items": [_rule_response(row) for row in rows]}
 
 
+@customer_router.get("/{customer_id}/invoice-item-rules/default")
+def get_customer_default_invoice_rule(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_profile_manage),
+) -> dict[str, Any]:
+    _customer_for_user(db, customer_id, user)
+    rule = db.scalar(
+        select(CustomerInvoiceItemRule)
+        .where(
+            CustomerInvoiceItemRule.customer_id == customer_id,
+            CustomerInvoiceItemRule.product_id.is_(None),
+        )
+        .order_by(CustomerInvoiceItemRule.version.desc(), CustomerInvoiceItemRule.id.desc())
+        .limit(1)
+    )
+    return _rule_response(rule) if rule is not None else _default_rule_response()
+
+
 @customer_router.put("/{customer_id}/invoice-item-rules/default")
 def save_customer_default_invoice_rule(
     customer_id: int,
@@ -569,8 +609,6 @@ def _snapshot_for_statement(
     missing = _profile_missing_items(profile, seller)
     if profile is None:
         return {}, [], missing
-    if profile.price_tax_mode != "tax_inclusive":
-        missing.append("不含税对账金额转换规则尚未确认")
     rules = _confirmed_rule_by_product(
         db,
         statement.customer_id,
@@ -596,10 +634,72 @@ def _snapshot_for_statement(
         if not all((_text(rule.project_name), _text(rule.tax_classification_code), _text(rule.unit), rule.tax_rate is not None, statement_item.receivable_amount is not None)):
             missing.append(f"对账明细 {statement_item.id} 的项目名称/税收编码/单位/税率")
             continue
-        amount = Decimal(str(statement_item.receivable_amount)).quantize(MONEY, rounding=ROUND_HALF_UP)
-        rate = Decimal(str(rule.tax_rate))
-        net = (amount / (Decimal("1") + rate)).quantize(MONEY, rounding=ROUND_HALF_UP)
-        tax = (amount - net).quantize(MONEY, rounding=ROUND_HALF_UP)
+        mode = (
+            statement_item.price_tax_mode_snapshot
+            if statement_item.price_tax_mode_snapshot in VALID_PRICE_TAX_MODES
+            else (
+                order_item.price_tax_mode_snapshot
+                if order_item is not None
+                and order_item.price_tax_mode_snapshot in VALID_PRICE_TAX_MODES
+                else profile.price_tax_mode
+            )
+        )
+        if mode not in VALID_PRICE_TAX_MODES:
+            missing.append(f"对账明细 {statement_item.id} 缺少有效税价口径")
+            continue
+        rate = Decimal(
+            str(
+                statement_item.tax_rate_snapshot
+                if statement_item.tax_rate_snapshot is not None
+                else (
+                    order_item.tax_rate_snapshot
+                    if order_item is not None and order_item.tax_rate_snapshot is not None
+                    else (
+                        profile.default_tax_rate
+                        if profile.default_tax_rate is not None
+                        else rule.tax_rate
+                    )
+                )
+            )
+        )
+        if rate < 0 or rate > 1:
+            missing.append(f"对账明细 {statement_item.id} 的冻结税率无效")
+            continue
+        total = Decimal(str(statement_item.receivable_amount)).quantize(
+            MONEY, rounding=ROUND_HALF_UP
+        )
+        quantity = Decimal(str(statement_item.actual_received_quantity))
+        if mode == "tax_exclusive":
+            raw_unit_price = Decimal(str(statement_item.unit_price_snapshot))
+            net = (quantity * raw_unit_price).quantize(
+                MONEY, rounding=ROUND_HALF_UP
+            )
+            tax = (net * rate).quantize(MONEY, rounding=ROUND_HALF_UP)
+            calculated_total = (net + tax).quantize(MONEY, rounding=ROUND_HALF_UP)
+            if calculated_total != total:
+                missing.append(
+                    f"对账明细 {statement_item.id} 的价税合计与冻结未税单价不一致"
+                )
+                continue
+            amount = net
+            unit_price = (
+                raw_unit_price.quantize(MONEY, rounding=ROUND_HALF_UP)
+                if rule.fill_unit_price
+                else None
+            )
+        else:
+            net = (total / (Decimal("1") + rate)).quantize(
+                MONEY, rounding=ROUND_HALF_UP
+            )
+            tax = (total - net).quantize(MONEY, rounding=ROUND_HALF_UP)
+            amount = total
+            unit_price = None
+        if rule.spec_source == "product_code_snapshot":
+            invoice_specification = code
+        elif rule.spec_source == "product_snapshot":
+            invoice_specification = spec
+        else:
+            invoice_specification = None
         lines.append({
             "statement_item_id": statement_item.id,
             "product_id": product_id,
@@ -607,14 +707,16 @@ def _snapshot_for_statement(
             "product_name_snapshot": name,
             "project_name": rule.project_name,
             "tax_classification_code": rule.tax_classification_code,
-            "specification": spec if rule.spec_source == "product_snapshot" else None,
+            "specification": invoice_specification,
             "unit": rule.unit,
-            "quantity": Decimal(str(statement_item.actual_received_quantity)),
-            "unit_price": None,
+            "quantity": quantity,
+            "unit_price": unit_price,
             "amount": amount,
             "tax_rate": rate,
             "tax_amount": tax,
             "net_amount": net,
+            "total_amount": total,
+            "price_tax_mode": mode,
             "rule_version": rule.version,
         })
     if not lines:
@@ -626,7 +728,11 @@ def _snapshot_for_statement(
         "profile_version": profile.version,
         "seller_id": seller.id,
         "seller_version": seller.version,
-        "price_tax_mode": profile.price_tax_mode,
+        "price_tax_mode": (
+            next(iter({line["price_tax_mode"] for line in lines}))
+            if len({line["price_tax_mode"] for line in lines}) == 1
+            else "mixed"
+        ),
         "lines": [
             {
                 **{key: (format(value, "f") if isinstance(value, Decimal) else value) for key, value in line.items()},
@@ -656,6 +762,7 @@ def _task_response(db: Session, task: FinanceInvoiceTask) -> dict[str, Any]:
         "customer_name": customer.name if customer else "",
         "seller_entity_id": task.seller_entity_id,
         "seller_name": seller.seller_name if seller else "",
+        "price_tax_mode": task.price_tax_mode,
         "net_amount": task.net_amount,
         "tax_amount": task.tax_amount,
         "total_amount": task.total_amount,
@@ -705,6 +812,42 @@ def create_invoice_task(
         raise HTTPException(status_code=409, detail="请先核对并确认对账单，再生成开票任务")
     if statement.version != payload.expected_version:
         raise HTTPException(status_code=409, detail={"message": "对账单版本已变化，请刷新后重试", "current_version": statement.version})
+    request_idempotency_base = hashlib.sha256(
+        f"{user.id}\0{payload.idempotency_key.strip()}".encode("utf-8")
+    ).hexdigest().upper()
+    request_payload_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "statement_id": statement.id,
+                "expected_version": payload.expected_version,
+                "seller_entity_id": payload.seller_entity_id,
+                "seller_change_type": payload.seller_change_type,
+                "seller_change_reason": _text(payload.seller_change_reason),
+                "confirm_permanent_change": payload.confirm_permanent_change,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest().upper()
+    request_idempotency_prefix = f"invoice-request:{request_idempotency_base}:"
+    request_idempotency_key = request_idempotency_prefix + request_payload_hash
+    request_replay = db.scalar(
+        select(FinanceInvoiceTask).where(
+            FinanceInvoiceTask.idempotency_key == request_idempotency_key
+        )
+    )
+    if request_replay is not None:
+        return _task_response(db, request_replay)
+    conflicting_replay = db.scalar(
+        select(FinanceInvoiceTask.id).where(
+            FinanceInvoiceTask.idempotency_key.like(
+                request_idempotency_prefix + "%"
+            )
+        )
+    )
+    if conflicting_replay is not None:
+        raise HTTPException(status_code=409, detail="幂等键已用于不同的开票任务请求")
     profile = db.scalar(select(CustomerInvoiceProfile).where(CustomerInvoiceProfile.customer_id == statement.customer_id))
     seller_id = payload.seller_entity_id or (profile.default_seller_id if profile else None)
     seller = db.get(InvoiceSellerEntity, seller_id) if seller_id else None
@@ -743,9 +886,9 @@ def create_invoice_task(
         "bank_account": seller.bank_account,
         "seller_version": seller.version,
     }
-    total = sum((line["amount"] for line in lines), Decimal("0")).quantize(MONEY)
+    total = sum((line["total_amount"] for line in lines), Decimal("0")).quantize(MONEY)
     net = sum((line["net_amount"] for line in lines), Decimal("0")).quantize(MONEY)
-    tax = (total - net).quantize(MONEY)
+    tax = sum((line["tax_amount"] for line in lines), Decimal("0")).quantize(MONEY)
     task = FinanceInvoiceTask(
         task_number=f"IT-{statement.statement_number}-V{statement.version}",
         statement_id=statement.id,
@@ -755,14 +898,14 @@ def create_invoice_task(
         buyer_snapshot_json=json.dumps(buyer_snapshot, ensure_ascii=False, sort_keys=True),
         seller_snapshot_json=json.dumps(seller_snapshot, ensure_ascii=False, sort_keys=True),
         invoice_type=profile.invoice_type,
-        price_tax_mode=profile.price_tax_mode,
+        price_tax_mode=snapshot["price_tax_mode"],
         net_amount=net,
         tax_amount=tax,
         total_amount=total,
         status="draft",
         rule_version=max(line["rule_version"] for line in lines),
         source_snapshot_hash=source_hash,
-        idempotency_key=f"statement:{statement.id}:v{statement.version}:seller:{seller.id}:{source_hash}",
+        idempotency_key=request_idempotency_key,
         created_by=user.id,
     )
     try:
@@ -780,9 +923,25 @@ def create_invoice_task(
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        existing = db.scalar(select(FinanceInvoiceTask).where(FinanceInvoiceTask.idempotency_key == task.idempotency_key))
+        existing = db.scalar(
+            select(FinanceInvoiceTask).where(
+                FinanceInvoiceTask.idempotency_key == request_idempotency_key
+            )
+        )
         if existing is not None:
             return _task_response(db, existing)
+        conflicting = db.scalar(
+            select(FinanceInvoiceTask.id).where(
+                FinanceInvoiceTask.idempotency_key.like(
+                    request_idempotency_prefix + "%"
+                )
+            )
+        )
+        if conflicting is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="幂等键已用于不同的开票任务请求",
+            ) from error
         raise HTTPException(status_code=409, detail="开票任务重复或来源已变化") from error
     return _task_response(db, task)
 
@@ -852,9 +1011,6 @@ def _ensure_task_source_current(db: Session, task: FinanceInvoiceTask) -> None:
     seller = db.get(InvoiceSellerEntity, task.seller_entity_id)
     if statement is None or seller is None or statement.confirmation_status != "confirmed" or statement.version != task.statement_version:
         raise HTTPException(status_code=409, detail="对账来源已变化或未确认；请作废旧任务后重新生成")
-    snapshot, _lines, missing = _snapshot_for_statement(db, statement, seller)
-    if missing or _snapshot_hash(snapshot) != task.source_snapshot_hash:
-        raise HTTPException(status_code=409, detail="开票资料或对账来源已变化；请作废旧任务后重新生成")
 
 
 @router.post("/invoice-tasks/{task_id}/confirm")

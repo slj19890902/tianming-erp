@@ -129,6 +129,16 @@ class OrderItem(Base):
         CheckConstraint("unit_price >= 0", name="ck_sales_order_items_unit_price"),
         CheckConstraint("subtotal >= 0", name="ck_sales_order_items_subtotal"),
         CheckConstraint(
+            "price_tax_mode_snapshot IS NULL OR "
+            "price_tax_mode_snapshot IN ('tax_inclusive','tax_exclusive')",
+            name="ck_sales_order_items_price_tax_mode_snapshot",
+        ),
+        CheckConstraint(
+            "tax_rate_snapshot IS NULL OR "
+            "(tax_rate_snapshot >= 0 AND tax_rate_snapshot <= 1)",
+            name="ck_sales_order_items_tax_rate_snapshot",
+        ),
+        CheckConstraint(
             "material_status IN ('pending', 'received')",
             name="ck_sales_order_items_material_status",
         ),
@@ -260,6 +270,12 @@ class OrderItem(Base):
     )
     unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    price_tax_mode_snapshot: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    tax_rate_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(6, 4), nullable=True
+    )
     material_status: Mapped[str] = mapped_column(
         String(20),
         default="pending",

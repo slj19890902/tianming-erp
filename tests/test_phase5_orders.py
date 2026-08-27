@@ -151,10 +151,53 @@ def test_create_multi_item_order_is_atomic_and_snapshots_products(
         "红色标识朝外，模切边缘重点检查"
     )
     assert body["items"][0]["material_status"] == "pending"
+    assert body["items"][0]["price_tax_mode_snapshot"] == "tax_inclusive"
+    assert Decimal(str(body["items"][0]["tax_rate_snapshot"])) == Decimal("0.1300")
 
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Order)) == 1
         assert session.scalar(select(func.count()).select_from(OrderItem)) == 2
+
+
+def test_new_order_freezes_explicit_customer_tax_exclusive_mode(order_api_app) -> None:
+    from app.models.invoice_task import CustomerInvoiceProfile
+    from app.models.order import OrderItem
+
+    app, session_factory = order_api_app
+    with session_factory() as session:
+        session.add(
+            CustomerInvoiceProfile(
+                customer_id=1,
+                price_tax_mode="tax_exclusive",
+                default_tax_rate=Decimal("0.13"),
+                confirmation_status="pending",
+            )
+        )
+        session.commit()
+
+    payload = _payload()
+    payload["items"] = [
+        {"product_id": 1, "quantity": 100, "unit_price": "10.00"}
+    ]
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post("/api/orders", json=payload)
+
+    assert response.status_code == 201, response.text
+    item_payload = response.json()["items"][0]
+    assert item_payload["price_tax_mode_snapshot"] == "tax_exclusive"
+    assert Decimal(str(item_payload["tax_rate_snapshot"])) == Decimal("0.1300")
+    assert Decimal(str(item_payload["unit_price"])) == Decimal("10.00")
+
+    with session_factory() as session:
+        profile = session.scalar(select(CustomerInvoiceProfile))
+        item = session.scalar(select(OrderItem))
+        assert profile is not None and item is not None
+        profile.price_tax_mode = "tax_inclusive"
+        session.commit()
+        session.refresh(item)
+        assert item.price_tax_mode_snapshot == "tax_exclusive"
+        assert Decimal(str(item.unit_price)) == Decimal("10.0000")
 
 
 def test_create_two_dimensional_liner_order_snapshots_length_and_width(

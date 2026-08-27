@@ -2940,7 +2940,7 @@
                   <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
                   <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="runExplicitPageListLoad('products')">重试</button></div>
                   <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">默认单价</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; runExplicitPageListLoad('products')"></pager>
@@ -5022,7 +5022,29 @@
             <div v-else-if="modal.type === 'invoiceTaskResult'">
               <div class="notice">下载 Excel 不等于开票成功；请在税局人工上传、核对并正式开具后，再登记结果。</div><fieldset :disabled="invoiceTaskOperationState.resultSaving" style="border:0;padding:0;margin:0;min-width:0"><div class="form-grid" style="margin-top:10px"><div class="field"><label>结果</label><select class="select" v-model="invoiceTaskResult.status"><option value="issued">开票成功</option><option value="failed">税局导入/开具失败</option></select></div><div v-if="invoiceTaskResult.status==='issued'" class="field"><label>发票号码</label><input class="input" v-model.trim="invoiceTaskResult.invoice_number" /></div><div v-if="invoiceTaskResult.status==='issued'" class="field"><label>开票日期</label><input class="input" type="date" v-model="invoiceTaskResult.invoice_date" /></div><div v-if="invoiceTaskResult.status==='failed'" class="field wide"><label>失败原因</label><input class="input" v-model.trim="invoiceTaskResult.failure_reason" placeholder="请如实登记税局返回信息" /></div></div></fieldset><div class="toolbar-group" style="margin-top:12px"><button class="btn primary" :disabled="invoiceTaskOperationState.resultSaving" @click="saveInvoiceTaskResult">{{ invoiceTaskOperationState.resultSaving ? '登记中…' : '确认登记' }}</button></div>
             </div>
-            <div v-else-if="modal.type === 'invoiceSellers'"><div class="notice">仅维护两个销方主体的已确认资料；不会自动变更客户默认销方。</div><div v-if="invoiceSellerState.loading" class="empty">正在读取销方主体…</div><div v-else-if="invoiceSellerState.error" class="empty"><div class="notice danger" style="margin-bottom:10px">销方主体读取失败：{{ invoiceSellerState.error }}</div><button class="btn" type="button" @click="loadInvoiceSellers">重新加载</button></div><template v-else><fieldset :disabled="!invoiceSellerState.loaded || invoiceSellerState.saving" style="border:0;padding:0;margin:0;min-width:0"><div class="form-grid" style="margin-top:10px"><div class="field"><label>销方名称</label><input class="input" v-model.trim="invoiceSellerForm.seller_name" /></div><div class="field"><label>纳税人识别号</label><input class="input" v-model.trim="invoiceSellerForm.tax_no" /></div><div class="field"><label>地址电话</label><input class="input" v-model.trim="invoiceSellerForm.address_phone" /></div><div class="field"><label>开户行及账号</label><input class="input" v-model.trim="invoiceSellerForm.bank_account" /></div><div class="field"><label>状态</label><select class="select" v-model="invoiceSellerForm.is_active"><option :value="true">启用</option><option :value="false">停用</option></select></div></div></fieldset><button class="btn primary" style="margin-top:8px" :disabled="!invoiceSellerState.loaded || invoiceSellerState.saving" @click="saveInvoiceSeller">{{ invoiceSellerState.saving ? '保存中…' : (invoiceSellerForm.id?'保存销方':'新增销方') }}</button><div v-if="!invoiceSellers.length" class="empty">暂无销方主体，可在上方新增。</div><div v-else class="table-wrap" style="margin-top:12px"><table><thead><tr><th>销方</th><th>税号</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="seller in invoiceSellers" :key="seller.id"><td>{{ seller.seller_name || seller.name }}</td><td>{{ seller.tax_no || '-' }}</td><td>{{ seller.is_active===false?'停用':'启用' }}</td><td><button class="btn small" :disabled="invoiceSellerState.saving" @click="editInvoiceSeller(seller)">编辑</button></td></tr></tbody></table></div></template></div>
+            <div v-else-if="modal.type === 'invoiceSellers'">
+              <div class="notice">维护两个销方主体的完整开票资料；不会自动变更客户默认销方。</div>
+              <div v-if="invoiceSellerState.loading" class="empty">正在读取销方主体…</div>
+              <div v-else-if="invoiceSellerState.error" class="empty"><div class="notice danger" style="margin-bottom:10px">销方主体读取失败：{{ invoiceSellerState.error }}</div><button class="btn" type="button" @click="loadInvoiceSellers">重新加载</button></div>
+              <template v-else>
+                <fieldset :disabled="!invoiceSellerState.loaded || invoiceSellerState.saving" style="border:0;padding:0;margin:0;min-width:0">
+                  <div class="form-grid" style="margin-top:10px">
+                    <div class="field"><label>销方编号</label><input class="input" v-model.trim="invoiceSellerForm.seller_code" /></div>
+                    <div class="field"><label>销方名称</label><input class="input" v-model.trim="invoiceSellerForm.seller_name" /></div>
+                    <div class="field"><label>纳税人识别号</label><input class="input" v-model.trim="invoiceSellerForm.tax_no" /></div>
+                    <div class="field"><label>地址</label><input class="input" v-model.trim="invoiceSellerForm.address" /></div>
+                    <div class="field"><label>电话</label><input class="input" v-model.trim="invoiceSellerForm.phone" /></div>
+                    <div class="field"><label>开户行</label><input class="input" v-model.trim="invoiceSellerForm.bank_name" /></div>
+                    <div class="field"><label>银行账号</label><input class="input" v-model.trim="invoiceSellerForm.bank_account" /></div>
+                    <div class="field"><label>启用状态</label><select class="select" v-model="invoiceSellerForm.is_enabled"><option :value="true">启用</option><option :value="false">停用</option></select></div>
+                    <div class="field"><label>确认状态</label><select class="select" v-model="invoiceSellerForm.confirmation_status"><option value="pending">待确认</option><option value="confirmed">已确认</option></select></div>
+                  </div>
+                </fieldset>
+                <button class="btn primary" style="margin-top:8px" :disabled="!invoiceSellerState.loaded || invoiceSellerState.saving" @click="saveInvoiceSeller">{{ invoiceSellerState.saving ? '保存中…' : (invoiceSellerForm.id?'保存销方':'新增销方') }}</button>
+                <div v-if="!invoiceSellers.length" class="empty">暂无销方主体，可在上方新增。</div>
+                <div v-else class="table-wrap" style="margin-top:12px"><table><thead><tr><th>销方编号</th><th>销方</th><th>税号</th><th>资料</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="seller in invoiceSellers" :key="seller.id"><td>{{ seller.seller_code }}</td><td>{{ seller.seller_name || seller.name }}</td><td>{{ seller.tax_no || '-' }}</td><td>{{ seller.confirmation_status==='confirmed'?'已确认':'待确认' }}</td><td>{{ seller.is_enabled===false?'停用':'启用' }}</td><td><button class="btn small" :disabled="invoiceSellerState.saving" @click="editInvoiceSeller(seller)">编辑</button></td></tr></tbody></table></div>
+              </template>
+            </div>
             <div v-else-if="modal.type === 'customer'">
               <div v-if="customerForm.id && !canEditCustomers" class="notice readonly-hint">当前为只读查看；客户资料控件已禁用。</div>
               <fieldset class="form-grid" :class="'readonly-fieldset'" :disabled="!!customerForm.id && !canEditCustomers">
@@ -5039,7 +5061,38 @@
                 <div class="field"><label>状态</label><select class="select" v-model="customerForm.status"><option value="active">启用</option><option value="inactive">停用</option></select></div>
                 <div class="field wide"><label>备注</label><textarea class="textarea" v-model="customerForm.remark"></textarea></div>
               </fieldset>
-              <section v-if="customerForm.id && canManageInvoiceProfiles" class="panel" style="margin:10px 0 0;padding:10px"><div class="toolbar"><strong>开票 / 税务资料</strong><span v-if="customerInvoiceState.profileLoading" class="status blue">税务资料读取中</span><span v-else :class="['status',customerInvoiceProfile.confirmation_status==='confirmed'?'green':'orange']">{{ customerInvoiceProfile.confirmation_status==='confirmed'?'已确认':'待确认' }}</span><button class="btn small" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving" @click="loadCustomerInvoiceProfile(customerForm.id)">{{ customerInvoiceState.profileLoading ? '读取中…' : '刷新' }}</button></div><div v-if="customerInvoiceProfile.error" class="notice danger">{{ customerInvoiceProfile.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceProfile(customerForm.id)">重新读取税务资料</button></div><fieldset class="form-grid" style="margin-top:8px" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)"><div class="field"><label>开票抬头</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_title" /></div><div class="field"><label>税号</label><input class="input" v-model.trim="customerInvoiceProfile.tax_no" /></div><div class="field"><label>开票地址电话</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_address_phone" /></div><div class="field"><label>开户行及账号</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div><div class="field"><label>默认销方</label><select class="select" v-model.number="customerInvoiceProfile.default_seller_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_active!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select></div></fieldset><div class="toolbar-group" style="margin-top:8px"><button class="btn small primary" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceProfile">{{ customerInvoiceState.profileSaving ? '税务资料保存中…' : '保存税务资料' }}</button></div><div class="panel" style="margin-top:10px;padding:8px"><div class="toolbar"><strong>客户默认开票项目规则</strong><span v-if="customerInvoiceState.ruleLoading" class="status blue">默认规则读取中</span><button class="btn small" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving" @click="loadCustomerInvoiceRule(customerForm.id)">{{ customerInvoiceState.ruleLoading ? '读取中…' : '刷新' }}</button></div><div v-if="customerInvoiceRule.error" class="notice danger">{{ customerInvoiceRule.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceRule(customerForm.id)">重新读取默认规则</button></div><fieldset class="form-grid" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)"><div class="field"><label>项目名称</label><input class="input" v-model.trim="customerInvoiceRule.project_name" /></div><div class="field"><label>税收分类编码</label><input class="input" v-model.trim="customerInvoiceRule.tax_category_code" /></div><div class="field"><label>单位</label><input class="input" v-model.trim="customerInvoiceRule.unit" /></div><div class="field"><label>税率</label><input class="input" type="number" min="0" step="0.01" v-model="customerInvoiceRule.tax_rate" /></div><div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceRule.confirmation_status"><option value="draft">待确认</option><option value="confirmed">已确认</option></select></div></fieldset><button class="btn small primary" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceRule">{{ customerInvoiceState.ruleSaving ? '默认规则保存中…' : '保存默认规则' }}</button></div><div class="muted" style="margin-top:5px">普通联系人地址、电话不会自动带入开票资料；必须由财务确认。</div></section>
+              <section v-if="customerForm.id && canManageInvoiceProfiles" class="panel" style="margin:10px 0 0;padding:10px">
+                <div class="toolbar"><strong>开票 / 税务资料</strong><span v-if="customerInvoiceState.profileLoading" class="status blue">税务资料读取中</span><span v-else :class="['status',customerInvoiceProfile.confirmation_status==='confirmed'?'green':'orange']">{{ customerInvoiceProfile.confirmation_status==='confirmed'?'已确认':'待确认' }}</span><button class="btn small" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving" @click="loadCustomerInvoiceProfile(customerForm.id)">{{ customerInvoiceState.profileLoading ? '读取中…' : '刷新' }}</button></div>
+                <div v-if="customerInvoiceProfile.error" class="notice danger">{{ customerInvoiceProfile.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceProfile(customerForm.id)">重新读取税务资料</button></div>
+                <fieldset class="form-grid" style="margin-top:8px" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)">
+                  <div class="field"><label>开票抬头</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_title" /></div>
+                  <div class="field"><label>税号</label><input class="input" v-model.trim="customerInvoiceProfile.tax_no" /></div>
+                  <div class="field"><label>开票地址</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_address" /></div>
+                  <div class="field"><label>开票电话</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_phone" /></div>
+                  <div class="field"><label>开户行</label><input class="input" v-model.trim="customerInvoiceProfile.bank_name" /></div>
+                  <div class="field"><label>银行账号</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div>
+                  <div class="field"><label>默认销方</label><select class="select" v-model.number="customerInvoiceProfile.default_seller_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_enabled!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select></div>
+                  <div class="field"><label>常用箱与订单单价口径</label><select class="select" v-model="customerInvoiceProfile.price_tax_mode"><option value="tax_inclusive">含税价</option><option value="tax_exclusive">未税价</option></select><div class="muted">只改变价格解释和以后生成的订单快照，不换算、不覆盖现有常用箱价格。</div></div>
+                  <div class="field"><label>默认税率</label><input class="input" type="number" min="0" max="1" step="0.01" v-model="customerInvoiceProfile.default_tax_rate" /></div>
+                  <div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceProfile.confirmation_status"><option value="pending">待确认</option><option value="confirmed">已确认</option></select></div>
+                </fieldset>
+                <div class="toolbar-group" style="margin-top:8px"><button class="btn small primary" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceProfile">{{ customerInvoiceState.profileSaving ? '税务资料保存中…' : '保存税务资料' }}</button></div>
+                <div class="panel" style="margin-top:10px;padding:8px">
+                  <div class="toolbar"><strong>客户默认开票项目规则</strong><span v-if="customerInvoiceState.ruleLoading" class="status blue">默认规则读取中</span><button class="btn small" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving" @click="loadCustomerInvoiceRule(customerForm.id)">{{ customerInvoiceState.ruleLoading ? '读取中…' : '刷新' }}</button></div>
+                  <div v-if="customerInvoiceRule.error" class="notice danger">{{ customerInvoiceRule.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceRule(customerForm.id)">重新读取默认规则</button></div>
+                  <fieldset class="form-grid" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)">
+                    <div class="field"><label>项目名称</label><input class="input" v-model.trim="customerInvoiceRule.project_name" /></div>
+                    <div class="field"><label>税收分类编码</label><input class="input" v-model.trim="customerInvoiceRule.tax_classification_code" /></div>
+                    <div class="field"><label>单位</label><input class="input" v-model.trim="customerInvoiceRule.unit" /></div>
+                    <div class="field"><label>税率</label><input class="input" type="number" min="0" max="1" step="0.01" v-model="customerInvoiceRule.tax_rate" /></div>
+                    <div class="field"><label>规格型号来源</label><select class="select" v-model="customerInvoiceRule.spec_source"><option value="product_code_snapshot">送货存货编码（默认）</option><option value="product_snapshot">产品规格</option><option value="blank">留空</option></select></div>
+                    <div class="field"><label>导出单价</label><label class="inline-check"><input type="checkbox" v-model="customerInvoiceRule.fill_unit_price" /> 未税客户填写两位单价</label></div>
+                    <div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceRule.confirmation_status"><option value="pending">待确认</option><option value="confirmed">已确认</option></select></div>
+                  </fieldset>
+                  <button class="btn small primary" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceRule">{{ customerInvoiceState.ruleSaving ? '默认规则保存中…' : '保存默认规则' }}</button>
+                </div>
+                <div class="muted" style="margin-top:5px">普通联系人地址、电话不会自动带入开票资料；必须由财务确认。</div>
+              </section>
               <section class="customer-pricing-preferences">
                 <div class="toolbar" style="margin:0 0 7px"><strong>客户报价偏好</strong><span class="muted">按箱型、层数、楞型和供应商维护已确认材质及含税客户平方价。</span></div>
                 <div v-if="!customerForm.id" class="muted">请先保存客户基本资料，再维护报价偏好。</div>
@@ -5589,7 +5642,7 @@
               </div>
 
               <div class="product-form-row product-final-row">
-                <div v-if="canViewSalesAmounts" class="field sensitive-price product-inline-price"><label>{{ productForm.supply_mode==='external_purchase' ? `客户默认销售单价 / ${productForm.external_packaging_purchase_unit || '采购单位'}` : '默认单价' }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /><div v-if="productForm.supply_mode==='external_purchase'" class="muted">这是给客户的销售单价，不是供应商采购成本。</div></div>
+                <div v-if="canViewSalesAmounts" class="field sensitive-price product-inline-price"><label>{{ productForm.supply_mode==='external_purchase' ? `${commonBoxPriceLabel(productForm.customer_id)} / ${productForm.external_packaging_purchase_unit || '采购单位'}` : commonBoxPriceLabel(productForm.customer_id) }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /><div class="muted">按当前客户口径原值保存，不自动乘或除 1.13。<span v-if="productForm.supply_mode==='external_purchase'">这是给客户的销售单价，不是供应商采购成本。</span></div></div>
                 <div class="field"><label>图纸</label>
                   <input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" />
                 </div>
@@ -8584,9 +8637,9 @@
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
             invoiceTaskUploadState:{uploading:false,taskId:null,taskNumber:"",error:""},
             financeStatementOperationState:{action:"",statementId:null},
-            invoiceSellers: [], invoiceSellerForm:{id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null}, invoiceSellerState:{loading:false,error:"",saving:false,loaded:false},
-            customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""},
-            customerInvoiceRule:{project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""},
+            invoiceSellers: [], invoiceSellerForm:{id:null,seller_code:"",seller_name:"",tax_no:"",address:"",phone:"",bank_name:"",bank_account:"",is_enabled:true,confirmation_status:"pending",version:null}, invoiceSellerState:{loading:false,error:"",saving:false,loaded:false},
+            customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""},
+            customerInvoiceRule:{project_name:"纸箱",tax_classification_code:"1060105010000000000",unit:"PCS",tax_rate:"0.13",spec_source:"product_code_snapshot",fill_unit_price:true,confirmation_status:"pending",version:null,error:""},
             customerInvoiceState:{profileLoading:false,profileSaving:false,profileLoadedCustomerId:null,ruleLoading:false,ruleSaving:false,ruleLoadedCustomerId:null},
             pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
             systemUsers: [], systemSection:"basic",
@@ -19760,7 +19813,7 @@
           },
           async openCustomerInvoiceProfile(customerId) { if (!this.canManageInvoiceProfiles) return; const customer=this.customers.find(row=>Number(row.id)===Number(customerId)); if(customer) this.openCustomer(customer); else this.showToast("请先在客户管理中打开该客户的税务资料",true); },
           resetInvoiceSellerForm() {
-            this.invoiceSellerForm = {id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null};
+            this.invoiceSellerForm = {id:null,seller_code:"",seller_name:"",tax_no:"",address:"",phone:"",bank_name:"",bank_account:"",is_enabled:true,confirmation_status:"pending",version:null};
           },
           async loadInvoiceSellers() {
             if (!this.canManageInvoiceProfiles) return false;
@@ -19797,7 +19850,18 @@
           },
           editInvoiceSeller(seller) {
             if (!this.invoiceSellerState.loaded || this.invoiceSellerState.saving) return;
-            this.invoiceSellerForm={...seller,seller_name:seller.seller_name||seller.name||"",tax_no:seller.tax_no||"",address_phone:seller.address_phone||"",bank_account:seller.bank_account||"",is_active:seller.is_active!==false};
+            this.invoiceSellerForm={
+              ...seller,
+              seller_code:seller.seller_code||"",
+              seller_name:seller.seller_name||seller.name||"",
+              tax_no:seller.tax_no||"",
+              address:seller.address||"",
+              phone:seller.phone||"",
+              bank_name:seller.bank_name||"",
+              bank_account:seller.bank_account||"",
+              is_enabled:seller.is_enabled!==false,
+              confirmation_status:seller.confirmation_status||"pending",
+            };
           },
           async saveInvoiceSeller() {
             if (this.invoiceSellerState.saving) return false;
@@ -19806,17 +19870,21 @@
               return false;
             }
             const form = {...this.invoiceSellerForm};
-            if (!String(form.seller_name || "").trim() || !String(form.tax_no || "").trim()) {
-              this.showToast("请填写销方名称和纳税人识别号", true);
+            if (!String(form.seller_code || "").trim() || !String(form.seller_name || "").trim()) {
+              this.showToast("请填写销方编号和销方名称", true);
               return false;
             }
             const editingId = Number(form.id || 0);
             const payload = {
+              seller_code:String(form.seller_code).trim(),
               seller_name:String(form.seller_name).trim(),
-              tax_no:String(form.tax_no).trim(),
-              address_phone:String(form.address_phone || "").trim() || null,
+              tax_no:String(form.tax_no || "").trim() || null,
+              address:String(form.address || "").trim() || null,
+              phone:String(form.phone || "").trim() || null,
+              bank_name:String(form.bank_name || "").trim() || null,
               bank_account:String(form.bank_account || "").trim() || null,
-              is_active:form.is_active !== false,
+              is_enabled:form.is_enabled !== false,
+              confirmation_status:form.confirmation_status || "pending",
             };
             this.invoiceSellerState.saving = true;
             try {
@@ -19841,6 +19909,27 @@
               this.invoiceSellerState.saving = false;
             }
           },
+          applyCustomerPriceTaxMode(customerId, mode) {
+            const normalizedMode = mode === "tax_exclusive" ? "tax_exclusive" : "tax_inclusive";
+            const apply = rows => (rows || []).map(row => Number(row.id) === Number(customerId) ? {...row,price_tax_mode:normalizedMode} : row);
+            this.customerOptions = apply(this.customerOptions);
+            this.customers = apply(this.customers);
+            if (Number(this.selectedProductCustomer?.id) === Number(customerId)) {
+              this.selectedProductCustomer = {...this.selectedProductCustomer,price_tax_mode:normalizedMode};
+            }
+          },
+          customerPriceTaxMode(customerId=this.productForm?.customer_id) {
+            const selectedMode = Number(this.selectedProductCustomer?.id) === Number(customerId)
+              ? this.selectedProductCustomer?.price_tax_mode
+              : null;
+            const customer = (this.customerOptions || []).find(row => Number(row.id) === Number(customerId));
+            return (selectedMode || customer?.price_tax_mode) === "tax_exclusive" ? "tax_exclusive" : "tax_inclusive";
+          },
+          commonBoxPriceLabel(customerId=this.productForm?.customer_id) {
+            return this.customerPriceTaxMode(customerId) === "tax_exclusive"
+              ? "未税单价（元/PCS）"
+              : "含税单价（元/PCS）";
+          },
           async loadCustomerInvoiceProfile(customerId=this.customerForm?.id) {
             const requestedCustomerId = Number(customerId || 0);
             if (!this.canManageInvoiceProfiles || !requestedCustomerId || Number(this.customerForm?.id) !== requestedCustomerId) return false;
@@ -19853,6 +19942,7 @@
               const { data } = await axios.get(`/api/customers/${requestedCustomerId}/invoice-profile`, {signal:controller.signal});
               if (latestRequestControllers.get(requestKey) !== controller || Number(this.customerForm?.id) !== requestedCustomerId) return false;
               this.customerInvoiceProfile = {...this.customerInvoiceProfile,...data,error:""};
+              this.applyCustomerPriceTaxMode(requestedCustomerId, data.price_tax_mode);
               this.customerInvoiceState.profileLoadedCustomerId = requestedCustomerId;
               return true;
             } catch (error) {
@@ -19879,10 +19969,15 @@
             const payload = {
               invoice_title:String(form.invoice_title || "").trim() || null,
               tax_no:String(form.tax_no || "").trim() || null,
-              invoice_address_phone:String(form.invoice_address_phone || "").trim() || null,
+              invoice_address:String(form.invoice_address || "").trim() || null,
+              invoice_phone:String(form.invoice_phone || "").trim() || null,
+              bank_name:String(form.bank_name || "").trim() || null,
               bank_account:String(form.bank_account || "").trim() || null,
               default_seller_id:form.default_seller_id ? Number(form.default_seller_id) : null,
-              confirmation_status:form.confirmation_status || "draft",
+              price_tax_mode:form.price_tax_mode,
+              default_tax_rate:Number(form.default_tax_rate),
+              is_enabled:form.is_enabled !== false,
+              confirmation_status:form.confirmation_status || "pending",
               expected_version:Number(form.version || 1),
             };
             this.customerInvoiceState.profileSaving = true;
@@ -19942,15 +20037,17 @@
               return false;
             }
             const form = {...this.customerInvoiceRule};
-            if (!String(form.project_name || "").trim() || !String(form.tax_category_code || "").trim() || !String(form.unit || "").trim() || form.tax_rate === "" || form.tax_rate === null) {
+            if (!String(form.project_name || "").trim() || !String(form.tax_classification_code || "").trim() || !String(form.unit || "").trim() || form.tax_rate === "" || form.tax_rate === null) {
               this.showToast("项目名称、税收分类编码、单位和税率均为必填", true);
               return false;
             }
             const payload = {
               project_name:String(form.project_name).trim(),
-              tax_category_code:String(form.tax_category_code).trim(),
+              tax_classification_code:String(form.tax_classification_code).trim(),
               unit:String(form.unit).trim(),
               tax_rate:Number(form.tax_rate),
+              spec_source:form.spec_source || "product_code_snapshot",
+              fill_unit_price:form.fill_unit_price !== false,
               confirmation_status:form.confirmation_status,
               expected_version:Number(form.version || 1),
             };
@@ -20723,8 +20820,8 @@
             if (!row) next.customer_number = Math.max(0, ...this.customers.map(c => Number(c.customer_number || 0))) + 1;
             if (!Number.isInteger(Number(next.statement_cycle_start_day)) || Number(next.statement_cycle_start_day) < 1 || Number(next.statement_cycle_start_day) > 28) next.statement_cycle_start_day = 20;
             this.customerForm = next;
-            this.customerInvoiceProfile = {invoice_title:"",tax_no:"",invoice_address_phone:"",bank_account:"",default_seller_id:null,confirmation_status:"draft",version:null,error:""};
-            this.customerInvoiceRule = {project_name:"",tax_category_code:"",unit:"",tax_rate:"",confirmation_status:"draft",version:null,error:""};
+            this.customerInvoiceProfile = {invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""};
+            this.customerInvoiceRule = {project_name:"纸箱",tax_classification_code:"1060105010000000000",unit:"PCS",tax_rate:"0.13",spec_source:"product_code_snapshot",fill_unit_price:true,confirmation_status:"pending",version:null,error:""};
             this.customerInvoiceState.profileLoading = false;
             this.customerInvoiceState.profileLoadedCustomerId = null;
             this.customerInvoiceState.ruleLoading = false;

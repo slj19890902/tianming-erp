@@ -3,7 +3,7 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from app.core.config import load_settings
+from app.core.config import load_settings, normalize_path
 from app.models import Base
 
 # this is the Alembic Config object, which provides
@@ -19,6 +19,15 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 settings = load_settings()
+x_arguments = context.get_x_argument(as_dictionary=True)
+expected_database_path = x_arguments.get("expected_database_path")
+if expected_database_path:
+    expected_path = normalize_path(expected_database_path)
+    if settings.database_path != expected_path:
+        raise RuntimeError(
+            "Alembic database isolation check failed: "
+            f"expected {expected_path}, resolved {settings.database_path}"
+        )
 config.set_main_option("sqlalchemy.url", settings.database_url)
 target_metadata = Base.metadata
 

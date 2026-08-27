@@ -98,7 +98,7 @@ vm.loadInvoiceSellers = new AsyncFunction({json.dumps(body, ensure_ascii=False)}
 
 def test_invoice_seller_save_is_single_flight_and_clears_form(tmp_path: Path) -> None:
     body = _method_body(
-        "async saveInvoiceSeller() {", "async loadCustomerInvoiceProfile("
+        "async saveInvoiceSeller() {", "applyCustomerPriceTaxMode(customerId, mode) {"
     )
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
@@ -109,9 +109,9 @@ globalThis.axios = {{
 }};
 const notices = [];
 const vm = {{
-  invoiceSellerForm: {{id:null,seller_name:"天明销方",tax_no:"9132TEST",address_phone:"",bank_account:"",is_active:true,version:null}},
+  invoiceSellerForm: {{id:null,seller_code:"TM-1",seller_name:"天明销方",tax_no:"9132TEST",address:"地址",phone:"电话",bank_name:"银行",bank_account:"账号",is_enabled:true,confirmation_status:"pending",version:null}},
   invoiceSellerState: {{loading:false,error:"",saving:false,loaded:true}},
-  resetInvoiceSellerForm() {{ this.invoiceSellerForm={{id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null}}; }},
+  resetInvoiceSellerForm() {{ this.invoiceSellerForm={{id:null,seller_code:"",seller_name:"",tax_no:"",address:"",phone:"",bank_name:"",bank_account:"",is_enabled:true,confirmation_status:"pending",version:null}}; }},
   async loadInvoiceSellers() {{ return true; }},
   showToast(message, error) {{ notices.push([message,error]); }},
   errorMessage(error) {{ return error?.message || String(error); }}
@@ -122,13 +122,14 @@ vm.saveInvoiceSeller = new AsyncFunction({json.dumps(body, ensure_ascii=False)})
   const first = vm.saveInvoiceSeller();
   const duplicate = vm.saveInvoiceSeller();
   if (pendingWrites.length !== 1) throw new Error("duplicate click issued more than one seller write");
+  if (pendingWrites[0].payload.seller_code !== "TM-1" || pendingWrites[0].payload.is_enabled !== true) throw new Error("seller backend contract was not sent");
   pendingWrites[0].resolve({{data:{{id:1}}}});
   await Promise.all([first, duplicate]);
   if (vm.invoiceSellerState.saving) throw new Error("save lock was not released");
   if (vm.invoiceSellerForm.seller_name || vm.invoiceSellerForm.tax_no) throw new Error("successful save did not clear seller form");
   if (!notices.some(([message]) => message.includes("销方主体已新增"))) throw new Error("success was not reported");
 
-  vm.invoiceSellerForm={{id:9,seller_name:"编辑销方",tax_no:"9132EDIT",address_phone:"",bank_account:"",is_active:true,version:7}};
+  vm.invoiceSellerForm={{id:9,seller_code:"TM-9",seller_name:"编辑销方",tax_no:"9132EDIT",address:"地址",phone:"电话",bank_name:"银行",bank_account:"账号",is_enabled:true,confirmation_status:"pending",version:7}};
   vm.invoiceSellerState.loaded=true;
   vm.loadInvoiceSellers=async () => false;
   const edited = vm.saveInvoiceSeller();

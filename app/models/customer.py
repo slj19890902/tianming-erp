@@ -115,3 +115,16 @@ class Customer(Base):
         passive_deletes=True,
         uselist=False,
     )
+
+    @property
+    def price_tax_mode(self) -> str:
+        """Expose the non-sensitive price interpretation to customer readers."""
+
+        profile = self.invoice_profile
+        if (
+            profile is not None
+            and profile.is_enabled
+            and profile.price_tax_mode == "tax_exclusive"
+        ):
+            return "tax_exclusive"
+        return "tax_inclusive"

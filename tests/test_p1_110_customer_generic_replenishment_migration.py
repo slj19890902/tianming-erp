@@ -11,6 +11,7 @@ from alembic.config import Config
 ROOT = Path(__file__).resolve().parents[1]
 PARENT_REVISION = "fj45v8x9z34"
 TARGET_REVISION = "fk46v8x9z35"
+CURRENT_HEAD_REVISION = "fl47v8x9z36"
 
 
 def _config(monkeypatch: pytest.MonkeyPatch, database: Path) -> Config:
@@ -45,7 +46,7 @@ def test_customer_generic_replenishment_migration_round_trips_and_is_unique_head
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    assert current_alembic_head == TARGET_REVISION
+    assert current_alembic_head == CURRENT_HEAD_REVISION
     database = tmp_path / "p1-110-roundtrip.sqlite3"
     _parent_schema(database)
     config = _config(monkeypatch, database)

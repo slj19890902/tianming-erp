@@ -112,7 +112,7 @@ def test_customer_write_target_is_frozen_and_refresh_failure_is_success_warning(
     tmp_path: Path,
 ) -> None:
     refresh_body = _method_body(
-        "handleMasterSaveRefreshFailure(entity, error) {", "async saveNewOrder(orderPayload) {"
+        "handleMasterSaveRefreshFailure(entity, error) {", "moldRepairWarningText(warnings) {"
     )
     save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     script = f"""

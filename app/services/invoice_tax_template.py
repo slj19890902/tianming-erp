@@ -214,6 +214,33 @@ def _set_cell_value(cell: ElementTree.Element, value: Any) -> None:
     text.text = str(value)
 
 
+def _two_decimal_style_xml(archive: zipfile.ZipFile) -> tuple[bytes, int]:
+    """Append a minimal built-in ``0.00`` cell style and return its index."""
+
+    styles_root = ElementTree.fromstring(archive.read("xl/styles.xml"))
+    cell_xfs = styles_root.find(_qualified("cellXfs"))
+    if cell_xfs is None:
+        raise InvoiceTaxTemplateError("导出副本缺少单元格样式")
+    style_id = len(cell_xfs.findall(_qualified("xf")))
+    ElementTree.SubElement(
+        cell_xfs,
+        _qualified("xf"),
+        {
+            "numFmtId": "2",
+            "fontId": "0",
+            "fillId": "0",
+            "borderId": "0",
+            "xfId": "0",
+            "applyNumberFormat": "true",
+        },
+    )
+    cell_xfs.attrib["count"] = str(style_id + 1)
+    return (
+        ElementTree.tostring(styles_root, encoding="utf-8", xml_declaration=True),
+        style_id,
+    )
+
+
 def _write_detail_rows(path: Path, lines: Sequence[Mapping[str, Any]]) -> None:
     """Update only the detail-sheet XML; helper worksheets stay byte-identical."""
 
@@ -237,6 +264,15 @@ def _write_detail_rows(path: Path, lines: Sequence[Mapping[str, Any]]) -> None:
         with zipfile.ZipFile(path, "r") as source_archive:
             detail_name = _detail_sheet_archive_name(source_archive)
             detail_root = ElementTree.fromstring(source_archive.read(detail_name))
+            use_two_decimal_unit_price = any(
+                line.get("unit_price") is not None for line in lines
+            )
+            styles_xml: bytes | None = None
+            two_decimal_style_id: int | None = None
+            if use_two_decimal_unit_price:
+                styles_xml, two_decimal_style_id = _two_decimal_style_xml(
+                    source_archive
+                )
             sheet_data = detail_root.find(_qualified("sheetData"))
             if sheet_data is None:
                 raise InvoiceTaxTemplateError("导出副本缺少明细行数据")
@@ -261,15 +297,24 @@ def _write_detail_rows(path: Path, lines: Sequence[Mapping[str, Any]]) -> None:
                     if cell is None:
                         cell = ElementTree.SubElement(row, _qualified("c"), {"r": reference})
                         cells[reference] = cell
+                    if column == "F" and two_decimal_style_id is not None:
+                        cell.attrib["s"] = str(two_decimal_style_id)
                     _set_cell_value(cell, value)
             detail_xml = ElementTree.tostring(
                 detail_root, encoding="utf-8", xml_declaration=True
             )
             with zipfile.ZipFile(temporary, "w") as destination_archive:
                 for member in source_archive.infolist():
+                    replacement = None
+                    if member.filename == detail_name:
+                        replacement = detail_xml
+                    elif member.filename == "xl/styles.xml" and styles_xml is not None:
+                        replacement = styles_xml
                     destination_archive.writestr(
                         member,
-                        detail_xml if member.filename == detail_name else source_archive.read(member.filename),
+                        replacement
+                        if replacement is not None
+                        else source_archive.read(member.filename),
                     )
         temporary.replace(path)
     except Exception:
@@ -294,6 +339,14 @@ def _verify_export(path: Path, lines: Sequence[Mapping[str, Any]], helper_finger
                 actual = sheet[f"{column}{row}"].value
                 if actual is None or Decimal(str(actual)) != line[key]:
                     raise InvoiceTaxTemplateError("导出文件金额或税率回读校验失败")
+            if line.get("unit_price") is not None:
+                actual_price = sheet[f"F{row}"].value
+                if (
+                    actual_price is None
+                    or Decimal(str(actual_price)) != Decimal(str(line["unit_price"]))
+                    or sheet[f"F{row}"].number_format not in {"0.00", "#,##0.00"}
+                ):
+                    raise InvoiceTaxTemplateError("导出文件未税单价两位显示校验失败")
     finally:
         workbook.close()
 

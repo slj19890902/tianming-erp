@@ -161,6 +161,7 @@ from app.services.order_customer_heat import (
     threshold_contract as customer_heat_threshold_contract,
 )
 from app.services.customer_search import customer_identity_search_clause
+from app.services.customer_price_tax import resolve_customer_price_tax_terms
 from app.services import material_pricing
 from app.services.box_type_rules import (
     BoxTypeRuleError,
@@ -2339,6 +2340,8 @@ def _order_response(
                 "is_force_closed": item.is_force_closed,
                 "unit_price": item.unit_price,
                 "subtotal": item.subtotal,
+                "price_tax_mode_snapshot": item.price_tax_mode_snapshot,
+                "tax_rate_snapshot": item.tax_rate_snapshot,
                 "material_status": item.material_status,
                 "material_received_at": (
                     utc_naive_to_api(item.material_received_at)
@@ -6574,6 +6577,7 @@ def _create_order_impl(
         customer = db.get(Customer, payload.customer_id)
         if customer is None:
             raise HTTPException(status_code=400, detail="客户不存在")
+        price_tax_terms = resolve_customer_price_tax_terms(db, customer.id)
         if payload.pdf_import_confirmation is not None and (
             not customer.is_active or customer.status != "active"
         ):
@@ -7015,6 +7019,8 @@ def _create_order_impl(
                 quantity=quantity,
                 unit_price=unit_price,
                 subtotal=subtotal,
+                price_tax_mode_snapshot=price_tax_terms.price_tax_mode,
+                tax_rate_snapshot=price_tax_terms.tax_rate,
                 material_status="pending",
                 snapshot_product_code=(
                     (item_payload.product_code or "").strip() or product.product_code

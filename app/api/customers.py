@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import (
     PermissionChecker,
@@ -86,6 +86,7 @@ class CustomerResponse(CustomerPayload):
     id: int
     is_active: bool
     version: int
+    price_tax_mode: Literal["tax_inclusive", "tax_exclusive"] = "tax_inclusive"
 
 
 class CustomerMutationPayload(BaseModel):
@@ -278,7 +279,11 @@ def list_customers(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    query = select(Customer).order_by(Customer.customer_number, Customer.id)
+    query = (
+        select(Customer)
+        .options(selectinload(Customer.invoice_profile))
+        .order_by(Customer.customer_number, Customer.id)
+    )
     scoped_ids = customer_scope_ids(user, db)
     if not has_unrestricted_customer_access(user, db):
         query = query.where(Customer.id.in_(scoped_ids))

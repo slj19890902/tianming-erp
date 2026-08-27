@@ -140,7 +140,7 @@ class CustomerInvoiceItemRule(Base):
             name="ck_customer_invoice_item_rules_confirmation_status",
         ),
         CheckConstraint(
-            "spec_source IN ('product_snapshot','blank')",
+            "spec_source IN ('product_snapshot','product_code_snapshot','blank')",
             name="ck_customer_invoice_item_rules_spec_source",
         ),
         CheckConstraint(

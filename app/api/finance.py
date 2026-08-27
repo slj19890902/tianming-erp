@@ -64,6 +64,10 @@ from app.services.fulfillment_reminders import (
     update_reminder_with_replay,
 )
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.customer_price_tax import (
+    VALID_PRICE_TAX_MODES,
+    resolve_customer_price_tax_terms,
+)
 from app.services.unordered_finished_delivery import (
     reconsume_unordered_finished_receipt_returns,
     restore_unordered_finished_receipt_shortage,
@@ -3462,6 +3466,10 @@ def create_statement(
         db.flush()
         total_receivable = Decimal("0")
         total_profit = Decimal("0")
+        current_price_tax_terms = resolve_customer_price_tax_terms(
+            db, payload.customer_id
+        )
+        statement_price_tax_modes: set[str] = set()
         for row in selected_rows:
             (
                 receipt_item,
@@ -3493,14 +3501,37 @@ def create_statement(
                 )
             unit_cost = Decimal(str(product.cost_unit_price or 0))
             quantity = Decimal(receipt_item.actual_received_quantity)
-            receivable = (quantity * unit_price).quantize(
+            price_tax_mode = (
+                order_item.price_tax_mode_snapshot
+                if order_item is not None
+                and order_item.price_tax_mode_snapshot in VALID_PRICE_TAX_MODES
+                else current_price_tax_terms.price_tax_mode
+            )
+            tax_rate = Decimal(
+                str(
+                    order_item.tax_rate_snapshot
+                    if order_item is not None
+                    and order_item.tax_rate_snapshot is not None
+                    else current_price_tax_terms.tax_rate
+                )
+            )
+            line_price_amount = (quantity * unit_price).quantize(
                 MONEY,
                 rounding=ROUND_HALF_UP,
             )
+            if price_tax_mode == "tax_exclusive":
+                line_tax_amount = (line_price_amount * tax_rate).quantize(
+                    MONEY,
+                    rounding=ROUND_HALF_UP,
+                )
+                receivable = line_price_amount + line_tax_amount
+            else:
+                receivable = line_price_amount
             profit = (quantity * (unit_price - unit_cost)).quantize(
                 MONEY,
                 rounding=ROUND_HALF_UP,
             )
+            statement_price_tax_modes.add(price_tax_mode)
             db.add(
                 StatementItem(
                     statement_id=statement.id,
@@ -3510,6 +3541,8 @@ def create_statement(
                     unit_cost_snapshot=unit_cost,
                     receivable_amount=receivable,
                     gross_profit_amount=profit,
+                    price_tax_mode_snapshot=price_tax_mode,
+                    tax_rate_snapshot=tax_rate,
                 )
             )
             total_receivable += receivable
@@ -3529,6 +3562,7 @@ def create_statement(
                 "item_count": len(selected_rows),
                 "total_receivable": statement.total_receivable,
                 "total_gross_profit": statement.total_gross_profit,
+                "price_tax_modes": sorted(statement_price_tax_modes),
             },
             description="生成客户月结对账单",
         )

@@ -234,6 +234,16 @@ class StatementItem(Base):
             name="uq_finance_statement_items_receipt_item",
         ),
         Index("ix_finance_statement_items_statement_id", "statement_id"),
+        CheckConstraint(
+            "price_tax_mode_snapshot IS NULL OR "
+            "price_tax_mode_snapshot IN ('tax_inclusive','tax_exclusive')",
+            name="ck_finance_statement_items_price_tax_mode_snapshot",
+        ),
+        CheckConstraint(
+            "tax_rate_snapshot IS NULL OR "
+            "(tax_rate_snapshot >= 0 AND tax_rate_snapshot <= 1)",
+            name="ck_finance_statement_items_tax_rate_snapshot",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -261,6 +271,12 @@ class StatementItem(Base):
     gross_profit_amount: Mapped[Decimal] = mapped_column(
         Numeric(14, 2),
         nullable=False,
+    )
+    price_tax_mode_snapshot: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    tax_rate_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(6, 4), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

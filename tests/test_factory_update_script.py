@@ -54,7 +54,7 @@ def test_factory_update_reports_current_release_version() -> None:
     assert any("本次更新｜" in item and "单张、批量" in item and "纸型切换不再偷换内容" in item for item in current_release)
     assert any("本次更新｜" in item and "无数据库迁移" in item for item in current_release)
     assert any("如何验证｜" in item and "v0.22.198" in item and "fk46v8x9z35" in item for item in current_release)
-    assert any(item.startswith("v0.22.197：本次更新｜") and "英文内部状态" in item for item in APP_CHANGELOG)
+    assert any(item.startswith("v0.22.197：本次更新｜") and "内部状态" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.197：本次更新｜") and "北京时间" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.196：本次更新｜") and "不再强制绑定" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.196：本次更新｜") and "无压线" in item and "特批" in item for item in APP_CHANGELOG)

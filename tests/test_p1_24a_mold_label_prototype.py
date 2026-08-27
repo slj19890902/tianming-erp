@@ -42,8 +42,8 @@ def test_mold_label_keeps_only_complete_on_label_identification_fields() -> None
     assert "report_specification" in LABEL
     assert "specification" in LABEL
     assert "shortLocation" not in LABEL
-    assert "内部版式沿80mm长边阅读" in LABEL
-    assert "底部约15mm主识别带与二维码平齐" in LABEL
+    assert "沿80mm长边完整放大排版" in LABEL
+    assert "内容与单个模具“打印标签”一致" in LABEL
     assert "只调整业务字段的位置、宽高、字号和对齐" in LABEL
     assert "共 ${total} 款见扫码" not in LABEL
     assert "label_product_specification" in LABEL

@@ -65,8 +65,8 @@ def test_mold_label_keeps_formal_and_prototype_sources() -> None:
     assert "sourceRows=batchMode?(data.items||[]):[data]" in LABEL
     assert "打印匿名测试标签" in LABEL
     assert "40×30 mm 模具侧面标签" in LABEL
-    assert "内部版式沿80mm长边阅读" in LABEL
-    assert "底部约15mm主识别带与二维码平齐" in LABEL
+    assert "沿80mm长边完整放大排版" in LABEL
+    assert "内容与单个模具“打印标签”一致" in LABEL
     assert "只影响以后新登记的打印任务" in LABEL
 
 

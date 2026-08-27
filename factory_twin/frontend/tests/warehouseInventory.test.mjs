@@ -307,7 +307,7 @@ test("full delivery leaves a mapped empty location while partial reserved and da
   assert.deepEqual(rows.map((item) => item.occupancy_status), ["empty", "occupied", "occupied", "occupied"]);
 });
 
-test("an unmatched observation keeps the formal location visible and marks it red", () => {
+test("unmatched goods and known-location discrepancies keep formal positions red", () => {
   const zone = {
     id: "zone-a1",
     feature_kind: "zone",
@@ -334,8 +334,21 @@ test("an unmatched observation keeps the formal location visible and marks it re
   const [mapped] = buildMappedLocationPallets([zone], [location], "3F", STANDARD_PALLET, "layout-3f");
   assert.equal(mapped.visual_status, "empty");
   assert.equal(mapped.color, "#b91c1c");
-  assert.match(mapped.status_note, /现场有货未匹配/);
-  assert.match(mapped.status_note, /2 条待管理员核对/);
+  assert.match(mapped.status_note, /现场库存待核对/);
+  assert.match(mapped.status_note, /2 条红色异常/);
+
+  const knownMismatch = normalizeInventoryLocationProjection({
+    ...location,
+    location_id: 90,
+    location_code: "A1-L07",
+    has_unmatched_inventory_observation: false,
+    unmatched_inventory_observation_count: 0,
+    has_location_discrepancy: true,
+    location_discrepancy_count: 1
+  });
+  const [mismatchMarker] = buildMappedLocationPallets([zone], [knownMismatch], "3F", STANDARD_PALLET, "layout-3f");
+  assert.equal(mismatchMarker.color, "#b91c1c");
+  assert.match(mismatchMarker.status_note, /1 条红色异常/);
 });
 
 test("full warehouse matches keep all mapped areas highlighted across the active floor", () => {

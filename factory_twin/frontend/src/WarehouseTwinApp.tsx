@@ -272,6 +272,17 @@ interface DashboardLocation {
     reason: string;
     reported_at?: string | null;
   }>;
+  has_location_discrepancy?: boolean;
+  location_discrepancy_count?: number;
+  location_discrepancies?: Array<{
+    id: number;
+    version: number;
+    reported_quantity: number;
+    reason: string;
+    reported_at?: string | null;
+    registered_location_id: number;
+    lot: InventoryItem;
+  }>;
 }
 
 interface DelayedDispatchCandidate {
@@ -4858,6 +4869,7 @@ export function WarehouseTwinApp() {
         {selectedLocation && <section className="twin-location-card">
           <div className="twin-location-card-title"><div><small>当前位置</small><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em></div>
           {selectedLocation.has_unmatched_inventory_observation && <div className="twin-unmatched-observation"><b>现场有货但系统未匹配 · 待管理员核对</b>{(selectedLocation.unmatched_inventory_observations || []).map((item) => <p key={item.id}><strong>{item.inventory_keyword}</strong>{item.customer_keyword ? ` · ${item.customer_keyword}` : ""}{item.reported_quantity ? ` · 约 ${item.reported_quantity}${item.reported_unit || ""}` : ""}<span>{item.reason}</span></p>)}</div>}
+          {selectedLocation.has_location_discrepancy && <div className="twin-unmatched-observation"><b>现场位置与 ERP 登记不符 · 持续标红</b>{(selectedLocation.location_discrepancies || []).map((item) => <p key={item.id}><strong>{item.lot.inventory_code || item.lot.lot_number || `批次 ${item.lot.lot_id}`}</strong>{item.reported_quantity ? ` · ${formatNumber(item.reported_quantity)} ${inventoryUnitLabel(item.lot.unit)}` : ""}<span>{item.reason}</span></p>)}</div>}
           <div className="twin-selection-summary"><span><small>货物</small><b>{selectedLocationItems.length} 条</b></span><span><small>客户</small><b>{selectedLocationCustomerLabel}</b></span><span><small>栈板</small><b>{selectedLocationPallets.length || 0} 块</b></span></div>
           {selectedLocationItems.length === 0 && <p className="twin-location-empty-primary">该位置当前没有货物</p>}
           {mapMode === "lookup" && selectedLocationCompositeParentSummaries.map(({ item, summary }) => <article className="twin-location-item twin-composite-parent-item" key={summary.group_key}>

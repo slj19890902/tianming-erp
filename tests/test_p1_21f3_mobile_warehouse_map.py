@@ -19,6 +19,9 @@ from test_p1_21b_mobile_admin_product_search import _login, mobile_erp_app
 
 ROOT = Path(__file__).resolve().parents[1]
 MOBILE_HTML = (ROOT / "static" / "mobile_erp.html").read_text(encoding="utf-8")
+MOBILE_STOCKTAKE_HTML = (ROOT / "static" / "mobile_stocktake.html").read_text(
+    encoding="utf-8"
+)
 PARENT = "ee13v8x9z02"
 TARGET = "ff14v8x9z03"
 MIGRATION = (
@@ -531,6 +534,315 @@ def test_delayed_discrepancy_correction_rejects_changed_observed_layout(
         assert db.scalar(select(func.count(InventoryLotTransfer.id))) == 0
 
 
+def test_open_discrepancy_marks_observed_map_until_physical_return_is_confirmed(
+    mobile_erp_app,
+) -> None:
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryPallet,
+        InventoryLotTransfer,
+        WarehouseFloor,
+        WarehouseLocation,
+        WarehouseLocationDiscrepancy,
+    )
+    from app.services.warehouse_twin_dashboard import build_warehouse_twin_dashboard
+
+    app, _ids, factory = mobile_erp_app
+    source_lot_id, observed_location_id = _add_map_target(
+        factory, code="C1-L03-RED", with_existing=False
+    )
+    with TestClient(app) as client:
+        _login(client, "mobile-scoped")
+        reported = client.post(
+            "/api/mobile/erp/warehouse/location-discrepancies",
+            json={
+                "inventory_lot_id": source_lot_id,
+                "expected_lot_version": 1,
+                "reported_quantity": 80,
+                "observed_location_id": observed_location_id,
+                "observed_location_layout_version": 1,
+                "reason": "现场临放在另一货位，等待搬回或重新归位",
+                "idempotency_key": "f3-report-persistent-red",
+            },
+        )
+        assert reported.status_code == 201, reported.text
+        report = reported.json()["report"]
+        area = client.get(
+            "/api/mobile/erp/warehouse/map/floors/3F",
+            params={"area_code": "C1"},
+        )
+        assert area.status_code == 200, area.text
+        observed = next(
+            item
+            for item in area.json()["locations"]
+            if item["location_id"] == observed_location_id
+        )
+        assert observed["has_location_discrepancy"] is True
+        assert observed["location_discrepancy_count"] == 1
+        assert observed["discrepant_goods"][0]["report_id"] == report["id"]
+        assert observed["discrepant_goods"][0]["lot"]["lot_id"] == source_lot_id
+        with factory() as db:
+            overview = build_warehouse_twin_dashboard(
+                db,
+                lots=list(db.scalars(select(InventoryLot)).all()),
+                locations=list(db.scalars(select(WarehouseLocation)).all()),
+                pallets=list(db.scalars(select(InventoryPallet)).all()),
+                floors=list(db.scalars(select(WarehouseFloor)).all()),
+                visible_customer_ids=None,
+                days=30,
+                as_of=date(2026, 8, 27),
+            )
+            desktop_observed = next(
+                item
+                for item in overview["locations"]
+                if item["location_id"] == observed_location_id
+            )
+            assert desktop_observed["has_location_discrepancy"] is True
+            assert desktop_observed["location_discrepancy_count"] == 1
+            assert desktop_observed["location_discrepancies"][0]["id"] == report["id"]
+
+        _login(client, "mobile-admin")
+        resolved = client.post(
+            f"/api/mobile/erp/warehouse/location-discrepancies/{report['id']}/resolve",
+            json={
+                "expected_version": 1,
+                "expected_lot_version": 1,
+                "resolution_action": "physical_returned",
+                "idempotency_key": "f3-physical-returned",
+                "resolution_note": "实物已搬回系统登记货位",
+            },
+        )
+        assert resolved.status_code == 200, resolved.text
+        assert resolved.json()["transfer_id"] is None
+        replay = client.post(
+            f"/api/mobile/erp/warehouse/location-discrepancies/{report['id']}/resolve",
+            json={
+                "expected_version": 1,
+                "expected_lot_version": 1,
+                "resolution_action": "physical_returned",
+                "idempotency_key": "f3-physical-returned",
+                "resolution_note": "实物已搬回系统登记货位",
+            },
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["idempotent_replay"] is True
+        after = client.get(
+            "/api/mobile/erp/warehouse/map/floors/3F",
+            params={"area_code": "C1"},
+        )
+        after_observed = next(
+            item
+            for item in after.json()["locations"]
+            if item["location_id"] == observed_location_id
+        )
+        assert after_observed["has_location_discrepancy"] is False
+
+    with factory() as db:
+        lot = db.get(InventoryLot, source_lot_id)
+        row = db.get(WarehouseLocationDiscrepancy, report["id"])
+        assert lot is not None and lot.version == 1
+        assert lot.quantity_available + lot.quantity_reserved == 80
+        assert row is not None and row.status == "resolved"
+        assert row.resolution_transfer_id is None
+        assert db.scalar(select(func.count(InventoryLotTransfer.id))) == 0
+
+
+def test_discrepant_goods_can_move_to_another_position_and_close_report_atomically(
+    mobile_erp_app,
+) -> None:
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryLotTransfer,
+        WarehouseLocationDiscrepancy,
+    )
+
+    app, _ids, factory = mobile_erp_app
+    source_lot_id, observed_location_id = _add_map_target(
+        factory, code="C1-L06-RED", with_existing=False
+    )
+    _same_lot, target_location_id = _add_map_target(
+        factory, code="C1-L07-CORRECT", with_existing=False
+    )
+    with TestClient(app) as client:
+        _login(client, "mobile-scoped")
+        reported = client.post(
+            "/api/mobile/erp/warehouse/location-discrepancies",
+            json={
+                "inventory_lot_id": source_lot_id,
+                "expected_lot_version": 1,
+                "reported_quantity": 80,
+                "observed_location_id": observed_location_id,
+                "observed_location_layout_version": 1,
+                "reason": "现场临放，等待移动到正确空位",
+                "idempotency_key": "f3-report-red-move",
+            },
+        )
+        assert reported.status_code == 201, reported.text
+        report = reported.json()["report"]
+
+        _login(client, "mobile-admin")
+        move_payload = {
+            "expected_version": 1,
+            "quantity": 80,
+            "target_location_id": target_location_id,
+            "expected_target_layout_version": 1,
+            "location_discrepancy_id": report["id"],
+            "expected_discrepancy_version": 1,
+            "idempotency_key": "f3-red-move-to-correct",
+            "physical_move_confirmed": True,
+        }
+        moved = client.post(
+            f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
+            json=move_payload,
+        )
+        assert moved.status_code == 200, moved.text
+        assert moved.json()["resolved_location_discrepancy_id"] == report["id"]
+        replay = client.post(
+            f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
+            json=move_payload,
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["idempotent_replay"] is True
+
+    with factory() as db:
+        row = db.get(WarehouseLocationDiscrepancy, report["id"])
+        assert row is not None and row.status == "resolved"
+        assert row.resolution_transfer_id is not None
+        assert db.scalar(select(func.count(InventoryLotTransfer.id))) == 1
+        positive = list(
+            db.scalars(
+                select(InventoryLot).where(
+                    InventoryLot.status.in_(("active", "frozen")),
+                    InventoryLot.quantity_available
+                    + InventoryLot.quantity_reserved
+                    + InventoryLot.quantity_damaged
+                    > 0,
+                )
+            ).all()
+        )
+        assert sum(
+            lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged
+            for lot in positive
+        ) >= 80
+        assert any(
+            lot.warehouse_location_id == target_location_id
+            and lot.quantity_available + lot.quantity_reserved == 80
+            for lot in positive
+        )
+
+
+def test_mobile_move_rejects_incompatible_occupied_target_but_allows_red_report(
+    mobile_erp_app,
+) -> None:
+    from app.models.product import Product
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryLotTransfer,
+        WarehouseLocationDiscrepancy,
+    )
+
+    app, _ids, factory = mobile_erp_app
+    source_lot_id, target_location_id = _add_map_target(
+        factory, code="C1-L08-OCCUPIED", with_existing=True
+    )
+    with factory() as db:
+        target_lot = db.scalar(
+            select(InventoryLot).where(
+                InventoryLot.warehouse_location_id == target_location_id
+            )
+        )
+        other_product = db.scalar(
+            select(Product).where(Product.product_code == "MOBILE-BOX-002")
+        )
+        assert target_lot is not None and target_lot.finished_detail is not None
+        assert other_product is not None
+        target_lot.finished_detail.product_id = other_product.id
+        target_lot.finished_detail.inventory_code_snapshot = other_product.product_code
+        target_lot.finished_detail.product_name_snapshot = other_product.product_name
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        blocked = client.post(
+            f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
+            json={
+                "expected_version": 1,
+                "quantity": 80,
+                "target_location_id": target_location_id,
+                "expected_target_layout_version": 1,
+                "idempotency_key": "f3-incompatible-target",
+                "physical_move_confirmed": True,
+            },
+        )
+        assert blocked.status_code == 409, blocked.text
+        assert "不能直接混放" in blocked.text
+        reported = client.post(
+            "/api/mobile/erp/warehouse/location-discrepancies",
+            json={
+                "inventory_lot_id": source_lot_id,
+                "expected_lot_version": 1,
+                "reported_quantity": 80,
+                "observed_location_id": target_location_id,
+                "observed_location_layout_version": 1,
+                "reason": "现场发现该批货物临放在已有其他货物的货位",
+                "idempotency_key": "f3-incompatible-target-red",
+            },
+        )
+        assert reported.status_code == 201, reported.text
+
+    with factory() as db:
+        assert db.scalar(select(func.count(InventoryLotTransfer.id))) == 0
+        assert db.scalar(select(func.count(WarehouseLocationDiscrepancy.id))) == 1
+
+
+def test_open_discrepancy_stops_rendering_after_lot_has_no_physical_quantity(
+    mobile_erp_app,
+) -> None:
+    from app.models.warehouse_inventory import InventoryLot
+
+    app, _ids, factory = mobile_erp_app
+    source_lot_id, observed_location_id = _add_map_target(
+        factory, code="C1-L09-ZERO", with_existing=False
+    )
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        reported = client.post(
+            "/api/mobile/erp/warehouse/location-discrepancies",
+            json={
+                "inventory_lot_id": source_lot_id,
+                "expected_lot_version": 1,
+                "reported_quantity": 80,
+                "observed_location_id": observed_location_id,
+                "observed_location_layout_version": 1,
+                "reason": "等待送货或废弃处理归零",
+                "idempotency_key": "f3-red-until-zero",
+            },
+        )
+        assert reported.status_code == 201, reported.text
+        with factory() as db:
+            lot = db.get(InventoryLot, source_lot_id)
+            assert lot is not None
+            lot.quantity_available = 0
+            lot.quantity_reserved = 0
+            lot.quantity_damaged = 0
+            lot.quantity_consumed = 80
+            lot.status = "closed"
+            lot.version = 2
+            db.commit()
+        area = client.get(
+            "/api/mobile/erp/warehouse/map/floors/3F",
+            params={"area_code": "C1"},
+        )
+        assert area.status_code == 200, area.text
+        observed = next(
+            item
+            for item in area.json()["locations"]
+            if item["location_id"] == observed_location_id
+        )
+        assert observed["has_location_discrepancy"] is False
+        assert observed["discrepant_goods"] == []
+
+
 def test_whole_move_releases_source_projection_and_binds_target(
     mobile_erp_app,
 ) -> None:
@@ -828,6 +1140,11 @@ def test_mobile_map_frontend_defers_reads_and_writes_only_after_final_confirm(
         "observed_location_layout_version: target.geometry.version",
         "warehouse/location-discrepancies",
         "待纠正位置报告",
+        "has_location_discrepancy",
+        "跨楼层、区域选择目标货位",
+        "盘点数量",
+        "/mobile/stocktake.html?location_id=",
+        "location_discrepancy_id",
     ):
         assert marker in MOBILE_HTML
     assert "position.pallet_code" not in MOBILE_HTML
@@ -839,6 +1156,18 @@ def test_mobile_map_frontend_defers_reads_and_writes_only_after_final_confirm(
     assert select_target
     assert "apiPost(" not in select_target.group("body")
     assert "state.warehouseMapTarget = location" in select_target.group("body")
+    load_area = re.search(
+        r"async function loadWarehouseMapArea\((?P<signature>.*?)\) \{(?P<body>.*?)\n      \}",
+        MOBILE_HTML,
+        re.S,
+    )
+    assert load_area
+    assert "preserveMove = false" in load_area.group("signature")
+    assert "if (!preserveMove) state.warehouseMapSource = null" in load_area.group(
+        "body"
+    )
+    assert "new URLSearchParams(window.location.search)" in MOBILE_STOCKTAKE_HTML
+    assert 'params.get("location_id")' in MOBILE_STOCKTAKE_HTML
     scripts = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", MOBILE_HTML, re.S)
     inline = "\n".join(script for script in scripts if script.strip())
     target = tmp_path / "mobile-erp-inline.js"

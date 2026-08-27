@@ -180,8 +180,8 @@
     .warehouse-map-features { position: absolute; inset: 0; width: 100%; height: 100%; }
     .warehouse-map-feature-zone { fill: #eef4f0; stroke: #9db1a6; stroke-width: 80; }
     .warehouse-map-feature-aisle { fill: #fff8df; stroke: #d4b761; stroke-width: 55; }
-    .warehouse-map-location { position: absolute; min-width: 46px; min-height: 34px; padding: 3px; overflow: hidden; border: 2px solid var(--green); border-radius: 5px; background: #e8f5ec; color: var(--green); font-size: 9px; font-weight: 900; }
-    .warehouse-map-location.has-goods { background: #d5ebff; border-color: var(--blue); color: var(--blue); }
+    .warehouse-map-location { position: absolute; min-width: 46px; min-height: 34px; padding: 3px; overflow: hidden; border: 2px solid #64748b; border-radius: 5px; background: #f8fafc; color: #334155; font-size: 9px; font-weight: 900; }
+    .warehouse-map-location.has-goods { background: #dcfce7; border-color: var(--green); color: var(--green); }
     .warehouse-map-location.unmatched { background: #ffe4e6; border-color: #b91c1c; color: #991b1b; box-shadow: 0 0 0 3px rgba(185, 28, 28, .18); }
     .warehouse-map-location.source { outline: 4px solid var(--orange); }
     .warehouse-map-location.target { outline: 4px solid #b00020; }
@@ -1255,7 +1255,7 @@
         if (state.warehouseMapArea) await loadWarehouseMapArea({ preferredLotId: preferred.lotId });
       }
 
-      async function loadWarehouseMapArea({ preferredLotId = null } = {}) {
+      async function loadWarehouseMapArea({ preferredLotId = null, preserveMove = false } = {}) {
         state.warehouseMapController?.abort();
         const controller = new AbortController();
         state.warehouseMapController = controller;
@@ -1263,15 +1263,21 @@
         showStatus("warehouseMapState", "正在读取这一片区域的正式位置…", "");
         byId("warehouseMapStage").hidden = true;
         byId("warehouseMapGoods").hidden = true;
-        byId("warehouseMapMoveForm").hidden = true;
+        if (!preserveMove) byId("warehouseMapMoveForm").hidden = true;
         try {
           const url = `/api/mobile/erp/warehouse/map/floors/${encodeURIComponent(state.warehouseMapFloor)}?area_code=${encodeURIComponent(state.warehouseMapArea)}`;
           const data = await apiGet(url, { signal: controller.signal });
           if (generation !== state.warehouseMapGeneration) return;
           state.warehouseMapData = data;
-          state.warehouseMapSource = null;
+          if (!preserveMove) state.warehouseMapSource = null;
           state.warehouseMapTarget = null;
           renderWarehouseMap();
+          if (preserveMove && state.warehouseMapSource) {
+            byId("warehouseMapMoveForm").hidden = false;
+            byId("warehouseMapMoveSummary").textContent = `${state.warehouseMapSource.good.product_code || "当前货物"}：来源 ${readableLocation(state.warehouseMapSource.location)}，请继续跨楼层、区域选择目标货位。`;
+            byId("warehouseMapConfirmMove").disabled = true;
+            byId("warehouseMapReportMismatch").disabled = true;
+          }
           if (preferredLotId) {
             const location = (data.locations || []).find(item => (item.goods || []).some(good => Number(good.lot_id) === Number(preferredLotId)));
             if (location) renderWarehouseLocationGoods(location, preferredLotId);
@@ -1311,10 +1317,12 @@
         const locations = Array.isArray(data.locations) ? data.locations : [];
         locations.forEach(location => {
           if (!location.geometry) return;
-          const button = node("button", `warehouse-map-location${(location.goods || []).length ? " has-goods" : ""}${location.has_unmatched_inventory_observation ? " unmatched" : ""}`);
+          const hasRedIssue = location.has_unmatched_inventory_observation || location.has_location_discrepancy;
+          const redIssueCount = Number(location.unmatched_inventory_observation_count || 0) + Number(location.location_discrepancy_count || 0);
+          const button = node("button", `warehouse-map-location${(location.goods || []).length ? " has-goods" : ""}${hasRedIssue ? " unmatched" : ""}`);
           button.type = "button";
           button.dataset.locationId = String(location.location_id);
-          button.textContent = `${readableLocation(location)}${location.has_unmatched_inventory_observation ? ` · 待核对${location.unmatched_inventory_observation_count || ""}` : ""}`;
+          button.textContent = `${readableLocation(location)}${hasRedIssue ? ` · 待核对${redIssueCount || ""}` : ""}`;
           button.style.left = `${location.geometry.left_pct}%`;
           button.style.top = `${location.geometry.top_pct}%`;
           button.style.width = `${location.geometry.width_pct}%`;
@@ -1339,22 +1347,50 @@
         const container = byId("warehouseMapGoods");
         container.replaceChildren(node("h2", "", `${readableLocation(location)}｜现场货物`));
         const goods = Array.isArray(location.goods) ? location.goods : [];
+        const discrepantGoods = Array.isArray(location.discrepant_goods) ? location.discrepant_goods : [];
+        discrepantGoods.forEach(item => {
+          const card = node("section", "card status error");
+          card.append(
+            node("strong", "", `位置待核对｜${item.lot.product_code || "无存货编码"}`),
+            node("p", "muted", `${item.lot.customer_name || "客户待确认"}｜${item.reported_quantity}${item.lot.unit}`),
+            node("p", "muted", `ERP登记 ${readableLocation(item.registered_location)}｜现场观察 ${readableLocation(location)}`),
+            node("p", "muted", item.reason)
+          );
+          const move = node("button", "small-btn", "搬运这批红色货物");
+          move.type = "button";
+          move.disabled = !state.warehouseMapCanCorrect || item.lot.can_move !== true;
+          move.addEventListener("click", () => selectWarehouseMapSource(item.lot, location, item));
+          const returned = node("button", "small-btn", "实物已搬回 ERP 登记位");
+          returned.type = "button";
+          returned.disabled = !state.warehouseMapCanCorrect;
+          returned.addEventListener("click", () => confirmWarehousePhysicalReturn(item));
+          card.append(move, returned);
+          container.append(card);
+        });
         if (!goods.length) {
           container.append(node("p", "muted", "该正式货位当前为空。若现场有货，请先按客户简称和存货编码搜索全仓实物库存；找到后可直接登记实际搬运，仍找不到再标红待管理员核对。"));
           renderEmptyWarehouseLocationSearch(location, container);
         }
         goods.forEach(good => {
-          const button = node("button", "candidate");
-          button.type = "button";
-          button.append(
+          const card = node("section", "candidate");
+          card.append(
             node("strong", "", `${good.product_code || "无存货编码"}｜${good.product_name || "未填写名称"}`),
             node("span", "", `${good.customer_name || "未填写客户"}｜${good.specification || "未填写规格"}`),
-            node("span", "", `${good.quantity_total || 0}${good.unit}｜在 ${readableLocation(location)}`),
-            node("span", "candidate-action", good.can_move ? "选择这批货物" : "半成品仅查看")
+            node("span", "", `${good.quantity_total || 0}${good.unit}｜在 ${readableLocation(location)}`)
           );
-          button.disabled = good.can_move !== true;
-          button.addEventListener("click", () => selectWarehouseMapSource(good, location));
-          container.append(button);
+          const actions = node("div", "warehouse-map-item-actions");
+          const move = node("button", "small-btn", "搬运");
+          move.type = "button";
+          move.disabled = good.can_move !== true;
+          move.addEventListener("click", () => selectWarehouseMapSource(good, location));
+          const stocktake = node("button", "small-btn", "盘点数量");
+          stocktake.type = "button";
+          stocktake.addEventListener("click", () => {
+            window.location.assign(`/mobile/stocktake.html?location_id=${encodeURIComponent(location.location_id)}`);
+          });
+          actions.append(move, stocktake);
+          card.append(actions);
+          container.append(card);
           if (Number(good.lot_id) === Number(preferredLotId) && good.can_move) selectWarehouseMapSource(good, location);
         });
         container.hidden = false;
@@ -1456,8 +1492,8 @@
         }
       }
 
-      function selectWarehouseMapSource(good, location) {
-        state.warehouseMapSource = { good, location };
+      function selectWarehouseMapSource(good, location, discrepancy = null) {
+        state.warehouseMapSource = { good, location, discrepancy };
         state.warehouseMapTarget = null;
         document.querySelectorAll(".warehouse-map-location").forEach(button => {
           button.classList.toggle("source", Number(button.dataset.locationId) === Number(location.location_id));
@@ -1466,7 +1502,7 @@
         byId("warehouseMapMoveForm").hidden = false;
         byId("warehouseMapMoveQuantity").value = String(good.quantity_movable || 1);
         byId("warehouseMapMoveQuantity").max = String(good.quantity_movable || 1);
-        byId("warehouseMapMoveSummary").textContent = `${good.product_code || "当前货物"}：来源 ${readableLocation(location)}，请在地图点选现场目标位置。`;
+        byId("warehouseMapMoveSummary").textContent = `${good.product_code || "当前货物"}：来源 ${readableLocation(location)}，可跨楼层、区域选择目标货位。`;
         byId("warehouseMapConfirmMove").disabled = true;
         byId("warehouseMapReportMismatch").disabled = true;
       }
@@ -1478,9 +1514,22 @@
           button.classList.toggle("target", Number(button.dataset.locationId) === Number(location.location_id));
         });
         const good = state.warehouseMapSource.good;
-        byId("warehouseMapMoveSummary").textContent = `${good.product_code || "当前货物"}：${readableLocation(state.warehouseMapSource.location)} → ${readableLocation(location)}`;
-        byId("warehouseMapConfirmMove").disabled = !state.warehouseMapCanExecute;
+        const targetGoods = Array.isArray(location.goods) ? location.goods : [];
+        const compatible = targetGoods.every(item => warehouseMapGoodsCompatible(good, item));
+        const targetBlocked = targetGoods.length > 0 && !compatible;
+        byId("warehouseMapMoveSummary").textContent = targetBlocked
+          ? `${readableLocation(location)} 已有不同货物，不能直接混放；可先上报现场位置并标红。`
+          : `${good.product_code || "当前货物"}：${readableLocation(state.warehouseMapSource.location)} → ${readableLocation(location)}`;
+        byId("warehouseMapConfirmMove").disabled = !state.warehouseMapCanExecute || targetBlocked;
         byId("warehouseMapReportMismatch").disabled = false;
+      }
+
+      function warehouseMapGoodsCompatible(source, target) {
+        return Number(source.customer_id || 0) === Number(target.customer_id || 0)
+          && String(source.product_code || "").trim() === String(target.product_code || "").trim()
+          && String(source.specification || "").trim() === String(target.specification || "").trim()
+          && String(source.inventory_type || "") === String(target.inventory_type || "")
+          && String(source.unit || "") === String(target.unit || "");
       }
 
       async function confirmWarehouseMapMove() {
@@ -1497,12 +1546,33 @@
             expected_target_layout_version: target.geometry.version,
             idempotency_key: warehouseRequestKey("mobile-map-move"),
             physical_move_confirmed: true,
+            location_discrepancy_id: source.discrepancy?.report_id || null,
+            expected_discrepancy_version: source.discrepancy?.report_version || null,
           });
           window.alert(data.message || "实际搬运已登记");
           await loadWarehouseMapArea();
         } catch (error) {
           window.alert(error.message || "实际搬运登记失败");
           byId("warehouseMapConfirmMove").disabled = false;
+        }
+      }
+
+      async function confirmWarehousePhysicalReturn(item) {
+        if (!window.confirm("确认现场实物已经搬回 ERP 当前登记货位？此操作只关闭红色标记，不改变库存数量。")) return;
+        const note = window.prompt("请输入现场复核说明：", "实物已搬回系统登记货位");
+        if (!note?.trim()) return;
+        try {
+          const data = await apiPost(`/api/mobile/erp/warehouse/location-discrepancies/${item.report_id}/resolve`, {
+            expected_version: item.report_version,
+            expected_lot_version: item.lot.lot_version,
+            resolution_action: "physical_returned",
+            idempotency_key: warehouseRequestKey("mobile-map-physical-returned"),
+            resolution_note: note.trim(),
+          });
+          window.alert(data.message || "红色标记已关闭");
+          await loadWarehouseMapArea();
+        } catch (error) {
+          window.alert(error.message || "现场搬回确认失败");
         }
       }
 
@@ -1525,6 +1595,7 @@
             idempotency_key: warehouseRequestKey("mobile-map-report"),
           });
           window.alert(data.message || "位置不符已上报");
+          await loadWarehouseMapArea({ preserveMove: true });
         } catch (error) {
           window.alert(error.message || "位置不符上报失败");
         } finally {
@@ -1562,6 +1633,7 @@
                   expected_lot_version: item.lot.lot_version,
                   idempotency_key: warehouseRequestKey("mobile-map-correct"),
                   resolution_note: note.trim(),
+                  resolution_action: "correct_ledger",
                 });
                 await loadWarehouseDiscrepancies();
                 await loadWarehouseMapArea();
@@ -2112,13 +2184,13 @@
         state.warehouseMapFloor = byId("warehouseMapFloor").value;
         state.warehouseMapArea = warehouseAreaOptions()[0]?.area_code || "";
         renderWarehouseMapSelectors();
-        loadWarehouseMapArea();
+        loadWarehouseMapArea({ preserveMove: Boolean(state.warehouseMapSource) });
       });
       byId("warehouseMapArea").addEventListener("change", () => {
         state.warehouseMapArea = byId("warehouseMapArea").value;
-        loadWarehouseMapArea();
+        loadWarehouseMapArea({ preserveMove: Boolean(state.warehouseMapSource) });
       });
-      byId("warehouseMapRefresh").addEventListener("click", () => loadWarehouseMapArea());
+      byId("warehouseMapRefresh").addEventListener("click", () => loadWarehouseMapArea({ preserveMove: Boolean(state.warehouseMapSource) }));
       byId("warehouseMapZoomIn").addEventListener("click", () => {
         state.warehouseMapZoom = Math.min(1.8, state.warehouseMapZoom + 0.2);
         if (state.warehouseMapData) renderWarehouseMap();

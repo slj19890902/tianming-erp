@@ -27,6 +27,7 @@ from app.models.warehouse_inventory import (
     WarehouseFloor,
     WarehouseGroundOccupancy,
     WarehouseLocation,
+    WarehouseLocationDiscrepancy,
     WarehouseUnmatchedInventoryObservation,
 )
 from app.models.order import Order, OrderItem
@@ -1134,6 +1135,29 @@ def build_warehouse_twin_dashboard(
         if row.location_id is not None:
             pallets_by_location[row.location_id].append(row)
     visible_location_ids = set(lots_by_location) | set(pallets_by_location)
+    discrepancies_by_location: dict[
+        int, list[tuple[WarehouseLocationDiscrepancy, InventoryLot]]
+    ] = defaultdict(list)
+    for discrepancy in db.scalars(
+        select(WarehouseLocationDiscrepancy)
+        .where(WarehouseLocationDiscrepancy.status == "open")
+        .order_by(
+            WarehouseLocationDiscrepancy.reported_at,
+            WarehouseLocationDiscrepancy.id,
+        )
+    ).all():
+        lot = positive_lots_by_id.get(int(discrepancy.inventory_lot_id))
+        if lot is None:
+            continue
+        business = _lot_business_fields(lot)
+        if (
+            visible_customer_ids is not None
+            and business.get("customer_id") not in visible_customer_ids
+        ):
+            continue
+        observed_location_id = int(discrepancy.observed_location_id)
+        discrepancies_by_location[observed_location_id].append((discrepancy, lot))
+        visible_location_ids.add(observed_location_id)
     floor_records = {row.floor_number: row for row in floors}
     policy_types_by_area: dict[tuple[int, str], list[str]] = {}
     policy_rows = db.execute(
@@ -1220,6 +1244,26 @@ def build_warehouse_twin_dashboard(
                 "reported_at": utc_naive_to_api(observation.reported_at),
             }
             for observation in open_observations
+        ]
+        open_discrepancies = discrepancies_by_location.get(int(location.id), [])
+        payload["has_location_discrepancy"] = bool(open_discrepancies)
+        payload["location_discrepancy_count"] = len(open_discrepancies)
+        payload["location_discrepancies"] = [
+            {
+                "id": int(discrepancy.id),
+                "version": int(discrepancy.version),
+                "reported_quantity": int(discrepancy.reported_quantity),
+                "reason": discrepancy.reason,
+                "reported_at": utc_naive_to_api(discrepancy.reported_at),
+                "registered_location_id": int(discrepancy.registered_location_id),
+                "lot": _lot_payload(
+                    lot,
+                    as_of,
+                    composite_projection=composite_projections.get(int(lot.id)),
+                    stocktake_decrease_issues=stocktake_decrease_issues,
+                ),
+            }
+            for discrepancy, lot in open_discrepancies
         ]
         location_rows.append(payload)
 

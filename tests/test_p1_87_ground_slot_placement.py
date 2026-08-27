@@ -227,6 +227,120 @@ def _publish_six_slots(client: TestClient) -> dict:
     return publish.json()
 
 
+def test_admin_can_drag_published_ground_slots_with_gaps_and_replay_safely(
+    p187_app,
+) -> None:
+    app, factory, _ids = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        draft = client.post(
+            "/api/warehouse/ground-layout/floors/3F/areas/A01/draft",
+            json={
+                "target_slot_count": 4,
+                "numbering_origin": "south",
+                "row_direction": "from_aisle_inward",
+                "slot_direction": "left_to_right",
+                "row_start_no": 1,
+                "slot_start_no": 1,
+                "expected_policy_version": 1,
+                "expected_map_revision": "p1-87-map-r1",
+            },
+        )
+        assert draft.status_code == 200, draft.text
+        published = client.post(
+            "/api/warehouse/ground-layout/floors/3F/areas/A01/publish",
+            json={
+                "expected_plan_version": draft.json()["plan_version"],
+                "preview_fingerprint": draft.json()["preview_fingerprint"],
+                "idempotency_key": "p187-publish-free-layout",
+            },
+        )
+        assert published.status_code == 200, published.text
+        management = client.get(
+            "/api/warehouse/spatial-layout/floors/3F/areas/A01/management"
+        )
+        assert management.status_code == 200, management.text
+        assert management.json()["available_actions"] == ["published_layout"]
+
+        slots = published.json()["slots"]
+        moved = slots[-1]
+        with factory() as db:
+            layout = db.scalar(
+                select(Floor3LocationLayout).where(
+                    Floor3LocationLayout.location_id == moved["location_id"]
+                )
+            )
+            assert layout is not None
+            before = {
+                "plans": int(db.scalar(select(func.count(WarehouseGroundLayoutPlan.id))) or 0),
+                "slots": int(db.scalar(select(func.count(WarehouseGroundLayoutSlot.id))) or 0),
+                "lots": int(db.scalar(select(func.count(InventoryLot.id))) or 0),
+                "pallets": int(db.scalar(select(func.count(InventoryPallet.id))) or 0),
+            }
+            payload_slot = {
+                "location_id": moved["location_id"],
+                "expected_version": layout.version,
+                "left_pct": float(layout.left_pct) + float(layout.width_pct),
+                "top_pct": float(layout.top_pct),
+                "width_pct": float(layout.width_pct),
+                "height_pct": float(layout.height_pct),
+                "z_index": layout.z_index,
+            }
+
+        payload = {
+            "slots": [payload_slot],
+            "expected_map_revision": "p1-87-map-r1",
+            "expected_policy_version": management.json()["policy_version"],
+            "expected_plan_version": management.json()["ground_plan_version"],
+            "idempotency_key": "p187-free-gap-save-01",
+        }
+        changed = client.patch(
+            "/api/warehouse/ground-layout/floors/3F/areas/A01/published-positions",
+            json=payload,
+        )
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["changed_location_count"] == 1
+        assert changed.json()["writes_inventory"] is False
+        assert changed.json()["idempotent_replay"] is False
+
+        replay = client.patch(
+            "/api/warehouse/ground-layout/floors/3F/areas/A01/published-positions",
+            json=payload,
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["idempotent_replay"] is True
+        conflicting_payload = {
+            **payload,
+            "slots": [
+                {
+                    **payload_slot,
+                    "left_pct": payload_slot["left_pct"] + 0.1,
+                }
+            ],
+        }
+        conflict = client.patch(
+            "/api/warehouse/ground-layout/floors/3F/areas/A01/published-positions",
+            json=conflicting_payload,
+        )
+        assert conflict.status_code == 409, conflict.text
+        assert "同一保存编号" in conflict.text
+        with factory() as db:
+            after = {
+                "plans": int(db.scalar(select(func.count(WarehouseGroundLayoutPlan.id))) or 0),
+                "slots": int(db.scalar(select(func.count(WarehouseGroundLayoutSlot.id))) or 0),
+                "lots": int(db.scalar(select(func.count(InventoryLot.id))) or 0),
+                "pallets": int(db.scalar(select(func.count(InventoryPallet.id))) or 0),
+            }
+            saved = db.scalar(
+                select(Floor3LocationLayout).where(
+                    Floor3LocationLayout.location_id == moved["location_id"]
+                )
+            )
+            assert saved is not None
+            assert saved.version == payload_slot["expected_version"] + 1
+            assert after == before
+
+
 def test_numbering_preview_uses_standard_footprint_and_custom_direction() -> None:
     preview = build_ground_slot_preview(
         _measured_layout(),
@@ -389,13 +503,44 @@ def test_unstructured_fin_publish_adopts_existing_real_locations_without_duplica
 
 
 def test_workshop_can_use_scoped_candidates_but_cannot_publish_layout(p187_app) -> None:
-    app, _factory, ids = p187_app
+    app, factory, ids = p187_app
     with TestClient(app) as admin_client:
         _login(admin_client)
-        _publish_six_slots(admin_client)
+        published = _publish_six_slots(admin_client)
+
+    first_slot = published["slots"][0]
+    with factory() as db:
+        first_layout = db.scalar(
+            select(Floor3LocationLayout).where(
+                Floor3LocationLayout.location_id == first_slot["location_id"]
+            )
+        )
+        assert first_layout is not None
+        restricted_payload = {
+            "slots": [
+                {
+                    "location_id": first_slot["location_id"],
+                    "expected_version": first_layout.version,
+                    "left_pct": float(first_layout.left_pct),
+                    "top_pct": float(first_layout.top_pct),
+                    "width_pct": float(first_layout.width_pct),
+                    "height_pct": float(first_layout.height_pct),
+                    "z_index": first_layout.z_index,
+                }
+            ],
+            "expected_map_revision": "p1-87-map-r1",
+            "expected_policy_version": 2,
+            "expected_plan_version": published["plan_version"],
+            "idempotency_key": "p187-workshop-cannot-move",
+        }
 
     with TestClient(app) as workshop_client:
         _login_workshop(workshop_client)
+        denied_position_save = workshop_client.patch(
+            "/api/warehouse/ground-layout/floors/3F/areas/A01/published-positions",
+            json=restricted_payload,
+        )
+        assert denied_position_save.status_code == 403
         planning = workshop_client.post(
             "/api/warehouse/ground-layout/floors/3F/areas/A01/draft",
             json={

@@ -6,7 +6,7 @@ const source = readFileSync(new URL("../src/WarehouseTwinApp.tsx", import.meta.u
 const sceneSource = readFileSync(new URL("../src/industrialScene.ts", import.meta.url), "utf8");
 
 test("ordinary area planning exposes a current-area-only point editing workflow", () => {
-  assert.match(source, />调整货位点位</);
+  assert.match(source, />拖动并保存现场货位</);
   assert.match(source, />保存并固定/);
   assert.match(source, />取消点位调整/);
   assert.match(source, /location\?\.area_code !== locationPointEditAreaCode/);
@@ -15,17 +15,31 @@ test("ordinary area planning exposes a current-area-only point editing workflow"
 
 test("point save warns about occupied locations and keeps inventory outside the write scope", () => {
   assert.match(source, /占用货位请先按现场实际/);
-  assert.match(source, /保存只更新地图点位，不移动库存、栈板或货物/);
+  assert.match(source, /保存会同步权威排位，但不改库存、栈板绑定或数量/);
   assert.match(source, /确认保存并固定/);
   assert.match(source, /其中 \$\{occupiedDraftCount\} 个为占用货位/);
 });
 
-test("auto arrange requires explicit confirmation and posts the confirmed area request", () => {
-  assert.match(source, /自动均匀排布空闲系统货位/);
-  assert.match(source, /window\.confirm\(`确认自动均匀排布/);
-  assert.match(source, /areas\/\$\{encodeURIComponent\(selectedAreaCode\)\}\/auto-arrange/);
-  assert.match(source, /mutateJson<\{ message\?: string; auto_arranged_count\?: number \}>\(endpoint, "POST", \{/);
-  assert.match(source, /confirmed: true,[\s\S]*expected_map_revision:[\s\S]*expected_policy_version: areaLocationManagement\?\.policy_version \|\| undefined,[\s\S]*expected_layout_versions: selectedAreaLayoutVersions/);
+test("published ground positions use the dedicated atomic save contract", () => {
+  assert.match(source, /available_actions\.includes\("published_layout"\)/);
+  assert.match(source, /ground-layout\/floors\/\$\{encodeURIComponent\(floorCode\)\}\/areas\/\$\{encodeURIComponent\(areaCode\)\}\/published-positions/);
+  assert.match(source, /expected_plan_version: management\.ground_plan_version/);
+  assert.match(source, /idempotency_key: locationLayoutIdempotencyKey/);
+  assert.match(source, /查货、移货、盘点和空货位显示将统一使用这组位置/);
+});
+
+test("map-first toolbar hides delayed dispatch and exposes selective auto merge", () => {
+  assert.match(source, /const \[delayedDispatchOpen, setDelayedDispatchOpen\] = useState\(false\)/);
+  assert.match(source, /延期待送 \{dashboard\.delayed_dispatch_relocation\.candidate_count\}/);
+  assert.match(source, /delayedDispatchOpen && dashboard\?\.delayed_dispatch_relocation/);
+  assert.match(source, />自动合并</);
+  assert.match(source, /只勾选现场要合并的栈板/);
+  assert.match(source, /type="checkbox" checked=\{selected\}/);
+});
+
+test("ordinary planning no longer offers tight automatic pallet packing", () => {
+  assert.doesNotMatch(source, />自动均匀排布空闲系统货位</);
+  assert.match(source, /系统不再强制把栈板紧贴均匀排布/);
 });
 
 test("count changes send the complete location snapshot even when it is empty", () => {

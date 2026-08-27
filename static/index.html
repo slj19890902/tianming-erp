@@ -2008,14 +2008,31 @@
       .reported-filterbar .reported-item-toolbar { display:flex; align-items:center; gap:6px; margin-left:auto; }
       .reported-filterbar .pager.top { flex:0 0 auto; }
       .production-compact-command-bar {
-        display:flex; align-items:center; gap:6px; min-width:0; margin:0 0 8px; white-space:nowrap;
-        padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--panel);
+        display:flex; align-items:center; gap:6px; min-width:0; margin:0 0 8px; flex-wrap:nowrap; white-space:nowrap;
+        min-height:58px; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--panel);
       }
       .production-compact-command-bar h2 { flex:0 0 auto; margin:0 8px 0 0; font-size:22px; line-height:36px; }
       .production-compact-command-bar .pager { flex:0 0 auto; margin-left:auto; }
-      .production-compact-command-bar .production-history-filters { display:flex; align-items:center; gap:6px; min-width:0; flex:1 1 auto; }
-      .production-compact-command-bar .production-history-filters .input,
-      .production-compact-command-bar .production-history-filters .select { min-width:0; max-width:150px; }
+      .production-tab-strip { flex:0 0 auto; flex-wrap:nowrap; min-width:0; }
+      .production-tab-actions { display:flex; align-items:center; justify-content:flex-end; gap:6px; min-width:0; margin-left:auto; flex-wrap:nowrap; }
+      .production-tab-actions .pager { margin-left:0; }
+      .production-filter-panel {
+        position:relative; z-index:25; display:flex; align-items:center; gap:6px; min-width:0;
+        margin:-2px 0 8px; padding:8px 10px; flex-wrap:nowrap; white-space:nowrap;
+        overflow:visible; border:1px solid var(--line); border-radius:10px; background:#f8fafc;
+      }
+      .production-filter-panel .search-select { flex:0 0 220px; width:220px; min-width:220px; }
+      .production-filter-panel .input,
+      .production-filter-panel .select { flex:1 1 128px; min-width:96px; max-width:168px; }
+      .production-filter-panel input[type="date"] { flex:0 0 142px; width:142px; }
+      .production-filter-panel .search-select:focus-within { z-index:410; }
+      .production-filter-panel .search-select-list {
+        left:0; right:auto; width:360px; max-width:min(560px,70vw); max-height:300px;
+        overflow-x:hidden; overflow-y:auto; white-space:normal; z-index:420;
+      }
+      .production-filter-panel .search-select-option {
+        display:block; width:100%; white-space:normal; overflow-wrap:anywhere; text-align:left;
+      }
       .ui-large .reported-filterbar .btn { padding-left:10px; padding-right:10px; }
       .ui-large .reported-filterbar .reported-size-filter { width:108px !important; min-width:108px !important; }
       .ui-large .reported-filter-fields .search-select { width:180px; min-width:180px; }
@@ -2026,11 +2043,9 @@
       .ui-large .production-compact-command-bar .select { min-height:40px; padding:6px 9px; font-size:15px; }
       @media (max-width: 1699px) {
         .requisition-board-head,
-        .production-compact-command-bar,
         .list-filterbar.reported-filterbar { flex-wrap:wrap; }
         .requisition-board-head .requisition-page-actions,
         .reported-filterbar .reported-item-toolbar { margin-left:0; flex-wrap:wrap; }
-        .production-compact-command-bar .production-history-filters,
         .reported-filterbar .reported-filter-fields { flex-wrap:wrap; }
       }
       .production-print-selection-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -3947,33 +3962,47 @@
 
             <template v-else-if="activePage === 'production'">
               <div class="production-compact-command-bar">
-                <div class="toolbar-group">
+                <div class="toolbar-group production-tab-strip">
                   <h2>生产与成品</h2>
                   <button :class="['btn',{primary:productionTab==='history'}]" :disabled="productionBusy" @click="productionTab='history'; loadProductionHistory()">完工历史 {{ productionHistoryTotal }}</button>
                   <button :class="['btn',{primary:productionTab==='placement'}]" :disabled="productionBusy" @click="productionTab='placement'; loadProductionPlacement()">待送成品归位 {{ productionPlacementTotal }}</button>
                 </div>
-                <div v-if="productionTab==='pending'" class="toolbar-group">
+                <div v-if="productionTab==='pending'" class="production-tab-actions">
                   <pager :page="pages.productionPending" :total="productionPendingTotal" :page-size="productionPendingPageSize()" :always="true" :compact="true" @change="loadProductionPage($event)"></pager>
                   <button v-if="productionTab==='pending' && productionLabelMaintenanceEntryVisible()" class="btn small" :disabled="productionBusy" @click="openProductionLabelMaintenance">标签异常 / 维护<span v-if="productionLabelMaintenanceAnomalyCount()">（{{ productionLabelMaintenanceAnomalyCount() }}）</span></button>
                   <button class="btn" :disabled="productionBusy || productionPendingLoading" @click="loadProduction">{{ productionPendingLoading ? '读取中…' : '刷新' }}</button>
                 </div>
-                <div v-else-if="productionTab==='history'" class="production-history-filters">
-                  <search-select v-model="productionHistoryFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true" @change="pages.productionHistory=1; loadProductionHistory()"></search-select>
-                  <input class="input" v-model.trim="productionHistoryFilters.order_keyword" placeholder="订单/客户单号" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
-                  <input class="input" v-model.trim="productionHistoryFilters.product_code" placeholder="存货编码" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
-                  <input class="input" v-model.trim="productionHistoryFilters.product_name" placeholder="产品名称" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
-                  <input class="input" type="date" aria-label="完工开始日期" v-model="productionHistoryFilters.completed_date_from" @change="pages.productionHistory=1; loadProductionHistory()" />
-                  <input class="input" type="date" aria-label="完工结束日期" v-model="productionHistoryFilters.completed_date_to" @change="pages.productionHistory=1; loadProductionHistory()" />
-                  <select class="select" v-model="productionHistoryFilters.status" @change="pages.productionHistory=1; loadProductionHistory()"><option value="">全部状态</option><option value="posted">有效完工</option><option value="reversed">已撤销</option></select>
-                  <button class="btn small" @click="pages.productionHistory=1; loadProductionHistory()">查询</button>
-                  <button class="btn small" @click="resetProductionHistoryFilters()">清空</button>
+                <div v-else-if="productionTab==='history'" class="production-tab-actions">
+                  <button class="btn" type="button" :aria-expanded="productionHistoryFilterVisible" @click="productionHistoryFilterVisible=!productionHistoryFilterVisible">{{ productionHistoryFilterVisible ? '收起筛选' : '筛选查找' }}</button>
                   <pager :page="pages.productionHistory" :total="productionHistoryTotal" :page-size="productionHistoryPageSize()" :always="true" :compact="true" @change="pages.productionHistory=$event; loadProductionHistory()"></pager>
+                  <button class="btn" :disabled="productionBusy" @click="loadProductionHistory()">刷新</button>
                 </div>
-                <div v-else class="toolbar-group">
-                  <span class="muted">把一楼待送区成品归位到现场实际位置，库存台账与实测地图同步更新。</span>
+                <div v-else class="production-tab-actions">
+                  <button class="btn" type="button" :aria-expanded="productionPlacementFilterVisible" @click="productionPlacementFilterVisible=!productionPlacementFilterVisible">{{ productionPlacementFilterVisible ? '收起筛选' : '筛选查找' }}</button>
                   <pager :page="pages.productionPlacement" :total="productionPlacementTotal" :page-size="productionHistoryPageSize()" :always="true" :compact="true" @change="pages.productionPlacement=$event; loadProductionPlacement()"></pager>
                   <button class="btn" :disabled="productionBusy || productionPlacementLoading" @click="loadProductionPlacement()">{{ productionPlacementLoading ? '读取中…' : '刷新' }}</button>
                 </div>
+              </div>
+              <div v-if="productionTab==='history' && productionHistoryFilterVisible" class="production-filter-panel">
+                <search-select v-model="productionHistoryFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true"></search-select>
+                <input class="input" v-model.trim="productionHistoryFilters.order_keyword" placeholder="订单/客户单号" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
+                <input class="input" v-model.trim="productionHistoryFilters.product_code" placeholder="存货编码" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
+                <input class="input" v-model.trim="productionHistoryFilters.product_name" placeholder="产品名称" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
+                <input class="input" type="date" aria-label="完工开始日期" v-model="productionHistoryFilters.completed_date_from" />
+                <input class="input" type="date" aria-label="完工结束日期" v-model="productionHistoryFilters.completed_date_to" />
+                <select class="select" v-model="productionHistoryFilters.status"><option value="">全部状态</option><option value="posted">有效完工</option><option value="reversed">已撤销</option></select>
+                <button class="btn small primary" @click="pages.productionHistory=1; loadProductionHistory()">查询</button>
+                <button class="btn small" @click="resetProductionHistoryFilters()">清空</button>
+              </div>
+              <div v-if="productionTab==='placement' && productionPlacementFilterVisible" class="production-filter-panel">
+                <search-select v-model="productionPlacementFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true"></search-select>
+                <input class="input" v-model.trim="productionPlacementFilters.order_keyword" placeholder="订单/客户单号" @keyup.enter="pages.productionPlacement=1; loadProductionPlacement()" />
+                <input class="input" v-model.trim="productionPlacementFilters.product_code" placeholder="存货编码" @keyup.enter="pages.productionPlacement=1; loadProductionPlacement()" />
+                <input class="input" v-model.trim="productionPlacementFilters.product_name" placeholder="产品名称" @keyup.enter="pages.productionPlacement=1; loadProductionPlacement()" />
+                <input class="input" type="date" aria-label="归位候选完工开始日期" v-model="productionPlacementFilters.completed_date_from" />
+                <input class="input" type="date" aria-label="归位候选完工结束日期" v-model="productionPlacementFilters.completed_date_to" />
+                <button class="btn small primary" @click="pages.productionPlacement=1; loadProductionPlacement()">查询</button>
+                <button class="btn small" @click="resetProductionPlacementFilters()">清空</button>
               </div>
               <div v-if="productionTab==='pending' && productionPendingError" class="status orange" style="display:block;margin:8px 0">{{ productionPendingError }} <button class="btn small" @click="loadProduction">重试</button></div>
               <data-panel v-if="productionTab==='pending'" :empty="!productionPending.length">
@@ -8642,8 +8671,9 @@
             incomingWorkspace: "board", incomingTab: "pending", incomingPending: [], incomingPendingTotal: 0, incomingPendingLoading: false, incomingPendingError: "", incomingPendingAppliedPage: 1, incomingPendingRetryPage: 1, incomingReceived: [], incomingReceivedTotal: 0, incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingProductionCardOpening: false, incomingProductionCardBatchBusy: false, incomingProductionCardSelections: {}, incomingProductionCardAttemptId: "", incomingProductionCardRecoveryUrl: "", incomingProductionCardRecoveryMessage: "", incomingHistoryFilterVisible: false,
             externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingFilter: "", externalIncomingLoaded: false, externalIncomingDrafts: {}, externalIncomingSavingId: null, externalIncomingSavingAttemptId: "",
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
-            productionTab: "history", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionPlacement: [], productionPlacementTotal: 0, productionPlacementLoading: false, productionPlacementError: "", productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
+            productionTab: "history", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionHistoryFilterVisible: false, productionPlacement: [], productionPlacementTotal: 0, productionPlacementLoading: false, productionPlacementError: "", productionPlacementFilterVisible: false, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
+            productionPlacementFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionActualAdjustmentAttempts: {}, productionLabelRefreshAttempts: {},
             productFormSnapshot: null, productBomSnapshot: null,
             productEditReturnContext: null,
@@ -17064,7 +17094,8 @@
           },
           async loadProduction() {
             if (this.productionTab === "placement") return this.loadProductionPlacement();
-            const [historyResult] = await Promise.all([
+            const [, historyResult] = await Promise.all([
+              this.loadCustomerOptions(),
               this.loadProductionHistory(),
               this.loadProductionPlacement(),
             ]);
@@ -17338,11 +17369,15 @@
             this.productionPlacementError = "";
             try {
               await this.ensureProductionLocations();
-              const { data } = await axios.get("/api/production/completions", { params:{
+              const params = {
                 placement_pending:true,
                 page:this.pages.productionPlacement,
                 page_size:this.productionHistoryPageSize(),
-              }});
+              };
+              Object.entries(this.productionPlacementFilters || {}).forEach(([key,value]) => {
+                if (value !== "" && value !== null && value !== undefined) params[key] = value;
+              });
+              const { data } = await axios.get("/api/production/completions", { params });
               const loadedFloors = this.productionLocationFloors;
               const singleFloor = loadedFloors.length === 1 ? loadedFloors[0].number : null;
               this.productionPlacement = (data.items || []).map(row => ({
@@ -17365,6 +17400,11 @@
             this.productionHistoryFilters = { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" };
             this.pages.productionHistory = 1;
             this.loadProductionHistory();
+          },
+          resetProductionPlacementFilters() {
+            this.productionPlacementFilters = { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"" };
+            this.pages.productionPlacement = 1;
+            this.loadProductionPlacement();
           },
           productionLocation(locationId) {
             return this.productionAvailableLocations.find(location => Number(location.id) === Number(locationId));

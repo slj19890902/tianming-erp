@@ -18,12 +18,30 @@ LAYOUT_JS = (ROOT / "static" / "assets" / "mold-label-layout.js").read_text(
 )
 
 
+def _legacy_v3_layout() -> dict:
+    """Return the final p1-103-v3 geometry for frozen-history tests."""
+
+    return {
+        "catalog_version": "p1-103-v3",
+        "paper": {"width_mm": 80.0, "height_mm": 40.0},
+        "elements": [
+            {"id": "board_specification", "kind": "text", "x_mm": 1.2, "y_mm": .8, "width_mm": 61.8, "height_mm": 7.0, "font_size_mm": 5.6, "font_weight": 900, "text_align": "left", "visible": True},
+            {"id": "inventory_code", "kind": "text", "x_mm": 1.2, "y_mm": 8.4, "width_mm": 61.8, "height_mm": 7.0, "font_size_mm": 4.8, "font_weight": 900, "text_align": "left", "visible": True},
+            {"id": "flute_type", "kind": "text", "x_mm": 1.2, "y_mm": 15.7, "width_mm": 12.0, "height_mm": 7.0, "font_size_mm": 4.0, "font_weight": 800, "text_align": "left", "visible": True},
+            {"id": "cutting_mode", "kind": "text", "x_mm": 13.6, "y_mm": 15.7, "width_mm": 49.4, "height_mm": 7.0, "font_size_mm": 3.8, "font_weight": 800, "text_align": "left", "visible": True},
+            {"id": "customer_name", "kind": "text", "x_mm": 1.2, "y_mm": 24.6, "width_mm": 21.8, "height_mm": 6.4, "font_size_mm": 4.0, "font_weight": 900, "text_align": "left", "visible": True},
+            {"id": "mold_label_name", "kind": "text", "x_mm": 1.2, "y_mm": 31.2, "width_mm": 61.8, "height_mm": 6.8, "font_size_mm": 5.0, "font_weight": 900, "text_align": "left", "visible": True},
+            {"id": "mold_chinese_short_name", "kind": "text", "x_mm": 23.4, "y_mm": 24.6, "width_mm": 39.6, "height_mm": 6.4, "font_size_mm": 4.0, "font_weight": 800, "text_align": "left", "visible": True},
+            {"id": "product_specification", "kind": "text", "x_mm": 24.6, "y_mm": 30.6, "width_mm": 38.4, "height_mm": 8.0, "font_size_mm": 4.4, "font_weight": 800, "text_align": "left", "visible": False},
+            {"id": "mold_qr", "kind": "qr", "x_mm": 64.4, "y_mm": 24.6, "width_mm": 14.2, "height_mm": 14.2, "visible": True},
+        ],
+    }
+
+
 def _frozen_v1_layout() -> dict:
     """Build the pre-P1-103E geometry instead of mutating the new default."""
 
-    from app.services.mold_label_layout import default_layout
-
-    legacy = deepcopy(default_layout())
+    legacy = deepcopy(_legacy_v3_layout())
     legacy["catalog_version"] = "p1-103-v1"
     geometry = {
         "customer_name": (1.2, 23.2, 21.8, 7.0, 4.2),
@@ -92,21 +110,18 @@ def _complete_named_mold(
         return int(mold.id)
 
 
-def test_default_layout_swaps_mold_name_and_chinese_short_name_within_qr_height() -> None:
+def test_default_layout_matches_single_label_content_and_fills_80x40_paper() -> None:
     from app.services.mold_label_layout import default_layout, normalize_layout
 
     layout = normalize_layout(default_layout())
-    assert layout["catalog_version"] == "p1-103-v3"
+    assert layout["catalog_version"] == "p1-112-v1"
     assert layout["paper"] == {"width_mm": 80.0, "height_mm": 40.0}
     assert [item["id"] for item in layout["elements"]] == [
         "board_specification",
-        "inventory_code",
-        "flute_type",
-        "cutting_mode",
-        "customer_name",
-        "mold_label_name",
-        "mold_chinese_short_name",
         "product_specification",
+        "flute_type",
+        "customer_name",
+        "mold_number",
         "mold_qr",
     ]
     qr = next(item for item in layout["elements"] if item["id"] == "mold_qr")
@@ -114,13 +129,8 @@ def test_default_layout_swaps_mold_name_and_chinese_short_name_within_qr_height(
     customer = next(
         item for item in layout["elements"] if item["id"] == "customer_name"
     )
-    mold_name = next(
-        item for item in layout["elements"] if item["id"] == "mold_label_name"
-    )
-    short_name = next(
-        item
-        for item in layout["elements"]
-        if item["id"] == "mold_chinese_short_name"
+    mold_number = next(
+        item for item in layout["elements"] if item["id"] == "mold_number"
     )
     product_size = next(
         item
@@ -130,31 +140,23 @@ def test_default_layout_swaps_mold_name_and_chinese_short_name_within_qr_height(
     board = next(
         item for item in layout["elements"] if item["id"] == "board_specification"
     )
-    inventory = next(
-        item for item in layout["elements"] if item["id"] == "inventory_code"
-    )
     assert board["width_mm"] >= 61.5
-    assert inventory["width_mm"] >= 61.5
-    assert customer["y_mm"] == short_name["y_mm"] == qr["y_mm"]
-    assert customer["x_mm"] < short_name["x_mm"]
-    assert mold_name["y_mm"] > short_name["y_mm"]
-    assert mold_name["x_mm"] == customer["x_mm"]
-    assert mold_name["width_mm"] >= 61.5
-    identity_height = (
-        mold_name["y_mm"] + mold_name["height_mm"] - customer["y_mm"]
-    )
-    assert identity_height <= qr["height_mm"]
-    assert mold_name["y_mm"] + mold_name["height_mm"] <= (
+    assert product_size["visible"] is True
+    assert customer["width_mm"] >= 61.5
+    assert mold_number["x_mm"] == customer["x_mm"]
+    assert mold_number["y_mm"] == qr["y_mm"]
+    assert mold_number["width_mm"] >= 61.5
+    assert mold_number["font_size_mm"] >= 4.3
+    assert mold_number["y_mm"] + mold_number["height_mm"] <= (
         qr["y_mm"] + qr["height_mm"]
     )
-    assert product_size["visible"] is False
     assert qr["y_mm"] >= 24.0
 
 
 def test_historical_wide_job_offers_explicit_current_layout_reregistration() -> None:
-    assert 'CURRENT_WIDE_CATALOG="p1-103-v3"' in LABEL_PAGE
+    assert 'CURRENT_WIDE_CATALOG="p1-112-v1"' in LABEL_PAGE
     assert 'id="recreateCurrentLayout"' in LABEL_PAGE
-    assert "按当前紧凑版式重新登记" in LABEL_PAGE
+    assert "按当前统一版式重新登记" in LABEL_PAGE
     assert "历史作业不会被改写" in LABEL_PAGE
     assert 'method:"POST"' in LABEL_PAGE
     assert '"/api/warehouse/molds/label-prints"' in LABEL_PAGE
@@ -183,7 +185,7 @@ def test_v1_snapshot_hash_and_prefix_catalog_remain_frozen_after_v2_default() ->
     assert snapshot["layout_hash"] == frozen_hash
 
 
-def test_current_v1_release_is_projected_to_v3_without_mutating_history(
+def test_current_v1_release_is_projected_to_single_parity_without_mutating_history(
     mold_app,
 ) -> None:
     from app.models.mold_tool import MoldLabelLayoutRevision
@@ -215,12 +217,15 @@ def test_current_v1_release_is_projected_to_v3_without_mutating_history(
         stored = db.scalar(select(MoldLabelLayoutRevision))
 
         assert current["version"] == 1
-        assert current["layout"]["catalog_version"] == "p1-103-v3"
-        assert next(
-            item
-            for item in current["layout"]["elements"]
-            if item["id"] == "product_specification"
-        )["visible"] is False
+        assert current["layout"]["catalog_version"] == "p1-112-v1"
+        assert [item["id"] for item in current["layout"]["elements"]] == [
+            "board_specification",
+            "product_specification",
+            "flute_type",
+            "customer_name",
+            "mold_number",
+            "mold_qr",
+        ]
         assert stored is not None
         assert stored.catalog_version == "p1-103-v1"
         assert '"catalog_version":"p1-103-v1"' in stored.payload_json
@@ -603,7 +608,7 @@ def test_layout_audit_failure_rolls_back_revision(mold_app, monkeypatch) -> None
         assert db.scalar(select(func.count(MoldLabelLayoutRevision.id))) == 0
 
 
-def test_wide_label_never_substitutes_internal_code_for_missing_handwritten_name(
+def test_wide_label_uses_single_label_facts_without_extra_handwritten_name_gate(
     mold_app,
 ) -> None:
     app, factory = mold_app
@@ -630,9 +635,30 @@ def test_wide_label_never_substitutes_internal_code_for_missing_handwritten_name
                 "idempotency_key": "p1-103-missing-label-80",
             },
         )
-        assert wide.status_code == 409
-        assert "实体侧面手写标签名称" in wide.json()["detail"]
-        assert "INT-01" not in wide.json()["detail"]
+        assert wide.status_code == 200, wide.text
+
+        legacy_label = client.get(
+            f"/api/warehouse/molds/{mold_id}/label",
+            params={
+                "template_version": "mold_40x30_v1",
+                "print_job_id": legacy.json()["print_job_id"],
+            },
+        ).json()
+        wide_label = client.get(
+            f"/api/warehouse/molds/{mold_id}/label",
+            params={
+                "template_version": "mold_80x40_v1",
+                "print_job_id": wide.json()["print_job_id"],
+            },
+        ).json()
+        for field in (
+            "label_customer_name",
+            "label_mold_number",
+            "label_product_specification",
+            "label_report_specification",
+            "label_flute_type",
+        ):
+            assert wide_label[field] == legacy_label[field]
 
 
 def test_rollback_replay_keeps_the_original_source_and_adds_no_duplicate(

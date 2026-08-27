@@ -8,7 +8,8 @@
   const V1_CATALOG_VERSION = "p1-103-v1";
   const V2_CATALOG_VERSION = "p1-103-v2";
   const V3_CATALOG_VERSION = "p1-103-v3";
-  const ELEMENT_LABELS = Object.freeze({
+  const V4_CATALOG_VERSION = "p1-112-v1";
+  const LEGACY_ELEMENT_LABELS = Object.freeze({
     board_specification: "片料尺寸",
     inventory_code: "纸箱存货编码",
     flute_type: "楞型",
@@ -19,7 +20,18 @@
     product_specification: "产品尺寸",
     mold_qr: "模具二维码",
   });
-  const ELEMENT_IDS = Object.freeze(Object.keys(ELEMENT_LABELS));
+  const CURRENT_ELEMENT_LABELS = Object.freeze({
+    board_specification: "片料尺寸",
+    product_specification: "产品尺寸",
+    flute_type: "楞型",
+    customer_name: "客户名称",
+    mold_number: "模具编号",
+    mold_qr: "模具二维码",
+  });
+  const ELEMENT_LABELS = Object.freeze({
+    ...LEGACY_ELEMENT_LABELS,
+    ...CURRENT_ELEMENT_LABELS,
+  });
 
   let editorConfig = null;
   let adminState = null;
@@ -84,7 +96,7 @@
     if (!Number.isInteger(version) || version < 0 || !layout || typeof layout !== "object") {
       throw new Error("40×80模具标签布局版本无效");
     }
-    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION, V3_CATALOG_VERSION].includes(layout.catalog_version)) {
+    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION, V3_CATALOG_VERSION, V4_CATALOG_VERSION].includes(layout.catalog_version)) {
       throw new Error("40×80模具标签元素目录不受支持");
     }
     if (
@@ -93,12 +105,15 @@
     ) {
       throw new Error("40×80模具标签内容区尺寸无效");
     }
-    if (!Array.isArray(layout.elements) || layout.elements.length !== ELEMENT_IDS.length) {
+    const currentCatalog = layout.catalog_version === V4_CATALOG_VERSION;
+    const catalogLabels = currentCatalog ? CURRENT_ELEMENT_LABELS : LEGACY_ELEMENT_LABELS;
+    const elementIds = Object.keys(catalogLabels);
+    if (!Array.isArray(layout.elements) || layout.elements.length !== elementIds.length) {
       throw new Error("40×80模具标签元素不完整");
     }
     const seen = new Set();
     for (const element of layout.elements) {
-      if (!ELEMENT_IDS.includes(element?.id) || seen.has(element.id)) {
+      if (!elementIds.includes(element?.id) || seen.has(element.id)) {
         throw new Error("40×80模具标签存在未知或重复元素");
       }
       seen.add(element.id);
@@ -112,7 +127,7 @@
         || x + width > PAPER_WIDTH_MM + .001
         || y + height > PAPER_HEIGHT_MM + .001
       ) {
-        throw new Error(`${ELEMENT_LABELS[element.id]}的位置或尺寸无效`);
+        throw new Error(`${catalogLabels[element.id]}的位置或尺寸无效`);
       }
       const productSizeHidden = (
         layout.catalog_version === V3_CATALOG_VERSION
@@ -127,7 +142,7 @@
         throw new Error("当前40×80版式暂不显示产品尺寸");
       }
       if (!productSizeHidden && element.visible !== true) {
-        throw new Error(`${ELEMENT_LABELS[element.id]}不能隐藏`);
+        throw new Error(`${catalogLabels[element.id]}不能隐藏`);
       }
       if (element.kind === "qr") {
         if (width !== 14.2 || height !== 14.2) {
@@ -140,7 +155,7 @@
         || ![400, 700, 800, 900].includes(Number(element.font_weight))
         || !["left", "center", "right"].includes(element.text_align)
       ) {
-        throw new Error(`${ELEMENT_LABELS[element.id]}的文字样式无效`);
+        throw new Error(`${catalogLabels[element.id]}的文字样式无效`);
       }
     }
     for (let index = 0; index < layout.elements.length; index += 1) {
@@ -154,7 +169,7 @@
           || Number(right.y_mm) + Number(right.height_mm) <= Number(left.y_mm) + .04
         );
         if (overlap) {
-          throw new Error(`${ELEMENT_LABELS[left.id]}与${ELEMENT_LABELS[right.id]}发生重叠`);
+          throw new Error(`${catalogLabels[left.id]}与${catalogLabels[right.id]}发生重叠`);
         }
       }
     }
@@ -163,6 +178,21 @@
 
   function valueForElement(row, elementId, catalogVersion = V3_CATALOG_VERSION) {
     const product = Array.isArray(row?.products) ? row.products[0] : null;
+    if (catalogVersion === V4_CATALOG_VERSION) {
+      const baselineValues = {
+        board_specification: String(row?.label_report_specification ?? product?.report_specification ?? "").trim() || "待完善",
+        product_specification: String(row?.label_product_specification ?? product?.specification ?? "").trim() || "待完善",
+        flute_type: String(row?.label_flute_type ?? product?.flute_type ?? "").trim() || "待完善",
+        customer_name: String(row?.label_customer_name ?? product?.customer_short_name ?? "").trim() || "待完善",
+        mold_number: String(row?.label_mold_number ?? "").trim() || "待完善",
+      };
+      const prefixes = {
+        board_specification: "片料 ",
+        product_specification: "产品 ",
+        flute_type: "楞型 ",
+      };
+      return `${prefixes[elementId] || ""}${baselineValues[elementId] || ""}`;
+    }
     const values = {
       board_specification: String(row?.label_report_specification ?? product?.report_specification ?? "").trim() || "待完善",
       inventory_code: String(row?.label_inventory_code ?? product?.product_code ?? "").trim() || "待完善",

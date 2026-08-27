@@ -15729,43 +15729,11 @@ def _mold_label_printability_error(
             f"模具 {display_name} 的标签内容过长，"
             "请核对客户简称、标签名称和中文简写"
         )
-    if template_version == MOLD_LABEL_TEMPLATE_80X40:
-        mold_label_name = _label_mold_name(row, products)
-        if not mold_label_name:
-            return (
-                f"模具 {display_name} 尚未维护实体侧面手写标签名称，"
-                "请先在“模具位置”中维护后再打印40×80标签"
-            )
-        customer_rows = _label_customer_rows(row, products)
-        board_size_rows = _label_dimension_rows(
-            products,
-            "report_specification",
-        )
-        flute_rows = _label_flute_rows(products)
-        cutting_rows = _label_cutting_rows(products)
-        missing = [
-            label
-            for label, value in (
-                ("客户中文简称", all(customer_rows)),
-                (
-                    "存货编码",
-                    all(str(product.product_code or "").strip() for product in products),
-                ),
-                ("片料尺寸", all(board_size_rows)),
-                ("楞型", all(flute_rows)),
-                ("开料方式", all(cutting_rows)),
-            )
-            if not value
-        ]
-        if missing:
-            return (
-                f"模具 {display_name} 的{'、'.join(missing)}待完善，"
-                "不能打印40×80实体模具标签"
-            )
-        # Text fitting is performed against the released millimetre layout on
-        # the print page.  Do not reject invisible product-name facts or reuse
-        # the retired P1-100 fixed-grid character caps here.
-        return None
+    # The 40×80 paper now uses the same six business facts as the approved
+    # single-label page.  Paper choice must not introduce additional master-
+    # data gates (handwritten name, cutting mode, inventory code, etc.) that
+    # make batch printing fail even though the same mold can print singly.
+    # Text fitting remains fail-closed in the millimetre layout renderer.
     return None
 
 
@@ -15857,7 +15825,6 @@ def _mold_label_dict(
                     row
                 ),
                 "label_customer_names": customer_names,
-                "label_customer_name": "/".join(customer_names),
                 "label_product_specifications": product_specifications,
                 "label_inventory_codes": [
                     product["product_code"] for product in label_products
@@ -15866,13 +15833,6 @@ def _mold_label_dict(
                 "label_flute_types": flute_types,
                 "label_cutting_modes": cutting_modes,
                 "label_products": label_products,
-                "label_product_specification": (
-                    _label_representative_product_specification(products)
-                ),
-                "label_report_specification": (
-                    _label_representative_report_specification(products)
-                ),
-                "label_flute_type": "/".join(flute_types),
                 "label_cutting_mode": "/".join(cutting_modes),
                 "label_inventory_code": _label_compact_inventory_code(products),
                 "label_product_name": " / ".join(

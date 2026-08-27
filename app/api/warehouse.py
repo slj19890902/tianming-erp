@@ -1197,6 +1197,30 @@ class Floor3LayoutAreaPatchPayload(BaseModel):
     expected_policy_version: int | None = Field(default=None, ge=1)
 
 
+class PublishedGroundLayoutPositionPatchPayload(BaseModel):
+    """Move existing published pallet footprints without changing inventory."""
+
+    model_config = {"extra": "forbid"}
+
+    slots: list[Floor3LayoutAreaSlotPayload] = Field(min_length=1, max_length=500)
+    expected_map_revision: str = Field(min_length=1, max_length=64)
+    expected_policy_version: int = Field(gt=0)
+    expected_plan_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=64)
+
+    @field_validator("expected_map_revision", "idempotency_key")
+    @classmethod
+    def strip_published_position_text(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def unique_location_ids(self):
+        location_ids = [slot.location_id for slot in self.slots]
+        if len(location_ids) != len(set(location_ids)):
+            raise ValueError("同一个货位不能在一次保存中重复提交")
+        return self
+
+
 class Floor3AreaLocationCountPayload(BaseModel):
     target_count: int = Field(ge=0, le=500)
     confirmed: Literal[True]
@@ -6230,16 +6254,18 @@ def get_area_location_management(
         management = area_location_management_payload(route)
         if policy is None:
             management["available_actions"] = []
-        elif db.scalar(
-            select(WarehouseGroundLayoutPlan.id).where(
+        else:
+            published_plan = db.scalar(
+                select(WarehouseGroundLayoutPlan).where(
                 WarehouseGroundLayoutPlan.area_id == _area.id,
                 WarehouseGroundLayoutPlan.status == "published",
             )
-        ) is not None:
-            management["available_actions"] = []
-            management["spatial_layout_locked_reason"] = (
-                "该区域已有正式发布的地堆排位；请通过地堆排位变更流程调整"
             )
+            if published_plan is not None:
+                management["available_actions"] = ["published_layout"]
+                management["ground_plan_id"] = published_plan.id
+                management["ground_plan_version"] = published_plan.version
+                management["spatial_layout_locked_reason"] = None
         return {
             **management,
             "policy_version": policy.version if policy is not None else None,
@@ -6250,6 +6276,287 @@ def get_area_location_management(
         }
     except WarehouseAreaActivationError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.patch(
+    "/ground-layout/floors/{floor_code}/areas/{area_code}/published-positions"
+)
+def patch_published_ground_layout_positions(
+    floor_code: str,
+    area_code: str,
+    payload: PublishedGroundLayoutPositionPatchPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Persist freely dragged pallet gaps in the one published spatial fact.
+
+    The stable location identity, pallets, lots, reservations and quantities are
+    untouched.  The location layout and its published measured ground plan are
+    updated together under the same persistent floor writer claim.
+    """
+
+    request_hash = ground_canonical_hash(payload.model_dump(mode="json"))
+    with GROUND_STORAGE_TRANSACTION_LOCK:
+        WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK.acquire()
+        try:
+            _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+            floor, area, policy = _ground_layout_context(
+                db, floor_code=floor_code, area_code=area_code
+            )
+            plan = db.scalar(
+                select(WarehouseGroundLayoutPlan)
+                .where(
+                    WarehouseGroundLayoutPlan.area_id == area.id,
+                    WarehouseGroundLayoutPlan.status == "published",
+                )
+                .options(
+                    selectinload(WarehouseGroundLayoutPlan.slots)
+                    .selectinload(WarehouseGroundLayoutSlot.location)
+                    .selectinload(WarehouseLocation.floor3_layout)
+                )
+                .execution_options(populate_existing=True)
+            )
+            if plan is None:
+                raise WarehouseGroundSlotError(
+                    "GROUND_PLAN_MISSING", "当前区域没有已发布的真实地堆排位。", status_code=404
+                )
+            replay_log = db.scalar(
+                select(OperationLog).where(
+                    OperationLog.action_code
+                    == "warehouse.ground_layout.positions_update",
+                    OperationLog.entity_type == "warehouse_ground_layout_plan",
+                    OperationLog.entity_id == plan.id,
+                    OperationLog.request_id == payload.idempotency_key,
+                )
+            )
+            if replay_log is not None:
+                details = json.loads(replay_log.details or "{}")
+                if details.get("request_hash") != request_hash:
+                    raise WarehouseGroundSlotError(
+                        "GROUND_LAYOUT_IDEMPOTENCY_CONFLICT",
+                        "同一保存编号已用于不同货位布局，请刷新后重试。",
+                    )
+                return {
+                    **details.get("result", {}),
+                    "idempotent_replay": True,
+                    "writes_inventory": False,
+                }
+            if policy.version != payload.expected_policy_version:
+                raise WarehouseGroundSlotError(
+                    "GROUND_POLICY_STALE", "区域设置已变化，请刷新后重试。"
+                )
+            if (
+                policy.status != "published"
+                or policy.published_map_revision != payload.expected_map_revision
+            ):
+                raise WarehouseGroundSlotError(
+                    "GROUND_MAP_STALE", "正式地图已变化，请刷新后重新调整货位。"
+                )
+            if plan.version != payload.expected_plan_version:
+                raise WarehouseGroundSlotError(
+                    "GROUND_PLAN_STALE", "地堆排位已被其他操作更新，请刷新后重试。"
+                )
+            if plan.published_map_revision != payload.expected_map_revision:
+                raise WarehouseGroundSlotError(
+                    "GROUND_MAP_STALE", "地堆排位与正式地图版本不一致，请刷新后重试。"
+                )
+            plan_slots_by_location = {row.location_id: row for row in plan.slots}
+            submitted = {row.location_id: row for row in payload.slots}
+            if not set(submitted).issubset(plan_slots_by_location):
+                raise WarehouseGroundSlotError(
+                    "GROUND_LOCATION_SET_STALE", "提交中包含不属于当前区域的货位。"
+                )
+            all_layout_payloads: list[dict] = []
+            before: dict[int, dict] = {}
+            for ground_slot in plan.slots:
+                location = ground_slot.location
+                layout = location.floor3_layout
+                if layout is None:
+                    raise WarehouseGroundSlotError(
+                        "GROUND_LOCATION_LAYOUT_MISSING", "已发布货位缺少地图坐标，请先刷新地图。"
+                    )
+                change = submitted.get(location.id)
+                if change is not None and layout.version != change.expected_version:
+                    raise WarehouseGroundSlotError(
+                        "GROUND_LOCATION_LAYOUT_STALE", "货位坐标已变化，请刷新后重试。"
+                    )
+                before[location.id] = _floor3_layout_dict(layout)
+                values = change.model_dump(mode="json") if change is not None else _layout_geometry_payload(location)
+                all_layout_payloads.append(values)
+            floor_layout = load_warehouse_twin_floor(f"{floor.floor_number}F")
+            if str(floor_layout.get("revision") or "") != payload.expected_map_revision:
+                raise WarehouseGroundSlotError(
+                    "GROUND_MAP_STALE", "运行地图与正式排位版本不一致，请刷新后重试。"
+                )
+            if not policy.map_feature_id:
+                raise WarehouseGroundSlotError(
+                    "GROUND_MAP_FEATURE_MISSING", "区域尚未绑定正式地图边界。"
+                )
+            measured = validate_capacity_layout_slots_for_zone(
+                floor_layout,
+                feature_id=policy.map_feature_id,
+                slots=all_layout_payloads,
+            )
+            feature = next(
+                (
+                    row
+                    for row in floor_layout.get("features") or []
+                    if row.get("feature_kind") == "zone"
+                    and str(row.get("id") or "") == str(policy.map_feature_id)
+                ),
+                None,
+            )
+            if feature is None:
+                raise WarehouseGroundSlotError(
+                    "GROUND_MAP_FEATURE_MISSING",
+                    "正式地图中已找不到该区域边界，请刷新地图并重新规划。",
+                )
+            points = feature.get("points") or []
+            tolerance = max(1.0, float(_percent_round_trip_epsilon(points)))
+            for row in measured:
+                size = (float(row["width_mm"]), float(row["depth_mm"]))
+                if not (
+                    abs(size[0] - 1200) <= tolerance and abs(size[1] - 1000) <= tolerance
+                ) and not (
+                    abs(size[0] - 1000) <= tolerance and abs(size[1] - 1200) <= tolerance
+                ):
+                    raise WarehouseGroundSlotError(
+                        "GROUND_SLOT_SIZE_CHANGED",
+                        "拖动只能改变货位位置，不能缩放标准栈板货位。",
+                    )
+            measured_by_location = {
+                int(source["location_id"]): {**actual, "existing_location_id": int(source["location_id"])}
+                for source, actual in zip(all_layout_payloads, measured, strict=True)
+            }
+            numbered = number_ground_physical_slots(
+                list(measured_by_location.values()),
+                numbering_origin=plan.numbering_origin,
+                row_direction=plan.row_direction,
+                slot_direction=plan.slot_direction,
+                row_start_no=plan.row_start_no,
+                slot_start_no=plan.slot_start_no,
+            )
+            numbered_by_location = {
+                int(row["existing_location_id"]): row for row in numbered
+            }
+            changed_ids = set(submitted)
+            now = beijing_now_naive()
+            for location_id in changed_ids:
+                ground_slot = plan_slots_by_location[location_id]
+                layout = ground_slot.location.floor3_layout
+                assert layout is not None
+                change = submitted[location_id]
+                layout.left_pct = change.left_pct
+                layout.top_pct = change.top_pct
+                layout.width_pct = change.width_pct
+                layout.height_pct = change.height_pct
+                layout.z_index = change.z_index
+                layout.source_type = "manual"
+                layout.version += 1
+                layout.updated_by = user.id
+                layout.updated_at = now
+            # Recreate the plan slots to avoid transient unique collisions while
+            # route and row numbers are re-derived from the saved real positions.
+            for row in list(plan.slots):
+                db.delete(row)
+            db.flush()
+            fingerprint_slots: list[dict] = []
+            for location_id, numbered_row in sorted(
+                numbered_by_location.items(), key=lambda item: item[1]["route_sequence"]
+            ):
+                location = plan_slots_by_location[location_id].location
+                db.add(
+                    WarehouseGroundLayoutSlot(
+                        plan_id=plan.id,
+                        location_id=location_id,
+                        route_sequence=int(numbered_row["route_sequence"]),
+                        row_no=int(numbered_row["row_no"]),
+                        slot_no=int(numbered_row["slot_no"]),
+                        x_mm=Decimal(str(numbered_row["x_mm"])),
+                        y_mm=Decimal(str(numbered_row["y_mm"])),
+                        width_mm=int(round(float(numbered_row["width_mm"]))),
+                        depth_mm=int(round(float(numbered_row["depth_mm"]))),
+                    )
+                )
+                fingerprint_slots.append(
+                    {
+                        **numbered_row,
+                        "location_code": location.location_code,
+                        "left_pct": float(location.floor3_layout.left_pct),
+                        "top_pct": float(location.floor3_layout.top_pct),
+                        "width_pct": float(location.floor3_layout.width_pct),
+                        "height_pct": float(location.floor3_layout.height_pct),
+                        "existing_location_id": location_id,
+                        "existing_layout_version": int(location.floor3_layout.version),
+                    }
+                )
+            plan.preview_fingerprint = ground_preview_fingerprint(
+                area_id=area.id,
+                policy_version=policy.version,
+                map_revision=payload.expected_map_revision,
+                configuration=_ground_plan_configuration(plan),
+                slots=fingerprint_slots,
+            )
+            plan.version += 1
+            plan.updated_by = user.id
+            plan.updated_at = now
+            result = {
+                "area_code": area.area_code,
+                "changed_location_count": len(changed_ids),
+                "plan_id": plan.id,
+                "plan_version": plan.version,
+                "published_map_revision": plan.published_map_revision,
+                "message": f"已保存 {len(changed_ids)} 个货位的现场位置；库存、栈板和产品数量均未改变。",
+            }
+            db.add(
+                OperationLog(
+                    user_id=user.id,
+                    username=user.username,
+                    role=user.role,
+                    action="UPDATE",
+                    resource=f"warehouse/ground-layout/plans/{plan.id}/positions",
+                    entity_type="warehouse_ground_layout_plan",
+                    entity_id=plan.id,
+                    description="管理员按现场实际拖动并保存已发布地堆货位",
+                    event_category="warehouse",
+                    result="success",
+                    source="web",
+                    module_code="warehouse",
+                    action_code="warehouse.ground_layout.positions_update",
+                    actor_user_id_snapshot=user.id,
+                    operator_name_snapshot=user.username,
+                    object_ref=f"ground-plan:{plan.id}",
+                    request_id=payload.idempotency_key,
+                    schema_version=1,
+                    details=json.dumps(
+                        {
+                            "request_hash": request_hash,
+                            "before": {str(key): value for key, value in before.items() if key in changed_ids},
+                            "result": result,
+                            "writes_inventory": False,
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                    ip_address=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"),
+                )
+            )
+            db.commit()
+            return {**result, "idempotent_replay": False, "writes_inventory": False}
+        except (WarehouseGroundSlotError, WarehouseAreaActivationError, Floor1CandidatePlanningError, WarehouseTwinLayoutNotFoundError, ValueError) as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=getattr(error, "status_code", 409), detail=str(error)
+            ) from error
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=409, detail="货位排位发生并发冲突，请刷新后重试。"
+            ) from error
+        finally:
+            WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK.release()
 
 
 @router.patch("/spatial-layout/floors/{floor_code}/areas/{area_code}")

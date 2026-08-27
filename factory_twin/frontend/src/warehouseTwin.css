@@ -159,7 +159,7 @@ body.warehouse-twin-page {
   border-radius: 3px;
   color: #526b77;
   background: transparent;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 900;
 }
 .twin-operation-modes button.active { border-color: #0f766e; color: #fff; background: #0f766e; }
@@ -173,7 +173,7 @@ body.warehouse-twin-page {
   border-radius: 3px;
   color: #7fa6b4;
   background: transparent;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
 }
 .twin-segmented button.active { border-color: #3a8a91; color: #d8fffb; background: #12464b; }
@@ -528,7 +528,7 @@ body.warehouse-twin-page {
   width: 100%;
   max-width: 100%;
   min-height: 480px;
-  grid-template-rows: 66px 42px minmax(0, 1fr);
+  grid-template-rows: 64px 48px minmax(0, 1fr);
   color: #243746;
   background: #f3f5f7;
 }
@@ -536,18 +536,18 @@ body.warehouse-twin-page {
 
 .twin-command-bar,
 .twin-command-bar.embedded {
-  padding: 7px 14px;
-  grid-template-columns: minmax(520px, 1fr) auto auto;
-  gap: 14px;
+  padding: 6px 12px;
+  grid-template-columns: minmax(680px, 1fr) auto auto;
+  gap: 10px;
   border-color: #c7d2d8;
   background: linear-gradient(90deg, #ffffff 0%, #f7fafb 65%, #edf4f4 100%);
   box-shadow: 0 2px 8px #0f172a14;
 }
 .twin-command-bar::after { display: none; }
-.twin-brand { display: flex; align-items: center; gap: 15px; }
+.twin-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .twin-brand > div { flex: 0 0 auto; }
-.twin-brand h1 { margin: 1px 0 0; color: #17384a; font-size: 20px; letter-spacing: .03em; }
-.twin-brand p { margin-left: 2px; color: #64748b; white-space: nowrap; }
+.twin-brand h1 { margin: 1px 0 0; color: #17384a; font-size: 18px; letter-spacing: .02em; }
+.twin-brand p { display: none; }
 .twin-floor-switch { padding-left: 14px; border-left: 1px solid #d3dde1; }
 .twin-floor-switch button {
   min-width: 88px;
@@ -577,8 +577,10 @@ body.warehouse-twin-page {
 }
 
 .twin-toolbar {
-  padding: 4px 8px;
+  padding: 5px 10px;
   gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
   border-color: #d5dee2;
   background: #f8fafb;
   box-shadow: 0 1px 4px #0f172a0d;
@@ -595,7 +597,7 @@ body.warehouse-twin-page {
 .twin-layer-toggle {
   padding: 6px 11px;
   border-radius: 3px;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
 }
 .twin-layer-toggle.active { border-color: #0f766e; color: #0f766e; background: #e8f5f2; }
@@ -603,15 +605,19 @@ body.warehouse-twin-page {
 .twin-segmented button,
 .twin-camera-presets button,
 .twin-reset,
-.twin-warehouse-search-toggle { padding: 5px 9px; color: #5b6f7c; }
+.twin-warehouse-search-toggle,
+.twin-delayed-toggle { padding: 6px 10px; color: #425b69; font-size: 12px; font-weight: 800; white-space: nowrap; }
 .twin-segmented button.active { border-color: #8ec8c1; color: #0f5f59; background: #fff; }
 .twin-camera-presets { padding-left: 6px; border-color: #d1dbe0; }
 .twin-camera-presets button,
 .twin-reset,
 .twin-warehouse-search-toggle { border-color: #c7d3d9; background: #fff; }
-.twin-warehouse-search-toggle { border-radius: 3px; font-size: 10px; font-weight: 800; }
+.twin-warehouse-search-toggle,
+.twin-delayed-toggle { border: 1px solid #c7d3d9; border-radius: 3px; background: #fff; }
 .twin-warehouse-search-toggle:hover,
-.twin-warehouse-search-toggle.active { border-color: #0f766e; color: #0f766e; background: #e8f5f2; }
+.twin-warehouse-search-toggle.active,
+.twin-delayed-toggle:hover,
+.twin-delayed-toggle.active { border-color: #0f766e; color: #0f766e; background: #e8f5f2; }
 .twin-location-edit-toggle,
 .twin-area-policy-toggle,
 .twin-save-location-layout,
@@ -621,7 +627,7 @@ body.warehouse-twin-page {
   border-radius: 3px;
   color: #526b77;
   background: #fff;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   white-space: nowrap;
 }
@@ -668,7 +674,7 @@ body.warehouse-twin-page {
 .twin-view-note { padding: 5px 7px; border: 1px solid #d3dde1; border-radius: 3px; color: #627783; background: #fff; font-size: 9px; white-space: nowrap; }
 .twin-toolbar-summary { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .twin-toolbar-summary span,
-.twin-toolbar-summary button { padding: 4px 6px; border: 1px solid #d6e0e4; border-radius: 3px; color: #6b7f8b; background: #fff; font-size: 8px; }
+.twin-toolbar-summary button { padding: 4px 7px; border: 1px solid #d6e0e4; border-radius: 3px; color: #5d7280; background: #fff; font-size: 10px; }
 .twin-toolbar-summary b { color: #0f766e; font: 800 10px Consolas, monospace; }
 .twin-toolbar-summary .unlocated-blocker { cursor: pointer; border-color: #e4a85c; color: #8a4b0f; background: #fff8e7; font-weight: 800; }
 .twin-toolbar-summary .unlocated-blocker b { color: #b45309; }
@@ -683,8 +689,8 @@ body.warehouse-twin-page {
 .twin-search input { border-color: #d4dde1; color: #263c49; background: #fff; }
 
 .twin-workspace { gap: 6px; padding: 6px; overflow: hidden; }
-.twin-workspace.layers-open { grid-template-columns: 150px 280px minmax(380px, 1fr) 320px; }
-.twin-workspace.layers-collapsed { grid-template-columns: 280px minmax(430px, 1fr) 320px; }
+.twin-workspace.layers-open { grid-template-columns: 138px 286px minmax(440px, 1fr) 300px; }
+.twin-workspace.layers-collapsed { grid-template-columns: 286px minmax(500px, 1fr) 300px; }
 .twin-layer-rail,
 .twin-context-rail,
 .twin-inspector,
@@ -1384,6 +1390,10 @@ body.warehouse-twin-page {
 .twin-merge-suggestions span,
 .twin-merge-suggestions small { overflow-wrap: anywhere; color: #58716d; font-size: 8px; line-height: 1.35; }
 .twin-merge-suggestions button { align-self: center; padding: 5px 7px; border: 1px solid #0f766e; color: #0f665f; background: #fff; font-size: 8px; font-weight: 800; }
+.twin-merge-checklist { margin-top: 4px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; }
+.twin-merge-checklist label { padding: 4px 5px; display: flex; align-items: center; gap: 5px; border: 1px solid #d7e6e2; border-radius: 3px; background: #f8fcfb; cursor: pointer; }
+.twin-merge-checklist input { flex: 0 0 auto; accent-color: #0f766e; }
+.twin-merge-checklist span { color: #355d58; font-size: 9px; }
 .twin-merge-target-list { max-height: 190px; display: grid; gap: 5px; overflow-y: auto; }
 .twin-merge-target-list button { min-width: 0; padding: 7px; display: grid; gap: 3px; border: 1px solid #d8c992; border-radius: 3px; color: #3d4f57; background: #fff; text-align: left; }
 .twin-merge-target-list button.selected { border-color: #b56800; background: #fff4df; box-shadow: inset 0 0 0 1px #b56800; }

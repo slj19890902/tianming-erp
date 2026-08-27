@@ -4265,8 +4265,8 @@ def test_p1_34b1_location_labels_are_mapped_read_only_and_fail_closed(
         single = client.get(f"/api/warehouse/locations/{mapped_id}/label")
         assert single.status_code == 200, single.text
         assert single.json()["location_code"] == "A1-L01"
-        assert single.json()["display_path"] == "三楼 A1成品存放区·左侧第1位"
-        assert single.json()["area_text"] == "A1成品存放区"
+        assert single.json()["display_path"] == "三楼 右区A1·成品存放区·A1-1"
+        assert single.json()["area_text"] == "右区A1·成品存放区"
         assert single.json()["area_master_name"] == "A1成品存放区"
         assert single.json()["position_status"] == "mapped"
         assert single.json()["layout_version"] == 3
@@ -4302,7 +4302,7 @@ def test_p1_34b1_location_labels_are_mapped_read_only_and_fail_closed(
         assert default_name.status_code == 200, default_name.text
         assert default_name.json()["area_text"] == "右区A1"
         assert default_name.json()["area_master_name"] == "A1 区"
-        assert default_name.json()["display_path"] == "三楼 右区A1·左侧第1位"
+        assert default_name.json()["display_path"] == "三楼 右区A1·A1-1"
 
     with factory() as db:
         layout = db.scalar(

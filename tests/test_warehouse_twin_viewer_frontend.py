@@ -288,8 +288,9 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert 'setPlanningPublishedRevision(result.published_revision)' in SOURCE
     assert "原有高级维护草稿已保留，没有随本次确认发布" in SOURCE
     assert 'palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}' in SOURCE
-    assert "调整货位点位" in SOURCE
-    assert "自动均匀排布空闲系统货位" in SOURCE
+    assert "拖动并保存现场货位" in SOURCE
+    assert "系统不再强制把栈板紧贴均匀排布" in SOURCE
+    assert "主动留出通行、货物外伸和操作间距" in SOURCE
     assert "逻辑货位点（非实尺度）" in SOURCE
     assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
     assert '区域规划 · 一次确认' in SOURCE

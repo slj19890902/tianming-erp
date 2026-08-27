@@ -30,7 +30,8 @@ def test_operational_twin_reuses_the_editor_renderer_for_2d_and_25d() -> None:
 
 
 def test_operational_twin_reuses_formal_inventory_and_does_not_fake_rack_positions() -> None:
-    assert "/api/warehouse/twin-dashboard/overview?days=30" in SOURCE
+    assert 'days: "30"' in SOURCE
+    assert "/api/warehouse/twin-dashboard/overview?${params.toString()}" in SOURCE
     assert "/api/warehouse/twin-operations/locate?${params.toString()}" in SOURCE
     assert "/api/warehouse/molds/by-map-area?${params.toString()}" in SOURCE
     assert "当前区域模具筛选" in SOURCE

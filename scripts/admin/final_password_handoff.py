@@ -390,9 +390,6 @@ def main() -> int:
     counts_before = {
         "sales_orders": db_scalar(db_path, "SELECT COUNT(*) FROM sales_orders"),
         "sales_order_items": db_scalar(db_path, "SELECT COUNT(*) FROM sales_order_items"),
-        "legacy_ruida_orders": db_scalar(db_path, "SELECT COUNT(*) FROM legacy_ruida_orders"),
-        "legacy_ruida_order_items": db_scalar(db_path, "SELECT COUNT(*) FROM legacy_ruida_order_items"),
-        "ruida_prefixed_orders": db_scalar(db_path, "SELECT COUNT(*) FROM sales_orders WHERE order_number LIKE 'RUIDA-%'"),
         "operation_logs": db_scalar(db_path, "SELECT COUNT(*) FROM operation_logs"),
     }
 
@@ -410,9 +407,6 @@ def main() -> int:
     counts_after = {
         "sales_orders": db_scalar(db_path, "SELECT COUNT(*) FROM sales_orders"),
         "sales_order_items": db_scalar(db_path, "SELECT COUNT(*) FROM sales_order_items"),
-        "legacy_ruida_orders": db_scalar(db_path, "SELECT COUNT(*) FROM legacy_ruida_orders"),
-        "legacy_ruida_order_items": db_scalar(db_path, "SELECT COUNT(*) FROM legacy_ruida_order_items"),
-        "ruida_prefixed_orders": db_scalar(db_path, "SELECT COUNT(*) FROM sales_orders WHERE order_number LIKE 'RUIDA-%'"),
         "operation_logs": db_scalar(db_path, "SELECT COUNT(*) FROM operation_logs"),
     }
     source_integrity_after = db_integrity(db_path)
@@ -474,10 +468,7 @@ def main() -> int:
         "incoming_html_status": incoming_html_status,
         "role_checks": role_checks,
         "history_counts_unchanged": counts_before["sales_orders"] == counts_after["sales_orders"]
-        and counts_before["sales_order_items"] == counts_after["sales_order_items"]
-        and counts_before["legacy_ruida_orders"] == counts_after["legacy_ruida_orders"]
-        and counts_before["legacy_ruida_order_items"] == counts_after["legacy_ruida_order_items"]
-        and counts_before["ruida_prefixed_orders"] == counts_after["ruida_prefixed_orders"],
+        and counts_before["sales_order_items"] == counts_after["sales_order_items"],
         "operation_logs_delta": counts_after["operation_logs"] - counts_before["operation_logs"],
     }
     output_json.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

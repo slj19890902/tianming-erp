@@ -66,11 +66,10 @@ from app.models.supplier_requisition_order import (
 )
 from app.models.user import User
 from app.models.warehouse_inventory import WarehouseLocation
-from app.services.history_orders import (
+from app.services.order_number_display import (
     build_display_registry,
     build_display_registry_for_order_ids,
     display_order_number,
-    is_history_order_number,
 )
 from app.services.location_candidates import (
     list_operational_locations,
@@ -1945,21 +1944,17 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
         ):
             rows.append(data)
 
-    history_order_ids = {
+    order_ids = {
         int(row["order_id"])
         for row in rows
-        if is_history_order_number(row.get("order_number"))
+        if row.get("order_id") is not None
     }
     registry = build_display_registry_for_order_ids(
         db,
-        history_order_ids,
+        order_ids,
     )
     for row in rows:
-        display = (
-            registry.by_order_id.get(row["order_id"], row.get("order_number"))
-            if history_order_ids
-            else row.get("order_number")
-        )
+        display = registry.by_order_id.get(row["order_id"], row.get("order_number"))
         row["order_number"] = display
         row.pop("order_id", None)
 
@@ -2177,12 +2172,12 @@ def _rows(
         )
         base_rows.append(data)
     if selected_pending_routes is not None:
-        history_order_ids = {
+        order_ids = {
             int(row["order_id"])
             for row in base_rows
-            if is_history_order_number(row.get("order_number"))
+            if row.get("order_id") is not None
         }
-        registry = build_display_registry_for_order_ids(db, history_order_ids)
+        registry = build_display_registry_for_order_ids(db, order_ids)
     assert registry is not None
 
     rows = []

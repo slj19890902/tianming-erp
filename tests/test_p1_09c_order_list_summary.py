@@ -195,7 +195,6 @@ def test_order_summary_is_small_and_default_response_remains_full(order_summary_
         "total_amount",
         "business_status",
         "business_delivery_progress",
-        "is_history_order",
     ):
         assert summary_row[field] == full_row[field]
     assert len(summary.content) < len(full.content) * 0.4

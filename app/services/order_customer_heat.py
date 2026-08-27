@@ -112,7 +112,6 @@ def _ongoing_customer_summaries(
             .options(selectinload(Order.items))
             .where(
                 Order.customer_id.in_(customer_ids),
-                ~Order.order_number.like("RUIDA-%"),
                 Order.status.notin_(_ONGOING_EXCLUDED_STATUSES),
             )
         ).all()
@@ -201,7 +200,6 @@ def customer_ids_matching_heat_filters(
 
     conditions.extend(
         [
-            ~Order.order_number.like("RUIDA-%"),
             Order.status.notin_(_ONGOING_EXCLUDED_STATUSES),
         ]
     )

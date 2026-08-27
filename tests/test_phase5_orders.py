@@ -1111,7 +1111,7 @@ def test_order_list_uses_new_multi_item_orders_and_masks_workshop_prices(
     assert "sale_amount" not in workshop_list.json()["items"][0]["items"][0]
 
 
-def test_order_list_supports_tm_display_search_and_hides_legacy_raw_number(
+def test_order_list_supports_current_order_number_search(
     order_api_app,
 ) -> None:
     from app.models.order import Order
@@ -1123,31 +1123,30 @@ def test_order_list_supports_tm_display_search_and_hides_legacy_raw_number(
         order_id = created.json()["id"]
         with session_factory() as session:
             order = session.get(Order, order_id)
-            order.order_number = "RUIDA-42838"
+            order.order_number = "TM20260613001"
             session.commit()
 
         keyword = client.get(
             "/api/orders",
-            params={"scope": "history", "keyword": "TM20260613-0001"},
+            params={"scope": "active", "keyword": "TM20260613001"},
         )
         exact = client.get(
             "/api/orders",
-            params={"scope": "history", "order_number": "TM20260613-0001"},
+            params={"scope": "active", "order_number": "TM20260613001"},
         )
         customer = client.get(
             "/api/orders",
-            params={"scope": "history", "customer_name": "思迈尔"},
+            params={"scope": "active", "customer_name": "思迈尔"},
         )
         missing = client.get(
             "/api/orders",
-            params={"scope": "history", "order_number": "TM20260613-9999"},
+            params={"scope": "active", "order_number": "TM20260613999"},
         )
 
     assert keyword.status_code == 200
     assert keyword.json()["total"] == 1
-    assert keyword.json()["items"][0]["display_order_number"] == "TM20260613-0001"
-    assert keyword.json()["items"][0]["order_number"] == "TM20260613-0001"
-    assert "RUIDA" not in str(keyword.json())
+    assert keyword.json()["items"][0]["display_order_number"] == "TM20260613001"
+    assert keyword.json()["items"][0]["order_number"] == "TM20260613001"
     assert exact.json()["total"] == 1
     assert customer.json()["total"] == 1
     assert missing.json()["total"] == 0
@@ -3496,7 +3495,7 @@ def test_frontend_detail_item_status_uses_backend_business_projection() -> None:
     )
 
     assert 'v-for="(item,itemIndex) in row.items"' in index
-    assert '<status-tag v-else :value="itemBusinessStatusKey(item)"></status-tag>' in index
+    assert '<status-tag :value="itemBusinessStatusKey(item)"></status-tag>' in index
     assert "return item?.business_status || \"pending_material\"" in index
     assert "itemDeliveryStatusKey" not in index
     assert "business_delivered_quantity" in index
@@ -3636,17 +3635,17 @@ def test_order_item_completion_date_uses_latest_dispatched_delivery(
     assert item["completion_date"] == "2026-06-25"
 
 
-def test_history_orders_not_mixed_into_business_by_default(order_api_app) -> None:
+def test_order_number_text_does_not_hide_active_business_order(order_api_app) -> None:
     from datetime import datetime
 
     from app.models.order import Order
 
     app, session_factory = order_api_app
     with session_factory() as session:
-        legacy = Order(
-            order_number="RUIDA-90001",
+        archived_named = Order(
+            order_number="ARCHIVE-90001",
             customer_id=1,
-            customer_po="LEGACY-PO",
+            customer_po="ARCHIVE-PO",
             order_date=date.fromisoformat("2020-01-02"),
             delivery_date=date.fromisoformat("2020-01-10"),
             status="pending_production",
@@ -3654,9 +3653,9 @@ def test_history_orders_not_mixed_into_business_by_default(order_api_app) -> Non
             total_amount=Decimal("100.00"),
             created_at=datetime(2026, 6, 20, 5, 0, 0),
         )
-        session.add(legacy)
+        session.add(archived_named)
         session.commit()
-        legacy_id = legacy.id
+        archived_named_id = archived_named.id
 
     with TestClient(app) as client:
         _login(client)
@@ -3666,20 +3665,17 @@ def test_history_orders_not_mixed_into_business_by_default(order_api_app) -> Non
         business = client.get("/api/orders", params={"status": "business"})
         business_keyword = client.get(
             "/api/orders",
-            params={"status": "business", "keyword": "LEGACY-PO"},
+            params={"status": "business", "keyword": "ARCHIVE-PO"},
         )
         history = client.get("/api/orders", params={"status": "history"})
 
-    # The response order_number is display-masked, so assert on stable ids.
     business_ids = [row["id"] for row in business.json()["items"]]
     business_keyword_ids = [row["id"] for row in business_keyword.json()["items"]]
     history_ids = [row["id"] for row in history.json()["items"]]
-    # active order is in business, legacy RUIDA order is NOT
     assert active["id"] in business_ids
-    assert legacy_id not in business_ids
-    assert legacy_id not in business_keyword_ids
-    # the legacy RUIDA order only shows under the explicit history view
-    assert legacy_id in history_ids
+    assert archived_named_id in business_ids
+    assert archived_named_id in business_keyword_ids
+    assert archived_named_id not in history_ids
 
 
 def test_n028_sales_order_scope_blocks_other_customer_and_filters_list(

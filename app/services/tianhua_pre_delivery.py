@@ -176,10 +176,7 @@ def preprocess_row(
     candidates=[]
     for oi,o in db.execute(select(OrderItem,Order).join(Order,Order.id==OrderItem.order_id).where(OrderItem.product_id.in_(pmap),OrderItem.delivered_quantity<OrderItem.quantity,OrderItem.is_force_closed.is_(False),Order.status.in_(VALID_ORDER_STATUSES))):
         p=pmap[oi.product_id]
-        if (
-            o.customer_id != p.customer_id
-            or "RUIDA" in o.order_number.upper()
-        ):
+        if o.customer_id != p.customer_id:
             continue
         pending=int(oi.quantity-oi.delivered_quantity); available=_available_delivery_quantity(db,oi)
         score,distance,order_match,quantity_match=_candidate_score(oi,o,image_qty=row.image_qty,image_order_no=image_order_no,pre_delivery_date=target_date)
@@ -189,7 +186,6 @@ def preprocess_row(
     score,distance,oi,o,p,pending,available,order_match,quantity_match=candidates[0]
     candidate_count=len(candidates)
     ambiguous=candidate_count>1 and score-candidates[1][0]<=1
-    ruida_excluded=db.scalar(select(OrderItem.id).join(Order,Order.id==OrderItem.order_id).where(OrderItem.product_id.in_(pmap),Order.order_number.ilike("%RUIDA%")).limit(1)) is not None
     if order_match and quantity_match:
         reason="按订单号+数量完全匹配"
     elif quantity_match and candidate_count>1:
@@ -198,8 +194,6 @@ def preprocess_row(
         reason=f"数量完全匹配，订单日期距预送货日期 {distance} 天"
     else:
         reason=f"数量差 {abs(pending-row.image_qty)}，按综合评分匹配"
-    if ruida_excluded:
-        reason += "；已排除 RUIDA 历史订单"
     data.update(product_id=p.id,product_name=p.product_name,order_item_id=oi.id,order_id=o.id,order_number=o.order_number,customer_order_no=o.customer_po,match_reason=reason,match_score=score,candidate_count=candidate_count,system_pending_qty=available,available_qty=available)
     dup=db.execute(select(Delivery.delivery_number,Delivery.delivery_date).join(DeliveryItem,DeliveryItem.delivery_id==Delivery.id).join(OrderItem,OrderItem.id==DeliveryItem.order_item_id).where(Delivery.customer_id==o.customer_id,Delivery.status=="dispatched",Delivery.delivery_date>=beijing_today()-timedelta(days=7),OrderItem.product_id==p.id,DeliveryItem.delivered_quantity==row.image_qty).limit(1)).one_or_none()
     multi_warning=f"该存货编码存在 {candidate_count} 个未送订单，请核对匹配订单号。" if candidate_count>1 else ""

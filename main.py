@@ -591,8 +591,6 @@ CREATE INDEX IF NOT EXISTS idx_statement_items_statement ON statement_items(stat
 CREATE INDEX IF NOT EXISTS idx_statement_items_delivery ON statement_items(delivery_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_statement ON invoices(statement_id);
 CREATE INDEX IF NOT EXISTS idx_order_status_events_order ON order_status_events(order_id);
-CREATE INDEX IF NOT EXISTS idx_legacy_order_items_customer_product
-    ON legacy_ruida_order_items(customer_id, product_archive_id);
 """
 
 
@@ -1092,7 +1090,6 @@ def customer_management_rows(
                 c.updated_at,
                 (SELECT COUNT(*) FROM product_archives p WHERE p.customer_id = c.id) AS product_count,
                 (SELECT COUNT(*) FROM orders o WHERE o.customer_id = c.id) AS order_count,
-                (SELECT COUNT(*) FROM legacy_ruida_orders lo WHERE lo.customer_id = c.id) AS history_order_count,
                 (SELECT COUNT(*) FROM company_file_index f WHERE f.customer_id = c.id) AS file_count
             FROM customers c
             {where_sql}
@@ -1135,7 +1132,6 @@ def customer_management_detail(customer_id: int) -> dict:
                 c.*,
                 (SELECT COUNT(*) FROM product_archives p WHERE p.customer_id = c.id) AS product_count,
                 (SELECT COUNT(*) FROM orders o WHERE o.customer_id = c.id) AS order_count,
-                (SELECT COUNT(*) FROM legacy_ruida_orders lo WHERE lo.customer_id = c.id) AS history_order_count,
                 (SELECT COUNT(*) FROM company_file_index f WHERE f.customer_id = c.id) AS file_count
             FROM customers c
             WHERE c.id = ?
@@ -1210,135 +1206,17 @@ def customer_product_rows(
             """,
             (customer_id,),
         ).fetchall()
-        stat_rows = conn.execute(
-            """
-            SELECT
-                CASE
-                    WHEN INSTR(TRIM(style_no), '/') > 0
-                        THEN TRIM(SUBSTR(TRIM(style_no), 1, INSTR(TRIM(style_no), '/') - 1))
-                    ELSE COALESCE(NULLIF(TRIM(style_no), ''), 'legacy:' || product_archive_id)
-                END AS style_key,
-                MAX(style_no) AS style_no,
-                MAX(product_archive_id) AS source_archive_id,
-                MAX(customer_order_no) AS customer_po,
-                MAX(box_type) AS box_type,
-                MAX(unit) AS unit,
-                MAX(length_mm) AS length_mm,
-                MAX(width_mm) AS width_mm,
-                MAX(height_mm) AS height_mm,
-                MAX(material) AS material,
-                MAX(product_note) AS process_note,
-                COUNT(*) AS order_count,
-                SUM(COALESCE(order_quantity, 0)) AS total_quantity,
-                MAX(order_date) AS last_order_date
-            FROM legacy_ruida_order_items
-            WHERE customer_id = ?
-            GROUP BY style_key
-            ORDER BY order_count DESC, total_quantity DESC
-            """,
-            (customer_id,),
-        ).fetchall()
-        source_ids = sorted(
-            {
-                int(row["source_archive_id"])
-                for row in stat_rows
-                if row["source_archive_id"] is not None
-            }
-        )
-        source_archives: dict[int, sqlite3.Row] = {}
-        if source_ids:
-            placeholders = ",".join("?" for _ in source_ids)
-            source_archives = {
-                int(row["id"]): row
-                for row in conn.execute(
-                    f"""
-                    SELECT
-                        id, customer_id, style_no, customer_po, product_name, unit,
-                        length_mm, width_mm, height_mm, material, flute_type, process_note,
-                        last_sale_unit_price AS sale_unit_price,
-                        sale_unit_price_no_tax,
-                        last_cost_unit_price AS cost_unit_price
-                    FROM product_archives
-                    WHERE id IN ({placeholders})
-                    """,
-                    tuple(source_ids),
-                ).fetchall()
-            }
-
     archives = [row_to_dict(row) for row in archive_rows]
-    archives_by_style = {
-        normalize_text(row.get("style_no")): row
-        for row in archives
-        if normalize_text(row.get("style_no"))
-    }
-    archives_by_code = {
-        product_style_key(row.get("style_no")): row
-        for row in archives
-        if product_style_key(row.get("style_no"))
-    }
     items: list[dict] = []
-    used_archive_ids: set[int] = set()
-    used_styles: set[str] = set()
-    for stat_row in stat_rows:
-        stat = row_to_dict(stat_row)
-        style_no = normalize_text(stat.get("style_no"))
-        customer_archive = archives_by_style.get(style_no) or archives_by_code.get(
-            product_style_key(style_no)
-        )
-        source_archive_row = source_archives.get(int(stat["source_archive_id"])) if stat.get("source_archive_id") else None
-        source_archive = row_to_dict(source_archive_row) if source_archive_row else {}
-        if product_style_key(source_archive.get("style_no")) != product_style_key(style_no):
-            source_archive = {}
-        base = customer_archive or source_archive
-        product_archive_id = int(customer_archive["id"]) if customer_archive else None
-        if product_archive_id:
-            used_archive_ids.add(product_archive_id)
-        if style_no:
-            used_styles.add(style_no)
-        item = {
-            "id": product_archive_id or source_archive.get("id"),
-            "product_archive_id": product_archive_id,
-            "customer_id": customer_id,
-            "style_no": style_no or normalize_text(base.get("style_no")),
-            "customer_po": stat.get("customer_po") or base.get("customer_po"),
-            "product_name": base.get("product_name") or stat.get("box_type") or style_no,
-            "unit": base.get("unit") or stat.get("unit") or "只",
-            "length_mm": base.get("length_mm") if base.get("length_mm") is not None else stat.get("length_mm"),
-            "width_mm": base.get("width_mm") if base.get("width_mm") is not None else stat.get("width_mm"),
-            "height_mm": base.get("height_mm") if base.get("height_mm") is not None else stat.get("height_mm"),
-            "material": base.get("material") or stat.get("material"),
-            "flute_type": base.get("flute_type"),
-            "process_note": base.get("process_note") or stat.get("process_note"),
-            "sale_unit_price": base.get("sale_unit_price") or 0,
-            "sale_unit_price_no_tax": base.get("sale_unit_price_no_tax"),
-            "cost_unit_price": base.get("cost_unit_price") or 0,
-            "order_count": int(stat.get("order_count") or 0),
-            "total_quantity": int(stat.get("total_quantity") or 0),
-            "last_order_date": stat.get("last_order_date"),
-            "source": "history",
-        }
-        item.update(
-            parse_product_label(
-                item["style_no"],
-                item["length_mm"],
-                item["width_mm"],
-                item["height_mm"],
-            )
-        )
-        items.append(item)
-
     for archive in archives:
         archive_id = int(archive["id"])
-        style_no = normalize_text(archive.get("style_no"))
-        if archive_id in used_archive_ids or (style_no and style_no in used_styles):
-            continue
         item = {
             **archive,
             "product_archive_id": archive_id,
             "order_count": 0,
             "total_quantity": 0,
             "last_order_date": None,
-            "source": "archive",
+            "source": "product_archive",
         }
         item.update(
             parse_product_label(
@@ -1368,16 +1246,7 @@ def customer_product_rows(
                 )
             )
         ]
-    if sort == "recent":
-        items.sort(key=lambda item: str(item.get("last_order_date") or ""), reverse=True)
-    else:
-        items.sort(
-            key=lambda item: (
-                int(item.get("order_count") or 0),
-                int(item.get("total_quantity") or 0),
-            ),
-            reverse=True,
-        )
+    items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
     return items[:safe_limit]
 
 
@@ -1525,40 +1394,6 @@ def customer_style_rows(customer_id: int, limit: int = 100) -> list[dict]:
             (customer_id, safe_limit),
         ).fetchall()
     return [row_to_dict(row) for row in rows]
-
-
-def legacy_summary() -> dict:
-    with get_db_connection() as conn:
-        customers = conn.execute(
-            "SELECT COUNT(*) AS count FROM customers WHERE is_active = 1"
-        ).fetchone()["count"]
-        product_archives = conn.execute(
-            "SELECT COUNT(*) AS count FROM product_archives"
-        ).fetchone()["count"]
-        orders = conn.execute("SELECT COUNT(*) AS count FROM orders").fetchone()["count"]
-        ruida_customers = conn.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM customers
-            WHERE is_active = 1
-              AND (billing_note LIKE '%ruida_%' OR billing_note LIKE '%瑞达%')
-            """
-        ).fetchone()["count"]
-        indexed_customers = conn.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM customers
-            WHERE is_active = 1
-              AND billing_note LIKE '%file_index%'
-            """
-        ).fetchone()["count"]
-    return {
-        "customers": customers,
-        "product_archives": product_archives,
-        "orders": orders,
-        "ruida_customers": ruida_customers,
-        "indexed_customers": indexed_customers,
-    }
 
 
 def order_rows(customer_id: int | None = None) -> list[dict]:
@@ -2089,11 +1924,6 @@ def update_customer_management_status(customer_id: int, status: str) -> JSONResp
 @app.get("/api/customers/{customer_id}/styles")
 def list_customer_styles(customer_id: int, limit: int = 100) -> JSONResponse:
     return JSONResponse({"ok": True, "items": customer_style_rows(customer_id, limit)})
-
-
-@app.get("/api/legacy/summary")
-def legacy_data_summary() -> JSONResponse:
-    return JSONResponse({"ok": True, "summary": legacy_summary()})
 
 
 @app.get("/api/orders")

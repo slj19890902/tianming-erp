@@ -758,7 +758,6 @@
                   <col style="width:95px" />
                   <col style="width:78px" />
                   <col style="width:82px" />
-                  <col style="width:82px" />
                   <col style="width:78px" />
                 </colgroup>
                 <thead>
@@ -771,7 +770,6 @@
                     <th>送货地址</th>
                     <th>账期</th>
                     <th>产品数</th>
-                    <th>历史订单</th>
                     <th>文件数</th>
                     <th>状态</th>
                   </tr>
@@ -1161,7 +1159,6 @@
                 <td title="${escapeHtml(row.address || "")}">${escapeHtml(row.address || "-")}</td>
                 <td>${escapeHtml(row.credit_terms || "-")}</td>
                 <td>${Number(row.product_count || 0).toLocaleString("zh-CN")}</td>
-                <td>${Number(row.history_order_count || 0).toLocaleString("zh-CN")}</td>
                 <td>${Number(row.file_count || 0).toLocaleString("zh-CN")}</td>
                 <td><span class="status ${row.status}">${statusText(row.status)}</span></td>
               </tr>
@@ -1603,7 +1600,6 @@
               <div class="detail-metrics">
                 <div class="detail-metric"><strong>${customer.product_count || 0}</strong><span>产品档案</span></div>
                 <div class="detail-metric"><strong>${customer.order_count || 0}</strong><span>新系统订单</span></div>
-                <div class="detail-metric"><strong>${customer.history_order_count || 0}</strong><span>历史订单</span></div>
                 <div class="detail-metric"><strong>${customer.file_count || 0}</strong><span>关联文件</span></div>
               </div>
             </section>
@@ -1680,7 +1676,7 @@
           showToast("当前客户列表尚未读取完成，暂不能导出", true);
           return;
         }
-        const headers = ["ID", "客户编号", "客户名称", "联系人", "联系电话", "送货地址", "账期", "税率", "产品数", "历史订单数", "文件数", "状态"];
+        const headers = ["ID", "客户编号", "客户名称", "联系人", "联系电话", "送货地址", "账期", "税率", "产品数", "文件数", "状态"];
         const rows = state.items.map((row) => [
           row.id,
           row.customer_code || "",
@@ -1691,7 +1687,6 @@
           row.credit_terms || "",
           taxText(row.default_tax_rate),
           row.product_count || 0,
-          row.history_order_count || 0,
           row.file_count || 0,
           statusText(row.status),
         ]);

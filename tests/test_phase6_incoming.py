@@ -775,14 +775,14 @@ def test_fully_received_partial_supplier_order_stays_hidden_until_next_report(
     }
 
 
-def test_incoming_api_hides_legacy_history_prefix_in_order_number(
+def test_incoming_api_keeps_current_order_number(
     incoming_api_app,
 ) -> None:
     from app.models.order import Order
 
     app, session_factory = incoming_api_app
     with session_factory() as session:
-        session.get(Order, 1).order_number = "RUIDA-50001"
+        session.get(Order, 1).order_number = "TM20260613001"
         session.commit()
     with TestClient(app) as client:
         _login(client, "admin")
@@ -792,10 +792,9 @@ def test_incoming_api_hides_legacy_history_prefix_in_order_number(
     matched = next(
         item
         for item in response.json()["items"]
-        if item["display_order_number"].startswith("TM20260613-")
+        if item["display_order_number"] == "TM20260613001"
     )
-    assert matched["order_number"].startswith("TM20260613-")
-    assert "RUIDA" not in str(response.json())
+    assert matched["order_number"] == "TM20260613001"
 
 
 def test_received_returns_only_last_24_hours_for_authorized_roles(incoming_api_app) -> None:

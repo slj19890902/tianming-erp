@@ -97,10 +97,8 @@ from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryReservation,
 )
-from app.services.history_orders import (
+from app.services.order_number_display import (
     build_display_registry,
-    filter_order_ids_for_display_search,
-    sanitize_user_text,
     serialize_order_number_fields,
 )
 from app.services.fulfillment_reminders import list_order_production_reminders
@@ -1889,7 +1887,7 @@ def _validate_combination_group_consistency(
 
 
 def _display_material(value: str | None) -> str | None:
-    text = sanitize_user_text(value)
+    text = value
     if not text:
         return text
     cleaned = re.sub(r"^\s*\d+\s+", "", text).strip()
@@ -2196,7 +2194,7 @@ def _order_response(
         ),
         "payment_status": order.payment_status,
         "total_amount": order.total_amount,
-        "remark": sanitize_user_text(order.remark),
+        "remark": order.remark,
         "external_packaging_purchase_summary": external_purchase_summary,
         "items": [],
     }
@@ -2576,7 +2574,7 @@ def list_orders(
     delivery_date_from: date | None = None,
     delivery_date_to: date | None = None,
     status_filter: list[str] | None = Query(default=None, alias="status"),
-    scope: Literal["active", "completed", "cancelled", "history", "all"] | None = Query(default=None),
+    scope: Literal["active", "completed", "cancelled", "all"] | None = Query(default=None),
     stage: list[str] | None = Query(default=None),
     sort_by: Literal["customer_name", "order_date", "delivery_date"] | None = None,
     sort_direction: Literal["asc", "desc"] = "desc",
@@ -2635,16 +2633,15 @@ def list_orders(
     if delivery_date_to is not None:
         ids_query = ids_query.where(Order.delivery_date <= delivery_date_to)
 
-    history_condition = Order.order_number.like("RUIDA-%")
     raw_status_filters = {
         status_value
         for status_value in status_values
-        if status_value not in {"business", "history"}
+        if status_value != "business"
         and status_value not in DERIVED_BUSINESS_STATUSES
         and status_value not in _DERIVED_STATUS_FILTER_GROUPS
     }
     requested_stage_values = stage_values or tuple(
-        value for value in status_values if value not in {"business", "history"}
+        value for value in status_values if value != "business"
     )
     derived_status_filter: set[str] = set()
     for stage_value in requested_stage_values:
@@ -2654,9 +2651,7 @@ def list_orders(
             derived_status_filter.update(_DERIVED_STATUS_FILTER_GROUPS[stage_value])
 
     if scope is None:
-        if status_values == ("history",):
-            resolved_scope = "history"
-        elif status_values == ("completed",):
+        if status_values == ("completed",):
             # Keep the historical ``status=completed`` query compatible while
             # the new UI uses the explicit ``scope=completed`` contract.
             resolved_scope = "completed"
@@ -2668,19 +2663,15 @@ def list_orders(
         resolved_scope = scope
     if resolved_scope in {"active", "completed"}:
         ids_query = ids_query.where(
-            ~history_condition,
             Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
         )
     elif resolved_scope == "cancelled":
         ids_query = ids_query.where(Order.status.in_(_BUSINESS_EXCLUDED_STATUSES))
-    elif resolved_scope == "history":
-        ids_query = ids_query.where(history_condition)
     if raw_status_filters:
         ids_query = ids_query.where(Order.status.in_(raw_status_filters))
 
     if search_keyword:
         trimmed = search_keyword
-        display_ids = filter_order_ids_for_display_search(db, trimmed, display_registry)
         customer_identity_filter = customer_identity_search_clause(trimmed)
         assert customer_identity_filter is not None
         ids_query = ids_query.outerjoin(
@@ -2698,14 +2689,12 @@ def list_orders(
                 OrderItem.snapshot_product_name.ilike(f"%{trimmed}%"),
                 OrderItem.snapshot_spec.ilike(f"%{trimmed}%"),
                 OrderItem.snapshot_material.ilike(f"%{trimmed}%"),
-                Order.id.in_(display_ids) if display_ids else False,
             )
         )
         joined_items = True
 
     if order_number and order_number.strip():
         trimmed = order_number.strip()
-        display_ids = filter_order_ids_for_display_search(db, trimmed, display_registry)
         if not joined_items:
             ids_query = ids_query.outerjoin(
                 OrderItem, OrderItem.order_id == Order.id
@@ -2714,7 +2703,6 @@ def list_orders(
             or_(
                 Order.order_number == trimmed,
                 OrderItem.item_order_number == trimmed,
-                Order.id.in_(display_ids) if display_ids else False,
             )
         )
 
@@ -2766,13 +2754,10 @@ def list_orders(
             )
         else:
             ids_query = ids_query.order_by(primary_sort, tie_breaker)
-    # History (RUIDA legacy) keeps chronological order_date ordering. All other
-    # views — especially "business" — sort by creation time so a freshly saved
+    # Business views sort by creation time so a freshly saved
     # order surfaces at the top even when its order_date is back-dated to the
     # source document date (e.g. PDF imports), instead of being buried below
     # newer-dated rows where users assume it "disappeared".
-    elif resolved_scope == "history":
-        ids_query = ids_query.order_by(Order.order_date.desc(), Order.id.desc())
     else:
         ids_query = ids_query.order_by(
             Order.created_at.desc(),
@@ -2926,7 +2911,6 @@ def list_orders(
             unfinished_projections = candidate_projection
         else:
             unfinished_ids_query = select(Order.id).where(
-                ~history_condition,
                 Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
                 Order.items.any(),
             )
@@ -3038,7 +3022,6 @@ def list_order_cost_readiness(
         .where(
             SalesOrderItemEstimatedCostSnapshot.calculation_status
             != "calculated",
-            ~Order.order_number.like("RUIDA-%"),
             Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
         )
         .order_by(
@@ -3092,13 +3075,13 @@ def list_order_cost_readiness(
             {
                 "order_id": int(order.id),
                 "customer_id": int(order.customer_id),
-                "customer_name": sanitize_user_text(customer.name),
-                "customer_po": sanitize_user_text(order.customer_po),
+                "customer_name": customer.name,
+                "customer_po": order.customer_po,
                 "order_date": order.order_date,
                 "item_id": int(item.id),
                 "item_sequence": item.item_sequence,
-                "product_code": sanitize_user_text(item.snapshot_product_code),
-                "product_name": sanitize_user_text(item.snapshot_product_name),
+                "product_code": item.snapshot_product_code,
+                "product_name": item.snapshot_product_name,
                 "snapshot_version": int(snapshot.snapshot_version),
                 "categories": [
                     {"code": category["code"], "label": category["label"]}
@@ -3175,7 +3158,6 @@ def list_order_cost_review(
         .where(
             SalesOrderItemEstimatedCostSnapshot.calculation_status
             == "calculated",
-            ~Order.order_number.like("RUIDA-%"),
             Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
         )
         .order_by(
@@ -3245,13 +3227,13 @@ def list_order_cost_review(
             {
                 "order_id": int(order.id),
                 "customer_id": int(order.customer_id),
-                "customer_name": sanitize_user_text(customer.name),
-                "customer_po": sanitize_user_text(order.customer_po),
+                "customer_name": customer.name,
+                "customer_po": order.customer_po,
                 "order_date": order.order_date,
                 "item_id": int(item.id),
                 "item_sequence": item.item_sequence,
-                "product_code": sanitize_user_text(item.snapshot_product_code),
-                "product_name": sanitize_user_text(item.snapshot_product_name),
+                "product_code": item.snapshot_product_code,
+                "product_name": item.snapshot_product_name,
                 "sale_amount": str(item.subtotal),
                 "estimated_order_total_cost": str(
                     snapshot.estimated_order_total_cost
@@ -3291,7 +3273,7 @@ def list_order_cost_review(
 @router.get("/customer-options")
 def list_order_customer_options(
     keyword: str | None = None,
-    scope: Literal["active", "completed", "cancelled", "history", "all"] = "active",
+    scope: Literal["active", "completed", "cancelled", "all"] = "active",
     stage: list[str] | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
@@ -3304,20 +3286,16 @@ def list_order_customer_options(
     narrows customer identity fields and can never broaden the order scope.
     """
 
-    history_condition = Order.order_number.like("RUIDA-%")
     order_query = select(Order).options(selectinload(Order.items))
     scoped_customer_ids = customer_scope_ids(user, db)
     if not has_unrestricted_customer_access(user, db):
         order_query = order_query.where(Order.customer_id.in_(scoped_customer_ids))
     if scope in {"active", "completed"}:
         order_query = order_query.where(
-            ~history_condition,
             Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
         )
     elif scope == "cancelled":
         order_query = order_query.where(Order.status.in_(_BUSINESS_EXCLUDED_STATUSES))
-    elif scope == "history":
-        order_query = order_query.where(history_condition)
 
     candidates = list(db.scalars(order_query).all())
     stage_values = tuple(
@@ -3466,7 +3444,7 @@ def list_order_customer_heat(
 def list_customer_heat_orders(
     customer_id: int,
     keyword: str | None = None,
-    scope: Literal["active", "completed", "cancelled", "history", "all"] = "active",
+    scope: Literal["active", "completed", "cancelled", "all"] = "active",
     stage: list[str] | None = Query(default=None),
     order_date_from: date | None = None,
     order_date_to: date | None = None,
@@ -5623,8 +5601,6 @@ def rollback_order_workflow(
     )
     if order is None:
         raise HTTPException(status_code=409, detail="订单已被删除，请刷新后重试")
-    if order.order_number.startswith("RUIDA-"):
-        raise HTTPException(status_code=409, detail="历史订单禁止执行流程撤回")
     if order.status in MANAGEMENT_TERMINAL_ORDER_STATUSES:
         customer = db.get(Customer, order.customer_id)
         return _order_response(
@@ -5833,7 +5809,7 @@ def get_order_group_detail(
     customer_id: int,
     anchor_order_id: int,
     customer_po: str | None = None,
-    scope: Literal["active", "completed", "cancelled", "history", "all"] = "active",
+    scope: Literal["active", "completed", "cancelled", "all"] = "active",
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
@@ -5897,13 +5873,7 @@ def get_order_group_detail(
         candidate_orders,
         include_finance=has_permission(user, "finance.view"),
     )
-    if scope == "history":
-        orders = [
-            order
-            for order in candidate_orders
-            if order.order_number.startswith("RUIDA-")
-        ]
-    elif scope == "cancelled":
+    if scope == "cancelled":
         orders = [
             order
             for order in candidate_orders
@@ -5913,8 +5883,7 @@ def get_order_group_detail(
         orders = [
             order
             for order in candidate_orders
-            if not order.order_number.startswith("RUIDA-")
-            and order.status not in _BUSINESS_EXCLUDED_STATUSES
+            if order.status not in _BUSINESS_EXCLUDED_STATUSES
             and (
                 business_projections.get(int(order.id), {}).get("business_status")
                 == "completed"

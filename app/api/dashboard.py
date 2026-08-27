@@ -216,7 +216,6 @@ def _workflow_projection_rows(
             ),
         )
         .where(
-            ~Order.order_number.like("RUIDA-%"),
             Order.status.notin_(["cancelled", "dead", "closed", "archived"]),
         )
     )

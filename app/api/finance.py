@@ -63,7 +63,7 @@ from app.services.fulfillment_reminders import (
     transition_reminder_with_replay,
     update_reminder_with_replay,
 )
-from app.services.history_orders import build_display_registry, display_order_number
+from app.services.order_number_display import build_display_registry, display_order_number
 from app.services.customer_price_tax import (
     VALID_PRICE_TAX_MODES,
     resolve_customer_price_tax_terms,

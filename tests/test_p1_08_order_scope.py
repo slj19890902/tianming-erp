@@ -66,7 +66,7 @@ def order_scope_app(tmp_path: Path):
             "b": customer_b.id,
             "empty": no_order.id,
             "active_a": add_order(customer_a, number="P108-A", status="production"),
-            "history_b": add_order(customer_b, number="RUIDA-P108-B", status="production"),
+            "active_b": add_order(customer_b, number="P108-B-ACTIVE", status="production"),
             "terminal_b": add_order(customer_b, number="P108-B-CLOSED", status="closed"),
         }
         db.commit()
@@ -97,16 +97,14 @@ def test_customer_options_only_lists_in_scope_customers_with_orders(order_scope_
         _login(client, "p108-admin")
         active = client.get("/api/orders/customer-options")
         all_scope = client.get("/api/orders/customer-options?scope=all&page=1&page_size=1")
-        history = client.get("/api/orders/customer-options?scope=history")
         cancelled = client.get("/api/orders/customer-options?scope=cancelled")
         keyword = client.get("/api/orders/customer-options?keyword=%E7%94%B2")
 
     assert active.status_code == 200
-    assert [row["id"] for row in active.json()["items"]] == [ids["a"]]
-    assert active.json()["items"][0]["is_active"] is False
+    assert {row["id"] for row in active.json()["items"]} == {ids["a"], ids["b"]}
+    assert next(row for row in active.json()["items"] if row["id"] == ids["a"])["is_active"] is False
     assert all_scope.json()["total"] == 2
     assert len(all_scope.json()["items"]) == 1
-    assert [row["id"] for row in history.json()["items"]] == [ids["b"]]
     assert [row["id"] for row in cancelled.json()["items"]] == [ids["b"]]
     assert [row["id"] for row in keyword.json()["items"]] == [ids["a"]]
     assert ids["empty"] not in {row["id"] for row in all_scope.json()["items"]}
@@ -117,14 +115,14 @@ def test_scope_and_stage_are_fixed_before_keyword_and_customer_scope(order_scope
     with TestClient(app) as client:
         _login(client, "p108-admin")
         without_keyword = client.get("/api/orders?scope=active&status=business&page=1&page_size=50")
-        with_keyword = client.get("/api/orders?scope=active&status=business&keyword=RUIDA&page=1&page_size=50")
+        with_keyword = client.get("/api/orders?scope=active&status=business&keyword=P108-A&page=1&page_size=50")
         stage = client.get("/api/orders?scope=active&stage=pending_material&page=1&page_size=50")
         _login(client, "p108-scoped")
         scoped = client.get("/api/orders/customer-options?scope=all")
 
-    assert {row["id"] for row in without_keyword.json()["items"]} == {ids["active_a"]}
-    assert with_keyword.json()["total"] == 0
-    assert {row["id"] for row in stage.json()["items"]} == {ids["active_a"]}
+    assert {row["id"] for row in without_keyword.json()["items"]} == {ids["active_a"], ids["active_b"]}
+    assert {row["id"] for row in with_keyword.json()["items"]} == {ids["active_a"]}
+    assert {row["id"] for row in stage.json()["items"]} == {ids["active_a"], ids["active_b"]}
     assert [row["id"] for row in scoped.json()["items"]] == [ids["a"]]
 
 

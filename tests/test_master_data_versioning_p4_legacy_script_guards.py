@@ -61,14 +61,7 @@ def test_legacy_offline_scripts_reject_write_modes_before_first_write(
     from scripts import import_historical_requisitions
     from scripts import import_material_dataset
     from scripts import migrate_phase3_data
-    from scripts import sync_ruida_customers_csv
     from scripts.admin import merge_short_tianhua_customer
-
-    monkeypatch.setattr(sync_ruida_customers_csv, "SessionLocal", lambda: Session(versioned_engine))
-    _assert_blocked_before_write(
-        write_statements,
-        lambda: sync_ruida_customers_csv.sync_customers(tmp_path / "not-read.csv", commit=True),
-    )
 
     monkeypatch.setattr(clean_phase12_master_data, "SessionLocal", lambda: Session(versioned_engine))
     _assert_blocked_before_write(
@@ -152,28 +145,3 @@ def test_guard_detects_version_columns_without_audit_table(tmp_path: Path) -> No
                 )
     finally:
         engine.dispose()
-
-
-def test_sync_customer_dry_run_stays_available_when_versioning_is_enabled(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    versioned_engine,
-) -> None:
-    from phase1_postgres.models import Base
-    from scripts import sync_ruida_customers_csv
-
-    Base.metadata.create_all(versioned_engine)
-    monkeypatch.setattr(sync_ruida_customers_csv, "SessionLocal", lambda: Session(versioned_engine))
-    monkeypatch.setattr(
-        sync_ruida_customers_csv,
-        "reject_legacy_master_data_write_if_versioned",
-        lambda *_args, **_kwargs: pytest.fail("dry-run 不应调用写入 guard"),
-    )
-    csv_path = tmp_path / "customers.csv"
-    csv_path.write_text("legacy_customer_id,customer_code,customer_name\n", encoding="utf-8")
-
-    assert sync_ruida_customers_csv.sync_customers(csv_path, commit=False) == {
-        "source_rows": 0,
-        "created": 0,
-        "updated": 0,
-    }

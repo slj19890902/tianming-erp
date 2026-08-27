@@ -3491,10 +3491,7 @@
                         <td>{{ group.child_count }}</td>
                         <td class="cell-right">{{ group.total_quantity }}</td>
                         <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">¥ {{ money(group.total_amount) }}</td>
-                        <td>
-                          <div v-if="group.hasHistoryOnly" class="status blue">历史归档</div>
-                          <status-tag v-else :value="group.group_status"></status-tag>
-                        </td>
+                        <td><status-tag :value="group.group_status"></status-tag></td>
                         <td class="cell-actions">
                           <div class="toolbar-group">
                             <button class="btn small" :disabled="orderGroupDetailLoading[group.key]" @click="toggleOrderGroup(group)">{{ orderGroupDetailLoading[group.key] ? "加载中" : (expandedOrders[group.key] ? "收起" : "展开") }}</button>
@@ -3538,8 +3535,7 @@
                                     <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">{{ money(item.subtotal) }}</td>
                                     <td v-if="canViewCosts" class="cost-sensitive cell-right"><div>成本 {{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</div><div class="muted" style="font-size:11px">毛利 {{ item.total_estimated_gross_profit ? money(item.total_estimated_gross_profit) : "-" }}</div></td>
                                     <td>
-                                      <div v-if="row.is_history_order" class="status blue">历史归档</div>
-                                      <status-tag v-else :value="itemBusinessStatusKey(item)"></status-tag>
+                                      <status-tag :value="itemBusinessStatusKey(item)"></status-tag>
                                       <div v-if="item.requisition_hold?.status === 'active'" class="status orange" style="margin-top:4px">{{ item.requisition_hold.label || '等候中' }}</div>
                                     </td>
                                     <td>{{ item.completion_date || "-" }}</td>
@@ -3579,9 +3575,9 @@
                 </div>
               </div>
               <data-panel :empty="!orders.length">
-                <table><thead><tr><th>主操作</th><th></th><th>旧版系统列</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th></tr></thead>
+                <table><thead><tr><th>主操作</th><th></th><th>订单号</th><th>客户单号</th><th>客户</th><th>下单日期</th><th>交货日期</th><th>明细数</th><th>订单数量</th><th>已送数量</th><th>来料</th><th>状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th></tr></thead>
                 <tbody v-if="filters.orderView === 'plain'"><template v-for="row in orders" :key="row.id">
-                  <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><div><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></div></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><div v-if="row.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
+                  <tr><td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td><td><button class="btn small" @click="toggleOrder(row)">{{ expandedOrders[row.id] ? "收起" : "展开" }}</button></td><td><strong>{{ displayOrderNumber(row) }}</strong></td><td>{{ row.customer_po || "-" }}</td><td>{{ row.customer_name }}</td><td>{{ row.order_date }}</td><td>{{ row.delivery_date || "-" }}</td><td>{{ row.items.length }}</td><td>{{ sum(row.items,'quantity') }}</td><td>{{ row.business_delivery_progress?.delivered_quantity || 0 }}</td><td><status-tag :value="row.items.every(i=>i.material_status==='received') ? 'received' : 'pending'"></status-tag></td><td><status-tag :value="orderDisplayStatusKey(row)"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ money(row.total_amount) }}</td></tr>
                   <tr v-if="expandedOrders[row.id]" class="order-detail-row"><td :colspan="canViewSalesAmounts ? 14 : 13"><div class="order-detail-box"><table><thead><tr><th class="col-order-item-sequence">序号</th><th>存货编码</th><th>名称</th><th>材质</th><th>规格mm</th><th>数量 / 送货</th><th>状态</th><th>报料状态</th><th v-if="canViewSalesAmounts" class="sensitive-price">客户销售单价</th><th v-if="canViewCosts" class="cost-sensitive">预计成本</th><th v-if="canViewCosts" class="cost-sensitive">预计利润</th><th>操作</th></tr></thead><tbody><tr v-for="(item,itemIndex) in row.items" :key="item.id"><td class="col-order-item-sequence">{{ item.item_sequence || itemIndex + 1 }}</td><td>{{ plainProductText(item.snapshot_product_code) }}</td><td>{{ plainProductText(item.snapshot_product_name) }}<div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">本订单 BOM 明细 / 组件需求（只改本订单）</div><div v-if="orderBomDemandSaveState.outcomeUncertain && Number(orderBomDemandSaveState.itemId)===Number(item.id)" class="notice warning" style="margin:6px 0">上次组件数量保存结果暂不确定，请点击上方“刷新”核对后再操作。</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item"><div>{{ bomPreviewComponentLabel(component) }}</div><div v-if="canSales" class="toolbar-group" style="margin-top:4px"><input class="input" style="width:110px" type="number" min="1" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" :value="component._demand_quantity ?? component.effective_required_piece_quantity ?? component.required_piece_quantity" @input="component._demand_quantity=Number($event.target.value)" /><button class="btn small" :disabled="orderBomDemandSaveState.saving || orderBomDemandSaveState.outcomeUncertain" @click="saveOrderBomComponentDemand(item,component)">{{ orderBomDemandSaveState.saving && Number(orderBomDemandSaveState.itemId)===Number(item.id) && Number(orderBomDemandSaveState.componentId)===Number(component.id) ? "保存中…" : "保存本订单需求" }}</button></div></div></div></div></td><td style="white-space:normal;word-break:break-all;max-width:130px;font-size:12px">{{ orderItemMaterialText(item, false) }}</td><td>{{ orderSpecificationText(item.snapshot_spec) }}</td><td>{{ item.quantity }}<div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td><td><status-tag :value="itemBusinessStatusKey(item)"></status-tag></td><td><status-tag :value="item.requisition_status"></status-tag></td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(item.unit_price) }}</td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_cost ? money(item.total_estimated_cost) : "-" }}</strong><div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin-top:3px">{{ item.estimated_cost_health_label }}</div></td><td v-if="canViewCosts" class="cost-sensitive"><strong>{{ item.total_estimated_gross_profit !== null && item.total_estimated_gross_profit !== undefined ? money(item.total_estimated_gross_profit) : "-" }}</strong><div v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined" class="muted">{{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</div></td><td class="toolbar-group"><button class="btn small primary" @click="openOrderTrace(row,item)">追溯</button><button v-if="canSales" class="btn small" @click="openOrderItem(row,item)">编辑</button><a v-if="item.drawing_file || item.product_drawing_file" href="#" class="btn small" @click.prevent="previewDrawingFile(item.drawing_file || item.product_drawing_file)" title="查看图纸">图纸</a></td></tr></tbody></table></div></td></tr>
                 </template></tbody>
                 <tbody v-else><template v-for="group in groupedOrderRows" :key="group.key">
@@ -3597,7 +3593,7 @@
                     <td>{{ group.total_quantity }}</td>
                     <td>{{ group.total_delivered_quantity }}</td>
                     <td><status-tag :value="group.all_received ? 'received' : 'pending'"></status-tag></td>
-                    <td><div class="status blue">历史归档</div></td>
+                    <td><status-tag :value="group.group_status"></status-tag></td>
                     <td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ money(group.total_amount) }}</td>
                   </tr>
                   <tr v-if="expandedOrders[group.key]" class="order-detail-row">
@@ -3607,12 +3603,12 @@
                           <thead><tr><th>TM编号</th><th>下单日期</th><th>产品</th><th>数量</th><th v-if="canViewSalesAmounts" class="sensitive-price">金额</th><th>状态</th><th>操作</th></tr></thead>
                           <tbody>
                             <tr v-for="row in group.orders" :key="row.id">
-                              <td><strong>{{ displayOrderNumber(row) }}</strong><div v-if="row.is_history_order" class="status blue" style="margin-top:4px">历史订单</div></td>
+                              <td><strong>{{ displayOrderNumber(row) }}</strong></td>
                               <td>{{ row.order_date }}</td>
                               <td>{{ row.items.map(item => plainProductText(item.snapshot_product_name)).join(' / ') }}</td>
                               <td>{{ sum(row.items,'quantity') }}</td>
                               <td v-if="canViewSalesAmounts" class="sensitive-price">¥ {{ money(row.total_amount) }}</td>
-                              <td><div class="status blue">历史归档</div></td>
+                              <td><status-tag :value="orderDisplayStatusKey(row)"></status-tag></td>
                               <td><div class="toolbar-group"><button class="btn small" @click="openOrderDetail(row)">查看详情</button><button v-if="canSales && row.items.length" class="btn primary small" @click="openOrderItem(row,row.items[0])">编辑订单</button></div></td>
                             </tr>
                           </tbody>
@@ -6933,7 +6929,7 @@
                 <div class="field"><label>客户单号</label><div>{{ orderDetail.customer_po || "-" }}</div></div>
                 <div class="field"><label>下单日期</label><div>{{ orderDetail.order_date }}</div></div>
                 <div class="field"><label>交货日期</label><div>{{ orderDetail.delivery_date || "-" }}</div></div>
-                <div class="field"><label>状态</label><div v-if="orderDetail.is_history_order" class="status blue">历史归档</div><status-tag v-else :value="orderDisplayStatusKey(orderDetail)"></status-tag></div>
+                <div class="field"><label>状态</label><status-tag :value="orderDisplayStatusKey(orderDetail)"></status-tag></div>
               <div v-if="canViewSalesAmounts" class="field sensitive-price"><label>订单金额</label><div>¥ {{ money(orderDetail.total_amount) }}</div></div>
                 <div class="field wide"><label>备注</label><div>{{ orderDetail.remark || "-" }}</div></div>
               </div>
@@ -8816,7 +8812,6 @@
               { label: "进行中", value: "active" },
               { label: "已完成", value: "completed" },
               { label: "已作废/取消", value: "cancelled" },
-              { label: "历史归档", value: "history" },
             ],
             orderStageOptions: [
               { label: "全部流程阶段", value: "" },
@@ -8846,7 +8841,6 @@
               { label: "待结款", value: "pending_payment" },
               { label: "订单完成", value: "completed" },
               { label: "待确认", value: "pending_confirmation" },
-              { label: "历史归档", value: "history" },
             ],
             showOrderMoreMenu: false,
             showAdvancedFilter: false,
@@ -9883,7 +9877,6 @@
                   all_received: true,
                   group_status: null,
                   business_delivery_progress: null,
-                  hasHistoryOnly: true,
                   orders: [],
                 });
               }
@@ -9895,25 +9888,22 @@
               group.total_delivered_quantity += Number(row.business_delivery_progress?.delivered_quantity ?? this.sum(rowItems, "delivered_quantity"));
               group.total_amount += Number(row.total_amount || 0);
               group.all_received = group.all_received && Boolean(row.all_material_received ?? rowItems.every((item) => item.material_status === "received"));
-              group.hasHistoryOnly = group.hasHistoryOnly && !!row.is_history_order;
               if (!group.latest_delivery_date || String(row.delivery_date || "") > String(group.latest_delivery_date || "")) {
                 group.latest_delivery_date = row.delivery_date || group.latest_delivery_date;
               }
             }
             return [...groups.values()].map((group) => {
-              if (!group.hasHistoryOnly) {
-                group.group_status = this.aggregateOrderBusinessStatus(group.orders);
-                const delivered = group.orders.reduce(
-                  (total, row) => total + Number(row?.business_delivery_progress?.delivered_quantity || 0),
-                  0,
-                );
-                const sequences = [...new Set(group.orders.flatMap(
-                  row => row?.business_delivery_progress?.item_sequences || [],
-                ).map(Number).filter(Number.isFinite))].sort((a,b) => a-b);
-                group.business_delivery_progress = delivered > 0
-                  ? { delivered_quantity:delivered, total_quantity:group.total_quantity, item_sequences:sequences }
-                  : null;
-              }
+              group.group_status = this.aggregateOrderBusinessStatus(group.orders);
+              const delivered = group.orders.reduce(
+                (total, row) => total + Number(row?.business_delivery_progress?.delivered_quantity || 0),
+                0,
+              );
+              const sequences = [...new Set(group.orders.flatMap(
+                row => row?.business_delivery_progress?.item_sequences || [],
+              ).map(Number).filter(Number.isFinite))].sort((a,b) => a-b);
+              group.business_delivery_progress = delivered > 0
+                ? { delivered_quantity:delivered, total_quantity:group.total_quantity, item_sequences:sequences }
+                : null;
               return group;
             });
           },
@@ -11547,7 +11537,7 @@
           statusText(value) {
             return ({
               active:"启用", inactive:"停用", pending:"待处理", received:"材料已到",
-              business:"日常订单", finished_delivery:"已送完", history:"历史归档", unfinished:"未送货", pending_confirmation:"待确认", pending_production:"待生产", pending_material:"待报料", pending_incoming:"待收料", production:"生产中", pending_delivery:"待送货",
+              business:"日常订单", finished_delivery:"已送完", unfinished:"未送货", pending_confirmation:"待确认", pending_production:"待生产", pending_material:"待报料", pending_incoming:"待收料", production:"生产中", pending_delivery:"待送货",
               partially_delivered:"部分送完", pending_reconciliation:"待对账", pending_invoice:"待开票", pending_payment:"待结款",
               delivered:"已送完", completed:"订单完成", archived:"已归档", closed:"已结档", dead:"死单", cancelled:"已作废",
               dispatched:"已发货", waiting_receipt:"待回单", confirmed:"回单已确认", receipt_cancelled:"已撤回",
@@ -26887,8 +26877,8 @@
             }
           },
           async dangerRollbackOrderGroup() {
-            const orders = (this.orderEditGroup?.orders || []).filter(o => !o.is_history_order);
-            if (!orders.length) { this.showToast("无可撤回的订单（历史归档订单不可撤回）", true); return; }
+            const orders = this.orderEditGroup?.orders || [];
+            if (!orders.length) return;
             if (!confirm(`确认撤回当前订单组的 ${orders.length} 张订单吗？\n将删除各订单关联的送货、回单、对账、开票和收款记录，并退回未报料状态；不符合条件的订单会拒绝。`)) return;
             let succeeded=0;
             for (const order of orders) {

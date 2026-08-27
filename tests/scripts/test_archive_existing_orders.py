@@ -32,7 +32,7 @@ def _make_source_db(path: Path) -> None:
                 FOREIGN KEY(order_id) REFERENCES sales_orders(id) ON DELETE CASCADE
             );
             INSERT INTO sales_orders VALUES
-                (1, 'RUIDA-10001', 'delivered', 'unpaid'),
+                (1, 'OLD-10001', 'delivered', 'unpaid'),
                 (2, 'PO-001', 'pending_production', 'unpaid'),
                 (3, 'TM20260622001', 'pending_production', 'unpaid');
             INSERT INTO sales_order_items VALUES

@@ -300,7 +300,7 @@ def test_projection_skips_full_page_decoration(tmp_path: Path, monkeypatch) -> N
     assert len(rows) == 4
 
 
-def test_projection_ranks_only_requested_history_rows_without_full_registry(
+def test_projection_loads_only_requested_order_numbers_without_full_registry(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -316,7 +316,7 @@ def test_projection_ranks_only_requested_history_rows_without_full_registry(
         product = db.query(Product).filter_by(product_code="P1-36J-PARENT").one()
         for suffix, pending in ((2, False), (10, True), (30, False)):
             order = Order(
-                order_number=f"RUIDA-{suffix}",
+                order_number=f"TM20260810{suffix:03d}",
                 customer_id=customer.id,
                 order_date=date(2026, 8, 10),
                 status="pending_production",
@@ -335,8 +335,8 @@ def test_projection_ranks_only_requested_history_rows_without_full_registry(
                     subtotal=Decimal("0"),
                     material_status="pending" if pending else "received",
                     requisition_status="已报料",
-                    snapshot_product_name="历史纸箱",
-                    snapshot_product_code=f"RUIDA-P-{suffix}",
+                    snapshot_product_name="当前纸箱",
+                    snapshot_product_code=f"P1-36J-P-{suffix}",
                     snapshot_material="A=B",
                 )
             )
@@ -344,24 +344,24 @@ def test_projection_ranks_only_requested_history_rows_without_full_registry(
 
         user = db.get(User, user_id)
         assert user is not None
-        full_history_row = next(
+        full_row = next(
             row
             for row in incoming_api._rows(db, user=user)
-            if row.get("product_code") == "RUIDA-P-10"
+            if row.get("product_code") == "P1-36J-P-10"
         )
 
         def forbidden(*_args, **_kwargs):
-            raise AssertionError("首页不得构造全量历史订单显示表")
+            raise AssertionError("首页不得构造全量订单号显示表")
 
         monkeypatch.setattr(incoming_api, "build_display_registry", forbidden)
-        projected_history_row = next(
+        projected_row = next(
             row
             for row in incoming_api.dashboard_pending_incoming_rows(db, user)
-            if row.get("product_code") == "RUIDA-P-10"
+            if row.get("product_code") == "P1-36J-P-10"
         )
 
-    assert full_history_row["order_number"] == "TM20260810-0002"
-    assert projected_history_row["order_number"] == full_history_row["order_number"]
+    assert full_row["order_number"] == "TM20260810010"
+    assert projected_row["order_number"] == full_row["order_number"]
 
 
 def _query_count(factory, user_id: int) -> tuple[int, list[str], int]:

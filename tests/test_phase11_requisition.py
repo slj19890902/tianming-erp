@@ -2959,28 +2959,24 @@ def test_submitted_requisition_items_can_be_listed(requisition_app) -> None:
     assert row["supplier_delivery_time"].startswith("2026-06-15T08:30")
 
 
-def test_requisition_api_hides_legacy_history_prefix_in_order_number(
+def test_requisition_api_keeps_current_order_number(
     requisition_app,
 ) -> None:
     from app.models.order import Order
 
     app, session_factory = requisition_app
     with session_factory() as session:
-        session.get(Order, 1).order_number = "RUIDA-42838"
+        session.get(Order, 1).order_number = "TM20260614001"
         session.commit()
     with TestClient(app) as client:
         _login(client, "admin")
         client.post("/api/requisition/batches", json=_batch_payload())
-        response = client.get(
-            "/api/requisition/items",
-            params={"include_history": "true"},
-        )
+        response = client.get("/api/requisition/items")
 
     assert response.status_code == 200
     row = response.json()["items"][0]
-    assert row["display_order_number"] == "TM20260614-0001"
-    assert row["order_number"] == "TM20260614-0001"
-    assert "RUIDA" not in str(response.json())
+    assert row["display_order_number"] == "TM20260614001"
+    assert row["order_number"] == "TM20260614001"
 
 
 def test_requisition_cannot_change_or_cancel_after_material_received(

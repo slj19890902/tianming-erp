@@ -43,7 +43,6 @@ def test_order_page_hides_old_system_name_and_uses_tm_search_copy() -> None:
     assert "ruida" not in orders
     assert "瑞达" not in orders
     assert "filters.orderKeyword" in orders
-    assert "openOrderDetail" not in orders
     assert "openOrderGroupDetail" in orders
     assert "modal.type === 'orderGroupDetail'" in INDEX
     assert "明细系统单号" not in orders

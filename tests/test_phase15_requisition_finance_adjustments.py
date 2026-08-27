@@ -37,7 +37,7 @@ def _seed_users(session) -> None:
     )
 
 
-def test_history_requisition_pending_is_hidden_and_listed_as_archive(tmp_path: Path) -> None:
+def test_unrequisitioned_delivered_order_is_not_listed_as_requisition_history(tmp_path: Path) -> None:
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.requisition import router as requisition_router
@@ -76,7 +76,7 @@ def test_history_requisition_pending_is_hidden_and_listed_as_archive(tmp_path: P
         session.add(product)
         session.flush()
         order = Order(
-            order_number="RUIDA-10001",
+            order_number="TM20260614001",
             customer_id=customer.id,
             order_date=date(2026, 6, 14),
             delivery_date=date(2026, 6, 21),
@@ -124,10 +124,7 @@ def test_history_requisition_pending_is_hidden_and_listed_as_archive(tmp_path: P
     assert pending.status_code == 200
     assert pending.json()["items"] == []
     assert archived.status_code == 200
-    assert len(archived.json()["items"]) == 1
-    row = archived.json()["items"][0]
-    assert row["order_number"] == "TM20260614-0001"
-    assert row["requisition_status"] == "settled"
+    assert archived.json()["items"] == []
 
 
 def test_statement_settlement_allows_missing_account(tmp_path: Path) -> None:

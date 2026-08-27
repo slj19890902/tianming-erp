@@ -73,7 +73,7 @@ from app.models.warehouse_inventory import (
     WarehouseFloor,
     WarehouseLocation,
 )
-from app.services.history_orders import build_display_registry, display_order_number
+from app.services.order_number_display import build_display_registry, display_order_number
 from app.services.audit_log import append_audit_event
 from app.services.fulfillment_reminders import list_delivery_reminders
 from app.services.location_candidates import (

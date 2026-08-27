@@ -1103,14 +1103,14 @@ def test_pending_statement_and_statement_snapshot_amounts(
     assert line.gross_profit_amount == Decimal("70.20")
 
 
-def test_finance_api_hides_legacy_history_prefix_in_pending_statement(
+def test_finance_api_keeps_current_order_number_in_pending_statement(
     finance_api_app,
 ) -> None:
     from app.models.order import Order
 
     app, session_factory = finance_api_app
     with session_factory() as session:
-        session.get(Order, 1).order_number = "RUIDA-42001"
+        session.get(Order, 1).order_number = "TM20260601001"
         session.commit()
     with TestClient(app) as client:
         _login(client, "finance")
@@ -1119,9 +1119,8 @@ def test_finance_api_hides_legacy_history_prefix_in_pending_statement(
 
     assert pending.status_code == 200
     first = pending.json()["items"][0]
-    assert first["display_order_number"] == "TM20260601-0001"
-    assert first["order_number"] == "TM20260601-0001"
-    assert "RUIDA" not in str(pending.json())
+    assert first["display_order_number"] == "TM20260601001"
+    assert first["order_number"] == "TM20260601001"
 
 
 def test_phase8_migration_preserves_legacy_finance_tables(

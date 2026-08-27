@@ -79,11 +79,10 @@ from app.models.warehouse_inventory import (
     SemiFinishedLotAllowedProduct,
     WarehouseLocation,
 )
-from app.services.history_orders import (
+from app.services.order_number_display import (
     build_display_registry,
     build_display_registry_for_order_ids,
     display_order_number,
-    is_history_order_number,
 )
 from app.services.audit_log import append_audit_event
 from app.services.historical_purchase_lookup import (
@@ -4463,8 +4462,6 @@ def _ensure_requisition_hold_eligible(
         db, order_item_id, lock=lock
     )
     require_customer_access(order.customer_id, user, db)
-    if is_history_order_number(order.order_number):
-        raise HTTPException(status_code=409, detail="历史订单不能设置等候报料")
     if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
         raise HTTPException(status_code=409, detail="订单当前状态不能设置等候报料")
     if item.is_force_closed:
@@ -5901,8 +5898,6 @@ def _validate_merge_member_rows(
         ],
     )
     for item, order, *_ in ordered_rows:
-        if is_history_order_number(order.order_number):
-            raise HTTPException(status_code=409, detail="历史订单不能创建待报料合并组")
         if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
             raise HTTPException(status_code=409, detail="订单当前状态不能创建待报料合并组")
         if item.is_force_closed:
@@ -6705,8 +6700,6 @@ def _ensure_pending_order_item_for_supplier_order(
     if row is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
     item, order, customer, product = row
-    if is_history_order_number(order.order_number):
-        raise HTTPException(status_code=409, detail="历史订单不能生成供应商报料单")
     if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
         raise HTTPException(status_code=409, detail="订单当前状态不能生成供应商报料单")
     if item.is_force_closed:
@@ -9415,8 +9408,6 @@ def _pending_requisition_eligible_rows(db: Session, user: User) -> list[dict]:
         )
 
     for item, order, customer, product in rows:
-        if is_history_order_number(order.order_number):
-            continue
         active_requisition = active_requisition_map.get(
             int(item.id),
             {"quantity": 0},
@@ -9475,36 +9466,13 @@ def _pending_requisitions_full_payload(
         merge_group_ids=merge_group_ids,
         order_item_ids=order_item_ids,
     )
-    if merge_group_ids is None and order_item_ids is None:
-        registry = build_display_registry(db)
-    else:
-        merge_rows_by_group = _pending_merge_member_rows(
-            db,
-            [int(group.id) for group in merge_groups],
-        )
-        history_order_ids = {
-            int(order.id)
-            for _requisition_item, _item, order, _customer, _product in (
-                group_row
-                for group_rows in merge_rows_by_group.values()
-                for group_row in group_rows
-            )
-            if is_history_order_number(order.order_number)
-        }
-        history_order_ids.update(
-            int(order.id)
-            for _item, order, _customer, _product in rows
-            if is_history_order_number(order.order_number)
-        )
-        registry = build_display_registry_for_order_ids(db, history_order_ids)
+    registry = build_display_registry(db)
     reservation_map = requisition_finished_inventory_coverage_by_item_ids(
         db, [item.id for item, *_ in rows]
     )
     read_context = _PendingRequisitionReadContext(db, rows)
     items = []
     for item, order, customer, product in rows:
-        if is_history_order_number(order.order_number):
-            continue
         material = read_context.material_for(item)
         if (
             read_context.is_ordinary(item)
@@ -11999,7 +11967,6 @@ def mark_pending_composite_parent_virtual(
 @router.get("/items")
 def list_requisition_items(
     status_filter: str | None = Query(default=None, alias="status"),
-    include_history: bool = False,
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
@@ -12022,13 +11989,8 @@ def list_requisition_items(
     rows = db.execute(query).all()
     items: list[dict] = []
     for item, order, customer, product in rows:
-        is_history = is_history_order_number(order.order_number)
-        if is_history and not include_history:
-            continue
         effective_status = item.requisition_status
-        if is_history and effective_status == "未报料":
-            effective_status = "settled"
-        if not is_history and effective_status == "未报料":
+        if effective_status == "未报料":
             continue
         if status_filter and effective_status != status_filter:
             continue
@@ -15458,8 +15420,6 @@ def merge_suggestions(
     from collections import defaultdict
     groups: dict = defaultdict(list)
     for item, order, customer, product in rows:
-        if is_history_order_number(order.order_number):
-            continue
         if not (item.snapshot_report_length_mm and item.snapshot_report_width_mm):
             continue
         material = read_context.material_for(item)

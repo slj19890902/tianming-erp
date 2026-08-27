@@ -36,7 +36,7 @@ from app.models.supplier_requisition_order import (
 )
 from app.models.warehouse_inventory import InventoryLot, InventoryPalletItem
 from app.services.box_type_rules import box_type_code, canonical_box_style
-from app.services.history_orders import build_display_registry, display_order_number
+from app.services.order_number_display import build_display_registry, display_order_number
 from app.services.fulfillment_reminders import (
     matching_production_reminders,
     production_reminders_by_customer,

@@ -80,9 +80,6 @@ def test_tianhua_candidate_scoring_and_invalid_order_filters(tmp_path):
             customer_po="PO-B",
         )
         _order(
-            db, customer.id, product.id, "RUIDA-OLD", date(2026, 7, 5), 200
-        )
-        _order(
             db, customer.id, product.id, "TH-COMPLETED",
             date(2026, 7, 5), 200, status="completed",
         )
@@ -125,7 +122,6 @@ def test_tianhua_candidate_scoring_and_invalid_order_filters(tmp_path):
         assert by_date["order_id"] == order_b.id
         assert by_date["candidate_count"] == 2
         assert "按预送货日期最近匹配" in by_date["match_reason"]
-        assert "已排除 RUIDA" in by_date["match_reason"]
 
         mismatch = preprocess_row(
             db,

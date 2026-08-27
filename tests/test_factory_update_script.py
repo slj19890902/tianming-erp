@@ -53,7 +53,21 @@ def test_factory_update_reports_current_release_version() -> None:
     assert any("本次更新｜" in item and "持续标红" in item and "手机与电脑" in item for item in current_release)
     assert any("本次更新｜" in item and "拒绝混放" in item and "同规格" in item for item in current_release)
     assert any("本次更新｜" in item and "搬回ERP登记位" in item and "正数物理量归零" in item for item in current_release)
+    assert any(
+        "本次更新｜" in item
+        and "新增gm48v8x9z37" in item
+        and "现场未匹配实物观察事实表" in item
+        and "不自动创建产品、批次、库存数量或搬货事实" in item
+        for item in current_release
+    )
     assert any("如何验证｜" in item and "v0.22.202" in item and "gm48v8x9z37" in item for item in current_release)
+    assert any(
+        "如何验证｜" in item
+        and "fl47v8x9z36" in item
+        and "gm48v8x9z37" in item
+        and "只新增现场未匹配实物观察表" in item
+        for item in current_release
+    )
     assert any(item.startswith("v0.22.201：本次更新｜") and "片料" in item and "产品" in item and "楞型" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.201：本次更新｜") and "发布版本隔离" in item and "禁止弹性缩小" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.201：本次更新｜") and "二维码顶部对齐" in item and "行距" in item for item in APP_CHANGELOG)

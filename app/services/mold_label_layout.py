@@ -56,12 +56,18 @@ V4_ELEMENT_CATALOG = (
 )
 _V4_CATALOG_BY_ID = {item["id"]: item for item in V4_ELEMENT_CATALOG}
 
+V5_CATALOG_VERSION = "p1-115-v1"
+V5_PAPER_WIDTH_MM = 80.0
+V5_PAPER_HEIGHT_MM = 40.0
+V5_ELEMENT_CATALOG = V4_ELEMENT_CATALOG
+_V5_CATALOG_BY_ID = {item["id"]: item for item in V5_ELEMENT_CATALOG}
+
 # These aliases describe the catalog accepted for new writes.  Historical
 # print snapshots use their own version-pinned decoder below.
-CATALOG_VERSION = V4_CATALOG_VERSION
-PAPER_WIDTH_MM = V4_PAPER_WIDTH_MM
-PAPER_HEIGHT_MM = V4_PAPER_HEIGHT_MM
-ELEMENT_CATALOG = V4_ELEMENT_CATALOG
+CATALOG_VERSION = V5_CATALOG_VERSION
+PAPER_WIDTH_MM = V5_PAPER_WIDTH_MM
+PAPER_HEIGHT_MM = V5_PAPER_HEIGHT_MM
+ELEMENT_CATALOG = V5_ELEMENT_CATALOG
 
 
 class MoldLabelLayoutError(ValueError):
@@ -125,9 +131,9 @@ def default_layout() -> dict[str, Any]:
                 "id": "customer_name",
                 "kind": "text",
                 "x_mm": 1.2,
-                "y_mm": 16.6,
+                "y_mm": 24.6,
                 "width_mm": 61.8,
-                "height_mm": 7.2,
+                "height_mm": 5.2,
                 "font_size_mm": 4.3,
                 "font_weight": 900,
                 "text_align": "left",
@@ -137,9 +143,9 @@ def default_layout() -> dict[str, Any]:
                 "id": "mold_number",
                 "kind": "text",
                 "x_mm": 1.2,
-                "y_mm": 24.6,
+                "y_mm": 30.0,
                 "width_mm": 61.8,
-                "height_mm": 14.2,
+                "height_mm": 8.8,
                 "font_size_mm": 6.0,
                 "font_weight": 900,
                 "text_align": "left",
@@ -560,19 +566,37 @@ def _normalize_layout_v4(payload: object) -> dict[str, Any]:
 _SNAPSHOT_NORMALIZERS[V4_CATALOG_VERSION] = _normalize_layout_v4
 
 
+def _normalize_layout_v5(payload: object) -> dict[str, Any]:
+    """Validate the board-labelled catalog while reusing the V4 geometry rules."""
+
+    if not isinstance(payload, dict):
+        raise MoldLabelLayoutError("模具标签布局必须是对象")
+    if payload.get("catalog_version") != V5_CATALOG_VERSION:
+        raise MoldLabelLayoutError("标签元素目录版本已变化，请重新加载默认布局")
+    compatible = {**payload, "catalog_version": V4_CATALOG_VERSION}
+    normalized = _normalize_layout_v4(compatible)
+    normalized["catalog_version"] = V5_CATALOG_VERSION
+    return normalized
+
+
+_SNAPSHOT_NORMALIZERS[V5_CATALOG_VERSION] = _normalize_layout_v5
+
+
 def normalize_layout(payload: object) -> dict[str, Any]:
     """Validate a layout submitted for the currently published catalog."""
 
-    return _normalize_layout_v4(payload)
+    return _normalize_layout_v5(payload)
 
 
 def _upgrade_to_current_catalog(layout: dict[str, Any]) -> dict[str, Any]:
     """Project an active legacy release without changing frozen snapshots."""
 
     catalog_version = layout.get("catalog_version")
+    if catalog_version == V5_CATALOG_VERSION:
+        return _normalize_layout_v5(layout)
     if catalog_version == V4_CATALOG_VERSION:
-        return _normalize_layout_v4(layout)
-    if catalog_version == V3_CATALOG_VERSION:
+        _normalize_layout_v4(layout)
+    elif catalog_version == V3_CATALOG_VERSION:
         _normalize_layout_v3(layout)
     elif catalog_version == V2_CATALOG_VERSION:
         _normalize_layout_v2(layout)
@@ -585,7 +609,7 @@ def _upgrade_to_current_catalog(layout: dict[str, Any]) -> dict[str, Any]:
     # P1-112.  Validate the frozen source, then start new jobs from the
     # approved single-label-equivalent default.  Historical print snapshots
     # keep their version-pinned decoder and remain exactly replayable.
-    return _normalize_layout_v4(default_layout())
+    return _normalize_layout_v5(default_layout())
 
 
 def _normalize_snapshot_layout(payload: object) -> dict[str, Any]:

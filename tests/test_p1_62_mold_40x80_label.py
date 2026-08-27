@@ -94,12 +94,12 @@ def _frozen_v2_layout() -> dict:
 
 
 def _layout_driven_label(index: int, qr: str) -> str:
-    return f'''<article class="mold-label-page" data-layout-catalog="p1-112-v1"><div class="label template-80x40 layout-driven">
+    return f'''<article class="mold-label-page" data-layout-catalog="p1-115-v1"><div class="label template-80x40 layout-driven">
       <div class="mold-layout-element mold-layout-text" data-layout-id="board_specification" style="left:1.2mm;top:.8mm;width:61.8mm;height:7mm;font-size:5.6mm;font-weight:900">片料 1100 × 760</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="product_specification" style="left:1.2mm;top:8.7mm;width:48mm;height:7mm;font-size:4.8mm;font-weight:900">产品 520 × 350 × 300</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="flute_type" style="left:50mm;top:8.7mm;width:13mm;height:7mm;font-size:4mm;font-weight:800">楞型 BC</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="customer_name" style="left:1.2mm;top:16.6mm;width:61.8mm;height:7.2mm;font-size:4.3mm;font-weight:900">思迈尔</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_number" style="left:1.2mm;top:24.6mm;width:61.8mm;height:14.2mm;font-size:6mm;font-weight:900">P162-{index:03d}</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="product_specification" style="left:1.2mm;top:8.7mm;width:48mm;height:7mm;font-size:4.8mm;font-weight:900">520 × 350 × 300</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="flute_type" style="left:50mm;top:8.7mm;width:13mm;height:7mm;font-size:4mm;font-weight:800">BC</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="customer_name" style="left:1.2mm;top:24.6mm;width:61.8mm;height:5.2mm;font-size:4.3mm;font-weight:900">思迈尔</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_number" style="left:1.2mm;top:30mm;width:61.8mm;height:8.8mm;font-size:6mm;font-weight:900">P162-{index:03d}</div>
       <img class="mold-layout-element mold-layout-qr" data-layout-id="mold_qr" style="left:64.4mm;top:24.6mm;width:14.2mm;height:14.2mm" src="{qr}" alt="二维码">
     </div></article>'''
 
@@ -522,7 +522,7 @@ def test_v3_allows_missing_hidden_product_dimensions(mold_app) -> None:
         )
         assert created.status_code == 200, created.text
         assert created.json()["label_layout"]["layout"]["catalog_version"] == (
-            "p1-112-v1"
+            "p1-115-v1"
         )
         printed = client.get(
             f"/api/warehouse/molds/{mold_id}/label",
@@ -764,7 +764,7 @@ def test_current_identity_order_changes_while_v1_v2_snapshots_stay_frozen(
     )
     rendered = _dump_rendered_dom(headless_browser, fixture, tmp_path)
     assert (
-        'data-v3-text="片料 890 × 650|产品 290 × 140 × 120|楞型 E|瑞明|9#"'
+        'data-v3-text="片料 890 × 650|290 × 140 × 120|E|瑞明|9#"'
     ) in rendered
     assert (
         'data-v2-text="890 × 650|22700002|E|一开一|瑞明|9#|'

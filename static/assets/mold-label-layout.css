@@ -2,6 +2,8 @@
   position: relative;
   width: 80mm;
   height: 40mm;
+  flex: none;
+  break-inside: avoid-page;
   background: #fff;
 }
 
@@ -55,6 +57,15 @@
 .mold-label-page[data-layout-catalog="p1-112-v1"]
   .mold-layout-text[data-layout-id="customer_name"],
 .mold-label-page[data-layout-catalog="p1-112-v1"]
+  .mold-layout-text[data-layout-id="mold_number"] {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.mold-label-page[data-layout-catalog="p1-115-v1"]
+  .mold-layout-text[data-layout-id="customer_name"],
+.mold-label-page[data-layout-catalog="p1-115-v1"]
   .mold-layout-text[data-layout-id="mold_number"] {
   white-space: nowrap;
   overflow-wrap: normal;
@@ -269,6 +280,7 @@
     margin: 0 !important;
     padding: 0 !important;
     overflow: hidden !important;
+    contain: strict !important;
     page-break-after: always !important;
     break-after: page !important;
   }

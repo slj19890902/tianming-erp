@@ -110,8 +110,8 @@ def _label_markup(index: int, qr_data_url: str) -> str:
       <article class="label">
         <div class="fact-row board-row"><span class="fact-key">片料</span><strong class="fact-value">880 × 425</strong></div>
         <div class="product-flute-row">
-          <div class="inline-fact"><span class="fact-key">产品</span><strong class="fact-value">430 × 68</strong></div>
-          <div class="inline-fact flute-fact"><span class="fact-key">楞型</span><strong class="fact-value flute">AB</strong></div>
+          <div class="inline-fact"><strong class="fact-value">430 × 68</strong></div>
+          <div class="inline-fact flute-fact"><strong class="fact-value flute">AB</strong></div>
         </div>
         <div class="identity">
           <div class="customer-name">聚晟达</div>
@@ -225,8 +225,10 @@ def test_mold_label_print_pdf_has_one_40x30mm_page_per_label(
             "MOLD-2026-00000001",
             "MOLD-2026-000000000001",
         )[(page_number - 1) % 5]
-        for expected_text in ("片料", "楞型", "产品", "聚晟达", expected_number):
+        for expected_text in ("片料", "880 × 425", "430 × 68", "AB", "聚晟达", expected_number):
             assert expected_text in page_text, (
                 f"第 {page_number} 页未找到标签字段 {expected_text}，"
                 "该页可能为空白页或发生了标签跨页"
             )
+        assert "产品" not in page_text
+        assert "楞型" not in page_text

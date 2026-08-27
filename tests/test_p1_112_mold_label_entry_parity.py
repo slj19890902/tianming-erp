@@ -22,7 +22,7 @@ def test_current_40x80_catalog_uses_the_single_label_business_content() -> None:
     from app.services.mold_label_layout import default_layout, normalize_layout
 
     layout = normalize_layout(default_layout())
-    assert layout["catalog_version"] == "p1-112-v1"
+    assert layout["catalog_version"] == "p1-115-v1"
     assert layout["paper"] == {"width_mm": 80.0, "height_mm": 40.0}
     assert [element["id"] for element in layout["elements"]] == [
         "board_specification",
@@ -40,11 +40,12 @@ def test_current_40x80_catalog_uses_the_single_label_business_content() -> None:
 
 
 def test_single_batch_and_editor_share_one_current_40x80_renderer() -> None:
-    assert 'CURRENT_WIDE_CATALOG="p1-112-v1"' in LABEL_PAGE
+    assert 'CURRENT_WIDE_CATALOG="p1-115-v1"' in LABEL_PAGE
     assert "function labelHtml80(row){return TmMoldLabelLayout.labelHtml" in LABEL_PAGE
     assert 'attempt.source==="batch"?' in WAREHOUSE_PAGE
     assert "template_version=${encodeURIComponent(attempt.templateVersion)}" in WAREHOUSE_PAGE
     assert 'const V4_CATALOG_VERSION = "p1-112-v1"' in LAYOUT_JS
+    assert 'const V5_CATALOG_VERSION = "p1-115-v1"' in LAYOUT_JS
     assert "product_specification" in LAYOUT_JS
     assert "mold_number" in LAYOUT_JS
     assert "inventory_code" not in LAYOUT_JS.split(
@@ -89,7 +90,7 @@ def test_operation_single_and_selected_batch_project_identical_visible_facts(
             json={
                 "mold_ids": [mold_id],
                 "source": "single",
-                "template_version": "mold_40x30_v1",
+                "template_version": "mold_80x40_v1",
                 "idempotency_key": "p1-112-operation-single",
             },
         )
@@ -103,21 +104,27 @@ def test_operation_single_and_selected_batch_project_identical_visible_facts(
             },
         )
         assert single_job.status_code == batch_job.status_code == 200
-        single = client.get(
+        single_response = client.get(
             f"/api/warehouse/molds/{mold_id}/label",
             params={
-                "template_version": "mold_40x30_v1",
+                "template_version": "mold_80x40_v1",
                 "print_job_id": single_job.json()["print_job_id"],
             },
-        ).json()
-        batch = client.get(
+        )
+        batch_response = client.get(
             "/api/warehouse/molds/labels",
             params={
                 "mold_ids": str(mold_id),
                 "template_version": "mold_80x40_v1",
                 "print_job_id": batch_job.json()["print_job_id"],
             },
-        ).json()["items"][0]
+        )
+        single = single_response.json()
+        batch_body = batch_response.json()
+        batch = batch_body["items"][0]
+
+    assert single["label_layout"] == batch_body["label_layout"]
+    assert single["label_layout"]["layout"]["catalog_version"] == "p1-115-v1"
 
     for field in (
         "label_customer_name",

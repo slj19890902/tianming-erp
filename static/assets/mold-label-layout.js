@@ -9,6 +9,7 @@
   const V2_CATALOG_VERSION = "p1-103-v2";
   const V3_CATALOG_VERSION = "p1-103-v3";
   const V4_CATALOG_VERSION = "p1-112-v1";
+  const V5_CATALOG_VERSION = "p1-115-v1";
   const LEGACY_ELEMENT_LABELS = Object.freeze({
     board_specification: "片料尺寸",
     inventory_code: "纸箱存货编码",
@@ -96,7 +97,7 @@
     if (!Number.isInteger(version) || version < 0 || !layout || typeof layout !== "object") {
       throw new Error("40×80模具标签布局版本无效");
     }
-    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION, V3_CATALOG_VERSION, V4_CATALOG_VERSION].includes(layout.catalog_version)) {
+    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION, V3_CATALOG_VERSION, V4_CATALOG_VERSION, V5_CATALOG_VERSION].includes(layout.catalog_version)) {
       throw new Error("40×80模具标签元素目录不受支持");
     }
     if (
@@ -105,7 +106,7 @@
     ) {
       throw new Error("40×80模具标签内容区尺寸无效");
     }
-    const currentCatalog = layout.catalog_version === V4_CATALOG_VERSION;
+    const currentCatalog = [V4_CATALOG_VERSION, V5_CATALOG_VERSION].includes(layout.catalog_version);
     const catalogLabels = currentCatalog ? CURRENT_ELEMENT_LABELS : LEGACY_ELEMENT_LABELS;
     const elementIds = Object.keys(catalogLabels);
     if (!Array.isArray(layout.elements) || layout.elements.length !== elementIds.length) {
@@ -178,7 +179,7 @@
 
   function valueForElement(row, elementId, catalogVersion = V3_CATALOG_VERSION) {
     const product = Array.isArray(row?.products) ? row.products[0] : null;
-    if (catalogVersion === V4_CATALOG_VERSION) {
+    if ([V4_CATALOG_VERSION, V5_CATALOG_VERSION].includes(catalogVersion)) {
       const baselineValues = {
         board_specification: String(row?.label_report_specification ?? product?.report_specification ?? "").trim() || "待完善",
         product_specification: String(row?.label_product_specification ?? product?.specification ?? "").trim() || "待完善",
@@ -186,6 +187,9 @@
         customer_name: String(row?.label_customer_name ?? product?.customer_short_name ?? "").trim() || "待完善",
         mold_number: String(row?.label_mold_number ?? "").trim() || "待完善",
       };
+      if (catalogVersion === V5_CATALOG_VERSION) {
+        return `${elementId === "board_specification" ? "片料 " : ""}${baselineValues[elementId] || ""}`;
+      }
       const prefixes = {
         board_specification: "片料 ",
         product_specification: "产品 ",

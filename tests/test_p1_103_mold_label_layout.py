@@ -114,7 +114,7 @@ def test_default_layout_matches_single_label_content_and_fills_80x40_paper() -> 
     from app.services.mold_label_layout import default_layout, normalize_layout
 
     layout = normalize_layout(default_layout())
-    assert layout["catalog_version"] == "p1-112-v1"
+    assert layout["catalog_version"] == "p1-115-v1"
     assert layout["paper"] == {"width_mm": 80.0, "height_mm": 40.0}
     assert [item["id"] for item in layout["elements"]] == [
         "board_specification",
@@ -144,7 +144,10 @@ def test_default_layout_matches_single_label_content_and_fills_80x40_paper() -> 
     assert product_size["visible"] is True
     assert customer["width_mm"] >= 61.5
     assert mold_number["x_mm"] == customer["x_mm"]
-    assert mold_number["y_mm"] == qr["y_mm"]
+    assert customer["y_mm"] == qr["y_mm"]
+    assert mold_number["y_mm"] - (
+        customer["y_mm"] + customer["height_mm"]
+    ) <= 0.3
     assert mold_number["width_mm"] >= 61.5
     assert mold_number["font_size_mm"] >= 4.3
     assert mold_number["y_mm"] + mold_number["height_mm"] <= (
@@ -154,7 +157,7 @@ def test_default_layout_matches_single_label_content_and_fills_80x40_paper() -> 
 
 
 def test_historical_wide_job_offers_explicit_current_layout_reregistration() -> None:
-    assert 'CURRENT_WIDE_CATALOG="p1-112-v1"' in LABEL_PAGE
+    assert 'CURRENT_WIDE_CATALOG="p1-115-v1"' in LABEL_PAGE
     assert 'id="recreateCurrentLayout"' in LABEL_PAGE
     assert "按当前统一版式重新登记" in LABEL_PAGE
     assert "历史作业不会被改写" in LABEL_PAGE
@@ -217,7 +220,7 @@ def test_current_v1_release_is_projected_to_single_parity_without_mutating_histo
         stored = db.scalar(select(MoldLabelLayoutRevision))
 
         assert current["version"] == 1
-        assert current["layout"]["catalog_version"] == "p1-112-v1"
+        assert current["layout"]["catalog_version"] == "p1-115-v1"
         assert [item["id"] for item in current["layout"]["elements"]] == [
             "board_specification",
             "product_specification",

@@ -641,7 +641,10 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
     }
     if requires_reserve_projection:
         try:
-            reserve_location = automatic_raw_material_staging_location(db)
+            reserve_location = automatic_raw_material_staging_location(
+                db,
+                allow_repairable_legacy=True,
+            )
             reserve_context = load_warehouse_location_projection_contexts(
                 db,
                 [reserve_location],

@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.191"
-    assert APP_VERSION_NAME == "旧版栈板项库存批次归一"
+    assert APP_VERSION == "v0.22.192"
+    assert APP_VERSION_NAME == "纸板收料当前地图原料位兼容"
     assert APP_BUILD_DATE == "2026-08-27"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,11 +49,12 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "86箱不是新增实物" in item and "规范批次投影" in item for item in current_release)
-    assert any("本次更新｜" in item and "261条/82831箱" in item and "262条/82917箱" in item for item in current_release)
-    assert any("本次更新｜" in item and "物理栈板、库位、地堆占位" in item and "不移动" in item for item in current_release)
-    assert any("本次更新｜" in item and "fi44v8x9z33" in item and "拒绝降级" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.191" in item and "fi44v8x9z33" in item for item in current_release)
+    assert any("本次更新｜" in item and "退役一楼RAW-006" in item and "CURRENT_MAP" in item for item in current_release)
+    assert any("本次更新｜" in item and "RAW-001四个原料货架位" in item and "不增加库存" in item for item in current_release)
+    assert any("本次更新｜" in item and "1200×1000" in item and "安全阻断" in item for item in current_release)
+    assert any("本次更新｜" in item and "fj45v8x9z34" in item and "订单600张与备库2张" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.192" in item and "fj45v8x9z34" in item for item in current_release)
+    assert any(item.startswith("v0.22.191：本次更新｜") and "86箱不是新增实物" in item and "规范批次投影" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.189：本次更新｜") and "A1至E3" in item and "SEMI-011" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.189：如何验证｜") and "v0.22.189" in item and "fg42v8x9z31" in item for item in APP_CHANGELOG)
     assert any(item.startswith("v0.22.188：本次更新｜") and "SO383" in item and "不是员工操作错误" in item for item in APP_CHANGELOG)
@@ -343,7 +344,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.191" in item and "fi44" in item
+        "如何验证｜" in item and "v0.22.192" in item and "fj45" in item
         for item in current_release
     )
     assert any(

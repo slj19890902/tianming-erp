@@ -949,7 +949,13 @@ def receive_replenishment_item(
         )
     if item.target_inventory_type == "semi_finished":
         try:
-            destination = automatic_raw_material_staging_location(db)
+            destination = automatic_raw_material_staging_location(
+                db,
+                repair_operator_id=operator_id,
+                repair_idempotency_key=(
+                    f"stock-replenishment-receipt:{int(receipt_item_id)}"
+                ),
+            )
         except WarehouseInventoryError as error:
             raise StockReplenishmentError(str(error), error.status_code) from error
     else:

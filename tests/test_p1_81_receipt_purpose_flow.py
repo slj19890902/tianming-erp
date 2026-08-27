@@ -2523,6 +2523,171 @@ def test_pending_receipt_defaults_to_order_quantity_when_only_reserve_location_i
         assert _active_semi_quantity(session_factory) == 0
 
 
+def test_legacy_exact_raw_ground_geometry_is_repaired_inside_full_receipt(
+    requisition_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.audit import OperationLog
+    from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
+        WarehouseArea,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
+        WarehouseLocation,
+    )
+
+    app, session_factory = requisition_app
+    _seed_material_and_staging(session_factory)
+    revision = "p181-anonymous-map-v1"
+    feature_id = "zone-p181-1f-a1"
+    monkeypatch.setattr(
+        "app.services.warehouse_inventory.load_warehouse_twin_floor",
+        lambda floor_code: {
+            "floor_code": str(floor_code).upper(),
+            "revision": revision,
+            "bounds_mm": {
+                "min_x": 0,
+                "min_y": 0,
+                "max_x": 1200,
+                "max_y": 1000,
+            },
+            "features": [
+                {
+                    "id": feature_id,
+                    "feature_kind": "zone",
+                    "erp_area_code": "A1",
+                    "points": [[0, 0], [1200, 0], [1200, 1000], [0, 1000]],
+                }
+            ],
+        },
+    )
+    with session_factory() as session:
+        raw_area = session.scalar(
+            select(WarehouseArea).where(WarehouseArea.area_code == "A1")
+        )
+        raw_location = session.scalar(
+            select(WarehouseLocation).where(
+                WarehouseLocation.location_code == "P181-RAW-STAGE"
+            )
+        )
+        assert raw_area is not None and raw_location is not None
+        raw_plan = session.scalar(
+            select(WarehouseGroundLayoutPlan).where(
+                WarehouseGroundLayoutPlan.area_id == raw_area.id
+            )
+        )
+        assert raw_plan is not None
+        session.delete(raw_plan)
+        layout = raw_location.floor3_layout
+        assert layout is not None
+        layout.left_pct = Decimal("0")
+        layout.top_pct = Decimal("0")
+        layout.width_pct = Decimal("100")
+        layout.height_pct = Decimal("100")
+        layout.source_type = "manual"
+        layout.layout_kind = "unknown"
+        session.commit()
+        raw_area_id = int(raw_area.id)
+        raw_location_id = int(raw_location.id)
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        source = _create_frozen_sources(
+            client,
+            session_factory,
+            order_quantity=600,
+            purchase_total=602,
+            order_purpose=600,
+            stock_purpose=2,
+        )[0]
+        pending = client.get("/api/incoming/pending")
+        assert pending.status_code == 200, pending.text
+        row = next(
+            item
+            for item in pending.json()["items"]
+            if item["item_id"] == source.route_key
+        )
+        assert row["incoming_quantity"] == 602
+        assert row["expected_order_purpose_sheet_qty"] == 600
+        assert row["expected_reserve_purpose_sheet_qty"] == 2
+        assert row["reserve_location_ready"] is True
+        assert row["receipt_execution_ready"] is True
+        assert not row.get("receipt_quantity_notice")
+
+        frozen = _freeze_receipt_fact(
+            client,
+            source,
+            idempotency_key="p181-legacy-ground-price-600-602",
+        )
+        assert frozen.status_code == 200, frozen.text
+        received = _receive(
+            client,
+            source,
+            frozen.json(),
+            quantity=602,
+            idempotency_key="p181-legacy-ground-receive-600-602",
+        )
+        _assert_allocation(
+            received,
+            order_delta=600,
+            reserve_delta=2,
+            order_cumulative=600,
+            reserve_cumulative=2,
+            finished_delta=600,
+            finished_cumulative=600,
+        )
+        replayed = _receive(
+            client,
+            source,
+            frozen.json(),
+            quantity=602,
+            idempotency_key="p181-legacy-ground-receive-600-602",
+        )
+        assert replayed.status_code == 200, replayed.text
+        assert replayed.json()["receipt_item_id"] == received.json()[
+            "receipt_item_id"
+        ]
+
+    with session_factory() as session:
+        repaired_plan = session.scalar(
+            select(WarehouseGroundLayoutPlan).where(
+                WarehouseGroundLayoutPlan.area_id == raw_area_id
+            )
+        )
+        assert repaired_plan is not None
+        repaired_slot = session.scalar(
+            select(WarehouseGroundLayoutSlot).where(
+                WarehouseGroundLayoutSlot.plan_id == repaired_plan.id
+            )
+        )
+        assert repaired_slot is not None
+        assert int(repaired_slot.location_id) == raw_location_id
+        repaired_layout = session.scalar(
+            select(Floor3LocationLayout).where(
+                Floor3LocationLayout.location_id == raw_location_id
+            )
+        )
+        assert repaired_layout is not None
+        assert repaired_layout.layout_kind == "physical_pallet"
+        assert session.scalar(
+            select(func.count(OperationLog.id)).where(
+                OperationLog.action_code
+                == "warehouse.legacy_ground_plan.auto_repair"
+            )
+        ) == 1
+        assert session.scalar(
+            select(func.count(WarehouseGroundLayoutPlan.id)).where(
+                WarehouseGroundLayoutPlan.area_id == raw_area_id
+            )
+        ) == 1
+        assert session.scalar(
+            select(func.count(WarehouseGroundLayoutSlot.id)).where(
+                WarehouseGroundLayoutSlot.plan_id == repaired_plan.id
+            )
+        ) == 1
+        assert _active_semi_quantity(session_factory) == 2
+
+
 def test_legacy_unset_keeps_old_receive_contract_without_new_auto_finished(
     requisition_app,
 ) -> None:

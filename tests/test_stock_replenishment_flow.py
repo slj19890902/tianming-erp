@@ -1123,8 +1123,9 @@ def test_replenishment_rejects_floor1_a1_marker_until_map_is_published(
         )
         assert received.status_code == 409, received.text
         assert "已发布" in received.json()["detail"]
-        assert "地图操作" in received.json()["detail"]
-        assert "不会改用一楼待送区" in received.json()["detail"]
+        assert "当前地图" in received.json()["detail"]
+        assert "地图发布状态" in received.json()["detail"]
+        assert "不会改用待送区" in received.json()["detail"]
 
     with session_factory() as session:
         assert session.scalar(select(func.count(InventoryLot.id))) == 0
@@ -1280,7 +1281,7 @@ def test_replenishment_receive_fails_closed_without_floor1_a1_staging(
             },
         )
         assert received.status_code == 409, received.text
-        assert "一楼原料区域" in received.json()["detail"]
+        assert "当前地图" in received.json()["detail"]
         assert "待送区" in received.json()["detail"]
 
     with session_factory() as session:
@@ -1428,6 +1429,303 @@ def test_replenishment_uses_current_published_floor1_raw_material_area(
         assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
 
 
+def test_replenishment_uses_current_published_floor3_raw_material_rack(
+    stock_replenishment_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
+        InventoryLot,
+        WarehouseArea,
+        WarehouseAreaStoragePolicy,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
+
+    revision = "stock-replenishment-current-floor3"
+    feature_id = "stock-replenishment-zone-raw-rack"
+    monkeypatch.setattr(
+        "app.services.location_candidates.load_warehouse_twin_published_floor_identity",
+        lambda floor_number: {
+            "revision": revision,
+            "zones_by_id": {feature_id: "RAW-001"},
+            "zone_ids_by_area": {"RAW-001": (feature_id,)},
+        }
+        if int(floor_number) == 3
+        else {
+            "revision": "stock-replenishment-map-v1",
+            "zones_by_id": {"stock-replenishment-zone-a1": "A1"},
+            "zone_ids_by_area": {"A1": ("stock-replenishment-zone-a1",)},
+        },
+    )
+
+    with session_factory() as session:
+        legacy = session.scalar(
+            select(WarehouseLocation).where(WarehouseLocation.location_code == "1FA")
+        )
+        assert legacy is not None
+        legacy.is_active = False
+        floor = WarehouseFloor(
+            floor_code="3F",
+            floor_name="三楼",
+            floor_number=3,
+            construction_status="enabled",
+        )
+        session.add(floor)
+        session.flush()
+        raw_area = WarehouseArea(
+            floor_id=floor.id,
+            area_code="RAW-001",
+            area_name="当前地图原料货架区",
+            construction_status="enabled",
+        )
+        session.add(raw_area)
+        session.flush()
+        session.add(
+            WarehouseAreaStoragePolicy(
+                area_id=raw_area.id,
+                map_feature_id=feature_id,
+                allowed_inventory_types_json='["raw_material"]',
+                storage_layout="rack",
+                status="published",
+                published_map_revision=revision,
+                version=1,
+            )
+        )
+        staging = WarehouseLocation(
+            location_code="3F-RAW-001-L001",
+            location_name="当前地图原料货架第1位",
+            warehouse_type="semi_finished",
+            warehouse_floor=3,
+            area_code="RAW-001",
+            storage_type="rack",
+            placement_status="placed",
+            source_version="CURRENT_MAP",
+            address_kind="rack_slot",
+            address_area_id=raw_area.id,
+            rack_code="A",
+            level_no=1,
+            slot_no=1,
+            is_active=True,
+        )
+        session.add(staging)
+        session.flush()
+        session.add(
+            Floor3LocationLayout(
+                location_id=staging.id,
+                left_pct=0,
+                top_pct=0,
+                width_pct=25,
+                height_pct=100,
+                source_type="seeded",
+                layout_kind="physical_rack",
+            )
+        )
+        session.commit()
+        staging_id = int(staging.id)
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json=_customer_replenishment_payload(quantity=10),
+        )
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+        received = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 10,
+                "idempotency_key": "replenishment-current-floor3-raw-rack",
+            },
+        )
+        assert received.status_code == 200, received.text
+
+    with session_factory() as session:
+        lot = session.scalar(select(InventoryLot))
+        assert lot is not None
+        assert int(lot.warehouse_location_id) == staging_id
+        assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
+
+
+def test_replenishment_repairs_exact_legacy_measured_raw_ground_plan(
+    stock_replenishment_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    from app.models.audit import OperationLog
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
+        InventoryLot,
+        WarehouseArea,
+        WarehouseAreaStoragePolicy,
+        WarehouseFloor,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
+        WarehouseLocation,
+    )
+    from app.services.warehouse_inventory import (
+        automatic_raw_material_staging_location,
+    )
+
+    revision = "stock-replenishment-legacy-map-v1"
+    feature_id = "stock-replenishment-zone-legacy-raw"
+    monkeypatch.setattr(
+        "app.services.location_candidates.load_warehouse_twin_published_floor_identity",
+        lambda floor_number: {
+            "revision": revision,
+            "zones_by_id": {feature_id: "RAW-006"},
+            "zone_ids_by_area": {"RAW-006": (feature_id,)},
+        }
+        if int(floor_number) == 1
+        else None,
+    )
+    monkeypatch.setattr(
+        "app.services.warehouse_inventory.load_warehouse_twin_floor",
+        lambda floor_code: {
+            "floor_code": str(floor_code).upper(),
+            "revision": revision,
+            "bounds_mm": {
+                "min_x": 0,
+                "min_y": 0,
+                "max_x": 1200,
+                "max_y": 1000,
+            },
+            "features": [
+                {
+                    "id": feature_id,
+                    "feature_kind": "zone",
+                    "erp_area_code": "RAW-006",
+                    "points": [[0, 0], [1200, 0], [1200, 1000], [0, 1000]],
+                }
+            ],
+        },
+    )
+
+    with session_factory() as session:
+        legacy = session.scalar(
+            select(WarehouseLocation).where(WarehouseLocation.location_code == "1FA")
+        )
+        floor = session.scalar(
+            select(WarehouseFloor).where(WarehouseFloor.floor_number == 1)
+        )
+        assert legacy is not None and floor is not None
+        legacy.is_active = False
+        raw_area = WarehouseArea(
+            floor_id=floor.id,
+            area_code="RAW-006",
+            area_name="一楼原料区",
+            construction_status="enabled",
+        )
+        session.add(raw_area)
+        session.flush()
+        session.add(
+            WarehouseAreaStoragePolicy(
+                area_id=raw_area.id,
+                map_feature_id=feature_id,
+                allowed_inventory_types_json='["raw_material"]',
+                storage_layout="pallet_ground",
+                status="published",
+                published_map_revision=revision,
+                version=1,
+            )
+        )
+        staging = WarehouseLocation(
+            location_code="F1-RAW-006-L001",
+            location_name="一楼原料区第1位",
+            warehouse_type="shared",
+            warehouse_floor=1,
+            area_code="RAW-006",
+            storage_type="ground",
+            placement_status="placed",
+            source_version="TWIN_V1",
+            is_active=True,
+        )
+        session.add(staging)
+        session.flush()
+        session.add(
+            Floor3LocationLayout(
+                location_id=staging.id,
+                left_pct=0,
+                top_pct=0,
+                width_pct=100,
+                height_pct=100,
+                source_type="manual",
+                layout_kind="unknown",
+            )
+        )
+        session.commit()
+        staging_id = int(staging.id)
+        raw_area_id = int(raw_area.id)
+
+    with session_factory() as session:
+        projected = automatic_raw_material_staging_location(
+            session,
+            allow_repairable_legacy=True,
+        )
+        assert int(projected.id) == staging_id
+        assert session.scalar(
+            select(WarehouseGroundLayoutPlan).where(
+                WarehouseGroundLayoutPlan.area_id == raw_area_id
+            )
+        ) is None
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json=_customer_replenishment_payload(quantity=10),
+        )
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+        received = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 10,
+                "idempotency_key": "replenishment-repair-legacy-raw-plan",
+            },
+        )
+        assert received.status_code == 200, received.text
+
+    with session_factory() as session:
+        lot = session.scalar(select(InventoryLot))
+        assert lot is not None
+        assert int(lot.warehouse_location_id) == staging_id
+        plan = session.scalar(
+            select(WarehouseGroundLayoutPlan).where(
+                WarehouseGroundLayoutPlan.area_id == raw_area_id
+            )
+        )
+        assert plan is not None and plan.status == "published"
+        slot = session.scalar(
+            select(WarehouseGroundLayoutSlot).where(
+                WarehouseGroundLayoutSlot.plan_id == plan.id
+            )
+        )
+        assert slot is not None
+        assert int(slot.location_id) == staging_id
+        assert {int(slot.width_mm), int(slot.depth_mm)} == {1200, 1000}
+        layout = session.scalar(
+            select(Floor3LocationLayout).where(
+                Floor3LocationLayout.location_id == staging_id
+            )
+        )
+        assert layout is not None
+        assert layout.layout_kind == "physical_pallet"
+        assert int(layout.version) == 2
+        audit = session.scalar(
+            select(OperationLog).where(
+                OperationLog.action_code
+                == "warehouse.legacy_ground_plan.auto_repair"
+            )
+        )
+        assert audit is not None
+        assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
+
+
 def test_replenishment_does_not_use_raw_area_without_published_ground_slot(
     stock_replenishment_app,
 ) -> None:
@@ -1458,7 +1756,7 @@ def test_replenishment_does_not_use_raw_area_without_published_ground_slot(
         )
         assert received.status_code == 409, received.text
         assert "已发布" in received.json()["detail"]
-        assert "一楼原料" in received.json()["detail"]
+        assert "当前地图" in received.json()["detail"]
 
     with session_factory() as session:
         assert session.scalar(select(func.count(InventoryLot.id))) == 0

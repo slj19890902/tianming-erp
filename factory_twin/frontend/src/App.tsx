@@ -950,7 +950,7 @@ export default function App() {
         <div><h1>工厂数字孪生布局编辑器 · Phase 2C-1</h1><p>工业平面 · 参数化 2.5D · ERP生产任务只读投影 · 坐标单位 mm</p></div>
         <div className="view-toggle" aria-label="视图切换">
           <button className={viewMode === "2d" ? "active" : ""} onClick={() => switchView("2d")}>二维 CAD · 工业平面</button>
-          <button className={viewMode === "25d" ? "active" : ""} onClick={() => switchView("25d")}>2.5D 等距 · 参数化</button>
+          <button className={viewMode === "25d" ? "active" : ""} onClick={() => switchView("25d")}>等距视图</button>
         </div>
       </header>
       <section className="statusbar"><span className={busy ? "status busy" : "status"}>{message}</span><strong>不生成正式库位 · 不修改库存、订单、生产或流水</strong></section>

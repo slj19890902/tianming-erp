@@ -11988,6 +11988,14 @@ def _twin_dashboard_source_rows(
     lot_query = _lot_query(require_formal_location=False)
     if visible_customer_ids is not None:
         lot_query = lot_query.where(_visible_lot_condition(visible_customer_ids))
+    lot_query = lot_query.options(
+        selectinload(InventoryLot.finished_detail).selectinload(
+            FinishedGoodsInventoryDetail.customer
+        ),
+        selectinload(InventoryLot.semi_finished_detail).selectinload(
+            SemiFinishedInventoryDetail.customer
+        ),
+    )
     lots = list(db.scalars(lot_query.order_by(InventoryLot.id)).unique().all())
     locations = list(
         db.scalars(

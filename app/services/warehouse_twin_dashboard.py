@@ -123,6 +123,11 @@ def _lot_business_fields(row: InventoryLot) -> dict:
             "product_name": detail.product_name_snapshot,
             "customer_id": detail.owner_customer_id,
             "customer_name": detail.owner_customer_name_snapshot or "通用库存",
+            "customer_short_name": (
+                str(detail.customer.chinese_short_name or "").strip()
+                if detail.customer is not None
+                else None
+            ),
             "specification": dimension_specification(
                 detail.length_mm,
                 detail.width_mm,
@@ -150,6 +155,11 @@ def _lot_business_fields(row: InventoryLot) -> dict:
             ),
             "customer_id": detail.owner_customer_id,
             "customer_name": detail.owner_customer_name_snapshot or "通用库存",
+            "customer_short_name": (
+                str(detail.customer.chinese_short_name or "").strip()
+                if detail.customer is not None
+                else None
+            ),
             "specification": dimensions,
             "material": detail.normalized_material_code or detail.material_code_snapshot,
         }
@@ -159,6 +169,7 @@ def _lot_business_fields(row: InventoryLot) -> dict:
         "product_name": "待补充库存名称",
         "customer_id": None,
         "customer_name": "待确认",
+        "customer_short_name": None,
         "specification": None,
         "material": None,
     }

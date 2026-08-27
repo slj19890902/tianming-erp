@@ -25,7 +25,8 @@ def test_operational_twin_reuses_the_editor_renderer_for_2d_and_25d() -> None:
     assert 'setViewMode("2d")' in SOURCE
     assert 'setViewMode("25d")' in SOURCE
     assert "二维平面" in SOURCE
-    assert "2.5D 等距" in SOURCE
+    assert "等距视图" in SOURCE
+    assert "2.5D 等距" not in SOURCE
     assert 'visualTheme?: "editor" | "warehouse"' in CANVAS
 
 
@@ -44,13 +45,14 @@ def test_operational_twin_reuses_formal_inventory_and_does_not_fake_rack_positio
     assert '"/api/warehouse/pallets/merge-batches"' in SOURCE
     assert "交换平面位置不改变库存" in SOURCE or "交换二维平面位置；库存和栈板绑定未改变" in SOURCE
     assert "/api/warehouse/twin-production/layouts/" in SOURCE
-    assert "只保存隔离地图库的任务ID与位置关系" in SOURCE
-    assert "ERP任务、数量和状态未修改" in SOURCE
+    assert "只保存隔离地图中的任务与位置关系" in SOURCE
+    assert "生产任务、数量和状态未修改" in SOURCE
 
 
 def test_mold_rack_planning_and_lookup_use_the_live_mold_ledger() -> None:
     assert "/api/warehouse/molds/by-map-rack?${params.toString()}" in SOURCE
-    assert "LIVE MOLD ASSET ELEVATION" in SOURCE
+    assert "实时模具货架" in SOURCE
+    assert "LIVE MOLD ASSET ELEVATION" not in SOURCE
     assert "同一格可登记多件模具" in SOURCE
     assert "关联产品</dt>" in SOURCE
     assert "直接选择货架，设置层数和每层格数" in SOURCE
@@ -115,7 +117,7 @@ def test_phase2c15_uses_low_cost_warehouse_rendering_on_factory_computers() -> N
 
 
 def test_operational_twin_uses_tianming_erp_compact_shell() -> None:
-    assert "天明智慧仓储" in SOURCE
+    assert '<div><h1>仓库地图</h1></div>' in SOURCE
     assert "数字孪生智慧仓储" not in SOURCE
     assert 'const [layerPanelOpen, setLayerPanelOpen] = useState(false)' in SOURCE
     assert 'const [productionPanelOpen, setProductionPanelOpen] = useState(false)' in SOURCE
@@ -135,8 +137,8 @@ def test_operational_twin_uses_tianming_erp_compact_shell() -> None:
 def test_embedded_warehouse_shell_has_a_definite_visible_height() -> None:
     assert (
         ".warehouse-shell {\n"
-        "        grid-row:2; height:100%; min-height:0; overflow:hidden;\n"
-        "        display:flex; flex-direction:column; gap:8px;\n"
+        "        grid-row:1; height:100%; min-height:0; overflow:hidden;\n"
+        "        display:flex; flex-direction:column; gap:0;\n"
         "      }"
     ) in ERP_INDEX
     assert (
@@ -147,6 +149,9 @@ def test_embedded_warehouse_shell_has_a_definite_visible_height() -> None:
 
 def test_embedded_twin_opens_the_ledger_in_the_top_level_page() -> None:
     assert '<a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>' in SOURCE
+    assert 'className={`warehouse-twin-shell ${embedded ? "embedded-shell" : ""}' in SOURCE
+    assert ".warehouse-twin-shell.embedded-shell .twin-command-bar" in TWIN_CSS
+    assert "display: none" in TWIN_CSS
 
 
 def test_operational_twin_keeps_fixed_objects_locked_and_only_adds_location_pallet_interaction() -> None:
@@ -376,7 +381,7 @@ def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
 def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> None:
     assert "库位布局" in SOURCE
     assert "二维编辑" in SOURCE
-    assert "2.5D 流畅查看 · 详情见右侧" in SOURCE
+    assert "等距视图仅查看库位与货物标签" in SOURCE
     assert "locationLayoutGeometry(" in SOURCE
     assert "/api/warehouse/spatial-layout/floors/${encodeURIComponent(floorCode)}/areas/${encodeURIComponent(areaCode)}" in SOURCE
     assert "/api/warehouse/spatial-layout/floors/${encodeURIComponent(floorCode)}/areas/${encodeURIComponent(selectedAreaCode)}/location-count" in SOURCE
@@ -431,7 +436,7 @@ def test_phase2c9_admin_operations_and_read_only_locating_share_the_measured_map
     assert 'value.permissions.includes("warehouse.stocktake.submit")' in SOURCE
     assert '"/api/warehouse/twin-operations/move-batches"' in SOURCE
     assert "移货页面草稿" in SOURCE
-    assert "整栈板移动" in SOURCE
+    assert "整栈移动" in SOURCE
     assert "canExecuteWarehouse" in SOURCE
     assert "buildMoveBatchPayload(moveBatchIdempotencyKey, moveDrafts)" in SOURCE
     assert "idempotency_key: idempotencyKey" in MOVE_DRAFT
@@ -531,7 +536,7 @@ def test_p1_42b_uses_only_measured_dispatch_zones_and_keeps_transfer_targets() -
     assert "buildMoveBatchPayload(moveBatchIdempotencyKey, moveDrafts)" in SOURCE
     assert '"/api/warehouse/pallets/merge-batches"' in SOURCE
     assert '<select value={moveTargetLocationId}' not in SOURCE
-    assert 'role="radiogroup" aria-label="目标系统栈板"' in SOURCE
+    assert 'role="radiogroup" aria-label="主货位"' in SOURCE
     assert "P1_47D_ENABLED" not in SOURCE
     assert 'canChooseProducts={canStocktake && mapMode === "move" && moveAction === "stocktake"}' in SOURCE
     assert "stocktakeLocationBlockReason(location)" in STOCKTAKE_DRAFT
@@ -571,8 +576,8 @@ def test_phase2c11_adds_rack_navigation_auto_locations_and_admin_corrections() -
     assert 'area?.area_code || areaCode || "未匹配区域"' not in SOURCE
     assert "上一个同区域货架" in SOURCE
     assert "下一个同区域货架" in SOURCE
-    assert "ERP PRODUCT LABEL" in SOURCE
     assert "当前产品标签" in SOURCE
+    assert "ERP PRODUCT LABEL" not in SOURCE
     assert "inventoryLabelQuantity(item)" in SOURCE
     assert "产品数量</dt>" in SOURCE
     assert "twin-header-area-summary" in SOURCE

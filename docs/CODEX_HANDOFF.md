@@ -1,5 +1,11 @@
 # Codex 项目交接
 
+## 2026-08-27 v0.22.193 订单搜索支持客户简称与缩写正式发布
+
+- 正式代码 `f4e8de33c9f8f00fa57764ee3520ff6afbc59a34` 已快进并推送 `factory-current-baseline`；本版无迁移，唯一数据库 head 继续为 `fj45v8x9z34`。两阶段报告 `docs/migration_reports/release_runtime_20260827_103626.json` 状态为 completed，正式备份 `data/backups/carton_erp_before_release_20260827_103627.sqlite3` 完整性正常、外键异常 0，发布前后核心表计数一致。
+- 订单业务队列、订单客户候选和客户热力现统一匹配客户主档的全称、中文简称与客户缩写，并在后端分页前应用；客户范围、订单权限及原有订单号/客户单号/存货编码/产品/规格/材质搜索保持不变，不创建猜测映射、不修改客户或订单事实。
+- 正式只读路由验收中，“天华”和带首尾空格的小写“th”均返回 73 条且订单 ID 集合完全一致；客户全称返回的 68 条全部包含在简称结果中，不存在的简称返回 0。正式库 `query_only=1`、`integrity_check=ok`、外键异常 0、调用前后 `total_changes=0`；完整证据见 NAS 同名正式发布回执。
+
 ## 2026-08-27 v0.22.192 纸板收料当前地图原料位兼容正式发布
 
 - 正式代码 `70b2b261494731ac62346c01160e1894352dfccc` 已快进并推送 `factory-current-baseline`；唯一迁移 head 为 `fj45v8x9z34`，发布报告为 `docs/migration_reports/release_runtime_20260827_095253.json`。迁移只把当前地图 `RAW-001` 四个原料货架位的历史技术类型归一为 `semi_finished`，不移动实物、不新增库存、不自动确认待收料；旧 `RAW-006` 保持停用。

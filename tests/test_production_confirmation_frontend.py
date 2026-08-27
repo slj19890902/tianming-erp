@@ -47,9 +47,13 @@ def test_legacy_direct_destination_returns_to_finished_history() -> None:
 
 
 def test_production_confirmation_keeps_destination_and_history_actions_compact() -> None:
-    assert 'class="production-history-action-menu"' in INDEX
-    assert ".production-history-action-menu[open] > .toolbar-group" in INDEX
-    assert "grid-template-columns:64px 92px minmax(112px,1fr)" in INDEX
+    history = INDEX.split('<table class="production-history-table"', 1)[1].split(
+        "</table>", 1
+    )[0]
+    assert 'class="production-history-action-menu"' not in history
+    assert ">撤销</button>" in history
+    assert "去送货" not in history
+    assert "转入成品库存" not in history
     assert ".ui-large .production-table .input" in INDEX
     assert "min-height:32px" in INDEX
 

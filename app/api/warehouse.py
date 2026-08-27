@@ -16987,8 +16987,13 @@ def _mold_live_tasks(
                     "production_quantity_unit"
                 ),
                 "task_status": payload.get("status"),
-                "task_status_label": _MOLD_TASK_STATUS_LABELS.get(
-                    str(payload.get("status")), str(payload.get("status") or "")
+                "task_status_label": (
+                    "已完工待送"
+                    if payload.get("status") == "completed"
+                    else _MOLD_TASK_STATUS_LABELS.get(
+                        str(payload.get("status")),
+                        str(payload.get("status") or ""),
+                    )
                 ),
                 "planned_quantity": int(payload.get("planned_quantity") or 0),
                 "actual_output_quantity": int(

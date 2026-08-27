@@ -268,6 +268,52 @@ def test_task_context_projects_only_the_selected_shared_mold_product(mold_app) -
         assert second_history["items"][0]["production_task_id"] == task_ids[1]
 
 
+def test_completed_mold_task_remains_until_its_order_item_is_fully_delivered(
+    mold_app,
+) -> None:
+    app, factory = mold_app
+    mold_id, task_ids = _create_shared_mold_tasks(factory)
+    from app.models.order import OrderItem
+    from app.models.production import ProductionTask
+
+    with factory() as db:
+        task = db.get(ProductionTask, task_ids[0])
+        assert task is not None
+        task.status = "completed"
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        visible = client.get(f"/api/warehouse/molds/live/{mold_id}")
+        assert visible.status_code == 200, visible.text
+        completed = next(
+            item
+            for item in visible.json()["current_orders"]["items"]
+            if item["production_task_id"] == task_ids[0]
+        )
+        assert completed["task_status"] == "completed"
+        assert completed["task_status_label"] == "已完工待送"
+
+    with factory() as db:
+        task = db.get(ProductionTask, task_ids[0])
+        assert task is not None
+        item = db.get(OrderItem, task.order_item_id)
+        assert item is not None
+        item.delivered_quantity = item.quantity
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        delivered = client.get(f"/api/warehouse/molds/live/{mold_id}")
+        assert delivered.status_code == 200, delivered.text
+        remaining_ids = {
+            row["production_task_id"]
+            for row in delivered.json()["current_orders"]["items"]
+        }
+        assert task_ids[0] not in remaining_ids
+        assert task_ids[1] in remaining_ids
+
+
 def test_mobile_scan_refetches_selected_task_context_and_hides_other_bindings() -> None:
     for marker in (
         "selectedTaskId",

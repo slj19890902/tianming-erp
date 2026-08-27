@@ -55,6 +55,7 @@ from app.services.production_workflow import (
     list_production_task_dashboard_rows,
     list_production_station_task_ids,
 )
+from app.services.box_type_rules import box_type_code
 from app.services.order_status_policy import ORDER_ITEM_ACTIVE_ORDER_STATUSES
 from app.services.printing_colors import parse_printing_colors
 from app.services.product_specification import (
@@ -331,14 +332,25 @@ def _safe_production_task(task: dict, *, drawing_path: str | None) -> dict:
 
     planned_output = max(int(task.get("planned_output_quantity") or 0), 0)
     receipt_purpose_managed = task.get("receipt_purpose_managed") is True
+    parent_order_quantity = max(
+        int(task.get("parent_order_quantity") or task.get("order_quantity") or 0),
+        0,
+    )
+    delivered_quantity = max(int(task.get("delivered_quantity") or 0), 0)
+    fully_delivered = (
+        parent_order_quantity > 0 and delivered_quantity >= parent_order_quantity
+    )
+    if task.get("status") == "completed":
+        status_text = "已送完" if fully_delivered else "已完工待送"
+    elif receipt_purpose_managed:
+        status_text = "收料自动推进"
+    else:
+        status_text = _task_status_text(task["status"])
     return {
         "task_id": task["id"],
         "status": task["status"],
-        "status_text": (
-            "收料自动推进"
-            if receipt_purpose_managed
-            else _task_status_text(task["status"])
-        ),
+        "status_text": status_text,
+        "is_fully_delivered": fully_delivered,
         "order_number": task.get("order_number"),
         "item_order_number": task.get("item_order_number"),
         "product_code": task.get("product_code"),
@@ -1512,6 +1524,14 @@ def recent_production_materials(
         for row in received_rows
         if row.get("order_item_id") is not None
     }
+    item_box_types = {
+        int(item_id): box_type_code(box_style)
+        for item_id, box_style in db.execute(
+            select(OrderItem.id, Product.box_style)
+            .join(Product, Product.id == OrderItem.product_id)
+            .where(OrderItem.id.in_(received_order_item_ids))
+        ).all()
+    }
     direction_notes = {
         item_id: note
         for item_id, note in db.execute(
@@ -1523,6 +1543,7 @@ def recent_production_materials(
     }
 
     items: list[dict] = []
+    seen_production_sources: set[tuple[int, str]] = set()
     for row in received_rows:
         order_item_id = row.get("order_item_id")
         linked_tasks = tasks_by_item.get(int(order_item_id), []) if order_item_id else []
@@ -1537,6 +1558,18 @@ def recent_production_materials(
         ]
         if exact_tasks:
             linked_tasks = exact_tasks
+        linked_tasks = [
+            task for task in linked_tasks if task.get("box_type_code") != "liner"
+        ]
+        if not linked_tasks and item_box_types.get(int(order_item_id or 0)) == "liner":
+            continue
+        source_key = (
+            int(order_item_id or 0),
+            (row.get("product_code") or "").strip().casefold(),
+        )
+        if source_key in seen_production_sources:
+            continue
+        seen_production_sources.add(source_key)
         remaining = max(int(row.get("remaining_quantity") or 0), 0)
         material_state = "材料未齐" if remaining > 0 else "材料已齐"
         items.append(

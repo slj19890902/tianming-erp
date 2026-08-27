@@ -189,10 +189,9 @@
       .ui-large .delivery-list-table { min-width: 1480px; }
       .ui-large .delivery-list-actions { min-width: 300px; white-space: normal; }
       .ui-large .delivery-list-actions.toolbar-group { flex-wrap: wrap; }
-      /* The fixed history table needs room for a full datetime and its actions. */
-      .ui-large .production-history-time { width: 176px; white-space: nowrap; }
-      .ui-large .production-history-actions { width: 280px; white-space: normal; }
-      .ui-large .production-history-actions .toolbar-group { min-width: 0; flex-wrap: wrap; }
+      /* 完工历史固定为最多两行；窄列只承载时间和撤销。 */
+      .ui-large .production-history-time { width: 154px; white-space: nowrap; }
+      .ui-large .production-history-actions { width: 66px; white-space: nowrap; text-align:center; }
 
       @media (max-width: 1400px) {
         .ui-large .topbar { height: auto; min-height: 76px; padding: 10px 18px; flex-wrap: wrap; gap: 10px 16px; }
@@ -2338,27 +2337,24 @@
       }
       .ui-large .production-table .input,
       .ui-large .production-table .select { min-height:32px; height:32px; padding:3px 6px; font-size:14px; }
-      .production-history-action-menu { position:relative; display:inline-block; }
-      .production-history-action-menu > summary {
-        display:inline-flex; align-items:center; justify-content:center; cursor:pointer;
-        min-height:28px; padding:3px 9px; border:1px solid var(--line-strong);
-        border-radius:6px; background:var(--surface); color:var(--blue); font-weight:700;
-        list-style:none;
+      .production-history-table th,
+      .production-history-table td { padding:5px 6px; line-height:1.2; vertical-align:middle; }
+      .production-history-table .history-two-lines { display:grid; gap:2px; min-width:0; }
+      .production-history-table .history-line {
+        min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
       }
-      .production-history-action-menu > summary::-webkit-details-marker { display:none; }
-      .production-history-action-menu[open] > .toolbar-group {
-        position:absolute; right:0; top:calc(100% + 4px); z-index:40;
-        display:flex; width:420px; padding:8px; border:1px solid var(--line-strong);
-        border-radius:8px; background:var(--surface); box-shadow:0 8px 24px rgba(15,23,42,.16);
+      .production-history-table .history-inline-edit {
+        display:flex; align-items:center; gap:4px; min-width:0; white-space:nowrap;
       }
-      .production-history-action-menu[open] .production-location-picker {
-        grid-template-columns:64px 92px minmax(112px,1fr);
+      .production-history-table .history-inline-edit .input {
+        width:76px; min-height:28px; height:28px; padding:2px 5px;
       }
-      /* 待送成品归位已独立到第二页，历史页只保留追溯和纠错操作。 */
-      .production-history-action-menu .production-location-picker,
-      .production-history-action-menu .production-location-picker + .btn.success {
-        display:none !important;
+      .production-history-table .history-link {
+        display:inline-block; max-width:100%; padding:0; border:0; background:none;
+        color:var(--blue); font:inherit; font-weight:700; text-align:left;
+        overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer;
       }
+      .production-history-table .history-delivered { color:#7c3aed; font-weight:800; }
       .audit-tabs {
         display: inline-flex; gap: 4px; padding: 4px;
         border: 1px solid var(--line-strong); border-radius: 999px; background: #f2f2f4;
@@ -4042,12 +4038,14 @@
                 <div v-else-if="productionLocationsError" class="status orange" style="display:block;margin:8px 0">{{ productionLocationsError }} <button class="btn small" @click="ensureProductionLocations({force:true})">重试</button></div>
                 <data-panel v-if="productionTab==='history'" :empty="!productionHistory.length">
                   <table class="production-history-table" style="table-layout:fixed;width:100%">
-                  <thead><tr><th class="production-history-time">完工时间</th><th style="width:18%">订单 / 客户</th><th style="width:24%">存货编码 / 产品</th><th style="width:13%">数量 / 操作人</th><th style="width:16%">完工处理 / 当前库位</th><th class="production-history-actions">操作</th></tr></thead>
+                  <thead><tr><th class="production-history-time">完工时间</th><th style="width:18%">客户 / 客户订单号</th><th style="width:27%">存货编码 / 产品名称</th><th style="width:17%">实际 / 理论数量</th><th>当前库位</th><th class="production-history-actions">操作</th></tr></thead>
                   <tbody><tr v-for="row in productionHistory" :key="row.id">
-                    <td class="production-history-time">{{ formatDateTime(row.completed_at) }}</td><td><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
-                    <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}</div><div v-if="row.is_component_task && row.composite_parent" class="muted" style="white-space:normal">组合父件 {{ row.composite_parent.product_code || '-' }}｜{{ row.composite_parent.product_name || '-' }}</div></div></td><td><strong>实际 {{ row.actual_output_quantity || row.quantity || 0 }}{{ row.is_component_task ? '片' : '' }}</strong><br><span class="muted">理论 {{ row.planned_output_quantity || 0 }}｜{{ row.completed_by_name || '-' }}</span><br><button v-if="['admin','boss'].includes(user?.role) && row.can_adjust_actual_quantity" class="btn small warning" :disabled="productionBusy" @click="modifyProductionActualQuantity(row)">修改实际数量</button></td>
-                    <td style="white-space:normal"><span v-if="row.status==='reversed'" class="status orange">已撤销</span><span v-else :class="['status',productionCompletionIsStock(row)?'green':'blue']">{{ productionDestinationLabel(row) }}</span><div v-if="row.current_inventory_status==='located'" style="margin-top:4px"><span class="muted">当前：</span><strong>{{ row.current_warehouse_location_name || '位置名称待完善' }}</strong></div><div v-else-if="row.current_location_issue" class="status orange" style="display:block;margin-top:4px;white-space:normal">{{ row.current_location_issue }}</div><div v-else-if="row.status!=='reversed'" class="muted" style="margin-top:4px">已送完 / 无当前库存</div><div v-if="row.current_warehouse_location_map_issue" class="status orange" style="display:block;margin-top:3px;white-space:normal">{{ row.current_warehouse_location_map_issue }}</div><div v-if="productionCompletionLocationChanged(row)" class="muted" style="margin-top:3px">完工时：{{ row.completion_warehouse_location_name || '位置名称待完善' }}</div><div>投入 {{ row.material_input_quantity }} / 合格 {{ row.actual_output_quantity }} / 损耗 {{ row.defective_quantity }}</div><div v-if="row.surplus_finished_quantity" class="status orange">客户余货 {{ row.surplus_finished_quantity }}</div><div v-if="row.status==='reversed'" class="muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</div></td>
-                    <td class="production-history-actions"><details class="production-history-action-menu"><summary>操作</summary><div class="toolbar-group"><template v-if="row.status!=='reversed' && row.can_transfer_to_stock && canWarehouseExecute"><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></div><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">转入成品库存</button></template><button v-if="user?.role==='admin' && row.can_supplement" class="btn small success" :disabled="productionBusy" @click="supplementProductionCompletion(row)">补录余量 {{ row.available_material_input_quantity }}</button><button v-if="row.status!=='reversed'" class="btn small" :disabled="productionBusy" @click="productionCompletionIsStock(row)?openProductionInventory(row):go('deliveries')">{{ productionCompletionIsStock(row)?'定位库存':'去送货' }}</button><button v-if="user?.role==='admin' && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销生产确认</button></div></details></td>
+                    <td class="production-history-time">{{ formatDateTime(row.completed_at) }}</td>
+                    <td><div class="history-two-lines"><strong class="history-line" :title="row.customer_name || ''">{{ row.customer_short_name || '中文简称未填写' }}</strong><span class="history-line muted" :title="row.customer_order_number || ''">{{ row.customer_order_number || '客户订单号未填写' }}</span></div></td>
+                    <td><div class="history-two-lines" :title="productionProductTitle(row)"><strong class="history-line"><span v-if="row.is_component_task">组件｜</span>{{ row.product_code || '-' }}</strong><span class="history-line">{{ row.product_name || '-' }}</span></div></td>
+                    <td><div class="history-two-lines"><div class="history-line"><template v-if="row._actual_editing"><div class="history-inline-edit"><span>实际</span><input class="input" type="number" min="1" step="1" v-model.number="row._actual_draft" :disabled="productionBusy" @keydown.enter.prevent="modifyProductionActualQuantity(row)" @keydown.esc.prevent="cancelProductionActualQuantityEdit(row)"><button class="btn small success" :disabled="productionBusy" @click="modifyProductionActualQuantity(row)">保存</button><button class="btn small" :disabled="productionBusy" @click="cancelProductionActualQuantityEdit(row)">取消</button></div></template><template v-else><strong>实际 {{ row.actual_output_quantity ?? row.quantity ?? 0 }}</strong><button v-if="['admin','boss'].includes(user?.role) && row.can_adjust_actual_quantity" class="btn small warning" :disabled="productionBusy" @click="beginProductionActualQuantityEdit(row)">修改</button></template></div><span class="history-line muted">理论 {{ row.planned_output_quantity ?? 0 }}</span></div></td>
+                    <td><div class="history-two-lines"><span v-if="row.status==='reversed'" class="history-line status orange">已撤销</span><span v-else-if="row.is_fully_delivered" class="history-line history-delivered">已送完</span><button v-else-if="productionCurrentLocationClickable(row)" class="history-link" type="button" :title="row.current_warehouse_location_name || ''" @click="openProductionInventory(row)">{{ row.current_warehouse_location_name || '位置名称待完善' }}</button><strong v-else-if="row.current_inventory_status==='located'" class="history-line">{{ row.current_warehouse_location_name || '位置名称待完善' }}</strong><span v-else class="history-line muted">暂无当前库存</span><span v-if="row.status==='reversed'" class="history-line muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</span><span v-else-if="!row.is_fully_delivered && (row.current_warehouse_location_map_issue || row.current_location_issue)" class="history-line status orange" :title="row.current_warehouse_location_map_issue || row.current_location_issue">{{ row.current_warehouse_location_map_issue || row.current_location_issue }}</span></div></td>
+                    <td class="production-history-actions"><button v-if="user?.role==='admin' && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销</button><span v-else class="muted">-</span></td>
                   </tr></tbody>
                   </table>
                 </data-panel>
@@ -17814,17 +17812,6 @@
           productionCompletionIsStock(row) {
             return ["stock","split"].includes(row?.initial_disposition) || Number(row?.stock_quantity || 0) > 0 || !!row?.stock_transfer_id;
           },
-          productionDestinationLabel(row) {
-            if (row?.is_component_task) return this.productionCompletionIsStock(row) ? "组件入库存" : "组件直接齐套";
-            if (row?.initial_disposition === "split") return "订单内直送 + 客户余货入库";
-            if (row?.initial_disposition === "direct") return "订单内直接待送";
-            return this.productionCompletionIsStock(row) ? "成品库存" : "直接待送货";
-          },
-          productionCompletionLocationChanged(row) {
-            if (!row?.completion_warehouse_location_name) return false;
-            if (row?.current_inventory_status !== "located") return true;
-            return Number(row.completion_warehouse_location_id) !== Number(row.current_warehouse_location_id);
-          },
           productionCompletionRequestItems(rows) {
             return rows.map(row => {
               const location = this.productionNeedsLocation(row) ? this.productionLocation(row.location_id) : null;
@@ -17946,15 +17933,25 @@
               this.showToast(`成品归位失败：${this.errorMessage(error)}；重试将复用同一幂等键`, true);
             } finally { this.productionBusy = false; }
           },
+          beginProductionActualQuantityEdit(row) {
+            if (this.productionBusy || !["admin","boss"].includes(this.user?.role) || !row?.can_adjust_actual_quantity) return;
+            row._actual_draft = Number(row.actual_output_quantity ?? row.quantity ?? 0);
+            row._actual_editing = true;
+          },
+          cancelProductionActualQuantityEdit(row) {
+            if (!row || this.productionBusy) return;
+            row._actual_editing = false;
+            delete row._actual_draft;
+          },
           async modifyProductionActualQuantity(row) {
             if (this.productionBusy || !["admin","boss"].includes(this.user?.role) || !row?.can_adjust_actual_quantity) return;
             const current = Number(row.actual_output_quantity || row.quantity || 0);
-            const desired = Number(prompt("请输入盘点后的实际完工成品数量", String(current)));
+            const desired = Number(row._actual_draft);
             if (!Number.isInteger(desired) || desired <= 0) {
               this.showToast("实际完工数量必须是大于 0 的整数", true);
               return;
             }
-            if (desired === current) return;
+            if (desired === current) { this.cancelProductionActualQuantityEdit(row); return; }
             const theoretical = Number(row.planned_output_quantity || 0);
             if (desired > theoretical && !confirm(`实际数量 ${desired} 高于理论数量 ${theoretical}，确认按现场实数保存？`)) return;
             const signature = JSON.stringify({completion_id:row.id,actual_output_quantity:desired,task_version:row.task_version,lot_version:row.inventory_lot_version});
@@ -18030,18 +18027,28 @@
             } finally { this.productionBusy=false; }
           },
           openProductionInventory(row) {
+            if (!this.productionCurrentLocationClickable(row)) return;
             if (!this.pageAllowed("warehouse")) {
               this.showToast("当前账号没有访问仓库库存管理的权限", true);
               return;
             }
-            const params = new URLSearchParams({ embedded:"1", tab:"finished" });
-            const currentLocationId = row?.current_inventory_status
-              ? row.current_warehouse_location_id
-              : row?.warehouse_location_id;
-            if (currentLocationId) params.set("location_id", String(currentLocationId));
+            const params = new URLSearchParams({ tab:"locations", view:"2d" });
+            const currentLocationId = row.current_warehouse_location_id;
+            params.set("location_id", String(currentLocationId));
             if (row?.inventory_lot_id) params.set("lot_id", String(row.inventory_lot_id));
-            this.ensureWarehouseFrame(`/warehouse.html?${params.toString()}`);
-            this.activePage = "warehouse";
+            window.open(`/warehouse.html?${params.toString()}`, "_blank", "noopener");
+          },
+          productionCurrentLocationClickable(row) {
+            return !!(
+              row
+              && this.pageAllowed("warehouse")
+              && row.status !== "reversed"
+              && row.is_fully_delivered !== true
+              && row.current_inventory_status === "located"
+              && Number(row.current_warehouse_location_id) > 0
+              && Number(row.inventory_lot_id) > 0
+              && !row.current_warehouse_location_map_issue
+            );
           },
           async revertProductionCompletion(row) {
             if (this.productionBusy || !row?.can_revert || this.user?.role !== "admin") return;

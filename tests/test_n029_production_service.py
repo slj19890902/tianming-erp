@@ -124,6 +124,7 @@ def _add_case(
 ) -> tuple[Order, OrderItem, ProductionTask]:
     order = Order(
         order_number=f"N029-{key}",
+        customer_po=f"PO-{key}",
         customer_id=customer.id,
         order_date=date.today(),
         delivery_date=date.today(),
@@ -408,7 +409,7 @@ def production_app(tmp_path: Path):
             must_change_password=False,
             customer_access_mode="selected",
         )
-        customer_a = Customer(name="N029客户A")
+        customer_a = Customer(name="N029客户A", chinese_short_name="客户甲")
         customer_b = Customer(name="N029客户B")
         db.add_all([admin, boss, scoped, direct_only, viewer, customer_a, customer_b])
         db.flush()
@@ -1760,6 +1761,9 @@ def test_completion_history_keeps_initial_location_and_reports_current_lot_locat
         assert created_row["current_inventory_status"] == "located"
         assert created_row["current_warehouse_location_id"] == ids["staging"]
         assert created_row["current_warehouse_location_code"] == "F1-DISPATCH-01"
+        assert created_row["customer_short_name"] == "客户甲"
+        assert created_row["customer_order_number"] == "PO-direct"
+        assert created_row["is_fully_delivered"] is False
 
     with factory() as db:
         completion = db.get(ProductionCompletion, completion_id)
@@ -1789,6 +1793,29 @@ def test_completion_history_keeps_initial_location_and_reports_current_lot_locat
     assert row["current_warehouse_location_id"] == ids["fixed3"]
     assert row["current_warehouse_location_code"] == "E1-R01"
     assert row["current_location_issue"] is None
+
+    with factory() as db:
+        completion = db.get(ProductionCompletion, completion_id)
+        assert completion is not None
+        item = db.get(OrderItem, completion.order_item_id)
+        assert item is not None
+        item.delivered_quantity = item.quantity
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        delivered_history = client.get(
+            "/api/production/completions",
+            params={"page": 1, "page_size": 50},
+        )
+    assert delivered_history.status_code == 200, delivered_history.text
+    delivered_row = next(
+        item
+        for item in delivered_history.json()["items"]
+        if item["id"] == completion_id
+    )
+    assert delivered_row["is_fully_delivered"] is True
+    assert delivered_row["current_inventory_status"] == "located"
 
 
 def test_completion_history_marks_zero_balance_lot_as_no_current_inventory(

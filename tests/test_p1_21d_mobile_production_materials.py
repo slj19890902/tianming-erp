@@ -84,7 +84,15 @@ def mobile_production_app(tmp_path: Path):
             customer_material_code="HP01",
             product_name="不可见产品",
         )
-        db.add_all([visible_product, hidden_product])
+        liner_product = Product(
+            customer_id=visible.id,
+            product_code="MOBILE-LINER-01",
+            customer_material_code="ML01",
+            product_name="匿名衬板",
+            box_category="normal",
+            box_style="衬板",
+        )
+        db.add_all([visible_product, hidden_product, liner_product])
         db.flush()
 
         def add_received(
@@ -203,6 +211,22 @@ def mobile_production_app(tmp_path: Path):
             cumulative=100,
             planned=100,
         )
+        liner_item_id, _liner_fact_id = add_received(
+            customer=visible,
+            product=liner_product,
+            key="LINER",
+            received_at=now - timedelta(hours=1),
+            received=100,
+            cumulative=100,
+            planned=100,
+        )
+        liner_task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == liner_item_id
+            )
+        )
+        assert liner_task is not None
+        liner_task.status = "completed"
         db.commit()
         ids = {"visible_item": visible_item_id, "visible_fact": visible_fact_id}
 
@@ -265,6 +289,7 @@ def test_recent_production_is_formal_scoped_redacted_and_read_only(
         assert task["current_producible_quantity"] == 60
         assert task["mold_location"] == "M1-R02"
         assert task["production_process"] == "模切后检查压线"
+        assert "MOBILE-LINER-01" not in response.text
         response_text = response.text
         assert "SECRET-SUPPLIER-MATERIAL" not in response_text
         assert "SECRET-SUPPLIER" not in response_text
@@ -306,13 +331,13 @@ def test_recent_production_permission_and_custom_period_fail_closed(
 
 def test_mobile_production_ui_is_strictly_read_only_and_preserves_context() -> None:
     for text in (
-        "近期来料和生产资料",
+        "近 3 天生产状态",
         "生产",
         "材料未齐",
         "现在可生产",
         "查看图纸",
         "返回生产资料",
-        "不能收料或确认完工",
+        "本页只能查看",
     ):
         assert text in MOBILE_HTML
     assert "Production cards and scroll position remain untouched" in MOBILE_HTML
@@ -320,3 +345,80 @@ def test_mobile_production_ui_is_strictly_read_only_and_preserves_context() -> N
     assert 'fetch("/api/auth/logout"' in MOBILE_HTML
     assert 'method: "PUT"' not in MOBILE_HTML
     assert 'method: "DELETE"' not in MOBILE_HTML
+
+
+def test_completed_received_task_remains_visible_as_waiting_delivery(
+    mobile_production_app,
+) -> None:
+    app, factory, ids = mobile_production_app
+    from app.models.production import ProductionTask
+
+    with factory() as db:
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == ids["visible_item"]
+            )
+        )
+        assert task is not None
+        task.status = "completed"
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "mobile-workshop")
+        response = client.get("/api/mobile/erp/production/recent")
+        assert response.status_code == 200, response.text
+        tasks = response.json()["items"][0]["production_tasks"]
+        assert len(tasks) == 1
+        assert tasks[0]["status"] == "completed"
+        assert tasks[0]["status_text"] == "已完工待送"
+        assert tasks[0]["is_fully_delivered"] is False
+
+
+def test_partial_receipts_show_one_task_card_using_the_latest_receipt(
+    mobile_production_app,
+) -> None:
+    app, factory, ids = mobile_production_app
+    from app.core.time_contract import utc_now_naive
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.order import OrderItem
+    from app.models.user import User
+
+    with factory() as db:
+        item = db.get(OrderItem, ids["visible_item"])
+        receiver = db.scalar(select(User).where(User.username == "mobile-workshop"))
+        assert item is not None and receiver is not None
+        receipt = IncomingReceipt(
+            receipt_number="REC-VISIBLE-PART-2",
+            status="posted",
+            received_at=utc_now_naive(),
+            received_by=receiver.id,
+            idempotency_key="mobile-receipt-visible-part-2",
+        )
+        db.add(receipt)
+        db.flush()
+        fact = IncomingReceiptItem(
+            receipt_id=receipt.id,
+            order_id=item.order_id,
+            order_item_id=item.id,
+            planned_quantity=100,
+            received_quantity=20,
+            cumulative_received_quantity=80,
+            variance_quantity=-20,
+            variance_type="short",
+            resolution_status="pending",
+            resolution_action="await_supplier",
+            status="posted",
+        )
+        db.add(fact)
+        db.commit()
+        latest_fact_id = int(fact.id)
+
+    with TestClient(app) as client:
+        _login(client, "mobile-workshop")
+        response = client.get("/api/mobile/erp/production/recent")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["count"] == 1
+        assert payload["items"][0]["receipt_item_id"] == latest_fact_id
+        assert payload["items"][0]["received_quantity"] == 20
+        assert payload["items"][0]["cumulative_received_quantity"] == 80

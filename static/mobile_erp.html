@@ -264,19 +264,8 @@
       </section>
 
       <section id="productionPage" hidden>
-        <h1 class="page-title">生产工位</h1>
-        <p class="page-help">按当前账号授权显示印刷或模切待生产任务；每页 20 条，只能查看，不能收料或确认完工。</p>
-        <div id="productionStationTabs" class="station-tabs" aria-label="生产工位" hidden>
-          <button class="station-btn" type="button" data-station="printing">印刷工位</button>
-          <button class="station-btn" type="button" data-station="die_cut">模切工位</button>
-        </div>
-        <div id="productionStationState" class="card status">正在读取待生产任务…</div>
-        <div id="productionStationList" hidden></div>
-        <div id="productionStationPager" class="pager" hidden>
-          <button id="productionStationPrev" class="small-btn" type="button">上一页</button>
-          <span id="productionStationPageText">第 1 页</span>
-          <button id="productionStationNext" class="small-btn" type="button">下一页</button>
-        </div>
+        <h1 class="page-title">生产任务</h1>
+        <p class="page-help">默认显示北京时间今天和前两天已正式来料的非衬板任务；已完工待送仍保留真实状态。本页只能查看。</p>
         <div class="searchbar">
           <input id="productionLookupInput" maxlength="100" autocomplete="off" inputmode="text" placeholder="扫码或输入存货编码、订单号、任务号">
           <button id="productionLookupButton" class="search-btn" type="button">扫码反查</button>
@@ -284,8 +273,7 @@
         <div class="lookup-actions"><button id="clearProductionLookup" class="small-btn" type="button" hidden>清空结果，返回近期生产</button></div>
         <div id="productionLookupState" class="card status empty" hidden></div>
         <div id="productionLookupList" hidden></div>
-        <h2>近期来料和生产资料（辅助）</h2>
-        <p class="muted">需要核对收料批次时，再按日期读取；不会随工位任务自动加载。</p>
+        <h2>近 3 天生产状态</h2>
         <div class="periods" aria-label="来料日期范围">
           <button class="period-btn" type="button" data-period="today">今天</button>
           <button class="period-btn active" type="button" data-period="3d">近3天</button>
@@ -297,8 +285,21 @@
           <label>结束日期 <input id="dateTo" type="date"></label>
           <button id="loadCustom" class="small-btn" type="button">查看</button>
         </div>
-        <div id="productionState" class="card status empty">请选择上方日期范围读取近期来料。</div>
+        <div id="productionState" class="card status">正在读取近 3 天生产状态…</div>
         <div id="productionList" hidden></div>
+        <h2>当前待生产工位</h2>
+        <p class="muted">每页 20 条；这里只显示仍可生产的严格待办。</p>
+        <div id="productionStationTabs" class="station-tabs" aria-label="生产工位" hidden>
+          <button class="station-btn" type="button" data-station="printing">印刷工位</button>
+          <button class="station-btn" type="button" data-station="die_cut">模切工位</button>
+        </div>
+        <div id="productionStationState" class="card status">正在读取待生产任务…</div>
+        <div id="productionStationList" hidden></div>
+        <div id="productionStationPager" class="pager" hidden>
+          <button id="productionStationPrev" class="small-btn" type="button">上一页</button>
+          <span id="productionStationPageText">第 1 页</span>
+          <button id="productionStationNext" class="small-btn" type="button">下一页</button>
+        </div>
       </section>
 
       <section id="preDeliveryPage" hidden>
@@ -710,7 +711,10 @@
         }
         const outerScrollTop = isIncoming ? 0 : (state.scrollByPage.get(page) || 0);
         window.requestAnimationFrame(() => window.scrollTo(0, outerScrollTop));
-        if (page === "production" && !state.productionStationItems.length) loadProductionStation();
+        if (page === "production") {
+          if (!state.productionItems.length) loadProduction();
+          if (!state.productionStationItems.length) loadProductionStation();
+        }
         persistMobilePortalState();
       }
 

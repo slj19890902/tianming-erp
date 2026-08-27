@@ -61,6 +61,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.production_station_routing import production_station_memberships
+from app.services.box_type_rules import box_type_code, canonical_box_style
 from app.services.composite_bom_workflow import (
     ComponentDemand,
     CompositeBomWorkflowError,
@@ -4890,6 +4891,8 @@ def _item_product_snapshot(item: OrderItem, product: Product) -> dict:
         "product_id": item.product_id,
         "product_code": item.snapshot_product_code or product.product_code,
         "product_name": item.snapshot_product_name or product.product_name,
+        "box_style": canonical_box_style(product.box_style),
+        "box_type_code": box_type_code(product.box_style),
         "specification": resolved_product_specification(item.snapshot_spec, product),
         "material": item.snapshot_material,
         "flute": item.flute_type,
@@ -4951,6 +4954,16 @@ def _task_product_snapshot(
             snapshot.snapshot_component_product_name
             if snapshot is not None
             else parent_product.product_name
+        ),
+        "box_style": canonical_box_style(
+            snapshot.snapshot_component_box_style
+            if snapshot is not None
+            else parent_product.box_style
+        ),
+        "box_type_code": box_type_code(
+            snapshot.snapshot_component_box_style
+            if snapshot is not None
+            else parent_product.box_style
         ),
         "specification": resolved_product_specification(
             snapshot.snapshot_component_spec if snapshot is not None else item.snapshot_spec,
@@ -6293,8 +6306,10 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                 "order_id": order.id,
                 "order_number": order.order_number,
                 "item_order_number": item.item_order_number,
+                "customer_order_number": order.customer_po,
                 "customer_id": order.customer_id,
                 "customer_name": customer.name,
+                "customer_short_name": customer.chinese_short_name,
                 **_task_product_snapshot(
                     db,
                     task=task,
@@ -6358,6 +6373,8 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                 "completion_warehouse_location_name": readable_location_name,
                 "current_inventory_quantity": current_inventory_quantity,
                 "current_inventory_status": current_inventory_status,
+                "is_fully_delivered": int(item.delivered_quantity or 0)
+                >= int(item.quantity or 0),
                 "current_warehouse_location_id": (
                     current_location.id if current_location is not None else None
                 ),

@@ -1,5 +1,11 @@
 # Codex 项目交接
 
+## 2026-08-27 v0.22.194 已报料压线按明细冻结正式发布
+
+- 正式代码 `5d390a2521c27cd9a541b183e9c79831d4424bfe` 已快进并推送 `factory-current-baseline`；本版无迁移，唯一数据库 head 继续为 `fj45v8x9z34`。两阶段报告 `docs/migration_reports/release_runtime_20260827_114610.json` 状态为 completed，正式备份 `data/backups/carton_erp_before_release_20260827_114611.sqlite3` 完整性正常、外键异常 0，发布前后核心表计数一致。
+- 根因是已报料投影把供应商采购单表头压线复制给整单所有明细；现已与采购单详情统一按供应商明细的稳定 `order_item_id` 读取订单明细冻结事实，列表、分页、逐明细接口和详情抽屉不再从首行或当前产品主档串值。正式全量核对表明该旧缺陷影响 217 条显示、涉及 73 张供应商采购单，用户没有操作错误。
+- 发布后正式只读投影确认 `SRO-20260810-0001` 第 6 行稳定身份为 `supplier_order:80:232`、存货编码 `21302006`、压线为“净料”；13 行压线与采购单详情逐行完全一致。正式库 `query_only=1`、调用前后 `total_changes=0`，服务 `/api/health` 返回正常；完整证据见 NAS 同名正式发布回执。
+
 ## 2026-08-27 v0.22.193 订单搜索支持客户简称与缩写正式发布
 
 - 正式代码 `f4e8de33c9f8f00fa57764ee3520ff6afbc59a34` 已快进并推送 `factory-current-baseline`；本版无迁移，唯一数据库 head 继续为 `fj45v8x9z34`。两阶段报告 `docs/migration_reports/release_runtime_20260827_103626.json` 状态为 completed，正式备份 `data/backups/carton_erp_before_release_20260827_103627.sqlite3` 完整性正常、外键异常 0，发布前后核心表计数一致。

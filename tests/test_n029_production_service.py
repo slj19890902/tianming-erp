@@ -1742,6 +1742,133 @@ def test_fixed_floor_three_location_accepts_stock_and_occupied_location_rejects(
         assert "占用" in rejected.json()["detail"]
 
 
+def test_completion_history_keeps_initial_location_and_reports_current_lot_location(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete(
+            client,
+            ids,
+            "direct",
+            idempotency_key="history-current-location-complete",
+        )
+        assert completed.status_code == 200, completed.text
+        created_row = completed.json()["items"][0]
+        completion_id = int(created_row["id"])
+        assert created_row["current_inventory_status"] == "located"
+        assert created_row["current_warehouse_location_id"] == ids["staging"]
+        assert created_row["current_warehouse_location_code"] == "F1-DISPATCH-01"
+
+    with factory() as db:
+        completion = db.get(ProductionCompletion, completion_id)
+        lot = db.get(InventoryLot, completion.inventory_lot_id)
+        assert lot is not None and lot.pallet_item is not None
+        pallet = lot.pallet_item.pallet
+        assert completion.warehouse_location_id == ids["staging"]
+        assert lot.warehouse_location_id == pallet.location_id == ids["staging"]
+        lot.warehouse_location_id = ids["fixed3"]
+        lot.version += 1
+        pallet.location_id = ids["fixed3"]
+        pallet.version += 1
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        history = client.get(
+            "/api/production/completions",
+            params={"page": 1, "page_size": 50},
+        )
+    assert history.status_code == 200, history.text
+    row = next(item for item in history.json()["items"] if item["id"] == completion_id)
+    assert row["warehouse_location_id"] == ids["staging"]
+    assert row["warehouse_location_code"] == "F1-DISPATCH-01"
+    assert row["current_inventory_status"] == "located"
+    assert row["current_inventory_quantity"] == 5
+    assert row["current_warehouse_location_id"] == ids["fixed3"]
+    assert row["current_warehouse_location_code"] == "E1-R01"
+    assert row["current_location_issue"] is None
+
+
+def test_completion_history_marks_zero_balance_lot_as_no_current_inventory(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete(
+            client,
+            ids,
+            "direct",
+            idempotency_key="history-drained-location-complete",
+        )
+        assert completed.status_code == 200, completed.text
+        completion_id = int(completed.json()["items"][0]["id"])
+
+    with factory() as db:
+        completion = db.get(ProductionCompletion, completion_id)
+        lot = db.get(InventoryLot, completion.inventory_lot_id)
+        assert lot is not None
+        lot.quantity_available = 0
+        lot.quantity_reserved = 0
+        lot.quantity_damaged = 0
+        lot.version += 1
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        history = client.get(
+            "/api/production/completions",
+            params={"page": 1, "page_size": 50},
+        )
+    assert history.status_code == 200, history.text
+    row = next(item for item in history.json()["items"] if item["id"] == completion_id)
+    assert row["warehouse_location_id"] == ids["staging"]
+    assert row["current_inventory_status"] == "drained"
+    assert row["current_inventory_quantity"] == 0
+    assert row["current_warehouse_location_id"] is None
+    assert row["current_warehouse_location_name"] is None
+    assert row["current_location_issue"] is None
+
+
+def test_completion_history_fails_closed_when_lot_and_pallet_locations_disagree(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete(
+            client,
+            ids,
+            "direct",
+            idempotency_key="history-location-mismatch-complete",
+        )
+        assert completed.status_code == 200, completed.text
+        completion_id = int(completed.json()["items"][0]["id"])
+
+    with factory() as db:
+        completion = db.get(ProductionCompletion, completion_id)
+        lot = db.get(InventoryLot, completion.inventory_lot_id)
+        assert lot is not None and lot.pallet_item is not None
+        assert lot.pallet_item.pallet.location_id == ids["staging"]
+        lot.warehouse_location_id = ids["fixed3"]
+        lot.version += 1
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        history = client.get(
+            "/api/production/completions",
+            params={"page": 1, "page_size": 50},
+        )
+    assert history.status_code == 200, history.text
+    row = next(item for item in history.json()["items"] if item["id"] == completion_id)
+    assert row["current_inventory_status"] == "pallet_mismatch"
+    assert row["current_warehouse_location_id"] is None
+    assert "库存批次与实体栈板库位不一致" in row["current_location_issue"]
+
+
 def test_direct_transfer_preserves_completion_and_production_reservation_cannot_release(
     production_app,
 ) -> None:

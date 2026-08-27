@@ -70,7 +70,9 @@ def test_search_map_labels_and_cross_module_views_prefer_current_chinese_address
     assert "location.employee_location_name || location.current_address_name || location.location_name" in index
     assert "event.employee_location_name || event.current_address_name || event.location_name" in index
     assert "{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}" in index
-    assert "{{ row.warehouse_location_name || '位置名称待完善' }}" in index
+    assert "{{ row.current_warehouse_location_name || '位置名称待完善' }}" in index
+    assert "row.current_inventory_status==='located'" in index
+    assert "完工时：{{ row.completion_warehouse_location_name" in index
     assert "{{ lot.location_name || \"位置名称待完善\" }}" in index
     assert "{{ lot.pallet_code || \"-\" }}" not in index
     assert "const code=readableLocation(location)" in warehouse

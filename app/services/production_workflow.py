@@ -6088,7 +6088,7 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
         db,
         [item.id for _completion, _task, item, *_rest in rows],
     )
-    effective_location_ids = {
+    completion_location_ids = {
         int(location_id)
         for completion, _task, _item, _order, _customer, _product, _user, transfer in rows
         if (
@@ -6100,15 +6100,49 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
         )
         is not None
     }
+    effective_lot_ids = {
+        int(lot_id)
+        for completion, _task, _item, _order, _customer, _product, _user, transfer in rows
+        if (
+            lot_id := (
+                transfer.inventory_lot_id
+                if transfer is not None
+                else completion.inventory_lot_id
+            )
+        )
+        is not None
+    }
+    lots_by_id = {
+        int(lot.id): lot
+        for lot in (
+            db.scalars(
+                select(InventoryLot)
+                .options(
+                    selectinload(InventoryLot.pallet_item).selectinload(
+                        InventoryPalletItem.pallet
+                    )
+                )
+                .where(InventoryLot.id.in_(effective_lot_ids))
+            ).all()
+            if effective_lot_ids
+            else []
+        )
+    }
+    current_lot_location_ids = {
+        int(lot.warehouse_location_id)
+        for lot in lots_by_id.values()
+        if lot.warehouse_location_id is not None
+    }
+    all_location_ids = completion_location_ids | current_lot_location_ids
     locations_by_id = {
         int(location.id): location
         for location in (
             db.scalars(
                 select(WarehouseLocation).where(
-                    WarehouseLocation.id.in_(effective_location_ids)
+                    WarehouseLocation.id.in_(all_location_ids)
                 )
             ).all()
-            if effective_location_ids
+            if all_location_ids
             else []
         )
     }
@@ -6150,7 +6184,7 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
             transfer.inventory_lot_id if transfer is not None else completion.inventory_lot_id
         )
         effective_lot = (
-            db.get(InventoryLot, effective_lot_id)
+            lots_by_id.get(int(effective_lot_id))
             if effective_lot_id is not None
             else None
         )
@@ -6182,6 +6216,72 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
             area=location_context.get("area"),
             floor=location_context.get("floor"),
             area_sequence=location_context.get("area_sequence"),
+        )
+        current_inventory_quantity = (
+            max(
+                int(effective_lot.quantity_available or 0)
+                + int(effective_lot.quantity_reserved or 0)
+                + int(effective_lot.quantity_damaged or 0),
+                0,
+            )
+            if effective_lot is not None
+            else 0
+        )
+        current_inventory_status = "missing"
+        current_location_issue: str | None = None
+        current_location: WarehouseLocation | None = None
+        if effective_lot is not None and current_inventory_quantity <= 0:
+            current_inventory_status = "drained"
+        elif effective_lot is not None and effective_lot.status not in {
+            "active",
+            "frozen",
+        }:
+            current_inventory_status = "inventory_status_mismatch"
+            current_location_issue = "库存批次仍有数量但状态不可用，请核对仓库"
+        elif effective_lot is not None:
+            lot_location = locations_by_id.get(
+                int(effective_lot.warehouse_location_id)
+            )
+            if lot_location is None:
+                current_inventory_status = "unlocated"
+                current_location_issue = "当前库存批次缺少有效库位，请核对仓库"
+            elif effective_pallet is None:
+                current_inventory_status = "missing_pallet"
+                current_location_issue = "当前库存未关联实体栈板，请核对仓库"
+            elif (
+                not effective_pallet.is_current
+                or effective_pallet.status != "active"
+                or effective_pallet.location_id
+                != effective_lot.warehouse_location_id
+            ):
+                current_inventory_status = "pallet_mismatch"
+                current_location_issue = "库存批次与实体栈板库位不一致，请核对仓库"
+            else:
+                current_inventory_status = "located"
+                current_location = lot_location
+
+        current_location_context = (
+            location_projection_contexts.get(int(current_location.id), {})
+            if current_location is not None
+            else {}
+        )
+        current_location_projection = (
+            warehouse_location_projection(
+                current_location,
+                **current_location_context,
+            )
+            if current_location is not None
+            else None
+        )
+        current_readable_location_name = (
+            employee_location_name(
+                current_location,
+                area=current_location_context.get("area"),
+                floor=current_location_context.get("floor"),
+                area_sequence=current_location_context.get("area_sequence"),
+            )
+            if current_location is not None
+            else None
         )
         result.append(
             {
@@ -6251,6 +6351,33 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                     "position_status"
                 ],
                 "warehouse_location_map_issue": location_projection.get("map_issue"),
+                "completion_warehouse_location_id": effective_location_id,
+                "completion_warehouse_location_code": (
+                    location.location_code if location else None
+                ),
+                "completion_warehouse_location_name": readable_location_name,
+                "current_inventory_quantity": current_inventory_quantity,
+                "current_inventory_status": current_inventory_status,
+                "current_warehouse_location_id": (
+                    current_location.id if current_location is not None else None
+                ),
+                "current_warehouse_location_code": (
+                    current_location.location_code
+                    if current_location is not None
+                    else None
+                ),
+                "current_warehouse_location_name": current_readable_location_name,
+                "current_warehouse_location_position_status": (
+                    current_location_projection["position_status"]
+                    if current_location_projection is not None
+                    else None
+                ),
+                "current_warehouse_location_map_issue": (
+                    current_location_projection.get("map_issue")
+                    if current_location_projection is not None
+                    else None
+                ),
+                "current_location_issue": current_location_issue,
                 "inventory_lot_id": effective_lot_id,
                 "inventory_lot_version": (
                     int(effective_lot.version) if effective_lot is not None else None

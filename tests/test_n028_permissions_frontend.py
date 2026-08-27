@@ -94,7 +94,7 @@ def test_n028_view_only_operational_pages_hide_write_controls() -> None:
     assert "拥有“来料入库操作”权限才可撤销" in INDEX
     assert 'canFinance() { return this.hasPermission("finance.execute"); }' in INDEX
     assert '<button v-if="canFinance" class="btn primary" @click="openStatement(financeFilters.statement_month)">' in INDEX
-    assert '<button v-if="canFinance && statement.confirmation_status!==\'confirmed\'" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(statement)">' in INDEX
+    assert '<button v-if="canFinance" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(statement)">' in INDEX
     assert '<button v-if="canFinance" class="btn small success"' in INDEX
     assert 'quotations:"quotations.view"' in INDEX
     assert 'if (!this.pageAllowed(page))' in INDEX

@@ -37,6 +37,7 @@ from app.services.production_workflow import (
     CompletionCommand,
     ProductionWorkflowError,
     StockTransferCommand,
+    adjust_production_completion_actual_quantity,
     batch_customer_ids,
     complete_production_batch,
     completion_customer_id,
@@ -62,6 +63,7 @@ router = APIRouter()
 can_read = PermissionChecker("orders.view")
 can_complete = PermissionChecker("orders.status")
 admin_only = RoleChecker(["admin"])
+actual_quantity_operator = RoleChecker(["admin", "boss"])
 
 
 class CompletionBatchItem(BaseModel):
@@ -137,6 +139,21 @@ class StockTransferRequest(BaseModel):
     def trim_optional_text(cls, value: str | None) -> str | None:
         normalized = (value or "").strip()
         return normalized or None
+
+
+class ActualQuantityAdjustmentRequest(BaseModel):
+    actual_output_quantity: int = Field(gt=0)
+    expected_task_version: int = Field(gt=0)
+    expected_lot_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=100)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def trim_idempotency_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("idempotency key cannot be blank")
+        return normalized
 
 
 class CompletionReversalRequest(BaseModel):
@@ -439,6 +456,7 @@ def get_production_completions(
         default=None,
         alias="status",
     ),
+    placement_pending: bool = Query(default=False),
     page: int | None = Query(default=None, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=200),
     user: User = Depends(can_read),
@@ -456,6 +474,7 @@ def get_production_completions(
             completed_date_from,
             completed_date_to,
             completion_status,
+            placement_pending,
         )
     ):
         return {
@@ -477,6 +496,7 @@ def get_production_completions(
         completed_date_from=completed_date_from,
         completed_date_to=completed_date_to,
         status=completion_status,
+        placement_pending=placement_pending,
         page=resolved_page,
         page_size=resolved_page_size,
     )
@@ -713,6 +733,93 @@ def post_completion_stock_transfer(
         raise HTTPException(
             status_code=409,
             detail="转库存记录已被其他请求修改，请刷新后重试",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.put("/completions/{completion_id}/actual-quantity")
+def put_completion_actual_quantity(
+    completion_id: int,
+    payload: ActualQuantityAdjustmentRequest,
+    user: User = Depends(actual_quantity_operator),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        customer_id = completion_customer_id(db, completion_id)
+        if customer_id is not None:
+            require_customer_access(customer_id, current_user=user, db=db)
+        result = adjust_production_completion_actual_quantity(
+            db,
+            completion_id=completion_id,
+            actual_output_quantity=payload.actual_output_quantity,
+            expected_task_version=payload.expected_task_version,
+            expected_lot_version=payload.expected_lot_version,
+            idempotency_key=payload.idempotency_key,
+            operator_id=user.id,
+        )
+        if not result.replayed:
+            customer_snapshot = _completion_customer_snapshots(
+                db,
+                (result.completion,),
+            ).get(completion_id)
+            snapshot_customer_id, snapshot_customer_name = (
+                customer_snapshot or (None, None)
+            )
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="production",
+                action_code="production.actual_quantity.adjusted",
+                legacy_action="ADJUST_PRODUCTION_ACTUAL",
+                resource="ProductionCompletion",
+                actor=user,
+                entity_type="production_completion",
+                entity_id=completion_id,
+                object_ref=f"production_completion:{completion_id}",
+                customer_id=snapshot_customer_id,
+                customer_name=snapshot_customer_name,
+                batch_id=payload.idempotency_key,
+                description="老板或管理员修订实际完工成品数量",
+                details={
+                    "completion_id": completion_id,
+                    "inventory_lot_id": result.lot.id,
+                    "inventory_movement_id": result.movement.id,
+                    "before_actual_output_quantity": (
+                        result.previous_actual_output_quantity
+                    ),
+                    "after_actual_output_quantity": payload.actual_output_quantity,
+                    "expected_task_version": payload.expected_task_version,
+                    "expected_lot_version": payload.expected_lot_version,
+                },
+            )
+        db.commit()
+        rows = list_production_completions(
+            db,
+            allowed_customer_ids=_allowed_customer_ids(user, db),
+            completion_ids=[completion_id],
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="生产完工记录不存在")
+        return {
+            "replayed": result.replayed,
+            "inventory_movement_id": result.movement.id,
+            "completion": rows[0],
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except (ProductionWorkflowError, WarehouseInventoryError) as error:
+        db.rollback()
+        _raise_workflow_error(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="实际完工数量已被其他操作修改，请刷新后重试",
         ) from error
     except Exception:
         db.rollback()

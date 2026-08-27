@@ -163,10 +163,14 @@ def test_fin001_permissions_and_failed_result_do_not_increase_invoice_amount(fin
         assert Decimal(str(db.get(Statement, 1).invoiced_amount)) == Decimal("0.00")
 
 
-def test_fin001_confirmed_statement_blocks_legacy_invoice_endpoint(fin001_app) -> None:
-    """Confirmed statements must only be invoiced through frozen invoice tasks."""
+def test_fin001_confirmed_statement_allows_manual_invoice_and_full_settlement(
+    fin001_app,
+) -> None:
+    """Boss rule: confirmed statements still accept audited manual invoices."""
 
-    app, _ = fin001_app
+    from app.models.finance import Invoice, SettlementRecord, Statement
+
+    app, factory = fin001_app
     with TestClient(app) as client:
         _login(client)
         confirmed = client.post(
@@ -174,15 +178,46 @@ def test_fin001_confirmed_statement_blocks_legacy_invoice_endpoint(fin001_app) -
             json={"expected_version": 1},
         )
         assert confirmed.status_code == 200, confirmed.text
-        legacy = client.post(
+        manual = client.post(
             "/api/finance/invoices",
             json={
                 "statement_id": 1,
-                "invoice_number": "FIN001-LEGACY-BYPASS",
+                "invoice_number": "FIN001-MANUAL-ISSUED",
                 "invoice_date": "2026-08-03",
                 "invoice_amount": "113.00",
             },
         )
+        assert manual.status_code == 201, manual.text
+        assert Decimal(str(manual.json()["invoiced_amount"])) == Decimal("113.00")
 
-    assert legacy.status_code == 409
-    assert "冻结" in str(legacy.json()) or "开票任务" in str(legacy.json())
+        current = client.get(
+            "/api/finance/current-customer-months",
+            params={"statement_month": "2026-08", "page": 1, "page_size": 25},
+        )
+        assert current.status_code == 200, current.text
+        current_statement = current.json()["items"][0]["statements"][0]
+        assert current_statement["confirmation_status"] == "confirmed"
+        assert current_statement["version"] == 2
+        assert current_statement["invoice_status"] == "invoiced"
+        assert Decimal(str(current_statement["pending_invoice_amount"])) == Decimal("0.00")
+
+        settled = client.put(
+            "/api/finance/statements/1/settle",
+            json={
+                "amount": "113.00",
+                "settlement_date": "2026-08-05",
+                "account": "测试银行",
+            },
+        )
+        assert settled.status_code == 200, settled.text
+        assert settled.json()["status"] == "settled"
+
+    with factory() as db:
+        statement = db.get(Statement, 1)
+        assert statement is not None
+        assert statement.confirmation_status == "confirmed"
+        assert statement.status == "settled"
+        assert db.scalar(select(Invoice).where(Invoice.statement_id == 1)) is not None
+        assert db.scalar(
+            select(SettlementRecord).where(SettlementRecord.statement_id == 1)
+        ) is not None

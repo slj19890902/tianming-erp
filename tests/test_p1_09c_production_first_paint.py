@@ -36,8 +36,12 @@ def test_production_cold_entry_requests_only_current_action_queues() -> None:
     cold_load = _block("async loadProduction()", "async openProductionLabelMaintenance")
     production = _block("async loadProductionPage", "async ensureProductionLocations")
 
-    assert 'params: { status: "pending", page, page_size: this.pageSize }' in production
-    assert "this.loadProductionPage(this.pages.productionPending || 1)" in cold_load
+    assert 'params: { status: "pending", page, page_size: this.productionPendingPageSize() }' in production
+    assert "this.loadProductionPage(this.pages.productionPending || 1)" not in cold_load
+    assert 'if (this.productionTab === "placement") return this.loadProductionPlacement();' in cold_load
+    assert "this.loadProductionHistory()," in cold_load
+    assert "this.loadProductionPlacement()," in cold_load
+    assert "return historyResult;" in cold_load
     assert "this.loadProductionWaitingLabelPage(this.pages.productionWaitingLabels || 1)" not in cold_load
     assert 'status:"waiting_material"' not in cold_load
     assert "/api/production/temporary-locations" not in production
@@ -75,6 +79,7 @@ global.axios={{get:(url,options)=>new Promise((resolve,reject)=>pending.push({{u
 const vm={{
   pageSize:1,pages:{{productionPending:1}},productionPending:[{{id:1,version:1}}],productionPendingTotal:1,
   productionPendingLoading:false,productionPendingError:"",productionLocations:[],productionSelected:{{1:true}},orders:[],
+  productionPendingPageSize(){{return 1;}},
   beginLatestRequest(key){{const previous=global.latestRequestControllers.get(key);previous?.abort();const controller={{signal:{{}},abort(){{this.aborted=true;}}}};global.latestRequestControllers.set(key,controller);return controller;}},
   finishLatestRequest(key,controller){{if(global.latestRequestControllers.get(key)===controller)global.latestRequestControllers.delete(key);}},
   isCancelledRequest(error){{return error?.code==="ERR_CANCELED";}},errorMessage(error){{return error?.message||String(error);}},

@@ -138,6 +138,9 @@ def test_receipt_auto_finished_inventory_is_in_stock_and_delivery_not_production
         assert rows[0]["order_remaining_quantity"] == ordered_quantity
         assert rows[0]["deliverable_quantity"] == received_quantity
         assert rows[0]["remaining_quantity"] == received_quantity
+        assert rows[0]["inventory_sources"]
+        assert rows[0]["inventory_sources"][0]["location_name"]
+        assert rows[0]["inventory_sources"][0]["location_name"] != "位置名称待完善"
 
         production = client.get(
             "/api/production/tasks",

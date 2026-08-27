@@ -376,6 +376,14 @@ def production_app(tmp_path: Path):
             must_change_password=False,
             customer_access_mode="all",
         )
+        boss = User(
+            username="n029-boss",
+            password_hash=hash_password(PASSWORD),
+            role="boss",
+            real_name="N029 Boss",
+            must_change_password=False,
+            customer_access_mode="all",
+        )
         scoped = User(
             username="n029-scoped",
             password_hash=hash_password(PASSWORD),
@@ -402,7 +410,7 @@ def production_app(tmp_path: Path):
         )
         customer_a = Customer(name="N029客户A")
         customer_b = Customer(name="N029客户B")
-        db.add_all([admin, scoped, direct_only, viewer, customer_a, customer_b])
+        db.add_all([admin, boss, scoped, direct_only, viewer, customer_a, customer_b])
         db.flush()
         product_a = Product(
             customer_id=customer_a.id,
@@ -745,6 +753,86 @@ def _complete(
             ],
         },
     )
+
+
+def test_admin_and_boss_adjust_actual_completion_with_inventory_cas(
+    production_app,
+) -> None:
+    app, factory, ids = production_app
+    with TestClient(app) as client:
+        _login(client)
+        completed = _complete(
+            client,
+            ids,
+            "transfer",
+            idempotency_key="p027-adjust-source",
+        )
+        assert completed.status_code == 200, completed.text
+        completion_id = int(completed.json()["items"][0]["id"])
+
+        with factory() as db:
+            completion = db.get(ProductionCompletion, completion_id)
+            assert completion is not None
+            lot = db.get(InventoryLot, completion.inventory_lot_id)
+            task = db.get(ProductionTask, completion.task_id)
+            assert lot is not None and task is not None
+            first_versions = (int(task.version), int(lot.version))
+
+        raised = client.put(
+            f"/api/production/completions/{completion_id}/actual-quantity",
+            json={
+                "actual_output_quantity": 6,
+                "expected_task_version": first_versions[0],
+                "expected_lot_version": first_versions[1],
+                "idempotency_key": "p027-adjust-up",
+            },
+        )
+        assert raised.status_code == 200, raised.text
+        assert raised.json()["completion"]["actual_output_quantity"] == 6
+        assert raised.json()["completion"]["quantity"] == 6
+
+        _login(client, "n029-boss")
+        raised_row = raised.json()["completion"]
+        lowered = client.put(
+            f"/api/production/completions/{completion_id}/actual-quantity",
+            json={
+                "actual_output_quantity": 5,
+                "expected_task_version": raised_row["task_version"],
+                "expected_lot_version": raised_row["inventory_lot_version"],
+                "idempotency_key": "p027-adjust-down",
+            },
+        )
+        assert lowered.status_code == 200, lowered.text
+        assert lowered.json()["completion"]["actual_output_quantity"] == 5
+
+        blocked = client.put(
+            f"/api/production/completions/{completion_id}/actual-quantity",
+            json={
+                "actual_output_quantity": 3,
+                "expected_task_version": lowered.json()["completion"]["task_version"],
+                "expected_lot_version": lowered.json()["completion"]["inventory_lot_version"],
+                "idempotency_key": "p027-adjust-below-reserved",
+            },
+        )
+        assert blocked.status_code == 409, blocked.text
+
+    with factory() as db:
+        completion = db.get(ProductionCompletion, completion_id)
+        lot = db.get(InventoryLot, completion.inventory_lot_id)
+        assert completion is not None and lot is not None
+        assert int(completion.actual_output_quantity) == 5
+        assert (
+            int(lot.quantity_available)
+            + int(lot.quantity_reserved)
+            + int(lot.quantity_consumed)
+            + int(lot.quantity_damaged)
+            + int(lot.quantity_scrapped)
+        ) == 5
+        assert db.scalar(
+            select(OperationLog).where(
+                OperationLog.action_code == "production.actual_quantity.adjusted"
+            )
+        ) is not None
 
 
 def test_stock_completion_requires_selected_location_layout_version(
@@ -1665,6 +1753,14 @@ def test_direct_transfer_preserves_completion_and_production_reservation_cannot_
         )
         assert completed.status_code == 200, completed.text
         completion_id = completed.json()["items"][0]["id"]
+        placement_before = client.get(
+            "/api/production/completions",
+            params={"placement_pending": True, "page": 1, "page_size": 50},
+        )
+        assert placement_before.status_code == 200, placement_before.text
+        assert completion_id in {
+            row["id"] for row in placement_before.json()["items"]
+        }
         payload = {
             "idempotency_key": "transfer-stock",
             "location_id": ids["temp2"],
@@ -1678,8 +1774,15 @@ def test_direct_transfer_preserves_completion_and_production_reservation_cannot_
             f"/api/production/completions/{completion_id}/stock-transfers",
             json=payload,
         )
+        placement_after = client.get(
+            "/api/production/completions",
+            params={"placement_pending": True, "page": 1, "page_size": 50},
+        )
     assert transferred.status_code == replayed.status_code == 200
     assert replayed.json()["replayed"] is True
+    assert completion_id not in {
+        row["id"] for row in placement_after.json()["items"]
+    }
     with factory() as db:
         completion = db.get(ProductionCompletion, completion_id)
         transfer = db.scalar(

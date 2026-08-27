@@ -22,7 +22,7 @@ def test_production_history_has_admin_reversal_and_inventory_deep_link() -> None
     assert "撤销生产确认" in INDEX
     assert 'user?.role===\'admin\' && row.can_revert' in INDEX
     assert "/api/production/completions/${row.id}/revert" in INDEX
-    assert "任务已退回待生产确认" in INDEX
+    assert "当前仍按收料自动完工主链执行" in INDEX
     assert "openProductionInventory" in INDEX
     assert 'if (!this.pageAllowed("warehouse"))' in INDEX
     assert "当前账号没有访问仓库库存管理的权限" in INDEX

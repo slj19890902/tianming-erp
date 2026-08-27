@@ -6869,6 +6869,52 @@ class _PendingDeliveryReadContext:
             order.id: order
             for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
         } if order_ids else {}
+        reservation_lot_ids = set(
+            db.scalars(
+                select(InventoryReservation.inventory_lot_id)
+                .where(
+                    InventoryReservation.order_item_id.in_(item_ids),
+                    InventoryReservation.status != "cancelled",
+                )
+                .distinct()
+            ).all()
+        ) if item_ids else set()
+        lot_ids = {
+            int(lot_id) for lot_id in reservation_lot_ids if lot_id is not None
+        }
+        lots = {
+            int(lot.id): lot
+            for lot in db.scalars(
+                select(InventoryLot)
+                .options(
+                    selectinload(InventoryLot.pallet_item).selectinload(
+                        InventoryPalletItem.pallet
+                    )
+                )
+                .where(InventoryLot.id.in_(lot_ids))
+            ).all()
+        } if lot_ids else {}
+        location_ids = {
+            int(lot.warehouse_location_id)
+            for lot in lots.values()
+            if lot.warehouse_location_id is not None
+        }
+        locations = {
+            int(location.id): location
+            for location in db.scalars(
+                select(WarehouseLocation).where(
+                    WarehouseLocation.id.in_(location_ids)
+                )
+            ).all()
+        } if location_ids else {}
+        self.inventory_read_context = {
+            "lots": lots,
+            "locations": locations,
+            "location_projection_contexts": (
+                load_warehouse_location_projection_contexts(db, locations.values())
+            ),
+            "space_ledger_enabled": has_space_ledger(db),
+        }
         if not item_ids:
             self.fast_item_ids: set[int] = set()
             self.receipt_auto_item_ids: set[int] = set()
@@ -7213,6 +7259,7 @@ def _pending_delivery_item_payload(
             db,
             order_item=order_item,
             planned_delivery_quantity=remaining_quantity,
+            read_context=context.inventory_read_context,
         )
 
     base_payload = dict(mapping)

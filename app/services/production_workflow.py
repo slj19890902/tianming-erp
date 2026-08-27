@@ -463,6 +463,15 @@ class StockTransferResult:
 
 
 @dataclass(frozen=True)
+class ActualQuantityAdjustmentResult:
+    completion: ProductionCompletion
+    lot: InventoryLot
+    movement: InventoryMovement
+    previous_actual_output_quantity: int
+    replayed: bool
+
+
+@dataclass(frozen=True)
 class CompletionReversalResult:
     completion: ProductionCompletion
     transfer: ProductionStockTransfer | None
@@ -3703,6 +3712,192 @@ def transfer_direct_completion_to_stock(
     return StockTransferResult(transfer, False)
 
 
+def adjust_production_completion_actual_quantity(
+    db: Session,
+    *,
+    completion_id: int,
+    actual_output_quantity: int,
+    expected_task_version: int,
+    expected_lot_version: int,
+    idempotency_key: str,
+    operator_id: int | None,
+) -> ActualQuantityAdjustmentResult:
+    """Correct a posted completion and its authoritative inventory lot atomically.
+
+    Only free inventory can be reduced. Reserved, consumed, damaged and scrapped
+    quantities are immutable evidence and therefore form the lower bound.
+    """
+
+    desired = int(actual_output_quantity)
+    if desired <= 0:
+        raise ProductionWorkflowError("actual output quantity must be positive", 400)
+    key = (idempotency_key or "").strip()
+    if not key or len(key) > 100:
+        raise ProductionWorkflowError("idempotency key must contain 1 to 100 characters", 400)
+
+    repeated = db.scalar(
+        select(InventoryMovement).where(InventoryMovement.idempotency_key == key)
+    )
+    completion = db.get(ProductionCompletion, completion_id)
+    if completion is None:
+        raise ProductionWorkflowError("production completion does not exist", 404)
+    lot = (
+        db.get(InventoryLot, completion.inventory_lot_id)
+        if completion.inventory_lot_id is not None
+        else None
+    )
+    if lot is None:
+        raise ProductionWorkflowError(
+            "completion has no authoritative finished inventory lot and cannot be adjusted",
+            409,
+        )
+    task = db.get(ProductionTask, completion.task_id)
+    if task is None:
+        raise ProductionWorkflowError("production task does not exist", 409)
+
+    if repeated is not None:
+        repeated_total = sum(
+            int(value or 0)
+            for value in (
+                repeated.after_available,
+                repeated.after_reserved,
+                repeated.after_consumed,
+                repeated.after_damaged,
+                repeated.after_scrapped,
+            )
+        )
+        if (
+            repeated.inventory_lot_id != lot.id
+            or repeated.movement_type != "adjust"
+            or repeated.related_order_item_id != completion.order_item_id
+            or repeated_total != desired
+        ):
+            raise ProductionWorkflowError(
+                "the idempotency key was already used for a different adjustment",
+                409,
+            )
+        return ActualQuantityAdjustmentResult(
+            completion=completion,
+            lot=lot,
+            movement=repeated,
+            previous_actual_output_quantity=(
+                int(completion.actual_output_quantity)
+                - int(repeated.after_available - repeated.before_available)
+            ),
+            replayed=True,
+        )
+
+    if completion.status != "posted":
+        raise ProductionWorkflowError("reversed completion cannot be adjusted", 409)
+    if lot.status not in {"active", "frozen"}:
+        raise ProductionWorkflowError("closed inventory lot cannot be adjusted", 409)
+    if int(task.version) != int(expected_task_version):
+        raise ProductionWorkflowError("production task version changed; refresh and retry", 409)
+    if int(lot.version) != int(expected_lot_version):
+        raise ProductionWorkflowError("inventory lot version changed; refresh and retry", 409)
+
+    current = int(completion.actual_output_quantity)
+    if desired == current:
+        raise ProductionWorkflowError("actual output quantity has not changed", 409)
+    before = _balances(lot)
+    current_lot_total = sum(int(value or 0) for value in before.values())
+    if current_lot_total != current:
+        raise ProductionWorkflowError(
+            "completion quantity no longer matches its inventory lot; adjustment was blocked",
+            409,
+        )
+    lower_bound = (
+        int(lot.quantity_reserved or 0)
+        + int(lot.quantity_consumed or 0)
+        + int(lot.quantity_damaged or 0)
+        + int(lot.quantity_scrapped or 0)
+    )
+    lower_bound = max(lower_bound, int(completion.order_reserved_quantity or 0))
+    if desired < lower_bound:
+        raise ProductionWorkflowError(
+            "actual output cannot be lower than reserved, delivered or other non-free inventory",
+            409,
+        )
+    delta = desired - current
+    if delta < 0 and -delta > int(lot.quantity_available or 0):
+        raise ProductionWorkflowError(
+            "only currently available inventory can be reduced",
+            409,
+        )
+
+    lot_update = db.execute(
+        update(InventoryLot)
+        .where(
+            InventoryLot.id == lot.id,
+            InventoryLot.version == int(expected_lot_version),
+            InventoryLot.quantity_available == int(lot.quantity_available),
+        )
+        .values(
+            quantity_available=InventoryLot.quantity_available + delta,
+            version=InventoryLot.version + 1,
+            last_movement_at=utc_now_naive(),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    task_update = db.execute(
+        update(ProductionTask)
+        .where(
+            ProductionTask.id == task.id,
+            ProductionTask.version == int(expected_task_version),
+        )
+        .values(version=ProductionTask.version + 1)
+        .execution_options(synchronize_session=False)
+    )
+    if lot_update.rowcount != 1 or task_update.rowcount != 1:
+        raise ProductionWorkflowError("quantity version changed; refresh and retry", 409)
+
+    db.expire(lot)
+    db.expire(task)
+    lot = db.get(InventoryLot, lot.id)
+    task = db.get(ProductionTask, task.id)
+    if lot is None or task is None:
+        raise ProductionWorkflowError("quantity adjustment lost its inventory reference", 409)
+
+    completion.quantity = desired
+    completion.actual_output_quantity = desired
+    if completion.initial_disposition == "stock":
+        completion.direct_delivery_quantity = 0
+        completion.stock_quantity = desired
+    elif completion.initial_disposition == "direct":
+        completion.direct_delivery_quantity = desired
+        completion.stock_quantity = 0
+    else:
+        direct_quantity = min(int(completion.direct_delivery_quantity or 0), desired)
+        completion.direct_delivery_quantity = direct_quantity
+        completion.stock_quantity = desired - direct_quantity
+    completion.surplus_finished_quantity = (
+        desired - int(completion.order_reserved_quantity or 0)
+    )
+    movement = _movement(
+        db,
+        lot=lot,
+        movement_type="adjust",
+        quantity=abs(delta),
+        before=before,
+        operator_id=operator_id,
+        reason="actual finished quantity adjustment",
+        remarks=f"production_completion:{completion.id};from:{current};to:{desired}",
+        idempotency_key=key,
+        related_order_id=db.scalar(
+            select(OrderItem.order_id).where(OrderItem.id == completion.order_item_id)
+        ),
+        related_order_item_id=completion.order_item_id,
+    )
+    db.flush()
+    return ActualQuantityAdjustmentResult(
+        completion=completion,
+        lot=lot,
+        movement=movement,
+        previous_actual_output_quantity=current,
+        replayed=False,
+    )
+
+
 def _reverse_completion_semi_consumption(
     db: Session,
     *,
@@ -5665,6 +5860,7 @@ def _completion_rows(
     completed_date_from: date | None = None,
     completed_date_to: date | None = None,
     status: str | None = None,
+    placement_pending: bool = False,
     page: int | None = None,
     page_size: int | None = None,
 ):
@@ -5730,6 +5926,23 @@ def _completion_rows(
         query = query.where(ProductionCompletion.completed_at < end_at)
     if status is not None:
         query = query.where(ProductionCompletion.status == status)
+    if placement_pending:
+        query = query.where(
+            ProductionCompletion.status == "posted",
+            ProductionCompletion.initial_disposition == "direct",
+            ProductionStockTransfer.id.is_(None),
+            OrderItem.delivered_quantity == 0,
+            OrderItem.is_force_closed.is_(False),
+            Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+            ~exists(
+                select(DeliveryItem.id)
+                .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+                .where(
+                    DeliveryItem.order_item_id == OrderItem.id,
+                    Delivery.status == "dispatched",
+                )
+            ),
+        )
 
     query = query.order_by(
         ProductionCompletion.completed_at.desc(),
@@ -5751,6 +5964,7 @@ def _production_completion_total(
     completed_date_from: date | None,
     completed_date_to: date | None,
     status: str | None,
+    placement_pending: bool = False,
 ) -> int:
     """Count the same customer-scoped completion set as the history page."""
 
@@ -5760,6 +5974,10 @@ def _production_completion_total(
         .join(OrderItem, OrderItem.id == ProductionCompletion.order_item_id)
         .join(Order, Order.id == OrderItem.order_id)
         .join(Product, Product.id == OrderItem.product_id)
+        .outerjoin(
+            ProductionStockTransfer,
+            ProductionStockTransfer.completion_id == ProductionCompletion.id,
+        )
     )
     if allowed_customer_ids is not None:
         query = query.where(Order.customer_id.in_(allowed_customer_ids))
@@ -5799,6 +6017,23 @@ def _production_completion_total(
         query = query.where(ProductionCompletion.completed_at < end_at)
     if status is not None:
         query = query.where(ProductionCompletion.status == status)
+    if placement_pending:
+        query = query.where(
+            ProductionCompletion.status == "posted",
+            ProductionCompletion.initial_disposition == "direct",
+            ProductionStockTransfer.id.is_(None),
+            OrderItem.delivered_quantity == 0,
+            OrderItem.is_force_closed.is_(False),
+            Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
+            ~exists(
+                select(DeliveryItem.id)
+                .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+                .where(
+                    DeliveryItem.order_item_id == OrderItem.id,
+                    Delivery.status == "dispatched",
+                )
+            ),
+        )
     return int(db.scalar(select(func.count()).select_from(query.subquery())) or 0)
 
 
@@ -5974,6 +6209,12 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                 ],
                 "warehouse_location_map_issue": location_projection.get("map_issue"),
                 "inventory_lot_id": effective_lot_id,
+                "inventory_lot_version": (
+                    int(effective_lot.version) if effective_lot is not None else None
+                ),
+                "can_adjust_actual_quantity": (
+                    completion.status == "posted" and effective_lot is not None
+                ),
                 "system_pallet_id": (
                     effective_pallet.id if effective_pallet is not None else None
                 ),
@@ -6047,6 +6288,7 @@ def list_production_completions_page(
     completed_date_from: date | None = None,
     completed_date_to: date | None = None,
     status: Literal["posted", "reversed"] | None = None,
+    placement_pending: bool = False,
     page: int = 1,
     page_size: int = 50,
 ) -> tuple[list[dict], int]:
@@ -6062,6 +6304,7 @@ def list_production_completions_page(
         completed_date_from=completed_date_from,
         completed_date_to=completed_date_to,
         status=status,
+        placement_pending=placement_pending,
     )
     rows = _completion_rows(
         db,
@@ -6073,6 +6316,7 @@ def list_production_completions_page(
         completed_date_from=completed_date_from,
         completed_date_to=completed_date_to,
         status=status,
+        placement_pending=placement_pending,
         page=page,
         page_size=page_size,
     )

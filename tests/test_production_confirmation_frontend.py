@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
 
-def test_direct_destination_posts_one_formal_completion_and_stays_pending() -> None:
+def test_legacy_direct_destination_returns_to_finished_history() -> None:
     assert "直接待送：选择后整批进入一楼待送区" not in INDEX
     assert "订单内直接待送" in INDEX
     assert 'class="production-compact-command-bar"' in INDEX
@@ -41,8 +41,8 @@ def test_direct_destination_posts_one_formal_completion_and_stays_pending() -> N
     assert body.index('axios.post("/api/production/completion-batches"') < body.index(
         "this.loadProduction()"
     )
-    assert 'this.productionTab = "pending";' in body
-    assert 'this.productionTab = "history";' not in body
+    assert 'this.productionTab = "pending";' not in body
+    assert 'this.productionTab = "history";' in body
     assert "重试会复用同一幂等键" in body
 
 
@@ -57,7 +57,8 @@ def test_production_confirmation_keeps_destination_and_history_actions_compact()
 def test_stock_location_only_selects_locally_then_customer_groups_are_posted() -> None:
     assert "全部入库：选好库位，再点顶部“批量确认入库”" not in INDEX
     assert "合格品全部入库" in INDEX
-    assert "`批量确认入库（${productionSelectedCount()}）`" in INDEX
+    assert "`批量确认入库（${productionSelectedCount()}）`" not in INDEX
+    assert "待送成品归位" in INDEX
     assert '@change="onProductionLocationSelection(row)"' in INDEX
     assert "确认入库位置" not in INDEX
 
@@ -90,8 +91,8 @@ def test_stock_location_only_selects_locally_then_customer_groups_are_posted() -
     assert "delete this.productionSelected[row.id]" in batch_body
     assert "this.loadDeliveries()" in batch_body
     assert "失败项已保留，可直接重试" in batch_body
-    assert 'this.productionTab = "pending";' in batch_body
-    assert 'this.productionTab = "history";' not in batch_body
+    assert 'this.productionTab = "pending";' not in batch_body
+    assert 'this.productionTab = "history";' in batch_body
     assert "一次只能确认同一客户" not in INDEX
     assert "当前已选择其他客户" not in INDEX
 

@@ -25,7 +25,8 @@ def test_finance_mutation_buttons_share_busy_state_and_hide_legacy_invoice_after
     assert "financeStatementOperationState.action==='cancel'" in finance
     assert "financeStatementOperationState.action==='register'" in finance
     assert "financeStatementOperationState.action==='settle'" in finance
-    assert "canFinance && statement.confirmation_status!=='confirmed'" in finance
+    assert "canFinance && statement.confirmation_status!=='confirmed'" not in finance
+    assert 'v-if="canFinance" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0' in finance
 
 
 def test_cancel_register_and_settle_are_single_flight_and_freeze_payload(tmp_path: Path) -> None:

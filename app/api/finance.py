@@ -2701,6 +2701,8 @@ def current_customer_months(
             Statement.invoiced_amount,
             Statement.settled_amount,
             Statement.status,
+            Statement.confirmation_status,
+            Statement.version,
             Statement.created_at,
         )
         .join(Customer, Customer.id == Statement.customer_id)
@@ -2806,6 +2808,16 @@ def current_customer_months(
                 "pending_invoice_amount": invoice_balance,
                 "pending_payment_amount": payment_balance,
                 "status": statement["status"],
+                "confirmation_status": statement["confirmation_status"],
+                "version": int(statement["version"]),
+                "invoice_status": (
+                    "invoiced"
+                    if receivable > Decimal("0.00")
+                    and invoice_balance == Decimal("0.00")
+                    else "partial"
+                    if invoiced > Decimal("0.00")
+                    else "pending"
+                ),
                 "created_at": statement["created_at"],
             }
         )
@@ -3550,12 +3562,7 @@ def create_invoice(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    statement_for_task = _statement_for_user(db, payload.statement_id, user)
-    if statement_for_task.confirmation_status == "confirmed":
-        raise HTTPException(
-            status_code=409,
-            detail="已确认对账单必须通过开票任务登记结果，不能绕过冻结快照。",
-        )
+    _statement_for_user(db, payload.statement_id, user)
     try:
         updated = db.execute(
             text(

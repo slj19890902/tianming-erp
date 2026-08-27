@@ -116,7 +116,7 @@ def test_desktop_spa_preserves_deep_link_and_defaults_root_to_dashboard() -> Non
 
 def test_n029_production_page_deep_link_and_manual_destination_are_present() -> None:
     assert "activePage === 'production'" in INDEX
-    assert 'key: "production", label: "生产确认"' in INDEX
+    assert 'key: "production", label: "生产与成品"' in INDEX
     assert 'production: "orders.view"' in INDEX
     assert '<option value="">请选择完工去向</option>' in INDEX
     assert '<option value="direct">订单内直接待送</option>' in INDEX
@@ -142,8 +142,11 @@ def test_n029_production_requests_disable_duplicates_and_reuse_idempotency_keys(
     start = INDEX.index("async loadProduction()")
     end = INDEX.index("async loadIncoming()", start)
     logic = INDEX[start:end]
-    assert 'params: { status: "pending", page, page_size: this.pageSize }' in logic
-    assert 'latestRequestControllers.get("production:pending") !== controller' in logic
+    assert 'if (this.productionTab === "placement") return this.loadProductionPlacement();' in logic
+    assert 'this.loadProductionHistory(),' in logic
+    assert 'this.loadProductionPlacement(),' in logic
+    assert 'return historyResult;' in logic
+    assert "placement_pending:true" in logic
     assert 'axios.get("/api/production/completions", { params })' in logic
     assert 'axios.get("/api/production/temporary-locations", {signal:controller.signal})' in logic
     assert 'axios.post("/api/production/completion-batches"' in logic

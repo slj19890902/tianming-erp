@@ -76,6 +76,7 @@ def customer_heat_app(tmp_path, monkeypatch):
                 customer_number=20,
                 customer_code="HEAT-WARM",
                 name="普通成熟客户",
+                chinese_short_name="暖客",
             ),
             "new": Customer(
                 customer_number=30,
@@ -101,6 +102,7 @@ def customer_heat_app(tmp_path, monkeypatch):
                 customer_number=70,
                 customer_code="HEAT-OUTSIDE",
                 name="范围外高额客户",
+                chinese_short_name="越权客",
             ),
         }
         db.add_all([admin, scoped, workshop, denied, *customers.values()])
@@ -401,6 +403,16 @@ def test_customer_heat_keyword_and_query_families(customer_heat_app) -> None:
         keyword = _heat(client, keyword="HEAT-WARM")
         assert keyword.status_code == 200, keyword.text
         assert [row["customer_id"] for row in keyword.json()["items"]] == [ids["warm"]]
+        trimmed_abbreviation = _heat(client, keyword=" heat-warm ")
+        assert trimmed_abbreviation.status_code == 200, trimmed_abbreviation.text
+        assert [row["customer_id"] for row in trimmed_abbreviation.json()["items"]] == [
+            ids["warm"]
+        ]
+        short_name = _heat(client, keyword="暖客")
+        assert short_name.status_code == 200, short_name.text
+        assert [row["customer_id"] for row in short_name.json()["items"]] == [
+            ids["warm"]
+        ]
 
         def select_count_for(page_size: int) -> int:
             statements: list[str] = []
@@ -424,6 +436,13 @@ def test_customer_heat_keyword_and_query_families(customer_heat_app) -> None:
 
     assert active_customer_queries <= 40
     assert all_customer_queries <= active_customer_queries + 2
+
+    with TestClient(app) as client:
+        _login(client, "heat-scoped")
+        hidden_short_name = _heat(client, keyword="越权客")
+    assert hidden_short_name.status_code == 200
+    assert hidden_short_name.json()["total"] == 0
+    assert "范围外高额客户" not in hidden_short_name.text
 
 
 def test_customer_heat_routes_are_explicit_and_internal_badge_flag_is_not_public(

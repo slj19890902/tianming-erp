@@ -48,8 +48,18 @@ def order_filter_app(tmp_path: Path):
             must_change_password=False,
             customer_access_mode="selected",
         )
-        customer_a = Customer(name="筛选客户甲")
-        customer_b = Customer(name="筛选客户乙")
+        customer_a = Customer(
+            customer_number=1,
+            customer_code="SJA",
+            name="筛选客户甲",
+            chinese_short_name="星甲",
+        )
+        customer_b = Customer(
+            customer_number=2,
+            customer_code="SJB",
+            name="筛选客户乙",
+            chinese_short_name="峰乙",
+        )
         db.add_all([admin, scoped, customer_a, customer_b])
         db.flush()
         db.add_all(
@@ -217,3 +227,81 @@ def test_order_list_rejects_out_of_scope_customer_ids(order_filter_app) -> None:
     assert allowed.status_code == 200, allowed.text
     assert {row["id"] for row in allowed.json()["items"]} == {ids["a1"], ids["a2"]}
     assert denied.status_code == 403
+
+
+def test_order_keyword_matches_customer_short_name_and_abbreviation_before_pagination(
+    order_filter_app,
+) -> None:
+    app, ids = order_filter_app
+    with TestClient(app) as client:
+        _login(client, "p106-order-admin")
+        full_name = client.get(
+            "/api/orders",
+            params={"keyword": "筛选客户甲", "page": 1, "page_size": 50},
+        )
+        short_name = client.get(
+            "/api/orders",
+            params={"keyword": " 星甲 ", "page": 1, "page_size": 1},
+        )
+        abbreviation = client.get(
+            "/api/orders",
+            params={"keyword": " sja ", "page": 1, "page_size": 50},
+        )
+        existing_order_number = client.get(
+            "/api/orders",
+            params={"keyword": "ORD-A1", "page": 1, "page_size": 50},
+        )
+        without_keyword = client.get(
+            "/api/orders", params={"page": 1, "page_size": 1}
+        )
+        blank_keyword = client.get(
+            "/api/orders",
+            params={"keyword": "   ", "page": 1, "page_size": 1},
+        )
+        missing = client.get(
+            "/api/orders",
+            params={"keyword": "不存在的客户简称", "page": 1, "page_size": 50},
+        )
+        customer_options = client.get(
+            "/api/orders/customer-options",
+            params={"keyword": "星甲", "scope": "all"},
+        )
+
+        _login(client, "p106-order-scoped")
+        scoped_allowed = client.get(
+            "/api/orders",
+            params={"keyword": "星甲", "page": 1, "page_size": 50},
+        )
+        scoped_denied = client.get(
+            "/api/orders",
+            params={"keyword": "峰乙", "page": 1, "page_size": 50},
+        )
+
+    assert full_name.status_code == short_name.status_code == 200
+    assert full_name.json()["total"] == short_name.json()["total"] == 2
+    assert [row["id"] for row in short_name.json()["items"]] == [ids["a2"]]
+    assert abbreviation.status_code == 200
+    assert {row["id"] for row in abbreviation.json()["items"]} == {
+        ids["a1"],
+        ids["a2"],
+    }
+    assert [row["id"] for row in existing_order_number.json()["items"]] == [
+        ids["a1"]
+    ]
+    assert blank_keyword.json() == without_keyword.json()
+    assert missing.status_code == 200
+    assert missing.json()["total"] == 0
+    assert missing.json()["items"] == []
+    assert customer_options.status_code == 200
+    assert [row["id"] for row in customer_options.json()["items"]] == [
+        ids["customer_a"]
+    ]
+    assert scoped_allowed.status_code == 200
+    assert {row["id"] for row in scoped_allowed.json()["items"]} == {
+        ids["a1"],
+        ids["a2"],
+    }
+    assert scoped_denied.status_code == 200
+    assert scoped_denied.json()["total"] == 0
+    assert "筛选客户乙" not in scoped_denied.text
+    assert "SJB" not in scoped_denied.text

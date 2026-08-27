@@ -28,7 +28,7 @@ def _production_page() -> str:
 def test_order_filters_keep_the_table_as_the_visual_focus() -> None:
     page = _orders_page()
     assert "order-keyword-input" in page
-    assert "搜索客户、订单号、存货编码、产品或规格" in page
+    assert "搜索客户全称/简称/缩写、订单号、存货编码、产品或规格" in page
     assert "order-stage-select" in page
     assert "order-filter-footer" in page
     assert "orderActiveFilterChips.length" in page

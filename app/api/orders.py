@@ -160,6 +160,7 @@ from app.services.order_customer_heat import (
     list_customer_heat,
     threshold_contract as customer_heat_threshold_contract,
 )
+from app.services.customer_search import customer_identity_search_clause
 from app.services import material_pricing
 from app.services.box_type_rules import (
     BoxTypeRuleError,
@@ -2677,6 +2678,8 @@ def list_orders(
     if search_keyword:
         trimmed = search_keyword
         display_ids = filter_order_ids_for_display_search(db, trimmed, display_registry)
+        customer_identity_filter = customer_identity_search_clause(trimmed)
+        assert customer_identity_filter is not None
         ids_query = ids_query.outerjoin(
             OrderItem, OrderItem.order_id == Order.id
         ).outerjoin(
@@ -2685,7 +2688,7 @@ def list_orders(
             or_(
                 Order.order_number.ilike(f"%{trimmed}%"),
                 Order.customer_po.ilike(f"%{trimmed}%"),
-                Customer.name.ilike(f"%{trimmed}%"),
+                customer_identity_filter,
                 OrderItem.item_order_number.ilike(f"%{trimmed}%"),
                 OrderItem.snapshot_product_code.ilike(f"%{trimmed}%"),
                 Product.product_code.ilike(f"%{trimmed}%"),
@@ -3346,11 +3349,9 @@ def list_order_customer_options(
         order_counts[order.customer_id] = order_counts.get(order.customer_id, 0) + 1
     customer_ids = set(order_counts)
     customer_query = select(Customer).where(Customer.id.in_(customer_ids))
-    if keyword and keyword.strip():
-        pattern = f"%{keyword.strip()}%"
-        customer_query = customer_query.where(
-            or_(Customer.name.ilike(pattern), Customer.customer_code.ilike(pattern))
-        )
+    customer_identity_filter = customer_identity_search_clause(keyword)
+    if customer_identity_filter is not None:
+        customer_query = customer_query.where(customer_identity_filter)
     customer_query = customer_query.order_by(Customer.customer_number, Customer.id)
     total = db.scalar(select(func.count()).select_from(customer_query.subquery())) or 0
     customers = db.scalars(

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.192"
-APP_VERSION_NAME = "纸板收料当前地图原料位兼容"
+APP_VERSION = "v0.22.193"
+APP_VERSION_NAME = "订单搜索支持客户简称与缩写"
 APP_BUILD_DATE = "2026-08-27"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -929,18 +929,32 @@ _V022191_VERIFICATION_STEPS = [
     "核对当前正数栈板项无inventory_lot_id的数量由1变为0，成品规范批次为262条/82917箱；integrity_check通过且foreign_key_check为空。",
 ]
 
-APP_CHANGES = [
+_V022192_CHANGES = [
     "修复当前地图已经退役一楼RAW-006后，纸板收料仍只查找一楼旧原料位的问题；收料现在按当前已发布区域策略选择合法原料或片料位置，优先使用CURRENT_MAP，不再要求员工处理版本遗留。",
     "当前正式RAW-001四个原料货架位从历史finished技术类型归一为semi_finished，与当前地图raw_material策略一致；不移动实物、不增加库存，也不自动确认任何待收料。",
     "保留P0-25对旧版一楼已实测标准地堆位的受控兼容：仅在地图身份、1200×1000几何、空库存、空栈板和空占位全部严格一致时补齐排位，任何漂移继续安全阻断。",
     "新增唯一线性迁移fj45v8x9z34并保存升级前快照；SO387的602张仍按冻结用途守恒为订单600张与备库2张，幂等、事务、客户范围、权限和审计门禁保持不变。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022192_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认版本为v0.22.192、数据库revision为唯一head fj45v8x9z34。",
     "在正式库隔离副本选择SO387并只提交一次，确认成功1条、失败0条，实收602张；订单用途600张正常形成成品，备库2张进入CURRENT_MAP的RAW-001原料货架位。",
     "对同一幂等键重复提交，确认收料、用途分配、成品、备库批次和库存流水均为零增量；旧RAW-006继续停用且不会重新成为收料目标。",
     "核对迁移前后订单、库存和栈板数量守恒，RAW-001四个位置仅技术类型归一；integrity_check通过、foreign_key_check为空。",
+]
+
+APP_CHANGES = [
+    "订单搜索框现在同时匹配客户主档中的客户全称、中文简称和客户缩写；订单号、客户单号、存货编码、产品名称、规格和材质等既有搜索字段保持不变。",
+    "客户简称与缩写筛选在后端分页前生效，输入首尾空格会被忽略，字母数字缩写不区分大小写；业务队列、客户筛选候选和客户热力共用同一组权威客户身份字段。",
+    "普通账号仍先应用客户范围和订单查看权限，再执行简称或缩写搜索；范围外客户不会进入结果、数量统计或页面回显。",
+    "本版无数据库迁移，不新增简称映射，不修改订单、客户、数量、金额、状态或历史快照；数据库revision继续保持唯一head fj45v8x9z34。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "进入系统备份→系统版本，确认版本为v0.22.193、数据库revision仍为唯一head fj45v8x9z34。",
+    "在订单业务队列分别输入一个客户中文简称和小写客户缩写，确认都能跨分页找到该客户订单；输入前后空格结果保持一致。",
+    "用订单号、客户单号、存货编码、产品名称和规格各抽查一次，确认原有搜索仍正常；空搜索恢复原列表，不存在的简称返回空结果而不是系统错误。",
+    "用受限客户范围账号搜索范围外客户的简称和缩写，确认结果与数量均为0；本次发布不修改任何订单、客户或库存业务数据。",
 ]
 
 
@@ -1034,6 +1048,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.192：本次更新｜{item}" for item in _V022192_CHANGES),
+    *(f"v0.22.192：如何验证｜{item}" for item in _V022192_VERIFICATION_STEPS),
     *(f"v0.22.191：本次更新｜{item}" for item in _V022191_CHANGES),
     *(f"v0.22.191：如何验证｜{item}" for item in _V022191_VERIFICATION_STEPS),
     *(f"v0.22.189：本次更新｜{item}" for item in _V022189_CHANGES),

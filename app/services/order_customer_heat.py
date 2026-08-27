@@ -13,6 +13,7 @@ from app.services.order_business_status import (
     BUSINESS_STATUS_ORDER,
     build_order_business_statuses,
 )
+from app.services.customer_search import customer_identity_search_clause
 
 
 THRESHOLD_VERSION = "p1-61a-20260814-candidate-v1"
@@ -266,11 +267,9 @@ def list_customer_heat(
         customer_conditions.append(Customer.id.in_(visible_customer_ids))
     if eligible_customer_ids is not None:
         customer_conditions.append(Customer.id.in_(eligible_customer_ids))
-    if keyword and keyword.strip():
-        pattern = f"%{keyword.strip()}%"
-        customer_conditions.append(
-            or_(Customer.name.ilike(pattern), Customer.customer_code.ilike(pattern))
-        )
+    customer_identity_filter = customer_identity_search_clause(keyword)
+    if customer_identity_filter is not None:
+        customer_conditions.append(customer_identity_filter)
 
     visible_customers = (
         select(

@@ -1,5 +1,12 @@
 # Codex 项目交接
 
+## 2026-08-27 v0.22.198 模具位置筛选与标签打印统一正式发布
+
+- 正式代码 `66282738662bb1e65e1d03b5ed0ed061cf734b0e` 已按顺序接在 `v0.22.197` 后并推送到 `factory-current-baseline`；系统版本为 `v0.22.198`，本版无数据库迁移，唯一 head 继续为 `fk46v8x9z35`。
+- 模具位置页现支持客户全称/简称/缩写、存货编码、货架位置和模具名称组合取交集；空客户输入不渲染客户候选，未打印、未启用和维修默认不勾选，纸型默认 `40×80`，列表按最近编辑倒序且正常状态不重复显示。
+- 单张、勾选批量和 `40×80` 布局编辑统一使用 `p1-112-v1` 六项正文与真实毫米版式；历史 `p1-103-v1/v2/v3` 打印快照继续冻结重放，共享模具完整事实仍保留在详情和二维码数据中。
+- 发布报告 `docs/migration_reports/release_runtime_20260827_150537.json` 状态为 `completed`；正式备份 `data/backups/carton_erp_before_release_20260827_150538.sqlite3` 完整性正常、外键异常 0，发布前后 15 张核心表计数一致。正式只读终验 `query_only=1`、`total_changes=0→0`、`integrity_check=ok`，服务健康正常；Chrome 已验收筛选布局，实体 Gprinter `40×80` 实打仍需现场完成。
+
 ## 2026-08-27 v0.22.197 补库报料状态与来料日期统一正式发布
 
 - 业务修复提交 `bcb7d98b3fa29622bff4f4e1e492b8058d5b256f` 与迁移中断恢复提交 `a18aaa7aec731428f4d57fac0cd80d091a733667` 已推送 `factory-current-baseline`；系统版本为 `v0.22.197`，唯一数据库 head 为 `fk46v8x9z35`。发布报告 `docs/migration_reports/release_runtime_20260827_144634.json` 状态为 `completed`；正式备份 `data/backups/carton_erp_before_release_20260827_144636.sqlite3` 完整性正常、外键异常 0，发布前后 15 张核心表计数一致。

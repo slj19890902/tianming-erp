@@ -1,5 +1,12 @@
 # Codex 项目交接
 
+## 2026-08-27 v0.22.196 客户通用备料与单向压线抵扣正式发布
+
+- 正式功能代码 `68d41609475386ca1dd13b8e8477c719b0296e43` 已快进并推送至 `factory-current-baseline`；系统版本为 `v0.22.196`，唯一数据库 head 由 `fj45v8x9z34` 升级为 `fk46v8x9z35`。发布报告 `docs/migration_reports/release_runtime_20260827_135154.json` 状态为 `completed`；正式备份 `data/backups/carton_erp_before_release_20260827_135155.sqlite3` 完整性正常、外键异常 0，发布前后 15 张核心表计数一致。
+- 库存补库不再强制绑定常用箱或存货编码；参考产品只回填尺寸、材质、楞型和压线等物理事实，收料后可形成同客户通用半成品库存；材质差异只警告，仍保留实际材质、批次、成本与来源事实。
+- 压线规则为单向：毛片/净料可用于需压线订单；已压线库存转无压线订单默认拒绝，仅老板或 admin 填写原因后可审计特批。补库与超量备料只进已发布的三楼左区原料/半成品位；衬板直接作为成品收入三楼左区成品位，不生成生产任务。
+- 除 Prepare 自动升级演练外，另在独立副本完成 `fk46 -> fj45 -> fk46` 往返，最终 `integrity_check=ok`、外键异常 0。正式只读回读确认新列/索引存在，历史通用批次、内部名称和参考产品计数均为 0，没有自动编造或改写历史事实；`/api/health` 返回 HTTP 200。完整证据见 NAS 同名正式发布回执。
+
 ## 2026-08-27 v0.22.195 主流程界面、人工开票与完工归位正式发布
 
 - 正式功能代码 `ba3ff2b3645a46a59a284db5a4e0a5b729857ecc` 已快进到 `factory-current-baseline`；本版无迁移，唯一数据库 head 继续为 `fj45v8x9z34`。双阶段报告 `docs/migration_reports/release_runtime_20260827_125856.json` 状态为 completed；正式备份 `data/backups/carton_erp_before_release_20260827_125857.sqlite3` 完整性正常、外键异常 0，发布前后 15 张核心表计数一致。

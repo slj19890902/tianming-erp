@@ -17,7 +17,58 @@ branch_labels = None
 depends_on = None
 
 
+def _upgrade_contract_state() -> str:
+    """Classify a clean parent schema versus a fully applied but unstamped schema."""
+
+    inspector = sa.inspect(op.get_bind())
+    replenishment_columns = {
+        column["name"]
+        for column in inspector.get_columns("stock_replenishment_order_items")
+    }
+    replenishment_indexes = {
+        index["name"]
+        for index in inspector.get_indexes("stock_replenishment_order_items")
+    }
+    replenishment_foreign_keys = {
+        foreign_key.get("name")
+        for foreign_key in inspector.get_foreign_keys(
+            "stock_replenishment_order_items"
+        )
+    }
+    semi_columns = {
+        column["name"]
+        for column in inspector.get_columns("semi_finished_inventory_details")
+    }
+    semi_indexes = {
+        index["name"]
+        for index in inspector.get_indexes("semi_finished_inventory_details")
+    }
+    checks = (
+        "reference_product_id" in replenishment_columns,
+        "internal_name" in replenishment_columns,
+        "ix_stock_replenishment_items_reference_product" in replenishment_indexes,
+        "fk_stock_replenishment_items_reference_product_id"
+        in replenishment_foreign_keys,
+        "customer_generic_eligible" in semi_columns,
+        "internal_name" in semi_columns,
+        "ix_semi_inventory_customer_generic" in semi_indexes,
+    )
+    if all(checks):
+        return "complete"
+    if any(checks):
+        raise RuntimeError(
+            "Refusing ambiguous upgrade: customer-generic replenishment schema is "
+            "only partially applied."
+        )
+    return "absent"
+
+
 def upgrade() -> None:
+    if _upgrade_contract_state() == "complete":
+        # SQLite DDL is non-transactional. A prior interrupted Apply can leave the
+        # full contract present while alembic_version still points at the parent.
+        # In that exact, verified state Alembic only needs to advance the stamp.
+        return
     with op.batch_alter_table("stock_replenishment_order_items") as batch:
         batch.add_column(sa.Column("reference_product_id", sa.Integer(), nullable=True))
         batch.add_column(sa.Column("internal_name", sa.String(length=200), nullable=True))

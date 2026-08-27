@@ -108,3 +108,28 @@ def test_customer_generic_replenishment_migration_refuses_fact_downgrade(
             "SELECT version_num FROM alembic_version"
         ).fetchone()[0] == TARGET_REVISION
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_customer_generic_replenishment_migration_recovers_fully_applied_unstamped_schema(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "p1-110-fully-applied-unstamped.sqlite3"
+    _parent_schema(database)
+    config = _config(monkeypatch, database)
+    command.upgrade(config, TARGET_REVISION)
+
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE alembic_version SET version_num = ?",
+            (PARENT_REVISION,),
+        )
+        connection.commit()
+
+    command.upgrade(config, TARGET_REVISION)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0] == TARGET_REVISION
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert not connection.execute("PRAGMA foreign_key_check").fetchall()

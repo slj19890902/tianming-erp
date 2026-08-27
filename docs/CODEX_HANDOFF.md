@@ -1,5 +1,10 @@
 # Codex 项目交接
 
+## 2026-08-27 v0.22.192 纸板收料当前地图原料位兼容正式发布
+
+- 正式代码 `70b2b261494731ac62346c01160e1894352dfccc` 已快进并推送 `factory-current-baseline`；唯一迁移 head 为 `fj45v8x9z34`，发布报告为 `docs/migration_reports/release_runtime_20260827_095253.json`。迁移只把当前地图 `RAW-001` 四个原料货架位的历史技术类型归一为 `semi_finished`，不移动实物、不新增库存、不自动确认待收料；旧 `RAW-006` 保持停用。
+- 工厂正式 Chrome 已对 SO387 只确认一次：实收 602 张，冻结用途分流为订单 600 张、片料备库 2 张，形成成品 600 只；成品进入当前地图“成品待送堆放区 002 号位”，片料进入 `3F-RAW-001-L001`。页面回显“已收 602｜待收 0”，正式库只读终验 `integrity_check=ok`、外键异常 0，旧 `RAW-006` 正库存 0。完整证据见 NAS 同名正式发布回执。
+
 ## 2026-08-27 v0.22.191 旧版栈板项库存批次归一正式发布
 
 - 正式代码 `58c9b06a2ee3c06152c1ca9915bb4df8ffe2a4c8` 已快进并推送 `factory-current-baseline`；唯一迁移 head 为 `fi44v8x9z33`，发布报告 `docs/migration_reports/release_runtime_20260827_021416.json` 状态为 completed。

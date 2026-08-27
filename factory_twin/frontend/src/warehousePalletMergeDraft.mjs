@@ -71,6 +71,9 @@ export function normalizePalletMergeCandidate(location, pallet) {
     return { candidate: null, error: "栈板数量无效。" };
   }
   const productKeys = new Set(items.map((item) => item?.product_id || item?.inventory_code || item?.lot_id));
+  const inventoryCode = oneValue(items, (item) => String(item?.inventory_code || "").trim() || null) || "存货编码待补充";
+  const specification = oneValue(items, (item) => String(item?.specification || "").trim() || null);
+  const productNames = [...new Set(items.map((item) => String(item?.product_name || "").trim()).filter(Boolean))];
   const candidate = {
     pallet_id: palletId,
     pallet_code: String(pallet?.pallet_code || `栈板 ${palletId}`),
@@ -82,6 +85,10 @@ export function normalizePalletMergeCandidate(location, pallet) {
     area_code: location?.area_code || null,
     customer_id: customerId,
     customer_name: String(items.find((item) => positiveInteger(item?.customer_id) === customerId)?.customer_name || "客户待确认"),
+    customer_short_name: String(items.find((item) => positiveInteger(item?.customer_id) === customerId)?.customer_short_name || "").trim() || null,
+    inventory_code: inventoryCode,
+    product_name: productNames.length === 1 ? productNames[0] : productNames.length > 1 ? `${productNames[0]} 等 ${productNames.length} 款` : "产品名称待补充",
+    specification,
     inventory_type: inventoryType,
     unit,
     inventory_status: inventoryStatus,

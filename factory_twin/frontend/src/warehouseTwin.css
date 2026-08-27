@@ -1438,3 +1438,69 @@ body.warehouse-twin-page {
   .twin-move-draft-list { grid-column: 1 / -1; grid-row: 2; }
   .twin-move-draft-heading > span { display: none; }
 }
+
+/* P0-29: embedded warehouse follows the ERP shell instead of rendering a second app header. */
+.warehouse-twin-shell,
+.warehouse-twin-shell button,
+.warehouse-twin-shell input,
+.warehouse-twin-shell select,
+.warehouse-twin-shell textarea {
+  font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+.warehouse-twin-shell.embedded-shell {
+  grid-template-rows: 48px minmax(0, 1fr);
+}
+.warehouse-twin-shell.embedded-shell.move-mode {
+  grid-template-rows: 48px minmax(0, 1fr) auto;
+}
+.warehouse-twin-shell.embedded-shell .twin-command-bar {
+  display: none;
+}
+.warehouse-twin-shell :is(
+  .twin-brand small,
+  .twin-production-title small,
+  .twin-context-rail > header small,
+  .twin-inventory-title small,
+  .twin-floor1-candidate-title small,
+  .twin-location-card-title small,
+  .twin-header-area-summary small,
+  .twin-move-draft-heading small
+) {
+  font-family: inherit;
+  letter-spacing: 0;
+}
+.twin-toolbar {
+  min-height: 48px;
+  border-radius: 0;
+}
+.twin-toolbar button,
+.twin-operation-modes button,
+.twin-segmented button {
+  border-radius: 7px;
+}
+.twin-context-rail > header,
+.twin-inspector > header {
+  background: #f7f8fa;
+}
+.twin-context-rail > header h2,
+.twin-inspector > header h2 {
+  font-size: 16px;
+  font-weight: 700;
+}
+.twin-location-card,
+.twin-object-card {
+  border-radius: 8px;
+}
+.twin-location-card-title b,
+.twin-location-item h4,
+.twin-area-lot strong {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 880px) {
+  .warehouse-twin-shell.embedded-shell,
+  .warehouse-twin-shell.embedded-shell.move-mode {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+}

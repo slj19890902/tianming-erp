@@ -847,8 +847,10 @@ function mergePallet(palletId, overrides = {}) {
       version: 2,
       product_id: palletId,
       inventory_code: `CP-${palletId}`,
+      product_name: "五层瓦楞纸箱",
       customer_id: 7,
       customer_name: "苏州思迈尔包装有限公司",
+      customer_short_name: "思迈尔",
       inventory_type: "finished",
       unit: "boxes",
       status: "active",
@@ -866,6 +868,9 @@ test("pallet merge candidates keep real locations, native units, and different i
   assert.equal(first.error, null);
   assert.equal(first.candidate.location_id, 49);
   assert.equal(first.candidate.total_quantity, 50);
+  assert.equal(first.candidate.customer_short_name, "思迈尔");
+  assert.equal(first.candidate.inventory_code, "CP-11");
+  assert.equal(first.candidate.product_name, "五层瓦楞纸箱");
   assert.equal(second.candidate.location_id, 50);
   assert.equal(palletMergeCompatibility(first.candidate, second.candidate).compatible, true);
   const selected = togglePalletMergeSource(togglePalletMergeSource([], first.candidate).items, second.candidate);

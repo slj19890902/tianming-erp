@@ -3,9 +3,11 @@ export interface PalletMergeInventoryItem {
   version?: number | null;
   product_id?: number | null;
   inventory_code?: string | null;
+  product_name?: string | null;
   specification?: string | null;
   customer_id?: number | null;
   customer_name?: string | null;
+  customer_short_name?: string | null;
   inventory_type?: string | null;
   unit?: string | null;
   status?: string | null;
@@ -47,6 +49,10 @@ export interface PalletMergeCandidate {
   area_code: string | null;
   customer_id: number;
   customer_name: string;
+  customer_short_name: string | null;
+  inventory_code: string;
+  product_name: string;
+  specification: string | null;
   inventory_type: "finished" | "semi_finished";
   unit: string;
   inventory_status: "active" | "frozen";

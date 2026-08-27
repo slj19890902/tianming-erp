@@ -68,8 +68,8 @@ def twin_dashboard_app(tmp_path, monkeypatch):
             must_change_password=False,
             customer_access_mode="selected",
         )
-        owner = Customer(name="苏州思迈尔包装有限公司", customer_code="SMILE")
-        hidden_owner = Customer(name="昆山华诚电子有限公司", customer_code="HUACHENG")
+        owner = Customer(name="苏州思迈尔包装有限公司", chinese_short_name="思迈尔", customer_code="SMILE")
+        hidden_owner = Customer(name="昆山华诚电子有限公司", chinese_short_name="华诚", customer_code="HUACHENG")
         db.add_all([admin, scoped, owner, hidden_owner])
         db.flush()
         db.add(UserCustomerScope(user_id=scoped.id, customer_id=owner.id))
@@ -526,6 +526,7 @@ def test_dashboard_keeps_native_units_and_hides_unconfirmed_capacity_metrics(
     assert mapped["map_position"]["z_index"] == 0
     assert mapped["current_address_name"] == "三楼 右区A1·成品区·A1-1"
     assert mapped["employee_location_name"] == "三楼 右区A1·成品区·A1-1"
+    assert mapped["pallets"][0]["items"][0]["customer_short_name"] == "思迈尔"
     assert [row["inventory_code"] for row in mapped["loose_items"]] == [
         "TM-FG-001-LOOSE"
     ]

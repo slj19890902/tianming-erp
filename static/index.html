@@ -2288,16 +2288,21 @@
       }
       .requisition-page-actions { display:flex; align-items:center; justify-content:flex-end; gap:6px; }
       .warehouse-wayfinding { display:flex; align-items:stretch; gap:8px; flex-wrap:wrap; }
-      .warehouse-shell-head {
-        display: flex; align-items: center; justify-content: space-between; gap: 12px;
-        margin-bottom: 8px; padding: 8px 12px; border: 1px solid var(--line);
-        border-radius: 10px; background: var(--panel);
+      .warehouse-top-shortcuts { display:flex; align-items:center; gap:5px; }
+      .warehouse-top-shortcuts button,
+      .warehouse-top-shortcuts a {
+        min-height:30px; padding:4px 9px; border:1px solid var(--line-strong); border-radius:8px;
+        color:var(--text-secondary); background:#fff; font-size:12px; font-weight:700; text-decoration:none;
+        white-space:nowrap;
       }
-      .main.warehouse-main { display:grid; grid-template-rows:auto minmax(0,1fr); gap:12px; overflow:hidden; }
+      .warehouse-top-shortcuts button.active { border-color:var(--primary); color:#fff; background:var(--primary); }
+      .warehouse-top-shortcuts a:hover,
+      .warehouse-top-shortcuts button:hover:not(.active) { border-color:var(--primary); color:var(--primary); }
+      .main.warehouse-main { display:grid; grid-template-rows:minmax(0,1fr); gap:0; overflow:hidden; }
       .warehouse-main .workbench-nav { margin:0; }
       .warehouse-shell {
-        grid-row:2; height:100%; min-height:0; overflow:hidden;
-        display:flex; flex-direction:column; gap:8px;
+        grid-row:1; height:100%; min-height:0; overflow:hidden;
+        display:flex; flex-direction:column; gap:0;
       }
       .warehouse-shell-frame {
         display:block; width:100%; height:auto; min-height:0; flex:1 1 auto;
@@ -2453,6 +2458,11 @@
           <div class="brand"><img class="brand-logo" src="/static/assets/logo.png" alt="天明包装ERP" /><span>天明包装ERP</span></div>
           <div class="top-actions">
             <button v-if="pageAllowed('warehouse')" type="button" :class="['btn','primary','topbar-warehouse-entry',{active:activePage==='warehouse'}]" :aria-current="activePage==='warehouse' ? 'page' : null" title="进入仓库页面" @click="goMenu('warehouse')"><span aria-hidden="true" v-html="navIcon('warehouse')"></span><span>仓库</span></button>
+            <div v-if="activePage==='warehouse'" class="warehouse-top-shortcuts" role="group" aria-label="仓库楼层与台账">
+              <button type="button" :class="{active:warehouseTwinFloor==='1F'}" @click="selectWarehouseFloor('1F')">1F 生产车间</button>
+              <button type="button" :class="{active:warehouseTwinFloor==='3F'}" @click="selectWarehouseFloor('3F')">3F 成品仓库</button>
+              <a href="/warehouse-ledger.html?tab=finished">库存台账</a>
+            </div>
             <span class="top-user-name">{{ user.real_name || user.username }}</span>
             <span class="status blue">{{ roleLabel(user.role) }}</span>
             <div class="ui-mode-switch" role="group" aria-label="界面显示大小">
@@ -2560,14 +2570,8 @@
             </section>
 
             <section v-if="warehouseFrameUrl" v-show="activePage === 'warehouse'" class="warehouse-shell">
-              <div v-if="user.role === 'admin'" class="warehouse-shell-head">
-                <div>
-                  <strong>仓库地图</strong>
-                  <div class="muted">新增或编辑生产模具，请进入模具档案，依次选择客户、填写标签名称和中文简写。</div>
-                </div>
-                <a class="btn primary" href="/warehouse-ledger.html?tab=molds" target="_blank" rel="noopener">模具档案</a>
-              </div>
               <iframe
+                ref="warehouseFrame"
                 :key="warehouseFrameRevision"
                 class="warehouse-shell-frame"
                 :src="warehouseFrameUrl"
@@ -10063,6 +10067,11 @@
             this.closeModal();
           });
           window.addEventListener("popstate", this.handlePdfWarehousePopState);
+          window.addEventListener("message", this.handleWarehouseFrameMessage);
+        },
+        beforeUnmount() {
+          window.removeEventListener("popstate", this.handlePdfWarehousePopState);
+          window.removeEventListener("message", this.handleWarehouseFrameMessage);
         },
         methods: {
           customerPhoneAnalysis(value) {
@@ -13790,6 +13799,27 @@
           refreshWarehouseFrame() {
             this.ensureWarehouseFrame();
             this.warehouseFrameRevision += 1;
+          },
+          handleWarehouseFrameMessage(event) {
+            if (event.origin !== window.location.origin) return;
+            const frameWindow = this.$refs.warehouseFrame?.contentWindow;
+            if (!frameWindow || event.source !== frameWindow) return;
+            const payload = event.data || {};
+            if (payload.source !== "tianming-warehouse" || payload.type !== "warehouse-state") return;
+            if (payload.floor_code === "1F" || payload.floor_code === "3F") this.warehouseTwinFloor = payload.floor_code;
+          },
+          selectWarehouseFloor(floorCode) {
+            if (floorCode !== "1F" && floorCode !== "3F") return;
+            this.warehouseTwinFloor = floorCode;
+            this.ensureWarehouseFrame();
+            this.$nextTick(() => {
+              this.$refs.warehouseFrame?.contentWindow?.postMessage({
+                source: "tianming-erp-shell",
+                type: "warehouse-command",
+                command: "set-floor",
+                floor_code: floorCode,
+              }, window.location.origin);
+            });
           },
           async loadOverview() {
             this.overviewLoading = true;

@@ -1,5 +1,12 @@
 # Codex 项目交接
 
+## 2026-08-27 v0.22.197 补库报料状态与来料日期统一正式发布
+
+- 业务修复提交 `bcb7d98b3fa29622bff4f4e1e492b8058d5b256f` 与迁移中断恢复提交 `a18aaa7aec731428f4d57fac0cd80d091a733667` 已推送 `factory-current-baseline`；系统版本为 `v0.22.197`，唯一数据库 head 为 `fk46v8x9z35`。发布报告 `docs/migration_reports/release_runtime_20260827_144634.json` 状态为 `completed`；正式备份 `data/backups/carton_erp_before_release_20260827_144636.sqlite3` 完整性正常、外键异常 0，发布前后 15 张核心表计数一致。
+- 已报料中的库存补库行按业务语义统一显示“有效/已撤销”，筛选同时覆盖 `confirmed`、`partially_stocked`、`stocked` 与 `voided`；底层生命周期原值继续保留，不做历史状态回写。待来料和历史入库的补库报料日期统一按北京时间输出 `YYYY-MM-DD`，与普通订单口径一致。
+- Prepare 首次发现正式库已经完整具备 `fk46` 的字段、索引和外键，但 `alembic_version` 仍停在 `fj45`。迁移恢复逻辑现在只允许“全部合同精确存在”时推进版本戳，任何部分落地仍拒绝；隔离副本演练和正式 Apply 后均为 `integrity_check=ok`、外键异常 0、head=`fk46v8x9z35`。
+- 正式只读回读确认补库单仍为 `confirmed=1 / stocked=1 / voided=1`，3 条明细合计 1041、已收 100，关联正式收料凭证 1 条；没有修改、重算或补造补库、来料、库存和审计事实。`/api/health` 返回正常，发布脚本已在服务启动后验证 v0.22.197；登录后的页面业务验收仍由老板执行。完整证据见 NAS 同名正式发布回执。
+
 ## 2026-08-27 v0.22.196 客户通用备料与单向压线抵扣正式发布
 
 - 正式功能代码 `68d41609475386ca1dd13b8e8477c719b0296e43` 已快进并推送至 `factory-current-baseline`；系统版本为 `v0.22.196`，唯一数据库 head 由 `fj45v8x9z34` 升级为 `fk46v8x9z35`。发布报告 `docs/migration_reports/release_runtime_20260827_135154.json` 状态为 `completed`；正式备份 `data/backups/carton_erp_before_release_20260827_135155.sqlite3` 完整性正常、外键异常 0，发布前后 15 张核心表计数一致。

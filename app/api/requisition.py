@@ -16248,17 +16248,50 @@ def _source_items_from_supplier_order(order: SupplierRequisitionOrder) -> list[d
 def _supplier_order_item_component_type(
     item: SupplierRequisitionOrderItem,
 ) -> str:
-    source_key = str(item.source_key or "").strip().lower()
+    return _supplier_order_component_type(item.source_key, item.product_name)
+
+
+def _supplier_order_component_type(
+    source_key: str | None,
+    product_name: str | None,
+) -> str:
+    source_key = str(source_key or "").strip().lower()
     if source_key.endswith(":cover"):
         return "cover"
     if source_key.endswith(":base"):
         return "base"
-    product_name = str(item.product_name or "").strip()
-    if product_name.endswith("-盖"):
+    normalized_product_name = str(product_name or "").strip()
+    if normalized_product_name.endswith("-盖"):
         return "cover"
-    if product_name.endswith("-底"):
+    if normalized_product_name.endswith("-底"):
         return "base"
     return "whole"
+
+
+def _supplier_order_line_crease(
+    order_item: OrderItem | None,
+    component_type: str,
+    *,
+    fallback_type: str | None,
+    fallback_left_mm: int | None,
+    fallback_middle_mm: int | None,
+    fallback_right_mm: int | None,
+) -> tuple[str | None, int | None, int | None, int | None]:
+    """Return the immutable physical line crease, never live product data.
+
+    Current supplier lines keep a stable ``order_item_id`` and therefore use
+    that order item's frozen physical-board snapshot.  Only source-less legacy
+    supplier lines retain the historical document-header fallback.
+    """
+
+    if order_item is not None:
+        return _component_crease(order_item, component_type)
+    return (
+        fallback_type,
+        fallback_left_mm,
+        fallback_middle_mm,
+        fallback_right_mm,
+    )
 
 
 def _supplier_order_purchase_lines(
@@ -16370,16 +16403,16 @@ def _supplier_order_purchase_lines(
             order_item.snapshot_report_width_mm if order_item is not None else None,
             order.report_width_mm,
         )
-        if order_item is not None:
-            crease_type, crease_left, crease_middle, crease_right = _component_crease(
+        crease_type, crease_left, crease_middle, crease_right = (
+            _supplier_order_line_crease(
                 order_item,
                 component_type,
+                fallback_type=order.crease_type,
+                fallback_left_mm=order.crease_left_mm,
+                fallback_middle_mm=order.crease_middle_mm,
+                fallback_right_mm=order.crease_right_mm,
             )
-        else:
-            crease_type = order.crease_type
-            crease_left = order.crease_left_mm
-            crease_middle = order.crease_middle_mm
-            crease_right = order.crease_right_mm
+        )
         cutting_mode = item.cutting_mode or (
             order_item.special_process if order_item is not None else None
         ) or order.cutting_mode or DEFAULT_CUTTING_MODE
@@ -17796,6 +17829,10 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                 SupplierRequisitionOrderItem.supplier_order_id.label(
                     "supplier_order_id"
                 ),
+                SupplierRequisitionOrderItem.order_item_id.label(
+                    "order_item_id"
+                ),
+                SupplierRequisitionOrderItem.source_key.label("source_key"),
                 SupplierRequisitionOrderItem.order_number.label("order_number"),
                 SupplierRequisitionOrderItem.product_code.label("product_code"),
                 SupplierRequisitionOrderItem.product_name.label("product_name"),
@@ -17840,14 +17877,52 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                 SupplierRequisitionOrderItem.id,
             )
         ).mappings().all()
+        source_order_item_ids = {
+            int(item["order_item_id"])
+            for item in supplier_item_rows
+            if item["order_item_id"] is not None
+        }
+        source_order_items_by_id = {
+            int(order_item.id): order_item
+            for order_item in (
+                db.scalars(
+                    select(OrderItem).where(
+                        OrderItem.id.in_(source_order_item_ids)
+                    )
+                ).all()
+                if source_order_item_ids
+                else []
+            )
+        }
         for item in supplier_item_rows:
             supplier_items_by_order.setdefault(
                 int(item["supplier_order_id"]), []
             ).append(item)
+    else:
+        source_order_items_by_id = {}
     for header in supplier_headers:
         document_id = int(header["document_id"])
         lines = []
         for item in supplier_items_by_order.get(document_id, []):
+            source_order_item = (
+                source_order_items_by_id.get(int(item["order_item_id"]))
+                if item["order_item_id"] is not None
+                else None
+            )
+            component_type = _supplier_order_component_type(
+                item["source_key"],
+                item["product_name"],
+            )
+            crease_type, crease_left, crease_middle, crease_right = (
+                _supplier_order_line_crease(
+                    source_order_item,
+                    component_type,
+                    fallback_type=header["document_crease_type"],
+                    fallback_left_mm=header["document_crease_left_mm"],
+                    fallback_middle_mm=header["document_crease_middle_mm"],
+                    fallback_right_mm=header["document_crease_right_mm"],
+                )
+            )
             lines.append(
                 {
                     "_item_id": int(item["item_id"]),
@@ -17869,6 +17944,10 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     ),
                     "flute_type": item["flute_type_snapshot"]
                     or header["document_flute_type"],
+                    "_crease_type": crease_type,
+                    "_crease_left_mm": crease_left,
+                    "_crease_middle_mm": crease_middle,
+                    "_crease_right_mm": crease_right,
                     "_item_status": item["item_status"],
                     "_item_version": item["item_version"],
                     "_item_voided_at": item["item_voided_at"],
@@ -18396,15 +18475,17 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
         candidate_lines = candidate.get("line_items") or []
 
         if source_type == "supplier_order":
-            crease_display = (
-                f"{candidate['_crease_left_mm']}+{candidate['_crease_middle_mm']}+{candidate['_crease_right_mm']}"
-                if candidate["_crease_type"] == "压线"
-                and candidate["_crease_middle_mm"] is not None
-                else candidate["_crease_type"] or "-"
-            )
-            line_items = [
-                with_match_metadata(
-                    {
+            line_items = []
+            for line in candidate_lines:
+                crease_display = (
+                    f"{line['_crease_left_mm']}+{line['_crease_middle_mm']}+{line['_crease_right_mm']}"
+                    if line["_crease_type"] == "压线"
+                    and line["_crease_middle_mm"] is not None
+                    else line["_crease_type"] or "-"
+                )
+                line_items.append(
+                    with_match_metadata(
+                        {
                         "id": line["_item_id"],
                         "stable_id": (
                             f"supplier_order:{candidate['id']}:{line['_item_id']}"
@@ -18432,11 +18513,10 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                             if line.get("_item_voided_at")
                             else None
                         ),
-                    },
-                    line,
+                        },
+                        line,
+                    )
                 )
-                for line in candidate_lines
-            ]
             documents.append(
                 finish_document(
                     {
@@ -18760,6 +18840,24 @@ def _build_reported_documents(
     supplier_customer_ids: dict[int, set[int]] = {}
     supplier_item_customer_ids: dict[int, int] = {}
     supplier_order_ids = [order.id for order in supplier_orders if order.items]
+    supplier_source_order_item_ids = {
+        int(item.order_item_id)
+        for order in supplier_orders
+        for item in order.items
+        if item.order_item_id is not None
+    }
+    supplier_source_order_items_by_id = {
+        int(order_item.id): order_item
+        for order_item in (
+            db.scalars(
+                select(OrderItem).where(
+                    OrderItem.id.in_(supplier_source_order_item_ids)
+                )
+            ).all()
+            if supplier_source_order_item_ids
+            else []
+        )
+    }
     if supplier_order_ids:
         for supplier_item_id, supplier_order_id, linked_customer_id in db.execute(
             select(
@@ -18802,13 +18900,31 @@ def _build_reported_documents(
         order_numbers = _unique_text([item.order_number for item in order.items])
         product_codes = _unique_text([item.product_code for item in order.items])
         customer_names = _unique_text([item.customer_name for item in order.items])
-        crease_display = (
-            f"{order.crease_left_mm}+{order.crease_middle_mm}+{order.crease_right_mm}"
-            if order.crease_type == "压线" and order.crease_middle_mm is not None
-            else order.crease_type or "-"
-        )
-        line_items = [
-            {
+        line_items = []
+        for item in order.items:
+            source_order_item = (
+                supplier_source_order_items_by_id.get(int(item.order_item_id))
+                if item.order_item_id is not None
+                else None
+            )
+            component_type = _supplier_order_item_component_type(item)
+            crease_type, crease_left, crease_middle, crease_right = (
+                _supplier_order_line_crease(
+                    source_order_item,
+                    component_type,
+                    fallback_type=order.crease_type,
+                    fallback_left_mm=order.crease_left_mm,
+                    fallback_middle_mm=order.crease_middle_mm,
+                    fallback_right_mm=order.crease_right_mm,
+                )
+            )
+            crease_display = (
+                f"{crease_left}+{crease_middle}+{crease_right}"
+                if crease_type == "压线" and crease_middle is not None
+                else crease_type or "-"
+            )
+            line_items.append(
+                {
                 "id": item.id,
                 "stable_id": f"supplier_order:{order.id}:{item.id}",
                 "customer_id": supplier_item_customer_ids.get(item.id),
@@ -18833,9 +18949,8 @@ def _build_reported_documents(
                     if item.voided_at
                     else None
                 ),
-            }
-            for item in order.items
-        ]
+                }
+            )
         documents.append(
             {
                 "source_type": "supplier_order",

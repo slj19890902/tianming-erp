@@ -18,6 +18,7 @@ from tests.test_mold_label_print_pdf import (
     _qr_data_url,
     headless_browser,
 )
+from tests.test_p1_103_mold_label_layout import _legacy_v3_layout
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,9 +70,7 @@ def _complete_mold(factory, *, suffix: str = "1") -> int:
 def _frozen_v2_layout() -> dict:
     """Recreate the pre-P1-103E geometry used by frozen v1/v2 jobs."""
 
-    from app.services.mold_label_layout import default_layout
-
-    legacy = deepcopy(default_layout())
+    legacy = deepcopy(_legacy_v3_layout())
     legacy["catalog_version"] = "p1-103-v2"
     geometry = {
         "customer_name": (1.2, 23.2, 21.8, 7.0, 4.2),
@@ -95,14 +94,12 @@ def _frozen_v2_layout() -> dict:
 
 
 def _layout_driven_label(index: int, qr: str) -> str:
-    return f'''<article class="mold-label-page" data-layout-catalog="p1-103-v3"><div class="label template-80x40 layout-driven">
-      <div class="mold-layout-element mold-layout-text" data-layout-id="board_specification" style="left:1.2mm;top:.8mm;width:61.8mm;height:7mm;font-size:5.6mm;font-weight:900">1100 × 760</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="inventory_code" style="left:1.2mm;top:8.4mm;width:61.8mm;height:7mm;font-size:4.8mm;font-weight:900">SME-LONG-CODE-{index:03d}</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="flute_type" style="left:1.2mm;top:15.7mm;width:12mm;height:7mm;font-size:4mm;font-weight:800">BC</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="cutting_mode" style="left:13.6mm;top:15.7mm;width:49.4mm;height:7mm;font-size:3.8mm;font-weight:800">一开二</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="customer_name" style="left:1.2mm;top:24.6mm;width:21.8mm;height:6.4mm;font-size:4mm;font-weight:900">思迈尔</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_chinese_short_name" style="left:23.4mm;top:24.6mm;width:39.6mm;height:6.4mm;font-size:4mm;font-weight:800">加强箱</div>
-      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_label_name" style="left:1.2mm;top:31.2mm;width:61.8mm;height:6.8mm;font-size:5mm;font-weight:900">P162-{index:03d}</div>
+    return f'''<article class="mold-label-page" data-layout-catalog="p1-112-v1"><div class="label template-80x40 layout-driven">
+      <div class="mold-layout-element mold-layout-text" data-layout-id="board_specification" style="left:1.2mm;top:.8mm;width:61.8mm;height:7mm;font-size:5.6mm;font-weight:900">片料 1100 × 760</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="product_specification" style="left:1.2mm;top:8.7mm;width:48mm;height:7mm;font-size:4.8mm;font-weight:900">产品 520 × 350 × 300</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="flute_type" style="left:50mm;top:8.7mm;width:13mm;height:7mm;font-size:4mm;font-weight:800">楞型 BC</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="customer_name" style="left:1.2mm;top:16.6mm;width:61.8mm;height:7.2mm;font-size:4.3mm;font-weight:900">思迈尔</div>
+      <div class="mold-layout-element mold-layout-text" data-layout-id="mold_number" style="left:1.2mm;top:24.6mm;width:61.8mm;height:14.2mm;font-size:6mm;font-weight:900">P162-{index:03d}</div>
       <img class="mold-layout-element mold-layout-qr" data-layout-id="mold_qr" style="left:64.4mm;top:24.6mm;width:14.2mm;height:14.2mm" src="{qr}" alt="二维码">
     </div></article>'''
 
@@ -221,7 +218,7 @@ def test_layout_editor_frozen_job_and_overflow_preflight_fail_closed(
           result.dataset.editableInit=String(editableInit);
           document.getElementById("moldLayoutOpen").click();
           const selector=document.getElementById("moldLayoutElement");
-          selector.value="inventory_code";
+          selector.value="product_specification";
           selector.dispatchEvent(new Event("change",{{bubbles:true}}));
           const width=document.getElementById("moldLayoutWidth");
           width.value="0.5";
@@ -245,7 +242,7 @@ def test_layout_editor_frozen_job_and_overflow_preflight_fail_closed(
     assert 'data-post-calls="0"' in dom
     assert 'data-confirm-calls="0"' in dom
     assert 'data-done="true"' in dom
-    assert "纸箱存货编码在当前样例中无法完整显示" in dom
+    assert "产品尺寸在当前样例中无法完整显示" in dom
     assert "data-failure=" not in dom
 
 
@@ -359,9 +356,9 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
             "SME-SECOND",
         ]
         assert body["label_shared_summary"] == "共用 2 款"
-        assert body["label_product_specification"] == "520 × 350 × 300"
-        assert body["label_report_specification"] == "1100 × 760"
-        assert body["label_flute_type"] == "BC/B"
+        assert body["label_product_specification"] == "多款见扫码"
+        assert body["label_report_specification"] == "多款见扫码"
+        assert body["label_flute_type"] == "多款见扫码"
         assert body["label_cutting_mode"] == "一开二/一开一"
         assert body["label_products"] == [
             {
@@ -388,7 +385,7 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
         assert db.scalar(select(func.count(MoldLabelPrintJob.id))) == 1
 
 
-def test_shared_mold_uses_most_common_report_specification(mold_app) -> None:
+def test_shared_mold_keeps_single_label_multi_product_summary(mold_app) -> None:
     from app.models.product import Product
 
     app, factory = mold_app
@@ -438,7 +435,7 @@ def test_shared_mold_uses_most_common_report_specification(mold_app) -> None:
             "1100 × 760",
             "900 × 650",
         ]
-        assert printed.json()["label_report_specification"] == "900 × 650"
+        assert printed.json()["label_report_specification"] == "多款见扫码"
         assert printed.json()["label_inventory_code"] == "SME-MAJORITY-1 等3款"
 
 
@@ -525,7 +522,7 @@ def test_v3_allows_missing_hidden_product_dimensions(mold_app) -> None:
         )
         assert created.status_code == 200, created.text
         assert created.json()["label_layout"]["layout"]["catalog_version"] == (
-            "p1-103-v3"
+            "p1-112-v1"
         )
         printed = client.get(
             f"/api/warehouse/molds/{mold_id}/label",
@@ -603,7 +600,7 @@ def test_rm9_hash_name_uses_verified_short_customer_and_prints_wide_label(mold_a
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["label_customer_name"] == "瑞明"
+    assert body["label_customer_name"] == "待完善"
     assert body["label_mold_name"] == "9#"
     assert body["label_mold_chinese_short_name"] == "纸箱"
     assert body["label_inventory_code"] == "9#"
@@ -617,7 +614,7 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
     for marker in (
         'value="mold_40x30_v1"',
         'value="mold_80x40_v1"',
-        "40×80（80mm走纸方向）",
+        'title="40×80 标签样式">40×80',
         "template_version:attempt.templateVersion",
         "moldLabelPrintSignature(source,ids,templateVersion)",
         "不能更换模具或纸型",
@@ -629,7 +626,7 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         "width:13.9mm;height:13.9mm",
         "transform:translateX(40mm) rotate(90deg)!important",
         'WIDE_PRINTER_QUEUE="Gprinter GP-3120TU - 40x80纵向标签"',
-        "内部版式沿80mm长边阅读",
+        "内容与单个模具“打印标签”一致",
         "调整40×80标签布局",
         "保存并用于以后打印",
         "TmMoldLabelLayout.labelHtml",
@@ -652,6 +649,7 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         "mold_label_name",
         "mold_chinese_short_name",
         "product_specification",
+        "mold_number",
         "fitAndValidate",
     ):
         assert marker in LAYOUT_JS
@@ -684,7 +682,8 @@ def test_actual_layout_javascript_fits_shared_mold_facts_without_clipping(
         "label_customer_name": "苏州思迈尔包装科技有限公司",
         "label_mold_name": "3D30268-超长现场手写标签",
         "label_mold_chinese_short_name": "" if product_count == 5 else "加强箱",
-        "label_product_specification": " / ".join(product_sizes),
+        "label_product_specification": "多款见扫码",
+        "label_mold_number": "P162-共用模具",
         "qr_data_url": _qr_data_url(),
         "products": [
             {"product_code": code, "product_name": f"共用模具纸箱{index:02d}"}
@@ -707,16 +706,17 @@ def test_actual_layout_javascript_fits_shared_mold_facts_without_clipping(
         + 'document.body.dataset.fitFailures=failures.join("|");'
         + 'document.body.dataset.elementCount=String(labels.querySelectorAll("[data-layout-id]").length);'
         + 'document.body.dataset.productSizeCount=String(labels.querySelectorAll("[data-layout-id=product_specification]").length);'
+        + 'document.body.dataset.inventoryCount=String(labels.querySelectorAll("[data-layout-id=inventory_code]").length);'
         + "</script></body></html>",
         encoding="utf-8",
     )
     rendered = _dump_rendered_dom(headless_browser, fixture, tmp_path)
     assert 'data-fit-failures=""' in rendered
-    assert 'data-element-count="8"' in rendered
-    assert 'data-product-size-count="0"' in rendered
-    assert product_codes[-1] in rendered
-    if product_count == 5:
-        assert ">待完善</div>" not in rendered
+    assert 'data-element-count="6"' in rendered
+    assert 'data-product-size-count="1"' in rendered
+    assert 'data-inventory-count="0"' in rendered
+    assert "多款见扫码" in rendered
+    assert ">待完善</div>" not in rendered
 
 
 def test_current_identity_order_changes_while_v1_v2_snapshots_stay_frozen(
@@ -731,6 +731,7 @@ def test_current_identity_order_changes_while_v1_v2_snapshots_stay_frozen(
         "label_flute_type": "E",
         "label_cutting_mode": "一开一",
         "label_customer_name": "瑞明",
+        "label_mold_number": "9#",
         "label_mold_name": "9#",
         "label_mold_chinese_short_name": "防静电单回路",
         "label_product_specification": "290 × 140 × 120",
@@ -763,7 +764,7 @@ def test_current_identity_order_changes_while_v1_v2_snapshots_stay_frozen(
     )
     rendered = _dump_rendered_dom(headless_browser, fixture, tmp_path)
     assert (
-        'data-v3-text="890 × 650|22700002|E|一开一|瑞明|9#|防静电单回路"'
+        'data-v3-text="片料 890 × 650|产品 290 × 140 × 120|楞型 E|瑞明|9#"'
     ) in rendered
     assert (
         'data-v2-text="890 × 650|22700002|E|一开一|瑞明|9#|'
@@ -856,12 +857,10 @@ def test_40x80_feed_uses_one_portrait_page_with_one_inner_rotation(
         compact_text = "".join(text.split())
         for expected in (
             "1100 × 760",
+            "520 × 350 × 300",
             "BC",
-            "一开二",
-            f"SME-LONG-CODE-{page_number:03d}",
             "思迈尔",
             f"P162-{page_number:03d}",
-            "加强箱",
         ):
             assert "".join(expected.split()) in compact_text
 

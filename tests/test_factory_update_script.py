@@ -37,7 +37,7 @@ def test_factory_update_reports_current_release_version() -> None:
     )
 
     assert APP_VERSION == "v0.22.196"
-    assert APP_VERSION_NAME == "模具位置组合筛选与两行布局"
+    assert APP_VERSION_NAME == "模具位置筛选与标签打印统一"
     assert APP_BUILD_DATE == "2026-08-27"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -51,6 +51,7 @@ def test_factory_update_reports_current_release_version() -> None:
     ]
     assert any("本次更新｜" in item and "严格取交集" in item and "未打印" in item for item in current_release)
     assert any("本次更新｜" in item and "最近编辑" in item and "异常状态" in item for item in current_release)
+    assert any("本次更新｜" in item and "单张、批量" in item and "纸型切换不再偷换内容" in item for item in current_release)
     assert any("本次更新｜" in item and "无数据库迁移" in item for item in current_release)
     assert any("如何验证｜" in item and "v0.22.196" in item and "fj45v8x9z34" in item for item in current_release)
     assert any(item.startswith("v0.22.195：本次更新｜") and "实际完工数量" in item for item in APP_CHANGELOG)

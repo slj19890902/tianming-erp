@@ -44,7 +44,7 @@ def _registered_wide_response(
     )
 
 
-def test_shared_80x40_label_projects_every_real_fact_without_scan_placeholders(
+def test_shared_80x40_label_keeps_full_detail_but_prints_single_label_summary(
     mold_app,
 ) -> None:
     from app.models.customer import Customer
@@ -108,16 +108,17 @@ def test_shared_80x40_label_projects_every_real_fact_without_scan_placeholders(
         "SME-LONG-CODE-100",
         "SME-SECOND-100",
     ]
-    assert body["label_product_specification"] == "520 × 350 × 300"
-    assert body["label_report_specification"] == "1100 × 760"
-    assert body["label_flute_type"] == "BC/B"
+    assert body["label_product_specification"] == "多款见扫码"
+    assert body["label_report_specification"] == "多款见扫码"
+    assert body["label_flute_type"] == "多款见扫码"
     assert body["label_cutting_mode"] == "一开二/一开一"
     rendered = json.dumps(body, ensure_ascii=False)
-    assert "多款见扫码" not in rendered
     assert "按任务显示" not in rendered
 
 
-def test_shared_80x40_label_lists_every_customer_short_name(mold_app) -> None:
+def test_shared_80x40_detail_lists_customers_but_print_uses_single_label_summary(
+    mold_app,
+) -> None:
     from app.models.customer import Customer
     from app.models.product import Product
 
@@ -171,7 +172,7 @@ def test_shared_80x40_label_lists_every_customer_short_name(mold_app) -> None:
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["label_customer_names"] == ["思迈尔", "瑞邦"]
-    assert body["label_customer_name"] == "思迈尔/瑞邦"
+    assert body["label_customer_name"] == "待完善"
 
 
 def test_shared_80x40_label_accepts_current_archive_maximum_of_11_products(

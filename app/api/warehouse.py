@@ -11,7 +11,7 @@ import socket
 import sqlite3
 from threading import Lock
 from collections.abc import Mapping
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -14458,9 +14458,16 @@ def _mold_tools_query(
     q: str | None,
     include_inactive: bool,
     customer_ids: set[int] | None = None,
+    customer_keyword: str | None = None,
+    product_code: str | None = None,
+    rack_location: str | None = None,
+    include_unprinted: bool = True,
+    include_repair: bool = True,
+    include_archived: bool = True,
 ):
     allowed_customer_ids = _mold_customer_scope(user, db)
-    requested_customer_ids = set(customer_ids or set())
+    supplied_customer_ids = set(customer_ids or set())
+    requested_customer_ids = set(supplied_customer_ids)
     if allowed_customer_ids is not None:
         requested_customer_ids &= allowed_customer_ids
     query = select(MoldTool).options(
@@ -14493,7 +14500,116 @@ def _mold_tools_query(
                 MoldTool.archive_status == "archived",
             )
         )
+    if not include_archived:
+        query = query.where(MoldTool.archive_status != "archived")
+    if not include_repair:
+        query = query.where(MoldTool.repair_status == "normal")
+    if not include_unprinted:
+        query = query.where(
+            MoldTool.id.in_(select(MoldLabelPrintJobItem.mold_tool_id))
+        )
+
     keyword = (q or "").strip()
+    normalized_customer_keyword = (customer_keyword or "").strip()
+    legacy_customer_ids = (
+        requested_customer_ids
+        if supplied_customer_ids and not normalized_customer_keyword and keyword
+        else set()
+    )
+    if normalized_customer_keyword or (supplied_customer_ids and not keyword):
+        customer_matches = []
+        if normalized_customer_keyword:
+            customer_pattern = f"%{normalized_customer_keyword}%"
+            customer_matches.extend(
+                (
+                    MoldTool.id.in_(
+                        select(MoldToolCustomer.mold_tool_id)
+                        .join(Customer, Customer.id == MoldToolCustomer.customer_id)
+                        .where(
+                            *(
+                                [
+                                    MoldToolCustomer.customer_id.in_(
+                                        allowed_customer_ids
+                                    )
+                                ]
+                                if allowed_customer_ids is not None
+                                else []
+                            ),
+                            or_(
+                                Customer.name.like(customer_pattern),
+                                Customer.chinese_short_name.like(customer_pattern),
+                                Customer.customer_code.like(customer_pattern),
+                            ),
+                        )
+                    ),
+                    MoldTool.id.in_(
+                        select(Product.mold_tool_id)
+                        .join(Customer, Customer.id == Product.customer_id)
+                        .where(
+                            Product.mold_tool_id.is_not(None),
+                            Product.deleted_at.is_(None),
+                            Product.is_active.is_(True),
+                            *(
+                                [Product.customer_id.in_(allowed_customer_ids)]
+                                if allowed_customer_ids is not None
+                                else []
+                            ),
+                            or_(
+                                Customer.name.like(customer_pattern),
+                                Customer.chinese_short_name.like(customer_pattern),
+                                Customer.customer_code.like(customer_pattern),
+                            ),
+                        )
+                    ),
+                )
+            )
+        if requested_customer_ids:
+            customer_matches.extend(
+                (
+                    MoldTool.id.in_(
+                        select(MoldToolCustomer.mold_tool_id).where(
+                            MoldToolCustomer.customer_id.in_(requested_customer_ids)
+                        )
+                    ),
+                    MoldTool.id.in_(
+                        select(Product.mold_tool_id).where(
+                            Product.mold_tool_id.is_not(None),
+                            Product.deleted_at.is_(None),
+                            Product.is_active.is_(True),
+                            Product.customer_id.in_(requested_customer_ids),
+                        )
+                    ),
+                )
+            )
+        query = query.where(or_(*customer_matches) if customer_matches else False)
+
+    normalized_product_code = (product_code or "").strip()
+    if normalized_product_code:
+        product_pattern = f"%{normalized_product_code}%"
+        query = query.where(
+            MoldTool.id.in_(
+                select(Product.mold_tool_id).where(
+                    Product.mold_tool_id.is_not(None),
+                    Product.deleted_at.is_(None),
+                    Product.is_active.is_(True),
+                    *(
+                        [Product.customer_id.in_(allowed_customer_ids)]
+                        if allowed_customer_ids is not None
+                        else []
+                    ),
+                    or_(
+                        Product.product_code.like(product_pattern),
+                        Product.customer_material_code.like(product_pattern),
+                    ),
+                )
+            )
+        )
+
+    normalized_rack_location = (rack_location or "").strip()
+    if normalized_rack_location:
+        query = query.where(
+            MoldTool.rack_location.like(f"%{normalized_rack_location}%")
+        )
     if keyword:
         pattern = f"%{keyword}%"
         linked_scope_filters = []
@@ -14551,9 +14667,7 @@ def _mold_tools_query(
                     [
                         MoldTool.id.in_(
                             select(MoldToolCustomer.mold_tool_id).where(
-                                MoldToolCustomer.customer_id.in_(
-                                    requested_customer_ids
-                                )
+                                MoldToolCustomer.customer_id.in_(legacy_customer_ids)
                             )
                         ),
                         MoldTool.id.in_(
@@ -14561,11 +14675,11 @@ def _mold_tools_query(
                                 Product.mold_tool_id.is_not(None),
                                 Product.deleted_at.is_(None),
                                 Product.is_active.is_(True),
-                                Product.customer_id.in_(requested_customer_ids),
+                                Product.customer_id.in_(legacy_customer_ids),
                             )
                         ),
                     ]
-                    if requested_customer_ids
+                    if legacy_customer_ids
                     else []
                 ),
             )
@@ -14576,8 +14690,15 @@ def _mold_tools_query(
 @router.get("/molds")
 def list_mold_tools(
     q: str | None = None,
+    customer_keyword: Annotated[str | None, Query(max_length=150)] = None,
     customer_ids: str | None = Query(default=None, max_length=400),
+    product_code: Annotated[str | None, Query(max_length=150)] = None,
+    rack_location: Annotated[str | None, Query(max_length=150)] = None,
     include_inactive: bool = False,
+    include_archived: bool = True,
+    include_unprinted: bool = True,
+    include_repair: bool = True,
+    sort_by: Literal["location", "updated_desc"] = "location",
     limit: int = Query(default=200, ge=1, le=500),
     page: int | None = Query(default=None, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -14600,6 +14721,12 @@ def list_mold_tools(
         q=q,
         include_inactive=include_inactive,
         customer_ids=resolved_customer_ids,
+        customer_keyword=customer_keyword,
+        product_code=product_code,
+        rack_location=rack_location,
+        include_unprinted=include_unprinted,
+        include_repair=include_repair,
+        include_archived=include_archived,
     )
     if allowed_customer_ids == set():
         return {
@@ -14614,11 +14741,17 @@ def list_mold_tools(
         )
         or 0
     )
-    ordered_query = query.order_by(
-        MoldTool.rack_location,
-        MoldTool.mold_code,
-        MoldTool.id,
-    )
+    if sort_by == "updated_desc":
+        ordered_query = query.order_by(
+            func.coalesce(MoldTool.updated_at, MoldTool.created_at).desc(),
+            MoldTool.id.desc(),
+        )
+    else:
+        ordered_query = query.order_by(
+            MoldTool.rack_location,
+            MoldTool.mold_code,
+            MoldTool.id,
+        )
     if page is not None:
         ordered_query = ordered_query.offset((page - 1) * page_size).limit(
             page_size

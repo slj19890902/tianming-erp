@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.203"
-    assert APP_VERSION_NAME == "模具标签名称层级与简称排版统一"
+    assert APP_VERSION == "v0.22.205"
+    assert APP_VERSION_NAME == "仓库现场货位自由布局与地图界面优化"
     assert APP_BUILD_DATE == "2026-08-27"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,17 +49,47 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "客户简称 + 一个空格" in item and "中文简写" in item for item in current_release)
-    assert any("本次更新｜" in item and "客户简称使用更大加粗字体" in item and "第二行字号" in item for item in current_release)
-    assert any("本次更新｜" in item and "40×30、40×80" in item and "布局编辑器" in item for item in current_release)
+    assert any("本次更新｜" in item and "空货位" in item and "直接拖动并保存" in item and "自由留缝" in item for item in current_release)
+    assert any("本次更新｜" in item and "查货、移货和盘点" in item and "库存数量" in item for item in current_release)
+    assert any("本次更新｜" in item and "延期待送整理" in item and "默认收进按钮" in item for item in current_release)
     assert any(
         "本次更新｜" in item
-        and "p1-117-v1" in item
-        and "历史打印任务" in item
-        and "无数据库迁移" in item
+        and "自动合并" in item
+        and "管理员勾选" in item
+        and "保持原位" in item
         for item in current_release
     )
-    assert any("如何验证｜" in item and "v0.22.203" in item and "gm48v8x9z37" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.205" in item and "gn49v8x9z38" in item for item in current_release)
+    assert any(
+        item.startswith("v0.22.204：本次更新｜")
+        and "旧系统" in item
+        and "迁移" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        item.startswith("v0.22.204：如何验证｜")
+        and "v0.22.204" in item
+        and "gn49v8x9z38" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        item.startswith("v0.22.203：本次更新｜")
+        and "客户简称 + 一个空格" in item
+        and "中文简写" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        item.startswith("v0.22.203：本次更新｜")
+        and "p1-117-v1" in item
+        and "历史打印任务" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        item.startswith("v0.22.203：如何验证｜")
+        and "v0.22.203" in item
+        and "gm48v8x9z37" in item
+        for item in APP_CHANGELOG
+    )
     assert any(
         item.startswith("v0.22.202：本次更新｜")
         and "跨楼层、跨区域" in item
@@ -385,7 +415,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.203" in item and "gm48" in item
+        "如何验证｜" in item and "v0.22.205" in item and "gn49" in item
         for item in current_release
     )
     assert any(

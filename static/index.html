@@ -16419,11 +16419,13 @@
           reportedItemStatusText(row) {
             if (row?.status === "active") return "有效";
             if (row?.status === "voided") return "已撤销";
+            if (row?.source_type === "stock_replenishment" && ["confirmed","partially_stocked","stocked"].includes(row?.status)) return "有效";
             return String(row?.status || "未知");
           },
           reportedItemStatusClass(row) {
             if (row?.status === "active") return "green";
             if (row?.status === "voided") return "gray";
+            if (row?.source_type === "stock_replenishment" && ["confirmed","partially_stocked","stocked"].includes(row?.status)) return "green";
             return "orange";
           },
           async openReportedItemDocument(row) {

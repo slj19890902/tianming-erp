@@ -30,6 +30,7 @@ from app.api.deps import (
 from app.core.time_contract import (
     beijing_naive_to_api,
     utc_naive_to_api,
+    utc_naive_to_beijing_date,
     utc_now_naive,
 )
 from app.models.audit import OperationLog
@@ -1562,7 +1563,9 @@ def _stock_replenishment_pending_rows(
                 "requisition_status": "已报料",
                 "requisition_qty": item.quantity,
                 "incoming_quantity": item.quantity,
-                "requisition_date": order.confirmed_at or order.created_at,
+                "requisition_date": utc_naive_to_beijing_date(
+                    order.confirmed_at or order.created_at
+                ),
                 "requisition_spec": None,
                 "cardboard_len": item.report_length_mm,
                 "cardboard_width": item.report_width_mm,
@@ -3058,7 +3061,9 @@ def _stock_replenishment_receipt_row(
         "resolution_reason": fact.resolution_reason,
         "received_inventory_lot_id": fact.received_inventory_lot_id,
         "surplus_inventory_lot_id": None,
-        "requisition_date": order.confirmed_at or order.created_at,
+        "requisition_date": utc_naive_to_beijing_date(
+            order.confirmed_at or order.created_at
+        ),
         "requisition_spec": None,
         "cardboard_len": item.report_length_mm,
         "cardboard_width": item.report_width_mm,

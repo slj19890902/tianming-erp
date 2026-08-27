@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 from pathlib import Path
@@ -2109,6 +2109,12 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         assert created.status_code == 201, created.text
         order = created.json()
         item = order["items"][0]
+        expected_requisition_date = (
+            datetime.fromisoformat(order["confirmed_at"].replace("Z", "+00:00"))
+            .astimezone(timezone(timedelta(hours=8)))
+            .date()
+            .isoformat()
+        )
 
         reported = client.get("/api/requisition/reported-documents")
         reported_row = next(
@@ -2118,6 +2124,17 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         )
         assert reported_row["incoming_status"] == "待入库"
         assert reported_row["can_void"] is True
+        reported_items = client.get(
+            "/api/requisition/reported-items",
+            params={"source_type": "stock_replenishment", "status": "active"},
+        )
+        assert reported_items.status_code == 200, reported_items.text
+        reported_item = next(
+            row
+            for row in reported_items.json()["items"]
+            if row["document_number"] == order["order_number"]
+        )
+        assert reported_item["status"] == "active"
 
         pending = client.get("/api/incoming/pending")
         assert pending.status_code == 200, pending.text
@@ -2128,6 +2145,7 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         )
         assert pending_row["source_type"] == "stock_replenishment"
         assert pending_row["incoming_quantity"] == 30
+        assert pending_row["requisition_date"] == expected_requisition_date
         assert pending_row["can_revert_receipt"] is False
 
         with session_factory() as session:
@@ -2175,6 +2193,24 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         )
         assert after_row["incoming_status"] == "已入库"
         assert after_row["can_void"] is False
+        received_reported_items = client.get(
+            "/api/requisition/reported-items",
+            params={"source_type": "stock_replenishment", "status": "active"},
+        )
+        assert received_reported_items.status_code == 200
+        assert any(
+            row["document_number"] == order["order_number"]
+            and row["status"] == "active"
+            for row in received_reported_items.json()["items"]
+        )
+        receipt_history = client.get("/api/incoming/history")
+        assert receipt_history.status_code == 200, receipt_history.text
+        history_row = next(
+            row
+            for row in receipt_history.json()["items"]
+            if row.get("stock_replenishment_item_id") == item["id"]
+        )
+        assert history_row["requisition_date"] == expected_requisition_date
         blocked_void = client.put(
             f"/api/requisition/stock-replenishment/orders/{order['id']}/void"
         )
@@ -2192,6 +2228,16 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         )
         assert voided.status_code == 200, voided.text
         assert voided.json()["status"] == "voided"
+        voided_reported_items = client.get(
+            "/api/requisition/reported-items",
+            params={"source_type": "stock_replenishment", "status": "voided"},
+        )
+        assert voided_reported_items.status_code == 200
+        assert any(
+            row["document_number"] == second_order["order_number"]
+            and row["status"] == "voided"
+            for row in voided_reported_items.json()["items"]
+        )
         after_void_pending = client.get("/api/incoming/pending").json()["items"]
         assert all(
             row["item_id"] != f"sr{second_item_id}" for row in after_void_pending

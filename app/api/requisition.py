@@ -18507,6 +18507,22 @@ def _load_reported_document_candidate_page_facts(
             line["_received"] = int(line["_item_id"]) in received_ids
 
 
+def _stock_replenishment_reported_line_status(source_status: object) -> str:
+    """Project the replenishment lifecycle into the reported-line contract.
+
+    ``confirmed``/``partially_stocked``/``stocked`` remain authoritative internal
+    states for receiving and inventory posting.  Reported physical lines use the
+    same public validity vocabulary as ordinary requisition lines.
+    """
+
+    normalized = str(source_status or "").strip()
+    if normalized == "voided":
+        return "voided"
+    if normalized in {"confirmed", "partially_stocked", "stocked"}:
+        return "active"
+    return normalized
+
+
 def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]:
     """Expand already-loaded page candidates into the legacy response shape."""
 
@@ -18642,7 +18658,9 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                             "received_qty": stocked_quantity,
                             "remaining_qty": max(quantity - stocked_quantity, 0),
                             "unit": "张",
-                            "status": candidate["status"],
+                            "status": _stock_replenishment_reported_line_status(
+                                candidate["status"]
+                            ),
                         },
                         line,
                     )
@@ -19090,7 +19108,9 @@ def _build_reported_documents(
                         int(item.quantity or 0) - int(item.stocked_quantity or 0), 0
                     ),
                     "unit": "张",
-                    "status": order.status,
+                    "status": _stock_replenishment_reported_line_status(
+                        order.status
+                    ),
                 }
             )
         documents.append(
@@ -19815,12 +19835,14 @@ def list_reported_items(
     for document in candidates:
         if source_type and document["source_type"] != source_type:
             continue
-        if (
-            normalized["status"]
-            and document["source_type"] != "supplier_order"
-            and document.get("status") != normalized["status"]
-        ):
-            continue
+        if normalized["status"] and document["source_type"] != "supplier_order":
+            document_filter_status = (
+                _stock_replenishment_reported_line_status(document.get("status"))
+                if document["source_type"] == "stock_replenishment"
+                else document.get("status")
+            )
+            if document_filter_status != normalized["status"]:
+                continue
         created_at = document.get("created_at")
         created_date = created_at.date() if created_at else None
         if date_from is not None and (created_date is None or created_date < date_from):
@@ -19840,7 +19862,13 @@ def list_reported_items(
                 line.get("_item_status")
                 if document["source_type"] == "supplier_order"
                 and document.get("status") == "confirmed"
-                else document.get("status")
+                else (
+                    _stock_replenishment_reported_line_status(
+                        document.get("status")
+                    )
+                    if document["source_type"] == "stock_replenishment"
+                    else document.get("status")
+                )
             )
             if normalized["status"] and effective_line_status != normalized["status"]:
                 continue

@@ -72,6 +72,11 @@ def test_saved_replenishment_is_reopenable_from_reported_history() -> None:
     assert "this.openStockReplenishmentPrint(data)" in INDEX
 
 
+def test_reported_replenishment_status_has_chinese_validity_fallback() -> None:
+    assert '["confirmed","partially_stocked","stocked"].includes(row?.status)' in INDEX
+    assert 'return "有效"' in INDEX
+
+
 def test_replenishment_print_reuses_supplier_purchase_order_sheet() -> None:
     assert "(modal.type === 'supplierOrderPrint' || modal.type === 'stockReplenishmentPrint')" in INDEX
     assert "stockReplenishmentPrintData(data)" in INDEX

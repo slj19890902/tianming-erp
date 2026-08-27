@@ -114,23 +114,25 @@ def test_default_layout_matches_single_label_content_and_fills_80x40_paper() -> 
     from app.services.mold_label_layout import default_layout, normalize_layout
 
     layout = normalize_layout(default_layout())
-    assert layout["catalog_version"] == "p1-115-v1"
+    assert layout["catalog_version"] == "p1-117-v1"
     assert layout["paper"] == {"width_mm": 80.0, "height_mm": 40.0}
     assert [item["id"] for item in layout["elements"]] == [
         "board_specification",
         "product_specification",
         "flute_type",
-        "customer_name",
-        "mold_number",
+        "mold_identity",
+        "mold_chinese_short_name",
         "mold_qr",
     ]
     qr = next(item for item in layout["elements"] if item["id"] == "mold_qr")
     assert (qr["width_mm"], qr["height_mm"]) == (14.2, 14.2)
     customer = next(
-        item for item in layout["elements"] if item["id"] == "customer_name"
+        item for item in layout["elements"] if item["id"] == "mold_identity"
     )
     mold_number = next(
-        item for item in layout["elements"] if item["id"] == "mold_number"
+        item
+        for item in layout["elements"]
+        if item["id"] == "mold_chinese_short_name"
     )
     product_size = next(
         item
@@ -150,14 +152,12 @@ def test_default_layout_matches_single_label_content_and_fills_80x40_paper() -> 
     ) <= 0.3
     assert mold_number["width_mm"] >= 61.5
     assert mold_number["font_size_mm"] >= 4.3
-    assert mold_number["y_mm"] + mold_number["height_mm"] <= (
-        qr["y_mm"] + qr["height_mm"]
-    )
+    assert mold_number["y_mm"] + mold_number["height_mm"] <= 40.0
     assert qr["y_mm"] >= 24.0
 
 
 def test_historical_wide_job_offers_explicit_current_layout_reregistration() -> None:
-    assert 'CURRENT_WIDE_CATALOG="p1-115-v1"' in LABEL_PAGE
+    assert 'CURRENT_WIDE_CATALOG="p1-117-v1"' in LABEL_PAGE
     assert 'id="recreateCurrentLayout"' in LABEL_PAGE
     assert "按当前统一版式重新登记" in LABEL_PAGE
     assert "历史作业不会被改写" in LABEL_PAGE
@@ -220,13 +220,13 @@ def test_current_v1_release_is_projected_to_single_parity_without_mutating_histo
         stored = db.scalar(select(MoldLabelLayoutRevision))
 
         assert current["version"] == 1
-        assert current["layout"]["catalog_version"] == "p1-115-v1"
+        assert current["layout"]["catalog_version"] == "p1-117-v1"
         assert [item["id"] for item in current["layout"]["elements"]] == [
             "board_specification",
             "product_specification",
             "flute_type",
-            "customer_name",
-            "mold_number",
+            "mold_identity",
+            "mold_chinese_short_name",
             "mold_qr",
         ]
         assert stored is not None

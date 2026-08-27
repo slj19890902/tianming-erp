@@ -10,6 +10,7 @@
   const V3_CATALOG_VERSION = "p1-103-v3";
   const V4_CATALOG_VERSION = "p1-112-v1";
   const V5_CATALOG_VERSION = "p1-115-v1";
+  const V6_CATALOG_VERSION = "p1-117-v1";
   const LEGACY_ELEMENT_LABELS = Object.freeze({
     board_specification: "片料尺寸",
     inventory_code: "纸箱存货编码",
@@ -29,9 +30,18 @@
     mold_number: "模具编号",
     mold_qr: "模具二维码",
   });
+  const V6_ELEMENT_LABELS = Object.freeze({
+    board_specification: "片料尺寸",
+    product_specification: "产品尺寸",
+    flute_type: "楞型",
+    mold_identity: "客户简称与模具标签名称",
+    mold_chinese_short_name: "模具中文简写",
+    mold_qr: "模具二维码",
+  });
   const ELEMENT_LABELS = Object.freeze({
     ...LEGACY_ELEMENT_LABELS,
     ...CURRENT_ELEMENT_LABELS,
+    ...V6_ELEMENT_LABELS,
   });
 
   let editorConfig = null;
@@ -97,7 +107,7 @@
     if (!Number.isInteger(version) || version < 0 || !layout || typeof layout !== "object") {
       throw new Error("40×80模具标签布局版本无效");
     }
-    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION, V3_CATALOG_VERSION, V4_CATALOG_VERSION, V5_CATALOG_VERSION].includes(layout.catalog_version)) {
+    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION, V3_CATALOG_VERSION, V4_CATALOG_VERSION, V5_CATALOG_VERSION, V6_CATALOG_VERSION].includes(layout.catalog_version)) {
       throw new Error("40×80模具标签元素目录不受支持");
     }
     if (
@@ -107,7 +117,9 @@
       throw new Error("40×80模具标签内容区尺寸无效");
     }
     const currentCatalog = [V4_CATALOG_VERSION, V5_CATALOG_VERSION].includes(layout.catalog_version);
-    const catalogLabels = currentCatalog ? CURRENT_ELEMENT_LABELS : LEGACY_ELEMENT_LABELS;
+    const catalogLabels = layout.catalog_version === V6_CATALOG_VERSION
+      ? V6_ELEMENT_LABELS
+      : currentCatalog ? CURRENT_ELEMENT_LABELS : LEGACY_ELEMENT_LABELS;
     const elementIds = Object.keys(catalogLabels);
     if (!Array.isArray(layout.elements) || layout.elements.length !== elementIds.length) {
       throw new Error("40×80模具标签元素不完整");
@@ -158,6 +170,13 @@
       ) {
         throw new Error(`${catalogLabels[element.id]}的文字样式无效`);
       }
+      if (
+        layout.catalog_version === V6_CATALOG_VERSION
+        && ["mold_identity", "mold_chinese_short_name"].includes(element.id)
+        && element.text_align !== "left"
+      ) {
+        throw new Error(`${catalogLabels[element.id]}必须左对齐`);
+      }
     }
     for (let index = 0; index < layout.elements.length; index += 1) {
       const left = layout.elements[index];
@@ -179,6 +198,20 @@
 
   function valueForElement(row, elementId, catalogVersion = V3_CATALOG_VERSION) {
     const product = Array.isArray(row?.products) ? row.products[0] : null;
+    if (catalogVersion === V6_CATALOG_VERSION) {
+      const customer = String(row?.label_customer_name ?? product?.customer_short_name ?? "").trim() || "待完善";
+      const labelName = String(row?.label_mold_name ?? "").trim()
+        || String(row?.label_mold_number ?? "").trim()
+        || "待完善";
+      const values = {
+        board_specification: `片料 ${String(row?.label_report_specification ?? product?.report_specification ?? "").trim() || "待完善"}`,
+        product_specification: String(row?.label_product_specification ?? product?.specification ?? "").trim() || "待完善",
+        flute_type: String(row?.label_flute_type ?? product?.flute_type ?? "").trim() || "待完善",
+        mold_identity: `${customer} ${labelName}`,
+        mold_chinese_short_name: String(row?.label_mold_chinese_short_name ?? "").trim(),
+      };
+      return values[elementId] || "";
+    }
     if ([V4_CATALOG_VERSION, V5_CATALOG_VERSION].includes(catalogVersion)) {
       const baselineValues = {
         board_specification: String(row?.label_report_specification ?? product?.report_specification ?? "").trim() || "待完善",
@@ -221,6 +254,22 @@
     return `${legacyPrefixes[elementId] || ""}${value}`;
   }
 
+  function identityHtml(row) {
+    const product = Array.isArray(row?.products) ? row.products[0] : null;
+    const customer = String(row?.label_customer_name ?? product?.customer_short_name ?? "").trim() || "待完善";
+    const labelName = String(row?.label_mold_name ?? "").trim()
+      || String(row?.label_mold_number ?? "").trim()
+      || "待完善";
+    return `<span class="mold-identity-customer">${escapeHtml(customer)}</span> <span class="mold-identity-label">${escapeHtml(labelName)}</span>`;
+  }
+
+  function textElementHtml(row, element, catalogVersion) {
+    if (catalogVersion === V6_CATALOG_VERSION && element.id === "mold_identity") {
+      return identityHtml(row);
+    }
+    return escapeHtml(valueForElement(row, element.id, catalogVersion));
+  }
+
   function elementInlineStyle(element, scale = 1) {
     const declarations = [
       `left:${Number(element.x_mm) * scale}${scale === 1 ? "mm" : "px"}`,
@@ -250,7 +299,10 @@
           : `<div class="mold-layout-element mold-layout-qr-missing" data-layout-id="mold_qr" style="${style}">二维码<br>待生成</div>`;
       }
       const value = valueForElement(row, element.id, envelope.layout.catalog_version);
-      return `<div class="mold-layout-element mold-layout-text${value.includes("待完善") ? " missing" : ""}" data-layout-id="${escapeHtml(element.id)}" data-layout-label="${escapeHtml(ELEMENT_LABELS[element.id])}" data-max-font-mm="${Number(element.font_size_mm)}" style="${style}">${escapeHtml(value)}</div>`;
+      const identityClass = envelope.layout.catalog_version === V6_CATALOG_VERSION && element.id === "mold_identity"
+        ? " mold-layout-identity-line"
+        : "";
+      return `<div class="mold-layout-element mold-layout-text${identityClass}${value.includes("待完善") ? " missing" : ""}" data-layout-id="${escapeHtml(element.id)}" data-layout-label="${escapeHtml(ELEMENT_LABELS[element.id])}" data-max-font-mm="${Number(element.font_size_mm)}" style="${style}">${textElementHtml(row, element, envelope.layout.catalog_version)}</div>`;
     }).join("");
     return `<article class="mold-label-page" data-layout-catalog="${escapeHtml(envelope.layout.catalog_version)}"><div class="label template-80x40 layout-driven">${elements}${prototypeMode ? '<span class="prototype-mark">样例</span>' : ""}</div></article>`;
   }
@@ -334,7 +386,10 @@
       return `<div class="mold-layout-element mold-layout-qr-missing${selected}" data-editor-element="${element.id}" style="${style}">二维码<br>14.2mm</div>`;
     }
     const sample = editorConfig?.sampleRow?.() || {};
-    return `<div class="mold-layout-element mold-layout-text${selected}" data-editor-element="${element.id}" style="${style}">${escapeHtml(valueForElement(sample, element.id, editorLayout?.catalog_version))}</div>`;
+    const identityClass = editorLayout?.catalog_version === V6_CATALOG_VERSION && element.id === "mold_identity"
+      ? " mold-layout-identity-line"
+      : "";
+    return `<div class="mold-layout-element mold-layout-text${identityClass}${selected}" data-editor-element="${element.id}" style="${style}">${textElementHtml(sample, element, editorLayout?.catalog_version)}</div>`;
   }
 
   function renderEditor() {
@@ -357,7 +412,9 @@
     byId("moldLayoutWidth").disabled = !isText;
     byId("moldLayoutHeight").disabled = !isText;
     byId("moldLayoutFontField").hidden = !isText;
-    byId("moldLayoutAlignField").hidden = !isText;
+    const fixedLeft = editorLayout.catalog_version === V6_CATALOG_VERSION
+      && ["mold_identity", "mold_chinese_short_name"].includes(element.id);
+    byId("moldLayoutAlignField").hidden = !isText || fixedLeft;
     byId("moldLayoutFont").value = isText ? element.font_size_mm : "";
     byId("moldLayoutAlign").value = isText ? element.text_align : "center";
     byId("moldLayoutVersion").textContent = `当前已发布 v${adminState.published.version}`;
@@ -368,7 +425,9 @@
     const element = currentElement();
     if (!element) return;
     if (field === "text_align") {
-      if (["left", "center", "right"].includes(rawValue)) element.text_align = rawValue;
+      const fixedLeft = editorLayout?.catalog_version === V6_CATALOG_VERSION
+        && ["mold_identity", "mold_chinese_short_name"].includes(element.id);
+      if (!fixedLeft && ["left", "center", "right"].includes(rawValue)) element.text_align = rawValue;
     } else {
       const value = finite(rawValue);
       if (value === null) return;

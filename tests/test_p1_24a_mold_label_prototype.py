@@ -50,6 +50,8 @@ def test_mold_label_keeps_only_complete_on_label_identification_fields() -> None
     assert "label_report_specification" in LABEL
     assert "label_customer_name" in LABEL
     assert "label_mold_number" in LABEL
+    assert "label_mold_name" in LABEL
+    assert "label_mold_chinese_short_name" in LABEL
     assert "label_flute_type" in LABEL
     assert "qr_data_url" in LABEL
     assert 'class="qr"' in LABEL
@@ -65,7 +67,8 @@ def test_mold_label_keeps_only_complete_on_label_identification_fields() -> None
     assert '<span class="field-key">位置</span>' not in LABEL
     assert 'class="product-flute-row"' in LABEL
     assert 'factRow("片料",board,"","board-row")' in LABEL
-    assert '.customer-name{font-size:3.05mm' in LABEL
+    assert '.customer-name{font-size:4.3mm' in LABEL
+    assert '.mold-label-name{font-size:3.05mm' in LABEL
     assert 'function numberClass(value)' in LABEL
     assert 'length>19?"xxlong":length>15?"xlong":length>11?"long":length>8?"compact"' in LABEL
     assert '.mold-number.compact{font-size:3.85mm' in LABEL

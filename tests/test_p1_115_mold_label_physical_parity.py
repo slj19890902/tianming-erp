@@ -33,11 +33,11 @@ def test_current_layout_keeps_board_prefix_and_aligns_customer_with_qr() -> None
     from app.services.mold_label_layout import default_layout, normalize_layout
 
     layout = normalize_layout(default_layout())
-    assert layout["catalog_version"] == "p1-115-v1"
+    assert layout["catalog_version"] == "p1-117-v1"
 
     elements = {item["id"]: item for item in layout["elements"]}
-    customer = elements["customer_name"]
-    mold_number = elements["mold_number"]
+    customer = elements["mold_identity"]
+    mold_number = elements["mold_chinese_short_name"]
     qr = elements["mold_qr"]
 
     assert customer["y_mm"] == qr["y_mm"]
@@ -45,9 +45,9 @@ def test_current_layout_keeps_board_prefix_and_aligns_customer_with_qr() -> None
     assert 0 <= line_gap <= 0.3
     assert mold_number["y_mm"] + mold_number["height_mm"] <= 40.0
 
-    assert 'CURRENT_WIDE_CATALOG="p1-115-v1"' in LABEL_PAGE
-    assert 'const V5_CATALOG_VERSION = "p1-115-v1"' in LAYOUT_JS
-    assert "catalogVersion === V5_CATALOG_VERSION" in LAYOUT_JS
+    assert 'CURRENT_WIDE_CATALOG="p1-117-v1"' in LABEL_PAGE
+    assert 'const V6_CATALOG_VERSION = "p1-117-v1"' in LAYOUT_JS
+    assert "catalogVersion === V6_CATALOG_VERSION" in LAYOUT_JS
     assert 'elementId === "board_specification" ? "片料 " : ""' in LAYOUT_JS
 
 
@@ -63,8 +63,8 @@ def test_40x30_renderer_keeps_board_prefix_only() -> None:
 
 
 def test_print_assets_are_release_versioned_and_pages_cannot_flex_shrink() -> None:
-    assert 'mold-label-layout.css?v=0.22.201' in LABEL_PAGE
-    assert 'mold-label-layout.js?v=0.22.201' in LABEL_PAGE
+    assert 'mold-label-layout.css?v=0.22.203' in LABEL_PAGE
+    assert 'mold-label-layout.js?v=0.22.203' in LABEL_PAGE
     assert ".mold-label-page" in LAYOUT_CSS
     assert "flex: none" in LAYOUT_CSS
     assert "break-inside: avoid-page" in LAYOUT_CSS

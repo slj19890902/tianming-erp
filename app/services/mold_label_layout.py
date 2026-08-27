@@ -62,12 +62,33 @@ V5_PAPER_HEIGHT_MM = 40.0
 V5_ELEMENT_CATALOG = V4_ELEMENT_CATALOG
 _V5_CATALOG_BY_ID = {item["id"]: item for item in V5_ELEMENT_CATALOG}
 
+V6_CATALOG_VERSION = "p1-117-v1"
+V6_PAPER_WIDTH_MM = 80.0
+V6_PAPER_HEIGHT_MM = 40.0
+V6_ELEMENT_CATALOG = (
+    {"id": "board_specification", "label": "片料尺寸", "kind": "text"},
+    {"id": "product_specification", "label": "产品尺寸", "kind": "text"},
+    {"id": "flute_type", "label": "楞型", "kind": "text"},
+    {
+        "id": "mold_identity",
+        "label": "客户简称与模具标签名称",
+        "kind": "text",
+    },
+    {
+        "id": "mold_chinese_short_name",
+        "label": "模具中文简写",
+        "kind": "text",
+    },
+    {"id": "mold_qr", "label": "模具二维码", "kind": "qr"},
+)
+_V6_CATALOG_BY_ID = {item["id"]: item for item in V6_ELEMENT_CATALOG}
+
 # These aliases describe the catalog accepted for new writes.  Historical
 # print snapshots use their own version-pinned decoder below.
-CATALOG_VERSION = V5_CATALOG_VERSION
-PAPER_WIDTH_MM = V5_PAPER_WIDTH_MM
-PAPER_HEIGHT_MM = V5_PAPER_HEIGHT_MM
-ELEMENT_CATALOG = V5_ELEMENT_CATALOG
+CATALOG_VERSION = V6_CATALOG_VERSION
+PAPER_WIDTH_MM = V6_PAPER_WIDTH_MM
+PAPER_HEIGHT_MM = V6_PAPER_HEIGHT_MM
+ELEMENT_CATALOG = V6_ELEMENT_CATALOG
 
 
 class MoldLabelLayoutError(ValueError):
@@ -79,12 +100,12 @@ class MoldLabelLayoutConflict(MoldLabelLayoutError):
 
 
 def default_layout() -> dict[str, Any]:
-    """Return the 80 mm layout using the approved single-label content.
+    """Return the 80 mm layout using the approved label hierarchy.
 
-    The physical paper remains 40 x 80 mm.  Only the six facts already shown
-    by the trusted single 40 x 30 label are projected, at equal or larger
-    physical text sizes.  This prevents a paper choice from silently changing
-    the business content of a single or batch label.
+    The physical paper remains 40 x 80 mm.  The first identity line owns the
+    customer short name and handwritten mold label name as two separately
+    styled facts with exactly one separating space.  The mold Chinese short
+    name keeps the former second-line type size on its own left-aligned line.
     """
 
     return {
@@ -128,24 +149,24 @@ def default_layout() -> dict[str, Any]:
                 "visible": True,
             },
             {
-                "id": "customer_name",
+                "id": "mold_identity",
                 "kind": "text",
                 "x_mm": 1.2,
                 "y_mm": 24.6,
                 "width_mm": 61.8,
-                "height_mm": 5.2,
-                "font_size_mm": 4.3,
+                "height_mm": 7.0,
+                "font_size_mm": 6.0,
                 "font_weight": 900,
                 "text_align": "left",
                 "visible": True,
             },
             {
-                "id": "mold_number",
+                "id": "mold_chinese_short_name",
                 "kind": "text",
                 "x_mm": 1.2,
-                "y_mm": 30.0,
+                "y_mm": 31.6,
                 "width_mm": 61.8,
-                "height_mm": 8.8,
+                "height_mm": 7.7,
                 "font_size_mm": 6.0,
                 "font_weight": 900,
                 "text_align": "left",
@@ -582,19 +603,139 @@ def _normalize_layout_v5(payload: object) -> dict[str, Any]:
 _SNAPSHOT_NORMALIZERS[V5_CATALOG_VERSION] = _normalize_layout_v5
 
 
+def _normalize_element_v6(raw: object) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise MoldLabelLayoutError("布局中存在无效元素")
+    element_id = str(raw.get("id") or "").strip()
+    metadata = _V6_CATALOG_BY_ID.get(element_id)
+    if metadata is None:
+        raise MoldLabelLayoutError("布局中存在未登记元素")
+    if raw.get("kind") != metadata["kind"]:
+        raise MoldLabelLayoutError(f"{metadata['label']}的元素类型无效")
+    if raw.get("visible") is not True:
+        raise MoldLabelLayoutError(f"{metadata['label']}不能隐藏")
+    normalized = {
+        "id": element_id,
+        "kind": metadata["kind"],
+        "x_mm": _finite_number(raw.get("x_mm"), name=f"{metadata['label']} X位置"),
+        "y_mm": _finite_number(raw.get("y_mm"), name=f"{metadata['label']} Y位置"),
+        "width_mm": _finite_number(
+            raw.get("width_mm"), name=f"{metadata['label']}宽度"
+        ),
+        "height_mm": _finite_number(
+            raw.get("height_mm"), name=f"{metadata['label']}高度"
+        ),
+        "visible": True,
+    }
+    if (
+        normalized["x_mm"] < 0
+        or normalized["y_mm"] < 0
+        or normalized["width_mm"] <= 0
+        or normalized["height_mm"] <= 0
+        or normalized["x_mm"] + normalized["width_mm"] > V6_PAPER_WIDTH_MM
+        or normalized["y_mm"] + normalized["height_mm"] > V6_PAPER_HEIGHT_MM
+    ):
+        raise MoldLabelLayoutError(f"{metadata['label']}的位置或尺寸超出80×40内容区")
+    if metadata["kind"] == "qr":
+        if normalized["width_mm"] != 14.2 or normalized["height_mm"] != 14.2:
+            raise MoldLabelLayoutError("模具二维码必须保持14.2毫米正方形")
+        return normalized
+    font_size = _finite_number(
+        raw.get("font_size_mm"), name=f"{metadata['label']}字号"
+    )
+    if not 1.2 <= font_size <= 8.0:
+        raise MoldLabelLayoutError(f"{metadata['label']}字号必须在1.2至8毫米之间")
+    font_weight = int(
+        _finite_number(raw.get("font_weight"), name=f"{metadata['label']}字重")
+    )
+    if font_weight not in (400, 700, 800, 900):
+        raise MoldLabelLayoutError(f"{metadata['label']}字重无效")
+    text_align = str(raw.get("text_align") or "")
+    if text_align not in ("left", "center", "right"):
+        raise MoldLabelLayoutError(f"{metadata['label']}对齐方式无效")
+    if (
+        element_id in {"mold_identity", "mold_chinese_short_name"}
+        and text_align != "left"
+    ):
+        raise MoldLabelLayoutError(f"{metadata['label']}必须左对齐")
+    normalized.update(
+        {
+            "font_size_mm": font_size,
+            "font_weight": font_weight,
+            "text_align": text_align,
+        }
+    )
+    return normalized
+
+
+def _normalize_layout_v6(payload: object) -> dict[str, Any]:
+    """Validate the split identity hierarchy used for new label jobs."""
+
+    if not isinstance(payload, dict):
+        raise MoldLabelLayoutError("模具标签布局必须是对象")
+    if payload.get("catalog_version") != V6_CATALOG_VERSION:
+        raise MoldLabelLayoutError("标签元素目录版本已变化，请重新加载默认布局")
+    paper = payload.get("paper")
+    if not isinstance(paper, dict):
+        raise MoldLabelLayoutError("标签纸张定义无效")
+    if (
+        _finite_number(paper.get("width_mm"), name="纸张宽度")
+        != V6_PAPER_WIDTH_MM
+        or _finite_number(paper.get("height_mm"), name="纸张高度")
+        != V6_PAPER_HEIGHT_MM
+    ):
+        raise MoldLabelLayoutError("本布局只允许80×40毫米内容区")
+    raw_elements = payload.get("elements")
+    if not isinstance(raw_elements, list):
+        raise MoldLabelLayoutError("标签元素必须是列表")
+    normalized_elements: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_elements:
+        normalized = _normalize_element_v6(raw)
+        if normalized["id"] in seen:
+            raise MoldLabelLayoutError(f"布局中存在重复元素：{normalized['id']}")
+        seen.add(normalized["id"])
+        normalized_elements.append(normalized)
+    missing = [item["id"] for item in V6_ELEMENT_CATALOG if item["id"] not in seen]
+    if missing:
+        raise MoldLabelLayoutError(f"布局缺少已登记元素：{','.join(missing)}")
+    for index, left in enumerate(normalized_elements):
+        for right in normalized_elements[index + 1 :]:
+            if _rectangles_overlap(left, right):
+                raise MoldLabelLayoutError(
+                    f"{_V6_CATALOG_BY_ID[left['id']]['label']}与"
+                    f"{_V6_CATALOG_BY_ID[right['id']]['label']}发生重叠"
+                )
+    order = {item["id"]: index for index, item in enumerate(V6_ELEMENT_CATALOG)}
+    normalized_elements.sort(key=lambda item: order[item["id"]])
+    return {
+        "catalog_version": V6_CATALOG_VERSION,
+        "paper": {
+            "width_mm": V6_PAPER_WIDTH_MM,
+            "height_mm": V6_PAPER_HEIGHT_MM,
+        },
+        "elements": normalized_elements,
+    }
+
+
+_SNAPSHOT_NORMALIZERS[V6_CATALOG_VERSION] = _normalize_layout_v6
+
+
 def normalize_layout(payload: object) -> dict[str, Any]:
     """Validate a layout submitted for the currently published catalog."""
 
-    return _normalize_layout_v5(payload)
+    return _normalize_layout_v6(payload)
 
 
 def _upgrade_to_current_catalog(layout: dict[str, Any]) -> dict[str, Any]:
     """Project an active legacy release without changing frozen snapshots."""
 
     catalog_version = layout.get("catalog_version")
+    if catalog_version == V6_CATALOG_VERSION:
+        return _normalize_layout_v6(layout)
     if catalog_version == V5_CATALOG_VERSION:
-        return _normalize_layout_v5(layout)
-    if catalog_version == V4_CATALOG_VERSION:
+        _normalize_layout_v5(layout)
+    elif catalog_version == V4_CATALOG_VERSION:
         _normalize_layout_v4(layout)
     elif catalog_version == V3_CATALOG_VERSION:
         _normalize_layout_v3(layout)
@@ -609,7 +750,7 @@ def _upgrade_to_current_catalog(layout: dict[str, Any]) -> dict[str, Any]:
     # P1-112.  Validate the frozen source, then start new jobs from the
     # approved single-label-equivalent default.  Historical print snapshots
     # keep their version-pinned decoder and remain exactly replayable.
-    return _normalize_layout_v5(default_layout())
+    return _normalize_layout_v6(default_layout())
 
 
 def _normalize_snapshot_layout(payload: object) -> dict[str, Any]:

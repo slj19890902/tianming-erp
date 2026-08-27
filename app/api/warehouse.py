@@ -15849,6 +15849,8 @@ def _mold_label_dict(
         "label_identity": _label_identity(row, products),
         "label_customer_name": _label_customer(row, products)[0],
         "label_mold_number": _label_mold_number(row, products),
+        "label_mold_name": _label_mold_name(row, products),
+        "label_mold_chinese_short_name": _label_mold_chinese_short_name(row),
         "label_product_specification": _label_dimension(
             products, "specification"
         ),
@@ -15888,10 +15890,6 @@ def _mold_label_dict(
                 "template_label": mold_label_template_label(template_version),
                 "label_projection_mode": (
                     "shared_mold" if shared_mold else "single_product"
-                ),
-                "label_mold_name": _label_mold_name(row, products),
-                "label_mold_chinese_short_name": _label_mold_chinese_short_name(
-                    row
                 ),
                 "label_customer_names": customer_names,
                 "label_product_specifications": product_specifications,

@@ -22,14 +22,14 @@ def test_current_40x80_catalog_uses_the_single_label_business_content() -> None:
     from app.services.mold_label_layout import default_layout, normalize_layout
 
     layout = normalize_layout(default_layout())
-    assert layout["catalog_version"] == "p1-115-v1"
+    assert layout["catalog_version"] == "p1-117-v1"
     assert layout["paper"] == {"width_mm": 80.0, "height_mm": 40.0}
     assert [element["id"] for element in layout["elements"]] == [
         "board_specification",
         "product_specification",
         "flute_type",
-        "customer_name",
-        "mold_number",
+        "mold_identity",
+        "mold_chinese_short_name",
         "mold_qr",
     ]
     assert min(
@@ -40,14 +40,16 @@ def test_current_40x80_catalog_uses_the_single_label_business_content() -> None:
 
 
 def test_single_batch_and_editor_share_one_current_40x80_renderer() -> None:
-    assert 'CURRENT_WIDE_CATALOG="p1-115-v1"' in LABEL_PAGE
+    assert 'CURRENT_WIDE_CATALOG="p1-117-v1"' in LABEL_PAGE
     assert "function labelHtml80(row){return TmMoldLabelLayout.labelHtml" in LABEL_PAGE
     assert 'attempt.source==="batch"?' in WAREHOUSE_PAGE
     assert "template_version=${encodeURIComponent(attempt.templateVersion)}" in WAREHOUSE_PAGE
     assert 'const V4_CATALOG_VERSION = "p1-112-v1"' in LAYOUT_JS
     assert 'const V5_CATALOG_VERSION = "p1-115-v1"' in LAYOUT_JS
+    assert 'const V6_CATALOG_VERSION = "p1-117-v1"' in LAYOUT_JS
     assert "product_specification" in LAYOUT_JS
     assert "mold_number" in LAYOUT_JS
+    assert "mold_identity" in LAYOUT_JS
     assert "inventory_code" not in LAYOUT_JS.split(
         "const CURRENT_ELEMENT_LABELS", 1
     )[1].split("});", 1)[0]
@@ -124,11 +126,13 @@ def test_operation_single_and_selected_batch_project_identical_visible_facts(
         batch = batch_body["items"][0]
 
     assert single["label_layout"] == batch_body["label_layout"]
-    assert single["label_layout"]["layout"]["catalog_version"] == "p1-115-v1"
+    assert single["label_layout"]["layout"]["catalog_version"] == "p1-117-v1"
 
     for field in (
         "label_customer_name",
         "label_mold_number",
+        "label_mold_name",
+        "label_mold_chinese_short_name",
         "label_product_specification",
         "label_report_specification",
         "label_flute_type",

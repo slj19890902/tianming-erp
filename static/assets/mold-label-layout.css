@@ -72,6 +72,37 @@
   word-break: normal;
 }
 
+.mold-label-page[data-layout-catalog="p1-117-v1"]
+  .mold-layout-text[data-layout-id="mold_identity"],
+.mold-label-page[data-layout-catalog="p1-117-v1"]
+  .mold-layout-text[data-layout-id="mold_chinese_short_name"] {
+  justify-content: flex-start;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.mold-layout-identity-line {
+  align-items: baseline;
+}
+
+.mold-identity-customer {
+  flex: 0 0 auto;
+  font-size: 100%;
+  font-weight: 900;
+}
+
+.mold-identity-label {
+  min-width: 0;
+  margin-left: .35em;
+  font-size: 71.6667%;
+  font-weight: 900;
+}
+
 .mold-layout-qr {
   display: block;
   object-fit: contain;

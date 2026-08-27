@@ -644,6 +644,7 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
             reserve_location = automatic_raw_material_staging_location(
                 db,
                 allow_repairable_legacy=True,
+                require_floor3_left=True,
             )
             reserve_context = load_warehouse_location_projection_contexts(
                 db,
@@ -727,7 +728,8 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
             row["incoming_quantity"] = quantity
             row["receipt_quantity_notice"] = (
                 f"已预填本单可直接收的 {remaining_order_plan} 张；"
-                f"其余 {remaining_reserve_plan} 张片料备库须等一楼原料真实排位发布后再收。"
+                f"其余 {remaining_reserve_plan} 张片料备库须等三楼左区原料或"
+                "半成品真实货位发布后再收。"
             )
         after_total = before_total + quantity
         after_order = after_total if reserve_plan == 0 else min(after_total, order_plan)

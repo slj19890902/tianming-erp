@@ -2651,6 +2651,8 @@ def _lot_dict(
             "supplier_name": item.supplier_name,
             "owner_customer_id": item.owner_customer_id,
             "owner_customer_name": item.owner_customer_name_snapshot,
+            "customer_generic_eligible": bool(item.customer_generic_eligible),
+            "internal_name": item.internal_name,
             "material_id": item.material_id,
             "material_code": item.material_code_snapshot,
             "normalized_material_code": item.normalized_material_code,
@@ -2668,7 +2670,10 @@ def _lot_dict(
             "crease_right_mm": item.crease_right_mm,
             "cutting_note": item.cutting_note,
             "inventory_display_name": (
-                "客户专用纸板备料"
+                item.internal_name
+                or "客户通用纸板备料"
+                if item.customer_generic_eligible
+                else "客户专用纸板备料"
                 if item.owner_customer_id is not None
                 else "通用半成品片料"
             ),
@@ -2852,6 +2857,8 @@ def _semi_candidate_dict(
         "warehouse_location": _location_dict(lot.location, projection_context),
         "customer_id": detail.owner_customer_id,
         "customer_name": detail.owner_customer_name_snapshot,
+        "customer_generic_eligible": bool(detail.customer_generic_eligible),
+        "internal_name": detail.internal_name,
         "board_length_mm": detail.board_length_mm,
         "board_width_mm": detail.board_width_mm,
         "material_code": detail.material_code_snapshot,
@@ -18727,6 +18734,7 @@ def list_lots(
                 SemiFinishedInventoryDetail.owner_customer_name_snapshot.like(pattern),
                 SemiFinishedInventoryDetail.supplier_name.like(pattern),
                 SemiFinishedInventoryDetail.cutting_note.like(pattern),
+                SemiFinishedInventoryDetail.internal_name.like(pattern),
             )
         )
         allowed_product_lot_ids = (

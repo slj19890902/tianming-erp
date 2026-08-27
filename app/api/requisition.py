@@ -141,6 +141,7 @@ from app.services.warehouse_inventory import (
     reserve_finished_inventory,
 )
 from app.services.semi_finished_inventory import (
+    CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,
     SIGNATURE_OVERRIDE_WARNING,
     SemiFinishedCandidate,
     SemiFinishedLotVersion,
@@ -162,6 +163,7 @@ from app.services.composite_bom_execution import (
 from app.services.composite_bom_workflow import effective_component_demands
 from app.services.box_type_rules import (
     BoxTypeRuleError,
+    box_type_code,
     recommend_box_type,
 )
 from app.services.customer_material_candidates import (
@@ -1432,6 +1434,8 @@ class PendingSemiInventoryReservationPayload(BaseModel):
     requested_requirement_quantity: int = Field(gt=0)
     lots: list[PendingSemiInventoryLot] = Field(min_length=1)
     override: bool = False
+    admin_reverse_crease_override: bool = False
+    reverse_crease_override_reason: str | None = Field(default=None, max_length=300)
     warning_acknowledged_codes: list[str] = Field(default_factory=list)
     idempotency_key: str = Field(min_length=1, max_length=80)
 
@@ -1442,6 +1446,14 @@ class PendingSemiInventoryReservationPayload(BaseModel):
         if normalized not in {"whole", "cover", "base"}:
             raise ValueError("半成品组件仅允许 whole、cover 或 base")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_reverse_crease_override(self):
+        reason = (self.reverse_crease_override_reason or "").strip()
+        self.reverse_crease_override_reason = reason or None
+        if self.admin_reverse_crease_override and len(reason) < 4:
+            raise ValueError("压线反向特批必须填写至少4个字符的原因")
+        return self
 
 
 class PendingCustomerBoardPreparationAutoCoverPayload(BaseModel):
@@ -1513,10 +1525,12 @@ class StockReplenishmentItemPayload(BaseModel):
     stock_policy_id: int | None = None
     target_inventory_type: str
     product_id: int | None = None
+    reference_product_id: int | None = None
     customer_id: int | None = None
     material_id: int | None = None
     product_code: str | None = Field(default=None, max_length=150)
     product_name: str | None = Field(default=None, max_length=250)
+    internal_name: str | None = Field(default=None, max_length=200)
     material_code: str | None = Field(default=None, max_length=100)
     layer_count: int | None = None
     flute_type: str | None = Field(default=None, max_length=20)
@@ -2688,7 +2702,8 @@ class _PendingRequisitionReadContext:
             detail = lot.semi_finished_detail
             if detail is None:
                 continue
-            if int(product.id) not in {
+            is_customer_generic = bool(detail.customer_generic_eligible)
+            if not is_customer_generic and int(product.id) not in {
                 int(binding.product_id) for binding in lot.allowed_products
             }:
                 continue
@@ -2696,11 +2711,15 @@ class _PendingRequisitionReadContext:
                 int(detail.owner_customer_id or 0) != int(order.customer_id)
                 or int(detail.board_length_mm or 0) != expected_length
                 or int(detail.board_width_mm or 0) != expected_width
-                or detail.normalized_material_code != expected_material
                 or detail.flute_type != expected_flute
                 or detail.component_type != component
                 or int(detail.pieces_per_box or 0) != expected_pieces
                 or int(detail.stock_yield_per_sheet or 0) != expected_yield
+            ):
+                continue
+            if (
+                not is_customer_generic
+                and detail.normalized_material_code != expected_material
             ):
                 continue
             if not safe_physical_board_facts_match(
@@ -3621,6 +3640,8 @@ def _semi_candidate_dict_for_requisition(
         "board_width_mm": detail.board_width_mm,
         "material_code": detail.material_code_snapshot,
         "flute_type": detail.flute_type,
+        "customer_generic_eligible": bool(detail.customer_generic_eligible),
+        "internal_name": detail.internal_name,
         "component_type": detail.component_type,
         "pieces_per_box": detail.pieces_per_box,
         "stock_yield_per_sheet": detail.stock_yield_per_sheet,
@@ -3671,17 +3692,21 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
         remaining = int(requirements["remaining_required_piece_qty"])
         if remaining <= 0:
             continue
-        recommended = semi_finished_candidates_for_product(
-            db,
-            product_id=product.id,
-            customer_id=entry["customer"].id,
-            board_length_mm=int(length),
-            board_width_mm=int(width),
-            material_code=material_code,
-            flute_type=flute_type,
-            component_type=component,
-            pieces_per_box=int(spec["pieces_per_box"]),
-            stock_yield_per_sheet=stock_yield,
+        recommended = (
+            semi_finished_inventory_candidates(db, requirement.id)
+            if requirement is not None
+            else semi_finished_candidates_for_product(
+                db,
+                product_id=product.id,
+                customer_id=entry["customer"].id,
+                board_length_mm=int(length),
+                board_width_mm=int(width),
+                material_code=material_code,
+                flute_type=flute_type,
+                component_type=component,
+                pieces_per_box=int(spec["pieces_per_box"]),
+                stock_yield_per_sheet=stock_yield,
+            )
         )
         recommended_ids = {row.lot.id for row in recommended}
         review_candidates = [
@@ -4036,8 +4061,13 @@ def _safe_customer_board_preparation_options(
                 row.lot.semi_finished_detail is not None
                 and row.lot.semi_finished_detail.owner_customer_id
                 == order.customer_id
-                and not row.signature_differences
-                and row.source in {"signature", "learned"}
+                and (
+                    row.source == "customer_generic"
+                    or (
+                        not row.signature_differences
+                        and row.source in {"signature", "learned"}
+                    )
+                )
                 and is_exact_physical_match(row, component=component)
             )
         ]
@@ -14218,6 +14248,7 @@ def search_stock_replenishment_products(
                 "crease_right_mm": row.crease_right_mm,
                 "splice_mode": row.splice_mode,
                 "pieces_per_box": row.pieces_per_box,
+                "box_type_code": box_type_code(row.box_style),
                 "material_code": (
                     row.material.code
                     if row.material is not None
@@ -14406,6 +14437,7 @@ def stock_policy_replenishment_draft(
         draft_product: Product,
     ) -> dict:
         product_defaults = product_replenishment_defaults(draft_product)
+        is_liner = box_type_code(draft_product.box_style) == "liner"
         finished_quantity = int(
             draft_summary.get(
                 "suggested_new_requisition_finished_quantity",
@@ -14427,7 +14459,7 @@ def stock_policy_replenishment_draft(
         )
         return {
             "stock_policy_id": draft_policy.id,
-            "target_inventory_type": "semi_finished",
+            "target_inventory_type": "finished" if is_liner else "semi_finished",
             "product_id": draft_product.id,
             "customer_id": draft_product.customer_id,
             "product_code": draft_product.product_code,
@@ -14463,7 +14495,7 @@ def stock_policy_replenishment_draft(
             "component_type": draft_policy.component_type,
             "pieces_per_box": product_defaults["pieces_per_box"],
             "stock_yield_per_sheet": product_defaults["output_per_sheet"],
-            "quantity": theoretical_quantity,
+            "quantity": finished_quantity if is_liner else theoretical_quantity,
             "suggested_finished_quantity": finished_quantity,
             "location_id": None,
             "remark": draft_policy.remark,
@@ -14636,6 +14668,9 @@ def _replenishment_order_query():
         selectinload(StockReplenishmentOrder.items).selectinload(
             StockReplenishmentOrderItem.product
         ),
+        selectinload(StockReplenishmentOrder.items).selectinload(
+            StockReplenishmentOrderItem.reference_product
+        ),
         selectinload(StockReplenishmentOrder.items)
         .selectinload(StockReplenishmentOrderItem.stock_policy)
         .selectinload(InventoryStockPolicy.customer),
@@ -14668,14 +14703,34 @@ def _build_replenishment_item(
         if not warning_finished_to_customer_board:
             raise StockReplenishmentError("补库明细类型与库存预警策略不一致。")
 
-    product_id = _coalesce(payload.product_id, policy.product_id if policy else None)
-    product = db.get(Product, product_id) if product_id else None
-    if product_id and (product is None or product.deleted_at is not None):
+    reference_product_id = _coalesce(
+        payload.reference_product_id,
+        _coalesce(payload.product_id, policy.product_id if policy else None),
+    )
+    product = db.get(Product, reference_product_id) if reference_product_id else None
+    if reference_product_id and (product is None or product.deleted_at is not None):
         raise StockReplenishmentError("补库明细产品不存在。", 404)
     customer_id = _coalesce(
         payload.customer_id,
         policy.customer_id if policy else (product.customer_id if product else None),
     )
+    if product is not None and customer_id is not None and product.customer_id != customer_id:
+        raise StockReplenishmentError("参考产品不属于所选客户。", 409)
+    if customer_id is None:
+        raise StockReplenishmentError("库存补库必须选择客户。")
+    is_liner_reference = bool(
+        product is not None and box_type_code(product.box_style) == "liner"
+    )
+    if payload.target_inventory_type == "finished" and not is_liner_reference:
+        raise StockReplenishmentError(
+            "只有正式识别为衬板的参考产品才能通过补库直接进入成品库。",
+            409,
+        )
+    if is_liner_reference and payload.target_inventory_type != "finished":
+        raise StockReplenishmentError(
+            "衬板属于直接成品，补库到料必须进入三楼左区成品货位。",
+            409,
+        )
     material = db.get(Material, payload.material_id) if payload.material_id else None
     if payload.material_id and (material is None or not material.is_active):
         raise StockReplenishmentError("补库明细材质主数据不存在或已停用。", 404)
@@ -14698,14 +14753,7 @@ def _build_replenishment_item(
         payload.report_width_mm,
         policy.report_width_mm if policy else None,
     )
-    location_id = (
-        None
-        if payload.target_inventory_type == "semi_finished"
-        else _coalesce(
-            payload.location_id,
-            policy.default_location_id if policy else None,
-        )
-    )
+    location_id = None
     if location_id:
         location = db.get(WarehouseLocation, location_id)
         if location is None or not location.is_active:
@@ -14759,11 +14807,22 @@ def _build_replenishment_item(
     return StockReplenishmentOrderItem(
         stock_policy_id=policy.id if policy else None,
         target_inventory_type=payload.target_inventory_type,
-        product_id=product.id if product else None,
+        product_id=(
+            product.id
+            if product is not None and payload.target_inventory_type == "finished"
+            else None
+        ),
+        reference_product_id=product.id if product else None,
         customer_id=customer_id,
         material_id=material.id if material else None,
         product_code_snapshot=(payload.product_code or (product.product_code if product else None)),
-        product_name_snapshot=(payload.product_name or (product.product_name if product else None) or (policy.policy_name if policy else "库存片料")),
+        product_name_snapshot=(
+            payload.product_name
+            or payload.internal_name
+            or (product.product_name if product else None)
+            or (policy.policy_name if policy else "客户通用备料")
+        ),
+        internal_name=(payload.internal_name or "").strip() or None,
         material_code_snapshot=material_code,
         normalized_material_code=normalized_material,
         layer_count=layer_count,
@@ -14806,14 +14865,6 @@ def create_stock_replenishment_order(
             raise StockReplenishmentError(
                 "库存补库只能先生成报料草稿，不能保存后直接写入库存。"
             )
-        if any(
-            item.target_inventory_type != "semi_finished"
-            for item in payload.items
-        ):
-            raise StockReplenishmentError(
-                "新建库存补库到料只能进入客户专用纸板备料，"
-                "不能直接生成成品库存。"
-            )
         if payload.source_type == "stock_warning" and payload.idempotency_key is None:
             raise StockReplenishmentError(
                 "库存预警报料草稿缺少防重复标识，请关闭后重新打开再保存。"
@@ -14852,18 +14903,14 @@ def create_stock_replenishment_order(
         ]
         if payload.source_type == "stock_warning":
             for item in items:
-                if (
-                    item.product_id is not None
-                    and item.target_inventory_type != "semi_finished"
-                ):
-                    raise StockReplenishmentError(
-                        "常用箱库存预警报料只能生成客户专用纸板备料，"
-                        "不能直接生成成品库存。"
-                    )
+                # 衬板是已定义的直接成品；_build 已校验只有 liner
+                # 参考产品可走 finished，不应再被纸板备料完整性拦截。
+                if item.target_inventory_type == "finished":
+                    continue
                 if not all(
                     value not in (None, "")
                     for value in (
-                        item.product_id,
+                        item.reference_product_id,
                         item.material_code_snapshot,
                         item.layer_count,
                         item.flute_type,
@@ -14875,11 +14922,11 @@ def create_stock_replenishment_order(
                         f"“{item.product_name_snapshot}”的常用箱资料不完整，"
                         "请先补全材质、层数、楞型和报料长宽。"
                     )
-                if item.product_id is not None:
+                if item.reference_product_id is not None:
                     product = db.scalar(
                         select(Product)
                         .options(selectinload(Product.material))
-                        .where(Product.id == item.product_id)
+                        .where(Product.id == item.reference_product_id)
                     )
                     if product is None:
                         raise StockReplenishmentError(
@@ -16753,6 +16800,8 @@ def reserve_semi_inventory_from_pending(
                 expected=expected,
             )
         requested = min(payload.requested_requirement_quantity, remaining)
+        if payload.admin_reverse_crease_override and user.role not in {"admin", "boss"}:
+            raise HTTPException(status_code=403, detail="仅管理员可特批已有压线库存用于无压线订单")
         result = reserve_semi_finished_inventory(
             db,
             requirement_id=requirement.id,
@@ -16769,6 +16818,8 @@ def reserve_semi_inventory_from_pending(
             confirmed=True,
             override=payload.override,
             warning_acknowledged_codes=payload.warning_acknowledged_codes,
+            admin_reverse_crease_override=payload.admin_reverse_crease_override,
+            reverse_crease_override_reason=payload.reverse_crease_override_reason,
         )
         updated = _current_requisition_requirements(
             db,
@@ -16789,6 +16840,8 @@ def reserve_semi_inventory_from_pending(
                     result.allocated_requirement_quantity
                 ),
                 "override": payload.override,
+                "admin_reverse_crease_override": payload.admin_reverse_crease_override,
+                "reverse_crease_override_reason": payload.reverse_crease_override_reason,
             },
             description="合并报料前重新检查并确认半成品库存抵扣",
         )
@@ -17169,7 +17222,11 @@ def auto_use_customer_board_preparation(
                 ),
                 confirmed=True,
                 override=False,
-                warning_acknowledged_codes=[],
+                warning_acknowledged_codes=(
+                    [CUSTOMER_GENERIC_SEMI_FINISHED_STOCK]
+                    if any(row.source == "customer_generic" for row in candidates)
+                    else []
+                ),
             )
             allocated_piece_quantity += int(
                 result.allocated_requirement_quantity

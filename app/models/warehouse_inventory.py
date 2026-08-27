@@ -1207,6 +1207,11 @@ class SemiFinishedInventoryDetail(Base):
         ),
         Index("ix_semi_inventory_sheet_flute", "sheet_type", "flute_type"),
         Index("ix_semi_inventory_owner", "owner_customer_id"),
+        Index(
+            "ix_semi_inventory_customer_generic",
+            "owner_customer_id",
+            "customer_generic_eligible",
+        ),
         Index("ix_semi_inventory_material", "material_code_snapshot"),
         Index("ix_semi_inventory_material_id", "material_id"),
         Index(
@@ -1235,6 +1240,10 @@ class SemiFinishedInventoryDetail(Base):
     owner_customer_name_snapshot: Mapped[str | None] = mapped_column(
         String(200), nullable=True
     )
+    customer_generic_eligible: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
+    internal_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     material_code_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
     normalized_material_code: Mapped[str] = mapped_column(String(100), nullable=False)
     layer_count: Mapped[int] = mapped_column(Integer, nullable=False)

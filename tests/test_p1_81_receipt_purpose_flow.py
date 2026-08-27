@@ -48,23 +48,28 @@ def _error_code(response) -> str:
 def _use_p181_published_map_identity(monkeypatch) -> None:
     import app.services.location_candidates as location_candidates
 
-    identity = {
+    floor1_identity = {
         "revision": "p181-anonymous-map-v1",
         "zones_by_id": {
             "zone-p181-1f-dispatch": "DISPATCH",
             "zone-p181-1f-fin-001": "FIN-001",
-            "zone-p181-1f-a1": "A1",
         },
         "zone_ids_by_area": {
             "DISPATCH": ("zone-p181-1f-dispatch",),
             "FIN-001": ("zone-p181-1f-fin-001",),
-            "A1": ("zone-p181-1f-a1",),
         },
+    }
+    floor3_identity = {
+        "revision": "p181-anonymous-map-v1",
+        "zones_by_id": {"zone-p181-3f-raw-001": "RAW-001"},
+        "zone_ids_by_area": {"RAW-001": ("zone-p181-3f-raw-001",)},
     }
     monkeypatch.setattr(
         location_candidates,
         "load_warehouse_twin_published_floor_identity",
-        lambda _floor_number: identity,
+        lambda floor_number: (
+            floor3_identity if int(floor_number) == 3 else floor1_identity
+        ),
     )
 
 
@@ -127,6 +132,14 @@ def _seed_material_and_staging(session_factory) -> int:
         )
         session.add(floor)
         session.flush()
+        floor3 = WarehouseFloor(
+            floor_code="P181-F3",
+            floor_name="P1-81 匿名三楼",
+            floor_number=3,
+            construction_status="enabled",
+        )
+        session.add(floor3)
+        session.flush()
         dispatch_area = WarehouseArea(
             floor_id=floor.id,
             area_code="DISPATCH",
@@ -156,13 +169,13 @@ def _seed_material_and_staging(session_factory) -> int:
             version=1,
         )
         raw_area = WarehouseArea(
-            floor_id=floor.id,
-            area_code="A1",
-            area_name="匿名原料暂存区",
+            floor_id=floor3.id,
+            area_code="RAW-001",
+            area_name="匿名三楼左区原料备料区",
             construction_status="enabled",
         )
         raw_area.storage_policy = WarehouseAreaStoragePolicy(
-            map_feature_id="zone-p181-1f-a1",
+            map_feature_id="zone-p181-3f-raw-001",
             allowed_inventory_types_json='["raw_material","semi_finished"]',
             storage_layout="pallet_ground",
             status="published",
@@ -217,15 +230,15 @@ def _seed_material_and_staging(session_factory) -> int:
             fin_locations.append(fin_location)
         raw_location = WarehouseLocation(
             location_code="P181-RAW-STAGE",
-            location_name="一楼半成品原料暂存区",
+            location_name="三楼左区半成品原料备料位",
             warehouse_type="semi_finished",
             is_active=True,
-            warehouse_floor=1,
-            area_code="A1",
+            warehouse_floor=3,
+            area_code="RAW-001",
             storage_type="ground",
             placement_status="placed",
             is_temporary=True,
-            source_version="TWIN_V1",
+            source_version="CURRENT_MAP",
         )
         raw_location.floor3_layout = Floor3LocationLayout(
             left_pct=Decimal("20"),
@@ -785,7 +798,7 @@ def test_pending_projection_refreshes_frozen_receipt_tokens_and_keeps_legacy_ope
         assert frozen_before["expected_reserve_purpose_sheet_qty"] == 100
         assert frozen_before["expected_finished_output_qty"] == 500
         assert frozen_before["finished_location_name"] == "成品待送堆放区 001 号位"
-        assert frozen_before["reserve_location_name"] == "一楼半成品原料暂存区"
+        assert frozen_before["reserve_location_name"] == "三楼左区半成品原料备料位"
         assert frozen_before["purpose_issue"]
 
         legacy_before = before_rows[legacy_route_key]
@@ -824,7 +837,7 @@ def test_pending_projection_refreshes_frozen_receipt_tokens_and_keeps_legacy_ope
         assert frozen_after["expected_reserve_purpose_sheet_qty"] == 100
         assert frozen_after["expected_finished_output_qty"] == 500
         assert frozen_after["finished_location_name"] == "成品待送堆放区 001 号位"
-        assert frozen_after["reserve_location_name"] == "一楼半成品原料暂存区"
+        assert frozen_after["reserve_location_name"] == "三楼左区半成品原料备料位"
         assert "purpose_issue" not in frozen_after
 
         legacy_after = after_rows[legacy_route_key]
@@ -1134,11 +1147,15 @@ def test_frozen_500_600_receipts_split_450_580_600_620_and_cost_exactly(
     assert fourth["reserve_actual_sheet_qty"] == 120
     assert fourth["reserve_variance_sheet_qty"] == 20
     assert fourth["finished_location_name"].startswith("成品待送堆放区 ")
-    assert fourth["reserve_location_name"] == "一楼半成品原料暂存区"
+    assert fourth["reserve_location_name"] == "三楼左区半成品原料备料位"
     assert "F1-DISPATCH-01" not in fourth["finished_location_name"]
 
     from app.models.production import ProductionTask
-    from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        SemiFinishedInventoryDetail,
+        WarehouseLocation,
+    )
 
     with session_factory() as session:
         tasks = list(
@@ -1167,6 +1184,17 @@ def test_frozen_500_600_receipts_split_450_580_600_620_and_cost_exactly(
         assert {lot.warehouse_location_id for lot in finished_lots}.issubset(
             fin_location_ids
         )
+        reserve_details = list(
+            session.scalars(
+                select(SemiFinishedInventoryDetail).where(
+                    SemiFinishedInventoryDetail.customer_generic_eligible.is_(True)
+                )
+            )
+        )
+        assert reserve_details
+        assert {row.owner_customer_id for row in reserve_details} == {1}
+        assert {row.material_code_snapshot for row in reserve_details} == {"KAKAK"}
+        assert all(row.internal_name for row in reserve_details)
     assert _posted_finished_quantity(session_factory) == 500
     assert _active_semi_quantity(session_factory) == 120
 
@@ -2523,7 +2551,7 @@ def test_pending_receipt_defaults_to_order_quantity_when_only_reserve_location_i
         assert _active_semi_quantity(session_factory) == 0
 
 
-def test_legacy_exact_raw_ground_geometry_is_repaired_inside_full_receipt(
+def test_floor3_left_reserve_never_repairs_missing_published_ground_plan(
     requisition_app,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2538,32 +2566,9 @@ def test_legacy_exact_raw_ground_geometry_is_repaired_inside_full_receipt(
 
     app, session_factory = requisition_app
     _seed_material_and_staging(session_factory)
-    revision = "p181-anonymous-map-v1"
-    feature_id = "zone-p181-1f-a1"
-    monkeypatch.setattr(
-        "app.services.warehouse_inventory.load_warehouse_twin_floor",
-        lambda floor_code: {
-            "floor_code": str(floor_code).upper(),
-            "revision": revision,
-            "bounds_mm": {
-                "min_x": 0,
-                "min_y": 0,
-                "max_x": 1200,
-                "max_y": 1000,
-            },
-            "features": [
-                {
-                    "id": feature_id,
-                    "feature_kind": "zone",
-                    "erp_area_code": "A1",
-                    "points": [[0, 0], [1200, 0], [1200, 1000], [0, 1000]],
-                }
-            ],
-        },
-    )
     with session_factory() as session:
         raw_area = session.scalar(
-            select(WarehouseArea).where(WarehouseArea.area_code == "A1")
+            select(WarehouseArea).where(WarehouseArea.area_code == "RAW-001")
         )
         raw_location = session.scalar(
             select(WarehouseLocation).where(
@@ -2588,7 +2593,6 @@ def test_legacy_exact_raw_ground_geometry_is_repaired_inside_full_receipt(
         layout.layout_kind = "unknown"
         session.commit()
         raw_area_id = int(raw_area.id)
-        raw_location_id = int(raw_location.id)
 
     with TestClient(app) as client:
         _login(client, "admin")
@@ -2607,12 +2611,13 @@ def test_legacy_exact_raw_ground_geometry_is_repaired_inside_full_receipt(
             for item in pending.json()["items"]
             if item["item_id"] == source.route_key
         )
-        assert row["incoming_quantity"] == 602
+        assert row["incoming_quantity"] == 600
         assert row["expected_order_purpose_sheet_qty"] == 600
-        assert row["expected_reserve_purpose_sheet_qty"] == 2
+        assert row["expected_reserve_purpose_sheet_qty"] == 0
+        assert row["remaining_reserve_purpose_sheet_qty"] == 2
         assert row["reserve_location_ready"] is True
         assert row["receipt_execution_ready"] is True
-        assert not row.get("receipt_quantity_notice")
+        assert "三楼左区" in row["receipt_quantity_notice"]
 
         frozen = _freeze_receipt_fact(
             client,
@@ -2627,26 +2632,8 @@ def test_legacy_exact_raw_ground_geometry_is_repaired_inside_full_receipt(
             quantity=602,
             idempotency_key="p181-legacy-ground-receive-600-602",
         )
-        _assert_allocation(
-            received,
-            order_delta=600,
-            reserve_delta=2,
-            order_cumulative=600,
-            reserve_cumulative=2,
-            finished_delta=600,
-            finished_cumulative=600,
-        )
-        replayed = _receive(
-            client,
-            source,
-            frozen.json(),
-            quantity=602,
-            idempotency_key="p181-legacy-ground-receive-600-602",
-        )
-        assert replayed.status_code == 200, replayed.text
-        assert replayed.json()["receipt_item_id"] == received.json()[
-            "receipt_item_id"
-        ]
+        assert received.status_code == 409, received.text
+        assert _error_code(received) == "RESERVE_STAGING_LOCATION_UNAVAILABLE"
 
     with session_factory() as session:
         repaired_plan = session.scalar(
@@ -2654,38 +2641,19 @@ def test_legacy_exact_raw_ground_geometry_is_repaired_inside_full_receipt(
                 WarehouseGroundLayoutPlan.area_id == raw_area_id
             )
         )
-        assert repaired_plan is not None
-        repaired_slot = session.scalar(
-            select(WarehouseGroundLayoutSlot).where(
-                WarehouseGroundLayoutSlot.plan_id == repaired_plan.id
-            )
-        )
-        assert repaired_slot is not None
-        assert int(repaired_slot.location_id) == raw_location_id
-        repaired_layout = session.scalar(
-            select(Floor3LocationLayout).where(
-                Floor3LocationLayout.location_id == raw_location_id
-            )
-        )
-        assert repaired_layout is not None
-        assert repaired_layout.layout_kind == "physical_pallet"
+        assert repaired_plan is None
         assert session.scalar(
             select(func.count(OperationLog.id)).where(
                 OperationLog.action_code
                 == "warehouse.legacy_ground_plan.auto_repair"
             )
-        ) == 1
+        ) == 0
         assert session.scalar(
             select(func.count(WarehouseGroundLayoutPlan.id)).where(
                 WarehouseGroundLayoutPlan.area_id == raw_area_id
             )
-        ) == 1
-        assert session.scalar(
-            select(func.count(WarehouseGroundLayoutSlot.id)).where(
-                WarehouseGroundLayoutSlot.plan_id == repaired_plan.id
-            )
-        ) == 1
-        assert _active_semi_quantity(session_factory) == 2
+        ) == 0
+        assert _active_semi_quantity(session_factory) == 0
 
 
 def test_legacy_unset_keeps_old_receive_contract_without_new_auto_finished(

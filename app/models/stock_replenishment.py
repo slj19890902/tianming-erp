@@ -191,6 +191,10 @@ class StockReplenishmentOrderItem(Base):
         Index("ix_stock_replenishment_items_policy", "stock_policy_id"),
         Index("ix_stock_replenishment_items_lot", "inventory_lot_id"),
         Index("ix_stock_replenishment_items_material", "material_id"),
+        Index(
+            "ix_stock_replenishment_items_reference_product",
+            "reference_product_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -205,6 +209,9 @@ class StockReplenishmentOrderItem(Base):
     product_id: Mapped[int | None] = mapped_column(
         ForeignKey("products.id", ondelete="RESTRICT"), nullable=True
     )
+    reference_product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+    )
     customer_id: Mapped[int | None] = mapped_column(
         ForeignKey("customers.id", ondelete="SET NULL"), nullable=True
     )
@@ -213,6 +220,7 @@ class StockReplenishmentOrderItem(Base):
     )
     product_code_snapshot: Mapped[str | None] = mapped_column(String(150), nullable=True)
     product_name_snapshot: Mapped[str] = mapped_column(String(250), nullable=False)
+    internal_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     material_code_snapshot: Mapped[str | None] = mapped_column(String(100), nullable=True)
     normalized_material_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     layer_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -253,7 +261,10 @@ class StockReplenishmentOrderItem(Base):
 
     order: Mapped["StockReplenishmentOrder"] = relationship(back_populates="items")
     stock_policy: Mapped["InventoryStockPolicy | None"] = relationship()
-    product: Mapped["Product | None"] = relationship()
+    product: Mapped["Product | None"] = relationship(foreign_keys=[product_id])
+    reference_product: Mapped["Product | None"] = relationship(
+        foreign_keys=[reference_product_id]
+    )
     customer: Mapped["Customer | None"] = relationship()
     material: Mapped["Material | None"] = relationship()
     location: Mapped["WarehouseLocation | None"] = relationship(

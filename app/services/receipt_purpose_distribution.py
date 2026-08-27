@@ -551,6 +551,7 @@ def post_receipt_purpose_allocation(
                 db,
                 repair_operator_id=operator_id,
                 repair_idempotency_key=f"receipt-purpose:{idempotency_key}",
+                require_floor3_left=True,
             )
             order_item = db.get(OrderItem, order_item_id)
             reserve_lot = manual_semi_finished_in(
@@ -591,6 +592,11 @@ def post_receipt_purpose_allocation(
                 material_id=fact.actual_material_id,
                 movement_reason="采购收料按冻结用途进入客户通用片料库存",
                 allow_raw_material_staging=True,
+                customer_generic_eligible=True,
+                internal_name=(
+                    f"{snapshot.customer_name_snapshot or '客户'} "
+                    f"{board_length}x{board_width} 通用备料"
+                ),
                 expected_layout_version=(
                     int(location.floor3_layout.version)
                     if location.floor3_layout is not None
@@ -623,6 +629,7 @@ def post_receipt_purpose_allocation(
                         "暂存",
                         "A1",
                         "库位",
+                        "三楼左区",
                         "一楼原料区域",
                         "真实排位",
                     )

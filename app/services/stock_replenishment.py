@@ -38,12 +38,14 @@ from app.services.requisition_quantities import (
 from app.services.warehouse_inventory import (
     SEMI_FINISHED_FLUTES_BY_LAYER,
     WarehouseInventoryError,
+    automatic_floor3_left_finished_location,
     automatic_raw_material_staging_location,
     manual_finished_in,
     manual_semi_finished_in,
     normalize_material_code,
     replace_semi_finished_lot_allowed_products,
 )
+from app.services.box_type_rules import box_type_code
 from app.services.semi_finished_inventory import (
     safe_physical_board_facts_match,
 )
@@ -476,11 +478,19 @@ def customer_board_preparation_coverage(
         )
         for row in candidates:
             detail = row.lot.semi_finished_detail
+            customer_generic = bool(
+                detail is not None and detail.customer_generic_eligible
+            )
             if (
                 detail is None
                 or detail.owner_customer_id != product.customer_id
-                or row.signature_differences
-                or row.source not in {"signature", "learned"}
+                or (
+                    not customer_generic
+                    and (
+                        row.signature_differences
+                        or row.source not in {"signature", "learned"}
+                    )
+                )
                 or not safe_physical_board_facts_match(
                     detail,
                     supplier_name=defaults["material_supplier_name"],
@@ -495,6 +505,8 @@ def customer_board_preparation_coverage(
             available_sheets += int(row.available_stock_quantity or 0)
             capacity = int(row.deductible_requirement_quantity or 0)
             available_finished_capacity += capacity
+            if customer_generic:
+                continue
             primary_product_id = _lot_primary_replenishment_product_id(db, row.lot)
             allowed_product_ids = {
                 int(binding.product_id)
@@ -551,7 +563,7 @@ def customer_board_preparation_coverage(
             # One incoming quantity has one owning replenishment line.  A
             # compatible-product binding permits future use, but must not make
             # the same physical sheets cover every product's warning at once.
-            if item.product_id == product.id:
+            if item.reference_product_id == product.id or item.product_id == product.id:
                 incoming_auto_cover_capacity += capacity
     return {
         "customer_board_preparation_available_sheet_quantity": available_sheets,
@@ -804,9 +816,11 @@ def replenishment_item_dict(
         "stock_policy_id": item.stock_policy_id,
         "target_inventory_type": item.target_inventory_type,
         "product_id": item.product_id,
+        "reference_product_id": item.reference_product_id,
         "customer_id": item.customer_id,
         "product_code": item.product_code_snapshot,
         "product_name": item.product_name_snapshot,
+        "internal_name": item.internal_name,
         "material_id": item.material_id,
         "material_code": item.material_code_snapshot,
         "layer_count": item.layer_count,
@@ -842,8 +856,21 @@ def replenishment_item_dict(
                 "id": lot.id,
                 "lot_number": lot.lot_number,
                 "quantity_available": lot.quantity_available,
+                "customer_generic_eligible": bool(
+                    lot.semi_finished_detail
+                    and lot.semi_finished_detail.customer_generic_eligible
+                ),
+                "internal_name": (
+                    lot.semi_finished_detail.internal_name
+                    if lot.semi_finished_detail is not None
+                    else None
+                ),
                 "display_name": (
-                    "客户专用纸板备料"
+                    "客户通用纸板备料"
+                    if lot.inventory_type == "semi_finished"
+                    and lot.semi_finished_detail is not None
+                    and lot.semi_finished_detail.customer_generic_eligible
+                    else "客户专用纸板备料"
                     if lot.inventory_type == "semi_finished" and item.customer_id
                     else "半成品片料"
                     if lot.inventory_type == "semi_finished"
@@ -944,9 +971,17 @@ def receive_replenishment_item(
         order.source_type == "stock_warning"
         and item.target_inventory_type != "semi_finished"
     ):
-        raise StockReplenishmentError(
-            "库存预警到料只能进入客户专用纸板备料，不能直接增加成品库存。"
+        warning_product = (
+            db.get(Product, item.product_id) if item.product_id is not None else None
         )
+        if (
+            warning_product is None
+            or box_type_code(warning_product.box_style) != "liner"
+        ):
+            raise StockReplenishmentError(
+                "库存预警到料只能进入客户通用纸板备料；"
+                "只有衬板可按直接成品进入三楼左区成品货位。"
+            )
     if item.target_inventory_type == "semi_finished":
         try:
             destination = automatic_raw_material_staging_location(
@@ -955,18 +990,25 @@ def receive_replenishment_item(
                 repair_idempotency_key=(
                     f"stock-replenishment-receipt:{int(receipt_item_id)}"
                 ),
+                require_floor3_left=True,
             )
         except WarehouseInventoryError as error:
             raise StockReplenishmentError(str(error), error.status_code) from error
     else:
-        # Finished replenishment is no longer creatable.  Keep existing legacy
-        # rows receivable only through the formal destination already saved on
-        # the row; do not silently route them to raw-material staging.
-        destination = (
-            db.get(WarehouseLocation, item.location_id)
-            if item.location_id
-            else None
-        )
+        finished_product = db.get(Product, item.product_id) if item.product_id else None
+        if finished_product is not None and box_type_code(finished_product.box_style) == "liner":
+            try:
+                destination = automatic_floor3_left_finished_location(db)
+            except WarehouseInventoryError as error:
+                raise StockReplenishmentError(str(error), error.status_code) from error
+        else:
+            # Preserve receivability of historical non-liner finished rows only
+            # through the explicit destination that was frozen on the row.
+            destination = (
+                db.get(WarehouseLocation, item.location_id)
+                if item.location_id
+                else None
+            )
         if destination is None or not destination.is_active:
             raise StockReplenishmentError("历史成品补库明细缺少可用入库库位。", 409)
         if destination.source_version == "V11":
@@ -987,7 +1029,10 @@ def receive_replenishment_item(
     customer_board_preparation = (
         item.target_inventory_type == "semi_finished"
         and item.customer_id is not None
-        and item.product_id is not None
+    )
+    customer_generic_preparation = (
+        customer_board_preparation
+        and (item.reference_product_id is not None or item.product_id is None)
     )
     common = {
         "location_id": destination_location_id,
@@ -996,7 +1041,7 @@ def receive_replenishment_item(
         "source_type": "replenishment",
         "remarks": (
             f"补库单 {order.order_number}；"
-            f"{'客户专用纸板备料；' if customer_board_preparation else ''}"
+            f"{'客户通用纸板备料；' if customer_generic_preparation else '客户专用纸板备料；' if customer_board_preparation else ''}"
             f"{item.remark or ''}"
         ).strip("；"),
         "operator_id": operator_id,
@@ -1007,6 +1052,11 @@ def receive_replenishment_item(
         ),
         "source_ref_type": source_ref_type,
         "source_ref_id": receipt_item_id,
+        "expected_layout_version": (
+            int(destination.floor3_layout.version)
+            if destination.floor3_layout is not None
+            else None
+        ),
     }
     try:
         if item.target_inventory_type == "finished":
@@ -1051,19 +1101,16 @@ def receive_replenishment_item(
                 crease_right_mm=item.crease_right_mm,
                 cutting_note=item.remark,
                 movement_reason=(
-                    "库存预警到料转客户专用纸板备料"
+                    "库存预警到料转客户通用纸板备料"
                     if customer_board_preparation
                     else "补库来料转半成品库存"
                 ),
                 allow_raw_material_staging=True,
-                expected_layout_version=(
-                    int(destination.floor3_layout.version)
-                    if destination.floor3_layout is not None
-                    else None
-                ),
+                customer_generic_eligible=customer_generic_preparation,
+                internal_name=item.internal_name,
                 **common,
             )
-            if customer_board_preparation:
+            if customer_board_preparation and not customer_generic_preparation:
                 allowed_product_ids = compatible_customer_product_ids(db, item)
                 if not allowed_product_ids:
                     raise StockReplenishmentError(

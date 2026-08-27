@@ -138,7 +138,14 @@ def _lot_business_fields(row: InventoryLot) -> dict:
         return {
             "product_id": None,
             "inventory_code": detail.material_code_snapshot,
-            "product_name": "客户专用纸板备料" if detail.owner_customer_id else "通用半成品片料",
+            "product_name": (
+                detail.internal_name
+                or "客户通用纸板备料"
+                if detail.customer_generic_eligible
+                else "客户专用纸板备料"
+                if detail.owner_customer_id
+                else "通用半成品片料"
+            ),
             "customer_id": detail.owner_customer_id,
             "customer_name": detail.owner_customer_name_snapshot or "通用库存",
             "specification": dimensions,

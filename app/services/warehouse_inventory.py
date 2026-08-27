@@ -673,6 +673,12 @@ SEMI_FINISHED_FLUTES_BY_LAYER: dict[int, frozenset[str]] = {
 
 
 RAW_MATERIAL_STAGING_WAREHOUSE_TYPES = frozenset({"semi_finished", "shared"})
+CURRENT_MAP_LEFT_RAW_SEMI_AREA_CODES = frozenset(
+    {"RAW-001", "RAW-004", "SEMI-006", "SEMI-010", "SEMI-011"}
+)
+CURRENT_MAP_LEFT_FINISHED_AREA_CODES = frozenset(
+    {"FG-004", "FG-005", "FG-006", "FG-007", "FG-008", "FG-009"}
+)
 RAW_MATERIAL_STAGING_STORAGE_TYPES = frozenset(
     {"ground", "temporary_aisle", "rack"}
 )
@@ -1044,6 +1050,7 @@ def automatic_raw_material_staging_location(
     allow_repairable_legacy: bool = False,
     repair_operator_id: int | None = None,
     repair_idempotency_key: str | None = None,
+    require_floor3_left: bool = False,
 ) -> WarehouseLocation:
     """Resolve the legal staging point for actual replenishment receipts."""
 
@@ -1063,6 +1070,12 @@ def automatic_raw_material_staging_location(
     )
     candidates: list[tuple[WarehouseLocation, str | None, int]] = []
     for row in rows:
+        if require_floor3_left and (
+            int(row.warehouse_floor or 0) != 3
+            or str(row.area_code or "").strip().upper()
+            not in CURRENT_MAP_LEFT_RAW_SEMI_AREA_CODES
+        ):
+            continue
         context = projection_contexts.get(int(row.id), {})
         if not _is_raw_material_staging_location(
             db,
@@ -1103,7 +1116,11 @@ def automatic_raw_material_staging_location(
             candidate[0].id,
         )
     )
-    if not candidates and (allow_repairable_legacy or repair_operator_id is not None):
+    if (
+        not candidates
+        and not require_floor3_left
+        and (allow_repairable_legacy or repair_operator_id is not None)
+    ):
         repairable = _repairable_legacy_raw_material_staging_location(
             db,
             rows=rows,
@@ -1119,11 +1136,60 @@ def automatic_raw_material_staging_location(
             # the subsequent inventory write.
             return automatic_raw_material_staging_location(db)
     if not candidates:
+        if require_floor3_left:
+            raise WarehouseInventoryError(
+                "当前正式地图没有可用的三楼左区原料或半成品货位；系统不会回退到一楼或待送区。",
+                409,
+            )
         raise WarehouseInventoryError(
             "当前地图没有可用的已发布原料或片料位置，请联系仓库管理员核对区域策略、地图发布状态与真实排位；系统不会改用待送区。",
             409,
         )
     return candidates[0][0]
+
+
+def automatic_floor3_left_finished_location(db: Session) -> WarehouseLocation:
+    """Resolve a published third-floor-left finished-goods destination."""
+
+    rows = db.scalars(
+        select(WarehouseLocation).where(
+            WarehouseLocation.is_active.is_(True),
+            WarehouseLocation.warehouse_type.in_(("finished", "shared")),
+            WarehouseLocation.warehouse_floor == 3,
+            WarehouseLocation.area_code.in_(CURRENT_MAP_LEFT_FINISHED_AREA_CODES),
+        )
+    ).all()
+    contexts = load_warehouse_location_projection_contexts(db, rows)
+    candidates: list[WarehouseLocation] = []
+    for row in rows:
+        context = contexts.get(int(row.id), {})
+        if operational_location_issue(
+            db,
+            row,
+            warehouse_types={"finished", "shared"},
+            require_published=True,
+            require_map_geometry=True,
+            required_inventory_type="finished",
+            projection_context=context,
+        ) is None:
+            candidates.append(row)
+    candidates.sort(
+        key=lambda row: (
+            0
+            if str(row.source_version or "").strip().upper() == "CURRENT_MAP"
+            else 1,
+            str(row.area_code or ""),
+            str(row.location_code or ""),
+            int(row.id),
+        )
+    )
+    if not candidates:
+        raise WarehouseInventoryError(
+            "当前正式地图没有可用的三楼左区成品货位；"
+            "系统不会回退到一楼、待送区或旧版未发布位置。",
+            409,
+        )
+    return candidates[0]
 
 
 def _location(
@@ -3353,6 +3419,8 @@ def manual_semi_finished_in(
     stock_date_original_text: str | None = None,
     allow_raw_material_staging: bool = False,
     expected_layout_version: int | None = None,
+    customer_generic_eligible: bool = False,
+    internal_name: str | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -3401,6 +3469,11 @@ def manual_semi_finished_in(
     customer = db.get(Customer, customer_id) if customer_id else None
     if customer_id and customer is None:
         raise WarehouseInventoryError("客户不存在", 404)
+    normalized_internal_name = (internal_name or "").strip() or None
+    if normalized_internal_name and len(normalized_internal_name) > 200:
+        raise WarehouseInventoryError("库存内部名称不能超过200个字符")
+    if customer_generic_eligible and customer is None:
+        raise WarehouseInventoryError("客户通用半成品库存必须指定客户", 409)
     date_accuracy, date_original_text = normalize_stock_date_metadata(
         stock_date=stock_date,
         stock_date_accuracy=stock_date_accuracy,
@@ -3444,6 +3517,8 @@ def manual_semi_finished_in(
         supplier_name=(supplier_name or "").strip() or None,
         owner_customer_id=customer.id if customer else None,
         owner_customer_name_snapshot=customer.name if customer else None,
+        customer_generic_eligible=bool(customer_generic_eligible),
+        internal_name=normalized_internal_name,
         material_id=material.id if material else None,
         material_code_snapshot=material_code.strip(),
         normalized_material_code=normalize_material_code(material_code),

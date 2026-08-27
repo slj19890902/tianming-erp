@@ -600,7 +600,10 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
         InventoryMovement,
         SemiFinishedLotAllowedProduct,
         WarehouseArea,
+        WarehouseAreaStoragePolicy,
         WarehouseFloor,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
         WarehouseLocation,
     )
     from app.services import location_candidates
@@ -610,8 +613,14 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
         "load_warehouse_twin_published_floor_identity",
         lambda floor_number: {
             "revision": "anonymous-common-box-map-v1",
-            "zones_by_id": {"zone-e1": "E1"},
-            "zone_ids_by_area": {"E1": ("zone-e1",)},
+            "zones_by_id": {
+                "zone-e1": "E1",
+                "zone-raw-001": "RAW-001",
+            },
+            "zone_ids_by_area": {
+                "E1": ("zone-e1",),
+                "RAW-001": ("zone-raw-001",),
+            },
         }
         if int(floor_number) == 3
         else None,
@@ -724,6 +733,25 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
                 construction_status="enabled",
             )
         )
+        raw_area = WarehouseArea(
+            floor_id=floor3.id,
+            area_code="RAW-001",
+            area_name="Floor 3 left raw-material area",
+            construction_status="enabled",
+        )
+        db.add(raw_area)
+        db.flush()
+        db.add(
+            WarehouseAreaStoragePolicy(
+                area_id=raw_area.id,
+                map_feature_id="zone-raw-001",
+                allowed_inventory_types_json='["raw_material","semi_finished","shared"]',
+                storage_layout="pallet_ground",
+                status="published",
+                published_map_revision="anonymous-common-box-map-v1",
+                version=1,
+            )
+        )
         raw_staging = WarehouseLocation(
             location_code="1FA",
             location_name="Floor 1 A1 raw-material staging",
@@ -741,6 +769,17 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             warehouse_type="semi_finished",
             is_active=True,
         )
+        floor3_raw_staging = WarehouseLocation(
+            location_code="F3-RAW-001-UAT",
+            location_name="Floor 3 left raw-material staging",
+            warehouse_type="semi_finished",
+            warehouse_floor=3,
+            area_code="RAW-001",
+            storage_type="ground",
+            placement_status="placed",
+            source_version="CURRENT_MAP",
+            is_active=True,
+        )
         production_location = WarehouseLocation(
             location_code="E1-L10",
             location_name="三楼成品E1-L10",
@@ -751,10 +790,23 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             placement_status="placed",
             is_active=True,
         )
-        db.add_all([raw_staging, semi_location, production_location])
+        db.add_all(
+            [raw_staging, semi_location, floor3_raw_staging, production_location]
+        )
         db.flush()
-        db.add(
-            Floor3LocationLayout(
+        db.add_all(
+            [
+                Floor3LocationLayout(
+                    location_id=floor3_raw_staging.id,
+                    left_pct=20,
+                    top_pct=10,
+                    width_pct=5,
+                    height_pct=5,
+                    version=1,
+                    source_type="seeded",
+                    layout_kind="physical_pallet",
+                ),
+                Floor3LocationLayout(
                 location_id=production_location.id,
                 left_pct=10,
                 top_pct=10,
@@ -763,6 +815,41 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
                 version=1,
                 source_type="manual",
                 layout_kind="physical_pallet",
+                ),
+            ]
+        )
+        raw_plan = WarehouseGroundLayoutPlan(
+            area_id=raw_area.id,
+            status="published",
+            target_slot_count=1,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="anonymous-common-box-map-v1",
+            published_map_revision="anonymous-common-box-map-v1",
+            preview_fingerprint="c" * 64,
+            version=1,
+            publish_idempotency_key="common-box-floor3-raw-v1",
+            publish_request_hash="d" * 64,
+            updated_by=admin.id,
+            published_by=admin.id,
+            published_at=datetime.now(),
+        )
+        db.add(raw_plan)
+        db.flush()
+        db.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=raw_plan.id,
+                location_id=floor3_raw_staging.id,
+                route_sequence=1,
+                row_no=1,
+                slot_no=1,
+                x_mm=1000,
+                y_mm=1000,
+                width_mm=1200,
+                depth_mm=1000,
             )
         )
         db.commit()
@@ -850,10 +937,11 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             "/api/requisition/stock-replenishment/orders",
             json={**payload, "items": [bypass]},
         )
-        assert blocked_finished.status_code == 400
-        assert "客户专用纸板备料" in blocked_finished.text
+        assert blocked_finished.status_code == 409
+        assert "只有正式识别为衬板" in blocked_finished.text
 
         line["quantity"] = 45
+        line["internal_name"] = "A客户 600x470 通用净料"
         line["location_id"] = semi_location_id
         saved = client.post(
             "/api/requisition/stock-replenishment/orders",
@@ -935,12 +1023,11 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             stocked_item = replenishment_item_dict(
                 db.get(StockReplenishmentOrderItem, replenishment_item_id)
             )
-        assert stocked_item["inventory_lot"]["display_name"] == "客户专用纸板备料"
+        assert stocked_item["inventory_lot"]["display_name"] == "客户通用纸板备料"
+        assert stocked_item["inventory_lot"]["customer_generic_eligible"] is True
+        assert stocked_item["inventory_lot"]["internal_name"] == "A客户 600x470 通用净料"
         assert stocked_item["inventory_lot"]["quantity_available"] == 45
-        assert [
-            row["product_code"]
-            for row in stocked_item["inventory_lot"]["allowed_products"]
-        ] == ["A-BOX", "A-BOX-PRINT-B"]
+        assert stocked_item["inventory_lot"]["allowed_products"] == []
         with factory() as db:
             stocked_summary = stock_policy_dict(
                 db,
@@ -954,11 +1041,8 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             ] == 0
             assert stocked_summary[
                 "suggested_new_requisition_sheet_quantity"
-            ] == 0
-            assert (
-                stocked_summary["replenishment_state"]
-                == "board_preparation_ready"
-            )
+            ] == 35
+            assert stocked_summary["replenishment_state"] == "purchase_needed"
             companion_policy = db.scalar(
                 select(InventoryStockPolicy).where(
                     InventoryStockPolicy.product_id == companion_product_id
@@ -981,18 +1065,17 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             "/api/warehouse/lots",
             params={
                 "inventory_type": "semi_finished",
-                "keyword": "A-BOX-PRINT-B",
+                "keyword": "600x470 通用净料",
             },
         )
         assert searched.status_code == 200, searched.text
         searched_payload = searched.json()
         assert searched_payload["total"] == 1
         searched_lot = searched_payload["items"][0]
-        assert searched_lot["detail"]["inventory_display_name"] == "客户专用纸板备料"
-        assert [
-            row["product_code"]
-            for row in searched_lot["detail"]["allowed_products"]
-        ] == ["A-BOX", "A-BOX-PRINT-B"]
+        assert searched_lot["detail"]["inventory_display_name"] == "A客户 600x470 通用净料"
+        assert searched_lot["detail"]["customer_generic_eligible"] is True
+        assert searched_lot["detail"]["internal_name"] == "A客户 600x470 通用净料"
+        assert searched_lot["detail"]["allowed_products"] == []
 
         with factory() as db:
             lot_count_before_repeat = int(
@@ -1088,7 +1171,7 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             )
             assert unsafe_policy_summary[
                 "customer_board_preparation_available_sheet_quantity"
-            ] == 0
+            ] == 45
             assert unsafe_policy_summary[
                 "suggested_new_requisition_sheet_quantity"
             ] == 35
@@ -1096,7 +1179,7 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
         unsafe_supplier = client.get("/api/requisition/pending").json()["items"]
         assert next(
             row for row in unsafe_supplier if row["item_id"] == order_item_id
-        )["can_auto_use_customer_board_preparation"] is False
+        )["can_auto_use_customer_board_preparation"] is True
         with factory() as db:
             detail = db.get(
                 InventoryLot,
@@ -1120,10 +1203,10 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             detail.sheet_type = "raw_board"
             detail.crease_type = "毛片"
             db.commit()
-        unsafe_sheet = client.get("/api/requisition/pending").json()["items"]
+        compatible_unpressed = client.get("/api/requisition/pending").json()["items"]
         assert next(
-            row for row in unsafe_sheet if row["item_id"] == order_item_id
-        )["can_auto_use_customer_board_preparation"] is False
+            row for row in compatible_unpressed if row["item_id"] == order_item_id
+        )["can_auto_use_customer_board_preparation"] is True
         with factory() as db:
             detail = db.get(
                 InventoryLot,
@@ -1182,14 +1265,14 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
                 ],
                 "source_ref_type": "stock_replenishment_receipt",
                 "source_ref_id": received.json()["receipt_item_id"],
-                    "location_code": "1FA",
-                    "location_name": "Floor 1 A1 raw-material staging",
-                    "current_address_name": "Floor 1 A1 raw-material staging",
-                    "employee_location_name": "Floor 1 A1 raw-material staging",
+                    "location_code": "F3-RAW-001-UAT",
+                    "location_name": "Floor 3 left raw-material staging",
+                    "current_address_name": "Floor 3 left raw-material staging",
+                    "employee_location_name": "Floor 3 left raw-material staging",
                     "remaining_sheet_quantity": 40,
                 "remaining_product_quantity": 80,
                 "stock_yield_per_sheet": 2,
-                "display_name": "客户专用纸板备料",
+                "display_name": "A客户 600x470 通用净料",
             }
         ]
 
@@ -1255,13 +1338,15 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
         assert semi_lot.quantity_consumed == 40
         assert semi_lot.unit == "sheets"
         assert semi_lot.semi_finished_detail.owner_customer_id == ids["customer_a"]
+        assert semi_lot.semi_finished_detail.customer_generic_eligible is True
+        assert semi_lot.semi_finished_detail.internal_name == "A客户 600x470 通用净料"
         assert set(
             db.scalars(
                 select(SemiFinishedLotAllowedProduct.product_id).where(
                     SemiFinishedLotAllowedProduct.inventory_lot_id == semi_lot.id
                 )
             ).all()
-        ) == {ids["product_a"], companion_product_id}
+        ) == set()
 
 
 def test_pending_order_uses_later_customer_finished_stock_before_requisition(

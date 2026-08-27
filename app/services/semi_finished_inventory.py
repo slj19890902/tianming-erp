@@ -46,6 +46,9 @@ VALID_COMPONENT_TYPES = {"whole", "cover", "base"}
 SIGNATURE_OVERRIDE_WARNING = "SEMI_SIGNATURE_OVERRIDE"
 MANUAL_CONFIRM_WARNING = "MANUAL_DEDUCTION_CONFIRM_REQUIRED"
 GENERAL_SEMI_FINISHED_STOCK = "GENERAL_SEMI_FINISHED_STOCK"
+CUSTOMER_GENERIC_SEMI_FINISHED_STOCK = "CUSTOMER_GENERIC_SEMI_FINISHED_STOCK"
+MATERIAL_VARIANCE_PRESERVED = "MATERIAL_VARIANCE_PRESERVED"
+REVERSE_CREASE_ADMIN_OVERRIDE = "REVERSE_CREASE_ADMIN_OVERRIDE"
 
 
 @dataclass(frozen=True)
@@ -317,6 +320,25 @@ def safe_physical_board_facts_match(
 ) -> bool:
     """Fail closed for no-dialog customer board-preparation reservations."""
 
+    if bool(detail.customer_generic_eligible):
+        expected_layer = int(layer_count or 0)
+        if expected_layer <= 0 or int(detail.layer_count or 0) != expected_layer:
+            return False
+        expected_type = _normalize_crease_type(crease_type)
+        stock_type = _normalize_crease_type(detail.crease_type)
+        uncreased = {"", "毛片", "净料", "其他"}
+        if stock_type in uncreased and expected_type in uncreased:
+            return True
+        if stock_type in uncreased and expected_type == "压线":
+            return True
+        if stock_type == expected_type == "压线":
+            return (
+                detail.crease_left_mm,
+                detail.crease_middle_mm,
+                detail.crease_right_mm,
+            ) == (crease_left_mm, crease_middle_mm, crease_right_mm)
+        return False
+
     normalized_supplier = " ".join((supplier_name or "").strip().casefold().split())
     actual_supplier = " ".join(
         (detail.supplier_name or "").strip().casefold().split()
@@ -366,6 +388,89 @@ def _physical_signature_differences(
         for name in _signature_differences_from_signature(expected, detail)
         if name != "customer"
     )
+
+
+def _customer_generic_signature_differences(
+    expected: SemiFinishedSignature,
+    detail: SemiFinishedInventoryDetail,
+) -> tuple[str, ...]:
+    """Compare product-independent physical facts and retain material as evidence."""
+
+    return _signature_differences_from_signature(expected, detail)
+
+
+def _customer_generic_blocking_differences(
+    expected: SemiFinishedSignature,
+    detail: SemiFinishedInventoryDetail,
+) -> tuple[str, ...]:
+    return tuple(
+        name
+        for name in _signature_differences_from_signature(expected, detail)
+        if name not in {"customer", "material_code"}
+    )
+
+
+def _normalize_crease_type(value: str | None) -> str:
+    normalized = str(value or "").strip()
+    return {"毛": "毛片", "净": "净料"}.get(normalized, normalized)
+
+
+def _requirement_crease_facts(
+    db: Session,
+    requirement: OrderItemSemiRequirement,
+) -> tuple[int | None, str, int | None, int | None, int | None]:
+    item = db.get(OrderItem, requirement.order_item_id)
+    if item is None:
+        raise WarehouseInventoryError("订单明细不存在", 404)
+    snapshot = (
+        db.get(SalesOrderItemBomComponent, requirement.sales_order_item_bom_component_id)
+        if requirement.sales_order_item_bom_component_id is not None
+        else None
+    )
+    if snapshot is not None:
+        return (
+            snapshot.snapshot_component_layer_count,
+            _normalize_crease_type(snapshot.snapshot_component_crease_type),
+            snapshot.snapshot_component_crease_left_mm,
+            snapshot.snapshot_component_crease_middle_mm,
+            snapshot.snapshot_component_crease_right_mm,
+        )
+    product = db.get(Product, item.product_id)
+    return (
+        item.layer_count or (product.layer_count if product is not None else None),
+        _normalize_crease_type(item.snapshot_crease_type),
+        item.snapshot_crease_left_mm,
+        item.snapshot_crease_middle_mm,
+        item.snapshot_crease_right_mm,
+    )
+
+
+def _customer_generic_crease_direction(
+    db: Session,
+    requirement: OrderItemSemiRequirement,
+    detail: SemiFinishedInventoryDetail,
+) -> str:
+    expected_layer, expected_type, expected_left, expected_middle, expected_right = (
+        _requirement_crease_facts(db, requirement)
+    )
+    if expected_layer and int(detail.layer_count or 0) != int(expected_layer):
+        return "blocked"
+    stock_type = _normalize_crease_type(detail.crease_type)
+    uncreased = {"", "毛片", "净料", "其他"}
+    if stock_type in uncreased and expected_type in uncreased:
+        return "compatible"
+    if stock_type in uncreased and expected_type == "压线":
+        return "forward_press"
+    if stock_type == "压线" and expected_type in uncreased:
+        return "reverse_admin"
+    if stock_type == expected_type == "压线":
+        if (
+            detail.crease_left_mm,
+            detail.crease_middle_mm,
+            detail.crease_right_mm,
+        ) == (expected_left, expected_middle, expected_right):
+            return "compatible"
+    return "blocked"
 
 
 def _requirement_product_id(db: Session, requirement: OrderItemSemiRequirement) -> int:
@@ -423,6 +528,14 @@ def _lot_eligibility_scope(
             if not _physical_signature_differences(expected, detail)
             else None
         )
+    if bool(detail.customer_generic_eligible):
+        if detail.owner_customer_id != customer_id:
+            return None
+        return (
+            "customer_generic"
+            if not _customer_generic_blocking_differences(expected, detail)
+            else None
+        )
     if detail.owner_customer_id != customer_id or lot.id not in allowed_lot_ids:
         return None
     return "dedicated"
@@ -457,6 +570,16 @@ def ensure_semi_finished_lot_eligibility(
                 409,
             )
         return "general"
+    if bool(detail.customer_generic_eligible):
+        if detail.owner_customer_id != customer_id:
+            raise WarehouseInventoryError("其他客户通用半成品库存不能用于当前订单", 409)
+        differences = _customer_generic_blocking_differences(expected, detail)
+        if differences:
+            raise WarehouseInventoryError(
+                "客户通用半成品物理规格与订单需求不一致：" + "、".join(differences),
+                409,
+            )
+        return "customer_generic"
     if detail.owner_customer_id != customer_id:
         raise WarehouseInventoryError("其他客户专用半成品库存不能用于当前订单", 409)
     if lot.id not in _allowed_lot_ids_for_product(db, product_id):
@@ -503,11 +626,45 @@ def semi_finished_inventory_candidates(
     if requirement is None:
         raise WarehouseInventoryError("半成品需求不存在", 404)
     expected = requirement_signature(requirement)
-    return _semi_finished_candidates_for_signature(
+    candidates = _semi_finished_candidates_for_signature(
         db,
         product_id=_requirement_product_id(db, requirement),
         expected=expected,
     )
+    resolved: list[SemiFinishedCandidate] = []
+    for row in candidates:
+        if row.source != "customer_generic":
+            resolved.append(row)
+            continue
+        detail = row.lot.semi_finished_detail
+        if detail is None:
+            continue
+        direction = _customer_generic_crease_direction(db, requirement, detail)
+        if direction == "blocked":
+            continue
+        if direction == "reverse_admin":
+            resolved.append(
+                SemiFinishedCandidate(
+                    lot=row.lot,
+                    source=row.source,
+                    match_rule_id=row.match_rule_id,
+                    available_stock_quantity=row.available_stock_quantity,
+                    deductible_requirement_quantity=row.deductible_requirement_quantity,
+                    signature_differences=row.signature_differences,
+                    warning_codes=tuple(
+                        [*row.warning_codes, REVERSE_CREASE_ADMIN_OVERRIDE]
+                    ),
+                    warning_messages=tuple(
+                        [
+                            *row.warning_messages,
+                            "该库存已有压线，当前订单无压线；仅管理员填写原因后可特批。",
+                        ]
+                    ),
+                )
+            )
+            continue
+        resolved.append(row)
+    return resolved
 
 
 def semi_finished_candidates_for_product(
@@ -607,7 +764,20 @@ def browse_semi_finished_inventory_for_product(
         )
         if scope is None:
             continue
-        if scope == "general":
+        if scope == "customer_generic":
+            source = "customer_generic"
+            differences = _customer_generic_signature_differences(expected, detail)
+            codes = [MANUAL_CONFIRM_WARNING, CUSTOMER_GENERIC_SEMI_FINISHED_STOCK]
+            messages = [
+                "每次半成品库存抵扣都必须人工确认。",
+                "该批次是同一客户的通用备料，不绑定具体存货编码。",
+            ]
+            if "material_code" in differences:
+                codes.append(MATERIAL_VARIANCE_PRESERVED)
+                messages.append("实际材质不同，但会保留原材质、成本、来源和批次事实。")
+            warning_codes = tuple(codes)
+            warning_messages = tuple(messages)
+        elif scope == "general":
             source = "general_signature"
             differences: tuple[str, ...] = ()
             warning_codes = (MANUAL_CONFIRM_WARNING, GENERAL_SEMI_FINISHED_STOCK)
@@ -684,6 +854,31 @@ def _semi_finished_candidates_for_signature(
             allowed_lot_ids=allowed_lot_ids,
         )
         if scope is None:
+            continue
+        if scope == "customer_generic":
+            differences = _customer_generic_signature_differences(expected, detail)
+            codes = [MANUAL_CONFIRM_WARNING, CUSTOMER_GENERIC_SEMI_FINISHED_STOCK]
+            messages = [
+                "每次半成品库存抵扣都必须人工确认。",
+                "该批次是同一客户的通用备料，不绑定具体存货编码。",
+            ]
+            if "material_code" in differences:
+                codes.append(MATERIAL_VARIANCE_PRESERVED)
+                messages.append("实际材质不同，但会保留原材质、成本、来源和批次事实。")
+            candidates.append(
+                SemiFinishedCandidate(
+                    lot=lot,
+                    source="customer_generic",
+                    match_rule_id=None,
+                    available_stock_quantity=lot.quantity_available,
+                    deductible_requirement_quantity=(
+                        lot.quantity_available * detail.stock_yield_per_sheet
+                    ),
+                    signature_differences=differences,
+                    warning_codes=tuple(codes),
+                    warning_messages=tuple(messages),
+                )
+            )
             continue
         if scope == "general":
             candidates.append(
@@ -788,7 +983,20 @@ def browse_semi_finished_inventory(
         )
         if scope is None:
             continue
-        if scope == "general":
+        if scope == "customer_generic":
+            source = "customer_generic"
+            differences = _customer_generic_signature_differences(expected, detail)
+            codes = [MANUAL_CONFIRM_WARNING, CUSTOMER_GENERIC_SEMI_FINISHED_STOCK]
+            messages = [
+                "每次半成品库存抵扣都必须人工确认。",
+                "该批次是同一客户的通用备料，不绑定具体存货编码。",
+            ]
+            if "material_code" in differences:
+                codes.append(MATERIAL_VARIANCE_PRESERVED)
+                messages.append("实际材质不同，但会保留原材质、成本、来源和批次事实。")
+            warning_codes = tuple(codes)
+            warning_messages = tuple(messages)
+        elif scope == "general":
             source = "general_signature"
             differences: tuple[str, ...] = ()
             warning_codes = (MANUAL_CONFIRM_WARNING, GENERAL_SEMI_FINISHED_STOCK)
@@ -937,6 +1145,8 @@ def confirm_semi_finished_match(
     operator_id: int | None,
     override: bool,
     warning_acknowledged_codes: list[str],
+    admin_reverse_crease_override: bool = False,
+    reverse_crease_override_reason: str | None = None,
 ) -> SemiFinishedMatchConfirmation:
     requirement = db.get(OrderItemSemiRequirement, requirement_id)
     if requirement is None:
@@ -955,11 +1165,16 @@ def confirm_semi_finished_match(
         customer_id=requirement.customer_id,
         expected=requirement_signature(requirement),
     )
-    differences = (
-        _physical_signature_differences(requirement_signature(requirement), detail)
-        if scope == "general"
-        else _signature_differences(requirement, detail)
-    )
+    if scope == "general":
+        differences = _physical_signature_differences(
+            requirement_signature(requirement), detail
+        )
+    elif scope == "customer_generic":
+        differences = _customer_generic_signature_differences(
+            requirement_signature(requirement), detail
+        )
+    else:
+        differences = _signature_differences(requirement, detail)
     if (
         scope == "general"
         and GENERAL_SEMI_FINISHED_STOCK not in warning_acknowledged_codes
@@ -968,7 +1183,32 @@ def confirm_semi_finished_match(
             "通用半成品库存跨客户抵扣必须确认 GENERAL_SEMI_FINISHED_STOCK 警告",
             409,
         )
-    if differences:
+    if scope == "customer_generic":
+        if CUSTOMER_GENERIC_SEMI_FINISHED_STOCK not in warning_acknowledged_codes:
+            raise WarehouseInventoryError(
+                "客户通用半成品抵扣必须确认 CUSTOMER_GENERIC_SEMI_FINISHED_STOCK 警告",
+                409,
+            )
+        crease_direction = _customer_generic_crease_direction(
+            db, requirement, detail
+        )
+        if crease_direction == "blocked":
+            raise WarehouseInventoryError(
+                "该客户通用半成品的层数或压线事实不能满足当前订单需求",
+                409,
+            )
+        if crease_direction == "reverse_admin":
+            reason = (reverse_crease_override_reason or "").strip()
+            if (
+                not admin_reverse_crease_override
+                or REVERSE_CREASE_ADMIN_OVERRIDE not in warning_acknowledged_codes
+                or len(reason) < 4
+            ):
+                raise WarehouseInventoryError(
+                    "已有压线的库存不能转成无压线订单；仅管理员明确特批并填写原因后允许",
+                    403,
+                )
+    elif differences:
         if not override:
             raise WarehouseInventoryError(
                 "库存签名与需求存在差异，必须明确 override 后确认："
@@ -981,7 +1221,7 @@ def confirm_semi_finished_match(
             )
     signature = (
         requirement_signature(requirement)
-        if scope == "general"
+        if scope in {"general", "customer_generic"}
         else lot_signature(detail)
     )
     if signature is None:
@@ -1018,7 +1258,13 @@ def confirm_semi_finished_match(
     warning_codes: list[str] = []
     if scope == "general":
         warning_codes.append(GENERAL_SEMI_FINISHED_STOCK)
-    if differences:
+    if scope == "customer_generic":
+        warning_codes.append(CUSTOMER_GENERIC_SEMI_FINISHED_STOCK)
+        if "material_code" in differences:
+            warning_codes.append(MATERIAL_VARIANCE_PRESERVED)
+        if _customer_generic_crease_direction(db, requirement, detail) == "reverse_admin":
+            warning_codes.append(REVERSE_CREASE_ADMIN_OVERRIDE)
+    elif differences:
         warning_codes.append(SIGNATURE_OVERRIDE_WARNING)
     return SemiFinishedMatchConfirmation(
         rule=rule,
@@ -1622,6 +1868,8 @@ def reserve_semi_finished_inventory(
     confirmed: bool,
     override: bool = False,
     warning_acknowledged_codes: list[str] | None = None,
+    admin_reverse_crease_override: bool = False,
+    reverse_crease_override_reason: str | None = None,
 ) -> SemiFinishedReservationBatch:
     if not confirmed:
         raise WarehouseInventoryError("半成品库存抵扣必须人工确认", 409)
@@ -1732,6 +1980,8 @@ def reserve_semi_finished_inventory(
                 operator_id=operator_id,
                 override=override,
                 warning_acknowledged_codes=warnings,
+                admin_reverse_crease_override=admin_reverse_crease_override,
+                reverse_crease_override_reason=reverse_crease_override_reason,
             )
             detail = lot.semi_finished_detail
             remaining_target = target - allocated

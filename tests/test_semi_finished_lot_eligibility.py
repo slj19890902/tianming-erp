@@ -32,7 +32,9 @@ from app.models.warehouse_inventory import (
 )
 from app.services.inventory_insights import build_inventory_insights
 from app.services.semi_finished_inventory import (
+    CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,
     GENERAL_SEMI_FINISHED_STOCK,
+    REVERSE_CREASE_ADMIN_OVERRIDE,
     SemiFinishedLotVersion,
     confirm_semi_finished_match,
     consume_semi_finished_reservation,
@@ -41,6 +43,152 @@ from app.services.semi_finished_inventory import (
     save_order_item_semi_requirement,
     semi_finished_inventory_candidates,
 )
+
+
+def test_customer_generic_lot_matches_same_customer_without_product_or_material_binding(
+    eligibility_db,
+) -> None:
+    db, data = eligibility_db
+    lot = _add_lot(
+        db,
+        data,
+        key="customer-generic-material-diff",
+        customer_id=data["customer"].id,
+    )
+    assert lot.semi_finished_detail is not None
+    lot.semi_finished_detail.material_code_snapshot = "B555B"
+    lot.semi_finished_detail.normalized_material_code = "B555B"
+    lot.semi_finished_detail.customer_generic_eligible = True
+    lot.semi_finished_detail.internal_name = "800x600 customer generic board"
+    _order_a, _item_a, requirement_a = _add_requirement(
+        db, data, product=data["products"][0], key="GENERIC-A"
+    )
+    _order_b, _item_b, requirement_b = _add_requirement(
+        db, data, product=data["products"][1], key="GENERIC-B"
+    )
+    _other_order, _other_item, other_requirement = _add_requirement(
+        db, data, product=data["other_product"], key="GENERIC-OTHER"
+    )
+    db.flush()
+
+    for requirement in (requirement_a, requirement_b):
+        candidate = next(
+            row
+            for row in semi_finished_inventory_candidates(db, requirement.id)
+            if row.lot.id == lot.id
+        )
+        assert candidate.source == "customer_generic"
+        assert "material_code" in candidate.signature_differences
+        assert CUSTOMER_GENERIC_SEMI_FINISHED_STOCK in candidate.warning_codes
+    assert lot.id not in {
+        row.lot.id
+        for row in semi_finished_inventory_candidates(db, other_requirement.id)
+    }
+
+    batch = reserve_semi_finished_inventory(
+        db,
+        requirement_id=requirement_b.id,
+        requested_requirement_quantity=3,
+        lots=[SemiFinishedLotVersion(lot.id, lot.version)],
+        operator_id=data["admin"].id,
+        idempotency_key="customer-generic-reserve",
+        confirmed=True,
+        warning_acknowledged_codes=[CUSTOMER_GENERIC_SEMI_FINISHED_STOCK],
+    )
+    assert batch.allocated_requirement_quantity == 3
+
+
+def test_customer_generic_crease_is_directional_and_reverse_requires_admin_override(
+    eligibility_db,
+) -> None:
+    db, data = eligibility_db
+    product = data["products"][0]
+
+    raw_lot = _add_lot(
+        db,
+        data,
+        key="customer-generic-uncreased",
+        customer_id=data["customer"].id,
+    )
+    assert raw_lot.semi_finished_detail is not None
+    raw_lot.semi_finished_detail.customer_generic_eligible = True
+    raw_lot.semi_finished_detail.sheet_type = "raw_board"
+    raw_lot.semi_finished_detail.crease_type = "毛片"
+    _pressed_order, pressed_item, pressed_requirement = _add_requirement(
+        db, data, product=product, key="GENERIC-PRESSED"
+    )
+    pressed_item.snapshot_crease_type = "压线"
+    pressed_item.snapshot_crease_left_mm = 200
+    pressed_item.snapshot_crease_middle_mm = 200
+    pressed_item.snapshot_crease_right_mm = 200
+    db.flush()
+    forward = reserve_semi_finished_inventory(
+        db,
+        requirement_id=pressed_requirement.id,
+        requested_requirement_quantity=1,
+        lots=[SemiFinishedLotVersion(raw_lot.id, raw_lot.version)],
+        operator_id=data["admin"].id,
+        idempotency_key="customer-generic-forward-crease",
+        confirmed=True,
+        warning_acknowledged_codes=[CUSTOMER_GENERIC_SEMI_FINISHED_STOCK],
+    )
+    assert forward.allocated_requirement_quantity == 1
+
+    creased_lot = _add_lot(
+        db,
+        data,
+        key="customer-generic-creased",
+        customer_id=data["customer"].id,
+    )
+    assert creased_lot.semi_finished_detail is not None
+    creased_lot.semi_finished_detail.customer_generic_eligible = True
+    creased_lot.semi_finished_detail.sheet_type = "creased_sheet"
+    creased_lot.semi_finished_detail.crease_type = "压线"
+    creased_lot.semi_finished_detail.crease_left_mm = 200
+    creased_lot.semi_finished_detail.crease_middle_mm = 200
+    creased_lot.semi_finished_detail.crease_right_mm = 200
+    _raw_order, raw_item, raw_requirement = _add_requirement(
+        db, data, product=product, key="GENERIC-RAW"
+    )
+    raw_item.snapshot_crease_type = "毛片"
+    db.flush()
+
+    reverse_candidate = next(
+        row
+        for row in semi_finished_inventory_candidates(db, raw_requirement.id)
+        if row.lot.id == creased_lot.id
+    )
+    assert REVERSE_CREASE_ADMIN_OVERRIDE in reverse_candidate.warning_codes
+
+    with pytest.raises(WarehouseInventoryError, match="管理员") as error:
+        reserve_semi_finished_inventory(
+            db,
+            requirement_id=raw_requirement.id,
+            requested_requirement_quantity=1,
+            lots=[SemiFinishedLotVersion(creased_lot.id, creased_lot.version)],
+            operator_id=data["admin"].id,
+            idempotency_key="customer-generic-reverse-blocked",
+            confirmed=True,
+            warning_acknowledged_codes=[CUSTOMER_GENERIC_SEMI_FINISHED_STOCK],
+        )
+    assert error.value.status_code == 403
+
+    allowed = reserve_semi_finished_inventory(
+        db,
+        requirement_id=raw_requirement.id,
+        requested_requirement_quantity=1,
+        lots=[SemiFinishedLotVersion(creased_lot.id, creased_lot.version)],
+        operator_id=data["admin"].id,
+        idempotency_key="customer-generic-reverse-approved",
+        confirmed=True,
+        warning_acknowledged_codes=[
+            CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,
+            REVERSE_CREASE_ADMIN_OVERRIDE,
+        ],
+        admin_reverse_crease_override=True,
+        reverse_crease_override_reason="现场确认特殊返工",
+    )
+    assert allowed.allocated_requirement_quantity == 1
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     manual_semi_finished_in,

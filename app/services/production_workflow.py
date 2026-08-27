@@ -5091,7 +5091,12 @@ def _active_customer_board_preparation_sources(
                 "stock_yield_per_sheet": int(
                     detail.stock_yield_per_sheet or reservation.yield_factor or 1
                 ),
-                "display_name": "客户专用纸板备料",
+                "display_name": (
+                    detail.internal_name
+                    or "客户通用纸板备料"
+                    if detail.customer_generic_eligible
+                    else "客户专用纸板备料"
+                ),
             }
         )
     return result

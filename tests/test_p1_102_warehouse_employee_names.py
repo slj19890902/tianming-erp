@@ -102,6 +102,50 @@ def test_custom_area_name_with_floor_prefix_is_not_duplicated_in_location() -> N
     )
 
 
+def test_area_local_sequence_gives_every_side_one_unique_employee_position() -> None:
+    floor = _floor(3)
+    area = _area(floor, area_code="A1", area_name="右区A1 新振（主通道西侧）")
+    left = _location(
+        code="A1-L01", area_code="A1", storage_type="ground", side_code="L"
+    )
+    right = _location(
+        code="A1-R01", area_code="A1", storage_type="ground", side_code="R"
+    )
+
+    assert employee_location_name(
+        left, area=area, floor=floor, area_sequence=1
+    ) == "三楼 右区A1 新振（主通道西侧）·A1-1"
+    assert location_address_payload(
+        right,
+        area=area,
+        floor=floor,
+        position_status="mapped",
+        area_sequence=6,
+    )["employee_location_name"] == "三楼 右区A1 新振（主通道西侧）·A1-6"
+
+
+def test_current_map_location_uses_the_same_area_local_sequence_projection() -> None:
+    floor = _floor(3)
+    area = _area(floor, area_code="A1", area_name="A1 area")
+    location = _location(
+        code="A1-L01",
+        area_code="A1",
+        storage_type="ground",
+        side_code="L",
+    )
+    location.source_version = "CURRENT_MAP"
+
+    projected = employee_location_name(
+        location,
+        area=area,
+        floor=floor,
+        area_sequence=1,
+    )
+
+    assert projected.endswith("A1-1")
+    assert projected != location.location_code
+
+
 @pytest.mark.parametrize(
     ("location", "expected"),
     [

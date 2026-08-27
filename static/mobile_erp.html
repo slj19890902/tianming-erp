@@ -182,6 +182,7 @@
     .warehouse-map-feature-aisle { fill: #fff8df; stroke: #d4b761; stroke-width: 55; }
     .warehouse-map-location { position: absolute; min-width: 46px; min-height: 34px; padding: 3px; overflow: hidden; border: 2px solid var(--green); border-radius: 5px; background: #e8f5ec; color: var(--green); font-size: 9px; font-weight: 900; }
     .warehouse-map-location.has-goods { background: #d5ebff; border-color: var(--blue); color: var(--blue); }
+    .warehouse-map-location.unmatched { background: #ffe4e6; border-color: #b91c1c; color: #991b1b; box-shadow: 0 0 0 3px rgba(185, 28, 28, .18); }
     .warehouse-map-location.source { outline: 4px solid var(--orange); }
     .warehouse-map-location.target { outline: 4px solid #b00020; }
     .warehouse-map-location[disabled] { border-style: dashed; opacity: .65; }
@@ -341,7 +342,7 @@
         <button id="warehouseMapZoomOut" class="small-btn" type="button">缩小</button>
         <button id="warehouseMapZoomIn" class="small-btn" type="button">放大</button>
         <button id="warehouseMapRefresh" class="small-btn" type="button">刷新当前位置</button>
-        <button id="warehouseDiscrepancyListButton" class="small-btn" type="button" hidden>待纠正报告</button>
+        <button id="warehouseDiscrepancyListButton" class="small-btn" type="button" hidden>待核对报告</button>
       </div>
       <div id="warehouseMapState" class="card status">进入后才读取一层一片区域。</div>
       <p id="warehouseMapGuidance" class="warehouse-map-note" hidden></p>
@@ -1310,10 +1311,10 @@
         const locations = Array.isArray(data.locations) ? data.locations : [];
         locations.forEach(location => {
           if (!location.geometry) return;
-          const button = node("button", `warehouse-map-location${(location.goods || []).length ? " has-goods" : ""}`);
+          const button = node("button", `warehouse-map-location${(location.goods || []).length ? " has-goods" : ""}${location.has_unmatched_inventory_observation ? " unmatched" : ""}`);
           button.type = "button";
           button.dataset.locationId = String(location.location_id);
-          button.textContent = readableLocation(location);
+          button.textContent = `${readableLocation(location)}${location.has_unmatched_inventory_observation ? ` · 待核对${location.unmatched_inventory_observation_count || ""}` : ""}`;
           button.style.left = `${location.geometry.left_pct}%`;
           button.style.top = `${location.geometry.top_pct}%`;
           button.style.width = `${location.geometry.width_pct}%`;
@@ -1339,7 +1340,8 @@
         container.replaceChildren(node("h2", "", `${readableLocation(location)}｜现场货物`));
         const goods = Array.isArray(location.goods) ? location.goods : [];
         if (!goods.length) {
-          container.append(node("p", "muted", "当前账号在这个位置没有可见货物。若货物实际在这里，请先从系统登记位置选中货物后再上报。"));
+          container.append(node("p", "muted", "该正式货位当前为空。若现场有货，请先按客户简称和存货编码搜索全仓实物库存；找到后可直接登记实际搬运，仍找不到再标红待管理员核对。"));
+          renderEmptyWarehouseLocationSearch(location, container);
         }
         goods.forEach(good => {
           const button = node("button", "candidate");
@@ -1358,6 +1360,102 @@
         container.hidden = false;
       }
 
+      function renderEmptyWarehouseLocationSearch(location, container) {
+        const search = node("section", "card warehouse-empty-search");
+        const customerLabel = node("label", "", "客户名称或简称（可选）");
+        const customerInput = node("input");
+        customerInput.maxLength = 120;
+        customerInput.placeholder = "例如 新振、YL";
+        customerLabel.append(customerInput);
+        const inventoryLabel = node("label", "", "存货编码、产品名称或关联词");
+        const inventoryInput = node("input");
+        inventoryInput.maxLength = 200;
+        inventoryInput.placeholder = "至少填写一个关键词";
+        inventoryLabel.append(inventoryInput);
+        const result = node("div", "warehouse-empty-search-results");
+        const submit = node("button", "search-btn", "搜索全仓实物库存");
+        submit.type = "button";
+        submit.addEventListener("click", async () => {
+          const customerKeyword = customerInput.value.trim();
+          const inventoryKeyword = inventoryInput.value.trim();
+          if (!customerKeyword && !inventoryKeyword) {
+            window.alert("请先输入客户简称或存货编码等关键词");
+            return;
+          }
+          submit.disabled = true;
+          result.replaceChildren(node("p", "muted", "正在搜索全仓所有正数成品库存…"));
+          try {
+            const params = new URLSearchParams({ limit: "100" });
+            if (customerKeyword) params.set("customer_keyword", customerKeyword);
+            if (inventoryKeyword) params.set("inventory_keyword", inventoryKeyword);
+            const data = await apiGet(`/api/mobile/erp/warehouse/physical-inventory/search?${params}`);
+            result.replaceChildren();
+            (data.items || []).forEach(good => {
+              const button = node("button", "candidate");
+              button.type = "button";
+              button.append(
+                node("strong", "", `${good.product_code || "无存货编码"}｜${good.product_name || "未填写名称"}`),
+                node("span", "", `${good.customer_name || "未填写客户"}｜${good.specification || "未填写规格"}`),
+                node("span", "", `${good.quantity_total || 0}${good.unit}｜系统位置 ${readableLocation(good.registered_location)}`),
+                node("span", "candidate-action", good.can_move ? "选择并登记搬到当前空位" : "质量冻结/损坏，仅供核对")
+              );
+              button.disabled = good.can_move !== true;
+              button.addEventListener("click", () => {
+                selectWarehouseMapSource(good, good.registered_location);
+                selectWarehouseMapTarget(location);
+                byId("warehouseMapMoveForm").scrollIntoView({ behavior: "smooth", block: "nearest" });
+              });
+              result.append(button);
+            });
+            if (!(data.items || []).length) result.append(node("p", "status error", "系统未找到匹配的正数成品库存；请核对关键词，或标红交管理员处理。"));
+            const report = node("button", "small-btn", "仍不是现场货物：标红待管理员核对");
+            report.type = "button";
+            report.addEventListener("click", () => reportUnmatchedWarehouseInventory(location, customerKeyword, inventoryKeyword));
+            result.append(report);
+            if (data.has_more) result.append(node("p", "muted", `匹配结果超过 ${data.items.length} 条，请补充客户简称或更完整存货编码缩小范围。`));
+          } catch (error) {
+            result.replaceChildren(node("p", "status error", error.message || "全仓实物库存搜索失败"));
+          } finally {
+            submit.disabled = false;
+          }
+        });
+        search.append(customerLabel, inventoryLabel, submit, result);
+        container.append(search);
+      }
+
+      async function reportUnmatchedWarehouseInventory(location, customerKeyword, inventoryKeyword) {
+        const requiredKeyword = String(inventoryKeyword || customerKeyword || "").trim();
+        if (!requiredKeyword) {
+          window.alert("请至少填写客户简称或存货编码等关键信息");
+          return;
+        }
+        const quantityText = window.prompt("现场大约有多少只？不确定可留空：", "");
+        if (quantityText === null) return;
+        const quantity = quantityText.trim() ? Number(quantityText) : null;
+        if (quantity !== null && (!Number.isInteger(quantity) || quantity <= 0)) {
+          window.alert("现场数量必须是正整数，或留空等待管理员核对");
+          return;
+        }
+        const reason = window.prompt("请记录包装、印字或其他可帮助管理员识别的信息：", "现场有货，但全仓实物库存搜索未找到匹配批次");
+        if (!reason?.trim()) return;
+        try {
+          const data = await apiPost("/api/mobile/erp/warehouse/unmatched-inventory-observations", {
+            observed_location_id: location.location_id,
+            observed_location_layout_version: location.geometry.version,
+            customer_keyword: String(customerKeyword || "").trim() || null,
+            inventory_keyword: requiredKeyword,
+            reported_quantity: quantity,
+            reported_unit: quantity === null ? null : "只",
+            reason: reason.trim(),
+            idempotency_key: warehouseRequestKey("mobile-map-unmatched"),
+          });
+          window.alert(data.message || "现场未匹配货物已标红，等待管理员核对");
+          await loadWarehouseMapArea();
+        } catch (error) {
+          window.alert(error.message || "现场未匹配货物标记失败");
+        }
+      }
+
       function selectWarehouseMapSource(good, location) {
         state.warehouseMapSource = { good, location };
         state.warehouseMapTarget = null;
@@ -1366,8 +1464,8 @@
           button.classList.remove("target");
         });
         byId("warehouseMapMoveForm").hidden = false;
-        byId("warehouseMapMoveQuantity").value = String(good.quantity_total || 1);
-        byId("warehouseMapMoveQuantity").max = String(good.quantity_total || 1);
+        byId("warehouseMapMoveQuantity").value = String(good.quantity_movable || 1);
+        byId("warehouseMapMoveQuantity").max = String(good.quantity_movable || 1);
         byId("warehouseMapMoveSummary").textContent = `${good.product_code || "当前货物"}：来源 ${readableLocation(location)}，请在地图点选现场目标位置。`;
         byId("warehouseMapConfirmMove").disabled = true;
         byId("warehouseMapReportMismatch").disabled = true;
@@ -1389,7 +1487,7 @@
         const source = state.warehouseMapSource;
         const target = state.warehouseMapTarget;
         const quantity = Number(byId("warehouseMapMoveQuantity").value || 0);
-        if (!source || !target || quantity < 1 || quantity > Number(source.good.quantity_total || 0)) return;
+        if (!source || !target || quantity < 1 || quantity > Number(source.good.quantity_movable || 0)) return;
         byId("warehouseMapConfirmMove").disabled = true;
         try {
           const data = await apiPost(`/api/mobile/erp/warehouse/lots/${source.good.lot_id}/moves`, {
@@ -1439,7 +1537,10 @@
         container.hidden = false;
         container.replaceChildren(node("p", "card muted", "正在读取待纠正报告…"));
         try {
-          const data = await apiGet("/api/mobile/erp/warehouse/location-discrepancies?status=open&limit=20");
+          const [data, unmatched] = await Promise.all([
+            apiGet("/api/mobile/erp/warehouse/location-discrepancies?status=open&limit=20"),
+            apiGet("/api/mobile/erp/warehouse/unmatched-inventory-observations?status=open&limit=100"),
+          ]);
           container.replaceChildren(node("h2", "", "待纠正位置报告"));
           (data.items || []).forEach(item => {
             const card = node("section", "card");
@@ -1472,7 +1573,38 @@
             card.append(button);
             container.append(card);
           });
-          if (!(data.items || []).length) container.append(node("p", "muted", "当前没有待纠正位置报告。"));
+          if ((unmatched.items || []).length) container.append(node("h2", "", "现场有货但系统未匹配"));
+          (unmatched.items || []).forEach(item => {
+            const card = node("section", "card status error");
+            card.append(
+              node("strong", "", `${item.inventory_keyword}｜${readableLocation(item.observed_location)}`),
+              node("p", "muted", `${item.customer_keyword || "客户未确认"}${item.reported_quantity ? `｜约 ${item.reported_quantity}${item.reported_unit || ""}` : ""}`),
+              node("p", "muted", item.reason)
+            );
+            const button = node("button", "small-btn", "核对后关闭红色标记");
+            button.type = "button";
+            button.addEventListener("click", async () => {
+              const note = window.prompt("请输入核对结果；若需要新增或修复库存，请先完成对应正式操作：", "已核对现场与系统事实");
+              if (!note?.trim()) return;
+              button.disabled = true;
+              try {
+                await apiPost(`/api/mobile/erp/warehouse/unmatched-inventory-observations/${item.id}/resolve`, {
+                  expected_version: item.version,
+                  resolution_note: note.trim(),
+                  resolved_inventory_lot_id: null,
+                  idempotency_key: warehouseRequestKey("mobile-map-unmatched-resolve"),
+                });
+                await loadWarehouseDiscrepancies();
+                await loadWarehouseMapArea();
+              } catch (error) {
+                window.alert(error.message || "红色标记关闭失败");
+                button.disabled = false;
+              }
+            });
+            card.append(button);
+            container.append(card);
+          });
+          if (!(data.items || []).length && !(unmatched.items || []).length) container.append(node("p", "muted", "当前没有待核对报告。"));
         } catch (error) {
           container.replaceChildren(node("p", "card status error", error.message || "待纠正报告读取失败"));
         }

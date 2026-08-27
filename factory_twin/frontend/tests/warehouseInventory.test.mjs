@@ -37,6 +37,7 @@ import {
   buildPalletMergeBatchPayload,
   normalizePalletMergeCandidate,
   palletMergeCompatibility,
+  palletMergeSuggestionProductKey,
   palletMergeTargetChoices,
   togglePalletMergeSource
 } from "../src/warehousePalletMergeDraft.mjs";
@@ -304,6 +305,37 @@ test("full delivery leaves a mapped empty location while partial reserved and da
   assert.deepEqual(mapped.map((item) => item.visual_status), ["empty", "waiting", "waiting", "waiting"]);
   assert.deepEqual(mapped.map((item) => item.visual_kind), ["location_anchor", "physical_pallet", "physical_pallet", "physical_pallet"]);
   assert.deepEqual(rows.map((item) => item.occupancy_status), ["empty", "occupied", "occupied", "occupied"]);
+});
+
+test("an unmatched observation keeps the formal location visible and marks it red", () => {
+  const zone = {
+    id: "zone-a1",
+    feature_kind: "zone",
+    feature_code: "A1",
+    erp_area_code: "A1",
+    points: [[0, 0], [10000, 0], [10000, 5000], [0, 5000]]
+  };
+  const location = normalizeInventoryLocationProjection({
+    location_id: 89,
+    location_code: "A1-L06",
+    location_name: "三楼 右区A1·A1-6",
+    floor_code: "3F",
+    area_code: "A1",
+    source_version: "V11",
+    position_status: "mapped",
+    occupancy_status: "empty",
+    map_position: { left_pct: 10, top_pct: 20, width_pct: 8, height_pct: 8, version: 2 },
+    pallets: [],
+    loose_items: [],
+    has_unmatched_inventory_observation: true,
+    unmatched_inventory_observation_count: 2
+  });
+
+  const [mapped] = buildMappedLocationPallets([zone], [location], "3F", STANDARD_PALLET, "layout-3f");
+  assert.equal(mapped.visual_status, "empty");
+  assert.equal(mapped.color, "#b91c1c");
+  assert.match(mapped.status_note, /现场有货未匹配/);
+  assert.match(mapped.status_note, /2 条待管理员核对/);
 });
 
 test("full warehouse matches keep all mapped areas highlighted across the active floor", () => {
@@ -880,6 +912,20 @@ test("pallet merge target is chosen from the selected set and omitted from batch
   ], target).sources, [
     { client_item_id: "merge-source-11", pallet_id: 11, expected_version: 11 }
   ]);
+});
+
+test("merge suggestions use inventory code and specification instead of internal product id", () => {
+  assert.equal(palletMergeSuggestionProductKey([
+    { product_id: 11, inventory_code: "cpn-001", specification: "500×300", quantity: 3 },
+    { product_id: 22, inventory_code: "CPN-001", specification: "500×300", quantity: 4 }
+  ]), "CPN-001|500×300");
+  assert.equal(palletMergeSuggestionProductKey([
+    { inventory_code: "CPN-001", specification: "500×300", quantity: 3 },
+    { inventory_code: "CPN-001", specification: "510×300", quantity: 4 }
+  ]), null);
+  assert.equal(palletMergeSuggestionProductKey([
+    { inventory_code: "", specification: "500×300", quantity: 3 }
+  ]), null);
 });
 
 test("stocktake drafts upsert by formal inventory identity and preserve the client item id", () => {

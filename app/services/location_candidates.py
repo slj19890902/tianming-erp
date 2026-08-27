@@ -171,6 +171,50 @@ def load_warehouse_location_projection_contexts(
             }
         )
 
+    # A location's employee-facing number is its stable rank inside the
+    # formal area, not the numeric suffix after L/M/R/P (those suffixes repeat
+    # across sides).  Include inactive historical positions so temporarily
+    # disabling one slot cannot renumber every later physical label.
+    floor_numbers = {
+        int(row.warehouse_floor)
+        for row in location_rows
+        if row.warehouse_floor is not None
+    }
+    area_codes = {
+        str(row.area_code).strip().upper()
+        for row in location_rows
+        if str(row.area_code or "").strip()
+    }
+    area_sequences: dict[int, int] = {}
+    if floor_numbers and area_codes:
+        sequence_rows = db.execute(
+            select(
+                WarehouseLocation.id,
+                WarehouseLocation.warehouse_floor,
+                WarehouseLocation.area_code,
+            )
+            .where(
+                WarehouseLocation.warehouse_floor.in_(floor_numbers),
+                WarehouseLocation.area_code.in_(area_codes),
+            )
+            .order_by(
+                WarehouseLocation.warehouse_floor,
+                WarehouseLocation.area_code,
+                WarehouseLocation.sort_order,
+                WarehouseLocation.location_code,
+                WarehouseLocation.id,
+            )
+        ).all()
+        current_key: tuple[int, str] | None = None
+        current_sequence = 0
+        for location_id, floor_number, area_code in sequence_rows:
+            key = (int(floor_number or 0), str(area_code or "").strip().upper())
+            if key != current_key:
+                current_key = key
+                current_sequence = 0
+            current_sequence += 1
+            area_sequences[int(location_id)] = current_sequence
+
     published_identities: dict[int, dict | None] = {}
     for floor_number in {
         int(row.warehouse_floor)
@@ -219,6 +263,7 @@ def load_warehouse_location_projection_contexts(
                 "layout": layouts_by_location.get(int(location.id)),
                 "published_floor_identity": published_identities.get(floor_number),
                 "ground_layout": ground_layout,
+                "area_sequence": area_sequences.get(int(location.id)),
             }
         )
         contexts[int(location.id)] = context
@@ -234,6 +279,7 @@ def warehouse_location_projection(
     published_floor_identity: Mapping[str, object] | None = None,
     ground_layout: Mapping[str, object] | None = None,
     layout: Floor3LocationLayout | None = None,
+    area_sequence: int | None = None,
 ) -> dict[str, object | None]:
     """Return the canonical current published-map projection for one location."""
 
@@ -816,17 +862,20 @@ def operational_location_payload(row: OperationalLocationRow) -> dict:
         location,
         area=address_area,
         floor=floor,
+        area_sequence=(int(context["area_sequence"]) if context.get("area_sequence") else None),
     )
     address_payload = location_address_payload(
         location,
         area=address_area,
         floor=floor,
         position_status=str(projection["position_status"]),
+        area_sequence=(int(context["area_sequence"]) if context.get("area_sequence") else None),
     )
     employee_name = employee_location_name(
         location,
         area=address_area,
         floor=floor,
+        area_sequence=(int(context["area_sequence"]) if context.get("area_sequence") else None),
     )
     layout = context.get("layout")
     policy = context.get("policy")

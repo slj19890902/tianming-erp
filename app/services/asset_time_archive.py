@@ -209,6 +209,7 @@ def _location_labels(db: Session, location_ids: set[int]) -> dict[int, str]:
             row,
             area=contexts.get(int(row.id), {}).get("area"),
             floor=contexts.get(int(row.id), {}).get("floor"),
+            area_sequence=contexts.get(int(row.id), {}).get("area_sequence"),
         )
         for row in rows
     }

@@ -1345,6 +1345,7 @@ def _production_stock_location(
     *,
     pallet_id: int | None,
     allowed_existing_pallet_id: int | None = None,
+    capacity_source_location_id: int | None = None,
 ) -> WarehouseLocation:
     if location_id is None:
         raise ProductionWorkflowError("库存完工必须选择成品库位", 400)
@@ -1379,6 +1380,7 @@ def _production_stock_location(
         required_inventory_type=(
             "finished" if require_published_location else None
         ),
+        capacity_source_location_id=capacity_source_location_id,
     )
     if issue:
         raise ProductionWorkflowError(
@@ -1421,6 +1423,7 @@ class ReceiptAutoFinishedGroundTarget:
     floor: WarehouseFloor | None = None
     target_kind: Literal["fin_ground_plan", "floor3_v11"] = "fin_ground_plan"
     runtime_map_revision: str | None = None
+    area_sequence: int | None = None
 
     @property
     def uses_ground_plan(self) -> bool:
@@ -1644,6 +1647,13 @@ def _receipt_auto_finished_ground_targets(
                     ),
                     area=plan.area,
                     floor=plan.area.floor,
+                    area_sequence=(
+                        int(projection_contexts[int(location.id)]["area_sequence"])
+                        if projection_contexts.get(int(location.id), {}).get(
+                            "area_sequence"
+                        )
+                        else None
+                    ),
                 )
             )
     if targets:
@@ -1746,6 +1756,17 @@ def _receipt_auto_finished_ground_targets(
                 ).get("floor"),
                 target_kind="floor3_v11",
                 runtime_map_revision=runtime_revision,
+                area_sequence=(
+                    int(
+                        floor3_projection_contexts[int(location.id)][
+                            "area_sequence"
+                        ]
+                    )
+                    if floor3_projection_contexts.get(int(location.id), {}).get(
+                        "area_sequence"
+                    )
+                    else None
+                ),
             )
         )
     if targets:
@@ -1981,6 +2002,7 @@ def receipt_auto_finished_location_projection(db: Session) -> dict[str, object]:
         target.location,
         area=area,
         floor=floor,
+        area_sequence=target.area_sequence,
     )
     if readable_location_name == "位置名称待完善":
         readable_location_name = _receipt_auto_location_name(
@@ -2377,6 +2399,11 @@ def list_temporary_locations(db: Session) -> list[dict]:
             location,
             area=candidate.area,
             floor=candidate.floor,
+            area_sequence=(
+                candidate.projection_context.get("area_sequence")
+                if candidate.projection_context
+                else None
+            ),
         )
         result.append(
             {
@@ -3564,11 +3591,12 @@ def transfer_direct_completion_to_stock(
     )
     if existing_transfer is not None:
         raise ProductionWorkflowError("该完工记录已转入库存，不能重复操作", 409)
-    target_location = _production_stock_location(
-        db, command.location_id, pallet_id=command.pallet_id
+    lot = (
+        db.get(InventoryLot, completion.inventory_lot_id)
+        if completion.inventory_lot_id is not None
+        else None
     )
     if completion.inventory_lot_id is not None:
-        lot = db.get(InventoryLot, completion.inventory_lot_id)
         if (
             lot is None
             or lot.status != "active"
@@ -3577,6 +3605,15 @@ def transfer_direct_completion_to_stock(
             or int(lot.source_ref_id or 0) != completion.id
         ):
             raise ProductionWorkflowError("当前直接待送成品批次已失效，不能转库存", 409)
+    target_location = _production_stock_location(
+        db,
+        command.location_id,
+        pallet_id=command.pallet_id,
+        capacity_source_location_id=(
+            int(lot.warehouse_location_id) if lot is not None else None
+        ),
+    )
+    if lot is not None:
         direct_pallet_item = lot.pallet_item
         direct_pallet = (
             direct_pallet_item.pallet if direct_pallet_item is not None else None
@@ -6144,6 +6181,7 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
             location,
             area=location_context.get("area"),
             floor=location_context.get("floor"),
+            area_sequence=location_context.get("area_sequence"),
         )
         result.append(
             {

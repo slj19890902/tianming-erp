@@ -161,6 +161,7 @@ from app.services.warehouse_twin_layout_editor import (
     load_effective_warehouse_twin_floor_for_edit,
     load_warehouse_twin_layout_draft,
     publish_warehouse_twin_layout_draft,
+    rebuild_stale_warehouse_twin_layout_draft,
     rebase_warehouse_twin_advanced_draft_after_one_step,
     restore_warehouse_twin_layout_draft,
     restore_warehouse_twin_publish_state,
@@ -2104,6 +2105,7 @@ def _location_dict(
         area=address_area,
         floor=floor,
         position_status=str(projection["position_status"]),
+        area_sequence=(int(context["area_sequence"]) if context.get("area_sequence") else None),
     )
     layout = context.get("layout")
     policy = context.get("policy")
@@ -2936,6 +2938,9 @@ def finished_candidates(
                 lot.location,
                 area=projection_contexts.get(int(lot.location.id), {}).get("area"),
                 floor=projection_contexts.get(int(lot.location.id), {}).get("floor"),
+                area_sequence=projection_contexts.get(
+                    int(lot.location.id), {}
+                ).get("area_sequence"),
             )
             for lot in rows
         }
@@ -6954,6 +6959,9 @@ def get_floor3_location(
                             int(movement.from_location_id or 0), {}
                         ).get("floor")
                     ),
+                    area_sequence=projection_contexts.get(
+                        int(movement.from_location_id or 0), {}
+                    ).get("area_sequence"),
                 ),
                 "to_location_id": movement.to_location_id,
                 "to_location_code": (
@@ -6973,6 +6981,9 @@ def get_floor3_location(
                             int(movement.to_location_id or 0), {}
                         ).get("floor")
                     ),
+                    area_sequence=projection_contexts.get(
+                        int(movement.to_location_id or 0), {}
+                    ).get("area_sequence"),
                 ),
                 "operator_id": movement.operator_id,
                 "moved_at": beijing_naive_to_api(movement.moved_at),
@@ -7313,6 +7324,7 @@ def twin_location_product_candidates(
             row,
             area=context.get("area"),
             floor=context.get("floor"),
+            area_sequence=context.get("area_sequence"),
         )
 
     items = []
@@ -9238,6 +9250,11 @@ class TwinLayoutDraftDiscardPayload(BaseModel):
     expected_revision: str = Field(min_length=1, max_length=64)
 
 
+class TwinLayoutDraftRebuildPayload(BaseModel):
+    expected_published_revision: str = Field(min_length=1, max_length=64)
+    operation_key: str = Field(min_length=8, max_length=120)
+
+
 class Floor1FormalCandidateConfirmPayload(BaseModel):
     expected_map_revision: str = Field(min_length=1, max_length=64)
     expected_plan_fingerprint: str = Field(min_length=64, max_length=64)
@@ -10072,6 +10089,52 @@ def discard_twin_layout_draft(
                     entity_id=floor_code.upper(),
                     description="管理员放弃仓库地图草稿",
                     details=result.value,
+                )
+                db.commit()
+        except WarehouseTwinLayoutEditError as error:
+            db.rollback()
+            if result is not None and result.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            _handle_twin_layout_edit_error(error)
+        except Exception:
+            db.rollback()
+            if result is not None and result.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            raise
+        return {**result.value, "applied": result.applied}
+
+
+@router.post("/twin-layout/floors/{floor_code}/draft/rebuild-stale")
+def rebuild_stale_twin_layout_draft(
+    floor_code: str,
+    payload: TwinLayoutDraftRebuildPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Explicitly abandon an obsolete draft and seed one from the live map."""
+
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        draft_snapshot = snapshot_warehouse_twin_layout_draft()
+        result = None
+        try:
+            result = rebuild_stale_warehouse_twin_layout_draft(
+                floor_code,
+                expected_published_revision=payload.expected_published_revision,
+            )
+            if result.applied:
+                _twin_layout_asset_log(
+                    db,
+                    request=request,
+                    user=user,
+                    action="TWIN_LAYOUT_STALE_DRAFT_REBUILD",
+                    entity_type="twin_layout_draft",
+                    entity_id=floor_code.upper(),
+                    description="管理员放弃过期仓库地图草稿并从当前正式地图重建",
+                    details={
+                        **result.value,
+                        "operation_key": payload.operation_key,
+                    },
                 )
                 db.commit()
         except WarehouseTwinLayoutEditError as error:
@@ -12122,6 +12185,7 @@ def search_warehouse_twin_inventory(
                 area=match_context.get("area"),
                 floor=match_context.get("floor"),
                 position_status=str(match_projection["position_status"]),
+                area_sequence=(int(match_context["area_sequence"]) if match_context.get("area_sequence") else None),
             )
         result["location_match"] = location_match
     except WarehouseLocationAddressError as error:
@@ -12961,7 +13025,12 @@ def _location_label_dict(
         floor_number=floor_number,
         fallback_name="区域待确认",
     )
-    readable_location = employee_location_name(row, area=area, floor=floor)
+    readable_location = employee_location_name(
+        row,
+        area=area,
+        floor=floor,
+        area_sequence=projection_context.get("area_sequence"),
+    )
     port = request.url.port or 8000
     lookup_url = (
         f"http://{lan_ip or _lan_ip()}:{port}/warehouse.html"
@@ -16048,6 +16117,9 @@ def _material_locations_for_task(
                     location,
                     area=projection_contexts.get(int(location.id), {}).get("area"),
                     floor=projection_contexts.get(int(location.id), {}).get("floor"),
+                    area_sequence=projection_contexts.get(
+                        int(location.id), {}
+                    ).get("area_sequence"),
                 ),
                 "availability_state": (
                     "available" if lot.status == "active" else "frozen"

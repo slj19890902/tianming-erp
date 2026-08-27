@@ -3,6 +3,7 @@ export interface PalletMergeInventoryItem {
   version?: number | null;
   product_id?: number | null;
   inventory_code?: string | null;
+  specification?: string | null;
   customer_id?: number | null;
   customer_name?: string | null;
   inventory_type?: string | null;
@@ -56,6 +57,7 @@ export interface PalletMergeCandidate {
   target_eligible: boolean;
 }
 
+export function palletMergeSuggestionProductKey(items: PalletMergeInventoryItem[]): string | null;
 export function normalizePalletMergeCandidate(location: PalletMergeLocation, pallet: PalletMergePallet): { candidate: PalletMergeCandidate | null; error: string | null };
 export function palletMergeCompatibility(left: PalletMergeCandidate | null, right: PalletMergeCandidate | null): { compatible: boolean; error: string | null };
 export function togglePalletMergeSource(sources: PalletMergeCandidate[], candidate: PalletMergeCandidate | null): { items: PalletMergeCandidate[]; error: string | null };

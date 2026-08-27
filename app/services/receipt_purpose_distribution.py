@@ -725,12 +725,29 @@ def _receipt_lots_with_location_names(
 
     if not lot_ids:
         return {}, {}
+    location_sequences = select(
+        WarehouseLocation.id.label("location_id"),
+        func.row_number()
+        .over(
+            partition_by=(
+                WarehouseLocation.warehouse_floor,
+                func.upper(func.trim(WarehouseLocation.area_code)),
+            ),
+            order_by=(
+                WarehouseLocation.sort_order,
+                WarehouseLocation.location_code,
+                WarehouseLocation.id,
+            ),
+        )
+        .label("area_sequence"),
+    ).subquery()
     rows = db.execute(
         select(
             InventoryLot,
             WarehouseLocation,
             WarehouseArea,
             WarehouseFloor,
+            location_sequences.c.area_sequence,
         )
         .select_from(InventoryLot)
         .outerjoin(
@@ -749,17 +766,22 @@ def _receipt_lots_with_location_names(
                 == func.upper(func.trim(WarehouseLocation.area_code)),
             ),
         )
+        .outerjoin(
+            location_sequences,
+            location_sequences.c.location_id == WarehouseLocation.id,
+        )
         .where(InventoryLot.id.in_(lot_ids))
     ).all()
     lots: dict[int, InventoryLot] = {}
     names: dict[int, str] = {}
-    for lot, location, area, floor in rows:
+    for lot, location, area, floor, area_sequence in rows:
         lots[int(lot.id)] = lot
         if location is not None:
             names[int(lot.id)] = employee_location_name(
                 location,
                 area=area,
                 floor=floor,
+                area_sequence=(int(area_sequence) if area_sequence else None),
             )
     return lots, names
 

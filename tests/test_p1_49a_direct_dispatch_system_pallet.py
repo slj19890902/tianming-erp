@@ -625,6 +625,71 @@ def test_direct_fin_transfer_to_current_twin_position_closes_spatial_loop_once(
         assert fact_counts(db) == before_replay
 
 
+def test_direct_finished_relocation_within_full_area_uses_net_pallet_capacity(
+    production_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Moving one pallet inside a full area must not count as a new pallet."""
+
+    from app.models.user import User
+
+    _app, factory, _ids = production_app
+    with factory() as db:
+        locations = _seed_current_fin_target(db, monkeypatch, count=2)
+        area = db.scalar(
+            select(WarehouseArea).where(WarehouseArea.area_code == "FIN-001")
+        )
+        assert area is not None
+        area.capacity_review_status = "confirmed"
+        area.capacity_eligible = True
+        area.confirmed_pallet_capacity = 1
+        area.capacity_reviewed_by = "P0-29 匿名复核"
+        area.capacity_reviewed_at = datetime.now()
+        _order, _item, task = _new_direct_case(
+            db, key="p0-29-same-area-capacity", quantity=11
+        )
+        operator = db.scalar(select(User).where(User.username == "n029-admin"))
+        assert operator is not None
+        completion = complete_production_batch(
+            db,
+            idempotency_key="p0-29-same-area-capacity-complete",
+            commands=[_direct_command(task, quantity=11)],
+            operator_id=operator.id,
+        ).completions[0]
+        lot = db.get(InventoryLot, completion.inventory_lot_id)
+        assert lot is not None
+        source_location_id = int(lot.warehouse_location_id)
+        target = next(row for row in locations if int(row.id) != source_location_id)
+        completion_id = int(completion.id)
+        operator_id = int(operator.id)
+        target_id = int(target.id)
+        db.commit()
+
+    with factory() as db:
+        result = transfer_direct_completion_to_stock(
+            db,
+            completion_id=completion_id,
+            command=StockTransferCommand(
+                idempotency_key="p0-29-same-area-capacity-transfer",
+                location_id=target_id,
+                expected_layout_version=1,
+            ),
+            operator_id=operator_id,
+        )
+        assert result.replayed is False
+        lot = db.get(InventoryLot, result.transfer.inventory_lot_id)
+        assert lot is not None
+        assert lot.warehouse_location_id == target_id
+        assert lot.pallet_item is not None
+        assert lot.pallet_item.pallet.location_id == target_id
+        assert db.scalar(
+            select(func.count()).select_from(InventoryPallet).where(
+                InventoryPallet.is_current.is_(True),
+                InventoryPallet.location_id.in_([source_location_id, target_id]),
+            )
+        ) == 1
+
+
 def test_direct_completion_56_creates_one_formal_system_pallet_and_replays(
     production_app,
 ) -> None:

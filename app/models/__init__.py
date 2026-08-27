@@ -204,6 +204,7 @@ from app.models.warehouse_inventory import (  # noqa: E402,F401
     InventoryMovement,
     InventoryLotTransfer,
     WarehouseLocationDiscrepancy,
+    WarehouseUnmatchedInventoryObservation,
     InventoryPallet,
     InventoryPalletItem,
     WarehouseGroundLayoutPlan,

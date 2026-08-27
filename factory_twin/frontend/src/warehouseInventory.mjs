@@ -348,6 +348,8 @@ export function buildMappedLocationPallets(
     ordered.forEach((location, index) => {
       const readableLocationName = employeeLocationName(location);
       const occupied = location.occupancy_status === "occupied";
+      const hasUnmatchedObservation = Boolean(location.has_unmatched_inventory_observation);
+      const unmatchedObservationCount = Number(location.unmatched_inventory_observation_count || 0);
       const locationPallets = inventoryLocationPallets(location);
       const actualPalletCode = locationPallets.length === 1 ? locationPallets[0].pallet_code : null;
       const palletSummary = locationPallets.length > 1 ? `${locationPallets.length} 块系统栈板` : null;
@@ -381,9 +383,9 @@ export function buildMappedLocationPallets(
         depth_mm: renderedDepthMm,
         height_mm: isLogicalAnchor ? 0 : standard.height_mm,
         rotation_deg: rotation,
-        color: occupied ? "#0f766e" : "#a16207",
+        color: hasUnmatchedObservation ? "#b91c1c" : occupied ? "#0f766e" : "#a16207",
         visual_status: occupied ? "waiting" : "empty",
-        status_note: `${actualPalletCode
+        status_note: `${hasUnmatchedObservation ? `现场有货未匹配 · ${unmatchedObservationCount || 1} 条待管理员核对 · ` : ""}${actualPalletCode
           ? `ERP正式库位 · ${actualPalletCode}`
           : palletSummary
             ? `ERP正式共享位置 · ${palletSummary} · 请在右侧逐块选择`

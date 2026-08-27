@@ -17,6 +17,7 @@ from app.services.warehouse_twin_layout_editor import (
     discard_warehouse_twin_layout_draft,
     load_warehouse_twin_layout_draft,
     publish_warehouse_twin_layout_draft,
+    rebuild_stale_warehouse_twin_layout_draft,
     update_warehouse_twin_rack,
     update_warehouse_twin_zone_policy,
     validate_warehouse_twin_layout_draft,
@@ -439,6 +440,58 @@ def test_discard_draft_is_idempotent_and_leaves_published_unchanged(
     )
     assert repeated.applied is False
     assert sha256(published.read_bytes()).hexdigest() == before
+
+
+def test_stale_draft_requires_explicit_rebuild_from_current_published_map(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published = _asset(tmp_path / "published.json")
+    draft = tmp_path / "layout.draft.json"
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", published)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_DRAFT_PATH", draft)
+    initial_revision = json.loads(published.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
+    create_warehouse_twin_rack(
+        "3F",
+        expected_revision=initial_revision,
+        operation_key="stale-draft-create-0001",
+        area_feature_id="zone-f1",
+        values=_rack_values(),
+    )
+    stale_sha = sha256(draft.read_bytes()).hexdigest()
+
+    published_document = json.loads(published.read_text(encoding="utf-8"))
+    published_document["floors"]["3F"]["features"][0]["name"] = "当前正式区域"
+    published_document["floors"]["3F"]["revision"] = _floor_revision(
+        published_document["floors"]["3F"]
+    )
+    current_revision = published_document["floors"]["3F"]["revision"]
+    published.write_text(
+        json.dumps(published_document, ensure_ascii=False), encoding="utf-8"
+    )
+    published_sha = sha256(published.read_bytes()).hexdigest()
+
+    with pytest.raises(WarehouseTwinLayoutEditConflictError):
+        load_warehouse_twin_layout_draft("3F")
+    with pytest.raises(WarehouseTwinLayoutEditConflictError):
+        rebuild_stale_warehouse_twin_layout_draft(
+            "3F", expected_published_revision=initial_revision
+        )
+
+    rebuilt = rebuild_stale_warehouse_twin_layout_draft(
+        "3F", expected_published_revision=current_revision
+    )
+    assert rebuilt.applied is True
+    assert rebuilt.value["stale_draft_sha256"] == stale_sha
+    assert sha256(published.read_bytes()).hexdigest() == published_sha
+    fresh = load_warehouse_twin_layout_draft("3F")
+    assert fresh["features"][0]["name"] == "当前正式区域"
+    assert fresh["draft_control"]["published_revision"] == current_revision
+    repeated = rebuild_stale_warehouse_twin_layout_draft(
+        "3F", expected_published_revision=current_revision
+    )
+    assert repeated.applied is False
+    assert repeated.value["status"] == "current"
 
 
 def test_refresh_export_preserves_operator_racks_and_zone_policy(tmp_path: Path) -> None:

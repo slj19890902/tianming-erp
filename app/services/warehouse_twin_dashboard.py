@@ -27,6 +27,7 @@ from app.models.warehouse_inventory import (
     WarehouseFloor,
     WarehouseGroundOccupancy,
     WarehouseLocation,
+    WarehouseUnmatchedInventoryObservation,
 )
 from app.models.order import Order, OrderItem
 from app.models.production import ProductionCompletion
@@ -789,6 +790,7 @@ def _location_payload(
         area=area,
         floor=floor,
         position_status=position_status,
+        area_sequence=(int(context["area_sequence"]) if context.get("area_sequence") else None),
     )
     layout = context.get("layout")
     policy = context.get("policy")
@@ -1169,6 +1171,21 @@ def build_warehouse_twin_dashboard(
                 str(value) for value in values if isinstance(value, str) and value
             ]
     projection_contexts = load_warehouse_location_projection_contexts(db, locations)
+    unmatched_by_location: dict[
+        int, list[WarehouseUnmatchedInventoryObservation]
+    ] = defaultdict(list)
+    if visible_customer_ids is None:
+        for observation in db.scalars(
+            select(WarehouseUnmatchedInventoryObservation)
+            .where(WarehouseUnmatchedInventoryObservation.status == "open")
+            .order_by(
+                WarehouseUnmatchedInventoryObservation.reported_at,
+                WarehouseUnmatchedInventoryObservation.id,
+            )
+        ).all():
+            unmatched_by_location[int(observation.observed_location_id)].append(
+                observation
+            )
     location_rows = []
     for location in locations:
         if visible_customer_ids is not None and location.id not in visible_location_ids:
@@ -1178,18 +1195,33 @@ def build_warehouse_twin_dashboard(
             str(location.area_code or "").upper(),
         )
         projection_context = projection_contexts.get(int(location.id), {})
-        location_rows.append(
-            _location_payload(
-                location,
-                lots=lots_by_location.get(location.id, []),
-                pallets=pallets_by_location.get(location.id, []),
-                as_of=as_of,
-                projection_context=projection_context,
-                allowed_inventory_types=policy_types_by_area.get(location_key, []),
-                composite_projections=composite_projections,
-                stocktake_decrease_issues=stocktake_decrease_issues,
-            )
+        payload = _location_payload(
+            location,
+            lots=lots_by_location.get(location.id, []),
+            pallets=pallets_by_location.get(location.id, []),
+            as_of=as_of,
+            projection_context=projection_context,
+            allowed_inventory_types=policy_types_by_area.get(location_key, []),
+            composite_projections=composite_projections,
+            stocktake_decrease_issues=stocktake_decrease_issues,
         )
+        open_observations = unmatched_by_location.get(int(location.id), [])
+        payload["has_unmatched_inventory_observation"] = bool(open_observations)
+        payload["unmatched_inventory_observation_count"] = len(open_observations)
+        payload["unmatched_inventory_observations"] = [
+            {
+                "id": int(observation.id),
+                "version": int(observation.version),
+                "customer_keyword": observation.customer_keyword,
+                "inventory_keyword": observation.inventory_keyword,
+                "reported_quantity": observation.reported_quantity,
+                "reported_unit": observation.reported_unit,
+                "reason": observation.reason,
+                "reported_at": utc_naive_to_api(observation.reported_at),
+            }
+            for observation in open_observations
+        ]
+        location_rows.append(payload)
 
     floor_summaries = []
     for floor_number in (1, 3):
@@ -1788,6 +1820,20 @@ def build_warehouse_twin_dashboard(
         "trend": trend,
         "throughput": throughput,
         "alerts": [
+            *(
+                [
+                    {
+                        "code": "unmatched_physical_inventory_observation",
+                        "level": "error",
+                        "message": (
+                            f"有 {sum(len(rows) for rows in unmatched_by_location.values())} 条现场有货但全仓实物库存未匹配的标记；"
+                            "相关货位已标红，须由管理员核对后通过正式盘点或入库流程处理。"
+                        ),
+                    }
+                ]
+                if unmatched_by_location
+                else []
+            ),
             *capacity_alerts,
             *(
                 [
@@ -1879,6 +1925,7 @@ def build_inventory_code_search_results(
                 area=location_context.get("area"),
                 floor=location_context.get("floor"),
                 position_status=position_status,
+                area_sequence=location_context.get("area_sequence"),
             )
             if location is not None
             else None

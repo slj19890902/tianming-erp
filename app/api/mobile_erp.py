@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import String, and_, case, cast, exists, func, or_, select
+from sqlalchemy import String, and_, case, cast, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased, selectinload
 
@@ -75,6 +75,7 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseLocation,
     WarehouseLocationDiscrepancy,
+    WarehouseUnmatchedInventoryObservation,
 )
 from app.services.warehouse_location_address import (
     employee_area_name,
@@ -1093,6 +1094,7 @@ def _position_payload(
         area=context.get("area"),
         floor=context.get("floor"),
         position_status=position_status,
+        area_sequence=(int(context["area_sequence"]) if context.get("area_sequence") else None),
     )
     return {
         "lot_id": lot.id,
@@ -2727,6 +2729,48 @@ class MobileWarehouseDiscrepancyResolvePayload(BaseModel):
         return text
 
 
+class MobileWarehouseUnmatchedObservationPayload(BaseModel):
+    observed_location_id: int = Field(gt=0)
+    observed_location_layout_version: int = Field(gt=0)
+    customer_keyword: str | None = Field(default=None, max_length=120)
+    inventory_keyword: str = Field(min_length=1, max_length=200)
+    reported_quantity: int | None = Field(default=None, gt=0)
+    reported_unit: str | None = Field(default=None, max_length=20)
+    reason: str = Field(min_length=1, max_length=500)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+    @field_validator("customer_keyword", "reported_unit")
+    @classmethod
+    def strip_optional_unmatched_observation_text(
+        cls, value: str | None
+    ) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    @field_validator("inventory_keyword", "reason", "idempotency_key")
+    @classmethod
+    def strip_required_unmatched_observation_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("存货关键词、现场说明和请求标识不能为空")
+        return text
+
+
+class MobileWarehouseUnmatchedResolvePayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    resolution_note: str = Field(min_length=1, max_length=500)
+    resolved_inventory_lot_id: int | None = Field(default=None, gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=120)
+
+    @field_validator("resolution_note", "idempotency_key")
+    @classmethod
+    def strip_unmatched_resolution_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("处理说明和请求标识不能为空")
+        return text
+
+
 def _mobile_layout_payload(layout: Floor3LocationLayout) -> dict:
     return {
         "left_pct": float(layout.left_pct),
@@ -2813,6 +2857,10 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
         customer_name = detail.owner_customer_name_snapshot if detail else None
         product_code = detail.material_code if detail else None
         product_name = "半成品纸板"
+    movable_quantity = int(lot.quantity_available or 0) + int(
+        lot.quantity_reserved or 0
+    )
+    damaged_quantity = int(lot.quantity_damaged or 0)
     return {
         "lot_id": int(lot.id),
         "lot_version": int(lot.version),
@@ -2824,12 +2872,18 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
         "specification": specification,
         "quantity_available": int(lot.quantity_available or 0),
         "quantity_reserved": int(lot.quantity_reserved or 0),
-        "quantity_total": int(lot.quantity_available or 0)
-        + int(lot.quantity_reserved or 0),
+        "quantity_damaged": damaged_quantity,
+        "quantity_movable": movable_quantity,
+        "quantity_total": movable_quantity + damaged_quantity,
         "unit": "只" if lot.inventory_type == "finished" else "张",
         "stock_date": lot.stock_date,
         "last_movement_at": utc_naive_to_api(lot.last_movement_at),
-        "can_move": lot.inventory_type == "finished" and lot.status == "active",
+        "can_move": (
+            lot.inventory_type == "finished"
+            and lot.status == "active"
+            and damaged_quantity == 0
+            and movable_quantity > 0
+        ),
     }
 
 
@@ -2949,6 +3003,24 @@ def mobile_warehouse_map_area(
         ).all()
     )
     visible_customer_ids = _visible_customer_ids(user, db)
+    unmatched_counts = {
+        int(location_id): int(count or 0)
+        for location_id, count in db.execute(
+            select(
+                WarehouseUnmatchedInventoryObservation.observed_location_id,
+                func.count(WarehouseUnmatchedInventoryObservation.id),
+            )
+            .where(
+                WarehouseUnmatchedInventoryObservation.status == "open",
+                WarehouseUnmatchedInventoryObservation.observed_location_id.in_(
+                    location_ids
+                ),
+            )
+            .group_by(
+                WarehouseUnmatchedInventoryObservation.observed_location_id
+            )
+        ).all()
+    }
     goods_by_location: dict[int, list[dict]] = {}
     for lot in lots:
         if _mobile_lot_is_visible(lot, visible_customer_ids):
@@ -3020,6 +3092,12 @@ def mobile_warehouse_map_area(
                 if unrestricted
                 else ("visible_goods" if goods else "not_disclosed"),
                 "goods": goods,
+                "has_unmatched_inventory_observation": bool(
+                    unmatched_counts.get(int(location.id), 0)
+                ),
+                "unmatched_inventory_observation_count": unmatched_counts.get(
+                    int(location.id), 0
+                ),
                 "can_select_target": is_mapped,
             }
         )
@@ -3044,6 +3122,141 @@ def mobile_warehouse_map_area(
         "can_execute": has_permission(user, "warehouse.execute"),
         "can_correct": has_permission(user, "warehouse.correct"),
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+    }
+
+
+@router.get("/warehouse/physical-inventory/search")
+def search_mobile_warehouse_physical_inventory(
+    response: Response,
+    customer_keyword: str | None = Query(default=None, max_length=120),
+    inventory_keyword: str | None = Query(default=None, max_length=200),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_inventory),
+) -> dict:
+    """Search every positive physical finished lot visible to the employee."""
+
+    _no_store(response)
+    customer_text = str(customer_keyword or "").strip()
+    inventory_text = str(inventory_keyword or "").strip()
+    if not customer_text and not inventory_text:
+        raise HTTPException(status_code=422, detail="请输入客户简称或存货编码等关键词")
+
+    filters = [
+        InventoryLot.inventory_type == "finished",
+        InventoryLot.status.in_(("active", "frozen")),
+        (
+            InventoryLot.quantity_available
+            + InventoryLot.quantity_reserved
+            + InventoryLot.quantity_damaged
+        )
+        > 0,
+    ]
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        filters.append(
+            FinishedGoodsInventoryDetail.owner_customer_id.in_(visible_customer_ids)
+        )
+    if customer_text:
+        pattern = f"%{customer_text}%"
+        filters.append(
+            or_(
+                FinishedGoodsInventoryDetail.owner_customer_name_snapshot.ilike(pattern),
+                Customer.name.ilike(pattern),
+                Customer.chinese_short_name.ilike(pattern),
+                Customer.customer_code.ilike(pattern),
+            )
+        )
+    if inventory_text:
+        pattern = f"%{inventory_text}%"
+        filters.append(
+            or_(
+                InventoryLot.lot_number.ilike(pattern),
+                FinishedGoodsInventoryDetail.inventory_code_snapshot.ilike(pattern),
+                FinishedGoodsInventoryDetail.product_name_snapshot.ilike(pattern),
+                Product.product_code.ilike(pattern),
+                Product.customer_material_code.ilike(pattern),
+                Product.product_name.ilike(pattern),
+            )
+        )
+
+    def joined_statement():
+        return (
+            select(InventoryLot)
+            .join(
+                FinishedGoodsInventoryDetail,
+                FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+            )
+            .outerjoin(
+                Customer,
+                Customer.id == FinishedGoodsInventoryDetail.owner_customer_id,
+            )
+            .outerjoin(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+            .where(*filters)
+        )
+
+    total = int(
+        db.scalar(
+            joined_statement()
+            .with_only_columns(func.count(InventoryLot.id))
+            .order_by(None)
+        )
+        or 0
+    )
+    lots = list(
+        db.scalars(
+            joined_statement()
+            .options(*_mobile_lot_options())
+            .order_by(
+                FinishedGoodsInventoryDetail.owner_customer_name_snapshot,
+                FinishedGoodsInventoryDetail.inventory_code_snapshot,
+                InventoryLot.stock_date,
+                InventoryLot.id,
+            )
+            .offset(offset)
+            .limit(limit)
+        ).all()
+    )
+    contexts = load_warehouse_location_projection_contexts(
+        db, [lot.location for lot in lots if lot.location is not None]
+    )
+    items = []
+    for lot in lots:
+        location = lot.location
+        context = contexts.get(int(location.id), {})
+        projection = warehouse_location_projection(location, **context)
+        address = location_address_payload(
+            location,
+            area=context.get("area"),
+            floor=context.get("floor"),
+            position_status=str(projection["position_status"]),
+            area_sequence=(
+                int(context["area_sequence"])
+                if context.get("area_sequence")
+                else None
+            ),
+        )
+        items.append(
+            {
+                **_mobile_goods_payload(lot),
+                "registered_location": {
+                    "location_id": int(location.id),
+                    "location_code": location.location_code,
+                    "employee_location_name": address["employee_location_name"],
+                    "floor": location.warehouse_floor,
+                    "area_code": location.area_code,
+                    "position_status": projection["position_status"],
+                },
+            }
+        )
+    return {
+        "items": items,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(items) < total,
+        "search_scope": "all_positive_physical_finished_inventory",
     }
 
 
@@ -3152,6 +3365,7 @@ def _mobile_discrepancy_payload(
             area=context.get("area"),
             floor=context.get("floor"),
             position_status=str(projection["position_status"]),
+            area_sequence=(int(context["area_sequence"]) if context.get("area_sequence") else None),
         )
         return {
             "location_id": location.id,
@@ -3475,3 +3689,300 @@ def resolve_mobile_warehouse_location_discrepancy(
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="库存位置或纠正请求已变化，请刷新重试") from error
+
+
+def _mobile_unmatched_observation_payload(
+    row: WarehouseUnmatchedInventoryObservation,
+    *,
+    location: WarehouseLocation,
+    projection_context: Mapping[str, object] | None = None,
+) -> dict:
+    context = dict(projection_context or {})
+    projection = warehouse_location_projection(location, **context)
+    address = location_address_payload(
+        location,
+        area=context.get("area"),
+        floor=context.get("floor"),
+        position_status=str(projection["position_status"]),
+        area_sequence=(
+            int(context["area_sequence"])
+            if context.get("area_sequence")
+            else None
+        ),
+    )
+    return {
+        "id": int(row.id),
+        "version": int(row.version),
+        "status": row.status,
+        "observed_location": {
+            "location_id": int(location.id),
+            "location_code": location.location_code,
+            "employee_location_name": address["employee_location_name"],
+            "floor": location.warehouse_floor,
+            "area_code": location.area_code,
+            "position_status": projection["position_status"],
+        },
+        "observed_location_layout_version": int(
+            row.observed_location_layout_version
+        ),
+        "customer_keyword": row.customer_keyword,
+        "inventory_keyword": row.inventory_keyword,
+        "reported_quantity": row.reported_quantity,
+        "reported_unit": row.reported_unit,
+        "reason": row.reason,
+        "reported_at": utc_naive_to_api(row.reported_at),
+        "resolution_note": row.resolution_note,
+        "resolved_inventory_lot_id": row.resolved_inventory_lot_id,
+    }
+
+
+@router.post("/warehouse/unmatched-inventory-observations", status_code=201)
+def report_mobile_unmatched_inventory_observation(
+    payload: MobileWarehouseUnmatchedObservationPayload,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_inventory),
+) -> dict:
+    _no_store(response)
+    location = db.scalar(
+        select(WarehouseLocation)
+        .options(selectinload(WarehouseLocation.floor3_layout))
+        .where(WarehouseLocation.id == payload.observed_location_id)
+    )
+    if location is None or not _mobile_location_is_published(db, location):
+        raise HTTPException(status_code=409, detail="现场观察货位已失效或尚未正式发布")
+    if (
+        location.floor3_layout is None
+        or int(location.floor3_layout.version)
+        != payload.observed_location_layout_version
+    ):
+        raise HTTPException(status_code=409, detail="现场货位布局已变化，请刷新地图后重新标记")
+
+    existing = db.scalar(
+        select(WarehouseUnmatchedInventoryObservation).where(
+            WarehouseUnmatchedInventoryObservation.idempotency_key
+            == payload.idempotency_key
+        )
+    )
+    if existing is not None:
+        if (
+            int(existing.observed_location_id) != int(location.id)
+            or int(existing.observed_location_layout_version)
+            != payload.observed_location_layout_version
+            or existing.customer_keyword != payload.customer_keyword
+            or existing.inventory_keyword != payload.inventory_keyword
+            or existing.reported_quantity != payload.reported_quantity
+            or existing.reported_unit != payload.reported_unit
+            or existing.reason != payload.reason
+        ):
+            raise HTTPException(status_code=409, detail="同一请求标识已用于其他现场未匹配货物")
+        context = load_warehouse_location_projection_contexts(db, [location]).get(
+            int(location.id), {}
+        )
+        return {
+            "message": "现场未匹配货物已标记，等待管理员核对",
+            "idempotent_replay": True,
+            "observation": _mobile_unmatched_observation_payload(
+                existing, location=location, projection_context=context
+            ),
+        }
+
+    row = WarehouseUnmatchedInventoryObservation(
+        observed_location_id=location.id,
+        observed_location_layout_version=payload.observed_location_layout_version,
+        customer_keyword=payload.customer_keyword,
+        inventory_keyword=payload.inventory_keyword,
+        reported_quantity=payload.reported_quantity,
+        reported_unit=payload.reported_unit,
+        reason=payload.reason,
+        idempotency_key=payload.idempotency_key,
+        reported_by=user.id,
+    )
+    db.add(row)
+    try:
+        db.flush()
+        append_audit_event(
+            db,
+            request=request,
+            actor=user,
+            event_category="business",
+            result="success",
+            source="mobile",
+            module_code="warehouse",
+            action_code="warehouse.unmatched_inventory_observation.report",
+            resource="WarehouseUnmatchedInventoryObservation",
+            entity_type="warehouse_unmatched_inventory_observation",
+            entity_id=row.id,
+            object_ref=f"warehouse_unmatched_inventory_observation:{row.id}",
+            description="员工标记现场有货但全仓实物库存搜索未匹配",
+            details={
+                "observed_location_id": int(location.id),
+                "observed_location_layout_version": (
+                    payload.observed_location_layout_version
+                ),
+                "customer_keyword": payload.customer_keyword,
+                "inventory_keyword": payload.inventory_keyword,
+                "reported_quantity": payload.reported_quantity,
+                "inventory_changed": False,
+            },
+        )
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="现场未匹配货物已被提交，请刷新重试") from error
+    context = load_warehouse_location_projection_contexts(db, [location]).get(
+        int(location.id), {}
+    )
+    return {
+        "message": "现场未匹配货物已标红，等待管理员核对；库存数量尚未改变",
+        "idempotent_replay": False,
+        "observation": _mobile_unmatched_observation_payload(
+            row, location=location, projection_context=context
+        ),
+    }
+
+
+@router.get("/warehouse/unmatched-inventory-observations")
+def list_mobile_unmatched_inventory_observations(
+    response: Response,
+    status: Literal["open", "resolved", "cancelled"] = Query(default="open"),
+    limit: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_correct_inventory),
+) -> dict:
+    _no_store(response)
+    rows = list(
+        db.scalars(
+            select(WarehouseUnmatchedInventoryObservation)
+            .where(WarehouseUnmatchedInventoryObservation.status == status)
+            .order_by(
+                WarehouseUnmatchedInventoryObservation.reported_at.desc(),
+                WarehouseUnmatchedInventoryObservation.id.desc(),
+            )
+            .limit(limit)
+        ).all()
+    )
+    locations = {
+        int(row.id): row
+        for row in db.scalars(
+            select(WarehouseLocation)
+            .options(selectinload(WarehouseLocation.floor3_layout))
+            .where(
+                WarehouseLocation.id.in_(
+                    [int(row.observed_location_id) for row in rows]
+                )
+            )
+        ).all()
+    } if rows else {}
+    contexts = load_warehouse_location_projection_contexts(db, locations.values())
+    items = [
+        _mobile_unmatched_observation_payload(
+            row,
+            location=locations[int(row.observed_location_id)],
+            projection_context=contexts.get(int(row.observed_location_id), {}),
+        )
+        for row in rows
+        if int(row.observed_location_id) in locations
+    ]
+    return {"items": items, "count": len(items), "status": status}
+
+
+@router.post("/warehouse/unmatched-inventory-observations/{observation_id}/resolve")
+def resolve_mobile_unmatched_inventory_observation(
+    observation_id: int,
+    payload: MobileWarehouseUnmatchedResolvePayload,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_correct_inventory),
+) -> dict:
+    _no_store(response)
+    row = db.get(WarehouseUnmatchedInventoryObservation, observation_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="现场未匹配货物标记不存在")
+    if row.status == "resolved":
+        if row.resolution_idempotency_key == payload.idempotency_key:
+            if (
+                row.resolution_note != payload.resolution_note
+                or row.resolved_inventory_lot_id
+                != payload.resolved_inventory_lot_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="同一处理请求标识已用于其他核对结果",
+                )
+            return {
+                "message": "现场未匹配货物已处理",
+                "idempotent_replay": True,
+                "observation_id": int(row.id),
+            }
+        raise HTTPException(status_code=409, detail="该现场未匹配货物已经处理")
+    if row.status != "open" or int(row.version) != payload.expected_version:
+        raise HTTPException(status_code=409, detail="现场未匹配货物状态已变化，请刷新重试")
+
+    resolved_lot = None
+    if payload.resolved_inventory_lot_id is not None:
+        resolved_lot = _require_mobile_lot(
+            db,
+            lot_id=payload.resolved_inventory_lot_id,
+            visible_customer_ids=_visible_customer_ids(user, db),
+        )
+        if int(resolved_lot.warehouse_location_id) != int(row.observed_location_id):
+            raise HTTPException(status_code=409, detail="关联库存不在该现场货位，不能关闭标记")
+    updated = db.execute(
+        update(WarehouseUnmatchedInventoryObservation)
+        .where(
+            WarehouseUnmatchedInventoryObservation.id == row.id,
+            WarehouseUnmatchedInventoryObservation.status == "open",
+            WarehouseUnmatchedInventoryObservation.version
+            == payload.expected_version,
+        )
+        .values(
+            status="resolved",
+            version=WarehouseUnmatchedInventoryObservation.version + 1,
+            resolved_by=user.id,
+            resolved_at=utc_now_naive(),
+            resolution_note=payload.resolution_note,
+            resolution_idempotency_key=payload.idempotency_key,
+            resolved_inventory_lot_id=(resolved_lot.id if resolved_lot else None),
+        )
+    )
+    if updated.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="现场未匹配货物状态已变化，请刷新重试")
+    append_audit_event(
+        db,
+        request=request,
+        actor=user,
+        event_category="business",
+        result="success",
+        source="mobile",
+        module_code="warehouse",
+        action_code="warehouse.unmatched_inventory_observation.resolve",
+        resource="WarehouseUnmatchedInventoryObservation",
+        entity_type="warehouse_unmatched_inventory_observation",
+        entity_id=row.id,
+        object_ref=f"warehouse_unmatched_inventory_observation:{row.id}",
+        description="管理员核对并关闭现场未匹配货物标记",
+        details={
+            "observed_location_id": int(row.observed_location_id),
+            "resolved_inventory_lot_id": (
+                int(resolved_lot.id) if resolved_lot is not None else None
+            ),
+            "inventory_changed_by_this_action": False,
+        },
+    )
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="处理请求已被使用，请刷新重试") from error
+    return {
+        "message": "现场未匹配货物标记已关闭",
+        "idempotent_replay": False,
+        "observation_id": int(row.id),
+        "resolved_inventory_lot_id": (
+            int(resolved_lot.id) if resolved_lot is not None else None
+        ),
+    }

@@ -466,6 +466,13 @@ def build_inventory_insights(
                             if lot.location is not None
                             else None
                         ),
+                        area_sequence=(
+                            location_contexts.get(int(lot.location.id), {}).get(
+                                "area_sequence"
+                            )
+                            if lot.location is not None
+                            else None
+                        ),
                     ),
                     "quantity_available": lot.quantity_available,
                     "unit": lot.unit,

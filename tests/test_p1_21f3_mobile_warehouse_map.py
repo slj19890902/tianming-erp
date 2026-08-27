@@ -29,7 +29,9 @@ MIGRATION = (
 )
 
 
-def _add_map_target(factory, *, code: str = "C1-L02") -> tuple[int, int]:
+def _add_map_target(
+    factory, *, code: str = "C1-L02", with_existing: bool = True
+) -> tuple[int, int]:
     from app.models.product import Product
     from app.models.warehouse_inventory import (
         FinishedGoodsInventoryDetail,
@@ -102,27 +104,28 @@ def _add_map_target(factory, *, code: str = "C1-L02") -> tuple[int, int]:
                 depth_mm=1000,
             )
         )
-        existing = InventoryLot(
-            lot_number=f"FG-{code}-EXISTING",
-            inventory_type="finished",
-            warehouse_location_id=target.id,
-            quantity_available=20,
-            quantity_reserved=0,
-            unit="boxes",
-            status="active",
-            source_type="manual",
-            stock_date=date(2026, 7, 2),
-            last_movement_at=datetime(2026, 8, 1, 0, 0, 0),
-        )
-        existing.finished_detail = FinishedGoodsInventoryDetail(
-            owner_customer_id=product.customer_id,
-            owner_customer_name_snapshot="匿名客户甲",
-            is_general=False,
-            product_id=product.id,
-            inventory_code_snapshot=product.product_code,
-            product_name_snapshot=product.product_name,
-        )
-        db.add(existing)
+        if with_existing:
+            existing = InventoryLot(
+                lot_number=f"FG-{code}-EXISTING",
+                inventory_type="finished",
+                warehouse_location_id=target.id,
+                quantity_available=20,
+                quantity_reserved=0,
+                unit="boxes",
+                status="active",
+                source_type="manual",
+                stock_date=date(2026, 7, 2),
+                last_movement_at=datetime(2026, 8, 1, 0, 0, 0),
+            )
+            existing.finished_detail = FinishedGoodsInventoryDetail(
+                owner_customer_id=product.customer_id,
+                owner_customer_name_snapshot="匿名客户甲",
+                is_general=False,
+                product_id=product.id,
+                inventory_code_snapshot=product.product_code,
+                product_name_snapshot=product.product_name,
+            )
+            db.add(existing)
         db.commit()
         return int(source_lot.id), int(target.id)
 
@@ -585,6 +588,192 @@ def test_whole_move_releases_source_projection_and_binds_target(
             )
         )
         assert target_item is not None and target_item.quantity == Decimal("80")
+
+
+def test_empty_position_searches_all_physical_inventory_and_marks_unmatched(
+    mobile_erp_app,
+) -> None:
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        WarehouseUnmatchedInventoryObservation,
+    )
+
+    app, _ids, factory = mobile_erp_app
+    source_lot_id, target_location_id = _add_map_target(
+        factory, code="C1-L05", with_existing=False
+    )
+    with factory() as db:
+        before_lot_count = int(db.scalar(select(func.count(InventoryLot.id))) or 0)
+        before_quantity = int(
+            db.scalar(
+                select(
+                    func.sum(
+                        InventoryLot.quantity_available
+                        + InventoryLot.quantity_reserved
+                        + InventoryLot.quantity_damaged
+                    )
+                )
+            )
+            or 0
+        )
+
+    with TestClient(app) as client:
+        _login(client, "mobile-scoped")
+        searched = client.get(
+            "/api/mobile/erp/warehouse/physical-inventory/search",
+            params={
+                "customer_keyword": "匿名客户甲",
+                "inventory_keyword": "MOBILE-BOX",
+            },
+        )
+        assert searched.status_code == 200, searched.text
+        result = next(
+            item
+            for item in searched.json()["items"]
+            if item["lot_id"] == source_lot_id
+        )
+        assert result["quantity_movable"] == 80
+        assert result["registered_location"]["location_code"] == "C1-L01"
+
+        hidden = client.get(
+            "/api/mobile/erp/warehouse/physical-inventory/search",
+            params={"inventory_keyword": "OTHER-MOBILE-001"},
+        )
+        assert hidden.status_code == 200
+        assert hidden.json()["items"] == []
+
+        reported = client.post(
+            "/api/mobile/erp/warehouse/unmatched-inventory-observations",
+            json={
+                "observed_location_id": target_location_id,
+                "observed_location_layout_version": 1,
+                "customer_keyword": "匿名客户甲",
+                "inventory_keyword": "MOBILE-UNKNOWN-RED",
+                "reported_quantity": 7,
+                "reported_unit": "只",
+                "reason": "现场包装编码未能匹配系统实物库存",
+                "idempotency_key": "mobile-unmatched-c1-l05",
+            },
+        )
+        assert reported.status_code == 201, reported.text
+        observation = reported.json()["observation"]
+        assert observation["status"] == "open"
+        replay = client.post(
+            "/api/mobile/erp/warehouse/unmatched-inventory-observations",
+            json={
+                "observed_location_id": target_location_id,
+                "observed_location_layout_version": 1,
+                "customer_keyword": "匿名客户甲",
+                "inventory_keyword": "MOBILE-UNKNOWN-RED",
+                "reported_quantity": 7,
+                "reported_unit": "只",
+                "reason": "现场包装编码未能匹配系统实物库存",
+                "idempotency_key": "mobile-unmatched-c1-l05",
+            },
+        )
+        assert replay.status_code == 201
+        assert replay.json()["idempotent_replay"] is True
+        conflicting_replay = client.post(
+            "/api/mobile/erp/warehouse/unmatched-inventory-observations",
+            json={
+                "observed_location_id": target_location_id,
+                "observed_location_layout_version": 1,
+                "customer_keyword": "匿名客户甲",
+                "inventory_keyword": "MOBILE-UNKNOWN-RED",
+                "reported_quantity": 7,
+                "reported_unit": "只",
+                "reason": "同一请求键但不同现场说明",
+                "idempotency_key": "mobile-unmatched-c1-l05",
+            },
+        )
+        assert conflicting_replay.status_code == 409
+        assert client.get(
+            "/api/mobile/erp/warehouse/unmatched-inventory-observations"
+        ).status_code == 403
+        area = client.get(
+            "/api/mobile/erp/warehouse/map/floors/3F",
+            params={"area_code": "C1"},
+        )
+        target = next(
+            item
+            for item in area.json()["locations"]
+            if item["location_id"] == target_location_id
+        )
+        assert target["occupancy_state"] == "not_disclosed"
+        assert target["goods"] == []
+        assert target["has_unmatched_inventory_observation"] is True
+        assert target["unmatched_inventory_observation_count"] == 1
+
+        _login(client, "mobile-admin")
+        listed = client.get(
+            "/api/mobile/erp/warehouse/unmatched-inventory-observations"
+        )
+        assert listed.status_code == 200, listed.text
+        assert [item["id"] for item in listed.json()["items"]] == [
+            observation["id"]
+        ]
+        resolved = client.post(
+            f"/api/mobile/erp/warehouse/unmatched-inventory-observations/{observation['id']}/resolve",
+            json={
+                "expected_version": 1,
+                "resolution_note": "已现场核对，后续由正式盘点流程处理",
+                "resolved_inventory_lot_id": None,
+                "idempotency_key": "mobile-unmatched-c1-l05-resolve",
+            },
+        )
+        assert resolved.status_code == 200, resolved.text
+        resolve_replay = client.post(
+            f"/api/mobile/erp/warehouse/unmatched-inventory-observations/{observation['id']}/resolve",
+            json={
+                "expected_version": 1,
+                "resolution_note": "已现场核对，后续由正式盘点流程处理",
+                "resolved_inventory_lot_id": None,
+                "idempotency_key": "mobile-unmatched-c1-l05-resolve",
+            },
+        )
+        assert resolve_replay.status_code == 200
+        assert resolve_replay.json()["idempotent_replay"] is True
+        conflicting_resolution = client.post(
+            f"/api/mobile/erp/warehouse/unmatched-inventory-observations/{observation['id']}/resolve",
+            json={
+                "expected_version": 1,
+                "resolution_note": "同一请求键但不同处理结论",
+                "resolved_inventory_lot_id": None,
+                "idempotency_key": "mobile-unmatched-c1-l05-resolve",
+            },
+        )
+        assert conflicting_resolution.status_code == 409
+        after_area = client.get(
+            "/api/mobile/erp/warehouse/map/floors/3F",
+            params={"area_code": "C1"},
+        )
+        after_target = next(
+            item
+            for item in after_area.json()["locations"]
+            if item["location_id"] == target_location_id
+        )
+        assert after_target["has_unmatched_inventory_observation"] is False
+
+    with factory() as db:
+        assert db.scalar(
+            select(func.count(WarehouseUnmatchedInventoryObservation.id))
+        ) == 1
+        assert db.scalar(
+            select(WarehouseUnmatchedInventoryObservation.status)
+        ) == "resolved"
+        assert db.scalar(select(func.count(InventoryLot.id))) == before_lot_count
+        assert int(
+            db.scalar(
+                select(
+                    func.sum(
+                        InventoryLot.quantity_available
+                        + InventoryLot.quantity_reserved
+                        + InventoryLot.quantity_damaged
+                    )
+                )
+            )
+            or 0
+        ) == before_quantity
 
 
 def _alembic_config(monkeypatch: pytest.MonkeyPatch, path: Path) -> Config:

@@ -1813,6 +1813,86 @@ class WarehouseLocationDiscrepancy(Base):
     resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class WarehouseUnmatchedInventoryObservation(Base):
+    """Physical goods seen at a mapped position but not found in the ledger.
+
+    This is an administrator review marker, never an inventory quantity fact.
+    A later stocktake/onboarding transaction must create or correct inventory.
+    """
+
+    __tablename__ = "warehouse_unmatched_inventory_observations"
+    __table_args__ = (
+        CheckConstraint(
+            "reported_quantity IS NULL OR reported_quantity > 0",
+            name="ck_warehouse_unmatched_observations_quantity",
+        ),
+        CheckConstraint(
+            "status IN ('open','resolved','cancelled')",
+            name="ck_warehouse_unmatched_observations_status",
+        ),
+        CheckConstraint(
+            "version > 0",
+            name="ck_warehouse_unmatched_observations_version",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_warehouse_unmatched_observations_idempotency",
+        ),
+        UniqueConstraint(
+            "resolution_idempotency_key",
+            name="uq_warehouse_unmatched_observations_resolution_idempotency",
+        ),
+        Index(
+            "ix_warehouse_unmatched_observations_location_status",
+            "observed_location_id",
+            "status",
+        ),
+        Index(
+            "ix_warehouse_unmatched_observations_status_reported",
+            "status",
+            "reported_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    observed_location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
+    )
+    observed_location_layout_version: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    customer_keyword: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    inventory_keyword: Mapped[str] = mapped_column(String(200), nullable=False)
+    reported_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reported_unit: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="open", server_default="open", nullable=False
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    reported_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reported_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    resolved_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution_idempotency_key: Mapped[str | None] = mapped_column(
+        String(120), nullable=True
+    )
+    resolved_inventory_lot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"), nullable=True
+    )
+
+
 class DeliveryInventoryAllocation(Base):
     __tablename__ = "delivery_inventory_allocations"
     __table_args__ = (

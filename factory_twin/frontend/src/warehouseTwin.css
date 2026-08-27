@@ -675,6 +675,9 @@ body.warehouse-twin-page {
 .twin-toolbar-summary .unlocated-blocker:disabled { cursor: default; border-color: #d6e0e4; color: #82929a; background: #fff; opacity: .72; }
 .twin-toolbar-summary .column-conflict { color: #b42318; border-color: #efb4ae; background: #fff1f0; }
 .twin-toolbar-summary .column-conflict b { color: #b42318; }
+.twin-toolbar-summary .unmatched-observation { color: #991b1b; border-color: #f0a6a6; background: #fff1f2; }
+.twin-toolbar-summary .unmatched-observation b { color: #b91c1c; }
+.twin-operation-modes button.warning { border-color: #d97706; color: #92400e; background: #fffbeb; }
 .twin-search { min-width: 245px; height: 30px; border-color: #c5d1d7; background: #fff; }
 .twin-search span { color: #5a707e; }
 .twin-search input { border-color: #d4dde1; color: #263c49; background: #fff; }
@@ -956,6 +959,10 @@ body.warehouse-twin-page {
 .twin-location-item-summary small { color: #82939b; font-size: 7px; font-weight: 500; }
 .twin-location-more { margin: 5px 0 0; color: #687d88; font-size: 8px; text-align: center; }
 .twin-location-column-warning { margin: 6px 0 0; padding: 6px 7px; border: 1px solid #efb4ae; color: #a12a20; background: #fff1f0; font-size: 8px; font-weight: 800; line-height: 1.45; }
+.twin-unmatched-observation { margin: 6px 0; padding: 7px; display: grid; gap: 4px; border: 1px solid #ef9a9a; border-left: 4px solid #b91c1c; color: #7f1d1d; background: #fff1f2; }
+.twin-unmatched-observation > b { font-size: 10px; }
+.twin-unmatched-observation p { margin: 0; display: grid; gap: 2px; font-size: 9px; line-height: 1.4; }
+.twin-unmatched-observation p span { color: #991b1b; }
 .twin-detail-toggle { width: 100%; margin-top: 7px; padding: 5px 7px; border: 1px solid #cbdadf; border-radius: 2px; color: #405966; background: #f5f8f9; font-size: 8px; font-weight: 800; }
 .twin-detail-toggle:hover { border-color: #79aaa3; color: #0f766e; background: #edf8f6; }
 .twin-detail-toggle.secondary { border-color: transparent; color: #718590; background: transparent; font-weight: 600; }
@@ -1369,6 +1376,14 @@ body.warehouse-twin-page {
 .twin-merge-source-chips span { min-width: 0; overflow: hidden; color: #667b84; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .twin-merge-source-chips em { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: #b42318; font-size: 8px; font-style: normal; }
 .twin-merge-compatibility-note { padding: 6px; color: #6b4f12; background: #fff8df; font-size: 8px; line-height: 1.45; }
+.twin-merge-suggestions { max-height: 220px; padding: 6px; display: grid; gap: 5px; overflow-y: auto; border: 1px solid #9fc8c0; background: #edf8f6; }
+.twin-merge-suggestions > b { color: #0f665f; font-size: 10px; }
+.twin-merge-suggestions article { padding: 6px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; border: 1px solid #c8ded9; background: #fff; }
+.twin-merge-suggestions article > div { min-width: 0; display: grid; gap: 2px; }
+.twin-merge-suggestions strong { color: #1f4d49; font-size: 9px; }
+.twin-merge-suggestions span,
+.twin-merge-suggestions small { overflow-wrap: anywhere; color: #58716d; font-size: 8px; line-height: 1.35; }
+.twin-merge-suggestions button { align-self: center; padding: 5px 7px; border: 1px solid #0f766e; color: #0f665f; background: #fff; font-size: 8px; font-weight: 800; }
 .twin-merge-target-list { max-height: 190px; display: grid; gap: 5px; overflow-y: auto; }
 .twin-merge-target-list button { min-width: 0; padding: 7px; display: grid; gap: 3px; border: 1px solid #d8c992; border-radius: 3px; color: #3d4f57; background: #fff; text-align: left; }
 .twin-merge-target-list button.selected { border-color: #b56800; background: #fff4df; box-shadow: inset 0 0 0 1px #b56800; }

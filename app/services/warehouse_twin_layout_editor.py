@@ -1663,3 +1663,87 @@ def discard_warehouse_twin_layout_draft(
             },
             applied=True,
         )
+
+
+def rebuild_stale_warehouse_twin_layout_draft(
+    floor_code: str,
+    *,
+    expected_published_revision: str,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> LayoutDraftAction:
+    """Replace only a stale draft with a fresh snapshot of the published map.
+
+    The ordinary draft loader deliberately fails closed when the published map
+    changed underneath a saved draft.  This explicit recovery operation keeps
+    that protection while giving an administrator one audited way to abandon
+    the obsolete file.  It never changes the published map or inventory.
+    """
+
+    normalized = _normalize_floor_code(floor_code)
+    published_target = _published_layout_paths(published_path).source
+    target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        published = _read_document(published_target)
+        published_floor = published["floors"].get(normalized)
+        if not isinstance(published_floor, dict):
+            raise WarehouseTwinLayoutEditNotFoundError(
+                f"数字孪生平面缺少 {normalized}"
+            )
+        published_revision = str(published_floor.get("revision") or "")
+        if published_revision != str(expected_published_revision or ""):
+            raise WarehouseTwinLayoutEditConflictError(
+                "正式地图版本已变化，请刷新后重新放弃旧草稿"
+            )
+        if not target.is_file():
+            return LayoutDraftAction(
+                value={
+                    "status": "none",
+                    "floor_code": normalized,
+                    "published_revision": published_revision,
+                    "inventory_changed": False,
+                },
+                applied=False,
+            )
+
+        stale_draft_sha256 = _path_sha256(target)
+        draft = _read_document(target)
+        meta = draft.get("draft_meta")
+        current_published_sha256 = _path_sha256(published_target)
+        base_published_sha256 = (
+            str(meta.get("base_published_sha256") or "")
+            if isinstance(meta, dict)
+            else ""
+        )
+        if (
+            isinstance(meta, dict)
+            and meta.get("status") in {"draft", "validated"}
+            and base_published_sha256 == current_published_sha256
+        ):
+            return LayoutDraftAction(
+                value={
+                    "status": "current",
+                    "floor_code": normalized,
+                    "published_revision": published_revision,
+                    "inventory_changed": False,
+                },
+                applied=False,
+            )
+
+        replacement = _new_draft_document(published_target)
+        replacement_meta = replacement["draft_meta"]
+        replacement_meta["replaced_stale_draft_sha256"] = stale_draft_sha256
+        replacement_meta["replacement_reason"] = "published_map_changed"
+        _write_document(target, replacement)
+        return LayoutDraftAction(
+            value={
+                "status": "rebuilt",
+                "floor_code": normalized,
+                "published_revision": published_revision,
+                "draft_revision": published_revision,
+                "stale_draft_sha256": stale_draft_sha256,
+                "base_published_sha256": current_published_sha256,
+                "inventory_changed": False,
+            },
+            applied=True,
+        )

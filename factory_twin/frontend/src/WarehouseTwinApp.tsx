@@ -47,6 +47,7 @@ import {
   buildPalletMergeBatchPayload,
   normalizePalletMergeCandidate,
   palletMergeCompatibility,
+  palletMergeSuggestionProductKey,
   palletMergeTargetChoices,
   togglePalletMergeSource
 } from "./warehousePalletMergeDraft.mjs";
@@ -259,6 +260,18 @@ interface DashboardLocation {
   pallet: DashboardPallet | null;
   pallets?: DashboardPallet[];
   loose_items: InventoryItem[];
+  has_unmatched_inventory_observation?: boolean;
+  unmatched_inventory_observation_count?: number;
+  unmatched_inventory_observations?: Array<{
+    id: number;
+    version: number;
+    customer_keyword?: string | null;
+    inventory_keyword: string;
+    reported_quantity?: number | null;
+    reported_unit?: string | null;
+    reason: string;
+    reported_at?: string | null;
+  }>;
 }
 
 interface DelayedDispatchCandidate {
@@ -1430,6 +1443,7 @@ export function WarehouseTwinApp() {
   const [layout, setLayout] = useState<Layout | null>(null);
   const [layoutStandardPallet, setLayoutStandardPallet] = useState<StandardPalletContract | null>(null);
   const [layoutDraftControl, setLayoutDraftControl] = useState<LayoutDraftControl | null>(null);
+  const [publishedFloorRevision, setPublishedFloorRevision] = useState("");
   const [planningPublishedRevision, setPlanningPublishedRevision] = useState("");
   const [assets, setAssets] = useState<AssetTemplate[]>([]);
   const [dashboard, setDashboard] = useState<TwinDashboard | null>(null);
@@ -1495,6 +1509,7 @@ export function WarehouseTwinApp() {
   const [spatialEditBusy, setSpatialEditBusy] = useState(false);
   const [locationEditBusy, setLocationEditBusy] = useState(false);
   const [locationEditMessage, setLocationEditMessage] = useState("");
+  const [staleLayoutDraft, setStaleLayoutDraft] = useState(false);
   const [swapSourceLocationId, setSwapSourceLocationId] = useState<number | null>(null);
   const [targetAreaLocationCount, setTargetAreaLocationCount] = useState("");
   const [areaLocationManagement, setAreaLocationManagement] = useState<AreaLocationManagement | null>(null);
@@ -1628,6 +1643,7 @@ export function WarehouseTwinApp() {
     setZonePolicyDrafts({});
     setZoneGeometryDrafts({});
     setLayoutDraftControl(null);
+    setPublishedFloorRevision("");
     setMapMode((current) => current === "move" || (current === "planning" && pendingAreaPolicyEdit) ? current : "lookup");
     setSearchPanelOpen(true);
     setLocationEditMode(false);
@@ -1640,6 +1656,7 @@ export function WarehouseTwinApp() {
         setLayout(hydrateLayout(raw));
         setLayoutStandardPallet(normalizeStandardPalletContract(raw.standard_pallet));
         setAssets(raw.assets || []);
+        setPublishedFloorRevision(raw.revision);
       })
       .catch((reason: Error) => active && setError(reason.message))
       .finally(() => active && setLoading(false));
@@ -1886,6 +1903,42 @@ export function WarehouseTwinApp() {
     (item) => String(item.location_id) === moveDraftTargetLocationId
   ) || null;
   const mergeTargetChoices = useMemo(() => palletMergeTargetChoices(mergeSources), [mergeSources]);
+  const mergeSuggestions = useMemo(() => {
+    const groups = new Map<string, { label: string; candidates: PalletMergeCandidate[]; total: number }>();
+    for (const location of visualLocations) {
+      for (const pallet of inventoryLocationPallets(location) as DashboardPallet[]) {
+        const normalized = normalizePalletMergeCandidate(location, pallet);
+        if (!normalized.candidate) continue;
+        const physicalItems = pallet.items.filter((item) => inventoryLabelQuantity(item) > 0);
+        const productKey = palletMergeSuggestionProductKey(physicalItems);
+        if (!productKey) continue;
+        const first = physicalItems[0];
+        const groupKey = [
+          normalized.candidate.customer_id,
+          normalized.candidate.inventory_type,
+          normalized.candidate.unit,
+          normalized.candidate.inventory_status,
+          productKey
+        ].join("|");
+        const current = groups.get(groupKey) || {
+          label: `${first.inventory_code || first.product_name || "存货编码待补充"}${first.specification ? ` · ${first.specification}` : ""}`,
+          candidates: [],
+          total: 0
+        };
+        current.candidates.push(normalized.candidate);
+        current.total += normalized.candidate.total_quantity;
+        groups.set(groupKey, current);
+      }
+    }
+    return [...groups.entries()]
+      .filter(([, group]) => group.candidates.length >= 2)
+      .map(([key, group]) => ({ key, ...group }))
+      .sort((left, right) => right.candidates.length - left.candidates.length || left.label.localeCompare(right.label, "zh-CN", { numeric: true }));
+  }, [visualLocations]);
+  const unmatchedInventoryObservationCount = useMemo(
+    () => visualLocations.reduce((total, location) => total + Number(location.unmatched_inventory_observation_count || 0), 0),
+    [visualLocations]
+  );
   const movablePalletIds = useMemo(
     () => visualLocations
       .filter((item) => item.floor_code === floorCode
@@ -3714,6 +3767,7 @@ export function WarehouseTwinApp() {
   const refreshPublishedTwinFloor = async () => {
     const raw = await requestJson<TwinFloorResponse>(`/api/warehouse/twin-layout/floors/${floorCode}`);
     showTwinFloor(raw);
+    setPublishedFloorRevision(raw.revision);
     setLayoutDraftControl(null);
   };
 
@@ -3796,6 +3850,7 @@ export function WarehouseTwinApp() {
         return;
       }
       const raw = await requestJson<TwinFloorDraftResponse>(`/api/warehouse/twin-layout/floors/${floorCode}/draft`);
+      setStaleLayoutDraft(false);
       showTwinFloor(raw);
       setLayoutDraftControl(raw.draft_control);
       setPlanningPublishedRevision(raw.draft_control.published_revision);
@@ -3816,7 +3871,56 @@ export function WarehouseTwinApp() {
           : "区域规划已开启；选中区域后填写用途、形式和最大栈板数，一次确认即可启用。"
       );
     } catch (reason) {
-      setLocationEditMessage(`打开布局草稿失败：${(reason as Error).message}`);
+      const message = (reason as Error).message;
+      setStaleLayoutDraft(message.includes("当前草稿已过期"));
+      setLocationEditMessage(`打开布局草稿失败：${message}`);
+    } finally {
+      setSpatialEditBusy(false);
+    }
+  };
+
+  const useMergeSuggestion = (candidates: PalletMergeCandidate[]) => {
+    const prepared = candidates.map((candidate) => ({
+      ...candidate,
+      client_item_id: operationKey("pallet-merge-source")
+    }));
+    setMergeSources(prepared);
+    setMergeTarget(null);
+    setMergeBatchIdempotencyKey(operationKey("warehouse-pallet-merge-batch"));
+    setWarehouseOperationMessage(`已把 ${prepared.length} 块同存货编码、同规格栈板加入合并草稿；请明确选择一块主栈板后再一次确认。`);
+  };
+
+  const rebuildStaleLayoutDraft = async () => {
+    if (!canEditLocations || spatialEditBusy || !publishedFloorRevision) return;
+    if (!window.confirm("确认放弃过期草稿，并以当前正式地图重新开始区域规划？\n\n旧草稿只会作为审计哈希保留；正式地图、库存、栈板和产品都不会改变。")) return;
+    setSpatialEditBusy(true);
+    try {
+      await mutateJson(
+        `/api/warehouse/twin-layout/floors/${floorCode}/draft/rebuild-stale`,
+        "POST",
+        {
+          expected_published_revision: publishedFloorRevision,
+          operation_key: operationKey("twin-layout-rebuild-stale")
+        }
+      );
+      const raw = await requestJson<TwinFloorDraftResponse>(`/api/warehouse/twin-layout/floors/${floorCode}/draft`);
+      showTwinFloor(raw);
+      setLayoutDraftControl(raw.draft_control);
+      setPlanningPublishedRevision(raw.draft_control.published_revision);
+      setMapMode("planning");
+      setViewMode("2d");
+      setSearchPanelOpen(false);
+      setLocationEditMode(true);
+      setAreaPolicyEditMode(true);
+      setAdvancedAreaMaintenanceOpen(false);
+      setLocationPointEditAreaCode(null);
+      setRackDrafts({});
+      setZonePolicyDrafts({});
+      setZoneGeometryDrafts({});
+      setStaleLayoutDraft(false);
+      setLocationEditMessage("过期草稿已放弃；区域规划现已基于当前正式地图重新开启。库存和正式地图未改变。");
+    } catch (reason) {
+      setLocationEditMessage(`重建布局草稿失败：${(reason as Error).message}`);
     } finally {
       setSpatialEditBusy(false);
     }
@@ -3903,7 +4007,9 @@ export function WarehouseTwinApp() {
         setLocationEditMessage("已打开阻断区域设置；处理并发布后，请返回原页面重新检查。");
       } catch (reason) {
         if (!active) return;
-        setLocationEditMessage(`打开阻断区域设置失败：${(reason as Error).message}`);
+        const message = (reason as Error).message;
+        setStaleLayoutDraft(message.includes("当前草稿已过期"));
+        setLocationEditMessage(`打开阻断区域设置失败：${message}`);
         setPendingAreaPolicyEdit(false);
       } finally {
         areaPolicyDeepLinkStartedRef.current = false;
@@ -4438,6 +4544,7 @@ export function WarehouseTwinApp() {
         <button type="button" className={mapMode === "lookup" ? "active" : ""} onClick={returnToLookupMode}>查货</button>
         {(canExecuteWarehouse || canStocktake) && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}
         {canEditLocations && <button type="button" className={mapMode === 'planning' ? 'active' : ''} disabled={spatialEditBusy} onClick={toggleLayoutEditor}>区域规划</button>}
+        {canEditLocations && staleLayoutDraft && <button type="button" className="warning" disabled={spatialEditBusy} onClick={rebuildStaleLayoutDraft}>放弃旧草稿并重新规划</button>}
       </div>
       <button type="button" className={`twin-layer-toggle ${layerPanelOpen ? "active" : ""}`} aria-expanded={layerPanelOpen} onClick={() => setLayerPanelOpen((value) => !value)}>图层</button>
       <div className="twin-segmented" aria-label="视图模式">
@@ -4462,7 +4569,7 @@ export function WarehouseTwinApp() {
         <button type="button" disabled={spatialEditBusy} onClick={discardLayoutDraft}>{layoutDraftControl?.has_draft ? "放弃草稿" : "取消编辑"}</button>
       </div>}
       <div className="twin-toolbar-spacer" />
-      <div className="twin-toolbar-summary"><span><b>{currentFloor?.active_lots || 0}</b> 有效批次</span><span><b>{currentFloorOccupiedLocations}</b> 占用库位</span><span><b>{mappedLocationPallets.length}</b> 地图库位</span><button type="button" className="unlocated-blocker" disabled={!unlocatedFinishedCount} onClick={() => { setSearchPanelOpen(true); setSearchType("finished"); }}><b>{unlocatedFinishedCount}</b> 待定位成品</button>{palletColumnConflicts.length > 0 && <span className="column-conflict"><b>{palletColumnConflicts.length}</b> 柱子冲突</span>}</div>
+      <div className="twin-toolbar-summary"><span><b>{currentFloor?.active_lots || 0}</b> 有效批次</span><span><b>{currentFloorOccupiedLocations}</b> 占用库位</span><span><b>{mappedLocationPallets.length}</b> 地图库位</span><button type="button" className="unlocated-blocker" disabled={!unlocatedFinishedCount} onClick={() => { setSearchPanelOpen(true); setSearchType("finished"); }}><b>{unlocatedFinishedCount}</b> 待定位成品</button>{unmatchedInventoryObservationCount > 0 && <span className="unmatched-observation"><b>{unmatchedInventoryObservationCount}</b> 现场未匹配</span>}{palletColumnConflicts.length > 0 && <span className="column-conflict"><b>{palletColumnConflicts.length}</b> 柱子冲突</span>}</div>
     </section>
 
     <section className={`twin-workspace ${layerPanelOpen ? "layers-open" : "layers-collapsed"} ${searchPanelOpen ? "context-open" : "context-collapsed"} ${locationEditMode ? "location-editing" : ""}`}>
@@ -4633,6 +4740,7 @@ export function WarehouseTwinApp() {
             <div className="twin-ground-storage-actions"><button type="button" onClick={() => { setGroundCandidates(null); setGroundPrimaryLocationId(null); setGroundSecondaryLocationId(null); setGroundStorageMessage("已取消页面选择；库存零写入。"); }}>取消选择</button><button type="button" className="twin-primary-action" disabled={groundStorageBusy || !groundPrimaryLocationId || (groundLargeFootprint && !groundSecondaryLocationId)} onClick={saveGroundStorage}>{groundStorageBusy ? "正在保存…" : "保存到当前中文位置"}</button></div>
           </div> : moveAction === "stocktake" ? <p>盘点只在右侧所选正式货位形成新增或调减草稿；不拖动货物、不改变地图结构，底部一次确认整批提交。</p> : moveAction === "merge" ? <>
             <p>合并集合已选 {mergeSources.length} 块；可切楼层和位置继续选择，再从集合内明确一块目标。合并不拆批次、不改数量，失败会保留本页选择与重试键。</p>
+            {mergeSuggestions.length > 0 && <div className="twin-merge-suggestions"><b>同存货编码、同规格可合并建议</b>{mergeSuggestions.slice(0, 12).map((suggestion) => <article key={suggestion.key}><div><strong>{suggestion.label}</strong><span>{suggestion.candidates[0].customer_name} · {suggestion.candidates.length} 块栈板 · 合计 {formatNumber(suggestion.total)} {inventoryUnitLabel(suggestion.candidates[0].unit)}</span><small>{suggestion.candidates.map((item) => `${item.location_name}/${item.pallet_code}`).join("；")}</small></div><button type="button" disabled={mergeBatchBusy} onClick={() => useMergeSuggestion(suggestion.candidates)}>加入合并草稿</button></article>)}</div>}
             {mergeSources.length > 0 && <div className="twin-merge-source-chips">{mergeSources.map((item) => <button type="button" key={item.pallet_id} disabled={mergeBatchBusy} onClick={() => {
               const result = togglePalletMergeSource(mergeSources, item);
               setMergeSources(result.items);
@@ -4749,6 +4857,7 @@ export function WarehouseTwinApp() {
         </section>}
         {selectedLocation && <section className="twin-location-card">
           <div className="twin-location-card-title"><div><small>当前位置</small><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em></div>
+          {selectedLocation.has_unmatched_inventory_observation && <div className="twin-unmatched-observation"><b>现场有货但系统未匹配 · 待管理员核对</b>{(selectedLocation.unmatched_inventory_observations || []).map((item) => <p key={item.id}><strong>{item.inventory_keyword}</strong>{item.customer_keyword ? ` · ${item.customer_keyword}` : ""}{item.reported_quantity ? ` · 约 ${item.reported_quantity}${item.reported_unit || ""}` : ""}<span>{item.reason}</span></p>)}</div>}
           <div className="twin-selection-summary"><span><small>货物</small><b>{selectedLocationItems.length} 条</b></span><span><small>客户</small><b>{selectedLocationCustomerLabel}</b></span><span><small>栈板</small><b>{selectedLocationPallets.length || 0} 块</b></span></div>
           {selectedLocationItems.length === 0 && <p className="twin-location-empty-primary">该位置当前没有货物</p>}
           {mapMode === "lookup" && selectedLocationCompositeParentSummaries.map(({ item, summary }) => <article className="twin-location-item twin-composite-parent-item" key={summary.group_key}>
@@ -4948,7 +5057,7 @@ export function WarehouseTwinApp() {
               <div><b>正式区域绑定</b><small>区域编号保存后不可与其他地图区域重复；发布前仍不会进入员工入库候选。</small></div>
               {!selectedAreaFeature.formal_area_id && <label><span>选用现有未绑定区域</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">不选，按下方编号建立新区域</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.floor_code} · {area.area_code} {employeeAreaName(area, { floorCode: area.floor_code })} · {area.capacity_review_status === "confirmed" ? `已确认 ${area.confirmed_pallet_capacity || 0} 栈板` : area.capacity_review_status === "excluded" ? "不计长期容量" : "容量待复核"}</option>)}</select>{formalAreaOptionsError && <small>现有区域读取失败：{formalAreaOptionsError}</small>} {!formalAreaOptionsError && formalAreaOptions.length === 0 && <small>当前楼层没有可选的未绑定区域；可使用下方新编号。</small>}</label>}
               <label><span>正式区域编号</span><input maxLength={30} disabled={Boolean(selectedExistingAreaId)} value={formalAreaCodeDraft} onChange={(event) => setFormalAreaCodeDraft(event.target.value.toUpperCase())} placeholder="例如 FIN-001" /></label>
-              <label><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 三楼右区A1" /></label>
+              <label><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 右区C2 新振（主通道西侧）" /><small>区域名称由管理员按现场客户和方位维护；主通道两侧请按东侧/西侧填写，不根据屏幕上下方向猜测。</small></label>
               <div><b>区域允许存放类型</b><small>可多选；只保存区域策略，不自动转换现有库存</small></div>
               <div className="twin-zone-policy-options">{([[
                 "finished", "成品"

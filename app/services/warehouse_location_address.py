@@ -429,6 +429,7 @@ def _measured_map_location_name(
     *,
     area: WarehouseArea | None,
     floor: WarehouseFloor | None,
+    area_sequence: int | None = None,
 ) -> str | None:
     """Project one published-map location into the employee-facing address.
 
@@ -437,7 +438,10 @@ def _measured_map_location_name(
     this one projection instead of inventing labels independently.
     """
 
-    if str(location.source_version or "").strip().upper() != "V11":
+    if (
+        str(location.source_version or "").strip().upper()
+        not in MEASURED_MAP_LOCATION_SOURCES
+    ):
         return None
     floor_number = int(
         (floor.floor_number if floor is not None else location.warehouse_floor) or 0
@@ -447,7 +451,7 @@ def _measured_map_location_name(
         area_code=location.area_code,
         floor_number=floor_number,
     )
-    sequence = _location_sequence(location)
+    sequence = int(area_sequence or 0) or _location_sequence(location)
     if not floor_number or not area_name or sequence is None:
         return None
 
@@ -458,6 +462,9 @@ def _measured_map_location_name(
         for marker in (floor_name, _floor_code(floor_number))
     )
     prefix = area_name if has_floor_prefix else f"{floor_name} {area_name}"
+    area_code = str(location.area_code or "").strip().upper()
+    if area_sequence:
+        return f"{prefix}·{area_code}-{sequence}"
     storage_type = str(location.storage_type or "").strip().lower()
     suffix_match = re.search(
         r"(?:^|-)([A-Z])?(\d+)$",
@@ -483,6 +490,7 @@ def format_location_address(
     *,
     area: WarehouseArea | None = None,
     floor: WarehouseFloor | None = None,
+    area_sequence: int | None = None,
 ) -> tuple[str, str]:
     area = area or getattr(location, "address_area", None)
     if floor is None and area is not None:
@@ -540,6 +548,7 @@ def format_location_address(
         location,
         area=area,
         floor=floor,
+        area_sequence=area_sequence,
     )
     if measured_name:
         return location.location_code, measured_name
@@ -551,10 +560,16 @@ def employee_location_name(
     *,
     area: WarehouseArea | None = None,
     floor: WarehouseFloor | None = None,
+    area_sequence: int | None = None,
 ) -> str:
     if location is None:
         return "位置待确认"
-    code, human = format_location_address(location, area=area, floor=floor)
+    code, human = format_location_address(
+        location,
+        area=area,
+        floor=floor,
+        area_sequence=area_sequence,
+    )
     if human and normalize_location_alias(human) != normalize_location_alias(code):
         return human
     return "位置名称待完善"
@@ -566,6 +581,7 @@ def location_address_payload(
     area: WarehouseArea | None = None,
     floor: WarehouseFloor | None = None,
     position_status: str | None = None,
+    area_sequence: int | None = None,
 ) -> dict:
     area = area or getattr(location, "address_area", None)
     if floor is None and area is not None:
@@ -574,10 +590,16 @@ def location_address_payload(
         location,
         area=area,
         floor=floor,
+        area_sequence=area_sequence,
     )
     if location.address_kind in MANAGED_ADDRESS_KINDS:
         projection_source = "structured_address"
-    elif _measured_map_location_name(location, area=area, floor=floor):
+    elif _measured_map_location_name(
+        location,
+        area=area,
+        floor=floor,
+        area_sequence=area_sequence,
+    ):
         projection_source = (
             "published_measured_map"
             if position_status == "mapped"
@@ -609,10 +631,12 @@ def location_address_payload(
         "address_version": int(location.address_version or 1),
         "current_address_code": current_code,
         "current_address_name": current_name,
+        "area_sequence": area_sequence,
         "employee_location_name": employee_location_name(
             location,
             area=area,
             floor=floor,
+            area_sequence=area_sequence,
         ),
         "projection_source": projection_source,
     }

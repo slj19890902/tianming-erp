@@ -308,6 +308,22 @@ def test_area_confirmation_keeps_the_current_planning_revision_for_the_next_zone
     assert "await Promise.all([refreshPlanningTwinFloor(), refreshDashboard()])" in SOURCE
 
 
+def test_stale_draft_has_an_explicit_recovery_without_mutating_inventory() -> None:
+    assert 'message.includes("当前草稿已过期")' in SOURCE
+    assert "放弃旧草稿并重新规划" in SOURCE
+    assert "/draft/rebuild-stale`" in SOURCE
+    assert "expected_published_revision: publishedFloorRevision" in SOURCE
+    assert "正式地图、库存、栈板和产品都不会改变" in SOURCE
+
+
+def test_same_inventory_and_specification_merge_is_only_a_confirmed_draft() -> None:
+    assert "同存货编码、同规格可合并建议" in SOURCE
+    assert "useMergeSuggestion" in SOURCE
+    assert "加入合并草稿" in SOURCE
+    assert "请明确选择一块主栈板后再一次确认" in SOURCE
+    assert '"/api/warehouse/pallets/merge-batches"' in SOURCE
+
+
 def test_move_panel_uses_business_wording_and_keeps_delivery_linkage_clear() -> None:
     assert "已选货物 ·" in SOURCE
     assert "重新选择货物" in SOURCE

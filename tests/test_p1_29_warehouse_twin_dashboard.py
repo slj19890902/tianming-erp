@@ -524,8 +524,8 @@ def test_dashboard_keeps_native_units_and_hides_unconfirmed_capacity_metrics(
     mapped = next(row for row in payload["locations"] if row["location_code"] == "A1-L01")
     assert mapped["map_position"]["version"] == 1
     assert mapped["map_position"]["z_index"] == 0
-    assert mapped["current_address_name"] == "三楼 A1成品区·左侧第1位"
-    assert mapped["employee_location_name"] == "三楼 A1成品区·左侧第1位"
+    assert mapped["current_address_name"] == "三楼 右区A1·成品区·A1-1"
+    assert mapped["employee_location_name"] == "三楼 右区A1·成品区·A1-1"
     assert [row["inventory_code"] for row in mapped["loose_items"]] == [
         "TM-FG-001-LOOSE"
     ]

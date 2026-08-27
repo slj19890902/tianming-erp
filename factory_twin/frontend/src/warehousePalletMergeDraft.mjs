@@ -10,6 +10,18 @@ function itemQuantity(item) {
     + Number(item?.damaged_quantity || 0);
 }
 
+export function palletMergeSuggestionProductKey(items) {
+  const physicalItems = (Array.isArray(items) ? items : []).filter((item) => itemQuantity(item) > 0);
+  if (!physicalItems.length) return null;
+  const keys = new Set(physicalItems.map((item) => {
+    const inventoryCode = String(item?.inventory_code || "").trim().toUpperCase();
+    const specification = String(item?.specification || "").trim().toUpperCase();
+    return inventoryCode ? `${inventoryCode}|${specification}` : "";
+  }));
+  if (keys.size !== 1 || keys.has("")) return null;
+  return [...keys][0];
+}
+
 function oneValue(items, getter) {
   const normalized = items.map(getter);
   if (normalized.some((value) => value === null || value === undefined || value === "")) return null;

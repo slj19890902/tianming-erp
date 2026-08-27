@@ -705,6 +705,7 @@ def stock_policy_dict(
                     location,
                     area=location_context.get("area"),
                     floor=location_context.get("floor"),
+                    area_sequence=location_context.get("area_sequence"),
                 ),
                 "location_master_name": location.location_name,
                 "warehouse_type": location.warehouse_type,
@@ -845,6 +846,7 @@ def replenishment_item_dict(
                     location,
                     area=location_context.get("area"),
                     floor=location_context.get("floor"),
+                    area_sequence=location_context.get("area_sequence"),
                 ),
                 "location_master_name": location.location_name,
             }

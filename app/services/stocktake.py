@@ -135,6 +135,11 @@ def _stocktake_address_payload(location: WarehouseLocation, candidate) -> dict:
         location,
         area=candidate.area,
         floor=candidate.floor,
+        area_sequence=(
+            candidate.projection_context.get("area_sequence")
+            if candidate.projection_context
+            else None
+        ),
     )
     return {
         "address_zone_code": (
@@ -324,6 +329,7 @@ def get_location_detail(db: Session, location_id: int) -> dict[str, object]:
         location,
         area=projection_context.get("area"),
         floor=projection_context.get("floor"),
+        area_sequence=projection_context.get("area_sequence"),
     )
     layout_version = db.scalar(
         select(Floor3LocationLayout.version).where(
@@ -1002,6 +1008,7 @@ def order_payload(
         order.location,
         area=context.get("area"),
         floor=context.get("floor"),
+        area_sequence=context.get("area_sequence"),
     )
     items = [
         {

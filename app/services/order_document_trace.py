@@ -236,6 +236,7 @@ def build_order_item_document_trace(
             location,
             area=context.get("area"),
             floor=context.get("floor"),
+            area_sequence=context.get("area_sequence"),
         )
 
     def add_event(

@@ -499,6 +499,26 @@ def ground_candidate_rows(
 ) -> list[dict]:
     rows: list[dict] = []
     location_ids = [slot.location_id for slot in plan.slots]
+    area_sequence_by_location = {
+        int(location_id): sequence
+        for sequence, location_id in enumerate(
+            db.scalars(
+                select(WarehouseLocation.id)
+                .where(
+                    WarehouseLocation.warehouse_floor
+                    == int(plan.area.floor.floor_number),
+                    func.upper(func.trim(WarehouseLocation.area_code))
+                    == str(plan.area.area_code or "").strip().upper(),
+                )
+                .order_by(
+                    WarehouseLocation.sort_order,
+                    WarehouseLocation.location_code,
+                    WarehouseLocation.id,
+                )
+            ).all(),
+            start=1,
+        )
+    }
     occupancies = list(
         db.scalars(
             select(WarehouseGroundOccupancy)
@@ -620,6 +640,7 @@ def ground_candidate_rows(
                     location,
                     area=plan.area,
                     floor=plan.area.floor,
+                    area_sequence=area_sequence_by_location.get(int(location.id)),
                 ),
                 "location_master_name": location.location_name,
                 "row_no": slot.row_no,

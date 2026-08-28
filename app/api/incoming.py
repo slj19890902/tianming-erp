@@ -8,7 +8,7 @@ import socket
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 import qrcode
@@ -624,9 +624,9 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
             0,
         )
         proposed_quantity = max(int(row.get("incoming_quantity") or 0), 0)
-        if proposed_quantity > 0 and remaining_order > 0:
+        if proposed_quantity > 0:
             requires_finished_projection = True
-        if proposed_quantity > remaining_order and remaining_reserve > 0:
+        if proposed_quantity > remaining_order:
             requires_reserve_projection = True
 
     finished_projection = (
@@ -643,7 +643,6 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
         try:
             reserve_location = automatic_raw_material_staging_location(
                 db,
-                allow_repairable_legacy=True,
                 require_floor3_left=True,
             )
             reserve_context = load_warehouse_location_projection_contexts(
@@ -718,39 +717,35 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
         remaining_order_plan = max(order_plan - before_order, 0)
         remaining_reserve_plan = max(reserve_plan - before_reserve, 0)
         quantity = max(int(row.get("incoming_quantity") or 0), 0)
-        if (
-            remaining_order_plan > 0
-            and remaining_reserve_plan > 0
-            and not bool(reserve_projection.get("ready"))
-            and quantity > remaining_order_plan
-        ):
-            quantity = remaining_order_plan
-            row["incoming_quantity"] = quantity
-            row["receipt_quantity_notice"] = (
-                f"已预填本单可直接收的 {remaining_order_plan} 张；"
-                f"其余 {remaining_reserve_plan} 张片料备库须等三楼左区原料或"
-                "半成品真实货位发布后再收。"
-            )
-        after_total = before_total + quantity
-        after_order = after_total if reserve_plan == 0 else min(after_total, order_plan)
-        after_reserve = after_total - after_order
-        order_delta = max(after_order - before_order, 0)
-        reserve_delta = max(after_reserve - before_reserve, 0)
+        base_order_delta = min(quantity, remaining_order_plan)
+        surplus_delta = max(quantity - base_order_delta, 0)
+        order_delta = base_order_delta
+        reserve_delta = surplus_delta
         before_sheets: dict[int, int] = {}
         for allocation in allocations_by_order_item.get(order_item_id, []):
             sid = int(allocation.purchase_purpose_source_snapshot_id or 0)
             before_sheets[sid] = before_sheets.get(sid, 0) + int(
                 allocation.receipt_order_purpose_sheet_qty
             )
-        after_sheets = dict(before_sheets)
-        after_sheets[snapshot.id] = after_sheets.get(snapshot.id, 0) + order_delta
         item_snapshots = snapshots_by_order_item.get(order_item_id, [])
         finished_before = receipt_purpose_finished_capacity(
             db, item_snapshots, before_sheets
         )
-        finished_after = receipt_purpose_finished_capacity(
-            db, item_snapshots, after_sheets
+        reserve_disposition_sheets = dict(before_sheets)
+        reserve_disposition_sheets[snapshot.id] = (
+            reserve_disposition_sheets.get(snapshot.id, 0) + base_order_delta
         )
+        reserve_disposition_finished_after = receipt_purpose_finished_capacity(
+            db, item_snapshots, reserve_disposition_sheets
+        )
+        finished_disposition_sheets = dict(before_sheets)
+        finished_disposition_sheets[snapshot.id] = (
+            finished_disposition_sheets.get(snapshot.id, 0) + quantity
+        )
+        finished_disposition_finished_after = receipt_purpose_finished_capacity(
+            db, item_snapshots, finished_disposition_sheets
+        )
+        finished_after = reserve_disposition_finished_after
         fact = latest_fact_by_snapshot.get(int(snapshot.id))
         variance = latest_variance_by_snapshot.get(int(snapshot.id))
         variance_material = (
@@ -883,6 +878,22 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
                 ),
                 "expected_order_purpose_sheet_qty": order_delta,
                 "expected_reserve_purpose_sheet_qty": reserve_delta,
+                "surplus_sheet_qty": surplus_delta,
+                "surplus_choice_required": surplus_delta > 0,
+                "finished_disposition_expected_order_purpose_sheet_qty": quantity,
+                "finished_disposition_expected_reserve_purpose_sheet_qty": 0,
+                "finished_disposition_expected_finished_output_qty": max(
+                    finished_disposition_finished_after - finished_before, 0
+                ),
+                "semi_finished_reserve_expected_order_purpose_sheet_qty": (
+                    base_order_delta
+                ),
+                "semi_finished_reserve_expected_reserve_purpose_sheet_qty": (
+                    surplus_delta
+                ),
+                "semi_finished_reserve_expected_finished_output_qty": max(
+                    reserve_disposition_finished_after - finished_before, 0
+                ),
                 "remaining_order_purpose_sheet_qty": remaining_order_plan,
                 "remaining_reserve_purpose_sheet_qty": remaining_reserve_plan,
                 "expected_finished_output_qty": max(
@@ -890,7 +901,7 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
                 ),
                 "finished_location_name": (
                     finished_projection.get("location_name")
-                    if finished_after > finished_before
+                    if finished_disposition_finished_after > finished_before
                     else None
                 ),
                 "reserve_location_name": (
@@ -898,17 +909,17 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
                 ),
                 "finished_location_ready": (
                     bool(finished_projection.get("ready"))
-                    if finished_after > finished_before
+                    if finished_disposition_finished_after > finished_before
                     else True
                 ),
                 "finished_location_issue": (
                     finished_projection.get("issue")
-                    if finished_after > finished_before
+                    if finished_disposition_finished_after > finished_before
                     else None
                 ),
                 "finished_capacity_warning": (
                     finished_projection.get("capacity_warning")
-                    if finished_after > finished_before
+                    if finished_disposition_finished_after > finished_before
                     else None
                 ),
                 "reserve_location_ready": (
@@ -923,7 +934,7 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
                 # client incorrectly calls the price-freeze endpoint again.
                 "receipt_execution_ready": bool(
                     (
-                        finished_after <= finished_before
+                        finished_disposition_finished_after <= finished_before
                         or finished_projection.get("ready")
                     )
                     and (reserve_delta <= 0 or reserve_projection.get("ready"))
@@ -932,7 +943,10 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
         )
         if not fact_ready:
             row["purpose_issue"] = "请先确认实际材质和正式采购价格"
-        if finished_after > finished_before and not finished_projection.get("ready"):
+        if (
+            finished_disposition_finished_after > finished_before
+            and not finished_projection.get("ready")
+        ):
             row["purpose_issue"] = str(finished_projection.get("issue") or "成品暂存位置未就绪")
         elif reserve_delta > 0 and not reserve_projection.get("ready"):
             row["purpose_issue"] = str(reserve_projection.get("issue") or "片料暂存位置未就绪")
@@ -1114,6 +1128,7 @@ class ReceiveRequest(BaseModel):
     received_quantity: int | None = None
     resolution_action: str | None = None
     resolution_reason: str | None = None
+    surplus_disposition: Literal["finished", "semi_finished_reserve"] | None = None
     surplus_location_id: int | None = Field(default=None, gt=0)
     expected_surplus_layout_version: int | None = Field(default=None, gt=0)
     expected_receipt_fact_version: int | None = Field(default=None, gt=0)
@@ -1142,6 +1157,7 @@ class BatchReceiveLine(BaseModel):
     received_quantity: int
     resolution_action: str | None = None
     resolution_reason: str | None = None
+    surplus_disposition: Literal["finished", "semi_finished_reserve"] | None = None
     surplus_location_id: int | None = Field(default=None, gt=0)
     expected_surplus_layout_version: int | None = Field(default=None, gt=0)
     expected_receipt_fact_version: int | None = Field(default=None, gt=0)
@@ -4519,6 +4535,7 @@ def receive_item(
             ),
             resolution_action=(payload.resolution_action if payload else None),
             resolution_reason=(payload.resolution_reason if payload else None),
+            surplus_disposition=(payload.surplus_disposition if payload else None),
             surplus_location_id=(payload.surplus_location_id if payload else None),
             expected_surplus_layout_version=(
                 payload.expected_surplus_layout_version if payload else None
@@ -4651,6 +4668,7 @@ def batch_receive_items(
                     received_quantity=line.received_quantity,
                     resolution_action=line.resolution_action,
                     resolution_reason=line.resolution_reason,
+                    surplus_disposition=line.surplus_disposition,
                     surplus_location_id=line.surplus_location_id,
                     expected_surplus_layout_version=(
                         line.expected_surplus_layout_version

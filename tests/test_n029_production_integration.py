@@ -396,6 +396,8 @@ def test_completed_task_rejects_over_delivery_without_physical_inventory(
                     {
                         "order_item_id": ids["task_completed"],
                         "delivered_quantity": 102,
+                        "over_delivery_confirmed": True,
+                        "over_delivery_reason": "确认送出102只，保留1只损坏品",
                     }
                 ],
             },
@@ -578,6 +580,8 @@ def test_delivery_does_not_release_pallet_with_damaged_goods(
                     {
                         "order_item_id": ids["task_completed"],
                         "delivered_quantity": 102,
+                        "over_delivery_confirmed": True,
+                        "over_delivery_reason": "确认送出102只，保留1只损坏品",
                     }
                 ],
             },
@@ -623,6 +627,8 @@ def test_authorized_over_delivery_103_consumes_stock_and_records_three(
                     {
                         "order_item_id": ids["task_completed"],
                         "delivered_quantity": 103,
+                        "over_delivery_confirmed": True,
+                        "over_delivery_reason": "确认将实际多生产的 3 只一并送货",
                     }
                 ],
             },
@@ -702,6 +708,8 @@ def test_new_finished_in_reuses_released_empty_pallet(
                     {
                         "order_item_id": ids["task_completed"],
                         "delivered_quantity": 103,
+                        "over_delivery_confirmed": True,
+                        "over_delivery_reason": "确认将实际多生产的3只一并送货",
                     }
                 ],
             },
@@ -815,6 +823,8 @@ def test_cancel_full_delivery_restores_auto_released_pallet(
                     {
                         "order_item_id": ids["task_completed"],
                         "delivered_quantity": 103,
+                        "over_delivery_confirmed": True,
+                        "over_delivery_reason": "确认将实际多生产的3只一并送货",
                     }
                 ],
             },
@@ -865,6 +875,8 @@ def test_cancel_full_delivery_fails_closed_when_original_location_is_reused(
                     {
                         "order_item_id": ids["task_completed"],
                         "delivered_quantity": 103,
+                        "over_delivery_confirmed": True,
+                        "over_delivery_reason": "确认将实际多生产的3只一并送货",
                     }
                 ],
             },

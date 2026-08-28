@@ -395,21 +395,33 @@ def test_receipt_preview_uses_real_published_fin_member_not_legacy_dispatch(
 
     with session_factory() as session:
         projection = receipt_auto_finished_location_projection(session)
-        location = session.get(
-            __import__(
-                "app.models.warehouse_inventory",
-                fromlist=["WarehouseLocation"],
-            ).WarehouseLocation,
-            expected_location_id,
-        )
+        from app.models.warehouse_inventory import WarehouseArea, WarehouseFloor, WarehouseLocation
+        from app.services.warehouse_location_address import employee_location_name
+
+        location, area, floor = session.execute(
+            select(WarehouseLocation, WarehouseArea, WarehouseFloor)
+            .join(WarehouseFloor, WarehouseFloor.floor_number == WarehouseLocation.warehouse_floor)
+            .join(
+                WarehouseArea,
+                (WarehouseArea.floor_id == WarehouseFloor.id)
+                & (WarehouseArea.area_code == WarehouseLocation.area_code),
+            )
+            .where(WarehouseLocation.id == expected_location_id)
+        ).one()
         assert location is not None
+        readable_name = employee_location_name(
+            location,
+            area=area,
+            floor=floor,
+            area_sequence=1,
+        )
         assert projection == {
             "ready": True,
             "location_id": location.id,
             "location_code": location.location_code,
-            "location_name": location.location_name,
-            "current_address_name": location.location_name,
-            "employee_location_name": location.location_name,
+            "location_name": readable_name,
+            "current_address_name": readable_name,
+            "employee_location_name": readable_name,
             "position_status": "mapped",
             "layout_version": 2,
             "capacity_warning": None,
@@ -435,8 +447,8 @@ def test_receipt_preview_reports_missing_fin_ground_plan_instead_of_dispatch(
         projection = receipt_auto_finished_location_projection(session)
 
     assert projection["ready"] is False
-    assert "FIN-001～003" in str(projection["issue"])
-    assert "地堆排位" in str(projection["issue"])
+    assert "已发布地堆排位" in str(projection["issue"])
+    assert "停止自动收料成品入库" in str(projection["issue"])
     assert "DISPATCH" not in str(projection["issue"])
 
 
@@ -1367,21 +1379,24 @@ def test_api_created_order_receipt_auto_fin_and_reserve_purposes_end_to_end(
         raw_policy = session.scalar(
             select(WarehouseAreaStoragePolicy)
             .join(WarehouseAreaStoragePolicy.area)
-            .where(WarehouseAreaStoragePolicy.area.has(area_code="A1"))
+            .where(WarehouseAreaStoragePolicy.area.has(area_code="RAW-001"))
         )
         assert raw_policy is not None
         raw_feature = str(raw_policy.map_feature_id)
+        raw_area_code = str(raw_policy.area.area_code)
+        raw_revision = str(raw_policy.published_map_revision)
     fin_identity = location_candidates.load_warehouse_twin_published_floor_identity
     def combined_identity(floor_number: int):
         identity = fin_identity(floor_number)
-        if int(floor_number) != 1:
+        if int(floor_number) != 3:
             return identity
         return {
             **identity,
-            "zones_by_id": {**identity["zones_by_id"], raw_feature: "A1"},
+            "revision": raw_revision,
+            "zones_by_id": {**identity["zones_by_id"], raw_feature: raw_area_code},
             "zone_ids_by_area": {
                 **identity["zone_ids_by_area"],
-                "A1": (raw_feature,),
+                raw_area_code: (raw_feature,),
             },
         }
     monkeypatch.setattr(location_candidates, "load_warehouse_twin_published_floor_identity", combined_identity)
@@ -1436,6 +1451,8 @@ def test_api_created_order_receipt_auto_fin_and_reserve_purposes_end_to_end(
                 purpose_snapshot_id=snapshot.id, purpose_snapshot_version=snapshot.snapshot_version,
                 receipt_plan_fingerprint=snapshot.preview_fingerprint,
                 component_type=snapshot.component_type, material_id=supplier_item.material_id,
+                order_purpose_sheet_qty=int(snapshot.order_purpose_sheet_qty or 0),
+                reserve_purpose_sheet_qty=int(snapshot.reserve_purpose_sheet_qty or 0),
             )
         frozen = _freeze_receipt_fact(client, source, idempotency_key="p1107-api-price")
         assert frozen.status_code == 200, frozen.text

@@ -37,6 +37,21 @@ def test_p1_123_migration_roundtrip_and_fact_guard(
             );
             INSERT INTO warehouse_locations (id, location_code, is_active)
             VALUES (1, 'LEGACY-KEEP', 1);
+            CREATE TABLE inventory_pallets (
+                id INTEGER PRIMARY KEY,
+                location_id INTEGER
+            );
+            CREATE TRIGGER trg_inventory_pallets_require_location
+            BEFORE INSERT ON inventory_pallets
+            FOR EACH ROW
+            WHEN NEW.location_id IS NOT NULL
+                 AND NOT EXISTS (
+                     SELECT 1 FROM warehouse_locations
+                     WHERE id = NEW.location_id
+                 )
+            BEGIN
+                SELECT RAISE(ABORT, 'location missing');
+            END;
             """
         )
     config = _config(database_path)
@@ -56,6 +71,13 @@ def test_p1_123_migration_roundtrip_and_fact_guard(
         assert connection.execute(
             "select location_code, map_rack_id from warehouse_locations where id = 1"
         ).fetchone() == ("LEGACY-KEEP", None)
+        assert connection.execute(
+            "select count(*) from sqlite_master "
+            "where type='trigger' and name='trg_inventory_pallets_require_location'"
+        ).fetchone()[0] == 1
+        connection.execute(
+            "insert into inventory_pallets (id, location_id) values (1, 1)"
+        )
 
     command.downgrade(config, OLD_HEAD)
     command.upgrade(config, NEW_HEAD)

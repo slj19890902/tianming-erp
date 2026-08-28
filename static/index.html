@@ -4033,8 +4033,54 @@
                     <td class="incoming-date-cell">{{ incomingTab==='pending' ? (row.requisition_date || '-') : (row.material_received_at ? formatDateTime(row.material_received_at) : '-') }}</td>
                     <td><a v-if="row.drawing_path" class="btn small" :href="row.drawing_path" target="_blank" rel="noopener">图纸</a><span v-else>-</span></td>
                     <td class="incoming-quantity-summary">{{ row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0 }} / {{ row.cumulative_received_quantity || 0 }} / {{ row.remaining_quantity ?? 0 }}</td>
-                    <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.received_quantity_this_time ?? row.incoming_quantity ?? 0 }}</strong></td>
-                    <td class="incoming-action-cell"><template v-if="incomingTab==='pending'"><span :class="['status',incomingProjectedVariance(row)===0?'green':'orange']">{{ incomingProjectedVariance(row)===0 ? '数量相符' : (incomingProjectedVariance(row)<0 ? '少收' : '多收') }}</span><details class="incoming-action-menu"><summary>操作</summary><div v-if="row.purpose_status==='legacy_unset'"><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id"><option :value="null">选择余量库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option></select></div><div v-else class="muted">预计订单用途 {{ row.expected_order_purpose_sheet_qty || 0 }} 张｜预计片料备库 {{ row.expected_reserve_purpose_sheet_qty || 0 }} 张｜预计形成成品 {{ row.expected_finished_output_qty || 0 }} 只<div v-if="row.finished_location_name">成品位置：{{ row.finished_location_name }}</div><div v-if="row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div><div v-if="row.receipt_quantity_notice" class="status orange" style="display:block;white-space:normal;margin-top:5px">{{ row.receipt_quantity_notice }}</div></div><div v-if="incomingReceiptExecutionIssue(row)" class="muted incoming-receipt-blocker">暂不能实收：{{ incomingReceiptExecutionIssue(row) }}</div><button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button><button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button><button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button></details></template><template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></div></template></td>
+                    <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" @input="onIncomingQuantityChanged(row)" /><strong v-else>{{ row.received_quantity_this_time ?? row.incoming_quantity ?? 0 }}</strong></td>
+                    <td class="incoming-action-cell">
+                      <template v-if="incomingTab==='pending'">
+                        <span :class="['status',incomingReceiptQuantityStatus(row).warning?'orange':'green']">{{ incomingReceiptQuantityStatus(row).label }}</span>
+                        <details class="incoming-action-menu">
+                          <summary>操作</summary>
+                          <div v-if="row.purpose_status==='legacy_unset'">
+                            <select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action">
+                              <option value="">少收怎么处理</option>
+                              <option value="await_supplier">继续等补货</option>
+                              <option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option>
+                            </select>
+                            <select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)">
+                              <option value="">多收怎么处理</option>
+                              <option value="all_to_production">全部用于本单</option>
+                              <option value="transfer_to_semi_inventory">余量存半成品仓</option>
+                            </select>
+                            <select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id">
+                              <option :value="null">选择余量库位</option>
+                              <option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option>
+                            </select>
+                          </div>
+                          <div v-else class="muted">
+                            <template v-if="incomingSurplusDispositionRequired(row)">
+                              <div class="status orange" style="display:block;white-space:normal;margin-bottom:6px">本次比订单成品用途多 {{ incomingFrozenSurplusQuantity(row) }} 张，必须先选择余量用途。</div>
+                              <select class="select" v-model="row.surplus_disposition" @change="onIncomingSurplusDisposition(row)">
+                                <option value="">请选择：做成品或片料备库</option>
+                                <option value="finished">做成品</option>
+                                <option value="semi_finished_reserve">片料备库</option>
+                              </select>
+                            </template>
+                            <template v-if="!incomingSurplusDispositionRequired(row) || row.surplus_disposition">
+                              <div style="margin-top:6px">预计订单用途 {{ incomingPurposeProjection(row).orderSheets }} 张｜预计片料备库 {{ incomingPurposeProjection(row).reserveSheets }} 张<template v-if="incomingPurposeProjection(row).finishedOutput!==null">｜预计形成成品 {{ incomingPurposeProjection(row).finishedOutput }} 只</template><template v-else>｜成品数量按已冻结换算确认</template></div>
+                              <div v-if="Number(incomingPurposeProjection(row).orderSheets || 0)>0 && row.finished_location_name">成品位置：{{ row.finished_location_name }}</div>
+                              <div v-if="Number(incomingPurposeProjection(row).reserveSheets || 0)>0 && row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div>
+                              <div v-if="row.surplus_disposition" :class="['status',incomingSelectedLocationsReady(row)?'green':'orange']" style="display:block;white-space:normal;margin-top:5px">{{ incomingSelectedLocationsReady(row) ? '所选分流库位已就绪' : '所选分流库位尚未就绪' }}</div>
+                            </template>
+                            <div v-else class="muted" style="margin-top:6px">选择后显示本次成品、片料数量和对应位置。</div>
+                            <div v-if="row.receipt_quantity_notice && row.surplus_disposition!=='finished'" class="status orange" style="display:block;white-space:normal;margin-top:5px">{{ row.receipt_quantity_notice }}</div>
+                          </div>
+                          <div v-if="incomingReceiptExecutionIssue(row)" class="muted incoming-receipt-blocker">暂不能实收：{{ incomingReceiptExecutionIssue(row) }}</div>
+                          <button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button>
+                          <button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button>
+                          <button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button>
+                        </details>
+                      </template>
+                      <template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></div></template>
+                    </td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -7590,7 +7636,7 @@
                 <div v-if="deliveryBatchPicker.loading" class="empty">待送订单正在载入…</div>
                 <table v-else class="delivery-batch-table"><colgroup><col class="delivery-batch-select-cell" /><col class="delivery-batch-code-col" /><col class="delivery-batch-name-col" /><col class="delivery-batch-spec-col" /><col class="delivery-batch-material-col" /><col class="delivery-batch-order-location-col" /><col class="delivery-batch-remaining-col" /><col class="delivery-batch-date-col" /></colgroup><thead><tr><th class="delivery-batch-select-cell"><div class="delivery-batch-select-head"><span>选择</span><button class="btn small success delivery-batch-select-all" type="button" :disabled="!deliveryBatchFilteredItems().some(item => !isDeliveryItemAlreadyInForm(item.order_item_id))" @click="toggleAllDeliveryBatchFiltered(true)">全选本页</button></div></th><th>存货编码</th><th>产品名称</th><th>规格</th><th>材质</th><th>订单 / 客户单号 / 库存位置</th><th class="delivery-batch-remaining-cell">未送数量</th><th>交期</th></tr></thead><tbody><tr v-for="item in deliveryBatchFilteredItems()" :key="item.order_item_id"><td class="delivery-batch-select-cell"><span v-if="isDeliveryItemAlreadyInForm(item.order_item_id)" class="muted">已在单中</span><input v-else type="checkbox" :checked="!!deliveryBatchPicker.selected[item.order_item_id]" @change="setDeliveryBatchSelection(item, $event.target.checked)" /></td><td>{{ item.product_code || "-" }}</td><td>{{ item.product_name || "-" }}</td><td>{{ item.specification || "-" }}</td><td>{{ item.material_display || "-" }}</td><td><div class="delivery-batch-order-location"><div>{{ displayOrderNumber(item) }}｜{{ item.customer_po || "-" }}</div><div class="muted">库存：{{ deliveryBatchOrderLocationText(item) }}</div></div></td><td class="delivery-batch-remaining-cell">{{ item.remaining_quantity || 0 }}</td><td>{{ item.delivery_date || "-" }}</td></tr></tbody></table>
               </div>
-              <table v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.lines.some(item => item.source_type !== 'unordered_finished')" :class="{'delivery-guide-review-target':deliveryGuideStage === 'review'}"><thead><tr><th>存货编码</th><th>订单号 / 客户单号</th><th>产品</th><th>订单待送 / 可用成品 / 可超送</th><th>本次送货</th><th>客户备注（会打印）</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines.filter(item => item.source_type !== 'unordered_finished')" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.order_remaining_quantity)}"><td>{{ line.inventory_code || line.product_code || '-' }}</td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}<div class="muted">{{ line.specification || "-" }}</div></td><td><div>订单待送 <strong>{{ line.order_remaining_quantity ?? "-" }}</strong></div><div>可用成品 <strong>{{ line.deliverable_quantity ?? "-" }}</strong></div><div v-if="Number(line.over_delivery_quantity)>0" class="status orange">可超送 {{ line.over_delivery_quantity }}</div></td><td><input class="input" style="width:110px" type="number" min="1" :max="line.deliverable_quantity || undefined" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" /><div v-if="Number(line.delivered_quantity)>Number(line.order_remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超过订单 {{ Number(line.delivered_quantity)-Number(line.order_remaining_quantity) }}，可直接保存</div></td><td><input class="input" v-model.trim="line.remarks" placeholder="仅填写给客户看的内容" /></td><td><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></td></tr></tbody></table>
+              <table v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.lines.some(item => item.source_type !== 'unordered_finished')" :class="{'delivery-guide-review-target':deliveryGuideStage === 'review'}"><thead><tr><th>存货编码</th><th>订单号 / 客户单号</th><th>产品</th><th>订单待送 / 可用成品 / 可超送</th><th>本次送货</th><th>客户备注（会打印）</th><th>操作</th></tr></thead><tbody><tr v-for="line in deliveryForm.lines.filter(item => item.source_type !== 'unordered_finished')" :key="line.key" :class="{'warning-row':line.order_item_id && Number(line.delivered_quantity)>Number(line.order_remaining_quantity)}"><td>{{ line.inventory_code || line.product_code || '-' }}</td><td>{{ line.order_number || "-" }}<div class="muted">{{ line.customer_po || "-" }}</div><div v-if="inventorySourcesText(line.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(line.inventory_sources) }}</div></td><td>{{ line.product_code || "-" }} / {{ line.product_name || "-" }}<div class="muted">{{ line.specification || "-" }}</div></td><td><div>订单待送 <strong>{{ line.order_remaining_quantity ?? "-" }}</strong></div><div>可用成品 <strong>{{ line.deliverable_quantity ?? "-" }}</strong></div><div v-if="Number(line.over_delivery_quantity)>0" class="status orange">可超送 {{ line.over_delivery_quantity }}</div></td><td><input class="input" style="width:110px" type="number" min="1" :max="line.deliverable_quantity || undefined" v-model.number="line.delivered_quantity" :disabled="!line.order_item_id" @input="onDeliveryQuantityChanged(line)" /><div v-if="Number(line.delivered_quantity)>Number(line.order_remaining_quantity)" class="status orange" style="margin-top:4px;white-space:normal">超过订单 {{ Number(line.delivered_quantity)-Number(line.order_remaining_quantity) }}，保存时需明确确认；真实可用成品 {{ line.deliverable_quantity ?? 0 }}</div></td><td><input class="input" v-model.trim="line.remarks" placeholder="仅填写给客户看的内容" /></td><td><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></td></tr></tbody></table>
               <div v-else-if="deliveryForm.source_tab === 'order' && deliveryForm.customer_id" class="empty">点击“选择待送订单”，勾选本次要送的产品。</div>
               <div v-else-if="unorderedFinishedPicker.visible" class="panel unordered-finished-picker">
                 <div class="toolbar delivery-batch-picker-toolbar" style="margin:-12px -12px 8px"><div class="section-title" style="margin:0">客户专用无订单成品库存</div><div class="toolbar-group"><input class="input" style="width:220px" v-model.trim="unorderedFinishedPicker.keyword" placeholder="存货编码 / 产品 / 规格" @keyup.enter.prevent="loadUnorderedFinishedCandidates(1)" /><button class="btn small" type="button" @click="loadUnorderedFinishedCandidates(1)">{{ unorderedFinishedPicker.loading ? '查询中...' : '查询' }}</button><span class="muted">第 {{ unorderedFinishedPicker.page }} / {{ unorderedFinishedPicker.total_pages }} 页</span><button class="btn small" type="button" :disabled="unorderedFinishedPicker.page <= 1" @click="loadUnorderedFinishedCandidates(unorderedFinishedPicker.page - 1)">上一页</button><button class="btn small" type="button" :disabled="unorderedFinishedPicker.page >= unorderedFinishedPicker.total_pages" @click="loadUnorderedFinishedCandidates(unorderedFinishedPicker.page + 1)">下一页</button><button class="btn primary small" type="button" @click="importUnorderedFinishedCandidates">导入已选</button></div></div>
@@ -18309,7 +18355,7 @@
           },
           applyIncomingPendingResponse(data, {requestedPage=1, clearSelection=false}={}) {
             const previousPage = this.incomingPendingAppliedPage;
-            this.incomingPending=(Array.isArray(data?.items) ? data.items : []).map(row=>({...row,incoming_quantity:Number(row.remaining_quantity ?? row.incoming_quantity ?? row.requisition_qty ?? row.quantity ?? 0),resolution_action:"",resolution_reason:"",surplus_location_id:null}));
+            this.incomingPending=(Array.isArray(data?.items) ? data.items : []).map(row=>({...row,incoming_quantity:Number(row.remaining_quantity ?? row.incoming_quantity ?? row.requisition_qty ?? row.quantity ?? 0),resolution_action:"",resolution_reason:"",surplus_disposition:"",surplus_location_id:null}));
             this.incomingPendingTotal=Number(data?.total ?? this.incomingPending.length);
             this.pages.incomingPending=Math.max(1, Number(data?.page || requestedPage || 1));
             this.incomingPendingAppliedPage=this.pages.incomingPending;
@@ -18589,6 +18635,66 @@
           incomingProjectedVariance(row) {
             return Number(row.cumulative_received_quantity || 0) + Number(row.incoming_quantity || 0) - Number(row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0);
           },
+          incomingReceiptQuantityStatus(row) {
+            const surplus = this.incomingFrozenSurplusQuantity(row);
+            if (surplus > 0) return {warning:true,label:`多收订单用途 ${surplus} 张`};
+            const variance = this.incomingProjectedVariance(row);
+            if (variance < 0) return {warning:true,label:"少收"};
+            if (variance > 0) return {warning:true,label:"多收"};
+            return {warning:false,label:"数量相符"};
+          },
+          incomingFrozenSurplusQuantity(row) {
+            if (row?.purpose_status !== "frozen") return 0;
+            if (row?.remaining_order_purpose_sheet_qty === null || row?.remaining_order_purpose_sheet_qty === undefined) return 0;
+            const received = Math.max(Number(row.incoming_quantity || 0), 0);
+            const remainingOrder = Math.max(Number(row.remaining_order_purpose_sheet_qty || 0), 0);
+            return Math.max(received - remainingOrder, 0);
+          },
+          incomingSurplusDispositionRequired(row) {
+            return row?.purpose_status === "frozen" && this.incomingFrozenSurplusQuantity(row) > 0;
+          },
+          incomingPurposeProjection(row) {
+            const received = Math.max(Number(row?.incoming_quantity || 0), 0);
+            if (row?.purpose_status !== "frozen") {
+              return {
+                orderSheets:Number(row?.expected_order_purpose_sheet_qty || 0),
+                reserveSheets:Number(row?.expected_reserve_purpose_sheet_qty || 0),
+                finishedOutput:Number(row?.expected_finished_output_qty || 0),
+              };
+            }
+            const remainingOrder = Math.max(Number(row.remaining_order_purpose_sheet_qty || 0), 0);
+            const baseOrderSheets = Math.min(received, remainingOrder);
+            const surplusSheets = Math.max(received - baseOrderSheets, 0);
+            const selected = String(row.surplus_disposition || "");
+            const orderSheets = selected === "finished" ? received : baseOrderSheets;
+            const reserveSheets = selected === "semi_finished_reserve" ? surplusSheets : 0;
+            const serverProjection = selected === "finished"
+              ? row.finished_disposition_expected_finished_output_qty
+              : row.semi_finished_reserve_expected_finished_output_qty;
+            let finishedOutput = Number.isFinite(Number(serverProjection)) && serverProjection !== null && serverProjection !== ""
+              ? Number(serverProjection)
+              : null;
+            if (finishedOutput === null) {
+              const baseFinished = Number(row.expected_finished_output_qty || 0);
+              const baseSheets = Number(row.expected_order_purpose_sheet_qty || 0);
+              if (orderSheets === baseSheets) finishedOutput = baseFinished;
+            }
+            return {orderSheets,reserveSheets,finishedOutput};
+          },
+          onIncomingQuantityChanged(row) {
+            if (!this.incomingSurplusDispositionRequired(row)) row.surplus_disposition = "";
+            if (!this.canReceiveIncoming(row)) this.incomingSelected[row.item_id] = false;
+          },
+          onIncomingSurplusDisposition(row) {
+            if (!this.incomingSurplusDispositionRequired(row)) row.surplus_disposition = "";
+            if (!this.canReceiveIncoming(row)) this.incomingSelected[row.item_id] = false;
+          },
+          incomingSelectedLocationsReady(row) {
+            const projection = this.incomingPurposeProjection(row);
+            const finishedReady = projection.orderSheets === 0 || row?.finished_location_ready !== false;
+            const reserveReady = projection.reserveSheets === 0 || row?.reserve_location_ready !== false;
+            return finishedReady && reserveReady;
+          },
           incomingSemiLocations() {
             return (this.incomingLocations || []).filter(row => ["semi_finished", "shared"].includes(row.warehouse_type));
           },
@@ -18816,6 +18922,7 @@
           },
           incomingPayload(row) {
             let action=null;
+            let surplusDisposition=null;
             if (row.purpose_status==='legacy_unset') {
               const variance=this.incomingProjectedVariance(row);
               action=variance===0 ? null : (row.resolution_action || null);
@@ -18825,8 +18932,14 @@
               if (action==="transfer_to_semi_inventory" && this.incomingLocationsError) throw new Error(this.incomingLocationsError);
               if (action==="transfer_to_semi_inventory" && !Number(row.surplus_location_id)) throw new Error("余量转半成品库存时必须选择库位");
             }
+            if (this.incomingSurplusDispositionRequired(row)) {
+              surplusDisposition=String(row.surplus_disposition || "");
+              if (!["finished","semi_finished_reserve"].includes(surplusDisposition)) throw new Error(`本次比订单成品用途多 ${this.incomingFrozenSurplusQuantity(row)} 张，请选择做成品或片料备库`);
+              const executionIssue=this.incomingReceiptExecutionIssue(row);
+              if (executionIssue) throw new Error(executionIssue);
+            }
             const surplusLocation=this.incomingLocations.find(location=>Number(location.id)===Number(row.surplus_location_id));
-            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null,expected_surplus_layout_version:surplusLocation?.layout_version||null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
+            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_disposition:surplusDisposition,surplus_location_id:Number(row.surplus_location_id)||null,expected_surplus_layout_version:surplusLocation?.layout_version||null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
           },
           canReceiveIncoming(row) {
             return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status) && (row.purpose_status==='legacy_unset' || row.purpose_status==='frozen') && !this.incomingReceiptExecutionIssue(row);
@@ -18835,9 +18948,14 @@
             return this.incomingPending.filter(row => this.canReceiveIncoming(row) && this.incomingSelected[row.item_id]).length;
           },
           incomingReceiptExecutionIssue(row) {
-            const reserveQuantity = Math.max(Number(row?.remaining_reserve_purpose_sheet_qty ?? row?.expected_reserve_purpose_sheet_qty ?? 0), 0);
-            const orderQuantity = Math.max(Number(row?.remaining_order_purpose_sheet_qty ?? row?.expected_order_purpose_sheet_qty ?? 0), 0);
-            const reserveNeeded = reserveQuantity > 0 && Number(row?.incoming_quantity || 0) > orderQuantity;
+            if (this.incomingSurplusDispositionRequired(row) && !["finished","semi_finished_reserve"].includes(String(row?.surplus_disposition || ""))) {
+              return `本次比订单成品用途多 ${this.incomingFrozenSurplusQuantity(row)} 张，请选择做成品或片料备库`;
+            }
+            const projection=this.incomingPurposeProjection(row);
+            const finishedNeeded=Number(projection.orderSheets || 0)>0;
+            const reserveNeeded=Number(projection.reserveSheets || 0)>0;
+            if (finishedNeeded && row?.finished_location_ready === false) return String(row?.finished_location_issue || row?.purpose_issue || "成品入库位置尚未准备好，请先发布可用库位");
+            if (reserveNeeded && row?.reserve_location_ready === false) return String(row?.reserve_location_issue || row?.purpose_issue || "片料备库位置尚未准备好，请先发布可用库位");
             if (
               row?.receipt_execution_ready === false
               && row?.reserve_location_ready === false
@@ -30497,6 +30615,8 @@
               allocations: [],
               over_delivery_confirmed: false,
               over_delivery_reason: "",
+              over_delivery_confirmed_quantity: null,
+              over_delivery_confirmed_order_remaining: null,
               remarks: "",
               product_options: [],
               selected_product_key: "",
@@ -30848,6 +30968,48 @@
               vehicle_number: String(this.deliveryForm.vehicle_number || "").trim(),
               items: deliveryItems,
             });
+          },
+          onDeliveryQuantityChanged(line) {
+            line.over_delivery_confirmed = false;
+            line.over_delivery_reason = "";
+            line.over_delivery_confirmed_quantity = null;
+            line.over_delivery_confirmed_order_remaining = null;
+          },
+          confirmDeliveryOverages(lines) {
+            const pending = (lines || []).filter(line => {
+              if (line.source_type === "unordered_finished") return false;
+              const quantity = Number(line.delivered_quantity || 0);
+              const remaining = Number(line.order_remaining_quantity || 0);
+              if (quantity <= remaining) return false;
+              return !(
+                line.over_delivery_confirmed
+                && Number(line.over_delivery_confirmed_quantity) === quantity
+                && Number(line.over_delivery_confirmed_order_remaining) === remaining
+                && String(line.over_delivery_reason || "").trim()
+              );
+            });
+            if (!pending.length) return true;
+            const details = pending.map(line => {
+              const quantity = Number(line.delivered_quantity || 0);
+              const remaining = Number(line.order_remaining_quantity || 0);
+              const deliverable = Number(line.deliverable_quantity || 0);
+              const label = String(line.product_code || line.product_name || "本产品").trim();
+              return `- ${label}：订单待送 ${remaining}，本次 ${quantity}，多送 ${quantity - remaining}；真实可用成品 ${deliverable}`;
+            }).join("\n");
+            if (!confirm(`本次送货超过订单待送数量：\n${details}\n\n确认把这些多出的成品一并送给客户吗？取消将不保存。`)) {
+              this.showToast("已取消超订单送货，本次没有保存", true);
+              return false;
+            }
+            pending.forEach(line => {
+              const quantity = Number(line.delivered_quantity || 0);
+              const remaining = Number(line.order_remaining_quantity || 0);
+              const deliverable = Number(line.deliverable_quantity || 0);
+              line.over_delivery_confirmed = true;
+              line.over_delivery_confirmed_quantity = quantity;
+              line.over_delivery_confirmed_order_remaining = remaining;
+              line.over_delivery_reason = `用户确认超订单送货 ${quantity - remaining} 只（订单待送 ${remaining} 只，本次 ${quantity} 只，真实可用成品 ${deliverable} 只）`;
+            });
+            return true;
           },
           deliverySourceModeFromLines(lines = this.deliveryForm.lines || []) {
             const active = (lines || []).filter(line => line && (line.source_type || line.order_item_id || line.product_id));
@@ -32360,6 +32522,7 @@
                 const deliveryError = this.validateDeliveryForm();
                 if (deliveryError) throw new Error(deliveryError);
                 const activeDeliveryLines = (this.deliveryForm.lines || []).filter(line => this.deliveryLineHasInput(line));
+                if (!this.confirmDeliveryOverages(activeDeliveryLines)) return false;
                 const sourceMode = this.deliverySourceModeFromLines(activeDeliveryLines);
                 this.deliveryForm.source_mode = sourceMode;
                 const items = activeDeliveryLines.map(line => line.source_type === "unordered_finished" ? ({
@@ -32671,6 +32834,8 @@
                 delivered_quantity: it.delivered_quantity,
                 over_delivery_confirmed: Number(it.over_delivery_quantity || 0) > 0,
                 over_delivery_reason: it.over_delivery_reason || "",
+                over_delivery_confirmed_quantity: Number(it.over_delivery_quantity || 0) > 0 ? Number(it.delivered_quantity || 0) : null,
+                over_delivery_confirmed_order_remaining: Number(it.over_delivery_quantity || 0) > 0 ? Number(pending?.order_remaining_quantity ?? it.order_remaining_snapshot ?? 0) : null,
                 remarks: it.remarks || "",
                 candidate_options: [],
                 candidate_message: "",

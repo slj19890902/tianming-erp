@@ -36,6 +36,7 @@ from app.services.warehouse_inventory import (
     inventory_fifo_order_columns,
     normalize_material_code,
     replace_semi_finished_lot_allowed_products,
+    release_finished_surplus_delivery_reservation,
     reverse_finished_consumption,
     semi_finished_lot_allowed_product_ids,
     utc_now,
@@ -1729,6 +1730,18 @@ def reverse_delivery_item_inventory(
             operator_id=operator_id,
             idempotency_key=f"{operation_key}-o-{allocation.id}",
             allocation_id=allocation.id,
+        )
+        db.flush()
+        refreshed_lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        if refreshed_lot is None:
+            raise WarehouseInventoryError("客户专用余货批次不存在", 409)
+        release_finished_surplus_delivery_reservation(
+            db,
+            reservation_id=reservation.id,
+            stock_quantity=quantity,
+            expected_version=int(refreshed_lot.version),
+            operator_id=operator_id,
+            idempotency_key=f"{operation_key}-o-release-{allocation.id}",
         )
         excess_surplus -= quantity
     if excess_surplus > 0:

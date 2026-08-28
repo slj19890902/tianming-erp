@@ -19,7 +19,37 @@ branch_labels = None
 depends_on = None
 
 
+def _drop_sqlite_triggers_referencing(connection, table_name: str) -> list[str]:
+    if connection.dialect.name != "sqlite":
+        return []
+    rows = connection.execute(
+        sa.text(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type='trigger' AND sql IS NOT NULL AND sql LIKE :needle"
+        ),
+        {"needle": f"%{table_name}%"},
+    ).mappings().all()
+    definitions: list[str] = []
+    for row in rows:
+        name = str(row["name"])
+        if not name.replace("_", "").isalnum():
+            raise RuntimeError(f"unsafe SQLite trigger name: {name}")
+        definitions.append(str(row["sql"]))
+        connection.exec_driver_sql(f'DROP TRIGGER IF EXISTS "{name}"')
+    return definitions
+
+
+def _restore_sqlite_triggers(connection, definitions: list[str]) -> None:
+    for definition in definitions:
+        connection.exec_driver_sql(definition)
+
+
 def upgrade() -> None:
+    connection = op.get_bind()
+    location_triggers = _drop_sqlite_triggers_referencing(
+        connection,
+        "warehouse_locations",
+    )
     with op.batch_alter_table("warehouse_locations", recreate="always") as batch:
         batch.add_column(sa.Column("map_rack_id", sa.String(80), nullable=True))
         batch.add_column(sa.Column("rack_display_name", sa.String(100), nullable=True))
@@ -28,6 +58,7 @@ def upgrade() -> None:
             ["map_rack_id", "is_active"],
             unique=False,
         )
+    _restore_sqlite_triggers(connection, location_triggers)
 
     op.create_table(
         "warehouse_rack_level_label_print_jobs",
@@ -115,7 +146,12 @@ def downgrade() -> None:
         table_name="warehouse_rack_level_label_print_jobs",
     )
     op.drop_table("warehouse_rack_level_label_print_jobs")
+    location_triggers = _drop_sqlite_triggers_referencing(
+        connection,
+        "warehouse_locations",
+    )
     with op.batch_alter_table("warehouse_locations", recreate="always") as batch:
         batch.drop_index("ix_warehouse_locations_map_rack")
         batch.drop_column("rack_display_name")
         batch.drop_column("map_rack_id")
+    _restore_sqlite_triggers(connection, location_triggers)

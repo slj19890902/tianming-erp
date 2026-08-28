@@ -344,6 +344,11 @@ class IncomingReceiptPurposeAllocation(Base):
             name="ck_receipt_purpose_allocations_contract_status",
         ),
         CheckConstraint(
+            "surplus_disposition IN "
+            "('not_applicable','finished','semi_finished_reserve')",
+            name="ck_receipt_purpose_allocations_surplus_disposition",
+        ),
+        CheckConstraint(
             "((purpose_contract_status_snapshot = 'frozen' "
             "AND purchase_purpose_source_snapshot_id IS NOT NULL "
             "AND purchase_receipt_fact_id IS NOT NULL "
@@ -421,13 +426,16 @@ class IncomingReceiptPurposeAllocation(Base):
             "purpose_contract_status_snapshot <> 'frozen' OR "
             "(order_purpose_plan_sheet_qty_snapshot >= 0 "
             "AND reserve_purpose_plan_sheet_qty_snapshot >= 0 "
-            "AND ((reserve_purpose_plan_sheet_qty_snapshot > 0 "
+            "AND ((surplus_disposition = 'finished' "
+            "AND receipt_reserve_purpose_sheet_qty = 0) OR "
+            "(surplus_disposition = 'semi_finished_reserve' "
+            "AND receipt_reserve_purpose_sheet_qty > 0 "
             "AND cumulative_order_purpose_sheet_qty_after "
             "<= order_purpose_plan_sheet_qty_snapshot) OR "
-            "(reserve_purpose_plan_sheet_qty_snapshot = 0 "
+            "(surplus_disposition = 'not_applicable' "
             "AND receipt_reserve_purpose_sheet_qty = 0 "
-            "AND cumulative_reserve_purpose_sheet_qty_before = 0 "
-            "AND cumulative_reserve_purpose_sheet_qty_after = 0)))",
+            "AND cumulative_order_purpose_sheet_qty_after "
+            "<= order_purpose_plan_sheet_qty_snapshot)))",
             name="ck_receipt_purpose_allocations_frozen_purpose_policy",
         ),
         CheckConstraint(
@@ -501,6 +509,9 @@ class IncomingReceiptPurposeAllocation(Base):
     )
     purpose_contract_status_snapshot: Mapped[str] = mapped_column(
         String(20), nullable=False
+    )
+    surplus_disposition: Mapped[str] = mapped_column(
+        String(30), default="not_applicable", server_default="not_applicable", nullable=False
     )
     purchase_purpose_source_snapshot_id: Mapped[int | None] = mapped_column(
         Integer,
@@ -681,6 +692,177 @@ class IncomingReceiptPurposeAllocation(Base):
 
     incoming_receipt_item: Mapped["IncomingReceiptItem"] = relationship(
         "IncomingReceiptItem", back_populates="purpose_allocation"
+    )
+
+
+class ProductionCompletionReserveConversion(Base):
+    """Immutable proof that receipt reserve sheets backed extra finished goods."""
+
+    __tablename__ = "production_completion_reserve_conversions"
+    __table_args__ = (
+        UniqueConstraint(
+            "semi_consume_movement_id",
+            name="uq_completion_reserve_conversions_consume_movement",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_completion_reserve_conversions_idempotency",
+        ),
+        CheckConstraint(
+            "converted_sheet_quantity > 0 AND finished_quantity_delta >= 0",
+            name="ck_completion_reserve_conversions_quantities",
+        ),
+        CheckConstraint(
+            "supported_finished_quantity_before >= 0 "
+            "AND supported_finished_quantity_after >= "
+            "supported_finished_quantity_before "
+            "AND finished_quantity_delta = supported_finished_quantity_after - "
+            "supported_finished_quantity_before",
+            name="ck_completion_reserve_conversions_capacity",
+        ),
+        CheckConstraint(
+            "length(trim(idempotency_key)) > 0 AND length(request_hash) = 64",
+            name="ck_completion_reserve_conversions_frozen",
+        ),
+        Index(
+            "ix_completion_reserve_conversions_completion",
+            "production_completion_id",
+            "id",
+        ),
+        Index(
+            "ix_completion_reserve_conversions_allocation",
+            "receipt_purpose_allocation_id",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    production_completion_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("production_completions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    receipt_purpose_allocation_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("incoming_receipt_purpose_allocations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    semi_finished_inventory_lot_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    finished_inventory_lot_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    semi_consume_movement_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    finished_adjust_movement_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    converted_sheet_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    finished_quantity_delta: Mapped[int] = mapped_column(Integer, nullable=False)
+    supported_finished_quantity_before: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    supported_finished_quantity_after: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+
+class ProductionCompletionReserveConversionReversal(Base):
+    """Immutable proof that a prior reserve conversion was restored."""
+
+    __tablename__ = "production_completion_reserve_conversion_reversals"
+    __table_args__ = (
+        UniqueConstraint(
+            "semi_reverse_movement_id",
+            name="uq_completion_reserve_conversion_reversals_semi_movement",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_completion_reserve_conversion_reversals_idempotency",
+        ),
+        CheckConstraint(
+            "restored_sheet_quantity > 0 "
+            "AND reversed_finished_quantity_delta >= 0",
+            name="ck_completion_reserve_conversion_reversals_quantities",
+        ),
+        CheckConstraint(
+            "supported_finished_quantity_before >= "
+            "supported_finished_quantity_after "
+            "AND reversed_finished_quantity_delta = "
+            "supported_finished_quantity_before - "
+            "supported_finished_quantity_after",
+            name="ck_completion_reserve_conversion_reversals_capacity",
+        ),
+        CheckConstraint(
+            "reason_type IN ('actual_adjustment','completion_reversal')",
+            name="ck_completion_reserve_conversion_reversals_reason",
+        ),
+        CheckConstraint(
+            "length(trim(idempotency_key)) > 0 AND length(request_hash) = 64",
+            name="ck_completion_reserve_conversion_reversals_frozen",
+        ),
+        Index(
+            "ix_completion_reserve_conversion_reversals_conversion",
+            "production_completion_reserve_conversion_id",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    production_completion_reserve_conversion_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey(
+            "production_completion_reserve_conversions.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    semi_reverse_movement_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    finished_reversal_movement_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("inventory_movements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    restored_sheet_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reversed_finished_quantity_delta: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    supported_finished_quantity_before: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    supported_finished_quantity_after: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    reason_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
     )
 
 

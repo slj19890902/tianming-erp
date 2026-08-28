@@ -43,6 +43,7 @@ from app.models.supplier_requisition_order import (
 )
 from app.models.user import User
 from app.models.warehouse_inventory import (
+    FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryLocationMovement,
     InventoryMovement,
@@ -1270,6 +1271,67 @@ def remaining_finished_order_credit_by_item_ids(
             )
             .group_by(InventoryReservation.order_item_id)
         ).all()
+    }
+
+
+def receipt_auto_deliverable_quantity_by_item_ids(
+    db: Session,
+    order_item_ids: Sequence[int],
+) -> dict[int, int]:
+    """Return one shared physical delivery projection for receipt-auto items."""
+
+    normalized_ids = sorted(
+        {int(order_item_id) for order_item_id in order_item_ids if order_item_id}
+    )
+    if not normalized_ids:
+        return {}
+    order_credit = remaining_finished_order_credit_by_item_ids(db, normalized_ids)
+    item_pairs = {
+        int(item_id): (int(customer_id), int(product_id))
+        for item_id, customer_id, product_id in db.execute(
+            select(OrderItem.id, Order.customer_id, OrderItem.product_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(OrderItem.id.in_(normalized_ids))
+        ).all()
+    }
+    pairs = set(item_pairs.values())
+    available_by_pair: dict[tuple[int, int], int] = {}
+    if pairs:
+        customer_ids = {pair[0] for pair in pairs}
+        product_ids = {pair[1] for pair in pairs}
+        for customer_id, product_id, quantity in db.execute(
+            select(
+                FinishedGoodsInventoryDetail.owner_customer_id,
+                FinishedGoodsInventoryDetail.product_id,
+                func.coalesce(func.sum(InventoryLot.quantity_available), 0),
+            )
+            .join(
+                FinishedGoodsInventoryDetail,
+                FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+            )
+            .where(
+                InventoryLot.inventory_type == "finished",
+                InventoryLot.status == "active",
+                InventoryLot.quantity_available > 0,
+                InventoryLot.source_type.in_(
+                    ("production_surplus", "production_completion", "transfer")
+                ),
+                FinishedGoodsInventoryDetail.is_general.is_(False),
+                FinishedGoodsInventoryDetail.owner_customer_id.in_(customer_ids),
+                FinishedGoodsInventoryDetail.product_id.in_(product_ids),
+            )
+            .group_by(
+                FinishedGoodsInventoryDetail.owner_customer_id,
+                FinishedGoodsInventoryDetail.product_id,
+            )
+        ).all():
+            pair = (int(customer_id), int(product_id))
+            if pair in pairs:
+                available_by_pair[pair] = max(int(quantity or 0), 0)
+    return {
+        item_id: max(int(order_credit.get(item_id, 0)), 0)
+        + max(int(available_by_pair.get(pair, 0)), 0)
+        for item_id, pair in item_pairs.items()
     }
 
 
@@ -3863,6 +3925,48 @@ def adjust_production_completion_actual_quantity(
             409,
         )
 
+    reserve_conversion_postings = []
+    reserve_conversion_reversal_postings = []
+    if delta > 0 and completion.origin == "receipt_auto":
+        from app.services.receipt_purpose_distribution import (
+            ReceiptPurposeFlowError,
+            consume_receipt_reserve_for_completion_adjustment,
+        )
+
+        try:
+            reserve_conversion_postings = (
+                consume_receipt_reserve_for_completion_adjustment(
+                    db,
+                    production_completion_id=int(completion.id),
+                    desired_completion_quantity=desired,
+                    operator_id=operator_id,
+                    idempotency_key=key,
+                )
+            )
+        except ReceiptPurposeFlowError as error:
+            raise ProductionWorkflowError(
+                str(error), error.status_code
+            ) from error
+    elif delta < 0 and completion.origin == "receipt_auto":
+        from app.services.receipt_purpose_distribution import (
+            ReceiptPurposeFlowError,
+            restore_receipt_reserve_after_completion_reduction,
+        )
+
+        try:
+            reserve_conversion_reversal_postings = (
+                restore_receipt_reserve_after_completion_reduction(
+                    db,
+                    production_completion_id=int(completion.id),
+                    desired_completion_quantity=desired,
+                    operator_id=operator_id,
+                    idempotency_key=key,
+                    reason_type="actual_adjustment",
+                )
+            )
+        except ReceiptPurposeFlowError as error:
+            raise ProductionWorkflowError(str(error), error.status_code) from error
+
     lot_update = db.execute(
         update(InventoryLot)
         .where(
@@ -3926,6 +4030,67 @@ def adjust_production_completion_actual_quantity(
         ),
         related_order_item_id=completion.order_item_id,
     )
+    db.flush()
+    if reserve_conversion_postings:
+        from app.models.purchase_receipt import (
+            ProductionCompletionReserveConversion,
+        )
+
+        for posting in reserve_conversion_postings:
+            db.add(
+                ProductionCompletionReserveConversion(
+                    production_completion_id=int(completion.id),
+                    receipt_purpose_allocation_id=(
+                        posting.receipt_purpose_allocation_id
+                    ),
+                    semi_finished_inventory_lot_id=(
+                        posting.semi_finished_inventory_lot_id
+                    ),
+                    finished_inventory_lot_id=int(lot.id),
+                    semi_consume_movement_id=posting.semi_consume_movement_id,
+                    finished_adjust_movement_id=int(movement.id),
+                    converted_sheet_quantity=posting.converted_sheet_quantity,
+                    finished_quantity_delta=posting.finished_quantity_delta,
+                    supported_finished_quantity_before=(
+                        posting.supported_finished_quantity_before
+                    ),
+                    supported_finished_quantity_after=(
+                        posting.supported_finished_quantity_after
+                    ),
+                    idempotency_key=posting.idempotency_key,
+                    request_hash=posting.request_hash,
+                    created_by=operator_id,
+                )
+            )
+    if reserve_conversion_reversal_postings:
+        from app.models.purchase_receipt import (
+            ProductionCompletionReserveConversionReversal,
+        )
+
+        for posting in reserve_conversion_reversal_postings:
+            db.add(
+                ProductionCompletionReserveConversionReversal(
+                    production_completion_reserve_conversion_id=(
+                        posting.production_completion_reserve_conversion_id
+                    ),
+                    semi_reverse_movement_id=posting.semi_reverse_movement_id,
+                    finished_reversal_movement_id=int(movement.id),
+                    restored_sheet_quantity=posting.restored_sheet_quantity,
+                    reversed_finished_quantity_delta=(
+                        posting.reversed_finished_quantity_delta
+                    ),
+                    supported_finished_quantity_before=(
+                        posting.supported_finished_quantity_before
+                    ),
+                    supported_finished_quantity_after=(
+                        posting.supported_finished_quantity_after
+                    ),
+                    reason_type="actual_adjustment",
+                    idempotency_key=posting.idempotency_key,
+                    request_hash=posting.request_hash,
+                    created_by=operator_id,
+                )
+            )
     db.flush()
     return ActualQuantityAdjustmentResult(
         completion=completion,
@@ -3991,7 +4156,7 @@ def _reverse_completion_finished_lot(
     lot_id: int,
     operator_id: int | None,
     reason: str,
-) -> None:
+) -> InventoryMovement:
     lot = db.get(InventoryLot, lot_id)
     if lot is None:
         raise ProductionWorkflowError("生产完工成品库存批次不存在", 409)
@@ -4023,7 +4188,19 @@ def _reverse_completion_finished_lot(
         .where(InventoryMovement.inventory_lot_id == lot.id)
         .order_by(InventoryMovement.id)
     ).all()
-    if not movements or any(row.movement_type not in {"manual_in", "reserve"} for row in movements):
+    def safe_completion_movement(row: InventoryMovement) -> bool:
+        if row.movement_type in {"manual_in", "reserve"}:
+            return True
+        return bool(
+            row.movement_type == "adjust"
+            and row.reason == "actual finished quantity adjustment"
+            and row.related_order_item_id == completion.order_item_id
+            and str(row.remarks or "").startswith(
+                f"production_completion:{completion.id};"
+            )
+        )
+
+    if not movements or any(not safe_completion_movement(row) for row in movements):
         raise ProductionWorkflowError("成品库存已经发生后续业务流水，不能回退生产确认", 409)
     reservations = db.scalars(
         select(InventoryReservation).where(
@@ -4092,7 +4269,7 @@ def _reverse_completion_finished_lot(
     db.expire(lot)
     lot = db.get(InventoryLot, lot_id)
     assert lot is not None
-    _movement(
+    close_movement = _movement(
         db,
         lot=lot,
         movement_type="adjust",
@@ -4139,6 +4316,8 @@ def _reverse_completion_finished_lot(
                 pallet_id=int(pallet.id),
                 operator_id=operator_id,
             )
+    db.flush()
+    return close_movement
 
 
 def reverse_production_completion(
@@ -4154,6 +4333,11 @@ def reverse_production_completion(
         raise ProductionWorkflowError("生产完工记录不存在", 404)
     if completion.status != "posted":
         raise ProductionWorkflowError("该生产完工记录已经撤销，不能重复操作", 409)
+    if completion.origin == "receipt_auto":
+        raise ProductionWorkflowError(
+            "收料自动形成的成品必须从来料入库撤销，不能单独撤销生产完工。",
+            409,
+        )
     task = db.get(ProductionTask, completion.task_id)
     item = db.get(OrderItem, completion.order_item_id)
     if task is None or item is None:
@@ -4591,15 +4775,71 @@ def reverse_automatic_receipt_completion(
     )
     if later is not None:
         raise ProductionWorkflowError("存在更晚的自动完工，请先撤销最新一笔来料", 409)
+    from app.services.receipt_purpose_distribution import (
+        ReceiptPurposeFlowError,
+        restore_receipt_reserve_after_completion_reduction,
+    )
+
+    try:
+        reserve_conversion_reversal_postings = (
+            restore_receipt_reserve_after_completion_reduction(
+                db,
+                production_completion_id=int(completion.id),
+                desired_completion_quantity=0,
+                operator_id=operator_id,
+                idempotency_key=f"receipt-auto-reversal:{completion.id}",
+                reason_type="completion_reversal",
+            )
+        )
+    except ReceiptPurposeFlowError as error:
+        raise ProductionWorkflowError(str(error), error.status_code) from error
+
     lot_id = completion.inventory_lot_id
+    finished_reversal_movement = None
     if lot_id is not None:
-        _reverse_completion_finished_lot(
+        finished_reversal_movement = _reverse_completion_finished_lot(
             db,
             completion=completion,
             lot_id=lot_id,
             operator_id=operator_id,
             reason=(reason or "").strip() or "撤销来料自动完工",
         )
+    if reserve_conversion_reversal_postings:
+        if finished_reversal_movement is None:
+            raise ProductionWorkflowError(
+                "备库转换已恢复，但成品反冲流水不存在，事务已停止。", 409
+            )
+        from app.models.purchase_receipt import (
+            ProductionCompletionReserveConversionReversal,
+        )
+
+        for posting in reserve_conversion_reversal_postings:
+            db.add(
+                ProductionCompletionReserveConversionReversal(
+                    production_completion_reserve_conversion_id=(
+                        posting.production_completion_reserve_conversion_id
+                    ),
+                    semi_reverse_movement_id=posting.semi_reverse_movement_id,
+                    finished_reversal_movement_id=int(
+                        finished_reversal_movement.id
+                    ),
+                    restored_sheet_quantity=posting.restored_sheet_quantity,
+                    reversed_finished_quantity_delta=(
+                        posting.reversed_finished_quantity_delta
+                    ),
+                    supported_finished_quantity_before=(
+                        posting.supported_finished_quantity_before
+                    ),
+                    supported_finished_quantity_after=(
+                        posting.supported_finished_quantity_after
+                    ),
+                    reason_type="completion_reversal",
+                    idempotency_key=posting.idempotency_key,
+                    request_hash=posting.request_hash,
+                    created_by=operator_id,
+                )
+            )
+        db.flush()
     now = utc_now_naive()
     completion.status = "reversed"
     completion.reversed_by = operator_id
@@ -5447,7 +5687,7 @@ def list_production_tasks(
             )
         ],
     )
-    receipt_managed_delivery_credit = remaining_finished_order_credit_by_item_ids(
+    receipt_managed_delivery_credit = receipt_auto_deliverable_quantity_by_item_ids(
         db,
         list(receipt_purpose_summaries),
     )
@@ -5648,20 +5888,12 @@ def list_production_tasks(
                 0,
             )
             row["can_supplement"] = False
-            order_remaining = max(
-                int(row["order_quantity"] or 0)
-                - int(row["delivered_quantity"] or 0),
-                0,
-            )
-            delivery_ready = min(
-                max(
-                    int(
-                        receipt_managed_delivery_credit.get(order_item_id, 0)
-                        or 0
-                    ),
-                    0,
+            delivery_ready = max(
+                int(
+                    receipt_managed_delivery_credit.get(order_item_id, 0)
+                    or 0
                 ),
-                order_remaining,
+                0,
             )
             row["delivery_ready_quantity"] = delivery_ready
             row["delivery_actionable"] = delivery_ready > 0

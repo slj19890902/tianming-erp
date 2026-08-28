@@ -266,6 +266,15 @@ class FinanceInvoiceTaskItem(Base):
         UniqueConstraint(
             "task_id", "statement_item_id", name="uq_invoice_task_items_statement_item"
         ),
+        CheckConstraint(
+            "source_type IN ('delivery','customer_charge')",
+            name="ck_finance_invoice_task_items_source_type",
+        ),
+        CheckConstraint(
+            "((source_type = 'delivery' AND customer_charge_id IS NULL) OR "
+            "(source_type = 'customer_charge' AND customer_charge_id IS NOT NULL))",
+            name="ck_finance_invoice_task_items_charge_source",
+        ),
         Index("ix_finance_invoice_task_items_task", "task_id"),
     )
 
@@ -276,6 +285,12 @@ class FinanceInvoiceTaskItem(Base):
     sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
     statement_item_id: Mapped[int] = mapped_column(
         ForeignKey("finance_statement_items.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_type: Mapped[str] = mapped_column(
+        String(30), default="delivery", server_default="delivery", nullable=False
+    )
+    customer_charge_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_customer_charges.id", ondelete="RESTRICT"), nullable=True
     )
     product_code_snapshot: Mapped[str | None] = mapped_column(String(100), nullable=True)
     product_name_snapshot: Mapped[str | None] = mapped_column(String(200), nullable=True)

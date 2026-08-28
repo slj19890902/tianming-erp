@@ -30,6 +30,7 @@ from app.api.deps import (
 )
 from app.core.config import PROJECT_ROOT, load_settings
 from app.models.customer import Customer
+from app.models.customer_charge import CustomerCharge
 from app.models.delivery import DeliveryItem
 from app.models.finance import Invoice, ReturnReceiptItem, Statement, StatementItem
 from app.models.invoice_task import (
@@ -562,14 +563,35 @@ def save_customer_default_invoice_rule(
     return _rule_response(rule)
 
 
-def _task_rows(db: Session, statement_id: int) -> list[tuple[StatementItem, DeliveryItem, OrderItem | None, Product | None]]:
+def _task_rows(
+    db: Session,
+    statement_id: int,
+) -> list[
+    tuple[
+        StatementItem,
+        DeliveryItem | None,
+        OrderItem | None,
+        Product | None,
+        CustomerCharge | None,
+    ]
+]:
     return list(
         db.execute(
-            select(StatementItem, DeliveryItem, OrderItem, Product)
-            .join(ReturnReceiptItem, StatementItem.return_receipt_item_id == ReturnReceiptItem.id)
-            .join(DeliveryItem, ReturnReceiptItem.delivery_item_id == DeliveryItem.id)
+            select(StatementItem, DeliveryItem, OrderItem, Product, CustomerCharge)
+            .outerjoin(
+                ReturnReceiptItem,
+                StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
+            )
+            .outerjoin(
+                DeliveryItem,
+                ReturnReceiptItem.delivery_item_id == DeliveryItem.id,
+            )
             .outerjoin(OrderItem, DeliveryItem.order_item_id == OrderItem.id)
             .outerjoin(Product, Product.id == DeliveryItem.product_id)
+            .outerjoin(
+                CustomerCharge,
+                StatementItem.customer_charge_id == CustomerCharge.id,
+            )
             .where(StatementItem.statement_id == statement_id)
             .order_by(StatementItem.id)
         ).all()
@@ -609,16 +631,92 @@ def _snapshot_for_statement(
     missing = _profile_missing_items(profile, seller)
     if profile is None:
         return {}, [], missing
+    task_rows = _task_rows(db, statement.id)
     rules = _confirmed_rule_by_product(
         db,
         statement.customer_id,
         effective_on=date.today(),
     )
     default_rule = rules.get(None)
-    if default_rule is None:
+    if default_rule is None and any(row[1] is not None for row in task_rows):
         missing.append("已确认的客户默认项目规则")
     lines: list[dict[str, Any]] = []
-    for statement_item, delivery_item, order_item, product in _task_rows(db, statement.id):
+    for statement_item, delivery_item, order_item, product, charge in task_rows:
+        if charge is not None:
+            mode = statement_item.price_tax_mode_snapshot
+            rate_value = statement_item.tax_rate_snapshot
+            project_name = _text(charge.tax_project_name)
+            classification_code = _text(charge.tax_classification_code)
+            unit = _text(statement_item.unit_snapshot or charge.unit)
+            if (
+                mode not in VALID_PRICE_TAX_MODES
+                or rate_value is None
+                or not project_name
+                or not classification_code
+                or not unit
+                or statement_item.receivable_amount is None
+                or statement_item.charge_quantity_snapshot is None
+            ):
+                missing.append(
+                    f"附加收费 {charge.display_name} 缺少税价口径/税率/项目名称/税收编码/单位"
+                )
+                continue
+            rate = Decimal(str(rate_value))
+            if rate < 0 or rate > 1:
+                missing.append(f"附加收费 {charge.display_name} 的冻结税率无效")
+                continue
+            total = Decimal(str(statement_item.receivable_amount)).quantize(
+                MONEY, rounding=ROUND_HALF_UP
+            )
+            quantity = Decimal(str(statement_item.charge_quantity_snapshot))
+            if mode == "tax_exclusive":
+                raw_unit_price = Decimal(str(statement_item.unit_price_snapshot))
+                net = (quantity * raw_unit_price).quantize(
+                    MONEY, rounding=ROUND_HALF_UP
+                )
+                tax = (net * rate).quantize(MONEY, rounding=ROUND_HALF_UP)
+                calculated_total = (net + tax).quantize(MONEY, rounding=ROUND_HALF_UP)
+                if calculated_total != total:
+                    missing.append(
+                        f"附加收费 {charge.display_name} 的价税合计与未税单价不一致"
+                    )
+                    continue
+                amount = net
+                unit_price = raw_unit_price.quantize(MONEY, rounding=ROUND_HALF_UP)
+            else:
+                net = (total / (Decimal("1") + rate)).quantize(
+                    MONEY, rounding=ROUND_HALF_UP
+                )
+                tax = (total - net).quantize(MONEY, rounding=ROUND_HALF_UP)
+                amount = total
+                unit_price = None
+            lines.append(
+                {
+                    "statement_item_id": statement_item.id,
+                    "source_type": "customer_charge",
+                    "customer_charge_id": charge.id,
+                    "product_id": None,
+                    "product_code_snapshot": None,
+                    "product_name_snapshot": charge.display_name,
+                    "project_name": project_name,
+                    "tax_classification_code": classification_code,
+                    "specification": None,
+                    "unit": unit,
+                    "quantity": quantity,
+                    "unit_price": unit_price,
+                    "amount": amount,
+                    "tax_rate": rate,
+                    "tax_amount": tax,
+                    "net_amount": net,
+                    "total_amount": total,
+                    "price_tax_mode": mode,
+                    "rule_version": charge.version,
+                }
+            )
+            continue
+        if delivery_item is None:
+            missing.append(f"对账明细 {statement_item.id} 的来源无效")
+            continue
         product_id = delivery_item.product_id or (order_item.product_id if order_item else None)
         rule = rules.get(product_id) or default_rule
         if rule is None:
@@ -702,6 +800,8 @@ def _snapshot_for_statement(
             invoice_specification = None
         lines.append({
             "statement_item_id": statement_item.id,
+            "source_type": "delivery",
+            "customer_charge_id": None,
             "product_id": product_id,
             "product_code_snapshot": code,
             "product_name_snapshot": name,
@@ -912,7 +1012,27 @@ def create_invoice_task(
         db.add(task)
         db.flush()
         for sequence, line in enumerate(lines, start=1):
-            db.add(FinanceInvoiceTaskItem(task_id=task.id, sequence_no=sequence, statement_item_id=line["statement_item_id"], product_code_snapshot=line["product_code_snapshot"], product_name_snapshot=line["product_name_snapshot"], project_name=line["project_name"], tax_classification_code=line["tax_classification_code"], specification=line["specification"], unit=line["unit"], quantity=line["quantity"], unit_price=line["unit_price"], amount=line["amount"], tax_rate=line["tax_rate"], tax_amount=line["tax_amount"], rule_version=line["rule_version"]))
+            db.add(
+                FinanceInvoiceTaskItem(
+                    task_id=task.id,
+                    sequence_no=sequence,
+                    statement_item_id=line["statement_item_id"],
+                    source_type=line["source_type"],
+                    customer_charge_id=line["customer_charge_id"],
+                    product_code_snapshot=line["product_code_snapshot"],
+                    product_name_snapshot=line["product_name_snapshot"],
+                    project_name=line["project_name"],
+                    tax_classification_code=line["tax_classification_code"],
+                    specification=line["specification"],
+                    unit=line["unit"],
+                    quantity=line["quantity"],
+                    unit_price=line["unit_price"],
+                    amount=line["amount"],
+                    tax_rate=line["tax_rate"],
+                    tax_amount=line["tax_amount"],
+                    rule_version=line["rule_version"],
+                )
+            )
         if payload.seller_entity_id and profile and seller.id != profile.default_seller_id:
             change_type = payload.seller_change_type or "temporary"
             db.add(CustomerInvoiceSellerChange(customer_id=customer.id, old_seller_id=profile.default_seller_id, new_seller_id=seller.id, change_type=change_type, statement_id=statement.id, invoice_task_id=task.id, reason=payload.seller_change_reason or "", created_by=user.id))
@@ -985,8 +1105,12 @@ def get_invoice_task(
         {
             "id": item.id,
             "sequence": item.sequence_no,
+            "source_type": item.source_type,
+            "customer_charge_id": item.customer_charge_id,
             "product_code": item.product_code_snapshot,
             "product_name": item.product_name_snapshot,
+            "product_code_snapshot": item.product_code_snapshot,
+            "product_name_snapshot": item.product_name_snapshot,
             "project_name": item.project_name,
             "tax_category_code": item.tax_classification_code,
             "specification": item.specification,

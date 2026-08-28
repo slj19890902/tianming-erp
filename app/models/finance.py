@@ -285,6 +285,10 @@ class StatementItem(Base):
             "return_receipt_item_id",
             name="uq_finance_statement_items_receipt_item",
         ),
+        UniqueConstraint(
+            "customer_charge_id",
+            name="uq_finance_statement_items_customer_charge",
+        ),
         Index("ix_finance_statement_items_statement_id", "statement_id"),
         CheckConstraint(
             "price_tax_mode_snapshot IS NULL OR "
@@ -296,6 +300,17 @@ class StatementItem(Base):
             "(tax_rate_snapshot >= 0 AND tax_rate_snapshot <= 1)",
             name="ck_finance_statement_items_tax_rate_snapshot",
         ),
+        CheckConstraint(
+            "((return_receipt_item_id IS NOT NULL AND customer_charge_id IS NULL "
+            "AND actual_received_quantity IS NOT NULL "
+            "AND charge_quantity_snapshot IS NULL AND unit_snapshot IS NULL "
+            "AND source_label_snapshot IS NULL) OR "
+            "(return_receipt_item_id IS NULL AND customer_charge_id IS NOT NULL "
+            "AND actual_received_quantity IS NULL "
+            "AND charge_quantity_snapshot IS NOT NULL "
+            "AND unit_snapshot IS NOT NULL AND source_label_snapshot IS NOT NULL))",
+            name="ck_finance_statement_items_single_source",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -303,11 +318,22 @@ class StatementItem(Base):
         ForeignKey("finance_statements.id", ondelete="CASCADE"),
         nullable=False,
     )
-    return_receipt_item_id: Mapped[int] = mapped_column(
+    return_receipt_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("finance_return_receipt_items.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
-    actual_received_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    customer_charge_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_customer_charges.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    actual_received_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    charge_quantity_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 4), nullable=True
+    )
+    unit_snapshot: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    source_label_snapshot: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
     unit_price_snapshot: Mapped[Decimal] = mapped_column(
         Numeric(12, 4),
         nullable=False,

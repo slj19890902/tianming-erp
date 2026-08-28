@@ -63,6 +63,8 @@ PERMISSION_CATALOG = frozenset(
         "finance.view",
         "finance.execute",
         "finance.return_receipt.period.adjust",
+        "finance.customer_charge.manage",
+        "finance.customer_charge.confirm",
         "finance.statement.confirm",
         "finance.invoice_task.generate",
         "finance.invoice_result.register",
@@ -118,6 +120,8 @@ BOSS_DEFAULT_PERMISSIONS = frozenset(
         "finance.invoice_result.register",
         "finance.invoice_profile.manage",
         "finance.invoice_attachment.manage",
+        "finance.customer_charge.manage",
+        "finance.customer_charge.confirm",
     }
     and permission not in ADMIN_ONLY_PERMISSIONS
 )
@@ -136,6 +140,8 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
             "finance.view",
             "finance.execute",
             "finance.return_receipt.period.adjust",
+            "finance.customer_charge.manage",
+            "finance.customer_charge.confirm",
             "finance.statement.confirm",
             "finance.invoice_task.generate",
             "finance.invoice_result.register",

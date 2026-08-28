@@ -7049,6 +7049,30 @@
                   <span v-else class="muted">-</span>
                 </td>
               </tr></tbody></table>
+              <div v-if="hasPermission('finance.view')" class="panel" style="margin-top:14px">
+                <div class="toolbar" style="margin-bottom:8px">
+                  <div><strong>客户附加收费</strong><div class="muted">模具费、制版费等独立应收；不改变产品售价、送货数量、库存或供应商成本。</div></div>
+                  <button v-if="canManageCustomerCharges" class="btn primary" type="button" @click="openCustomerChargeForm()">新增收费</button>
+                </div>
+                <div v-if="customerChargeForm.visible" class="notice" style="margin-bottom:10px">
+                  <div class="form-grid">
+                    <div class="field"><label>收费类型</label><select class="input" v-model="customerChargeForm.charge_type"><option value="mold">模具费</option><option value="printing_plate">制版费</option><option value="sample">打样费</option><option value="setup">开机费</option><option value="freight">运费</option><option value="other">其他</option></select></div>
+                    <div class="field"><label>收费名称</label><input class="input" v-model.trim="customerChargeForm.display_name" placeholder="例如：本订单模具费" /></div>
+                    <div class="field"><label>数量</label><input class="input" type="number" min="0.0001" step="0.0001" v-model.number="customerChargeForm.quantity" /></div>
+                    <div class="field"><label>单位</label><input class="input" v-model.trim="customerChargeForm.unit" /></div>
+                    <div class="field sensitive-price"><label>单价</label><input class="input" type="number" min="0" step="0.01" v-model.number="customerChargeForm.unit_price" /></div>
+                    <div class="field sensitive-price"><label>最终应收金额</label><input class="input" type="number" min="0.01" step="0.01" v-model.number="customerChargeForm.amount" /></div>
+                    <div class="field"><label>税价口径</label><select class="input" v-model="customerChargeForm.price_tax_mode"><option value="">待财务完善</option><option value="tax_inclusive">含税</option><option value="tax_exclusive">未税</option></select></div>
+                    <div class="field"><label>税率</label><input class="input" type="number" min="0" max="1" step="0.01" v-model="customerChargeForm.tax_rate" placeholder="例如 0.13" /></div>
+                    <div class="field"><label>开票项目名称</label><input class="input" v-model.trim="customerChargeForm.tax_project_name" placeholder="生成开票任务前必填" /></div>
+                    <div class="field"><label>税收分类编码</label><input class="input" v-model.trim="customerChargeForm.tax_classification_code" placeholder="生成开票任务前必填" /></div>
+                    <div class="field wide"><label>备注</label><input class="input" v-model.trim="customerChargeForm.note" /></div>
+                  </div>
+                  <div class="toolbar-group" style="justify-content:flex-end"><button class="btn" type="button" @click="customerChargeForm.visible=false">取消</button><button class="btn primary" type="button" :disabled="customerChargeForm.saving" @click="saveCustomerCharge">{{ customerChargeForm.saving ? '保存中…' : '保存收费草稿' }}</button></div>
+                </div>
+                <table v-if="orderCustomerCharges.length"><thead><tr><th>收费</th><th>数量/单位</th><th class="sensitive-price">应收</th><th>归属月份</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="charge in orderCustomerCharges" :key="charge.id"><td><strong>{{ charge.display_name }}</strong><div class="muted">{{ customerChargeTypeText(charge.charge_type) }}<span v-if="charge.historical_similar_charge_count"> · 已有 {{ charge.historical_similar_charge_count }} 条相似历史收费，请人工核对</span></div></td><td>{{ charge.quantity }} {{ charge.unit }}</td><td class="sensitive-price">¥ {{ money(charge.amount) }}</td><td>{{ charge.reconciliation_month || '待确认' }}</td><td><span :class="['status',charge.status==='confirmed'?'green':charge.status==='cancelled'?'gray':'orange']">{{ charge.status==='confirmed'?'已确认':charge.status==='cancelled'?'已作废':'草稿' }}</span><div v-if="charge.locked" class="muted">已进入对账单</div></td><td class="toolbar-group"><button v-if="canManageCustomerCharges && charge.status==='draft' && !charge.locked" class="btn small" @click="openCustomerChargeForm(charge)">编辑</button><button v-if="canConfirmCustomerCharges && charge.status==='draft' && !charge.locked" class="btn small success" @click="confirmCustomerCharge(charge)">确认月份</button><button v-if="canConfirmCustomerCharges && charge.status==='confirmed' && !charge.locked" class="btn small" @click="cancelCustomerChargeConfirmation(charge)">取消确认</button><button v-if="canManageCustomerCharges && charge.status!=='cancelled' && !charge.locked" class="btn small danger" @click="voidCustomerCharge(charge)">作废</button></td></tr></tbody></table>
+                <div v-else class="empty">本订单暂无客户附加收费。</div>
+              </div>
               <div v-if="orderDetail.items.some(hasExternalPackagingRequirements)" class="external-packaging-order-panel">
                 <div class="toolbar" style="margin-bottom:0">
                   <div>
@@ -7695,7 +7719,8 @@
                   <tr v-if="expandedStatementDeliveries[row.delivery_id]" class="statement-delivery-detail-row"><td colspan="8"><div class="statement-delivery-detail"><table><thead><tr><th>产品</th><th>规格</th><th>实收数量</th><th class="sensitive-price">应收金额</th><th>差异原因</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.return_receipt_item_id"><td>{{ item.product_code }} / {{ item.product_name }}</td><td>{{ item.specification || '-' }}</td><td>{{ item.actual_received_quantity }}</td><td class="sensitive-price">¥ {{ money(item.receivable_amount) }}</td><td>{{ item.difference_reason || '-' }}</td></tr><tr v-if="!row.items.length"><td colspan="5" class="empty">暂无产品明细</td></tr></tbody></table></div></td></tr>
                 </template>
               </tbody></table>
-              <div v-if="statementForm.customer_id && !pendingStatements.length" class="empty">该客户当前月份暂无可生成对账单的送货明细。</div>
+              <div v-if="pendingStatementCharges.length" style="margin-top:12px"><div class="section-title">已确认客户附加收费</div><table><thead><tr><th>选择</th><th>客户单号</th><th>收费名称</th><th>数量/单位</th><th class="sensitive-price">应收金额</th></tr></thead><tbody><tr v-for="charge in pendingStatementCharges" :key="`statement-charge-${charge.id}`"><td><input type="checkbox" v-model="statementForm.selectedCharges[charge.id]" /></td><td>{{ charge.customer_po || '-' }}</td><td>{{ charge.display_name }}<div class="muted">{{ customerChargeTypeText(charge.charge_type) }}</div></td><td>{{ charge.quantity }} {{ charge.unit }}</td><td class="sensitive-price">¥ {{ money(charge.amount) }}</td></tr></tbody></table></div>
+              <div v-if="statementForm.customer_id && !pendingStatements.length && !pendingStatementCharges.length" class="empty">该客户当前月份暂无可生成对账单的送货明细或附加收费。</div>
               <div v-else-if="!statementForm.customer_id && statementCustomers.length" class="empty">请先选择客户，再查看可对账明细。</div>
             </div>
             <div v-else-if="modal.type === 'statementDetail' && statementDetail">
@@ -7730,13 +7755,13 @@
                 </thead>
                 <tbody>
                   <tr v-for="item in statementDetail.items" :key="item.statement_item_id">
-                    <td>{{ item.actual_received_date }}</td>
-                    <td>{{ item.delivery_number }}</td>
+                    <td>{{ item.source_type==='customer_charge' ? '附加收费' : item.actual_received_date }}</td>
+                    <td>{{ item.delivery_number || '-' }}</td>
                     <td>{{ item.customer_po }}</td>
-                    <td>{{ item.product_code }} / {{ item.product_name }}</td>
-                    <td>{{ item.specification }}</td>
-                    <td>{{ item.material }}</td>
-                    <td>{{ item.actual_received_quantity }}</td>
+                    <td>{{ item.source_type==='customer_charge' ? item.product_name : `${item.product_code || '-'} / ${item.product_name || '-'}` }}</td>
+                    <td>{{ item.source_type==='customer_charge' ? `${item.charge_quantity} ${item.unit_snapshot}` : (item.specification || '-') }}</td>
+                    <td>{{ item.source_type==='customer_charge' ? '客户独立应收' : (item.material || '-') }}</td>
+                    <td>{{ item.source_type==='customer_charge' ? '-' : item.actual_received_quantity }}</td>
                     <td class="sensitive-price">¥ {{ money(item.unit_price_snapshot) }}</td>
                     <td class="sensitive-price">¥ {{ money(item.receivable_amount) }}</td>
                     <td>{{ item.difference_reason || "-" }}</td>
@@ -8730,7 +8755,7 @@
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""},
             customerInvoiceRule:{project_name:"纸箱",tax_classification_code:"1060105010000000000",unit:"PCS",tax_rate:"0.13",spec_source:"product_code_snapshot",fill_unit_price:true,confirmation_status:"pending",version:null,error:""},
             customerInvoiceState:{profileLoading:false,profileSaving:false,profileLoadedCustomerId:null,ruleLoading:false,ruleSaving:false,ruleLoadedCustomerId:null},
-            pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
+            pendingStatements: [], pendingStatementCharges: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
             systemUsers: [], systemSection:"basic",
             systemSectionLoaded:{basic:false,layout:false,print:false,backup:false,pdf:false},
             systemSectionLoading:{basic:false,layout:false,print:false,backup:false,pdf:false},
@@ -8836,7 +8861,7 @@
             costPanelTab:"gaps",
             costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
-            orderDetail:null, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
+            orderDetail:null, orderCustomerCharges:[], customerChargeForm:{visible:false,id:null,version:null,charge_type:"mold",display_name:"",quantity:1,unit:"项",unit_price:"",amount:"",price_tax_mode:"",tax_rate:"",tax_project_name:"",tax_classification_code:"",note:"",saving:false}, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             externalPurchase:{loading:false,saving:false,cancelSaving:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,history:[],cancelReason:"采购内容或数量需要重新核对",idempotencyKey:""},
             externalPurchaseView:"pending", externalPurchaseRouting:[], externalPurchaseRoutingLoading:false, externalPurchaseRoutingError:"", externalPurchaseRoutingFilter:"", externalPurchaseRoutingLoaded:false,
             externalPurchaseHistory:[], externalPurchaseHistoryTotal:0, externalPurchaseHistoryLoading:false, externalPurchaseHistoryError:"", externalPurchaseHistoryFilter:"", externalPurchaseHistoryLoaded:false,
@@ -8964,7 +8989,7 @@
             deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message: "", error: false },
             unorderedFinishedPicker: { visible: false, loading: false, keyword:"", items: [], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message: "", error: false },
             tianhuaPreimport: { files:[], preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
-            statementForm: { customer_id: null, statement_month: month(), selected: {}, idempotency_key:null },
+            statementForm: { customer_id: null, statement_month: month(), selected: {}, selectedCharges:{}, idempotency_key:null },
             expandedStatementDeliveries: {}, statementCyclePeriod: "",
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
             resetPasswordForm: { username: "", new_password: "", confirm_password: "" },
@@ -9569,6 +9594,8 @@
           },
           canFinance() { return this.hasPermission("finance.execute"); },
           canAdjustReconciliationPeriod() { return this.hasPermission("finance.return_receipt.period.adjust"); },
+          canManageCustomerCharges() { return this.hasPermission("finance.customer_charge.manage"); },
+          canConfirmCustomerCharges() { return this.hasPermission("finance.customer_charge.confirm"); },
           canViewInvoiceTasks() { return this.hasPermission("finance.view") && (this.hasPermission("finance.invoice_task.generate") || this.hasPermission("finance.invoice_result.register")); },
           canConfirmStatement() { return this.hasPermission("finance.statement.confirm"); },
           canGenerateInvoiceTask() { return this.hasPermission("finance.invoice_task.generate"); },
@@ -27957,6 +27984,106 @@
               {returnFocusFallback:this.$refs.costGapTrigger || null},
             );
           },
+          customerChargeTypeText(value) {
+            return {mold:"模具费",printing_plate:"制版费",sample:"打样费",setup:"开机费",freight:"运费",other:"其他"}[value] || value || "其他";
+          },
+          async loadOrderCustomerCharges(orderId = null) {
+            const selectedOrderId = Number(orderId || this.orderDetail?.id || 0);
+            if (!selectedOrderId || !this.hasPermission("finance.view")) { this.orderCustomerCharges = []; return; }
+            try {
+              const {data} = await axios.get("/api/finance/customer-charges", {params:{order_id:selectedOrderId}});
+              this.orderCustomerCharges = data.items || [];
+            } catch(error) {
+              this.orderCustomerCharges = [];
+              this.showToast(`附加收费读取失败：${this.errorMessage(error)}`, true);
+            }
+          },
+          openCustomerChargeForm(charge = null) {
+            const source = charge || {};
+            this.customerChargeForm = {
+              visible:true,
+              id:source.id || null,
+              version:source.version || null,
+              charge_type:source.charge_type || "mold",
+              display_name:source.display_name || "",
+              quantity:Number(source.quantity || 1),
+              unit:source.unit || "项",
+              unit_price:source.unit_price ?? "",
+              amount:source.amount ?? "",
+              price_tax_mode:source.price_tax_mode || "",
+              tax_rate:source.tax_rate ?? "",
+              tax_project_name:source.tax_project_name || "",
+              tax_classification_code:source.tax_classification_code || "",
+              note:source.note || "",
+              saving:false,
+            };
+          },
+          async saveCustomerCharge() {
+            const form = this.customerChargeForm;
+            if (!this.orderDetail?.id) return false;
+            if (!form.display_name) { this.showToast("请填写收费名称", true); return false; }
+            if (!(Number(form.quantity) > 0) || !(Number(form.amount) > 0) || Number(form.unit_price) < 0) { this.showToast("请核对数量、单价和最终应收金额", true); return false; }
+            form.saving = true;
+            const payload = {
+              customer_id:Number(this.orderDetail.customer_id),
+              order_id:Number(this.orderDetail.id),
+              order_item_id:null,
+              mold_tool_id:null,
+              printing_plate_id:null,
+              charge_type:form.charge_type,
+              display_name:form.display_name,
+              quantity:Number(form.quantity),
+              unit:form.unit || "项",
+              unit_price:Number(form.unit_price),
+              amount:Number(form.amount),
+              price_tax_mode:form.price_tax_mode || null,
+              tax_rate:form.tax_rate === "" || form.tax_rate === null ? null : Number(form.tax_rate),
+              tax_project_name:form.tax_project_name || null,
+              tax_classification_code:form.tax_classification_code || null,
+              note:form.note || null,
+              idempotency_key:createIdempotencyKey(),
+            };
+            try {
+              if (form.id) {
+                payload.expected_version = Number(form.version);
+                await axios.put(`/api/finance/customer-charges/${form.id}`, payload);
+              } else {
+                await axios.post("/api/finance/customer-charges", payload);
+              }
+              form.visible = false;
+              await this.loadOrderCustomerCharges();
+              this.showToast("客户附加收费草稿已保存");
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error), true); return false; }
+            finally { form.saving = false; }
+          },
+          async confirmCustomerCharge(charge) {
+            const selectedMonth = window.prompt("请输入该收费的对账归属月份（YYYY-MM）", month());
+            if (selectedMonth === null) return false;
+            if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(selectedMonth.trim())) { this.showToast("对账月份格式必须为 YYYY-MM", true); return false; }
+            try {
+              await axios.post(`/api/finance/customer-charges/${charge.id}/confirm`, {expected_version:Number(charge.version),reconciliation_month:selectedMonth.trim(),idempotency_key:createIdempotencyKey()});
+              await this.loadOrderCustomerCharges();
+              this.showToast("收费已确认，可进入对应月份对账");
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error), true); return false; }
+          },
+          async cancelCustomerChargeConfirmation(charge) {
+            if (!confirm("确认取消该收费的对账月份吗？取消后恢复为草稿。")) return false;
+            try {
+              await axios.post(`/api/finance/customer-charges/${charge.id}/cancel-confirmation`, {expected_version:Number(charge.version),idempotency_key:createIdempotencyKey()});
+              await this.loadOrderCustomerCharges();
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error), true); return false; }
+          },
+          async voidCustomerCharge(charge) {
+            if (!confirm(`确认作废“${charge.display_name}”吗？`)) return false;
+            try {
+              await axios.post(`/api/finance/customer-charges/${charge.id}/void`, {expected_version:Number(charge.version),idempotency_key:createIdempotencyKey()});
+              await this.loadOrderCustomerCharges();
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error), true); return false; }
+          },
           async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {
             const requestKey = "orders:read-detail-modal";
             const orderId = Number(row?.id || 0);
@@ -27974,6 +28101,7 @@
               if (latestRequestControllers.get(requestKey) !== controller) return false;
               if (keepCurrentModalSession && (!modalA11ySessionActive || modalA11ySessionGeneration !== expectedModalSessionGeneration)) return false;
               this.orderDetail = data;
+              await this.loadOrderCustomerCharges(orderId);
               this.modal = { type:"orderDetail", title:`只读订单详情 ${this.displayOrderNumber(data)}` };
               this.focusAccessibleModal(modalOpener, returnFocusFallback);
               return true;
@@ -31273,7 +31401,7 @@
           },
           async openStatement(statementMonth = null, preferredCustomerId = null) {
             if (statementMonth && typeof statementMonth !== "string") statementMonth = null;
-            this.statementForm = { customer_id:preferredCustomerId ? Number(preferredCustomerId) : null, statement_month:statementMonth || month(), selected:{}, idempotency_key:null };
+            this.statementForm = { customer_id:preferredCustomerId ? Number(preferredCustomerId) : null, statement_month:statementMonth || month(), selected:{}, selectedCharges:{}, idempotency_key:null };
             this.expandedStatementDeliveries = {};
             this.statementCyclePeriod = "";
             this.modal = { type:"statement", title:"生成月结对账单" };
@@ -31292,16 +31420,19 @@
             }
           },
           async loadPendingStatements() {
-            if (!this.statementForm.customer_id) { this.pendingStatements=[]; this.statementCyclePeriod = ""; this.expandedStatementDeliveries = {}; return; }
+            if (!this.statementForm.customer_id) { this.pendingStatements=[]; this.pendingStatementCharges=[]; this.statementCyclePeriod = ""; this.expandedStatementDeliveries = {}; return; }
             const { data } = await axios.get("/api/finance/pending_statements", {
               params:{ customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month }
             });
             const rawDeliveries = Array.isArray(data?.deliveries) ? data.deliveries : this.groupLegacyStatementItems(data?.items || []);
             this.pendingStatements = rawDeliveries.map(row => this.normalizeStatementDelivery(row));
+            this.pendingStatementCharges = Array.isArray(data?.customer_charges) ? data.customer_charges : [];
             this.statementForm.selected = {};
+            this.statementForm.selectedCharges = {};
             this.pendingStatements.filter(row => !row.selection_blocked).forEach(row => {
               this.statementForm.selected[row.delivery_id] = true;
             });
+            this.pendingStatementCharges.forEach(row => { this.statementForm.selectedCharges[row.id] = true; });
             this.statementCyclePeriod = data?.period_start && data?.period_end
               ? `${data.period_start} 至 ${data.period_end}`
               : "";
@@ -32272,9 +32403,10 @@
               if (this.modal.type === "statement") {
                 if (!this.statementForm.customer_id) throw new Error("请先选择客户");
                 const ids = this.pendingStatements.filter(row => !row.selection_blocked && this.statementForm.selected[row.delivery_id]).map(row => row.delivery_id);
-                if (!ids.length) throw new Error("至少选择一张待对账送货单");
+                const chargeIds = this.pendingStatementCharges.filter(row => this.statementForm.selectedCharges[row.id]).map(row => row.id);
+                if (!ids.length && !chargeIds.length) throw new Error("至少选择一张待对账送货单或一条已确认附加收费");
                 if (!this.statementForm.idempotency_key) this.statementForm.idempotency_key = createIdempotencyKey();
-                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, delivery_ids:ids, idempotency_key:this.statementForm.idempotency_key });
+                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, delivery_ids:ids, customer_charge_ids:chargeIds, idempotency_key:this.statementForm.idempotency_key });
                 this.statementForm.idempotency_key = null;
                 await this.loadFinance();
               }

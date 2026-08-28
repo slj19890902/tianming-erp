@@ -840,7 +840,7 @@
           return {
             title: item.display_name || item.mold_name || "模具名称待完善",
             lines: [
-              `位置 ${item.rack_location || "未填写"}｜${item.repair_status === "needs_repair" ? "需要维修" : "状态正常"}`,
+              `位置 ${item.location_guide?.prompt || item.rack_location || "未填写"}｜${item.repair_status === "needs_repair" ? "需要维修" : "状态正常"}`,
               linked,
             ],
           };
@@ -851,7 +851,7 @@
             lines: [
               `${item.customer_name || "客户未填写"}｜${item.order_number || "订单号未填写"}`,
               `${item.product_name || "产品未填写"}｜${item.carton_specification || "规格未填写"}｜${Number(item.order_quantity || 0)}只`,
-              `${item.process_tags?.length ? item.process_tags.join("、") : "工艺待核对"}${item.mold_display_name || item.mold_name ? `｜模具 ${item.mold_display_name || item.mold_name} ${item.mold_location || ""}` : ""}`,
+              `${item.process_tags?.length ? item.process_tags.join("、") : "工艺待核对"}${item.mold_display_name || item.mold_name ? `｜模具 ${item.mold_display_name || item.mold_name} ${item.mold_location_display || item.mold_location || ""}` : ""}`,
             ],
           };
         }
@@ -1766,7 +1766,7 @@
             stationFact("订单数量", `${task.order_quantity || 0}只`),
             stationFact("材质 / 楞型", [task.material, task.flute_type ? `${task.flute_type}楞` : ""].filter(Boolean).join(" / ")),
             stationFact("模具名称", task.mold_display_name || task.mold_name || "未绑定"),
-            stationFact("正式模具位置", task.mold_location || "未登记")
+            stationFact("正式模具位置", task.mold_location_display || task.mold_location || "未登记")
           );
         } else {
           const cartonSize = [task.carton_length_mm, task.carton_width_mm, task.carton_height_mm].filter(value => value !== null && value !== undefined && value !== "").join("×");
@@ -1896,7 +1896,7 @@
           card.append(node("p", "fact-line", `生产备注说明：${task.production_notes}`));
         }
         if (task.mold_name || task.mold_location) {
-          card.append(node("p", "fact-line", `模具：${task.mold_name || "未命名"}｜位置 ${task.mold_location || "未登记"}`));
+          card.append(node("p", "fact-line", `模具：${task.mold_name || "未命名"}｜位置 ${task.mold_location_display || task.mold_location || "未登记"}`));
         }
         productionPrintingSnapshotLines(task).forEach(line => card.append(node("p", "fact-line", line)));
         if (task.drawing_path) {

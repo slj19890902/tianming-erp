@@ -17,7 +17,7 @@ from urllib.parse import urlsplit, urlunsplit
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import qrcode
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
 
@@ -15089,7 +15089,7 @@ def list_mold_tools(
     include_archived: bool = True,
     include_unprinted: bool = True,
     include_repair: bool = True,
-    sort_by: Literal["location", "updated_desc"] = "location",
+    sort_by: Literal["location", "updated_desc", "status_attention"] = "location",
     limit: int = Query(default=200, ge=1, le=500),
     page: int | None = Query(default=None, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -15132,7 +15132,25 @@ def list_mold_tools(
         )
         or 0
     )
-    if sort_by == "updated_desc":
+    if sort_by == "status_attention":
+        printed = (
+            select(MoldLabelPrintJobItem.id)
+            .where(MoldLabelPrintJobItem.mold_tool_id == MoldTool.id)
+            .exists()
+        )
+        status_rank = case(
+            (~printed, 0),
+            (MoldTool.repair_status == "needs_repair", 1),
+            (MoldTool.archive_status == "archived", 2),
+            (MoldTool.is_active.is_(False), 3),
+            else_=4,
+        )
+        ordered_query = query.order_by(
+            status_rank,
+            func.coalesce(MoldTool.updated_at, MoldTool.created_at).desc(),
+            MoldTool.id.desc(),
+        )
+    elif sort_by == "updated_desc":
         ordered_query = query.order_by(
             func.coalesce(MoldTool.updated_at, MoldTool.created_at).desc(),
             MoldTool.id.desc(),
@@ -17019,11 +17037,14 @@ def _mold_live_tasks(
 
 
 def _mold_scan_event_dict(row: MoldScanEvent) -> dict:
+    location_guide = describe_mold_location(row.mold_location_snapshot)
     return {
         "id": int(row.id),
         "mold_tool_id": int(row.mold_tool_id),
         "mold_code": row.mold_code_snapshot,
         "mold_location": row.mold_location_snapshot,
+        "mold_location_display": location_guide["prompt"],
+        "mold_location_guide": location_guide,
         "mold_location_version": int(row.mold_location_version_snapshot),
         "production_task_id": int(row.production_task_id_snapshot),
         "production_task_version": int(row.production_task_version_snapshot),

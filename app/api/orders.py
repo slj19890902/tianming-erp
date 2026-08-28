@@ -191,6 +191,7 @@ from app.services.manual_size_product import (
     ManualSizeProductInput,
     resolve_or_create_manual_size_product,
 )
+from app.services.mold_location import describe_mold_location
 from app.services.production_workflow import (
     ProductionWorkflowError,
     cutting_output_factor,
@@ -2401,6 +2402,11 @@ def _order_response(
                 "mold_code": mold_tool.mold_code if mold_tool else None,
                 "mold_name": mold_tool.mold_name if mold_tool else None,
                 "mold_location": mold_tool.rack_location if mold_tool else None,
+                "mold_location_display": (
+                    describe_mold_location(mold_tool.rack_location)["prompt"]
+                    if mold_tool
+                    else None
+                ),
                 "inventory_deducted_qty": item.inventory_deducted_qty,
                 "finished_inventory_reserved_qty": finished_reserved_quantity,
                 "production_required_qty": production_required_quantity,

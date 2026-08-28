@@ -5,9 +5,17 @@ import {
   buildMoldLocationTarget,
   buildMoldRackView,
   buildMoldShelfSpines,
+  moldRackEmployeeName,
   moldRackLevelUsage,
   moldRacksForArea
 } from "../src/moldRackView.mjs";
+
+test("员工地图只显示一楼模具货架简称且不改原始地图名称", () => {
+  const rack = { rack_code: "R01", mold_rack_code: "R01", name: "R01 左架（模具002，小模切机上方）" };
+  assert.equal(moldRackEmployeeName(rack), "左架");
+  assert.equal(rack.name, "R01 左架（模具002，小模切机上方）");
+  assert.equal(moldRackEmployeeName({ rack_code: "R01", name: "原料货架" }), "原料货架");
+});
 
 const rack = {
   levels: 3,

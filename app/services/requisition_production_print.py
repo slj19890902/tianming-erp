@@ -41,6 +41,7 @@ from app.services.fulfillment_reminders import (
     matching_production_reminders,
     production_reminders_by_customer,
 )
+from app.services.mold_location import describe_mold_location
 from app.services.production_workflow import (
     _task_printing_snapshot,
     cutting_output_factor,
@@ -791,6 +792,11 @@ def build_supplier_requisition_production_package(
             ),
             "mold_location": (
                 current_mold.rack_location if current_mold is not None else None
+            ),
+            "mold_location_display": (
+                describe_mold_location(current_mold.rack_location)["prompt"]
+                if current_mold is not None
+                else None
             ),
             "mold_location_version": (
                 int(current_mold.location_version)

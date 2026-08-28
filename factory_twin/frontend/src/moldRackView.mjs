@@ -31,6 +31,23 @@ function normalizedIdentity(value) {
   return String(value || "").trim().toUpperCase();
 }
 
+const MOLD_RACK_EMPLOYEE_NAMES = Object.freeze({
+  R01: "左架",
+  R02: "中架",
+  R03: "右架"
+});
+
+export function moldRackEmployeeName(rack) {
+  const code = normalizedIdentity(rack?.mold_rack_code || rack?.rack_code);
+  const isMoldRack = Boolean(rack?.mold_rack_code)
+    || /模具\s*00[12]/.test(String(rack?.name || ""))
+    || normalizedIdentity(rack?.area_code).includes("MOLD");
+  if (isMoldRack && MOLD_RACK_EMPLOYEE_NAMES[code]) {
+    return MOLD_RACK_EMPLOYEE_NAMES[code];
+  }
+  return String(rack?.name || code || "货架").trim();
+}
+
 export function moldRacksForArea(feature, racks) {
   if (!feature) return [];
   const featureId = String(feature.id || "").trim();

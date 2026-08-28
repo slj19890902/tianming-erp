@@ -24864,7 +24864,7 @@
             return ct === '净料' ? '净' : ct === '毛片' ? '毛' : ct;
           },
           moldLocationText(item) {
-            const parts = [item.mold_display_name || item.mold_name, item.mold_location].filter(Boolean);
+            const parts = [item.mold_display_name || item.mold_name, item.mold_location_display || item.mold_location].filter(Boolean);
             return parts.length ? parts.join("｜") : "未绑定模具";
           },
           // ===== 常用箱采购报料/压线推荐（只推荐，不强制覆盖人工值） =====

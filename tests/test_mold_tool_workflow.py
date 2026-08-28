@@ -891,7 +891,8 @@ def test_workshop_can_open_structured_location_label_and_qr(
         assert listed.status_code == 200, listed.text
         row = listed.json()["items"][0]
         assert row["location_guide"]["kind"] == "flat"
-        assert "三楼模具区" in row["location_guide"]["prompt"]
+        assert "三楼" in row["location_guide"]["prompt"]
+        assert "模具区" not in row["location_guide"]["prompt"]
         assert "第2号货架" in row["location_guide"]["prompt"]
         assert row["products"][0]["report_specification"] == "1200 × 800"
         assert row["products"][0]["direction_note"] == "长边顺瓦楞方向"
@@ -940,6 +941,8 @@ def test_workshop_can_open_structured_location_label_and_qr(
             "label_identity",
             "label_customer_name",
             "label_mold_number",
+            "label_mold_name",
+            "label_mold_chinese_short_name",
             "label_product_specification",
             "label_report_specification",
             "label_flute_type",
@@ -2317,9 +2320,9 @@ def test_scoped_customer_can_read_current_bom_snapshot_after_product_unbind(
 @pytest.mark.parametrize(
     ("location", "kind", "expected"),
     [
-        ("3F-M-R02-L2-D03-P08", "flat", "前往三楼模具区，第2号货架，第2层、第3排"),
-        ("3F-M-R01-L1-V-P12", "vertical", "前往三楼模具区，第1号货架，底层（第1层）竖放区"),
-        ("二楼模具架 B-12", "manual", "前往“二楼模具架 B-12”"),
+        ("3F-M-R02-L2-D03-P08", "flat", "三楼，第2号货架，第2层、第3排"),
+        ("3F-M-R01-L1-V-P12", "vertical", "三楼，第1号货架，底层（第1层）竖放区"),
+        ("二楼模具架 B-12", "manual", "二楼模具架 B-12"),
     ],
 )
 def test_mold_location_prompt_is_immediately_readable(
@@ -2355,8 +2358,11 @@ def test_confirmed_one_floor_mold_locations_are_accepted(location: str) -> None:
     normalized = normalize_mold_location_code(location.lower())
     guide = describe_mold_location(normalized)
     assert normalized == location
-    assert "一楼模具区" in guide["prompt"]
-    assert f"R{guide['rack']:02d}" in guide["prompt"]
+    assert "一楼" in guide["prompt"]
+    assert {1: "左架", 2: "中架", 3: "右架", 4: "靠墙特大模具区"}[
+        guide["rack"]
+    ] in guide["prompt"]
+    assert f"R{guide['rack']:02d}" not in guide["prompt"]
     assert f"第{guide['level']}层" in guide["prompt"]
     assert "P" not in guide["prompt"]
     assert "不再代表从左到右固定顺序" not in guide["prompt"]
@@ -2402,9 +2408,14 @@ def test_one_floor_mold_location_options_are_read_only_and_employee_friendly(
             "R04",
         ]
         assert data["racks"][0]["location_depth"] == "grid"
+        assert [rack["name"] for rack in data["racks"][:3]] == [
+            "左架",
+            "中架",
+            "右架",
+        ]
         assert data["racks"][0]["levels"] == [
-            {"level": 2, "kind": "flat", "grid_count": 1, "grids": [1]},
-            {"level": 3, "kind": "flat", "grid_count": 1, "grids": [1]},
+            {"level": 2, "kind": "flat", "grid_count": 4, "grids": [1, 2, 3, 4]},
+            {"level": 3, "kind": "flat", "grid_count": 3, "grids": [1, 2, 3]},
         ]
         assert data["racks"][3]["location_depth"] == "rack"
         assert data["racks"][3]["levels"] == []
@@ -2563,7 +2574,7 @@ def test_new_one_floor_mold_locations_do_not_record_left_to_right_order(
     assert normalized == location
     assert guide["position"] is None
     if guide["kind"] == "storage_grid":
-        assert guide["prompt"].endswith(f"第{guide['level']}层、第{guide['grid']}排")
+        assert guide["prompt"].endswith(f"第{guide['level']}层、第{guide['grid']}格")
     assert "左右顺序" not in guide["prompt"]
     assert "拿取前" not in guide["prompt"]
 
@@ -2801,6 +2812,7 @@ def test_order_response_exposes_current_mold_location_to_workshop(mold_app) -> N
         assert item["mold_code"] == "MJ-ORDER-001"
         assert item["mold_name"] == "订单生产模"
         assert item["mold_location"] == "生产模具架 C-08"
+        assert item["mold_location_display"] == "生产模具架 C-08"
         assert "unit_price" not in item
 
 
@@ -2839,7 +2851,6 @@ def test_desktop_mold_form_builds_confirmed_one_floor_location_codes() -> None:
         "function buildMoldRackLocation()",
         "1F-M-${rack.rack_code}-L${level.level}-G${positionCode(grid)}",
         "1F-M-${rack.rack_code}`",
-        "左右顺序不记录",
     ):
         assert marker in warehouse
     assert 'id="moldRackLocation" required readonly' in warehouse
@@ -3418,13 +3429,13 @@ def test_mobile_mold_page_keeps_lookup_and_adds_double_code_confirmation() -> No
         "oneFloorLevel",
         "oneFloorGrid",
         "1F-M-${rack.rack_code}-L${level.level}-G${positionCode(grid)}",
-        "左右顺序不记录",
         "warehouse.execute",
         "idempotency_key",
         "/mold-label.html?mold_id=",
         "/api/warehouse/molds?q=",
     ):
         assert marker in mobile
+    assert "一楼位置快捷选择（只记录货架、层、格" not in mobile
     assert "oneFloorPosition" not in mobile
 
 

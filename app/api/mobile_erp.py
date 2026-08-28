@@ -90,6 +90,7 @@ from app.services.location_candidates import (
     operational_location_payload,
     warehouse_location_projection,
 )
+from app.services.mold_location import describe_mold_location
 from app.services.warehouse_floor1_candidate_planner import overlay_formal_area_bindings
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
@@ -375,6 +376,11 @@ def _safe_production_task(task: dict, *, drawing_path: str | None) -> dict:
         "production_notes": task.get("production_notes"),
         "mold_name": task.get("mold_name"),
         "mold_location": task.get("mold_location"),
+        "mold_location_display": (
+            describe_mold_location(task["mold_location"])["prompt"]
+            if task.get("mold_location")
+            else None
+        ),
         "printing_plate_mode": task.get("printing_plate_mode"),
         "print_content": task.get("print_content"),
         "printing_situation": task.get("printing_situation") or task.get("print_content"),
@@ -639,6 +645,11 @@ def _production_station_task_payloads(
                     "mold_display_name": mold_name,
                     "mold_name": mold_name,
                     "mold_location": mold.rack_location if mold is not None else None,
+                    "mold_location_display": (
+                        describe_mold_location(mold.rack_location)["prompt"]
+                        if mold is not None
+                        else None
+                    ),
                     "mold_is_active": mold_active,
                     "mold_archive_status": mold.archive_status if mold is not None else None,
                     "mold_warning": (
@@ -1899,6 +1910,9 @@ def product_production_overview(
                     "display_name": mold.mold_name,
                     "mold_name": mold.mold_name,
                     "current_location": mold.rack_location,
+                    "current_location_display": describe_mold_location(
+                        mold.rack_location
+                    )["prompt"],
                     "is_active": bool(mold.is_active),
                 }
                 if mold is not None and location_allowed
@@ -2291,6 +2305,7 @@ def _mobile_mold_search_group(
                 "mold_name": mold.mold_name,
                 "identity_status": mold.identity_status,
                 "rack_location": mold.rack_location,
+                "location_guide": describe_mold_location(mold.rack_location),
                 "is_active": bool(mold.is_active),
                 "archive_status": mold.archive_status,
                 "repair_status": mold.repair_status,

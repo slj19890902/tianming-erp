@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.216"
-    assert APP_VERSION_NAME == "超订单来料成品与送货数量守恒"
+    assert APP_VERSION == "v0.22.217"
+    assert APP_VERSION_NAME == "仓库盘点引导与库存补录"
     assert APP_BUILD_DATE == "2026-08-28"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,10 +49,15 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "实收超过订单数量" in item and "做成品" in item for item in current_release)
-    assert any("本次更新｜" in item and "同一批来料" in item and "恢复" in item for item in current_release)
-    assert any("本次更新｜" in item and "多送" in item and "填写原因" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.216" in item and "gs54v8x9z43" in item for item in current_release)
+    assert any("本次更新｜" in item and "CURRENT_MAP" in item and "正式货位" in item for item in current_release)
+    assert any("本次更新｜" in item and "正式移货草稿" in item and "库存总量" in item for item in current_release)
+    assert any("本次更新｜" in item and "仅管理员" in item and "盘点库存批次" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.217" in item and "gs54v8x9z43" in item for item in current_release)
+    prior_release_216 = [item for item in APP_CHANGELOG if item.startswith("v0.22.216：")]
+    assert any("本次更新｜" in item and "实收超过订单数量" in item and "做成品" in item for item in prior_release_216)
+    assert any("本次更新｜" in item and "同一批来料" in item and "恢复" in item for item in prior_release_216)
+    assert any("本次更新｜" in item and "多送" in item and "填写原因" in item for item in prior_release_216)
+    assert any("如何验证｜" in item and "v0.22.216" in item and "gs54v8x9z43" in item for item in prior_release_216)
     warehouse_rack_release = [item for item in APP_CHANGELOG if item.startswith("v0.22.215：")]
     assert any("本次更新｜" in item and "整理货位/货架" in item and "规划中" in item for item in warehouse_rack_release)
     assert any("本次更新｜" in item and "80×40" in item and "打印登记" in item for item in warehouse_rack_release)

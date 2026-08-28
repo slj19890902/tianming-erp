@@ -31,6 +31,7 @@ from app.models.warehouse_inventory import (
     InventoryPallet,
     InventoryPalletItem,
     InventoryReservation,
+    SemiFinishedLotAllowedProduct,
     SemiFinishedInventoryDetail,
     WarehouseArea,
     WarehouseAreaStoragePolicy,
@@ -421,6 +422,14 @@ def stocktake_app(tmp_path: Path):
         }
         db.add_all(list(lots.values()))
         db.flush()
+        db.add(
+            SemiFinishedLotAllowedProduct(
+                inventory_lot_id=lots["semi"].id,
+                product_id=product.id,
+                confirmed_by=admin.id,
+                confirmed_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+        )
 
         zero_pallet = InventoryPallet(
             pallet_code="PLT-P147D-ZERO",
@@ -559,6 +568,69 @@ def _counts(db: Session) -> tuple[int, int, int]:
     )
 
 
+def test_stocktake_add_requires_admin_before_any_inventory_validation(
+    stocktake_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import warehouse as warehouse_api
+
+    app, factory, ids, _database = stocktake_app
+    payload = _batch(
+        "p147d-admin-only-add",
+        _add(
+            client_item_id="admin-only-add",
+            location_id=ids["loc_fg1_add"],
+            inventory_type="finished",
+            customer_id=ids["customer"],
+            product_id=ids["product"],
+            quantity=3,
+        ),
+    )
+    with factory() as db:
+        before = _counts(db)
+    with TestClient(app) as client:
+        _login(client)
+        denied = client.post(URL, json=payload)
+        assert denied.status_code == 403, denied.text
+        assert "只能由管理员确认" in denied.json()["detail"]
+    with factory() as db:
+        assert _counts(db) == before
+
+    def fake_execute(*_args, **kwargs):
+        return {
+            "message": "盘点补录已确认",
+            "batch_id": kwargs["batch_id"],
+            "confirmed_at": "2026-08-28T12:00:00",
+            "operator_id": kwargs["operator_id"],
+            "items": [],
+        }
+
+    monkeypatch.setattr(
+        warehouse_api,
+        "execute_warehouse_stocktake_batch",
+        fake_execute,
+    )
+    with TestClient(app) as client:
+        _login(client, "p147d-admin")
+        accepted = client.post(URL, json=payload)
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["idempotent_replay"] is False
+        _login(client)
+        ordinary_decrease = client.post(
+            URL,
+            json=_batch(
+                "p147d-operator-decrease-still-allowed",
+                _decrease(
+                    client_item_id="operator-decrease",
+                    location_id=ids["loc_fg1"],
+                    lot_id=ids["lot_normal"],
+                    quantity=1,
+                ),
+            ),
+        )
+        assert ordinary_decrease.status_code == 200, ordinary_decrease.text
+
+
 def test_multi_item_add_finished_and_semi_plus_decrease_records_formal_facts(
     stocktake_app,
 ) -> None:
@@ -589,7 +661,7 @@ def test_multi_item_add_finished_and_semi_plus_decrease_records_formal_facts(
         ),
     )
     with TestClient(app) as client:
-        _login(client)
+        _login(client, "p147d-admin")
         response = client.post(URL, json=payload)
         assert response.status_code == 200, response.text
         body = response.json()
@@ -906,7 +978,7 @@ def test_stale_last_item_and_runtime_failure_roll_back_entire_batch(
     with factory() as db:
         before = _counts(db)
     with TestClient(app) as client:
-        _login(client)
+        _login(client, "p147d-admin")
         response = client.post(URL, json=stale)
         assert response.status_code == 409, response.text
     with factory() as db:
@@ -1127,7 +1199,7 @@ def test_stale_map_version_rejects_the_entire_stocktake_without_writes(
             lot.status,
         )
     with TestClient(app) as client:
-        _login(client)
+        _login(client, "p147d-admin" if operation == "add" else "p147d-operator")
         response = client.post(URL, json=_batch(f"p147d-stale-map-{operation}", item))
         assert response.status_code == 409, response.text
     with factory() as db:
@@ -1165,7 +1237,7 @@ def test_two_same_identity_adds_share_one_pallet_and_preserve_quantity(
         ),
     )
     with TestClient(app) as client:
-        _login(client)
+        _login(client, "p147d-admin")
         response = client.post(URL, json=payload)
         assert response.status_code == 200, response.text
         result = response.json()
@@ -1394,6 +1466,7 @@ def test_confirmed_capacity_allows_existing_occupancy_but_blocks_a_new_slot(
             ),
         )
         assert decrease.status_code == 200, decrease.text
+        _login(client, "p147d-admin")
         append = client.post(
             URL,
             json=_batch(
@@ -1489,7 +1562,7 @@ def test_finished_add_rejects_snapshot_only_current_pallet_without_any_write(
         before = _counts(db)
 
     with TestClient(app) as client:
-        _login(client)
+        _login(client, "p147d-admin")
         response = client.post(
             URL,
             json=_batch(
@@ -1629,6 +1702,8 @@ def test_stocktake_only_permission_gets_scoped_overview_candidates_and_projectio
         assert by_lot[ids["lot_normal"]]["stocktake_decrease_block_reason"] is None
         assert by_lot[ids["lot_reserved"]]["stocktake_decrease_eligible"] is False
         assert "预占" in by_lot[ids["lot_reserved"]]["stocktake_decrease_block_reason"]
+        assert by_lot[ids["lot_semi"]]["product_id"] == ids["product"]
+        assert by_lot[ids["lot_semi"]]["allowed_product_ids"] == [ids["product"]]
         assert {item.get("customer_id") for item in projected} <= {ids["customer"]}
 
         candidates = client.get(
@@ -1734,7 +1809,7 @@ def test_add_source_rack_and_dispatch_gates_keep_supported_semi_rack(
     with factory() as db:
         before = _counts(db)
     with TestClient(app) as client:
-        _login(client)
+        _login(client, "p147d-admin")
         for index, item in enumerate(blocked_items):
             response = client.post(
                 URL, json=_batch(f"p147d-add-strict-{index}", item)

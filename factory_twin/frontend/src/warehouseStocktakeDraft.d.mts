@@ -18,6 +18,29 @@ export interface StocktakeDecreaseProjection {
   stocktake_decrease_block_reason?: string | null;
 }
 
+export interface StocktakeExistingProductLocation {
+  lot_id: number;
+  version?: number;
+  inventory_type: StocktakeInventoryType;
+  unit?: string;
+  customer_id?: number | null;
+  product_id?: number | null;
+  allowed_product_ids?: number[];
+  inventory_code?: string | null;
+  product_name?: string | null;
+  available_quantity?: number;
+  reserved_quantity?: number;
+  damaged_quantity?: number;
+  source_location_id: number | null;
+  source_floor_code: string;
+  source_area_code: string | null;
+  source_location_code: string;
+  source_location_name: string;
+  source_layout_version: number | null;
+  is_target_location: boolean;
+  is_outside_target_area: boolean;
+}
+
 interface StocktakeDraftBase {
   client_item_id: string;
   location_id: number;
@@ -55,6 +78,18 @@ export type WarehouseStocktakeDraft = StocktakeAddDraft | StocktakeDecreaseDraft
 export function stocktakeLocationBlockReason(location?: StocktakeLocationProjection | null): string | null;
 export function stocktakeAddBlockReason(location: StocktakeLocationProjection | null | undefined, inventoryType: StocktakeInventoryType): string | null;
 export function stocktakeDecreaseBlockReason(item?: StocktakeDecreaseProjection | null): string | null;
+export function stocktakeBlockResolution(reason?: string | null): string;
+export function stocktakeExistingProductLocations(
+  locations: unknown[],
+  options: {
+    customerId?: string | number | null;
+    productId?: string | number | null;
+    inventoryType?: StocktakeInventoryType;
+    targetFloorCode?: string | null;
+    targetAreaCode?: string | null;
+    targetLocationId?: string | number | null;
+  }
+): StocktakeExistingProductLocation[];
 export function validateStocktakeDraft(draft: WarehouseStocktakeDraft): string | null;
 export function upsertStocktakeDraft<T extends WarehouseStocktakeDraft>(drafts: T[], draft: T): { items: T[]; error: string | null };
 export function removeStocktakeDraft<T extends WarehouseStocktakeDraft>(drafts: T[], clientItemId: string): T[];

@@ -35,6 +35,8 @@ class FrozenSource:
     receipt_plan_fingerprint: str
     component_type: str
     material_id: int
+    order_purpose_sheet_qty: int
+    reserve_purpose_sheet_qty: int
 
 
 def _error_code(response) -> str:
@@ -431,6 +433,12 @@ def _create_frozen_sources(
                     receipt_plan_fingerprint=snapshot.preview_fingerprint,
                     component_type=snapshot.component_type,
                     material_id=supplier_item.material_id,
+                    order_purpose_sheet_qty=int(
+                        snapshot.order_purpose_sheet_qty or 0
+                    ),
+                    reserve_purpose_sheet_qty=int(
+                        snapshot.reserve_purpose_sheet_qty or 0
+                    ),
                 )
             )
     assert len(result) == (2 if composite else 1)
@@ -530,6 +538,12 @@ def _create_frozen_source_batch(
                     receipt_plan_fingerprint=snapshot.preview_fingerprint,
                     component_type=snapshot.component_type,
                     material_id=supplier_item.material_id,
+                    order_purpose_sheet_qty=int(
+                        snapshot.order_purpose_sheet_qty or 0
+                    ),
+                    reserve_purpose_sheet_qty=int(
+                        snapshot.reserve_purpose_sheet_qty or 0
+                    ),
                 )
             )
     assert len(result) == count
@@ -603,6 +617,14 @@ def _receive(
         "expected_actual_material_version": receipt_fact["actual_material_version"],
         "actual_material_fingerprint": receipt_fact["actual_material_fingerprint"],
     }
+    if (
+        source.reserve_purpose_sheet_qty > 0
+        and quantity > source.order_purpose_sheet_qty
+    ):
+        # Existing P1-81 cases explicitly exercise the established reserve
+        # branch.  P0-32 adds a separate regression for the now-forbidden
+        # omitted choice and for the finished-goods choice.
+        payload["surplus_disposition"] = "semi_finished_reserve"
     payload.update(overrides or {})
     return client.put(f"/api/incoming/receive/{source.route_key}", json=payload)
 
@@ -797,8 +819,8 @@ def test_pending_projection_refreshes_frozen_receipt_tokens_and_keeps_legacy_ope
         assert frozen_before["expected_order_purpose_sheet_qty"] == 500
         assert frozen_before["expected_reserve_purpose_sheet_qty"] == 100
         assert frozen_before["expected_finished_output_qty"] == 500
-        assert frozen_before["finished_location_name"] == "成品待送堆放区 001 号位"
-        assert frozen_before["reserve_location_name"] == "三楼左区半成品原料备料位"
+        assert "FIN-001-1" in frozen_before["finished_location_name"]
+        assert frozen_before["reserve_location_name"]
         assert frozen_before["purpose_issue"]
 
         legacy_before = before_rows[legacy_route_key]
@@ -836,8 +858,8 @@ def test_pending_projection_refreshes_frozen_receipt_tokens_and_keeps_legacy_ope
         assert frozen_after["expected_order_purpose_sheet_qty"] == 500
         assert frozen_after["expected_reserve_purpose_sheet_qty"] == 100
         assert frozen_after["expected_finished_output_qty"] == 500
-        assert frozen_after["finished_location_name"] == "成品待送堆放区 001 号位"
-        assert frozen_after["reserve_location_name"] == "三楼左区半成品原料备料位"
+        assert "FIN-001-1" in frozen_after["finished_location_name"]
+        assert frozen_after["reserve_location_name"]
         assert "purpose_issue" not in frozen_after
 
         legacy_after = after_rows[legacy_route_key]
@@ -1044,12 +1066,12 @@ def test_pending_frozen_preview_reports_capacity_warning_without_blocking(
             if str(item["item_id"]) == source.route_key
         )
         assert row["receipt_fact_ready"] is True
-        assert row["finished_location_name"] == "成品待送堆放区 002 号位"
+        assert "FIN-001-2" in row["finished_location_name"]
         assert row["finished_location_ready"] is True
         assert row["finished_capacity_warning"]
 
 
-def test_frozen_500_600_receipts_split_450_580_600_620_and_cost_exactly(
+def test_frozen_500_600_receipts_split_450_580_600_and_block_duplicate_overreceipt(
     requisition_app,
 ) -> None:
     app, session_factory = requisition_app
@@ -1099,6 +1121,7 @@ def test_frozen_500_600_receipts_split_450_580_600_620_and_cost_exactly(
                 receipt_fact,
                 quantity=130,
                 idempotency_key="p181-receive-580",
+                overrides={"surplus_disposition": "semi_finished_reserve"},
             ),
             order_delta=50,
             reserve_delta=80,
@@ -1114,6 +1137,7 @@ def test_frozen_500_600_receipts_split_450_580_600_620_and_cost_exactly(
                 receipt_fact,
                 quantity=20,
                 idempotency_key="p181-receive-600",
+                overrides={"surplus_disposition": "semi_finished_reserve"},
             ),
             order_delta=0,
             reserve_delta=20,
@@ -1122,33 +1146,27 @@ def test_frozen_500_600_receipts_split_450_580_600_620_and_cost_exactly(
             finished_delta=0,
             finished_cumulative=500,
         )
-        fourth = _assert_allocation(
-            _receive(
-                client,
-                source,
-                receipt_fact,
-                quantity=20,
-                idempotency_key="p181-receive-620",
-            ),
-            order_delta=0,
-            reserve_delta=20,
-            order_cumulative=500,
-            reserve_cumulative=120,
-            finished_delta=0,
-            finished_cumulative=500,
+        duplicate = _receive(
+            client,
+            source,
+            receipt_fact,
+            quantity=20,
+            idempotency_key="p181-receive-620",
+            overrides={"surplus_disposition": "semi_finished_reserve"},
         )
+        assert duplicate.status_code == 409, duplicate.text
+        assert _error_code(duplicate) == "INCOMING_SOURCE_ALREADY_FULLY_RECEIVED"
 
     assert Decimal(str(first["receipt_total_cost"])) == Decimal("1125.0000")
     assert Decimal(str(second["order_cost"])) == Decimal("125.0000")
     assert Decimal(str(second["reserve_cost"])) == Decimal("200.0000")
     assert Decimal(str(third["reserve_cost"])) == Decimal("50.0000")
-    assert Decimal(str(fourth["reserve_cost"])) == Decimal("50.0000")
-    assert fourth["reserve_planned_sheet_qty"] == 100
-    assert fourth["reserve_actual_sheet_qty"] == 120
-    assert fourth["reserve_variance_sheet_qty"] == 20
-    assert fourth["finished_location_name"].startswith("成品待送堆放区 ")
-    assert fourth["reserve_location_name"] == "三楼左区半成品原料备料位"
-    assert "F1-DISPATCH-01" not in fourth["finished_location_name"]
+    assert third["reserve_planned_sheet_qty"] == 100
+    assert third["reserve_actual_sheet_qty"] == 100
+    assert third["reserve_variance_sheet_qty"] == 0
+    assert "FIN-001" in third["finished_location_name"]
+    assert "RAW-001-1" in third["reserve_location_name"]
+    assert "F1-DISPATCH-01" not in third["finished_location_name"]
 
     from app.models.production import ProductionTask
     from app.models.warehouse_inventory import (
@@ -1196,7 +1214,7 @@ def test_frozen_500_600_receipts_split_450_580_600_620_and_cost_exactly(
         assert {row.material_code_snapshot for row in reserve_details} == {"KAKAK"}
         assert all(row.internal_name for row in reserve_details)
     assert _posted_finished_quantity(session_factory) == 500
-    assert _active_semi_quantity(session_factory) == 120
+    assert _active_semi_quantity(session_factory) == 100
 
 
 def test_received_and_history_project_purpose_reversal_with_cost_permission(
@@ -2519,13 +2537,14 @@ def test_pending_receipt_defaults_to_order_quantity_when_only_reserve_location_i
             for item in pending.json()["items"]
             if item["item_id"] == source.route_key
         )
-        assert row["incoming_quantity"] == 600
+        assert row["incoming_quantity"] == 602
         assert row["expected_order_purpose_sheet_qty"] == 600
-        assert row["expected_reserve_purpose_sheet_qty"] == 0
+        assert row["expected_reserve_purpose_sheet_qty"] == 2
         assert row["remaining_order_purpose_sheet_qty"] == 600
         assert row["remaining_reserve_purpose_sheet_qty"] == 2
-        assert row["receipt_execution_ready"] is True
-        assert "其余 2 张片料备库" in row["receipt_quantity_notice"]
+        assert row["surplus_choice_required"] is True
+        assert row["finished_location_ready"] is True
+        assert row["reserve_location_ready"] is False
         frozen = _freeze_receipt_fact(
             client,
             source,
@@ -2536,17 +2555,18 @@ def test_pending_receipt_defaults_to_order_quantity_when_only_reserve_location_i
             client,
             source,
             frozen.json(),
-            quantity=600,
+            quantity=602,
             idempotency_key="p181-order-only-receive-600-602",
+            overrides={"surplus_disposition": "finished"},
         )
         _assert_allocation(
             received,
-            order_delta=600,
+            order_delta=602,
             reserve_delta=0,
-            order_cumulative=600,
+            order_cumulative=602,
             reserve_cumulative=0,
-            finished_delta=600,
-            finished_cumulative=600,
+            finished_delta=602,
+            finished_cumulative=602,
         )
         assert _active_semi_quantity(session_factory) == 0
 
@@ -2611,13 +2631,13 @@ def test_floor3_left_reserve_never_repairs_missing_published_ground_plan(
             for item in pending.json()["items"]
             if item["item_id"] == source.route_key
         )
-        assert row["incoming_quantity"] == 600
+        assert row["incoming_quantity"] == 602
         assert row["expected_order_purpose_sheet_qty"] == 600
-        assert row["expected_reserve_purpose_sheet_qty"] == 0
+        assert row["expected_reserve_purpose_sheet_qty"] == 2
         assert row["remaining_reserve_purpose_sheet_qty"] == 2
-        assert row["reserve_location_ready"] is True
-        assert row["receipt_execution_ready"] is True
-        assert "三楼左区" in row["receipt_quantity_notice"]
+        assert row["surplus_choice_required"] is True
+        assert row["reserve_location_ready"] is False
+        assert row["receipt_execution_ready"] is False
 
         frozen = _freeze_receipt_fact(
             client,
@@ -2631,6 +2651,7 @@ def test_floor3_left_reserve_never_repairs_missing_published_ground_plan(
             frozen.json(),
             quantity=602,
             idempotency_key="p181-legacy-ground-receive-600-602",
+            overrides={"surplus_disposition": "semi_finished_reserve"},
         )
         assert received.status_code == 409, received.text
         assert _error_code(received) == "RESERVE_STAGING_LOCATION_UNAVAILABLE"
@@ -2950,7 +2971,7 @@ def test_frozen_receipt_revert_replays_same_actor_payload_and_key(
         assert _business_counts(session_factory) == counts
 
 
-def test_latest_reversal_exactly_unwinds_620_600_580_450_zero(
+def test_latest_reversal_exactly_unwinds_600_580_450_zero(
     requisition_app,
 ) -> None:
     app, session_factory = requisition_app
@@ -2977,7 +2998,6 @@ def test_latest_reversal_exactly_unwinds_620_600_580_450_zero(
             (450, "450"),
             (130, "580"),
             (20, "600"),
-            (20, "620"),
         ):
             response = _receive(
                 client,
@@ -2985,12 +3005,16 @@ def test_latest_reversal_exactly_unwinds_620_600_580_450_zero(
                 fact,
                 quantity=quantity,
                 idempotency_key=f"p181-revert-source-{key}",
+                overrides=(
+                    {"surplus_disposition": "semi_finished_reserve"}
+                    if key in {"580", "600"}
+                    else None
+                ),
             )
             assert response.status_code == 200, response.text
             receipt_item_ids.append(response.json()["receipt_item_id"])
 
         expected = (
-            (600, 500, 100, 500),
             (580, 500, 80, 500),
             (450, 450, 0, 450),
             (0, 0, 0, 0),
@@ -3065,6 +3089,7 @@ def test_reversal_blocks_when_reserve_lot_is_used_by_a_later_order(
             fact,
             quantity=130,
             idempotency_key="p181-downstream-580",
+            overrides={"surplus_disposition": "semi_finished_reserve"},
         )
         assert first.status_code == second.status_code == 200
         second_receipt_item_id = second.json()["receipt_item_id"]

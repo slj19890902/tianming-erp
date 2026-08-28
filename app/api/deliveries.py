@@ -138,6 +138,7 @@ from app.services.production_workflow import (
     lock_order_rows_for_production_transition,
     normalized_completion_output,
     production_ready_quantity,
+    receipt_auto_deliverable_quantity_by_item_ids,
     remaining_finished_order_credit_by_item_ids,
     remaining_finished_order_credit_expression,
 )
@@ -540,14 +541,7 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
             0,
         )
     if has_receipt_auto_finished:
-        return min(
-            _receipt_auto_delivery_ready_quantity(db, order_item.id),
-            max(
-                int(order_item.quantity or 0)
-                - int(order_item.delivered_quantity or 0),
-                0,
-            ),
-        )
+        return _receipt_auto_delivery_ready_quantity(db, order_item.id)
     if task is not None:
         if task.status not in {"completed", "not_required"}:
             return 0
@@ -597,13 +591,9 @@ def _receipt_auto_ready_quantity_from_facts(
 
 
 def _receipt_auto_delivery_ready_quantity(db: Session, order_item_id: int) -> int:
-    remaining_reserved = remaining_finished_order_credit_by_item_ids(
-        db,
-        [int(order_item_id)],
+    return receipt_auto_deliverable_quantity_by_item_ids(
+        db, [int(order_item_id)]
     ).get(int(order_item_id), 0)
-    return _receipt_auto_ready_quantity_from_facts(
-        remaining_finished_reserved=remaining_reserved,
-    )
 
 
 def _delivery_quantity_facts(db: Session, order_item: OrderItem) -> dict[str, int]:
@@ -1174,6 +1164,10 @@ def _pick_source_location(
         if read_context is not None and lot_id is not None
         else (db.get(InventoryLot, lot_id) if lot_id is not None else None)
     )
+    if lot is None and lot_id is not None:
+        lot = db.get(InventoryLot, lot_id)
+        if lot is not None and read_context is not None:
+            read_context.setdefault("lots", {})[lot_id] = lot
     location_id = (
         int(lot.warehouse_location_id)
         if lot is not None and lot.warehouse_location_id is not None
@@ -1188,6 +1182,10 @@ def _pick_source_location(
             else None
         )
     )
+    if location is None and location_id is not None:
+        location = db.get(WarehouseLocation, location_id)
+        if location is not None and read_context is not None:
+            read_context.setdefault("locations", {})[location_id] = location
     projection_context = (
         (read_context.get("location_projection_contexts") or {}).get(
             int(location.id)
@@ -2800,7 +2798,9 @@ def _inventory_sources_for_order_item(
         .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
         .where(
             InventoryReservation.order_item_id == order_item.id,
-            InventoryReservation.reservation_type.in_(("finished_order", "semi_order")),
+            InventoryReservation.reservation_type.in_(
+                ("finished_order", "finished_surplus_delivery", "semi_order")
+            ),
             InventoryReservation.status != "cancelled",
             func.coalesce(InventoryReservation.credited_requirement_quantity, 0)
             > InventoryReservation.released_requirement_quantity,
@@ -2847,14 +2847,17 @@ def _inventory_sources_for_order_item(
             )
 
     planned_stock: dict[int, tuple[int, int]] = {}
+    remaining_unreserved_surplus = 0
     if not dispatched:
-        target_delivered = min(
+        target_delivered = (
             int(order_item.delivered_quantity or 0)
-            + max(int(planned_delivery_quantity), 0),
-            int(order_item.quantity or 0),
+            + max(int(planned_delivery_quantity), 0)
+        )
+        target_order_delivered = min(
+            target_delivered, int(order_item.quantity or 0)
         )
         finished_coverage = active_finished_reserved_qty(db, order_item.id)
-        finished_target = min(target_delivered, finished_coverage)
+        finished_target = min(target_order_delivered, finished_coverage)
         finished_current = sum(
             int(row.consumed_stock_quantity or 0)
             for row in reservations
@@ -2872,7 +2875,32 @@ def _inventory_sources_for_order_item(
                 planned_stock[reservation.id] = (stock, stock)
                 finished_need -= stock
 
-        semi_boxes = max(target_delivered - finished_coverage, 0)
+        target_surplus = max(
+            target_delivered - int(order_item.quantity or 0), 0
+        )
+        consumed_surplus = sum(
+            int(row.consumed_stock_quantity or 0)
+            for row in reservations
+            if row.reservation_type == "finished_surplus_delivery"
+        )
+        remaining_unreserved_surplus = max(
+            target_surplus - consumed_surplus, 0
+        )
+        for reservation in reservations:
+            if reservation.reservation_type != "finished_surplus_delivery":
+                continue
+            available_stock = (
+                int(reservation.reserved_stock_quantity)
+                - int(reservation.consumed_stock_quantity or 0)
+                - int(reservation.released_stock_quantity or 0)
+            )
+            stock = min(available_stock, remaining_unreserved_surplus)
+            if stock <= 0:
+                continue
+            planned_stock[reservation.id] = (stock, stock)
+            remaining_unreserved_surplus -= stock
+
+        semi_boxes = max(target_order_delivered - finished_coverage, 0)
         for requirement in requirements.values():
             coverage = active_semi_requirement_credited_quantity(db, requirement.id)
             target_pieces = min(
@@ -2951,7 +2979,8 @@ def _inventory_sources_for_order_item(
             {
                 "source_type": (
                     "finished"
-                    if reservation.reservation_type == "finished_order"
+                    if reservation.reservation_type
+                    in {"finished_order", "finished_surplus_delivery"}
                     else "semi_finished"
                 ),
                 "reservation_id": reservation.id,
@@ -2971,7 +3000,8 @@ def _inventory_sources_for_order_item(
                 **_delivery_location_metadata(
                     db,
                     location,
-                    finished=reservation.reservation_type == "finished_order",
+                    finished=reservation.reservation_type
+                    in {"finished_order", "finished_surplus_delivery"},
                     projection_context=projection_context,
                     space_ledger_enabled=(
                         bool(read_context.get("space_ledger_enabled"))
@@ -3001,6 +3031,85 @@ def _inventory_sources_for_order_item(
                 "quantity_to_pick_requirement": pick_credit,
             }
         )
+    if not dispatched and remaining_unreserved_surplus > 0:
+        order = db.get(Order, order_item.order_id)
+        if order is not None:
+            surplus_lots = list(
+                db.scalars(
+                    select(InventoryLot)
+                    .join(
+                        FinishedGoodsInventoryDetail,
+                        FinishedGoodsInventoryDetail.inventory_lot_id
+                        == InventoryLot.id,
+                    )
+                    .where(
+                        InventoryLot.inventory_type == "finished",
+                        InventoryLot.status == "active",
+                        InventoryLot.quantity_available > 0,
+                        InventoryLot.source_type.in_(
+                            (
+                                "production_surplus",
+                                "production_completion",
+                                "transfer",
+                            )
+                        ),
+                        FinishedGoodsInventoryDetail.product_id
+                        == order_item.product_id,
+                        FinishedGoodsInventoryDetail.is_general.is_(False),
+                        FinishedGoodsInventoryDetail.owner_customer_id
+                        == order.customer_id,
+                    )
+                    .order_by(
+                        case(
+                            (
+                                (InventoryLot.source_ref_type == "production_completion")
+                                & (
+                                    InventoryLot.source_ref_id.in_(
+                                        select(ProductionCompletion.id).where(
+                                            ProductionCompletion.order_item_id
+                                            == order_item.id,
+                                            ProductionCompletion.status == "posted",
+                                        )
+                                    )
+                                ),
+                                0,
+                            ),
+                            else_=1,
+                        ),
+                        *inventory_fifo_order_columns(),
+                    )
+                ).all()
+            )
+            for lot in surplus_lots:
+                if remaining_unreserved_surplus <= 0:
+                    break
+                take = min(
+                    int(lot.quantity_available or 0),
+                    remaining_unreserved_surplus,
+                )
+                if take <= 0:
+                    continue
+                if read_context is not None:
+                    read_context.setdefault("lots", {})[int(lot.id)] = lot
+                items.append(
+                    {
+                        "source_type": "finished",
+                        "reservation_id": None,
+                        "lot_id": int(lot.id),
+                        "lot_number": lot.lot_number,
+                        "location_id": lot.warehouse_location_id,
+                        "location_code": None,
+                        "location_name": None,
+                        "component_type": "whole",
+                        "yield_factor": 1,
+                        "reserved_stock_quantity": 0,
+                        "remaining_reserved_stock_quantity": 0,
+                        "covered_requirement_quantity": take,
+                        "quantity_to_pick_stock": take,
+                        "quantity_to_pick_requirement": take,
+                    }
+                )
+                remaining_unreserved_surplus -= take
     return items
 
 
@@ -6348,6 +6457,24 @@ def _collect_delivery_lines(
                     status_code=403,
                     detail=f"第{index}条超订单送货需要超量送货权限",
                 )
+            if not line.over_delivery_confirmed:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"第{index}条本次送货超过订单剩余数量 {over_delivery}，"
+                        "请确认使用真实可用成品余货后再保存。"
+                    ),
+                )
+            confirmed_reason = (line.over_delivery_reason or "").strip()
+            if not confirmed_reason:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"第{index}条超订单送货必须填写确认原因，"
+                        "说明为什么要把实际余货一并送出。"
+                    ),
+                )
+            line.over_delivery_reason = confirmed_reason
             warnings.append(
                 {
                     "code": "OVER_DELIVERY",
@@ -7258,6 +7385,45 @@ class _PendingDeliveryReadContext:
         remaining_finished_reserved_by_item = (
             remaining_finished_order_credit_by_item_ids(db, sorted(item_ids))
         )
+        customer_product_pairs = {
+            (int(self.orders[item.order_id].customer_id), int(item.product_id))
+            for item in self.order_items.values()
+            if item.order_id in self.orders
+        }
+        available_surplus_by_customer_product: dict[tuple[int, int], int] = {}
+        if customer_product_pairs:
+            customer_ids = {pair[0] for pair in customer_product_pairs}
+            product_ids = {pair[1] for pair in customer_product_pairs}
+            for owner_customer_id, product_id, quantity in db.execute(
+                select(
+                    FinishedGoodsInventoryDetail.owner_customer_id,
+                    FinishedGoodsInventoryDetail.product_id,
+                    func.coalesce(func.sum(InventoryLot.quantity_available), 0),
+                )
+                .join(
+                    FinishedGoodsInventoryDetail,
+                    FinishedGoodsInventoryDetail.inventory_lot_id
+                    == InventoryLot.id,
+                )
+                .where(
+                    InventoryLot.inventory_type == "finished",
+                    InventoryLot.status == "active",
+                    InventoryLot.quantity_available > 0,
+                    InventoryLot.source_type.in_(
+                        ("production_surplus", "production_completion", "transfer")
+                    ),
+                    FinishedGoodsInventoryDetail.is_general.is_(False),
+                    FinishedGoodsInventoryDetail.owner_customer_id.in_(customer_ids),
+                    FinishedGoodsInventoryDetail.product_id.in_(product_ids),
+                )
+                .group_by(
+                    FinishedGoodsInventoryDetail.owner_customer_id,
+                    FinishedGoodsInventoryDetail.product_id,
+                )
+            ).all():
+                pair = (int(owner_customer_id), int(product_id))
+                if pair in customer_product_pairs:
+                    available_surplus_by_customer_product[pair] = int(quantity or 0)
         semi_credited_by_requirement: dict[int, int] = {}
         semi_requirement_ids = [requirement.id for requirement in semi_requirements]
         if semi_requirement_ids:
@@ -7327,14 +7493,20 @@ class _PendingDeliveryReadContext:
         for item_id, item in self.order_items.items():
             delivered = max(int(item.delivered_quantity or 0), 0)
             if item_id in self.receipt_auto_item_ids:
-                ready_quantity = min(
-                    _receipt_auto_ready_quantity_from_facts(
-                        remaining_finished_reserved=int(
-                            remaining_finished_reserved_by_item.get(item_id, 0)
-                        ),
-                    ),
-                    max(int(item.quantity or 0) - delivered, 0),
+                order = self.orders.get(int(item.order_id))
+                available_surplus = (
+                    available_surplus_by_customer_product.get(
+                        (int(order.customer_id), int(item.product_id)),
+                        0,
+                    )
+                    if order is not None
+                    else 0
                 )
+                ready_quantity = _receipt_auto_ready_quantity_from_facts(
+                    remaining_finished_reserved=int(
+                        remaining_finished_reserved_by_item.get(item_id, 0)
+                    ),
+                ) + max(int(available_surplus), 0)
                 self.remaining_by_item[item_id] = max(ready_quantity, 0)
                 continue
             if item_id in self.composite_ids:
@@ -8404,8 +8576,22 @@ def dispatch_delivery(
                         status_code=403,
                         detail="当前账号没有超量送货权限",
                     )
-                if line.over_delivery_confirmed_by is None:
-                    line.over_delivery_confirmed_by = user.id
+                confirmed_over_delivery = max(
+                    int(line.over_delivery_quantity or 0), 0
+                )
+                confirmed_reason = str(line.over_delivery_reason or "").strip()
+                if (
+                    line.over_delivery_confirmed_by is None
+                    or not confirmed_reason
+                    or over_delivery > confirmed_over_delivery
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "订单剩余数量在送货单创建后发生变化，本单现在形成了"
+                            f" {over_delivery} 个超量；请刷新送货单并重新确认原因。"
+                        ),
+                    )
             line.ordered_quantity_snapshot = int(order_item.quantity or 0)
             line.order_remaining_snapshot = order_remaining_before
             line.over_delivery_quantity = over_delivery

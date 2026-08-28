@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.214"
-    assert APP_VERSION_NAME == "客户附加收费对账与开票闭环"
+    assert APP_VERSION == "v0.22.215"
+    assert APP_VERSION_NAME == "超订单来料成品与送货数量守恒"
     assert APP_BUILD_DATE == "2026-08-28"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,10 +49,13 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "客户附加收费" in item and "独立客户应收" in item for item in current_release)
-    assert any("本次更新｜" in item and "FIN-001" in item and "税务资料缺失" in item for item in current_release)
-    assert any("本次更新｜" in item and "gq52v8x9z41" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.214" in item and "gq52v8x9z41" in item for item in current_release)
+    assert any("本次更新｜" in item and "实收超过订单数量" in item and "做成品" in item for item in current_release)
+    assert any("本次更新｜" in item and "同一批来料" in item and "恢复" in item for item in current_release)
+    assert any("本次更新｜" in item and "多送" in item and "填写原因" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.215" in item and "gr53v8x9z42" in item for item in current_release)
+    previous_release_214 = [item for item in APP_CHANGELOG if item.startswith("v0.22.214：")]
+    assert any("本次更新｜" in item and "客户附加收费" in item and "独立客户应收" in item for item in previous_release_214)
+    assert any("本次更新｜" in item and "gq52v8x9z41" in item for item in previous_release_214)
     prior_release = [item for item in APP_CHANGELOG if item.startswith("v0.22.213：")]
     assert any("本次更新｜" in item and "历史送货补录" in item and "双权限" in item for item in prior_release)
     assert any("如何验证｜" in item and "v0.22.213" in item and "gp51v8x9z40" in item for item in prior_release)

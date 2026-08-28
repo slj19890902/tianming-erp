@@ -3002,6 +3002,200 @@ def _finished_idempotent_mutation(
     return FinishedReservationMutation(reservation, movement, allocation)
 
 
+def consume_available_semi_finished_lot(
+    db: Session,
+    *,
+    lot_id: int,
+    quantity: int,
+    expected_version: int,
+    operator_id: int | None,
+    idempotency_key: str,
+    related_order_id: int,
+    related_order_item_id: int,
+    reason: str,
+) -> InventoryMovement:
+    """Consume unreserved semi-finished sheets with one auditable CAS update."""
+
+    repeated = db.scalar(
+        select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == idempotency_key
+        )
+    )
+    if repeated is not None:
+        if (
+            repeated.inventory_lot_id != int(lot_id)
+            or repeated.movement_type != "consume"
+            or repeated.reservation_id is not None
+            or int(repeated.quantity or 0) != int(quantity)
+            or repeated.related_order_item_id != int(related_order_item_id)
+        ):
+            raise WarehouseInventoryError(
+                "该操作标识已用于其它库存扣减，请刷新后重试。", 409
+            )
+        return repeated
+    if int(quantity) <= 0:
+        raise WarehouseInventoryError("备库片料扣减数量必须大于0。", 400)
+    lot = db.get(InventoryLot, int(lot_id))
+    if lot is None:
+        raise WarehouseInventoryError("备库片料批次不存在，不能转为成品。", 409)
+    if lot.inventory_type != "semi_finished" or lot.status != "active":
+        raise WarehouseInventoryError("备库片料已停用或类型不正确，不能转为成品。", 409)
+    if int(lot.version) != int(expected_version):
+        raise WarehouseInventoryError("备库片料数量已变化，请刷新后重试。", 409)
+    if int(lot.quantity_available or 0) < int(quantity):
+        raise WarehouseInventoryError(
+            f"备库片料不足，本次需要 {int(quantity)} 片，当前可用 {int(lot.quantity_available or 0)} 片。",
+            409,
+        )
+    before = _balances(lot)
+    now = utc_now_naive()
+    changed = db.execute(
+        update(InventoryLot)
+        .where(
+            InventoryLot.id == int(lot_id),
+            InventoryLot.version == int(expected_version),
+            InventoryLot.status == "active",
+            InventoryLot.inventory_type == "semi_finished",
+            InventoryLot.quantity_available >= int(quantity),
+        )
+        .values(
+            quantity_available=InventoryLot.quantity_available - int(quantity),
+            quantity_consumed=InventoryLot.quantity_consumed + int(quantity),
+            version=InventoryLot.version + 1,
+            last_movement_at=now,
+        )
+    )
+    if changed.rowcount != 1:
+        raise WarehouseInventoryError("备库片料数量已变化，请刷新后重试。", 409)
+    db.flush()
+    db.expire(lot)
+    refreshed = db.get(InventoryLot, int(lot_id))
+    if refreshed is None:
+        raise WarehouseInventoryError("备库片料扣减后批次引用丢失，操作已停止。", 409)
+    movement = _movement(
+        db,
+        lot=refreshed,
+        movement_type="consume",
+        quantity=int(quantity),
+        before=before,
+        operator_id=operator_id,
+        reason=reason,
+        idempotency_key=idempotency_key,
+        related_order_id=int(related_order_id),
+        related_order_item_id=int(related_order_item_id),
+    )
+    db.flush()
+    return movement
+
+
+def restore_consumed_semi_finished_lot(
+    db: Session,
+    *,
+    lot_id: int,
+    quantity: int,
+    expected_version: int,
+    original_consume_movement_id: int,
+    operator_id: int | None,
+    idempotency_key: str,
+    related_order_id: int,
+    related_order_item_id: int,
+    reason: str,
+) -> InventoryMovement:
+    """Restore a traced reserve conversion without inventing new material."""
+
+    repeated = db.scalar(
+        select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == idempotency_key
+        )
+    )
+    if repeated is not None:
+        if (
+            repeated.inventory_lot_id != int(lot_id)
+            or repeated.movement_type != "reverse_consume"
+            or repeated.reversal_of_movement_id != int(original_consume_movement_id)
+            or int(repeated.quantity or 0) != int(quantity)
+            or repeated.related_order_item_id != int(related_order_item_id)
+        ):
+            raise WarehouseInventoryError(
+                "该操作标识已用于其它备库恢复，请刷新后重试。", 409
+            )
+        return repeated
+    if int(quantity) <= 0:
+        raise WarehouseInventoryError("备库恢复数量必须大于0。", 400)
+    original = db.get(InventoryMovement, int(original_consume_movement_id))
+    if (
+        original is None
+        or original.inventory_lot_id != int(lot_id)
+        or original.movement_type != "consume"
+        or original.related_order_item_id != int(related_order_item_id)
+    ):
+        raise WarehouseInventoryError(
+            "备库转换的原扣减流水不完整，不能自动恢复。", 409
+        )
+    already_reversed = int(
+        db.scalar(
+            select(func.coalesce(func.sum(InventoryMovement.quantity), 0)).where(
+                InventoryMovement.movement_type == "reverse_consume",
+                InventoryMovement.reversal_of_movement_id == original.id,
+            )
+        )
+        or 0
+    )
+    if already_reversed + int(quantity) > int(original.quantity or 0):
+        raise WarehouseInventoryError(
+            "备库转换恢复数量超过原扣减数量，操作已停止。", 409
+        )
+    lot = db.get(InventoryLot, int(lot_id))
+    if lot is None:
+        raise WarehouseInventoryError("备库片料批次不存在，不能恢复。", 409)
+    if lot.inventory_type != "semi_finished" or lot.status != "active":
+        raise WarehouseInventoryError("备库片料已停用或类型不正确，不能恢复。", 409)
+    if int(lot.version) != int(expected_version):
+        raise WarehouseInventoryError("备库片料数量已变化，请刷新后重试。", 409)
+    if int(lot.quantity_consumed or 0) < int(quantity):
+        raise WarehouseInventoryError("备库片料已消耗数量不足，不能自动恢复。", 409)
+    before = _balances(lot)
+    now = utc_now_naive()
+    changed = db.execute(
+        update(InventoryLot)
+        .where(
+            InventoryLot.id == int(lot_id),
+            InventoryLot.version == int(expected_version),
+            InventoryLot.status == "active",
+            InventoryLot.inventory_type == "semi_finished",
+            InventoryLot.quantity_consumed >= int(quantity),
+        )
+        .values(
+            quantity_available=InventoryLot.quantity_available + int(quantity),
+            quantity_consumed=InventoryLot.quantity_consumed - int(quantity),
+            version=InventoryLot.version + 1,
+            last_movement_at=now,
+        )
+    )
+    if changed.rowcount != 1:
+        raise WarehouseInventoryError("备库片料数量已变化，请刷新后重试。", 409)
+    db.flush()
+    db.expire(lot)
+    refreshed = db.get(InventoryLot, int(lot_id))
+    if refreshed is None:
+        raise WarehouseInventoryError("备库片料恢复后批次引用丢失，操作已停止。", 409)
+    movement = _movement(
+        db,
+        lot=refreshed,
+        movement_type="reverse_consume",
+        quantity=int(quantity),
+        before=before,
+        operator_id=operator_id,
+        reason=reason,
+        idempotency_key=idempotency_key,
+        related_order_id=int(related_order_id),
+        related_order_item_id=int(related_order_item_id),
+        reversal_of_movement_id=int(original.id),
+    )
+    db.flush()
+    return movement
+
+
 def consume_finished_reservation(
     db: Session,
     *,
@@ -3346,6 +3540,95 @@ def release_finished_reservation(
     from app.services.production_workflow import refresh_existing_production_task
 
     refresh_existing_production_task(db, reservation.order_item_id)
+    return reservation
+
+
+def release_finished_surplus_delivery_reservation(
+    db: Session,
+    *,
+    reservation_id: int,
+    stock_quantity: int,
+    expected_version: int,
+    operator_id: int | None,
+    idempotency_key: str,
+) -> InventoryReservation:
+    """Return a cancelled delivery-only surplus reservation to availability."""
+    repeated = db.scalar(
+        select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == idempotency_key
+        )
+    )
+    if repeated is not None:
+        if repeated.movement_type != "release_reserve":
+            raise WarehouseInventoryError(
+                "该请求标识已用于其他库存操作，请重新提交", 409
+            )
+        reservation = db.get(InventoryReservation, repeated.reservation_id)
+        if reservation is None or reservation.id != reservation_id:
+            raise WarehouseInventoryError("该请求标识已用于其他释放操作", 409)
+        return reservation
+    if stock_quantity <= 0:
+        raise WarehouseInventoryError("余货预占释放数量必须大于0")
+    reservation = db.get(InventoryReservation, reservation_id)
+    if (
+        reservation is None
+        or reservation.reservation_type != "finished_surplus_delivery"
+    ):
+        raise WarehouseInventoryError("超量送货余货预占记录不存在", 404)
+    remaining = (
+        int(reservation.reserved_stock_quantity or 0)
+        - int(reservation.consumed_stock_quantity or 0)
+        - int(reservation.released_stock_quantity or 0)
+    )
+    if stock_quantity > remaining:
+        raise WarehouseInventoryError("余货预占释放数量超过未使用余额", 409)
+    lot = db.get(InventoryLot, reservation.inventory_lot_id)
+    if lot is None or int(lot.version or 0) != expected_version:
+        raise WarehouseInventoryError("余货库存版本已变化，请刷新后重试", 409)
+    if int(lot.quantity_reserved or 0) < stock_quantity:
+        raise WarehouseInventoryError("余货库存预占余额异常，请联系管理员处理", 409)
+    before = _balances(lot)
+    now = utc_now_naive()
+    updated = db.execute(
+        update(InventoryLot)
+        .where(
+            InventoryLot.id == lot.id,
+            InventoryLot.version == expected_version,
+            InventoryLot.quantity_reserved >= stock_quantity,
+        )
+        .values(
+            quantity_available=InventoryLot.quantity_available + stock_quantity,
+            quantity_reserved=InventoryLot.quantity_reserved - stock_quantity,
+            version=InventoryLot.version + 1,
+            last_movement_at=now,
+        )
+    )
+    if updated.rowcount != 1:
+        raise WarehouseInventoryError("余货库存数量已变化，请刷新后重试", 409)
+    reservation.released_stock_quantity += stock_quantity
+    reservation.released_requirement_quantity += stock_quantity
+    reservation.released_by = operator_id
+    reservation.released_at = now
+    reservation.release_reason = "撤销送货，释放本次超量送货余货"
+    reservation.status = _finished_reservation_status(reservation)
+    db.flush()
+    db.expire(lot)
+    refreshed = db.get(InventoryLot, lot.id)
+    assert refreshed is not None
+    _movement(
+        db,
+        lot=refreshed,
+        movement_type="release_reserve",
+        quantity=stock_quantity,
+        before=before,
+        operator_id=operator_id,
+        reason=reservation.release_reason,
+        idempotency_key=idempotency_key,
+        reservation_id=reservation.id,
+        related_order_id=reservation.order_id,
+        related_order_item_id=reservation.order_item_id,
+    )
+    db.flush()
     return reservation
 
 

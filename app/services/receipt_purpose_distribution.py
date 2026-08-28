@@ -6,7 +6,8 @@ All functions participate in the caller's transaction.  They never commit.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP
+from hashlib import sha256
 import json
 from typing import Any
 
@@ -22,6 +23,8 @@ from app.models.product_bom import RequisitionItemBomSource
 from app.models.purchase_receipt import (
     IncomingReceiptPurposeAllocation,
     IncomingReceiptPurposeReversal,
+    ProductionCompletionReserveConversion,
+    ProductionCompletionReserveConversionReversal,
     PurchaseReceiptFact,
 )
 from app.models.requisition import Requisition, RequisitionItem
@@ -51,8 +54,10 @@ from app.services.purchase_receipt_facts import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     automatic_raw_material_staging_location,
+    consume_available_semi_finished_lot,
     manual_semi_finished_in,
     mutate_lot,
+    restore_consumed_semi_finished_lot,
 )
 from app.services.warehouse_location_address import employee_location_name
 
@@ -72,6 +77,32 @@ class ReceiptPurposeContext:
     source: SupplierRequisitionOrderItem | RequisitionItem
     snapshot: PurchasePurposeSourceSnapshot
     receipt_fact: PurchaseReceiptFact
+
+
+@dataclass(frozen=True, slots=True)
+class ReserveConversionPosting:
+    receipt_purpose_allocation_id: int
+    semi_finished_inventory_lot_id: int
+    semi_consume_movement_id: int
+    converted_sheet_quantity: int
+    finished_quantity_delta: int
+    supported_finished_quantity_before: int
+    supported_finished_quantity_after: int
+    idempotency_key: str
+    request_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReserveConversionReversalPosting:
+    production_completion_reserve_conversion_id: int
+    semi_finished_inventory_lot_id: int
+    semi_reverse_movement_id: int
+    restored_sheet_quantity: int
+    reversed_finished_quantity_delta: int
+    supported_finished_quantity_before: int
+    supported_finished_quantity_after: int
+    idempotency_key: str
+    request_hash: str
 
 
 def _formal_source(target: Any) -> SupplierRequisitionOrderItem | RequisitionItem | None:
@@ -243,6 +274,20 @@ def _active_source_allocations(
     )
 
 
+def receipt_purpose_source_totals(
+    db: Session,
+    snapshot_id: int,
+) -> tuple[int, int, int]:
+    """Return active received, finished-purpose and reserve-purpose sheets."""
+
+    rows = _active_source_allocations(db, int(snapshot_id))
+    return (
+        sum(int(row.receipt_total_sheet_qty or 0) for row in rows),
+        sum(int(row.receipt_order_purpose_sheet_qty or 0) for row in rows),
+        sum(int(row.receipt_reserve_purpose_sheet_qty or 0) for row in rows),
+    )
+
+
 def _order_item_snapshots(
     db: Session,
     order_item_id: int,
@@ -359,6 +404,582 @@ def receipt_purpose_finished_capacity(
     return _finished_capacity(db, snapshots, order_sheets_by_snapshot)
 
 
+def _conversion_key(raw: str) -> str:
+    value = str(raw).strip()
+    if len(value) <= 120:
+        return value
+    digest = sha256(value.encode("utf-8")).hexdigest()[:24]
+    return f"{value[:95]}:{digest}"
+
+
+def _component_capacities(
+    db: Session,
+    snapshots: list[PurchasePurposeSourceSnapshot],
+    sheets_by_snapshot: dict[int, int],
+) -> dict[str, Decimal]:
+    capacities: dict[str, Decimal] = {}
+    for snapshot in snapshots:
+        key = _component_key(db, snapshot)
+        sheets = max(int(sheets_by_snapshot.get(int(snapshot.id), 0)), 0)
+        per_sheet = Decimal(max(int(snapshot.yield_per_sheet_snapshot or 1), 1)) / Decimal(
+            max(int(snapshot.pieces_per_finished_snapshot or 1), 1)
+        )
+        capacities[key] = capacities.get(key, Decimal("0")) + Decimal(sheets) * per_sheet
+    return capacities
+
+
+def consume_receipt_reserve_for_completion_adjustment(
+    db: Session,
+    *,
+    production_completion_id: int,
+    desired_completion_quantity: int,
+    operator_id: int | None,
+    idempotency_key: str,
+) -> list[ReserveConversionPosting]:
+    """Convert receipt reserve sheets only when receipt-auto output needs them.
+
+    Planning is completed before the first write.  Every physical sheet
+    consumption then uses a versioned inventory update and an immutable
+    conversion fact created by the production caller in the same transaction.
+    """
+
+    from app.models.production import ProductionCompletion
+
+    completion = db.get(ProductionCompletion, int(production_completion_id))
+    if completion is None or completion.status != "posted":
+        raise ReceiptPurposeFlowError(
+            "PRODUCTION_COMPLETION_INVALID",
+            "生产完工记录不存在或已撤销，不能把备库片料转为成品。",
+        )
+    if completion.origin != "receipt_auto":
+        return []
+    order_item_id = int(completion.order_item_id)
+    snapshots = _order_item_snapshots(db, order_item_id)
+    allocations = _active_order_item_allocations(db, order_item_id)
+    allocation_ids = [int(row.id) for row in allocations]
+    if not snapshots or not allocations:
+        raise ReceiptPurposeFlowError(
+            "RECEIPT_PURPOSE_SUPPORT_MISSING",
+            "该完工记录缺少可核对的来料用途事实，已停止修改成品数量。",
+        )
+    sheets_by_snapshot: dict[int, int] = {}
+    for allocation in allocations:
+        snapshot_id = int(allocation.purchase_purpose_source_snapshot_id or 0)
+        sheets_by_snapshot[snapshot_id] = sheets_by_snapshot.get(snapshot_id, 0) + int(
+            allocation.receipt_order_purpose_sheet_qty or 0
+        )
+    owner_allocation = next(
+        (
+            row
+            for row in allocations
+            if int(row.production_completion_id or 0) == int(completion.id)
+        ),
+        None,
+    )
+    if owner_allocation is None:
+        raise ReceiptPurposeFlowError(
+            "RECEIPT_PURPOSE_SUPPORT_MISSING",
+            "该完工记录缺少对应的本次来料用途事实，不能自动使用其它批次备库。",
+        )
+    receipt_item_ids = [int(row.incoming_receipt_item_id) for row in allocations]
+    receipt_batch_by_item_id = {
+        int(row.id): int(row.receipt_id)
+        for row in db.scalars(
+            select(IncomingReceiptItem).where(
+                IncomingReceiptItem.id.in_(receipt_item_ids)
+            )
+        ).all()
+    }
+    owner_receipt_batch_id = receipt_batch_by_item_id.get(
+        int(owner_allocation.incoming_receipt_item_id)
+    )
+    if owner_receipt_batch_id is None:
+        raise ReceiptPurposeFlowError(
+            "RECEIPT_PURPOSE_SUPPORT_MISSING",
+            "该完工记录缺少稳定的来料批次关联，不能自动使用备库片料。",
+        )
+    prior_conversions = list(
+        db.scalars(
+            select(ProductionCompletionReserveConversion).where(
+                ProductionCompletionReserveConversion.receipt_purpose_allocation_id.in_(
+                    allocation_ids
+                )
+            )
+        ).all()
+    )
+    conversion_ids = [int(row.id) for row in prior_conversions]
+    reversed_by_conversion: dict[int, int] = {}
+    if conversion_ids:
+        for conversion_id, restored in db.execute(
+            select(
+                ProductionCompletionReserveConversionReversal.production_completion_reserve_conversion_id,
+                func.coalesce(
+                    func.sum(
+                        ProductionCompletionReserveConversionReversal.restored_sheet_quantity
+                    ),
+                    0,
+                ),
+            )
+            .where(
+                ProductionCompletionReserveConversionReversal.production_completion_reserve_conversion_id.in_(
+                    conversion_ids
+                )
+            )
+            .group_by(
+                ProductionCompletionReserveConversionReversal.production_completion_reserve_conversion_id
+            )
+        ).all():
+            reversed_by_conversion[int(conversion_id)] = int(restored or 0)
+    allocation_by_id = {int(row.id): row for row in allocations}
+    for conversion in prior_conversions:
+        allocation = allocation_by_id.get(int(conversion.receipt_purpose_allocation_id))
+        if allocation is None:
+            continue
+        snapshot_id = int(allocation.purchase_purpose_source_snapshot_id or 0)
+        active_converted = max(
+            int(conversion.converted_sheet_quantity or 0)
+            - reversed_by_conversion.get(int(conversion.id), 0),
+            0,
+        )
+        sheets_by_snapshot[snapshot_id] = (
+            sheets_by_snapshot.get(snapshot_id, 0) + active_converted
+        )
+    supported_before = _finished_capacity(db, snapshots, sheets_by_snapshot)
+    other_actual = int(
+        db.scalar(
+            select(
+                func.coalesce(func.sum(ProductionCompletion.actual_output_quantity), 0)
+            ).where(
+                ProductionCompletion.order_item_id == order_item_id,
+                ProductionCompletion.status == "posted",
+                ProductionCompletion.origin == "receipt_auto",
+                ProductionCompletion.id != completion.id,
+            )
+        )
+        or 0
+    )
+    desired_total = other_actual + int(desired_completion_quantity)
+    if desired_total <= supported_before:
+        return []
+
+    snapshots_by_id = {int(row.id): row for row in snapshots}
+    candidates: list[
+        tuple[
+            IncomingReceiptPurposeAllocation,
+            PurchasePurposeSourceSnapshot,
+            InventoryLot,
+            str,
+            Decimal,
+        ]
+    ] = []
+    for allocation in allocations:
+        if (
+            allocation.surplus_disposition != "semi_finished_reserve"
+            or allocation.semi_finished_inventory_lot_id is None
+            or receipt_batch_by_item_id.get(int(allocation.incoming_receipt_item_id))
+            != owner_receipt_batch_id
+        ):
+            continue
+        snapshot = snapshots_by_id.get(
+            int(allocation.purchase_purpose_source_snapshot_id or 0)
+        )
+        lot = db.get(InventoryLot, int(allocation.semi_finished_inventory_lot_id))
+        if snapshot is None or lot is None or int(lot.quantity_available or 0) <= 0:
+            continue
+        per_sheet = Decimal(max(int(snapshot.yield_per_sheet_snapshot or 1), 1)) / Decimal(
+            max(int(snapshot.pieces_per_finished_snapshot or 1), 1)
+        )
+        candidates.append(
+            (allocation, snapshot, lot, _component_key(db, snapshot), per_sheet)
+        )
+    candidates.sort(key=lambda row: int(row[0].id))
+
+    planned: list[
+        tuple[
+            IncomingReceiptPurposeAllocation,
+            PurchasePurposeSourceSnapshot,
+            InventoryLot,
+            int,
+        ]
+    ] = []
+    projected_sheets = dict(sheets_by_snapshot)
+    component_capacities = _component_capacities(db, snapshots, projected_sheets)
+    required_components = bool(
+        any(key.startswith("bom:") for key in component_capacities)
+        or {"cover", "base"}.intersection(component_capacities)
+    )
+
+    def plan_from_candidates(
+        rows: list[
+            tuple[
+                IncomingReceiptPurposeAllocation,
+                PurchasePurposeSourceSnapshot,
+                InventoryLot,
+                str,
+                Decimal,
+            ]
+        ],
+        missing_capacity: Decimal,
+    ) -> Decimal:
+        missing = max(missing_capacity, Decimal("0"))
+        for allocation, snapshot, lot, _key, per_sheet in rows:
+            if missing <= 0:
+                break
+            available = max(int(lot.quantity_available or 0), 0)
+            needed = int((missing / per_sheet).to_integral_value(rounding=ROUND_CEILING))
+            take = min(available, needed)
+            if take <= 0:
+                continue
+            planned.append((allocation, snapshot, lot, take))
+            projected_sheets[int(snapshot.id)] = projected_sheets.get(int(snapshot.id), 0) + take
+            missing -= Decimal(take) * per_sheet
+        return max(missing, Decimal("0"))
+
+    target_capacity = Decimal(desired_total)
+    if required_components:
+        for component_key in sorted(component_capacities):
+            missing = target_capacity - component_capacities.get(
+                component_key, Decimal("0")
+            )
+            if missing <= 0:
+                continue
+            remaining = plan_from_candidates(
+                [row for row in candidates if row[3] == component_key], missing
+            )
+            if remaining > 0:
+                raise ReceiptPurposeFlowError(
+                    "RECEIPT_RESERVE_INSUFFICIENT_FOR_FINISHED_ADJUSTMENT",
+                    "同一来料批次的备库片料不足，不能把成品实收修改到该数量。",
+                )
+    else:
+        current_capacity = sum(component_capacities.values(), Decimal("0"))
+        remaining = plan_from_candidates(candidates, target_capacity - current_capacity)
+        if remaining > 0:
+            raise ReceiptPurposeFlowError(
+                "RECEIPT_RESERVE_INSUFFICIENT_FOR_FINISHED_ADJUSTMENT",
+                "同一来料批次的备库片料不足，不能把成品实收修改到该数量。",
+            )
+
+    supported_after_plan = _finished_capacity(db, snapshots, projected_sheets)
+    if supported_after_plan < desired_total:
+        raise ReceiptPurposeFlowError(
+            "RECEIPT_RESERVE_INSUFFICIENT_FOR_FINISHED_ADJUSTMENT",
+            f"备库片料换算后最多支持 {supported_after_plan} 个成品，不能修改为 {desired_total}。",
+        )
+    order_item = db.get(OrderItem, order_item_id)
+    if order_item is None:
+        raise ReceiptPurposeFlowError(
+            "ORDER_ITEM_MISSING", "生产完工关联的订单明细不存在，已停止修改。"
+        )
+
+    postings: list[ReserveConversionPosting] = []
+    running_sheets = dict(sheets_by_snapshot)
+    for allocation, snapshot, lot, take in planned:
+        step_before = _finished_capacity(db, snapshots, running_sheets)
+        running_sheets[int(snapshot.id)] = running_sheets.get(int(snapshot.id), 0) + take
+        step_after = _finished_capacity(db, snapshots, running_sheets)
+        movement_key = _conversion_key(
+            f"{idempotency_key}:receipt-reserve:{int(allocation.id)}"
+        )
+        try:
+            movement = consume_available_semi_finished_lot(
+                db,
+                lot_id=int(lot.id),
+                quantity=int(take),
+                expected_version=int(lot.version),
+                operator_id=operator_id,
+                idempotency_key=movement_key,
+                related_order_id=int(order_item.order_id),
+                related_order_item_id=order_item_id,
+                reason="生产实收增加，自动扣减同批次片料备库转作成品原料",
+            )
+        except WarehouseInventoryError as error:
+            raise ReceiptPurposeFlowError(
+                "RECEIPT_RESERVE_CONSUME_FAILED", str(error), error.status_code
+            ) from error
+        request_hash = canonical_purchase_receipt_hash(
+            {
+                "production_completion_id": int(completion.id),
+                "receipt_purpose_allocation_id": int(allocation.id),
+                "semi_finished_inventory_lot_id": int(lot.id),
+                "converted_sheet_quantity": int(take),
+                "desired_completion_quantity": int(desired_completion_quantity),
+                "supported_finished_quantity_before": int(step_before),
+                "supported_finished_quantity_after": int(step_after),
+                "idempotency_key": movement_key,
+            }
+        )
+        postings.append(
+            ReserveConversionPosting(
+                receipt_purpose_allocation_id=int(allocation.id),
+                semi_finished_inventory_lot_id=int(lot.id),
+                semi_consume_movement_id=int(movement.id),
+                converted_sheet_quantity=int(take),
+                finished_quantity_delta=int(step_after - step_before),
+                supported_finished_quantity_before=int(step_before),
+                supported_finished_quantity_after=int(step_after),
+                idempotency_key=movement_key,
+                request_hash=request_hash,
+            )
+        )
+    return postings
+
+
+def restore_receipt_reserve_after_completion_reduction(
+    db: Session,
+    *,
+    production_completion_id: int,
+    desired_completion_quantity: int,
+    operator_id: int | None,
+    idempotency_key: str,
+    reason_type: str,
+) -> list[ReserveConversionReversalPosting]:
+    """Restore only the converted sheets no longer needed by finished output."""
+
+    from app.models.production import ProductionCompletion
+
+    if reason_type not in {"actual_adjustment", "completion_reversal"}:
+        raise ReceiptPurposeFlowError(
+            "RECEIPT_RESERVE_RESTORE_REASON_INVALID",
+            "备库恢复原因无效，操作已停止。",
+            400,
+        )
+    completion = db.get(ProductionCompletion, int(production_completion_id))
+    if completion is None or completion.status != "posted":
+        raise ReceiptPurposeFlowError(
+            "PRODUCTION_COMPLETION_INVALID",
+            "生产完工记录不存在或已撤销，不能恢复备库片料。",
+        )
+    if completion.origin != "receipt_auto":
+        return []
+    order_item_id = int(completion.order_item_id)
+    desired = max(int(desired_completion_quantity), 0)
+    snapshots = _order_item_snapshots(db, order_item_id)
+    allocations = _active_order_item_allocations(db, order_item_id)
+    allocation_by_id = {int(row.id): row for row in allocations}
+    if not snapshots or not allocation_by_id:
+        raise ReceiptPurposeFlowError(
+            "RECEIPT_PURPOSE_SUPPORT_MISSING",
+            "该完工记录缺少可核对的来料用途事实，不能自动恢复备库。",
+        )
+    conversions = list(
+        db.scalars(
+            select(ProductionCompletionReserveConversion)
+            .where(
+                ProductionCompletionReserveConversion.receipt_purpose_allocation_id.in_(
+                    list(allocation_by_id)
+                )
+            )
+            .order_by(ProductionCompletionReserveConversion.id)
+        ).all()
+    )
+    if not conversions:
+        return []
+    conversion_ids = [int(row.id) for row in conversions]
+    restored_by_conversion: dict[int, int] = {}
+    for conversion_id, restored in db.execute(
+        select(
+            ProductionCompletionReserveConversionReversal.production_completion_reserve_conversion_id,
+            func.coalesce(
+                func.sum(
+                    ProductionCompletionReserveConversionReversal.restored_sheet_quantity
+                ),
+                0,
+            ),
+        )
+        .where(
+            ProductionCompletionReserveConversionReversal.production_completion_reserve_conversion_id.in_(
+                conversion_ids
+            )
+        )
+        .group_by(
+            ProductionCompletionReserveConversionReversal.production_completion_reserve_conversion_id
+        )
+    ).all():
+        restored_by_conversion[int(conversion_id)] = int(restored or 0)
+
+    sheets_by_snapshot: dict[int, int] = {}
+    for allocation in allocations:
+        snapshot_id = int(allocation.purchase_purpose_source_snapshot_id or 0)
+        sheets_by_snapshot[snapshot_id] = (
+            sheets_by_snapshot.get(snapshot_id, 0)
+            + int(allocation.receipt_order_purpose_sheet_qty or 0)
+        )
+    active_by_conversion: dict[int, int] = {}
+    for conversion in conversions:
+        allocation = allocation_by_id.get(
+            int(conversion.receipt_purpose_allocation_id)
+        )
+        if allocation is None:
+            continue
+        active = max(
+            int(conversion.converted_sheet_quantity or 0)
+            - restored_by_conversion.get(int(conversion.id), 0),
+            0,
+        )
+        active_by_conversion[int(conversion.id)] = active
+        snapshot_id = int(allocation.purchase_purpose_source_snapshot_id or 0)
+        sheets_by_snapshot[snapshot_id] = sheets_by_snapshot.get(snapshot_id, 0) + active
+
+    other_actual = int(
+        db.scalar(
+            select(
+                func.coalesce(func.sum(ProductionCompletion.actual_output_quantity), 0)
+            ).where(
+                ProductionCompletion.order_item_id == order_item_id,
+                ProductionCompletion.status == "posted",
+                ProductionCompletion.origin == "receipt_auto",
+                ProductionCompletion.id != completion.id,
+            )
+        )
+        or 0
+    )
+    desired_total = other_actual + desired
+    supported_before = _finished_capacity(db, snapshots, sheets_by_snapshot)
+    if supported_before < desired_total:
+        raise ReceiptPurposeFlowError(
+            "RECEIPT_PURPOSE_SUPPORT_MISSING",
+            "当前来料用途最多支持的成品数少于拟保留成品数，不能自动恢复备库。",
+        )
+
+    planned: list[
+        tuple[
+            ProductionCompletionReserveConversion,
+            IncomingReceiptPurposeAllocation,
+            InventoryLot,
+            int,
+            int,
+            int,
+        ]
+    ] = []
+    projected_sheets = dict(sheets_by_snapshot)
+    for conversion in reversed(conversions):
+        if int(conversion.production_completion_id) != int(completion.id):
+            continue
+        active = active_by_conversion.get(int(conversion.id), 0)
+        if active <= 0:
+            continue
+        allocation = allocation_by_id.get(
+            int(conversion.receipt_purpose_allocation_id)
+        )
+        lot = db.get(InventoryLot, int(conversion.semi_finished_inventory_lot_id))
+        if allocation is None or lot is None:
+            raise ReceiptPurposeFlowError(
+                "RECEIPT_RESERVE_RESTORE_SUPPORT_MISSING",
+                "备库转换关联的用途事实或片料批次不存在，不能自动恢复。",
+            )
+        snapshot_id = int(allocation.purchase_purpose_source_snapshot_id or 0)
+        step_before = _finished_capacity(db, snapshots, projected_sheets)
+        low, high = 0, active
+        while low < high:
+            midpoint = (low + high + 1) // 2
+            candidate_sheets = dict(projected_sheets)
+            candidate_sheets[snapshot_id] = max(
+                candidate_sheets.get(snapshot_id, 0) - midpoint,
+                0,
+            )
+            if _finished_capacity(db, snapshots, candidate_sheets) >= desired_total:
+                low = midpoint
+            else:
+                high = midpoint - 1
+        take = low
+        if take <= 0:
+            continue
+        projected_sheets[snapshot_id] = max(
+            projected_sheets.get(snapshot_id, 0) - take,
+            0,
+        )
+        step_after = _finished_capacity(db, snapshots, projected_sheets)
+        planned.append(
+            (conversion, allocation, lot, take, step_before, step_after)
+        )
+
+    required_by_lot: dict[int, int] = {}
+    for _conversion, _allocation, lot, take, _before, _after in planned:
+        required_by_lot[int(lot.id)] = required_by_lot.get(int(lot.id), 0) + take
+    for lot_id, required in required_by_lot.items():
+        lot = db.get(InventoryLot, lot_id)
+        if (
+            lot is None
+            or lot.inventory_type != "semi_finished"
+            or lot.status != "active"
+            or int(lot.quantity_consumed or 0) < required
+        ):
+            raise ReceiptPurposeFlowError(
+                "RECEIPT_RESERVE_RESTORE_FAILED",
+                "备库片料状态或已消耗数量发生变化，不能自动恢复。",
+            )
+    order_item = db.get(OrderItem, order_item_id)
+    if order_item is None:
+        raise ReceiptPurposeFlowError(
+            "ORDER_ITEM_MISSING",
+            "生产完工关联的订单明细不存在，已停止恢复。",
+        )
+
+    postings: list[ReserveConversionReversalPosting] = []
+    for conversion, allocation, lot, take, step_before, step_after in planned:
+        refreshed_lot = db.get(InventoryLot, int(lot.id))
+        if refreshed_lot is None:
+            raise ReceiptPurposeFlowError(
+                "RECEIPT_RESERVE_RESTORE_FAILED",
+                "备库片料批次在恢复前消失，操作已停止。",
+            )
+        movement_key = _conversion_key(
+            f"{idempotency_key}:receipt-reserve-restore:{int(conversion.id)}"
+        )
+        try:
+            movement = restore_consumed_semi_finished_lot(
+                db,
+                lot_id=int(refreshed_lot.id),
+                quantity=int(take),
+                expected_version=int(refreshed_lot.version),
+                original_consume_movement_id=int(conversion.semi_consume_movement_id),
+                operator_id=operator_id,
+                idempotency_key=movement_key,
+                related_order_id=int(order_item.order_id),
+                related_order_item_id=order_item_id,
+                reason=(
+                    "成品实收减少，自动恢复此前转作成品原料的备库片料"
+                    if reason_type == "actual_adjustment"
+                    else "撤销收料自动完工，恢复此前转作成品原料的备库片料"
+                ),
+            )
+        except WarehouseInventoryError as error:
+            raise ReceiptPurposeFlowError(
+                "RECEIPT_RESERVE_RESTORE_FAILED",
+                str(error),
+                error.status_code,
+            ) from error
+        request_hash = canonical_purchase_receipt_hash(
+            {
+                "production_completion_id": int(completion.id),
+                "production_completion_reserve_conversion_id": int(conversion.id),
+                "receipt_purpose_allocation_id": int(allocation.id),
+                "semi_finished_inventory_lot_id": int(lot.id),
+                "restored_sheet_quantity": int(take),
+                "desired_completion_quantity": desired,
+                "supported_finished_quantity_before": int(step_before),
+                "supported_finished_quantity_after": int(step_after),
+                "reason_type": reason_type,
+                "idempotency_key": movement_key,
+            }
+        )
+        postings.append(
+            ReserveConversionReversalPosting(
+                production_completion_reserve_conversion_id=int(conversion.id),
+                semi_finished_inventory_lot_id=int(lot.id),
+                semi_reverse_movement_id=int(movement.id),
+                restored_sheet_quantity=int(take),
+                reversed_finished_quantity_delta=int(step_before - step_after),
+                supported_finished_quantity_before=int(step_before),
+                supported_finished_quantity_after=int(step_after),
+                idempotency_key=movement_key,
+                request_hash=request_hash,
+            )
+        )
+    return postings
+
+
 def _source_dimensions(
     source: SupplierRequisitionOrderItem | RequisitionItem,
 ) -> tuple[int, int]:
@@ -423,6 +1044,7 @@ def post_receipt_purpose_allocation(
     context: ReceiptPurposeContext,
     operator_id: int,
     idempotency_key: str,
+    surplus_disposition: str,
 ) -> IncomingReceiptPurposeAllocation:
     snapshot = context.snapshot
     fact = context.receipt_fact
@@ -443,10 +1065,41 @@ def post_receipt_purpose_allocation(
     after_total = before_total + quantity
     order_plan = int(snapshot.order_purpose_sheet_qty or 0)
     reserve_plan = int(snapshot.reserve_purpose_sheet_qty or 0)
-    after_order = after_total if reserve_plan == 0 else min(after_total, order_plan)
-    after_reserve = after_total - after_order
-    order_delta = after_order - before_order
-    reserve_delta = after_reserve - before_reserve
+    disposition = str(surplus_disposition or "not_applicable").strip()
+    if disposition not in {
+        "not_applicable",
+        "finished",
+        "semi_finished_reserve",
+    }:
+        raise ReceiptPurposeFlowError(
+            "INCOMING_SURPLUS_DISPOSITION_INVALID",
+            "多收片料用途无效，请刷新后重新选择。",
+        )
+    remaining_order = max(order_plan - before_order, 0)
+    base_order_delta = min(quantity, remaining_order)
+    surplus_delta = quantity - base_order_delta
+    if surplus_delta > 0:
+        if disposition == "not_applicable":
+            raise ReceiptPurposeFlowError(
+                "INCOMING_SURPLUS_DISPOSITION_REQUIRED",
+                f"本次实收比订单成品用途多 {surplus_delta} 片，请先选择用途。",
+            )
+        if disposition == "finished":
+            order_delta = quantity
+            reserve_delta = 0
+        else:
+            order_delta = base_order_delta
+            reserve_delta = surplus_delta
+    else:
+        if disposition != "not_applicable":
+            raise ReceiptPurposeFlowError(
+                "INCOMING_SURPLUS_DISPOSITION_INVALID",
+                "本次没有多收片料，不能提交多收片料用途。",
+            )
+        order_delta = quantity
+        reserve_delta = 0
+    after_order = before_order + order_delta
+    after_reserve = before_reserve + reserve_delta
     if order_delta < 0 or reserve_delta < 0:
         raise ReceiptPurposeFlowError(
             "PURCHASE_PURPOSE_CUMULATIVE_INVALID",
@@ -647,6 +1300,7 @@ def post_receipt_purpose_allocation(
             "receipt_total_sheet_qty": quantity,
             "receipt_order_purpose_sheet_qty": order_delta,
             "receipt_reserve_purpose_sheet_qty": reserve_delta,
+            "surplus_disposition": disposition,
             "receipt_plan_fingerprint": fact.receipt_plan_fingerprint,
         }
     )
@@ -654,6 +1308,7 @@ def post_receipt_purpose_allocation(
     allocation = IncomingReceiptPurposeAllocation(
         incoming_receipt_item_id=receipt_item.id,
         purpose_contract_status_snapshot="frozen",
+        surplus_disposition=disposition,
         purchase_purpose_source_snapshot_id=snapshot.id,
         purchase_receipt_fact_id=fact.id,
         supplier_requisition_order_item_id=(
@@ -841,6 +1496,7 @@ def serialize_receipt_purpose_allocation(
         return location_names.get(int(lot.id)) if lot is not None else None
 
     return {
+        "surplus_disposition": allocation.surplus_disposition,
         "order_sheet_delta": allocation.receipt_order_purpose_sheet_qty,
         "reserve_sheet_delta": allocation.receipt_reserve_purpose_sheet_qty,
         "order_sheet_cumulative": allocation.cumulative_order_purpose_sheet_qty_after,
@@ -1010,6 +1666,30 @@ def reverse_receipt_purpose_allocation(
             "该订单明细存在更晚的用途收料，请先撤销最新一笔。",
         )
 
+    completion_reversed = False
+    if int(allocation.production_completion_id or 0) > 0:
+        remaining_material_input = sum(
+            int(row.receipt_order_purpose_sheet_qty)
+            for row in _active_order_item_allocations(db, receipt_item.order_item_id)
+            if row.id != allocation.id
+        )
+        try:
+            reverse_automatic_receipt_completion(
+                db,
+                completion_id=int(allocation.production_completion_id),
+                remaining_theoretical_quantity=allocation.finished_output_qty_before,
+                remaining_material_input_quantity=remaining_material_input,
+                operator_id=operator_id,
+                reason=reason,
+            )
+            completion_reversed = True
+        except ProductionWorkflowError as error:
+            raise ReceiptPurposeFlowError(
+                "AUTOMATIC_FINISHED_REVERSAL_FAILED",
+                str(error),
+                error.status_code,
+            ) from error
+
     compensation_movement: InventoryMovement | None = None
     reserve_lot: InventoryLot | None = None
     if allocation.semi_finished_inventory_lot_id is not None:
@@ -1053,7 +1733,7 @@ def reverse_receipt_purpose_allocation(
                 error.status_code,
             ) from error
 
-    if allocation.production_completion_id is not None:
+    if allocation.production_completion_id is not None and not completion_reversed:
         remaining_material_input = sum(
             int(row.receipt_order_purpose_sheet_qty)
             for row in _active_order_item_allocations(db, receipt_item.order_item_id)

@@ -239,6 +239,8 @@ from app.models.purchase_receipt import (  # noqa: E402,F401
     IncomingReceiptPurposeAllocation,
     IncomingReceiptPurposeReversal,
     IncomingReceiptReversalFact,
+    ProductionCompletionReserveConversion,
+    ProductionCompletionReserveConversionReversal,
     PurchaseReceiptFact,
     PurchaseReceiptMaterialVariance,
     PurchaseReceiptMaterialVarianceApproval,

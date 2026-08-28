@@ -1370,6 +1370,7 @@ def _idempotent_receipt_item(
     received_quantity: int | None,
     resolution_action: str | None,
     resolution_reason: str | None,
+    surplus_disposition: str | None,
     surplus_location_id: int | None,
     user: User,
     expected_receipt_fact_version: int | None = None,
@@ -1492,10 +1493,22 @@ def _idempotent_receipt_item(
     if allocation is not None:
         # Frozen-purpose clients do not submit the server-derived pending
         # marker.  Compare only client-controlled fields on replay.
+        submitted_disposition = (surplus_disposition or "").strip() or None
+        stored_disposition = str(allocation.surplus_disposition or "not_applicable")
+        expected_disposition = (
+            None if stored_disposition == "not_applicable" else stored_disposition
+        )
+        expected_action = {
+            "finished": "all_to_production",
+            "semi_finished_reserve": "transfer_to_semi_inventory",
+            "not_applicable": row.resolution_action,
+        }.get(stored_disposition)
         same_resolution = (
             normalized_action is None
             and normalized_reason is None
             and surplus_location_id is None
+            and submitted_disposition == expected_disposition
+            and row.resolution_action == expected_action
         )
     else:
         same_resolution = (
@@ -1683,6 +1696,7 @@ def receive_one(
     resolution_reason: str | None,
     surplus_location_id: int | None,
     idempotency_key: str | None,
+    surplus_disposition: str | None = None,
     expected_surplus_layout_version: int | None = None,
     expected_receipt_fact_version: int | None = None,
     purchase_purpose_source_snapshot_id: int | None = None,
@@ -1705,6 +1719,7 @@ def receive_one(
             received_quantity=received_quantity,
             resolution_action=resolution_action,
             resolution_reason=resolution_reason,
+            surplus_disposition=surplus_disposition,
             surplus_location_id=surplus_location_id,
             user=user,
             expected_receipt_fact_version=expected_receipt_fact_version,
@@ -1723,6 +1738,7 @@ def receive_one(
             received_quantity=received_quantity,
             resolution_action=resolution_action,
             resolution_reason=resolution_reason,
+            surplus_disposition=surplus_disposition,
             surplus_location_id=surplus_location_id,
             idempotency_key=key,
             audit_context=audit_context,
@@ -1816,10 +1832,59 @@ def receive_one(
                 409,
                 code="INCOMING_RECEIPT_PLAN_TAMPERED",
             )
+        if before >= int(target.planned_quantity or 0):
+            raise IncomingReceiptError(
+                "该采购来料已经全部实收，不能再次入库；请刷新待入库列表。",
+                409,
+                code="INCOMING_SOURCE_ALREADY_FULLY_RECEIVED",
+            )
+        from app.services.receipt_purpose_distribution import (
+            receipt_purpose_source_totals,
+        )
+
+        _, before_order_purpose, _ = receipt_purpose_source_totals(
+            db, int(purpose_context.snapshot.id)
+        )
+        remaining_order_purpose = max(
+            int(purpose_context.snapshot.order_purpose_sheet_qty or 0)
+            - before_order_purpose,
+            0,
+        )
+        surplus_quantity = max(quantity - remaining_order_purpose, 0)
+        normalized_disposition = (surplus_disposition or "").strip() or None
+        if surplus_quantity > 0 and normalized_disposition is None:
+            raise IncomingReceiptError(
+                f"本次实收比订单成品用途多 {surplus_quantity} 片，请先选择多收片料用于做成品还是片料备库。",
+                409,
+                code="INCOMING_SURPLUS_DISPOSITION_REQUIRED",
+            )
+        if surplus_quantity == 0 and normalized_disposition is not None:
+            raise IncomingReceiptError(
+                "本次没有超出订单成品用途，不能提交多收片料用途。请刷新后重试。",
+                409,
+                code="INCOMING_SURPLUS_DISPOSITION_INVALID",
+            )
+        if normalized_disposition not in {
+            None,
+            "finished",
+            "semi_finished_reserve",
+        }:
+            raise IncomingReceiptError(
+                "多收片料用途无效，请刷新后重新选择。",
+                409,
+                code="INCOMING_SURPLUS_DISPOSITION_INVALID",
+            )
         resolution_status = (
             "pending" if cumulative < target.planned_quantity else "not_required"
         )
-        action = "await_supplier" if cumulative < target.planned_quantity else None
+        if cumulative < target.planned_quantity:
+            action = "await_supplier"
+        elif normalized_disposition == "finished":
+            action = "all_to_production"
+        elif normalized_disposition == "semi_finished_reserve":
+            action = "transfer_to_semi_inventory"
+        else:
+            action = None
     else:
         resolution_status, action = _validate_decision(
             planned=target.planned_quantity,
@@ -1880,6 +1945,9 @@ def receive_one(
                 context=purpose_context,
                 operator_id=user.id,
                 idempotency_key=key,
+                surplus_disposition=(
+                    normalized_disposition or "not_applicable"
+                ),
             )
         except ReceiptPurposeFlowError as error:
             raise IncomingReceiptError(

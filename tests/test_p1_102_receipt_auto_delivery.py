@@ -397,7 +397,7 @@ def test_partial_then_full_dispatch_uses_current_credit_without_surplus_replay(
         assert restored_row["delivery_actionable"] is True
 
 
-def test_receipt_auto_order_path_caps_credit_at_current_order_remainder(
+def test_receipt_auto_order_path_exposes_real_surplus_above_order_remainder(
     requisition_app,
 ) -> None:
     from app.api.deliveries import (
@@ -420,7 +420,8 @@ def test_receipt_auto_order_path_caps_credit_at_current_order_remainder(
             received_quantity=62,
         )
         # Delivered quantity can be reconciled independently from reservation
-        # history.  The order path must still never propose an over-delivery.
+        # history.  The order path exposes the physical surplus, while creation
+        # still requires an explicit over-delivery confirmation.
         with session_factory() as session:
             item = session.get(OrderItem, 1)
             assert item is not None
@@ -429,14 +430,14 @@ def test_receipt_auto_order_path_caps_credit_at_current_order_remainder(
         with session_factory() as session:
             item = session.get(OrderItem, 1)
             assert item is not None
-            assert _delivery_remaining_quantity(session, item) == 50
+            assert _delivery_remaining_quantity(session, item) == 62
 
         pending = client.get(
             "/api/deliveries/pending-items/search",
             params={"customer_id": 1, "order_item_id": 1},
         )
         assert pending.status_code == 200, pending.text
-        assert pending.json()["items"][0]["remaining_quantity"] == 50
+        assert pending.json()["items"][0]["remaining_quantity"] == 62
 
         production = client.get(
             "/api/production/tasks",
@@ -453,7 +454,7 @@ def test_receipt_auto_order_path_caps_credit_at_current_order_remainder(
         assert waiting.status_code == 200, waiting.text
         waiting_row = waiting.json()["items"][0]
         assert waiting_row["status"] == "waiting_material"
-        assert waiting_row["delivery_ready_quantity"] == 50
+        assert waiting_row["delivery_ready_quantity"] == 62
         assert waiting_row["delivery_actionable"] is True
 
 

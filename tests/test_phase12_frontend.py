@@ -99,7 +99,7 @@ def test_requisition_spa_route_returns_index_page_after_refresh() -> None:
 
     assert response.status_code == 200
     assert "天明包装ERP" in response.text
-    assert "智能报料工作台" in response.text
+    assert "纸板报料" in response.text
     assert "Not Found" not in response.text
 
 
@@ -191,10 +191,22 @@ def test_n029_production_tables_are_compact_and_do_not_require_horizontal_scroll
         "数量情况",
         "本次生产",
         "订单 / 多出",
-        "数量 / 操作人",
         "完工去向",
     ):
         assert merged_heading in page
+
+    history_start = page.index('<table class="production-history-table"')
+    history_end = page.index("</table>", history_start)
+    history_table = page[history_start:history_end]
+    for history_heading in (
+        "完工时间",
+        "客户 / 客户订单号",
+        "存货编码 / 产品名称",
+        "实际 / 理论数量",
+        "当前库位",
+        "操作",
+    ):
+        assert history_heading in history_table
 
 
 def test_n029_batch_completion_groups_customers_and_prevents_duplicate_locations() -> None:
@@ -396,7 +408,11 @@ def test_desktop_and_mobile_incoming_layout_support_editable_quantity() -> None:
     assert 'this.hasPermission("incoming.execute")' in INDEX
     assert '"/api/incoming/surplus-locations"' in INDEX
     assert '"/api/incoming/replenishment-locations"' not in INDEX
-    assert "进入一楼当前已发布原料区的真实排位" in INDEX
+    assert "预计订单用途" in INDEX
+    assert "预计片料备库" in INDEX
+    assert "预计形成成品" in INDEX
+    assert "成品位置：" in INDEX
+    assert "片料位置：" in INDEX
     assert "incoming-table" in INDEX
     assert "本次后累计等于计划" not in INDEX
     assert "本次后累计等于计划" not in INCOMING

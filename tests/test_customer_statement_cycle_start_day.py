@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from alembic.script import ScriptDirectory
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -193,7 +192,7 @@ def test_customer_statement_cycle_start_day_migration_upgrade_and_downgrade(
     assert version == "an41v7w8x9j31"
 
 
-def test_customer_statement_cycle_start_day_round_trip_through_head(
+def test_customer_statement_cycle_start_day_round_trip_through_last_data_independent_revision(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -210,10 +209,13 @@ def test_customer_statement_cycle_start_day_round_trip_through_head(
     )
     project_root = Path(__file__).resolve().parents[1]
     config = Config(str(project_root / "alembic.ini"))
-    current_head = ScriptDirectory.from_config(config).get_current_head()
-    assert current_head is not None
+    # fj45 and later intentionally require the owner-confirmed RAW-001 rack.
+    # Keep this blank-database schema round-trip at its direct predecessor so
+    # the test still crosses every data-independent migration after aq44
+    # without fabricating current-map production evidence.
+    target_revision = "fi44v8x9z33"
 
-    command.upgrade(config, "head")
+    command.upgrade(config, target_revision)
     command.downgrade(config, "an41v7w8x9j31")
 
     with sqlite3.connect(database_path) as connection:
@@ -229,7 +231,7 @@ def test_customer_statement_cycle_start_day_round_trip_through_head(
     assert "statement_cycle_start_day" not in columns
     assert version == "an41v7w8x9j31"
 
-    command.upgrade(config, "head")
+    command.upgrade(config, target_revision)
     with sqlite3.connect(database_path) as connection:
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(customers)")
@@ -241,4 +243,4 @@ def test_customer_statement_cycle_start_day_round_trip_through_head(
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
     assert "statement_cycle_start_day" in columns
-    assert version == current_head
+    assert version == target_revision

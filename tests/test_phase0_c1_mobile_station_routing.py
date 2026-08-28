@@ -160,6 +160,7 @@ def _add_component_tasks(db, *, customer, mold) -> dict[str, int]:
         task = ProductionTask(
             order_item_id=item.id,
             sales_order_item_bom_component_id=snapshot.id,
+            task_role="component_internal",
             status="pending",
             planned_quantity=10,
             ordered_quantity_snapshot=10,

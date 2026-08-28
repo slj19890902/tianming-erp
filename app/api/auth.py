@@ -763,11 +763,12 @@ def login(
             detail="用户名或密码错误",
         )
 
-    current = load_settings()
+    current = getattr(request.app.state, "erp_settings", None) or load_settings()
     remember_seconds = 30 * 24 * 60 * 60
     token = create_session_token(
         user_snapshot["id"],
         auth_version=user_snapshot["auth_version"],
+        secret_key=current.secret_key,
         expires_minutes=(
             remember_seconds // 60
             if payload.remember_me
@@ -850,7 +851,7 @@ def logout(
         details={"revoked_all_sessions": True},
     )
     db.commit()
-    current = load_settings()
+    current = getattr(request.app.state, "erp_settings", None) or load_settings()
     response.delete_cookie(
         key=current.session_cookie_name,
         path="/",

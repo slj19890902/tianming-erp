@@ -17,7 +17,11 @@ def test_supplement_requires_business_facts_but_not_free_text_reason() -> None:
     method = _supplement_method()
     assert 'prompt("本次补充实际投入数量"' in method
     assert "本次实际合格产量" in method
-    assert "输入余货库位编码" in method
+    assert "输入余货位置名称或当前地址" in method
+    assert (
+        "[item.employee_location_name,item.current_address_name,"
+        "item.current_address_code,item.location_name]"
+    ) in method
     assert "补充生产确认原因" not in method
     assert method.count("confirm(") == 1
     assert "material_input_quantity:input" in method

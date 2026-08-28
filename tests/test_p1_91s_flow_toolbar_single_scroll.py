@@ -72,8 +72,8 @@ def test_paper_flow_headers_are_single_compact_command_bars_without_help_copy() 
     assert "<page-head" not in incoming
     assert "incoming-compact-head" in incoming
 
-    assert production.index("<h2>生产确认</h2>") < production.index("待生产")
-    assert production.index("待生产") < production.index("批量确认入库")
+    assert production.index("<h2>生产与成品</h2>") < production.index("完工历史")
+    assert production.index("完工历史") < production.index("待送成品归位")
     assert "<page-head" not in production
     assert "production-compact-command-bar" in production
     assert "直接待送会进入一楼待送区" not in production
@@ -84,7 +84,7 @@ def test_each_board_tab_has_one_authoritative_top_pager() -> None:
     incoming = _board_incoming()
     production = _production()
 
-    assert requisition.count(':page="pages.requisitionPending"') == 1
+    assert requisition.count(':page="pages.requisitionPending"') == 0
     assert requisition.count(':page="pages.requisitionHolds"') == 1
     assert requisition.count(':page="pages.requisitionReported"') == 1
     assert incoming.count(':page="pages.incomingPending"') == 1
@@ -98,8 +98,6 @@ def test_compact_flow_page_sizes_are_server_driven_and_mode_specific() -> None:
     for declaration in (
         "REPORTED_ITEM_PAGE_SIZE_STANDARD = 12",
         "REPORTED_ITEM_PAGE_SIZE_LARGE = 8",
-        "REQUISITION_PENDING_PAGE_SIZE_STANDARD = 6",
-        "REQUISITION_PENDING_PAGE_SIZE_LARGE = 4",
         "REQUISITION_HOLD_PAGE_SIZE_STANDARD = 8",
         "REQUISITION_HOLD_PAGE_SIZE_LARGE = 6",
         "PRODUCTION_PENDING_PAGE_SIZE_STANDARD = 6",
@@ -109,8 +107,12 @@ def test_compact_flow_page_sizes_are_server_driven_and_mode_specific() -> None:
     ):
         assert declaration in INDEX
 
-    assert 'typeof this.requisitionPendingPageSize === "function"' in INDEX
-    assert "? this.requisitionPendingPageSize()" in INDEX
+    request_params = _between(
+        "requisitionPendingRequestParams(page, supplierName) {",
+        "clearPendingRequisitionSelection() {",
+    )
+    assert "return {};" in request_params
+    assert "page_size" not in request_params
     assert "const effectivePageSize = this.requisitionHoldPageSize();" in INDEX
     assert "page_size: effectivePageSize" in INDEX
     assert 'page_size: this.productionPendingPageSize()' in INDEX

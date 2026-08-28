@@ -861,7 +861,8 @@ expect(printingHtml({{components:[{{printing_situation:'无印刷',printing_plat
     assert ".task-card.printing-heavy" in TASK_PRINT
     assert "element.scrollHeight > element.clientHeight + 1" in TASK_PRINT
     assert "element.scrollWidth > element.clientWidth + 1" in TASK_PRINT
-    assert "toolbarNote.textContent = batchMode" in TASK_PRINT
+    assert "toolbarNote.textContent = receiptBatchMode" in TASK_PRINT
+    assert ": batchMode" in TASK_PRINT
     assert ": receiptMode" in TASK_PRINT
     assert "fullPageCount" not in TASK_PRINT
     assert "每个生产任务固定半张 A4" in TASK_PRINT

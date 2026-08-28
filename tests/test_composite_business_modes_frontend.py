@@ -88,7 +88,9 @@ def test_composite_merge_opens_review_draft_before_formal_purchase() -> None:
     assert "当前只是报料明细草稿" in INDEX
     assert "确认生成正式采购单" in INDEX
     assert "系统最低" in INDEX
-    assert "采购张数允许按供应商实际要求增加" in INDEX
+    # P1-80 将“允许增加”明确拆成订单用途与客户通用片料备库，避免多订张数失去归属。
+    assert "采购总张调整后默认先满足订单用途" in INDEX
+    assert "多订差额进入该客户通用片料备库" in INDEX
 
 
 def test_composite_draft_can_apply_matching_inventory_and_recalculate() -> None:

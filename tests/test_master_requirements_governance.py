@@ -46,9 +46,9 @@ def test_factory_audit_followup_rules_separate_business_groups_and_facts() -> No
 
     assert "一个业务暂存组的三个独立真实物理区域" in warehouse
     assert "不能只保存“FIN 合并区”" in master
-    assert "只作当前参考价，不能反推历史成交价" in master
+    assert "不能由后续主档改价反推或覆盖历史收料价" in master
     assert "每条正式收料行确认时冻结" in master
-    assert "发生收料后禁止直接覆盖旧值" in master
+    assert "不得直接覆盖历史收料快照" in master
     assert "显式冻结单位、币种、税口径、税率、确认人与版本" in finance
 
 

@@ -110,6 +110,7 @@ def test_n029_models_register_complete_contract_in_metadata() -> None:
         "id",
         "order_item_id",
         "sales_order_item_bom_component_id",
+        "task_role",
         "status",
         "planned_quantity",
         "finished_coverage_snapshot",
@@ -148,7 +149,7 @@ def test_n029_models_register_complete_contract_in_metadata() -> None:
     } <= unique_indexes
     assert _foreign_key_deletes("production_tasks") == {
         "order_item_id": "CASCADE",
-        "sales_order_item_bom_component_id": "SET NULL",
+        "sales_order_item_bom_component_id": "RESTRICT",
     }
     task_checks = _check_sql("production_tasks")
     assert "planned_quantity >= 0" in task_checks

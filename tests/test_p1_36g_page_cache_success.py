@@ -130,14 +130,14 @@ function makeVm(loader) {{
   const multi = makeVm(async () => true);
   multi.loadCustomerOptions = async () => true;
   multi.loadOrderCustomerOptions = async () => false;
-  multi.loadOrders = async () => true;
+  multi.loadCurrentOrderWorkspace = async () => true;
   expect(await multi.loadPage("orders") === false, "partial multi-loader failure was accepted");
   expect(multi.marks.length === 0, "partially failed page was cached");
 
   const allGood = makeVm(async () => true);
   allGood.loadCustomerOptions = async () => true;
   allGood.loadOrderCustomerOptions = async () => true;
-  allGood.loadOrders = async () => true;
+  allGood.loadCurrentOrderWorkspace = async () => true;
   expect(await allGood.loadPage("orders") === true, "successful multi-loader page failed");
   expect(allGood.marks.join(",") === "orders", "successful multi-loader page was not cached once");
 }})().catch(error => {{ console.error(error); process.exit(1); }});

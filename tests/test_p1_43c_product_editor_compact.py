@@ -120,10 +120,11 @@ def test_internal_bom_component_is_one_compact_business_row() -> None:
         "同客户常用箱",
         "每套数量",
         "必需",
-        "送货单显示",
         "removeBomComponent(index)",
     ):
         assert marker in component_card
+    assert 'v-model="productForm.composite_fulfillment_mode"' in PRODUCT_MODAL
+    assert "送货单显示" not in component_card
     for removed_control in (
         "模切组件",
         "模具最大产出",
@@ -134,7 +135,7 @@ def test_internal_bom_component_is_one_compact_business_row() -> None:
         assert removed_control not in component_card
 
 
-def test_hidden_bom_facts_and_delivery_visibility_survive_round_trip(
+def test_hidden_bom_facts_survive_round_trip_and_delivery_mode_is_canonical(
     tmp_path: Path,
 ) -> None:
     normalize_params, normalize_body = _method("normalizeBomComponent")
@@ -145,7 +146,10 @@ globalThis.blankBomComponent=()=>({{
   mold_max_yield_per_sheet:null,spare_sheet_quantity:0,display_mode:"internal_only",
   show_on_delivery:true,is_required:true,remark:""
 }});
-const vm={{bomEditor:{{enabled:true,expected_version:7,components:[]}}}};
+const vm={{
+  bomEditor:{{enabled:true,expected_version:7,components:[]}},
+  productForm:{{composite_fulfillment_mode:"parent_delivery"}}
+}};
 vm.normalizeBomComponent=new Function(
   {json.dumps(normalize_params)},
   {json.dumps(normalize_body, ensure_ascii=False)}
@@ -162,10 +166,14 @@ const loaded=vm.normalizeBomComponent({{
 }});
 vm.bomEditor.components=[loaded];
 const saved=vm._productBomSaveFields().components[0];
-if (saved.show_on_delivery !== false || saved.is_required !== false) throw new Error("visible flags changed");
+if (saved.show_on_delivery !== false || saved.display_mode !== "internal_only") throw new Error("parent delivery mapping changed");
+if (saved.is_required !== false) throw new Error("required flag changed");
 if (!saved.is_die_cut || saved.mold_tool_id !== 21 || saved.mold_max_yield_per_sheet !== 4) throw new Error("hidden mold facts were cleared");
-if (saved.spare_sheet_quantity !== 6 || saved.display_mode !== "show_on_all_docs") throw new Error("hidden component facts were cleared");
+if (saved.spare_sheet_quantity !== 6) throw new Error("hidden component facts were cleared");
 if (saved.remark !== "历史生产备注") throw new Error("hidden remark was cleared");
+vm.productForm.composite_fulfillment_mode="component_delivery";
+const componentDelivery=vm._productBomSaveFields().components[0];
+if (!componentDelivery.show_on_delivery || componentDelivery.display_mode !== "show_on_delivery") throw new Error("component delivery mapping changed");
 """
     _run_node(tmp_path, source)
 

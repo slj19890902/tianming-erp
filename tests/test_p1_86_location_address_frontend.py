@@ -72,7 +72,8 @@ def test_search_map_labels_and_cross_module_views_prefer_current_chinese_address
     assert "{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}" in index
     assert "{{ row.current_warehouse_location_name || '位置名称待完善' }}" in index
     assert "row.current_inventory_status==='located'" in index
-    assert "完工时：{{ row.completion_warehouse_location_name" in index
+    assert "<th>当前库位</th>" in index
+    assert "完工时：{{ row.completion_warehouse_location_name" not in index
     assert "{{ lot.location_name || \"位置名称待完善\" }}" in index
     assert "{{ lot.pallet_code || \"-\" }}" not in index
     assert "const code=readableLocation(location)" in warehouse
@@ -105,7 +106,7 @@ def test_employee_mobile_print_and_location_label_views_hide_internal_codes() ->
     )[0]
     assert "position.location_code" not in location_card
     move_body = mobile.split("async function confirmWarehouseMapMove()", 1)[1].split(
-        "async function reportWarehouseMapMismatch", 1
+        "async function confirmWarehousePhysicalReturn", 1
     )[0]
     assert "window.confirm" not in move_body
     assert "group.label||group.employee_location_name||group.current_address_name||group.location_name" in pick

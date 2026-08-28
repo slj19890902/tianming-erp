@@ -55,6 +55,7 @@ const factory=new Function("axios","return async function(orderIds,orderPayload)
 const sourceIds=[11,12],source={{customer_po:"PO-1",delivery_date:"2026-08-08",remark:"原备注"}};
 const vm={{
   orderGroupSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},
+  prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   closeCount:0,closeModal(){{this.closeCount+=1;}},loadOrders:async()=>true,
   showToast(){{}},errorMessage:error=>error.message,
 }};
@@ -84,6 +85,7 @@ const factory=new Function("axios","return async function(orderIds,orderPayload)
 const toasts=[];let closed=false;
 const vm={{
   orderGroupSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},
+  prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   closeModal(){{closed=true;}},loadOrders:async()=>{{throw new Error("orders offline");}},
   showToast:(message,isError)=>toasts.push({{message,isError}}),errorMessage:error=>error.message,
 }};
@@ -104,6 +106,7 @@ const body={json.dumps(body, ensure_ascii=False)};
 const factory=axios=>new Function("axios","return async function(orderIds,orderPayload) {{"+body+"}}")(axios);
 const makeVm=()=>({{
   orderGroupSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},closeCount:0,
+  prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   closeModal(){{this.closeCount+=1;}},loadOrders:async()=>true,showToast(){{}},errorMessage:error=>error.message,
 }});
 const responseError=message=>{{const error=new Error(message);error.response={{status:409}};return error;}};
@@ -130,7 +133,7 @@ def test_save_modal_routes_order_group_results() -> None:
     body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     assert 'if (this.modal?.type === "orderEdit" && (this.orderGroupSaveState.saving' in body
     assert "const savedGroup = await this.saveOrderGroup(this.orderEditForm.order_ids, payload);" in body
-    assert "if (savedGroup?._in_flight) return false;" in body
+    assert "if (savedGroup?._in_flight || savedGroup?._cancelled) return false;" in body
     assert "if (error?._orderGroupPartial)" in body
     assert "订单组部分保存" in body
     assert "if (error?._orderGroupOutcomeUncertain)" in body

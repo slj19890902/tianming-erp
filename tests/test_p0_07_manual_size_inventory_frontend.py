@@ -58,6 +58,7 @@ state.stale = true;
 const manual = {{
   manual_size_entry:true, product_id:null, matched_product_id:null,
   product_name:"匿名纸箱", box_type:"A1", length_mm:520, width_mm:350, height_mm:300,
+  report_length_mm:875, report_width_mm:730,
   material_id:1, flute_type:"AB", quantity:200, unit_price:"3.68", _quote_preference_id:11,
   _inventory:state, bom_component_demands:[],
 }};
@@ -70,12 +71,16 @@ const context = {{
   orderForm:{{customer_id:1,items:[manual]}},
   inventoryPlanApplies:methods.inventoryPlanApplies,
   inventoryDecisionRequired:methods.inventoryDecisionRequired,
+  manualSizeRequiredDimensionsComplete:methods.manualSizeRequiredDimensionsComplete,
+  productBoxTypeRule:() => ({{required_dimensions:["length_mm","width_mm","height_mm"]}}),
+  orderItemIsExternalPurchase:methods.orderItemIsExternalPurchase,
+  normalizeBoxTypeDisplay:methods.normalizeBoxTypeDisplay,
   inventoryStateMatchesLine:() => true,
   inventoryComponents:() => ["whole"],
   componentLabel:methods.componentLabel,
   isGeneralSemiFinishedCandidate:() => false,
   newOrderInventoryState:methods.newOrderInventoryState,
-  manualSizePreferenceOptions:[{{id:11,material_id:1}}],
+  manualSizePreferenceOptions:[{{id:11,material_id:1,box_type:"A1"}}],
 }};
 const manualGate = methods.inventoryDecisionRequired.call(context, manual);
 const manualValidation = methods.validateOrderForm.call(context);
@@ -147,7 +152,11 @@ const addContext = {{
 methods.addManualSizeOrderItem.call(addContext);
 if (reused._inventory !== null || reused._inventory_product !== null || reused._show_inventory_details || reused._inventory_refresh_timer) throw new Error("reused blank line kept inventory state");
 const payload = methods.orderFormItemPayload.call(
-  {{inventoryPlanApplies:methods.inventoryPlanApplies,buildReservationPlan:methods.buildReservationPlan}},
+  {{
+    inventoryPlanApplies:methods.inventoryPlanApplies,
+    buildReservationPlan:methods.buildReservationPlan,
+    orderItemIsExternalPurchase:methods.orderItemIsExternalPurchase,
+  }},
   reused
 );
 if (payload.reservation_plan !== null) throw new Error("manual payload carried reservation plan");

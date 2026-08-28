@@ -1149,7 +1149,7 @@ def test_phase8_migration_preserves_legacy_finance_tables(
     monkeypatch.setenv("ERP_BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("ERP_SECRET_KEY", "phase8-migration-test")
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-    command.upgrade(config, "head")
+    command.upgrade(config, "e82d4a6f1b30")
 
     with sqlite3.connect(database_path) as connection:
         tables = {
@@ -1194,6 +1194,20 @@ def _create_statement(client: TestClient) -> dict:
     return statement.json()
 
 
+def _mark_statement_confirmed(session_factory, statement: dict) -> dict:
+    from app.models.finance import Statement
+
+    with session_factory() as session:
+        master = session.get(Statement, statement["id"])
+        master.confirmation_status = "confirmed"
+        session.commit()
+        return {
+            **statement,
+            "confirmation_status": master.confirmation_status,
+            "version": master.version,
+        }
+
+
 def test_invoice_and_partial_settlement_are_cumulative_and_audited(
     finance_api_app,
 ) -> None:
@@ -1203,7 +1217,9 @@ def test_invoice_and_partial_settlement_are_cumulative_and_audited(
     app, session_factory = finance_api_app
     with TestClient(app) as client:
         _login(client, "finance")
-        statement = _create_statement(client)
+        statement = _mark_statement_confirmed(
+            session_factory, _create_statement(client)
+        )
         first_invoice = client.post(
             "/api/finance/invoices",
             json={
@@ -1211,6 +1227,9 @@ def test_invoice_and_partial_settlement_are_cumulative_and_audited(
                 "invoice_number": "INV-202606-001",
                 "invoice_date": "2026-06-14",
                 "invoice_amount": "180.80",
+                "expected_version": statement["version"],
+                "expected_ledger_version": 1,
+                "idempotency_key": "phase8-invoice-cumulative-001",
             },
         )
         second_invoice = client.post(
@@ -1220,6 +1239,9 @@ def test_invoice_and_partial_settlement_are_cumulative_and_audited(
                 "invoice_number": "INV-202606-002",
                 "invoice_date": "2026-06-14",
                 "invoice_amount": "100.00",
+                "expected_version": statement["version"],
+                "expected_ledger_version": 2,
+                "idempotency_key": "phase8-invoice-cumulative-002",
             },
         )
         partial_payment = client.put(
@@ -1228,6 +1250,9 @@ def test_invoice_and_partial_settlement_are_cumulative_and_audited(
                 "amount": "80.80",
                 "settlement_date": "2026-06-14",
                 "account": "中国银行 6688",
+                "expected_version": statement["version"],
+                "expected_ledger_version": 3,
+                "idempotency_key": "phase8-payment-cumulative-001",
             },
         )
 
@@ -1250,16 +1275,21 @@ def test_invoice_and_partial_settlement_are_cumulative_and_audited(
 def test_exact_settlement_closes_statement_and_rejects_overpayment(
     finance_api_app,
 ) -> None:
-    app, _ = finance_api_app
+    app, session_factory = finance_api_app
     with TestClient(app) as client:
         _login(client, "admin")
-        statement = _create_statement(client)
+        statement = _mark_statement_confirmed(
+            session_factory, _create_statement(client)
+        )
         settled = client.put(
             f"/api/finance/statements/{statement['id']}/settle",
             json={
                 "amount": "280.80",
                 "settlement_date": "2026-06-14",
                 "account": "现金",
+                "expected_version": statement["version"],
+                "expected_ledger_version": 1,
+                "idempotency_key": "phase8-payment-exact-001",
             },
         )
         overpayment = client.put(
@@ -1268,6 +1298,9 @@ def test_exact_settlement_closes_statement_and_rejects_overpayment(
                 "amount": "0.01",
                 "settlement_date": "2026-06-14",
                 "account": "现金",
+                "expected_version": statement["version"],
+                "expected_ledger_version": 2,
+                "idempotency_key": "phase8-payment-over-001",
             },
         )
 
@@ -1278,15 +1311,20 @@ def test_exact_settlement_closes_statement_and_rejects_overpayment(
 
 
 def test_settlement_accepts_missing_or_blank_account(finance_api_app) -> None:
-    app, _ = finance_api_app
+    app, session_factory = finance_api_app
     with TestClient(app) as client:
         _login(client, "admin")
-        statement = _create_statement(client)
+        statement = _mark_statement_confirmed(
+            session_factory, _create_statement(client)
+        )
         missing_account = client.put(
             f"/api/finance/statements/{statement['id']}/settle",
             json={
                 "amount": "100.00",
                 "settlement_date": "2026-06-14",
+                "expected_version": statement["version"],
+                "expected_ledger_version": 1,
+                "idempotency_key": "phase8-payment-no-account-001",
             },
         )
         blank_account = client.put(
@@ -1295,6 +1333,9 @@ def test_settlement_accepts_missing_or_blank_account(finance_api_app) -> None:
                 "amount": "100.00",
                 "settlement_date": "2026-06-15",
                 "account": "",
+                "expected_version": statement["version"],
+                "expected_ledger_version": 2,
+                "idempotency_key": "phase8-payment-blank-account-001",
             },
         )
 
@@ -1317,6 +1358,9 @@ def test_invoice_and_settlement_reject_non_finance_roles(
                 "invoice_number": "NO-ACCESS",
                 "invoice_date": "2026-06-14",
                 "invoice_amount": "1.00",
+                "expected_version": 1,
+                "expected_ledger_version": 1,
+                "idempotency_key": "phase8-forbidden-invoice-001",
             },
         )
         settlement = client.put(
@@ -1325,6 +1369,9 @@ def test_invoice_and_settlement_reject_non_finance_roles(
                 "amount": "1.00",
                 "settlement_date": "2026-06-14",
                 "account": "NO-ACCESS",
+                "expected_version": 1,
+                "expected_ledger_version": 1,
+                "idempotency_key": "phase8-forbidden-payment-001",
             },
         )
 
@@ -1333,10 +1380,12 @@ def test_invoice_and_settlement_reject_non_finance_roles(
 
 
 def test_finance_lists_statements_and_invoice_records(finance_api_app) -> None:
-    app, _ = finance_api_app
+    app, session_factory = finance_api_app
     with TestClient(app) as client:
         _login(client, "finance")
-        statement = _create_statement(client)
+        statement = _mark_statement_confirmed(
+            session_factory, _create_statement(client)
+        )
         invoice = client.post(
             "/api/finance/invoices",
             json={
@@ -1344,6 +1393,9 @@ def test_finance_lists_statements_and_invoice_records(finance_api_app) -> None:
                 "invoice_number": "INV-LIST-001",
                 "invoice_date": "2026-06-14",
                 "invoice_amount": "100.00",
+                "expected_version": statement["version"],
+                "expected_ledger_version": 1,
+                "idempotency_key": "phase8-invoice-list-001",
             },
         )
         assert invoice.status_code == 201, invoice.text
@@ -1465,10 +1517,12 @@ def test_current_finance_prioritizes_pending_reconciliation(finance_api_app) -> 
 def _fully_process_statement(
     client: TestClient,
     statement: dict,
+    session_factory,
     *,
     invoice_number: str,
     transaction_date: str,
 ) -> None:
+    statement = _mark_statement_confirmed(session_factory, statement)
     amount = str(statement["total_receivable"])
     invoice = client.post(
         "/api/finance/invoices",
@@ -1477,6 +1531,9 @@ def _fully_process_statement(
             "invoice_number": invoice_number,
             "invoice_date": transaction_date,
             "invoice_amount": amount,
+            "expected_version": statement["version"],
+            "expected_ledger_version": 1,
+            "idempotency_key": f"phase8-invoice-{invoice_number}",
         },
     )
     settlement = client.put(
@@ -1485,6 +1542,9 @@ def _fully_process_statement(
             "amount": amount,
             "settlement_date": transaction_date,
             "account": "测试账户",
+            "expected_version": statement["version"],
+            "expected_ledger_version": 2,
+            "idempotency_key": f"phase8-payment-{invoice_number}",
         },
     )
     assert invoice.status_code == 201, invoice.text
@@ -1503,6 +1563,7 @@ def test_settled_history_groups_full_customer_month_and_supports_search(
         _fully_process_statement(
             client,
             first,
+            session_factory,
             invoice_number="INV-HIST-001",
             transaction_date="2026-06-18",
         )
@@ -1606,6 +1667,7 @@ def test_settled_history_excludes_customer_month_with_any_balance(
         _fully_process_statement(
             client,
             first,
+            session_factory,
             invoice_number="INV-BALANCE-001",
             transaction_date="2026-06-18",
         )
@@ -1669,6 +1731,7 @@ def test_settled_history_excludes_month_with_new_pending_reconciliation(
         _fully_process_statement(
             client,
             first,
+            session_factory,
             invoice_number="INV-PENDING-001",
             transaction_date="2026-06-18",
         )

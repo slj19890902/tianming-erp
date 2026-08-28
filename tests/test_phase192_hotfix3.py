@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sys
 from datetime import datetime
+from decimal import Decimal
 
 import pytest
 
@@ -266,6 +267,14 @@ from app.core.database import create_sqlite_engine
 from app.core.security import hash_password
 
 
+RETURNABLE_PURCHASE_CONTRACT = {
+    "price_unit": "元/㎡",
+    "purchase_currency": "CNY",
+    "purchase_tax_included": True,
+    "purchase_tax_rate": Decimal("0.13"),
+}
+
+
 def _make_kw_client():
     import pathlib
     import tempfile
@@ -284,16 +293,20 @@ def _make_kw_client():
         db.add_all([
             Material(code="D4B", supplier_name="苏州嘉林亿", layer_count=3,
                      flute_type="B", quote_price=1.21,
-                     basis_weight_description="130g/100g/100g"),
+                     basis_weight_description="130g/100g/100g",
+                     **RETURNABLE_PURCHASE_CONTRACT),
             Material(code="A4B", supplier_name="昆山鸣朋", layer_count=3,
                      flute_type="B", quote_price=1.44,
-                     basis_weight_description="100g/100g/100g"),
+                     basis_weight_description="100g/100g/100g",
+                     **RETURNABLE_PURCHASE_CONTRACT),
             Material(code="A414B", supplier_name="昆山鸣朋", layer_count=5,
                      flute_type="AB", quote_price=2.15,
-                     basis_weight_description="100g/100g/60g/100g/100g"),
+                     basis_weight_description="100g/100g/60g/100g/100g",
+                     **RETURNABLE_PURCHASE_CONTRACT),
             Material(code="X4A", supplier_name="苏州佳丰", layer_count=3,
                      flute_type="A", quote_price=2.11,
-                     basis_weight_description="230g进口俄卡"),
+                     basis_weight_description="230g进口俄卡",
+                     **RETURNABLE_PURCHASE_CONTRACT),
         ])
         db.commit()
 
@@ -419,7 +432,8 @@ class TestMaterialPageSizeGuardApi:
             db.add_all([
                 Material(code=f"M{i:04d}", supplier_name="苏州嘉林亿",
                          layer_count=3, flute_type="B", quote_price=1.0 + i / 100,
-                         basis_weight_description="100g/100g/100g")
+                         basis_weight_description="100g/100g/100g",
+                         **RETURNABLE_PURCHASE_CONTRACT)
                 for i in range(n)
             ])
             db.commit()

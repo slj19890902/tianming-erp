@@ -53,10 +53,18 @@ def create_session_token(
         or auth_version < 1
     ):
         raise ValueError("auth_version must be a positive integer")
-    current = load_settings()
+    current = (
+        load_settings()
+        if secret_key is None or expires_minutes is None
+        else None
+    )
     now = datetime.now(timezone.utc)
     expires = now + timedelta(
-        minutes=expires_minutes or current.session_expire_minutes
+        minutes=(
+            expires_minutes
+            if expires_minutes is not None
+            else current.session_expire_minutes
+        )
     )
     return jwt.encode(
         {
@@ -66,7 +74,7 @@ def create_session_token(
             "type": "session",
             "auth_version": auth_version,
         },
-        secret_key or current.secret_key,
+        secret_key if secret_key is not None else current.secret_key,
         algorithm="HS256",
     )
 
@@ -76,11 +84,11 @@ def decode_session_token(
     *,
     secret_key: str | None = None,
 ) -> tuple[int, int]:
-    current = load_settings()
+    current = load_settings() if secret_key is None else None
     try:
         payload = jwt.decode(
             token,
-            secret_key or current.secret_key,
+            secret_key if secret_key is not None else current.secret_key,
             algorithms=["HS256"],
         )
         if payload.get("type") != "session":

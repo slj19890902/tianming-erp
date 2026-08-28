@@ -18,7 +18,7 @@ def _block(start_marker: str, end_marker: str) -> str:
 def test_delivery_guide_is_short_reuses_existing_actions_and_never_auto_executes() -> None:
     guide = _block(
         '<div class="delivery-flow-guide"',
-        '<div class="form-grid">',
+        '<div class="form-grid delivery-header-grid">',
     )
     guide_logic = _block(
         "deliveryGuideStage() {",

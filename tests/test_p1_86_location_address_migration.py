@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "xx32v8x9z21"
 P1_86_REVISION = "bb36v8x9z25"
 P1_87_REVISION = "cc37v8x9z26"
-INTEGRATION_HEAD = "dd38v8x9z27"
+P1_86_INTEGRATION_ANCESTOR = "dd38v8x9z27"
+CURRENT_INTEGRATION_HEAD = "go50v8x9z39"
 P1_86_TABLES = {
     "warehouse_location_aliases",
     "warehouse_location_address_mutations",
@@ -98,16 +99,28 @@ def test_revision_is_linear_from_latest_formal_head() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [INTEGRATION_HEAD]
+    assert script.get_heads() == [CURRENT_INTEGRATION_HEAD]
     revision = script.get_revision(P1_86_REVISION)
     assert revision is not None
     assert revision.down_revision == BASE_REVISION
     next_revision = script.get_revision(P1_87_REVISION)
     assert next_revision is not None
     assert next_revision.down_revision == P1_86_REVISION
-    integration_revision = script.get_revision(INTEGRATION_HEAD)
+    integration_revision = script.get_revision(P1_86_INTEGRATION_ANCESTOR)
     assert integration_revision is not None
     assert integration_revision.down_revision == P1_87_REVISION
+    integration_chain = {
+        row.revision
+        for row in script.walk_revisions(
+            base=P1_86_REVISION,
+            head=CURRENT_INTEGRATION_HEAD,
+        )
+    }
+    assert {
+        P1_86_REVISION,
+        P1_87_REVISION,
+        P1_86_INTEGRATION_ANCESTOR,
+    } <= integration_chain
 
 
 def test_legacy_sqlite_upgrade_downgrade_upgrade_preserves_old_rows_and_triggers(

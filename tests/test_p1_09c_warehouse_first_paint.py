@@ -136,7 +136,7 @@ def test_location_candidates_compact_mode_preserves_flat_items(tmp_path) -> None
     assert "floors" not in compact
 
 
-def test_location_ledger_eager_loads_floor3_map_status_without_n_plus_one(tmp_path) -> None:
+def test_location_ledger_eager_loads_current_map_status_without_n_plus_one(tmp_path) -> None:
     engine, factory = _location_db(tmp_path)
     selects = 0
 
@@ -153,7 +153,8 @@ def test_location_ledger_eager_loads_floor3_map_status_without_n_plus_one(tmp_pa
         event.remove(engine, "before_cursor_execute", count_selects)
 
     assert len(payload["items"]) == 30
-    assert {row["map_status"] for row in payload["items"]} == {"floor3_mapped"}
-    # One ledger query plus four fixed-size projection preload queries.  The
-    # count must not grow with the 30 locations.
+    assert {row["map_status"] for row in payload["items"]} == {"current_map_mapped"}
+    # One ledger query plus four fixed-size current-map projection preloads,
+    # including the stable area-sequence lookup.  The count must not grow with
+    # 30 locations and must not preload the same layout relationship twice.
     assert selects == 5

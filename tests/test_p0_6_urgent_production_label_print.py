@@ -42,11 +42,11 @@ def test_a4_layout_overflow_does_not_block_independent_packaging_labels() -> Non
         helper_start,
     )
     label_gate = TASK_PRINT.index(
-        "labelButton.disabled = batchMode || labelCount <= 0",
+        "labelButton.disabled = batchMode || receiptBatchMode || labelCount <= 0",
         helper_start,
     )
     refresh_gate = TASK_PRINT.index(
-        "labelRefreshButton.hidden = batchMode || !refreshAction.options.length",
+        "labelRefreshButton.hidden = batchMode || receiptBatchMode || !refreshAction.options.length",
         helper_start,
     )
 

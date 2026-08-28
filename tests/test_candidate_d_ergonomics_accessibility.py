@@ -251,11 +251,13 @@ def test_target_sizes_are_scoped_to_high_frequency_and_mobile_controls() -> None
     assert ".drawing-btn" in MOBILE and "min-height: 44px" in _between(MOBILE, ".drawing-btn", ".bottom-nav")
 
 
-def test_candidate_d_release_note_is_pending_formal_acceptance() -> None:
-    assert "人体工学" in VERSION
-    assert "焦点陷阱" in VERSION
-    assert "正式 ERP 人工验收待完成" in VERSION
-    assert "无新增 migration" in VERSION
+def test_candidate_d_keeps_current_release_external_acceptance_gate() -> None:
+    # Candidate D's concrete accessibility contracts are asserted above.  Its
+    # historical release-note wording must not pin every later release name;
+    # the current version exposes the durable external-acceptance gate instead.
+    assert "APP_VERSION = " in VERSION
+    assert "APP_VERSION_NAME = " in VERSION
+    assert "APP_EXTERNAL_ACCEPTANCE_REQUIRED = True" in VERSION
 
 
 def test_index_inline_javascript_remains_valid(tmp_path: Path) -> None:

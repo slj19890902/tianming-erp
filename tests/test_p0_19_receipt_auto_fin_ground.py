@@ -403,13 +403,17 @@ def test_receipt_preview_uses_real_published_fin_member_not_legacy_dispatch(
             expected_location_id,
         )
         assert location is not None
+        readable_name = str(projection["employee_location_name"])
+        assert readable_name.startswith("一楼 ")
+        assert "FIN-001-1" in readable_name
+        assert readable_name != location.location_name
         assert projection == {
             "ready": True,
             "location_id": location.id,
             "location_code": location.location_code,
-            "location_name": location.location_name,
-            "current_address_name": location.location_name,
-            "employee_location_name": location.location_name,
+            "location_name": readable_name,
+            "current_address_name": readable_name,
+            "employee_location_name": readable_name,
             "position_status": "mapped",
             "layout_version": 2,
             "capacity_warning": None,
@@ -435,7 +439,7 @@ def test_receipt_preview_reports_missing_fin_ground_plan_instead_of_dispatch(
         projection = receipt_auto_finished_location_projection(session)
 
     assert projection["ready"] is False
-    assert "FIN-001～003" in str(projection["issue"])
+    assert "一楼成品待送区" in str(projection["issue"])
     assert "地堆排位" in str(projection["issue"])
     assert "DISPATCH" not in str(projection["issue"])
 
@@ -1367,22 +1371,24 @@ def test_api_created_order_receipt_auto_fin_and_reserve_purposes_end_to_end(
         raw_policy = session.scalar(
             select(WarehouseAreaStoragePolicy)
             .join(WarehouseAreaStoragePolicy.area)
-            .where(WarehouseAreaStoragePolicy.area.has(area_code="A1"))
+            .where(WarehouseAreaStoragePolicy.area.has(area_code="RAW-001"))
         )
         assert raw_policy is not None
         raw_feature = str(raw_policy.map_feature_id)
+        raw_revision = str(raw_policy.published_map_revision)
     fin_identity = location_candidates.load_warehouse_twin_published_floor_identity
     def combined_identity(floor_number: int):
         identity = fin_identity(floor_number)
+        if int(floor_number) == 3:
+            return {
+                "revision": raw_revision,
+                "zones_by_id": {raw_feature: "RAW-001"},
+                "zone_ids_by_area": {"RAW-001": (raw_feature,)},
+            }
         if int(floor_number) != 1:
             return identity
         return {
             **identity,
-            "zones_by_id": {**identity["zones_by_id"], raw_feature: "A1"},
-            "zone_ids_by_area": {
-                **identity["zone_ids_by_area"],
-                "A1": (raw_feature,),
-            },
         }
     monkeypatch.setattr(location_candidates, "load_warehouse_twin_published_floor_identity", combined_identity)
     with session_factory() as session:

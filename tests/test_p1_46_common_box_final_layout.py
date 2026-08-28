@@ -105,7 +105,7 @@ def test_layout_matches_selected_compact_information_architecture() -> None:
     final_row = PRODUCT_MODAL.split('class="product-form-row product-final-row"', 1)[1].split(
         "</fieldset>", 1
     )[0]
-    assert final_row.index("默认单价") < final_row.index("图纸")
+    assert final_row.index('v-model="productForm.sale_unit_price"') < final_row.index("图纸")
     assert final_row.index("图纸") < final_row.index("图纸记录")
     assert final_row.index("图纸记录") < final_row.index("product-inline-save")
 
@@ -131,7 +131,10 @@ def test_async_search_select_options_repaint_existing_backend_bindings() -> None
         'app.mount("#app")', 1
     )[0]
     assert "modelValue() { if (!this.open) this.query=this.selectedLabel; }," in component
-    assert "options() { if (!this.open) this.query=this.selectedLabel; }," in component
+    assert (
+        "options() { if (!this.open && this.query !== this.selectedLabel) "
+        "this.query=this.selectedLabel; },"
+    ) in component
 
 
 def test_printing_raw_fields_survive_sibling_edits_until_configuration_changes(

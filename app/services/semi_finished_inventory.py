@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 import json
 from math import ceil
@@ -1294,6 +1295,32 @@ def active_semi_requirement_credited_quantity(
     return total
 
 
+def finished_order_source_coverage(
+    reservations: Iterable[InventoryReservation],
+) -> int:
+    """Return cumulative main-item coverage backed by finished reservations.
+
+    This is a source-composition fact, not the canonical order coverage returned
+    by ``active_finished_reserved_qty``. Delivered quantity may include units
+    backed by semi-finished reservations, so only finished reservation facts are
+    counted here.
+    """
+
+    return sum(
+        int(reservation.consumed_stock_quantity or 0)
+        + max(
+            int(reservation.credited_requirement_quantity or 0)
+            - int(reservation.consumed_requirement_quantity or 0)
+            - int(reservation.released_requirement_quantity or 0),
+            0,
+        )
+        for reservation in reservations
+        if reservation.reservation_type == "finished_order"
+        and reservation.sales_order_item_bom_component_id is None
+        and reservation.status != "cancelled"
+    )
+
+
 def active_semi_coverage_by_order_item(
     db: Session,
     order_item_id: int,
@@ -1366,7 +1393,7 @@ def _finished_reservations_for_delivery(
     order_item_id: int,
     reservation_type: str = "finished_order",
 ) -> list[InventoryReservation]:
-    return db.scalars(
+    query = (
         select(InventoryReservation)
         .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
         .where(
@@ -1381,7 +1408,12 @@ def _finished_reservations_for_delivery(
             *inventory_fifo_order_columns(),
             InventoryReservation.id,
         )
-    ).all()
+    )
+    if reservation_type == "finished_order":
+        query = query.where(
+            InventoryReservation.sales_order_item_bom_component_id.is_(None)
+        )
+    return db.scalars(query).all()
 
 
 def _semi_reservations_for_delivery(
@@ -1423,19 +1455,24 @@ def consume_delivery_item_inventory(
     target_delivered = max(int(delivered_quantity_after_dispatch), 0)
     ordered_quantity = max(int(item.quantity or 0), 0)
     target_order_delivery = min(target_delivered, ordered_quantity)
-    finished_coverage = active_finished_reserved_qty(db, item.id)
-    target_finished = min(target_order_delivery, finished_coverage)
-    current_finished = int(
-        db.scalar(
-            select(func.coalesce(func.sum(InventoryReservation.consumed_stock_quantity), 0))
-            .where(
-                InventoryReservation.order_item_id == item.id,
-                InventoryReservation.reservation_type == "finished_order",
-                InventoryReservation.status != "cancelled",
-            )
+    finished_reservations = db.scalars(
+        select(InventoryReservation).where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            InventoryReservation.status != "cancelled",
         )
-        or 0
+    ).all()
+    current_finished = sum(
+        int(reservation.consumed_stock_quantity or 0)
+        for reservation in finished_reservations
     )
+    # This dispatch allocator needs cumulative finished-source coverage, not
+    # the canonical delivered-plus-remaining order coverage returned by
+    # active_finished_reserved_qty().  Delivered quantity can include units
+    # backed by semi-finished reservations and must not become finished credit.
+    finished_coverage = finished_order_source_coverage(finished_reservations)
+    target_finished = min(target_order_delivery, finished_coverage)
     remaining_finished = max(target_finished - current_finished, 0)
     for reservation in _finished_reservations_for_delivery(db, item.id):
         if remaining_finished <= 0:
@@ -1616,6 +1653,10 @@ def _active_delivery_allocations(
         query = query.where(
             InventoryReservation.semi_requirement_id == requirement_id
         )
+    if reservation_type == "finished_order":
+        query = query.where(
+            InventoryReservation.sales_order_item_bom_component_id.is_(None)
+        )
     rows = db.scalars(query).all()
     return sorted(
         rows,
@@ -1643,19 +1684,23 @@ def reverse_delivery_item_inventory(
     target_delivered = max(int(delivered_quantity_after_cancel), 0)
     ordered_quantity = max(int(item.quantity or 0), 0)
     target_order_delivery = min(target_delivered, ordered_quantity)
-    finished_coverage = active_finished_reserved_qty(db, item.id)
-    target_finished = min(target_order_delivery, finished_coverage)
-    current_finished = int(
-        db.scalar(
-            select(func.coalesce(func.sum(InventoryReservation.consumed_stock_quantity), 0))
-            .where(
-                InventoryReservation.order_item_id == item.id,
-                InventoryReservation.reservation_type == "finished_order",
-                InventoryReservation.status != "cancelled",
-            )
+    finished_reservations = db.scalars(
+        select(InventoryReservation).where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            InventoryReservation.status != "cancelled",
         )
-        or 0
+    ).all()
+    current_finished = sum(
+        int(reservation.consumed_stock_quantity or 0)
+        for reservation in finished_reservations
     )
+    # Keep cancellation symmetric with dispatch: delivered quantity can include
+    # semi-finished-backed units, so only reservation facts define cumulative
+    # finished-source coverage here.
+    finished_coverage = finished_order_source_coverage(finished_reservations)
+    target_finished = min(target_order_delivery, finished_coverage)
     excess_finished = max(current_finished - target_finished, 0)
     for allocation in _active_delivery_allocations(
         db,

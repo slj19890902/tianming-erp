@@ -188,7 +188,7 @@ def test_migration_rejects_invalid_provenance_and_fails_closed_with_any_new_fact
         command.downgrade(config, "co71v8x9z60")
 
 
-def test_product_bom_editor_exposes_mode_without_reusing_display_mode() -> None:
+def test_product_bom_editor_separates_pricing_from_fulfillment_display_mode() -> None:
     bom_start = INDEX.index('<fieldset class="bom-editor-panel"')
     bom_end = INDEX.index("</fieldset>", bom_start) + len("</fieldset>")
     bom_block = INDEX[bom_start:bom_end]
@@ -197,7 +197,14 @@ def test_product_bom_editor_exposes_mode_without_reusing_display_mode() -> None:
     assert 'value="component_priced"' in bom_block
     assert 'combination_mode: "parent_priced_set"' in INDEX
     assert "combination_mode: f.combination_mode" in INDEX
-    # 组件展示范围仍是 BOM 组件自己的事实，不能复用父件计价方式。
+    # P1-79 将客户单据展示范围提升为父件交付方式，并在保存 BOM 时统一落到组件；
+    # 它仍必须与组合计价方式完全分离，不能把 combination_mode 写入 display_mode。
     assert "component.display_mode" in INDEX
-    assert "display_mode: component.display_mode" in INDEX
+    assert (
+        'display_mode: this.productForm.composite_fulfillment_mode === "component_delivery" '
+        '? "show_on_delivery" : "internal_only"'
+    ) in INDEX
+    assert (
+        'show_on_delivery: this.productForm.composite_fulfillment_mode === "component_delivery"'
+    ) in INDEX
     assert "display_mode: f.combination_mode" not in INDEX

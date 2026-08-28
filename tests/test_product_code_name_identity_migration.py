@@ -161,4 +161,5 @@ def test_product_code_name_downgrade_fails_closed_with_same_code_facts(
 def test_order_picker_frontend_requests_authoritative_selection_context() -> None:
     index = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     assert index.count('selection_context:"order"') == 2
-    assert index.count('.filter(Boolean).join("｜") || "未命名常用箱"') == 2
+    assert index.count('.filter(Boolean).join("｜") || "未命名常用箱"') == 1
+    assert index.count('_compact_label:product.product_code || "未登记存货编码"') == 1

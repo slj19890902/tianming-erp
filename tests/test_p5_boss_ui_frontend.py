@@ -131,19 +131,19 @@ def test_p5_incoming_table_wraps_controls_inside_fixed_columns() -> None:
     for marker in (
         ".incoming-table { width: 100%; min-width: 0; table-layout: fixed; white-space: normal; }",
         ".incoming-table .input, .incoming-table .select { min-width: 0 !important;",
-        ".incoming-table .incoming-board-cell { word-break: normal; overflow-wrap: normal; }",
-        ".incoming-decision-cell { width: 13%; }",
+        ".incoming-sequence-cell,.incoming-dimension-cell,.incoming-times-cell,.incoming-date-cell,.incoming-quantity-summary { white-space:nowrap !important;",
+        ".incoming-compact-table th:nth-child(12) { width:13.1%; }",
         ".incoming-action-cell { width: 9%; }",
         ".incoming-table .btn {\n        max-width: 100%; min-width: 0; padding-left: 6px; padding-right: 6px;",
         "line-height: 1.3; white-space: normal; overflow-wrap: anywhere;",
         ".incoming-table td:last-child .btn { display: block; width: 100%; margin: 0 0 4px; }",
         '<input v-if="incomingTab===\'pending\' && hasPermission(\'incoming.execute\')" class="input compact-input" type="number"',
-        '<th class="incoming-board-cell">报料尺寸</th>',
-        '<td class="incoming-board-cell"><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>',
-        'class="incoming-decision-cell"><template v-if="incomingTab===\'pending\'">',
+        '<th>报料长(mm)</th><th class="incoming-times-cell">×</th><th>报料宽(mm)</th>',
+        '<td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row.cardboard_len) }}</strong></td><td class="incoming-times-cell">×</td><td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row.cardboard_width) }}</strong></td>',
+        '<td class="incoming-quantity-summary">{{ row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0 }} / {{ row.cumulative_received_quantity || 0 }} / {{ row.remaining_quantity ?? 0 }}</td>',
         'class="incoming-action-cell"><template v-if="incomingTab===\'pending\'">',
-        '<button class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving" @click="receiveIncoming(row)">',
-        '<button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button>',
+        '<button v-if="hasPermission(\'incoming.execute\')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">',
+        '<button v-if="hasPermission(\'incoming.execute\') && row.purpose_status===\'legacy_unset\' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button>',
     ):
         assert marker in INDEX
 
@@ -156,6 +156,7 @@ def test_p5_customer_list_has_page_scoped_narrow_desktop_layout() -> None:
     assert customer_columns == [
         "customer-col-number",
         "customer-col-code",
+        "customer-col-label-short",
         "customer-col-name",
         "customer-col-contact",
         "customer-col-phone",
@@ -167,7 +168,7 @@ def test_p5_customer_list_has_page_scoped_narrow_desktop_layout() -> None:
     widths = {
         name: int(width)
         for name, width in re.findall(
-            r"\.customer-list-table \.(customer-col-[a-z]+) \{ width: (\d+)%; \}",
+            r"\.customer-list-table \.(customer-col-[a-z-]+) \{ width: (\d+)%; \}",
             INDEX,
         )
     }

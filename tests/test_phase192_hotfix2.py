@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Generator
+from decimal import Decimal
 
 import pytest
 
@@ -212,6 +213,11 @@ def _make_test_app():
             Material(code="X4A",   supplier_name="嘉林亿", layer_count=3, flute_type="A",  quote_price=2.11, basis_weight_description="230g进口俄卡"),
             Material(code="X616X", supplier_name="鸣朋",   layer_count=5, flute_type="AB", quote_price=6.96, basis_weight_description="250g美卡"),
         ]
+        for material in mats:
+            material.price_unit = "元/㎡"
+            material.purchase_currency = "CNY"
+            material.purchase_tax_included = True
+            material.purchase_tax_rate = Decimal("0.13")
         db.add_all(mats)
         db.commit()
 

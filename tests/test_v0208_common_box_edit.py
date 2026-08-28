@@ -450,7 +450,8 @@ def test_common_box_fifth_row_contains_price_drawing_history_and_save() -> None:
     row_start = source.index('class="product-form-row product-final-row"')
     row_end = source.index('<div v-else-if="modal.type === \'material\'"', row_start)
     row = source[row_start:row_end]
-    assert "默认单价" in row
+    assert "product-inline-price" in row
+    assert "commonBoxPriceLabel(productForm.customer_id)" in row
     assert "图纸" in row
     assert "图纸记录" in row
     assert "product-inline-save" in row

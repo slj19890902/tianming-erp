@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 import sqlite3
 
@@ -8,15 +7,9 @@ from alembic import command
 from alembic.config import Config
 import pytest
 from sqlalchemy import inspect
-from sqlalchemy.orm import Session
 
 from app.core.database import create_sqlite_engine
 from app.models import Base
-from app.models.customer import Customer
-from app.models.delivery import Delivery
-from app.models.finance import ReturnReceipt
-from app.models.fulfillment_reminder import FulfillmentReminder
-from app.models.user import User
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,60 +83,89 @@ def test_p1_65a_downgrade_fails_closed_after_reminder_fact(
     path = tmp_path / "p1-65a-fail-closed.sqlite3"
     config = _config(monkeypatch, path)
     command.upgrade(config, TARGET_REVISION)
-    engine = create_sqlite_engine(path)
-    try:
-        with Session(engine) as session:
-            user = User(
-                username="p165-migration",
-                password_hash="test-only",
-                role="admin",
-                real_name="迁移测试",
-                display_name="迁移测试",
-                must_change_password=False,
-            )
-            customer = Customer(name="P1-65A 迁移测试客户")
-            session.add_all([user, customer])
-            session.flush()
-            delivery = Delivery(
-                delivery_number="P1-65A-MIGRATION",
-                customer_id=customer.id,
-                delivery_date=date(2026, 8, 16),
-                status="dispatched",
-                total_quantity=1,
-            )
-            session.add(delivery)
-            session.flush()
-            receipt = ReturnReceipt(
-                delivery_id=delivery.id,
-                actual_received_date=date(2026, 8, 16),
-                status="confirmed",
-                created_by=user.id,
-            )
-            session.add(receipt)
-            session.flush()
-            session.add(
-                FulfillmentReminder(
-                    source_return_receipt_id=receipt.id,
-                    source_return_receipt_id_snapshot=receipt.id,
-                    source_delivery_id_snapshot=delivery.id,
-                    source_delivery_number_snapshot=delivery.delivery_number,
-                    source_received_date_snapshot=receipt.actual_received_date,
-                    source_valid=True,
-                    customer_id=customer.id,
-                    customer_name_snapshot=customer.name,
-                    scope_type="customer",
-                    reminder_type="delivery_attention",
-                    content="迁移测试内部备忘",
-                    cadence="continuous",
-                    status="active",
-                    version=1,
-                    created_by=user.id,
-                    created_by_name_snapshot="迁移测试",
-                )
-            )
-            session.commit()
-    finally:
-        engine.dispose()
+    # This database intentionally stops at the historical oo23 schema.  Seed
+    # the fact with revision-local SQL so future ORM columns do not invalidate
+    # a migration downgrade contract that predates them.
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        user_id = connection.execute(
+            """
+            INSERT INTO users (
+                username, password_hash, role, real_name, display_name,
+                must_change_password
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "p165-migration",
+                "test-only",
+                "admin",
+                "迁移测试",
+                "迁移测试",
+                0,
+            ),
+        ).lastrowid
+        customer_id = connection.execute(
+            "INSERT INTO customers (name) VALUES (?)",
+            ("P1-65A 迁移测试客户",),
+        ).lastrowid
+        delivery_id = connection.execute(
+            """
+            INSERT INTO sales_deliveries (
+                delivery_number, customer_id, delivery_date, status,
+                total_quantity, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("P1-65A-MIGRATION", customer_id, "2026-08-16", "dispatched", 1, user_id),
+        ).lastrowid
+        receipt_id = connection.execute(
+            """
+            INSERT INTO finance_return_receipts (
+                delivery_id, actual_received_date, status, created_by
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (delivery_id, "2026-08-16", "confirmed", user_id),
+        ).lastrowid
+        connection.execute(
+            """
+            INSERT INTO fulfillment_reminders (
+                source_return_receipt_id,
+                source_return_receipt_id_snapshot,
+                source_delivery_id_snapshot,
+                source_delivery_number_snapshot,
+                source_received_date_snapshot,
+                source_valid,
+                customer_id,
+                customer_name_snapshot,
+                scope_type,
+                reminder_type,
+                content,
+                cadence,
+                status,
+                version,
+                created_by,
+                created_by_name_snapshot
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                receipt_id,
+                receipt_id,
+                delivery_id,
+                "P1-65A-MIGRATION",
+                "2026-08-16",
+                1,
+                customer_id,
+                "P1-65A 迁移测试客户",
+                "customer",
+                "delivery_attention",
+                "迁移测试内部备忘",
+                "continuous",
+                "active",
+                1,
+                user_id,
+                "迁移测试",
+            ),
+        )
+        connection.commit()
 
     with pytest.raises(RuntimeError, match="拒绝破坏性降级"):
         command.downgrade(config, PARENT_REVISION)

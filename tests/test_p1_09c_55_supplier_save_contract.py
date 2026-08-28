@@ -108,7 +108,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 def test_supplier_refresh_failure_reports_write_success_without_repeat(tmp_path: Path) -> None:
     refresh_body = _method_body(
         "handleMasterSaveRefreshFailure(entity, error) {",
-        "async saveNewOrder(orderPayload) {",
+        "moldRepairWarningText(warnings) {",
     )
     save_body = _method_body(
         "async saveModal() {", "async dispatchDelivery(row, options = {}) {"

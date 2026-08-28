@@ -123,7 +123,7 @@ def test_contract_print_is_safe_customer_facing_document() -> None:
     assert '存货编码</th>' not in PRINT
     assert 'item.product_code' not in PRINT
     assert '规格(mm)' not in PRINT
-    assert '.replace(/mm/gi, "")' in PRINT
+    assert 'return `${dimensions.map(compactNumber).join("×")}mm`;' in PRINT
     assert '金额</th>' in PRINT
     assert 'buildContractPages(items)' in PRINT
     assert 'items.length <= 4' in PRINT

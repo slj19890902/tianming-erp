@@ -939,6 +939,8 @@ def test_workshop_can_open_structured_location_label_and_qr(
             "product_count",
             "label_identity",
             "label_customer_name",
+            "label_mold_name",
+            "label_mold_chinese_short_name",
             "label_mold_number",
             "label_product_specification",
             "label_report_specification",
@@ -2403,8 +2405,8 @@ def test_one_floor_mold_location_options_are_read_only_and_employee_friendly(
         ]
         assert data["racks"][0]["location_depth"] == "grid"
         assert data["racks"][0]["levels"] == [
-            {"level": 2, "kind": "flat", "grid_count": 1, "grids": [1]},
-            {"level": 3, "kind": "flat", "grid_count": 1, "grids": [1]},
+            {"level": 2, "kind": "flat", "grid_count": 4, "grids": [1, 2, 3, 4]},
+            {"level": 3, "kind": "flat", "grid_count": 3, "grids": [1, 2, 3]},
         ]
         assert data["racks"][3]["location_depth"] == "rack"
         assert data["racks"][3]["levels"] == []

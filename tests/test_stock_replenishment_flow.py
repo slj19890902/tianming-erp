@@ -2135,6 +2135,7 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
             if row["document_number"] == order["order_number"]
         )
         assert reported_item["status"] == "active"
+        assert reported_item["stock_replenishment_can_void"] is True
 
         pending = client.get("/api/incoming/pending")
         assert pending.status_code == 200, pending.text
@@ -2201,6 +2202,7 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         assert any(
             row["document_number"] == order["order_number"]
             and row["status"] == "active"
+            and row["stock_replenishment_can_void"] is False
             for row in received_reported_items.json()["items"]
         )
         receipt_history = client.get("/api/incoming/history")
@@ -2236,6 +2238,7 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         assert any(
             row["document_number"] == second_order["order_number"]
             and row["status"] == "voided"
+            and row["stock_replenishment_can_void"] is False
             for row in voided_reported_items.json()["items"]
         )
         after_void_pending = client.get("/api/incoming/pending").json()["items"]

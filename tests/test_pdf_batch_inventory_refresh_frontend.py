@@ -111,6 +111,9 @@ context.loadOrderLineInventory = async line => {
   line._inventory = inventoryState(freshCandidate);
 };
 sandbox.axios.post = async (url, payload) => {
+  if (url === "/api/orders/mold-repair-preview") {
+    return { data:{ required:false, warnings:[], confirmation_token:null } };
+  }
   assert(url === "/api/orders", `unexpected URL ${url}`);
   const reservation = payload.items[0].reservation_plan.finished[0];
   const expected = reservation.expected_version;

@@ -1964,8 +1964,11 @@ class _PendingRequisitionReadContext:
         self._bom_reservations_by_snapshot_id: dict[
             int, list[tuple[InventoryReservation, OrderItemSemiRequirement | None]]
         ] = {}
-        self._bom_active_requisition_components: dict[int, set[str]] = {}
-        self._bom_parent_active_requisition_item_ids: set[int] = set()
+        self._bom_active_order_purpose_by_snapshot_component: dict[
+            tuple[int, str], int
+        ] = {}
+        self._bom_parent_active_order_purpose_by_item_id: dict[int, int] = {}
+        self._bom_component_products_by_id: dict[int, Product] = {}
         self._bom_batch_supported_item_ids: set[int] = set()
         self._semi_requirements_by_item_component: dict[
             tuple[int, str], OrderItemSemiRequirement
@@ -2016,6 +2019,21 @@ class _PendingRequisitionReadContext:
             self._bom_snapshots_by_item_id.setdefault(
                 int(snapshot.sales_order_item_id), []
             ).append(snapshot)
+        component_product_ids = {
+            int(snapshot.component_product_id)
+            for snapshot in bom_snapshots
+            if snapshot.component_product_id is not None
+        }
+        if component_product_ids:
+            # Keep strong references for the request. SQLAlchemy's identity map
+            # may otherwise release a clean component Product between BOM rows,
+            # making the established db.get() formatter issue one SELECT per row.
+            self._bom_component_products_by_id = {
+                int(product.id): product
+                for product in db.scalars(
+                    select(Product).where(Product.id.in_(component_product_ids))
+                ).all()
+            }
         complex_item_ids = set(self._bom_snapshots_by_item_id)
         # Telescoping lid boxes have two independent cover/base requirements.
         # Their aggregate values cannot use the ordinary whole-item formula.
@@ -2176,15 +2194,49 @@ class _PendingRequisitionReadContext:
                         snapshot_id, []
                     ).append((reservation, requirement))
 
-            for snapshot_id, component_type in db.execute(
+            purpose = (
+                select(
+                    PurchasePurposeSourceSnapshot.material_requisition_item_id.label(
+                        "requisition_item_id"
+                    ),
+                    func.sum(
+                        PurchasePurposeSourceSnapshot.order_purpose_sheet_qty
+                    ).label("order_purpose_sheet_qty"),
+                )
+                .where(
+                    PurchasePurposeSourceSnapshot.material_requisition_item_id.is_not(
+                        None
+                    )
+                )
+                .group_by(
+                    PurchasePurposeSourceSnapshot.material_requisition_item_id
+                )
+                .subquery()
+            )
+            for (
+                snapshot_id,
+                component_type,
+                purchase_qty,
+                frozen_order_purpose,
+            ) in db.execute(
                 select(
                     RequisitionItemBomSource.sales_order_item_bom_component_id,
                     RequisitionItemBomSource.component_type,
+                    RequisitionItem.requisition_qty,
+                    purpose.c.order_purpose_sheet_qty,
                 )
                 .join(
                     RequisitionItem,
                     RequisitionItem.id
                     == RequisitionItemBomSource.requisition_item_id,
+                )
+                .join(
+                    Requisition,
+                    Requisition.id == RequisitionItem.requisition_id,
+                )
+                .outerjoin(
+                    purpose,
+                    purpose.c.requisition_item_id == RequisitionItem.id,
                 )
                 .where(
                     RequisitionItemBomSource.sales_order_item_bom_component_id.in_(
@@ -2193,11 +2245,23 @@ class _PendingRequisitionReadContext:
                     func.lower(RequisitionItem.status).notin_(
                         INACTIVE_REQUISITION_ITEM_STATUSES
                     ),
+                    func.lower(Requisition.status).notin_(
+                        NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES
+                    ),
                 )
             ).all():
-                self._bom_active_requisition_components.setdefault(
-                    int(snapshot_id), set()
-                ).add((component_type or "whole").strip().lower())
+                key = (
+                    int(snapshot_id),
+                    (component_type or "whole").strip().lower(),
+                )
+                self._bom_active_order_purpose_by_snapshot_component[key] = (
+                    self._bom_active_order_purpose_by_snapshot_component.get(key, 0)
+                    + (
+                        int(frozen_order_purpose)
+                        if frozen_order_purpose is not None
+                        else int(purchase_qty or 0)
+                    )
+                )
 
             linked_source = (
                 select(RequisitionItemBomSource.id)
@@ -2207,19 +2271,46 @@ class _PendingRequisitionReadContext:
                 )
                 .exists()
             )
-            self._bom_parent_active_requisition_item_ids = set(
-                int(order_item_id)
-                for order_item_id in db.scalars(
-                    select(RequisitionItem.order_item_id).where(
-                        RequisitionItem.order_item_id.in_(item_ids),
-                        func.lower(RequisitionItem.status).notin_(
-                            INACTIVE_REQUISITION_ITEM_STATUSES
-                        ),
-                        ~linked_source,
+            for (
+                order_item_id,
+                purchase_qty,
+                frozen_order_purpose,
+            ) in db.execute(
+                select(
+                    RequisitionItem.order_item_id,
+                    RequisitionItem.requisition_qty,
+                    purpose.c.order_purpose_sheet_qty,
+                )
+                .join(
+                    Requisition,
+                    Requisition.id == RequisitionItem.requisition_id,
+                )
+                .outerjoin(
+                    purpose,
+                    purpose.c.requisition_item_id == RequisitionItem.id,
+                )
+                .where(
+                    RequisitionItem.order_item_id.in_(item_ids),
+                    func.lower(RequisitionItem.status).notin_(
+                        INACTIVE_REQUISITION_ITEM_STATUSES
+                    ),
+                    func.lower(Requisition.status).notin_(
+                        NON_EFFECTIVE_LEGACY_REQUISITION_STATUSES
+                    ),
+                    ~linked_source,
+                )
+            ).all():
+                if order_item_id is None:
+                    continue
+                item_id = int(order_item_id)
+                self._bom_parent_active_order_purpose_by_item_id[item_id] = (
+                    self._bom_parent_active_order_purpose_by_item_id.get(item_id, 0)
+                    + (
+                        int(frozen_order_purpose)
+                        if frozen_order_purpose is not None
+                        else int(purchase_qty or 0)
                     )
-                ).all()
-                if order_item_id is not None
-            )
+                )
 
         if include_display_facts:
             self._posted_completion_item_ids = set(
@@ -2406,21 +2497,23 @@ class _PendingRequisitionReadContext:
             "total_piece_quantity": finished + semi,
         }
 
-    def _bom_has_active_requisition(
+    def _bom_active_order_purpose_sheet_qty(
         self,
         snapshot: SalesOrderItemBomComponent,
         component: str,
-    ) -> bool:
+    ) -> int:
         accepted = (
             {component, "whole"}
             if component in {"cover", "base"}
             else {"whole"}
         )
-        return bool(
-            self._bom_active_requisition_components.get(
-                int(snapshot.id), set()
+        return sum(
+            int(
+                self._bom_active_order_purpose_by_snapshot_component.get(
+                    (int(snapshot.id), accepted_component), 0
+                )
             )
-            & accepted
+            for accepted_component in accepted
         )
 
     def bom_pending_component_requirements(
@@ -2455,12 +2548,21 @@ class _PendingRequisitionReadContext:
                     f"component:{snapshot.id}:{component}"
                 )
                 requirement["parent_order_item_id"] = item.id
+                authoritative_order_sheet_qty = int(requirement["requisition_qty"])
                 requirement["already_requisitioned"] = (
-                    self._bom_has_active_requisition(snapshot, component)
+                    self._bom_active_order_purpose_sheet_qty(snapshot, component)
+                )
+                requirement["authoritative_order_sheet_qty"] = (
+                    authoritative_order_sheet_qty
+                )
+                requirement["requisition_qty"] = max(
+                    authoritative_order_sheet_qty
+                    - int(requirement["already_requisitioned"]),
+                    0,
                 )
                 requirement["can_requisition"] = (
                     int(requirement["remaining_required_piece_qty"]) > 0
-                    and not requirement["already_requisitioned"]
+                    and int(requirement["requisition_qty"]) > 0
                 )
                 rows.append(requirement)
         return rows
@@ -2480,9 +2582,10 @@ class _PendingRequisitionReadContext:
                 (item.id, "whole"), 0
             ),
         )
-        already_requisitioned = (
-            item.id in self._bom_parent_active_requisition_item_ids
+        already_requisitioned = int(
+            self._bom_parent_active_order_purpose_by_item_id.get(item.id, 0)
         )
+        authoritative_order_sheet_qty = int(requirements["requisition_qty"])
         return {
             "source_kind": "parent",
             "source_key": f"parent:{item.id}",
@@ -2509,14 +2612,18 @@ class _PendingRequisitionReadContext:
             "semi_finished_reserved_piece_qty": int(
                 requirements["semi_finished_reserved_piece_qty"]
             ),
-            "requisition_qty": int(requirements["requisition_qty"]),
+            "requisition_qty": max(
+                authoritative_order_sheet_qty - already_requisitioned,
+                0,
+            ),
+            "authoritative_order_sheet_qty": authoritative_order_sheet_qty,
             "cutting_mode": str(requirements["cutting_mode"]),
             "cutting_factor": int(requirements["cutting_factor"]),
             "yield_per_sheet": int(requirements["cutting_factor"]),
             "already_requisitioned": already_requisitioned,
             "can_requisition": (
                 int(requirements["remaining_required_piece_qty"]) > 0
-                and not already_requisitioned
+                and authoritative_order_sheet_qty > already_requisitioned
             ),
         }
 
@@ -19285,6 +19392,37 @@ def _build_reported_documents(
                     "source_key": source_key,
                     "component_type": source.component_type if source else None,
                     "component_label": component_label,
+                    "order_item_id": item.order_item_id,
+                    "composite_fulfillment_mode": (
+                        (
+                            order_item.composite_fulfillment_mode_snapshot
+                            if order_item is not None
+                            else None
+                        )
+                        or "component_delivery"
+                    ) if source is not None else None,
+                    "composite_parent_product_code": (
+                        order_item.snapshot_product_code
+                        if source is not None and order_item is not None
+                        else None
+                    ),
+                    "composite_parent_product_name": (
+                        order_item.snapshot_product_name
+                        if source is not None and order_item is not None
+                        else None
+                    ),
+                    "composite_parent_set_quantity": (
+                        int(order_item.quantity or 0)
+                        if source is not None and order_item is not None
+                        else (0 if source is not None else None)
+                    ),
+                    "composite_parent_label_enabled": (
+                        bool(order_item.product.production_label_enabled)
+                        if source is not None
+                        and order_item is not None
+                        and order_item.product is not None
+                        else False
+                    ),
                     "customer_id": customer.id if customer else None,
                     "customer_name": customer.name if customer else None,
                     "order_number": display_order_number(order, registry) if order else None,
@@ -20019,6 +20157,11 @@ def list_reported_items(
                 "can_view_supplier_order": candidate["source_type"] == "supplier_order",
                 "version": line.get("version"),
                 "voided_at": line.get("voided_at"),
+                "stock_replenishment_can_void": (
+                    candidate["source_type"] == "stock_replenishment"
+                    and bool(document.get("can_void"))
+                    and has_permission(user, "requisition.execute")
+                ),
                 "can_void_item": (
                     is_current_supplier_item
                     and has_permission(user, "requisition.execute")

@@ -55,6 +55,7 @@ let release,callCount=0;const calls=[];
 const vm={{
   orderItemSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},orderItemForm:{{id:7,_product_error:""}},
   putIndirectProductUpdate:(url,payload,form,label)=>{{callCount+=1;calls.push({{url,payload,form,label}});return new Promise(resolve=>{{release=()=>resolve({{data:{{id:7}}}});}});}},
+  prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   closeCount:0,closeModal(){{this.closeCount+=1;}},loadOrders:async()=>true,loadProducts:async()=>true,
   showToast(){{}},errorMessage:error=>error.message,
 }};
@@ -82,6 +83,7 @@ const body={json.dumps(body, ensure_ascii=False)};const toasts=[];let closed=fal
 const vm={{
   orderItemSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},orderItemForm:{{id:7}},
   putIndirectProductUpdate:async()=>({{data:{{id:7}}}}),closeModal(){{closed=true;}},
+  prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   loadOrders:async()=>{{throw new Error("orders offline");}},loadProducts:async()=>true,
   showToast:(message,isError)=>toasts.push({{message,isError}}),errorMessage:error=>error.message,
 }};
@@ -100,6 +102,7 @@ def test_order_item_network_explicit_and_cancelled_results(tmp_path: Path) -> No
 const body={json.dumps(body, ensure_ascii=False)};const factory=()=>new Function("return async function(orderItemId,orderItemPayload) {{"+body+"}}")();
 const makeVm=()=>({{
   orderItemSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},orderItemForm:{{id:7,_product_error:""}},closeCount:0,
+  prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   closeModal(){{this.closeCount+=1;}},loadOrders:async()=>true,loadProducts:async()=>true,showToast(){{}},errorMessage:error=>error.message,
 }});
 (async()=>{{
@@ -121,7 +124,10 @@ def test_save_modal_routes_order_item_result_without_losing_guards() -> None:
     body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     assert 'if (this.modal?.type === "orderItem" && (this.orderItemSaveState.saving' in body
     assert "const orderItemSaved = await this.saveCurrentOrderItem(" in body
-    assert "if (orderItemSaved?._in_flight || !orderItemSaved) return false;" in body
+    assert (
+        "if (orderItemSaved?._in_flight || orderItemSaved?._cancelled || "
+        "!orderItemSaved) return false;"
+    ) in body
     assert "if (error?._orderItemOutcomeUncertain)" in body
     assert "结果暂不确定" in body
     assert "订单详情和常用箱" in body

@@ -24,8 +24,9 @@ def test_location_management_routes_all_maps_to_the_measured_twin() -> None:
     assert 'id="floor3KeywordFilter"' in WAREHOUSE_HTML
     assert 'page_size:"500"' in WAREHOUSE_HTML
     assert 'FLOOR3_AREA_OPTIONS=[' in WAREHOUSE_HTML
-    for area_code in ("A1", "A2", "AB1", "AB2", "B1", "B2", "C1", "C2", "CD1", "D1", "D2", "DE1", "E1", "E2", "E3", "E4", "F1", "F2", "F3", "F4"):
+    for area_code in ("A1", "A2", "AB1", "AB2", "B1", "B2", "C1", "C2", "CD1", "D1", "D2", "DE1", "E1", "E2", "E3", "SEMI-011", "F1", "F2", "F3", "F4"):
         assert f'["{area_code}"' in WAREHOUSE_HTML
+    assert '["E4","E4 区"]' not in WAREHOUSE_HTML
     assert '"F12"' in WAREHOUSE_HTML and '"F34"' in WAREHOUSE_HTML
 
 
@@ -40,7 +41,7 @@ def test_new_floor3_slot_refreshes_area_and_global_overview() -> None:
     refresh = WAREHOUSE_HTML.split("async function refreshFloor3LocationData(){", 1)[1].split(
         "async function loadFloor3MoveLocations", 1
     )[0]
-    assert "state.floor3.mapLocations=state.readOnly?(overview.items||[]).filter(row=>row.layout):(overview.items||[])" in refresh
+    assert 'state.floor3.mapLocations=state.readOnly?(overview.items||[]).filter(row=>row.position_status==="mapped"&&row.layout):(overview.items||[])' in refresh
     assert "renderFloor3Plan()" in refresh
     assert "await loadFloor3Locations(true)" in refresh
     loader = WAREHOUSE_HTML.split("async function loadFloor3Locations(throwOnError=false){", 1)[1].split(
@@ -317,28 +318,26 @@ def test_floor3_f_detail_moves_away_from_the_selected_rack_without_duplicate_pan
     assert "overflow-x:hidden" in area_rule
 
 
-def test_floor3_d1_has_two_ground_pallet_rows_and_one_second_level_rack_row() -> None:
+def test_floor3_d1_uses_current_measured_positions_instead_of_legacy_special_layout() -> None:
     assert 'if(areaCode==="D1")return 28' in WAREHOUSE_HTML
-    assert "function floor3D1DefaultDisplayLayout(row)" in WAREHOUSE_HTML
-    assert '/^D1-S2-(\\d{2})$/' in WAREHOUSE_HTML
-    assert '/^D1-([LR])(\\d{2})$/' in WAREHOUSE_HTML
-    assert "function floor3D1LayoutHtml(rows)" in WAREHOUSE_HTML
-    assert "二层货架格（8 格）" in WAREHOUSE_HTML
-    assert "底部栈板位（两排，各 10 位）" in WAREHOUSE_HTML
-    assert 'area==="D1"?floor3D1LayoutHtml(rows)' in WAREHOUSE_HTML
+    render = WAREHOUSE_HTML.split("function renderFloor3AreaSlots(){", 1)[1].split(
+        "function renderFloor3LayoutEditor", 1
+    )[0]
+    assert 'area==="F"?floor3FGroupHtml(rows)' in render
+    assert "floor3AreaBackdropHtml(area)" in render
+    assert "rows.map(row=>floor3SlotMarker(row,true))" in render
+    assert 'area==="D1"?floor3D1LayoutHtml(rows)' not in render
 
 
-def test_floor3_e4_and_de1_follow_vertical_physical_order() -> None:
-    assert "function floor3E4DefaultDisplayLayout(row)" in WAREHOUSE_HTML
-    assert "function floor3DE1DefaultDisplayLayout(row)" in WAREHOUSE_HTML
-    assert "function floor3VerticalStructureHtml(areaCode,rows)" in WAREHOUSE_HTML
-    assert "一列货架 / 两列栈板" in WAREHOUSE_HTML
-    assert "左侧货架（从上到下 4 格）" in WAREHOUSE_HTML
-    assert "右侧栈板 L 列（6 位）" in WAREHOUSE_HTML
-    assert "右侧栈板 R 列（6 位）" in WAREHOUSE_HTML
-    assert "栈板位（从上到下）" in WAREHOUSE_HTML
-    assert 'area==="E4"||area==="DE1"' in WAREHOUSE_HTML
-    assert ".floor3-slot-marker.area-e4,.floor3-slot-marker.area-de1" in WAREHOUSE_HTML
+def test_floor3_current_map_replaces_e4_with_semi_finished_area() -> None:
+    assert '["SEMI-011","SEMI-011 半成品堆放区"]' in WAREHOUSE_HTML
+    assert 'if(areaCode==="SEMI-011")return 4' in WAREHOUSE_HTML
+    assert '["半成品区",["SEMI-011"]]' in WAREHOUSE_HTML
+    render = WAREHOUSE_HTML.split("function renderFloor3AreaSlots(){", 1)[1].split(
+        "function renderFloor3LayoutEditor", 1
+    )[0]
+    assert 'area==="E4"||area==="DE1"' not in render
+    assert "floor3VerticalStructureHtml(area,rows)" not in render
 
 
 def test_floor3_capacity_copy_separates_actual_enabled_and_theoretical_capacity() -> None:
@@ -508,7 +507,7 @@ def test_floor3_area_outlines_are_passive_and_use_separate_corridor_entries() ->
         "];", 1
     )[0]
     f_area_codes = {"F1", "F2", "F3", "F4", "F12", "F34"}
-    assert len([code for code in re.findall(r'id:"([A-Z0-9]+)"', zones) if code not in f_area_codes]) == 16
+    assert len([code for code in re.findall(r'id:"([A-Z0-9-]+)"', zones) if code not in f_area_codes]) == 16
 
     plan = WAREHOUSE_HTML.split("function renderFloor3Plan(){", 1)[1].split(
         "function floor3OverviewSelectionHtml", 1
@@ -653,14 +652,13 @@ console.log(JSON.stringify({display,moved,returned,source}));
     assert 0 <= payload["moved"]["top_pct"] <= 100 - payload["moved"]["height_pct"]
 
 
-def test_floor3_e4_overview_moves_only_rack_half_a_cell_left() -> None:
-    assert '.floor3-slot-marker.overview-e4-rack{transform:translateX(-50%)}' in WAREHOUSE_HTML
+def test_floor3_slot_markers_do_not_apply_retired_e4_offsets() -> None:
     marker_block = WAREHOUSE_HTML.split("function floor3SlotMarker(row,areaFocus=false){", 1)[1].split(
         "function floor3RackLevel", 1
     )[0]
-    assert '!areaFocus&&floor3AreaCode(row)==="E4"&&floor3IsRack(row)?"overview-e4-rack":""' in marker_block
-    assert 'left_pct:ground[1]==="L"?58:128' in WAREHOUSE_HTML
-    assert 'width_pct:63,height_pct:13.5' in WAREHOUSE_HTML
+    assert 'floor3AreaCode(row)==="E4"' not in marker_block
+    assert '"overview-e4-rack"' not in marker_block
+    assert "floor3MarkerLayout(row,areaFocus)" in marker_block
 
 
 def test_floor3_clear_uses_one_impact_confirmation_and_move_filters_empty_active() -> None:
@@ -1068,7 +1066,7 @@ def test_semi_finished_location_dropdown_uses_active_placed_locations_and_explai
     loader = WAREHOUSE_HTML.split("async function loadLocations(includeInactive=false){", 1)[1].split(
         "async function loadCustomers", 1
     )[0]
-    assert 'const semiLocations=active.filter(x=>x.placement_status!=="unplaced"&&["semi_finished","shared"].includes(x.warehouse_type))' in loader
+    assert 'const semiLocations=active.filter(x=>x.position_status==="mapped"&&["semi_finished","shared"].includes(x.warehouse_type))' in loader
     assert '$("siLocation").disabled=!semiLocations.length' in loader
     assert 'id="siLocationHint"' in WAREHOUSE_HTML
     assert "暂无半成品库位，请先完成 SF-TEMP 迁移或新增半成品库位" in WAREHOUSE_HTML

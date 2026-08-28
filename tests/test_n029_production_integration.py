@@ -966,6 +966,12 @@ def test_over_delivery_flows_through_receipt_statement_export_and_invoice(
         )
         assert statement.status_code == 201, statement.text
         statement_id = statement.json()["id"]
+        with factory() as db:
+            from app.models.finance import Statement
+
+            confirmed_statement = db.get(Statement, statement_id)
+            confirmed_statement.confirmation_status = "confirmed"
+            db.commit()
 
         detail = client.get(f"/api/finance/statements/{statement_id}")
         assert detail.status_code == 200, detail.text
@@ -996,6 +1002,9 @@ def test_over_delivery_flows_through_receipt_statement_export_and_invoice(
                 "invoice_number": "N029-OVER-103-INVOICE",
                 "invoice_date": date.today().isoformat(),
                 "invoice_amount": "103.00",
+                "expected_version": 1,
+                "expected_ledger_version": 1,
+                "idempotency_key": "n029-over-103-invoice",
             },
         )
         assert invoice.status_code == 201, invoice.text

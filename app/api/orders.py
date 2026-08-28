@@ -57,6 +57,7 @@ from app.models.external_packaging_purchase import (
     ExternalPackagingReceipt,
 )
 from app.models.finance import (
+    FinanceManualMutation,
     Invoice,
     ReturnReceipt,
     ReturnReceiptItem,
@@ -64,6 +65,7 @@ from app.models.finance import (
     Statement,
     StatementItem,
 )
+from app.models.invoice_task import FinanceInvoiceTask
 from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.material import Material
 from app.models.order import Order, OrderItem
@@ -5102,6 +5104,55 @@ def _already_at_workflow_rollback_baseline(
     return True
 
 
+def _ensure_statement_chain_can_be_removed_for_workflow_rollback(
+    db: Session,
+    statement_ids: set[int],
+) -> None:
+    """Allow cleanup only for unconfirmed drafts without immutable finance facts."""
+
+    if not statement_ids:
+        return
+    blocked_reasons: list[str] = []
+    statement_states = db.execute(
+        select(
+            Statement.confirmation_status,
+            Statement.status,
+            Statement.invoiced_amount,
+            Statement.settled_amount,
+        ).where(Statement.id.in_(statement_ids))
+    ).all()
+    if any(row.confirmation_status != "draft" for row in statement_states):
+        blocked_reasons.append("对账单已确认或取消")
+    if any(row.status != "unsettled" for row in statement_states):
+        blocked_reasons.append("对账单已结清")
+    if any(Decimal(row.invoiced_amount or 0) > 0 for row in statement_states):
+        blocked_reasons.append("对账单已有开票累计")
+    if any(Decimal(row.settled_amount or 0) > 0 for row in statement_states):
+        blocked_reasons.append("对账单已有收款累计")
+    finance_fact_models = (
+        (FinanceInvoiceTask, "已生成开票任务"),
+        (FinanceManualMutation, "已形成财务幂等事实"),
+        (Invoice, "已登记开票"),
+        (SettlementRecord, "已登记收款"),
+    )
+    for model, label in finance_fact_models:
+        if db.scalar(
+            select(model.id)
+            .where(model.statement_id.in_(statement_ids))
+            .limit(1)
+        ) is not None:
+            blocked_reasons.append(label)
+    if blocked_reasons:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "关联对账链已进入财务受控阶段（"
+                + "、".join(blocked_reasons)
+                + "），不能自动撤回或删除。请先按财务作废/冲销流程处理。"
+            ),
+        )
+
+
 def _lock_orders_for_production_transition(
     db: Session,
     order_ids: list[int],
@@ -5698,6 +5749,10 @@ def rollback_order_workflow(
                 status_code=409,
                 detail="该订单与其他订单共用对账单，不能自动撤回，请先拆分处理。",
             )
+    _ensure_statement_chain_can_be_removed_for_workflow_rollback(
+        db,
+        statement_ids,
+    )
     try:
         _ensure_no_active_incoming_receipts(
             db,
@@ -5798,6 +5853,16 @@ def rollback_order_workflow(
         return _order_response(order, user, db=db, customer_name=customer.name if customer else None)
     except HTTPException:
         db.rollback()
+        raise
+    except IntegrityError as error:
+        db.rollback()
+        try:
+            _ensure_statement_chain_can_be_removed_for_workflow_rollback(
+                db,
+                statement_ids,
+            )
+        except HTTPException as finance_conflict:
+            raise finance_conflict from error
         raise
     except Exception:
         db.rollback()

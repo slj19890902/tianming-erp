@@ -27,8 +27,8 @@ def test_finance_customer_month_rows_expand_existing_statement_actions() -> None
     assert '@click="openStatementEdit(statement)"' in INDEX
     assert '@click="cancelStatement(statement)"' in INDEX
     assert '@click="exportStatement(statement)"' in INDEX
-    assert 'v-if="canFinance" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(statement)"' in INDEX
-    assert 'v-if="canFinance" class="btn small success" :disabled="Number(statement.pending_payment_amount)<=0 || !!financeStatementOperationState.action" @click="settle(statement)"' in INDEX
+    assert 'v-if="canFinance" class="btn small" :disabled="statement.confirmation_status!==\'confirmed\' || Number(statement.pending_invoice_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(statement)"' in INDEX
+    assert 'v-if="canFinance" class="btn small success" :disabled="statement.confirmation_status!==\'confirmed\' || Number(statement.pending_payment_amount)<=0 || !!financeStatementOperationState.action" @click="settle(statement)"' in INDEX
     assert "@click=\"setFinanceView('statements')\">全部单据" in INDEX
     assert '<div class="section-title">开票记录</div>' in INDEX
     assert 'axios.get("/api/finance/statements"' in INDEX

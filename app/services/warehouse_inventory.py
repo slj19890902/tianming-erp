@@ -178,6 +178,19 @@ def _ensure_finished_projection_postcondition(
     if not projection_required:
         return None
 
+    current_pallet = current_same_location_pallet(lot)
+    capacity_source_location_id = (
+        int(location.id) if current_pallet is not None else None
+    )
+    if capacity_source_location_id is None and pallet_id is not None:
+        requested_pallet = db.get(InventoryPallet, int(pallet_id))
+        if (
+            requested_pallet is not None
+            and requested_pallet.is_current
+            and requested_pallet.location_id is not None
+            and int(requested_pallet.location_id) == int(location.id)
+        ):
+            capacity_source_location_id = int(location.id)
     context: dict[str, object | None] = {}
     if space_ledger_exists:
         context = load_warehouse_location_projection_contexts(db, [location]).get(
@@ -189,6 +202,7 @@ def _ensure_finished_projection_postcondition(
             warehouse_types={"finished", "shared"},
             require_published=True,
             required_inventory_type="finished",
+            capacity_source_location_id=capacity_source_location_id,
             projection_context=context,
         )
         if issue:
@@ -197,7 +211,6 @@ def _ensure_finished_projection_postcondition(
                 409,
             )
 
-    current_pallet = current_same_location_pallet(lot)
     if current_pallet is None:
         if not create_missing:
             raise WarehouseInventoryError(
@@ -1197,6 +1210,7 @@ def _location(
     location_id: int,
     inventory_type: str,
     *,
+    capacity_source_location_id: int | None = None,
     allow_raw_material_staging: bool = False,
     raw_material_staging_source_type: str | None = None,
     raw_material_staging_source_ref_type: str | None = None,
@@ -1241,6 +1255,7 @@ def _location(
             required_inventory_type=(
                 "finished" if require_published_location else None
             ),
+            capacity_source_location_id=capacity_source_location_id,
             projection_context=projection_context,
         )
         if issue:
@@ -1920,7 +1935,23 @@ def manual_finished_in(
         location_id,
         expected_layout_version=expected_layout_version,
     )
-    location = _location(db, location_id, "finished")
+    capacity_source_pallet = (
+        db.get(InventoryPallet, int(pallet_id)) if pallet_id is not None else None
+    )
+    capacity_source_location_id = (
+        int(location_id)
+        if capacity_source_pallet is not None
+        and capacity_source_pallet.is_current
+        and capacity_source_pallet.location_id is not None
+        and int(capacity_source_pallet.location_id) == int(location_id)
+        else None
+    )
+    location = _location(
+        db,
+        location_id,
+        "finished",
+        capacity_source_location_id=capacity_source_location_id,
+    )
     customer = db.get(Customer, customer_id) if customer_id is not None else None
     product = db.get(Product, product_id)
     if not is_general and customer is None:

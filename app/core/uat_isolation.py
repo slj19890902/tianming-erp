@@ -267,7 +267,13 @@ def _terminate_owned_windows_process(pid: int, expected_token: str) -> bool:
             )
         if not terminator(handle, 1):
             error_code = ctypes.get_last_error()
-            if error_code != 5 or waiter(handle, 0) != 0:
+            # Windows returns ACCESS_DENIED when TerminateProcess races with a
+            # process that has already begun exiting.  A zero-time probe can
+            # still observe that object as unsignalled and used to report a
+            # false cleanup failure even though the owned process disappeared
+            # milliseconds later.  Keep failing closed for a live process,
+            # but allow the same bounded wait used after a successful kill.
+            if error_code != 5:
                 raise UatIsolationError(
                     f"Cannot terminate owned UAT process PID {pid} (error={error_code})"
                 )

@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSIONS = ROOT / "alembic" / "versions"
 BASE_REVISION = "ww31v8x9z20"
 P1_81_REVISION = "xx32v8x9z21"
-INTEGRATION_HEAD = "de39v8x9z28"
+P1_81_INTEGRATION_ANCESTOR = "de39v8x9z28"
+CURRENT_INTEGRATION_HEAD = "go50v8x9z39"
 P1_81_TABLES = {
     "purchase_receipt_facts",
     "incoming_receipt_purpose_allocations",
@@ -191,7 +192,16 @@ def test_migration_is_linear_and_declares_immutable_conserved_facts() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [INTEGRATION_HEAD]
+    assert script.get_heads() == [CURRENT_INTEGRATION_HEAD]
+    integration_chain = {
+        revision.revision
+        for revision in script.walk_revisions(
+            base=P1_81_REVISION,
+            head=CURRENT_INTEGRATION_HEAD,
+        )
+    }
+    assert P1_81_INTEGRATION_ANCESTOR in integration_chain
+    assert P1_81_REVISION in integration_chain
 
     source = _migration_path().read_text(encoding="utf-8")
     for table in P1_81_TABLES:
@@ -320,9 +330,11 @@ def test_price_fact_is_immutable_and_blocks_destructive_downgrade(
     db_path = tmp_path / "p1_81_fact_guard.sqlite3"
     config = _config(db_path, monkeypatch)
     command.upgrade(config, P1_81_REVISION)
-    # The SQLAlchemy model reflects the current code head; advance the
-    # isolated database before creating fixture rows through that model.
-    command.upgrade(config, INTEGRATION_HEAD)
+    # The SQLAlchemy model needs the later schema carried by P1-81's own
+    # integration ancestor before creating fixture rows through that model.
+    # Keep this guard local so newer irreversible migrations cannot mask the
+    # P1-81 destructive-downgrade protection exercised below.
+    command.upgrade(config, P1_81_INTEGRATION_ANCESTOR)
     engine = create_engine(config.get_main_option("sqlalchemy.url"))
     with Session(engine) as session:
         user = User(

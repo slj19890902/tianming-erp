@@ -88,8 +88,9 @@ def test_n040_supplier_order_creation_paths_freeze_material_snapshots() -> None:
     source = (PROJECT_ROOT / "app" / "api" / "requisition.py").read_text(
         encoding="utf-8"
     )
-    # One helper definition plus all three SupplierRequisitionOrderItem creation paths.
-    assert source.count("_supplier_item_snapshot_values(") == 4
+    # One helper definition plus the single consolidated supplier-item path.
+    assert source.count("_supplier_item_snapshot_values(") == 2
+    assert source.count("SupplierRequisitionOrderItem(") == 1
 
 
 def test_n040_downgrade_fails_closed_after_business_facts_exist() -> None:

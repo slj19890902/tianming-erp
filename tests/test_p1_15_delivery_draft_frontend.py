@@ -287,6 +287,7 @@ function context() {
     deliveryForm: { editingId: null, saved_signature: "before" },
     deliveryFormSignature() { return "after"; },
     deliveryFormHasUnsavedChanges: methods.deliveryFormHasUnsavedChanges,
+    resetDeliveryReminderState() {},
     _productFormDirty() { return false; },
     productEditReturnContext: null,
     statementDetail: { id: 1 },

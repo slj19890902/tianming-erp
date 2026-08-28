@@ -80,7 +80,7 @@ from app.models.warehouse_inventory import (
     WarehouseFloor,
     WarehouseLocation,
 )
-from app.services.order_number_display import build_display_registry, display_order_number
+from app.services.order_number_display import display_order_number
 from app.services.audit_log import append_audit_event
 from app.services.fulfillment_reminders import list_delivery_reminders
 from app.services.location_candidates import (
@@ -159,13 +159,12 @@ from app.services.composite_bom_workflow import (
 from app.services.semi_finished_inventory import (
     active_semi_requirement_credited_quantity,
     consume_delivery_item_inventory,
+    finished_order_source_coverage,
     inventory_fully_covers_order_item,
     reverse_delivery_item_inventory,
 )
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
-    active_finished_reserved_qty,
-    active_finished_reservations_by_item_ids,
     inventory_fifo_order_columns,
     inventory_fifo_sort_key,
     release_empty_pallets_after_delivery,
@@ -2386,12 +2385,33 @@ def _delivery_location_metadata(
         if finished
         else {"semi_finished", "shared"}
     )
+    resolved_projection_context = projection_context
+    if location is not None and resolved_projection_context is None:
+        resolved_projection_context = load_warehouse_location_projection_contexts(
+            db,
+            [location],
+        ).get(int(location.id), {})
+    projection = (
+        warehouse_location_projection(
+            location,
+            **(resolved_projection_context or {}),
+        )
+        if location is not None
+        else {}
+    )
+    resolved_space_ledger_enabled = (
+        has_space_ledger(db)
+        if space_ledger_enabled is None
+        else bool(space_ledger_enabled)
+    )
     operational_projection_context = (
-        projection_context if space_ledger_enabled is not False else None
+        resolved_projection_context if resolved_space_ledger_enabled else None
     )
     return {
         "warehouse_floor": location.warehouse_floor if location else None,
         "area_code": location.area_code if location else None,
+        "position_status": projection.get("position_status", "unlocated"),
+        "map_issue": projection.get("map_issue"),
         "location_operational": bool(
             location is not None
             and operational_location_issue(
@@ -2717,6 +2737,7 @@ def _delivery_kit_metadata(
     if order_item is None or not is_composite_order_item(db, order_item.id):
         return {
             "is_composite_bom": False,
+            "composite_fulfillment_mode": None,
             "kit_availability": None,
             "available_sets": None,
             "missing_components": [],
@@ -2801,6 +2822,10 @@ def _inventory_sources_for_order_item(
             InventoryReservation.reservation_type.in_(
                 ("finished_order", "finished_surplus_delivery", "semi_order")
             ),
+            or_(
+                InventoryReservation.reservation_type != "finished_order",
+                InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            ),
             InventoryReservation.status != "cancelled",
             func.coalesce(InventoryReservation.credited_requirement_quantity, 0)
             > InventoryReservation.released_requirement_quantity,
@@ -2856,7 +2881,7 @@ def _inventory_sources_for_order_item(
         target_order_delivered = min(
             target_delivered, int(order_item.quantity or 0)
         )
-        finished_coverage = active_finished_reserved_qty(db, order_item.id)
+        finished_coverage = finished_order_source_coverage(reservations)
         finished_target = min(target_order_delivered, finished_coverage)
         finished_current = sum(
             int(row.consumed_stock_quantity or 0)
@@ -3756,6 +3781,10 @@ def _delivery_list_standard_inventory_sources(
         row
         for row in context["reservations_by_order_item"].get(order_item.id, [])
         if row.reservation_type in {"finished_order", "semi_order"}
+        and (
+            row.reservation_type != "finished_order"
+            or row.sales_order_item_bom_component_id is None
+        )
         and row.status != "cancelled"
         and int(row.credited_requirement_quantity or 0)
         > int(row.released_requirement_quantity or 0)
@@ -4175,24 +4204,13 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         for row in areas
     }
 
-    active_finished_by_order_item: dict[int, int] = {}
+    finished_reservations_by_order_item: dict[int, list[InventoryReservation]] = {}
     active_semi_by_requirement: dict[int, int] = {}
     for reservation in reservation_rows:
-        if (
-            reservation.order_item_id is not None
-            and reservation.reservation_type == "finished_order"
-            and reservation.sales_order_item_bom_component_id is None
-            and reservation.status != "cancelled"
-        ):
-            item_id = int(reservation.order_item_id)
-            active_finished_by_order_item[item_id] = (
-                active_finished_by_order_item.get(item_id, 0)
-                + max(
-                    int(reservation.credited_requirement_quantity or 0)
-                    - int(reservation.released_requirement_quantity or 0),
-                    0,
-                )
-            )
+        if reservation.order_item_id is not None:
+            finished_reservations_by_order_item.setdefault(
+                int(reservation.order_item_id), []
+            ).append(reservation)
         if (
             reservation.semi_requirement_id is not None
             and reservation.reservation_type == "semi_order"
@@ -4207,6 +4225,10 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
                     0,
                 )
             )
+    active_finished_by_order_item = {
+        item_id: finished_order_source_coverage(item_reservations)
+        for item_id, item_reservations in finished_reservations_by_order_item.items()
+    }
 
     component_direct_available_by_snapshot: dict[int, int] = {}
     component_delivered_direct = {}
@@ -4485,7 +4507,12 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
             "unordered_allocations": [],
         }
     context["item_contexts"] = item_contexts
-    context["registry"] = build_display_registry(db)
+    # Every order rendered by this page is already loaded above.  Reuse that
+    # page-local snapshot instead of scanning the complete order table again.
+    context["registry"] = {
+        int(order_id): str(order.order_number)
+        for order_id, order in orders.items()
+    }
     return context
 
 
@@ -4968,7 +4995,6 @@ def _delivery_response(
         if list_context is not None
         else _delivery_item_rows(db, [delivery_id])
     )
-    registry = list_context["registry"] if list_context is not None else build_display_registry(db)
     order_ids = {
         row["order_id"]
         for row in items
@@ -4980,6 +5006,14 @@ def _delivery_response(
         else {
             order.id: order for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
         } if order_ids else {}
+    )
+    registry = (
+        list_context["registry"]
+        if list_context is not None
+        else {
+            int(order_id): str(order.order_number)
+            for order_id, order in orders.items()
+        }
     )
     pick_task = (
         list_context["pick_tasks"].get(delivery_id)
@@ -7201,7 +7235,13 @@ class _PendingDeliveryReadContext:
     without using a stale process-wide cache for inventory availability.
     """
 
-    def __init__(self, db: Session, rows: list[object]):
+    def __init__(
+        self,
+        db: Session,
+        rows: list[object],
+        *,
+        include_inventory_sources: bool = True,
+    ):
         item_ids = {
             int(row._mapping["order_item_id"])
             for row in rows
@@ -7231,7 +7271,7 @@ class _PendingDeliveryReadContext:
                 )
                 .distinct()
             ).all()
-        ) if item_ids else set()
+        ) if include_inventory_sources and item_ids else set()
         lot_ids = {
             int(lot_id) for lot_id in reservation_lot_ids if lot_id is not None
         }
@@ -7266,7 +7306,9 @@ class _PendingDeliveryReadContext:
             "location_projection_contexts": (
                 load_warehouse_location_projection_contexts(db, locations.values())
             ),
-            "space_ledger_enabled": has_space_ledger(db),
+            "space_ledger_enabled": (
+                has_space_ledger(db) if include_inventory_sources else False
+            ),
         }
         if not item_ids:
             self.fast_item_ids: set[int] = set()
@@ -7379,9 +7421,6 @@ class _PendingDeliveryReadContext:
             ).append(completion)
             if completion.origin == "receipt_auto":
                 self.receipt_auto_item_ids.add(int(completion.order_item_id))
-        reserved_by_item = active_finished_reservations_by_item_ids(
-            db, sorted(item_ids)
-        )
         remaining_finished_reserved_by_item = (
             remaining_finished_order_credit_by_item_ids(db, sorted(item_ids))
         )
@@ -7424,6 +7463,11 @@ class _PendingDeliveryReadContext:
                 pair = (int(owner_customer_id), int(product_id))
                 if pair in customer_product_pairs:
                     available_surplus_by_customer_product[pair] = int(quantity or 0)
+        reserved_by_item = {
+            item_id: max(int(item.delivered_quantity or 0), 0)
+            + int(remaining_finished_reserved_by_item.get(item_id, 0))
+            for item_id, item in self.order_items.items()
+        }
         semi_credited_by_requirement: dict[int, int] = {}
         semi_requirement_ids = [requirement.id for requirement in semi_requirements]
         if semi_requirement_ids:
@@ -7690,11 +7734,14 @@ def pending_delivery_items(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    registry = build_display_registry(db)
     rows = list(
         db.execute(_pending_query(customer_ids=_visible_customer_ids(user, db)))
     )
     context = _PendingDeliveryReadContext(db, rows)
+    registry = {
+        int(order_id): str(order.order_number)
+        for order_id, order in context.orders.items()
+    }
     items = []
     for row in rows:
         payload = _pending_delivery_item_payload(
@@ -7726,7 +7773,11 @@ def pending_delivery_customer_summaries(
     """
 
     rows = list(db.execute(_pending_query(customer_ids=_visible_customer_ids(user, db))))
-    context = _PendingDeliveryReadContext(db, rows)
+    context = _PendingDeliveryReadContext(
+        db,
+        rows,
+        include_inventory_sources=False,
+    )
     grouped: dict[int, dict] = {}
     for row in rows:
         mapping = row._mapping
@@ -7857,7 +7908,6 @@ def search_pending_delivery_items(
         raise HTTPException(status_code=400, detail="客户不存在")
     load_all = list_all and page_size is None and limit is None
     effective_limit = page_size or limit or (100 if list_all else 20)
-    registry = build_display_registry(db)
     base_query = _pending_query(
         order_item_id=order_item_id,
         customer_id=customer_id,
@@ -7876,6 +7926,10 @@ def search_pending_delivery_items(
         offset = 0 if list_all and page_size is None else (page - 1) * effective_limit
         rows = list(db.execute(base_query.offset(offset).limit(query_limit)))
     context = _PendingDeliveryReadContext(db, rows)
+    registry = {
+        int(order_id): str(order.order_number)
+        for order_id, order in context.orders.items()
+    }
     items = []
     for row in rows:
         payload = _pending_delivery_item_payload(

@@ -71,7 +71,7 @@ const vm={{
   compositeRequisitionSaveState:{{saving:false,committed:false,uncertain:false,result:null,requestKey:"",draftSignature:""}},
   requisitionForm:{{supplier_name:"鸣朋",items:[{{order_item_id:1,component_type:"whole",bom_snapshot_id:3,requisition_qty:10,cardboard_len:800,cardboard_width:600,special_process:"一开二",remark:""}}]}},
   requisitionSelected:{{a:true}},selectedPendingKeys:["a"],selectedBomSnapshotIds:["3:whole"],modal:{{type:"requisition"}},
-  validateRequisitionForm(){{return "";}},requisitionBatchLinePayload(line){{return {{...line}};}},
+  validateRequisitionForm(){{return "";}},requisitionBatchLinePayloads(line){{return [{{...line}}];}},
   loadRequisition:async()=>true,showToast(message,isError){{toasts.push({{message,isError}});}}
 }};
 vm.saveCompositeRequisitionDraft=new AsyncFunction({json.dumps(block, ensure_ascii=False)}).bind(vm);

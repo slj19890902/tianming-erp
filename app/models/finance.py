@@ -202,6 +202,10 @@ class Statement(Base):
             name="ck_finance_statements_confirmation_status",
         ),
         CheckConstraint("version >= 1", name="ck_finance_statements_version"),
+        CheckConstraint(
+            "ledger_version >= 1",
+            name="ck_finance_statements_ledger_version",
+        ),
         UniqueConstraint(
             "statement_number",
             name="uq_finance_statements_number",
@@ -267,6 +271,12 @@ class Statement(Base):
         server_default="1",
         nullable=False,
     )
+    ledger_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
     confirmed_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
@@ -299,6 +309,65 @@ class Statement(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="SettlementRecord.id",
+    )
+
+
+class FinanceManualMutation(Base):
+    """Immutable idempotency fact for statement-ledger mutations."""
+
+    __tablename__ = "finance_manual_mutations"
+    __table_args__ = (
+        CheckConstraint(
+            "mutation_type IN "
+            "('register_invoice', 'settle_statement', 'register_invoice_task')",
+            name="ck_finance_manual_mutations_type",
+        ),
+        CheckConstraint(
+            "length(trim(idempotency_key)) >= 8",
+            name="ck_finance_manual_mutations_key",
+        ),
+        CheckConstraint(
+            "(mutation_type = 'register_invoice_task' "
+            "AND lower(trim(idempotency_key)) LIKE 'system:invoice-task-result:%') "
+            "OR (mutation_type != 'register_invoice_task' "
+            "AND lower(trim(idempotency_key)) NOT LIKE 'system:%')",
+            name="ck_finance_manual_mutations_key_namespace",
+        ),
+        CheckConstraint(
+            "length(request_hash) = 64",
+            name="ck_finance_manual_mutations_request_hash",
+        ),
+        CheckConstraint(
+            "length(response_json) >= 2",
+            name="ck_finance_manual_mutations_response_json",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_finance_manual_mutations_idempotency_key",
+        ),
+        Index(
+            "ix_finance_manual_mutations_statement_id",
+            "statement_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    mutation_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    statement_id: Mapped[int] = mapped_column(
+        ForeignKey("finance_statements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    response_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        nullable=False,
     )
 
 

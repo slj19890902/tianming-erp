@@ -16,14 +16,15 @@ def _method_body(signature: str, next_signature: str) -> str:
 
 
 def test_invoice_task_list_has_latest_request_and_retry_contract() -> None:
-    block = INDEX.split("async loadInvoiceTasks() {", 1)[1].split(
+    block = INDEX.split("async loadInvoiceTasks(sessionContext = null) {", 1)[1].split(
         "async confirmFinanceStatement(row) {", 1
     )[0]
     for marker in (
         'const requestKey = "finance:invoice-tasks";',
         "this.beginLatestRequest(requestKey)",
         "signal:controller.signal",
-        "latestRequestControllers.get(requestKey) !== controller",
+        "const requestIsCurrent = () => (",
+        "&& sessionIsCurrent()",
         "this.isCancelledRequest(error)",
         "this.finishLatestRequest(requestKey, controller)",
     ):
@@ -44,7 +45,7 @@ def test_invoice_task_old_response_cannot_overwrite_latest_filters(tmp_path: Pat
     assert node is not None, "Node.js is required for the invoice task race regression"
 
     body = _method_body(
-        "async loadInvoiceTasks() {", "async confirmFinanceStatement(row) {"
+        "async loadInvoiceTasks(sessionContext = null) {", "async confirmFinanceStatement(row) {"
     )
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
@@ -57,6 +58,8 @@ globalThis.axios = {{
 }};
 const vm = {{
   canViewInvoiceTasks: true,
+  authGeneration: 1,
+  user: {{id:7}},
   invoiceTaskFilters: {{customer_id:1, statement_month:"2026-07", status:"draft"}},
   invoiceTasks: [{{task_number:"原列表"}}],
   invoiceTaskState: {{loading:false, error:""}},
@@ -74,7 +77,7 @@ const vm = {{
   }},
   errorMessage(error) {{ return error?.message || String(error); }}
 }};
-vm.loadInvoiceTasks = new AsyncFunction({json.dumps(body, ensure_ascii=False)}).bind(vm);
+vm.loadInvoiceTasks = new AsyncFunction("sessionContext", {json.dumps(body, ensure_ascii=False)}).bind(vm);
 
 (async () => {{
   const first = vm.loadInvoiceTasks();

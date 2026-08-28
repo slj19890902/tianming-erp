@@ -27,7 +27,7 @@ def test_p1_02_order_entry_is_one_row_per_product_with_fixed_business_columns() 
     for heading in (
         "存货编码",
         "产品名称",
-        "规格",
+        "规格mm",
         "材质楞型",
         "数量",
         "单价",

@@ -19,8 +19,9 @@ def test_delivery_editor_keeps_sources_explicit_and_allows_controlled_mix() -> N
         INDEX.index('<div v-else-if="modal.type === \'tianhuaPreimport\'">')
     ]
     assert 'source_mode: "order"' in INDEX
-    assert "订单待送（默认优先）" in modal
+    assert "选择待送订单（{{ deliveryPendingCountForSelectedCustomer() }} 款）" in modal
     assert "无订单成品库存" in modal
+    assert "订单待送必须先全部加入；无订单库存只补不足数量。" in modal
     assert "setDeliverySourceMode('unordered_finished')" in modal
     assert "本单混合两类来源" in modal
     assert 'deliveryForm.source_tab === \'order\'' in modal

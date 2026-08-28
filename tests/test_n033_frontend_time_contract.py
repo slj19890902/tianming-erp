@@ -86,7 +86,7 @@ def test_index_converts_utc_instants_and_keeps_calendar_days() -> None:
     index = (STATIC / "index.html").read_text(encoding="utf-8")
     assert 'h.effective_date || "时间未知"' in index
     assert "formatDateTime(h.created_at)" in index
-    assert "formatBeijingDate(row.created_at)" in index
+    assert "formatDateTime(row.reported_at)" in index
     assert "TmTime.formatBeijingDate(value).split" in index
     assert "(h.created_at||'').slice(0,10)" not in index
     assert "row.created_at.slice(0,10)" not in index

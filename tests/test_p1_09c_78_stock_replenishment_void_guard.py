@@ -37,12 +37,13 @@ def test_replenishment_void_button_has_dedicated_operation_state() -> None:
         "stockReplenishmentVoidState:{orderId:null, documentNumber:\"\", uncertainIds:{}}"
         in INDEX
     )
-    hit = INDEX.index('@click="voidReportedReplenishment(row)"')
+    hit = INDEX.index('@click="voidReportedReplenishment(reportedItemDetail)"')
     start = INDEX.rfind("<button", 0, hit)
     end = INDEX.index("</button>", hit) + len("</button>")
     button = INDEX[start:end]
-    assert "stockReplenishmentVoidBusy(row)" in button
-    assert "stockReplenishmentVoidUncertain(row)" in button
+    assert 'v-if="reportedItemDetail.stock_replenishment_can_void"' in button
+    assert "stockReplenishmentVoidBusy(reportedItemDetail)" in button
+    assert "stockReplenishmentVoidUncertain(reportedItemDetail)" in button
     assert "撤销中…" in button
     assert "请刷新核对" in button
 
@@ -52,7 +53,7 @@ def test_replenishment_void_freezes_target_and_marks_success_before_refresh() ->
         "async voidReportedReplenishment(row) {",
         "async voidReportedCompositeRequisition(row) {",
     )
-    assert "const orderId = Number(row.id)" in block
+    assert "const orderId = Number(row?.document_id || row?.id)" in block
     assert "const documentNumber = String(row.document_number" in block
     assert 'axios.put("/api/requisition/stock-replenishment/orders/"+orderId+"/void")' in block
     assert block.index('row.status = "voided"') < block.index("Promise.allSettled")

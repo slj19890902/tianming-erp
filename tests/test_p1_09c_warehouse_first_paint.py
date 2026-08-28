@@ -136,7 +136,7 @@ def test_location_candidates_compact_mode_preserves_flat_items(tmp_path) -> None
     assert "floors" not in compact
 
 
-def test_location_ledger_eager_loads_floor3_map_status_without_n_plus_one(tmp_path) -> None:
+def test_location_ledger_eager_loads_current_map_status_without_n_plus_one(tmp_path) -> None:
     engine, factory = _location_db(tmp_path)
     selects = 0
 

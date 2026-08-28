@@ -15,7 +15,8 @@ def test_location_ledger_exposes_placement_status_and_storage_type() -> None:
     assert '<option value="">暂未确定</option>' in WAREHOUSE
     assert '<option value="ground">地面位</option>' in WAREHOUSE
     assert "待布局，禁止入库" in WAREHOUSE
-    assert "x.placement_status!==\"unplaced\"" in WAREHOUSE
+    assert 'row.position_status==="mapped"' in WAREHOUSE
+    assert 'function locationLabelEligible(row){return row.is_active!==false&&row.position_status==="mapped"' in WAREHOUSE
     assert "storage_type:storageType||null" in WAREHOUSE
 
 

@@ -184,4 +184,4 @@ def test_backend_has_manual_idempotency_and_unique_conflict_replay_contract() ->
     assert "if payload.idempotency_key:" in block
     assert "except IntegrityError:" in block
     assert "idempotent_order_number" in block
-    assert "return replenishment_order_dict(existing_order)" in block
+    assert "return replenishment_order_dict(existing_order, db=db)" in block

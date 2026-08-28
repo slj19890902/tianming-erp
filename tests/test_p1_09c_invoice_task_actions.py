@@ -145,7 +145,7 @@ const messages = [];
 const vm = {{
   modal:null,
   invoiceTaskOperationState:{{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false}},
-  invoiceTaskResult:{{task_id:20,status:"issued",invoice_number:"INV-001",invoice_date:"2026-08-05",failure_reason:"",expected_version:7}},
+  invoiceTaskResult:{{task_id:20,status:"issued",invoice_number:"INV-001",invoice_date:"2026-08-05",failure_reason:"",expected_version:7,expected_ledger_version:4}},
   async loadInvoiceTasks() {{ return true; }},
   closeModal() {{ this.modal = null; }},
   errorMessage(error) {{ return error?.message || String(error); }},
@@ -175,7 +175,8 @@ vm.saveInvoiceTaskResult = new AsyncFunction({json.dumps(save_body, ensure_ascii
   await Promise.resolve();
   vm.invoiceTaskResult.invoice_number = "CHANGED";
   vm.invoiceTaskResult.expected_version = 99;
-  if (pending.length !== 2 || pending[1].payload.invoice_number !== "INV-001" || pending[1].payload.expected_version !== 7) {{
+  vm.invoiceTaskResult.expected_ledger_version = 99;
+  if (pending.length !== 2 || pending[1].payload.invoice_number !== "INV-001" || pending[1].payload.expected_version !== 7 || pending[1].payload.expected_ledger_version !== 4) {{
     throw new Error("result registration was duplicated or did not freeze its form");
   }}
   const duplicateSave = await duplicateSavePromise;
@@ -185,7 +186,7 @@ vm.saveInvoiceTaskResult = new AsyncFunction({json.dumps(save_body, ensure_ascii
   if (vm.modal !== null || vm.invoiceTaskOperationState.resultSaving) throw new Error("successful result registration did not close and unlock");
 
   vm.modal = {{type:"invoiceTaskResult"}};
-  vm.invoiceTaskResult = {{task_id:21,status:"failed",invoice_number:"",invoice_date:"",failure_reason:"税局拒绝",expected_version:2}};
+  vm.invoiceTaskResult = {{task_id:21,status:"failed",invoice_number:"",invoice_date:"",failure_reason:"税局拒绝",expected_version:2,expected_ledger_version:0}};
   const failed = vm.saveInvoiceTaskResult();
   pending[2].reject(new Error("服务器忙"));
   await failed;
@@ -196,6 +197,16 @@ vm.saveInvoiceTaskResult = new AsyncFunction({json.dumps(save_body, ensure_ascii
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
     _run_node(tmp_path, "invoice-task-submit-actions.js", script)
+
+
+def test_invoice_task_result_freezes_statement_ledger_version() -> None:
+    assert "expected_ledger_version:Number(task.ledger_version || 0)" in INDEX
+    save = INDEX[
+        INDEX.index("async saveInvoiceTaskResult() {") :
+        INDEX.index("uploadInvoiceTaskPdf(task) {")
+    ]
+    assert "expected_ledger_version:Number(form.expected_ledger_version || 0)" in save
+    assert "expected_ledger_version:submitted.status === \"issued\"" in save
 
 
 def test_invoice_task_action_inline_javascript_is_valid(tmp_path: Path) -> None:

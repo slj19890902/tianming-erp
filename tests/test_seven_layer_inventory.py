@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Generator
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -29,11 +29,16 @@ def inventory_app(tmp_path: Path, seed_supplier_master):
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
+    from app.models.customer import Customer
     from app.models.material import Material
     from app.models.user import User
     from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
         WarehouseArea,
+        WarehouseAreaStoragePolicy,
         WarehouseFloor,
+        WarehouseGroundLayoutPlan,
+        WarehouseGroundLayoutSlot,
         WarehouseLocation,
     )
 
@@ -51,6 +56,7 @@ def inventory_app(tmp_path: Path, seed_supplier_master):
             display_name="七层库存管理员",
             must_change_password=False,
         )
+        customer = Customer(name="七层库存测试客户")
         material = Material(
             code="JA616AJ",
             layer_count=7,
@@ -68,10 +74,24 @@ def inventory_app(tmp_path: Path, seed_supplier_master):
         )
         db.add(floor)
         db.flush()
+        floor3 = WarehouseFloor(
+            floor_code="F3",
+            floor_name="三楼",
+            floor_number=3,
+            construction_status="enabled",
+        )
+        db.add(floor3)
+        db.flush()
         area = WarehouseArea(
             floor_id=floor.id,
             area_code="A1",
             area_name="A1原料暂存区",
+            construction_status="enabled",
+        )
+        floor3_area = WarehouseArea(
+            floor_id=floor3.id,
+            area_code="RAW-001",
+            area_name="三楼左区原料备料区",
             construction_status="enabled",
         )
         location = WarehouseLocation(
@@ -84,9 +104,88 @@ def inventory_app(tmp_path: Path, seed_supplier_master):
             placement_status="placed",
             is_active=True,
         )
-        db.add_all([user, material, area, location])
+        floor3_location = WarehouseLocation(
+            location_code="F3-RAW-001-R01-L01-G01",
+            location_name="三楼左区原料备料位",
+            warehouse_type="shared",
+            warehouse_floor=3,
+            area_code="RAW-001",
+            storage_type="ground",
+            placement_status="placed",
+            source_version="CURRENT_MAP",
+            is_active=True,
+        )
+        db.add_all(
+            [
+                user,
+                customer,
+                material,
+                area,
+                floor3_area,
+                location,
+                floor3_location,
+            ]
+        )
+        db.flush()
+        db.add(
+            WarehouseAreaStoragePolicy(
+                area_id=floor3_area.id,
+                map_feature_id="98ddeb13-805f-4a63-83e1-120ebf38b27f",
+                allowed_inventory_types_json='["raw_material","semi_finished"]',
+                storage_layout="pallet_ground",
+                status="published",
+                published_map_revision="3994317ae14a7f18",
+                version=1,
+            )
+        )
+        db.add(
+            Floor3LocationLayout(
+                location_id=floor3_location.id,
+                left_pct=Decimal("15"),
+                top_pct=Decimal("15"),
+                width_pct=Decimal("8"),
+                height_pct=Decimal("8"),
+                source_type="seeded",
+            )
+        )
+        floor3_plan = WarehouseGroundLayoutPlan(
+            area_id=floor3_area.id,
+            status="published",
+            target_slot_count=1,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="3994317ae14a7f18",
+            published_map_revision="3994317ae14a7f18",
+            preview_fingerprint="3" * 64,
+            version=1,
+            publish_idempotency_key="seven-layer-floor3-raw-v1",
+            publish_request_hash="4" * 64,
+            updated_by=user.id,
+            published_by=user.id,
+            published_at=datetime.now(),
+        )
+        db.add(floor3_plan)
+        db.flush()
+        db.add(
+            WarehouseGroundLayoutSlot(
+                plan_id=floor3_plan.id,
+                location_id=floor3_location.id,
+                route_sequence=1,
+                row_no=1,
+                slot_no=1,
+                x_mm=Decimal("2500"),
+                y_mm=Decimal("1500"),
+                width_mm=1200,
+                depth_mm=1000,
+            )
+        )
         db.commit()
         ids = {
+            "customer_id": customer.id,
+            "floor3_location_id": floor3_location.id,
             "material_id": material.id,
             "location_id": location.id,
         }
@@ -165,6 +264,7 @@ def test_seven_layer_policy_order_save_and_semi_finished_stock(
                     {
                         "stock_policy_id": policy["id"],
                         "target_inventory_type": "semi_finished",
+                        "customer_id": ids["customer_id"],
                         "material_id": ids["material_id"],
                         "material_code": "WRONG-CODE-IS-IGNORED",
                         "layer_count": 7,
@@ -222,6 +322,7 @@ def test_seven_layer_policy_order_save_and_semi_finished_stock(
         assert lot is not None
         assert lot.source_type == "replenishment"
         assert lot.quantity_available == 24
+        assert lot.warehouse_location_id == ids["floor3_location_id"]
         material = db.get(Material, ids["material_id"])
         assert material is not None
         assert material.flute_type is None
@@ -241,6 +342,7 @@ def test_seven_layer_invalid_flute_is_rejected_by_api_and_inventory_service(
                 "items": [
                     {
                         "target_inventory_type": "semi_finished",
+                        "customer_id": ids["customer_id"],
                         "material_id": ids["material_id"],
                         "layer_count": 7,
                         "flute_type": "AB",
@@ -378,6 +480,7 @@ def test_three_and_five_layer_replenishment_regression(
                 "items": [
                     {
                         "target_inventory_type": "semi_finished",
+                        "customer_id": ids["customer_id"],
                         "material_code": material_code,
                         "layer_count": layer_count,
                         "flute_type": flute_type,
@@ -405,13 +508,16 @@ def test_three_and_five_layer_replenishment_regression(
         )
         assert received.status_code == 200, received.text
 
-    from app.models.warehouse_inventory import SemiFinishedInventoryDetail
+    from app.models.warehouse_inventory import InventoryLot, SemiFinishedInventoryDetail
 
     with session_factory() as db:
         detail = db.scalar(select(SemiFinishedInventoryDetail))
         assert detail is not None
         assert detail.layer_count == layer_count
         assert detail.flute_type == flute_type
+        lot = db.get(InventoryLot, detail.inventory_lot_id)
+        assert lot is not None
+        assert lot.warehouse_location_id == ids["floor3_location_id"]
 
 
 def test_high_confidence_mapping_validates_seven_layer_code_and_clears_flute(

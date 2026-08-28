@@ -244,7 +244,6 @@ def _ensure_finished_projection_postcondition(
             "该成品库位的存储方式不支持形成正式空间投影",
             409,
         )
-
     if current_pallet is None:
         if not create_missing:
             raise WarehouseInventoryError(

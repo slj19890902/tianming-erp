@@ -148,11 +148,39 @@ def _assign_rack_location(
 
 
 @pytest.mark.parametrize(
-    ("location_code", "storage_type", "level_no", "side_code", "expected_name"),
+    (
+        "location_code",
+        "storage_type",
+        "level_no",
+        "side_code",
+        "expected_name",
+        "legacy_name",
+    ),
     [
-        ("A1-R04", "ground", None, "R", "三楼 A1成品存放区·右侧第4位"),
-        ("F2-S3-L05", "rack", 3, "L", "三楼 F2成品货架区·3层·左侧第5格"),
-        ("F12-P01", "temporary_aisle", None, "P", "三楼 F12过道临放区·临放第1位"),
+        (
+            "A1-R04",
+            "ground",
+            None,
+            "R",
+            "三楼 右区A1·成品存放区·右侧第4位",
+            "三楼 A1成品存放区·右侧第4位",
+        ),
+        (
+            "F2-S3-L05",
+            "rack",
+            3,
+            "L",
+            "三楼 右区F2·成品货架区·3层·左侧第5格",
+            "三楼 F2成品货架区·3层·左侧第5格",
+        ),
+        (
+            "F12-P01",
+            "temporary_aisle",
+            None,
+            "P",
+            "三楼 右区F12·过道临放区·临放第1位",
+            "三楼 F12过道临放区·临放第1位",
+        ),
     ],
 )
 def test_v11_measured_map_location_uses_one_employee_projection(
@@ -161,6 +189,7 @@ def test_v11_measured_map_location_uses_one_employee_projection(
     level_no: int | None,
     side_code: str | None,
     expected_name: str,
+    legacy_name: str,
 ) -> None:
     floor = WarehouseFloor(
         id=3,
@@ -210,6 +239,7 @@ def test_v11_measured_map_location_uses_one_employee_projection(
 
     assert current_code == location_code
     assert current_name == expected_name
+    assert current_name != legacy_name
     assert employee_location_name(location, area=area, floor=floor) == expected_name
     assert payload["current_address_name"] == expected_name
     assert payload["employee_location_name"] == expected_name

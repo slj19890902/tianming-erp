@@ -1,19 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
-from decimal import Decimal
 import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
-
-from sqlalchemy.orm import Session
-
-from app.core.database import create_sqlite_engine
-from app.models.customer import Customer
-from app.models.delivery import Delivery
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PREVIOUS_REVISION = "dh90v8x9z79"
@@ -75,33 +66,28 @@ def test_mixed_delivery_fact_blocks_downgrade_before_ddl(tmp_path: Path) -> None
     database_path = tmp_path / "q1-03-mixed-fail-closed.sqlite3"
     _must_run(database_path, "upgrade", TARGET_REVISION)
 
-    engine = create_sqlite_engine(database_path)
-    with Session(engine) as database:
-        customer = Customer(
-            name="Q1-03混合送货迁移匿名客户",
-            payment_term_days=0,
-            statement_cycle_start_day=20,
-            credit_limit=Decimal("0"),
-            delivery_method="配送",
-            default_tax_rate=Decimal("0.13"),
-            status="active",
-            is_active=True,
-            version=1,
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        customer = connection.execute(
+            "INSERT INTO customers (name) VALUES (?)",
+            ("Q1-03混合送货迁移匿名客户",),
         )
-        database.add(customer)
-        database.flush()
-        database.add(
-            Delivery(
-                delivery_number="Q1-03-MIXED-MIGRATION-FACT",
-                customer_id=customer.id,
-                delivery_date=date(2026, 8, 2),
-                source_mode="mixed",
-                status="pending",
-                total_quantity=0,
-            )
+        connection.execute(
+            """
+            INSERT INTO sales_deliveries (
+                delivery_number,
+                customer_id,
+                delivery_date,
+                source_mode
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (
+                "Q1-03-MIXED-MIGRATION-FACT",
+                customer.lastrowid,
+                "2026-08-02",
+                "mixed",
+            ),
         )
-        database.commit()
-    engine.dispose()
 
     before = _state(database_path)
     blocked = _run_alembic(database_path, "downgrade", PREVIOUS_REVISION)

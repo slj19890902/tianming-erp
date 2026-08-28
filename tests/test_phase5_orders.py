@@ -2005,6 +2005,212 @@ def test_workflow_rollback_voids_single_source_supplier_order_before_group_delet
         assert supplier_order.status == "voided"
 
 
+@pytest.mark.parametrize(
+    "finance_fact",
+    [
+        "confirmed_statement",
+        "cancelled_statement",
+        "settled_status",
+        "invoiced_aggregate",
+        "settled_aggregate",
+        "manual_mutation",
+        "invoice",
+        "settlement",
+        "invoice_task",
+    ],
+)
+def test_workflow_rollback_rejects_immutable_finance_facts_before_any_delete(
+    order_api_app,
+    finance_fact: str,
+) -> None:
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.finance import (
+        FinanceManualMutation,
+        Invoice,
+        ReturnReceipt,
+        ReturnReceiptItem,
+        SettlementRecord,
+        Statement,
+        StatementItem,
+    )
+    from app.models.invoice_task import FinanceInvoiceTask, InvoiceSellerEntity
+    from app.models.order import Order, OrderItem
+    from app.models.user import User
+
+    app, session_factory = order_api_app
+    payload = _payload()
+    payload["customer_po"] = f"ROLLBACK-FINANCE-{finance_fact}"
+    payload["items"] = [payload["items"][0]]
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/orders", json=payload).json()
+        with session_factory() as session:
+            order = session.get(Order, created["id"])
+            order_item = session.get(OrderItem, created["items"][0]["id"])
+            actor = session.scalar(select(User).where(User.username == "admin"))
+            assert order is not None
+            assert order_item is not None
+            assert actor is not None
+            delivery = Delivery(
+                delivery_number=f"DN-{finance_fact}",
+                customer_id=order.customer_id,
+                delivery_date=date(2026, 8, 27),
+                status="dispatched",
+                total_quantity=20,
+            )
+            session.add(delivery)
+            session.flush()
+            delivery_item = DeliveryItem(
+                delivery_id=delivery.id,
+                order_item_id=order_item.id,
+                delivered_quantity=20,
+                ordered_quantity_snapshot=order_item.quantity,
+                order_remaining_snapshot=order_item.quantity - 20,
+            )
+            session.add(delivery_item)
+            session.flush()
+            receipt = ReturnReceipt(
+                delivery_id=delivery.id,
+                actual_received_date=date(2026, 8, 27),
+                status="confirmed",
+                created_by=actor.id,
+            )
+            session.add(receipt)
+            session.flush()
+            receipt_item = ReturnReceiptItem(
+                return_receipt_id=receipt.id,
+                delivery_item_id=delivery_item.id,
+                actual_received_quantity=20,
+            )
+            session.add(receipt_item)
+            session.flush()
+            statement = Statement(
+                statement_number=f"ST-{finance_fact}",
+                customer_id=order.customer_id,
+                statement_month="2026-08",
+                total_receivable=Decimal("72.00"),
+                total_gross_profit=Decimal("20.00"),
+                invoiced_amount=(
+                    Decimal("10.00")
+                    if finance_fact == "invoiced_aggregate"
+                    else Decimal("0.00")
+                ),
+                settled_amount=(
+                    Decimal("10.00")
+                    if finance_fact == "settled_aggregate"
+                    else Decimal("0.00")
+                ),
+                status=("settled" if finance_fact == "settled_status" else "unsettled"),
+                confirmation_status=(
+                    "confirmed"
+                    if finance_fact == "confirmed_statement"
+                    else "cancelled"
+                    if finance_fact == "cancelled_statement"
+                    else "draft"
+                ),
+                created_by=actor.id,
+            )
+            session.add(statement)
+            session.flush()
+            statement_item = StatementItem(
+                statement_id=statement.id,
+                return_receipt_item_id=receipt_item.id,
+                actual_received_quantity=20,
+                unit_price_snapshot=Decimal("3.6000"),
+                unit_cost_snapshot=Decimal("2.6000"),
+                receivable_amount=Decimal("72.00"),
+                gross_profit_amount=Decimal("20.00"),
+            )
+            session.add(statement_item)
+            if finance_fact == "manual_mutation":
+                session.add(
+                    FinanceManualMutation(
+                        idempotency_key="rollback-finance-manual",
+                        mutation_type="register_invoice",
+                        statement_id=statement.id,
+                        request_hash="a" * 64,
+                        actor_id=actor.id,
+                        response_json='{"ok":true}',
+                    )
+                )
+            elif finance_fact == "invoice":
+                session.add(
+                    Invoice(
+                        statement_id=statement.id,
+                        invoice_number="ROLLBACK-FINANCE-INV",
+                        invoice_date=date(2026, 8, 27),
+                        invoice_amount=Decimal("10.00"),
+                        created_by=actor.id,
+                    )
+                )
+            elif finance_fact == "settlement":
+                session.add(
+                    SettlementRecord(
+                        statement_id=statement.id,
+                        settled_amount=Decimal("10.00"),
+                        settlement_date=date(2026, 8, 27),
+                        account="测试账户",
+                        created_by=actor.id,
+                    )
+                )
+            elif finance_fact == "invoice_task":
+                seller = InvoiceSellerEntity(
+                    seller_code="ROLLBACK-SELLER",
+                    seller_name="撤回保护测试销方",
+                )
+                session.add(seller)
+                session.flush()
+                session.add(
+                    FinanceInvoiceTask(
+                        task_number="ROLLBACK-FINANCE-TASK",
+                        statement_id=statement.id,
+                        statement_version=statement.version,
+                        customer_id=order.customer_id,
+                        seller_entity_id=seller.id,
+                        buyer_snapshot_json="{}",
+                        seller_snapshot_json="{}",
+                        invoice_type="digital_vat_special",
+                        price_tax_mode="tax_inclusive",
+                        net_amount=Decimal("63.72"),
+                        tax_amount=Decimal("8.28"),
+                        total_amount=Decimal("72.00"),
+                        status="voided",
+                        rule_version=1,
+                        source_snapshot_hash="b" * 64,
+                        idempotency_key="rollback-finance-task",
+                    )
+                )
+            order.status = "pending_payment"
+            order_item.delivered_quantity = 20
+            session.flush()
+            ids = {
+                "delivery": delivery.id,
+                "receipt": receipt.id,
+                "statement": statement.id,
+                "statement_item": statement_item.id,
+            }
+            session.commit()
+
+        rolled_back = client.put(
+            f"/api/orders/{created['id']}/rollback-workflow",
+            json={"reason": "immutable finance facts must block rollback"},
+        )
+
+    assert rolled_back.status_code == 409, rolled_back.text
+    assert "财务受控阶段" in rolled_back.json()["detail"]
+    with session_factory() as session:
+        order = session.get(Order, created["id"])
+        order_item = session.get(OrderItem, created["items"][0]["id"])
+        assert order is not None
+        assert order.status == "pending_payment"
+        assert order_item is not None
+        assert order_item.delivered_quantity == 20
+        assert session.get(Delivery, ids["delivery"]) is not None
+        assert session.get(ReturnReceipt, ids["receipt"]) is not None
+        assert session.get(Statement, ids["statement"]) is not None
+        assert session.get(StatementItem, ids["statement_item"]) is not None
+
+
 def test_workflow_rollback_removes_only_current_order_from_shared_supplier_order(
     order_api_app,
 ) -> None:

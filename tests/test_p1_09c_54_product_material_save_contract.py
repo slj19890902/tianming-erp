@@ -85,7 +85,7 @@ def test_successful_product_write_with_refresh_failure_is_not_reported_as_save_f
     tmp_path: Path,
 ) -> None:
     refresh_body = _method_body(
-        "handleMasterSaveRefreshFailure(entity, error) {", "async saveNewOrder(orderPayload) {"
+        "handleMasterSaveRefreshFailure(entity, error) {", "moldRepairWarningText(warnings) {"
     )
     save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     script = f"""
@@ -118,7 +118,7 @@ def test_successful_material_write_with_refresh_failure_uses_same_contract(
     tmp_path: Path,
 ) -> None:
     refresh_body = _method_body(
-        "handleMasterSaveRefreshFailure(entity, error) {", "async saveNewOrder(orderPayload) {"
+        "handleMasterSaveRefreshFailure(entity, error) {", "moldRepairWarningText(warnings) {"
     )
     save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     script = f"""

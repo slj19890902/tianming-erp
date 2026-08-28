@@ -15,6 +15,7 @@ from app.services.current_map_raw_staging import (
     TARGET_LOCATION_CODES,
     TARGET_WAREHOUSE_TYPE,
 )
+from app.services import current_map_raw_staging
 from app.services.warehouse_inventory import automatic_raw_material_staging_location
 
 
@@ -42,6 +43,35 @@ def _isolated_formal_copy(
 
 def _engine(database: Path):
     return create_engine(f"sqlite:///{database}")
+
+
+def test_missing_current_map_is_not_treated_as_blank_when_orders_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE warehouse_current_map_migration_snapshots "
+                "(migration_key TEXT PRIMARY KEY)"
+            )
+        )
+        monkeypatch.setattr(
+            current_map_raw_staging,
+            "_target_locations",
+            lambda _connection: [],
+        )
+
+        def fake_scalar(_connection, statement: str, _params=None) -> int:
+            if "warehouse_current_map_migration_snapshots" in statement:
+                return 0
+            assert "sales_orders" in statement
+            return 1
+
+        monkeypatch.setattr(current_map_raw_staging, "_scalar", fake_scalar)
+        with pytest.raises(RuntimeError, match="current RAW-001 rack is missing"):
+            current_map_raw_staging._preflight(connection)
+    engine.dispose()
 
 
 def test_normalizes_current_raw_rack_and_resolves_receipt_destination(

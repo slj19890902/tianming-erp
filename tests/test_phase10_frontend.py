@@ -92,8 +92,16 @@ def test_phase10_frontend_enforces_auth_and_workshop_finance_masking() -> None:
         '"warehouse", "deliveries"]'
     ) in source
     assert (
-        'v-else-if="row.source_type!==\'stock_replenishment\' '
-        '&& row.incoming_status!==\'已作废\' && (isWorkshop || canAdmin)"'
+        '<input v-if="incomingTab===\'pending\' && hasPermission(\'incoming.execute\')" '
+        'class="input compact-input" type="number"'
+    ) in source
+    assert (
+        '<button v-if="hasPermission(\'incoming.execute\')" '
+        'class="btn small success"'
+    ) in source
+    assert (
+        '<button v-if="canAdmin && row.receipt_status===\'posted\'" '
+        'class="btn small danger"'
     ) in source
 
 
@@ -122,7 +130,8 @@ def test_core_lists_keep_server_side_pagination() -> None:
 
     assert 'app.component("pager"' in source
     assert "page: this.pages.products" in source
-    assert "page: this.pages.orders" in source
+    assert "const requestedPage = Math.max(1, Number(this.pages.orders || 1));" in source
+    assert "const params = { page: requestedPage, page_size: effectivePageSize };" in source
     assert "page: Number(this.pages.deliveries || 1)" in source
 
 

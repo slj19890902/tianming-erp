@@ -781,10 +781,11 @@ def test_dashboard_keeps_future_due_accept_short_line_in_finance_chain(
     with factory() as db:
         order, item = _add_order(db, suffix="DASH-ZERO-SHORT")
         order.delivery_date = beijing_today() + timedelta(days=30)
+        statement_period_delivery_date = beijing_today().replace(day=1)
         delivery = Delivery(
             delivery_number="DN-P0-04-DASH-ZERO-SHORT",
             customer_id=order.customer_id,
-            delivery_date=beijing_today(),
+            delivery_date=statement_period_delivery_date,
             status="dispatched",
             total_quantity=item.quantity,
         )
@@ -828,7 +829,7 @@ def test_dashboard_keeps_future_due_accept_short_line_in_finance_chain(
     assert dashboard.status_code == 200, dashboard.text
     body = dashboard.json()
     assert body["business_status_counts"]["pending_reconciliation"] == 1
-    assert any(todo["type"] == "待对账" for todo in body["todos"])
+    assert any(todo["type"] == "待对账" for todo in body["todos"]), body["todos"]
 
 
 def test_dashboard_only_account_cannot_read_order_status_counts(status_app) -> None:

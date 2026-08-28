@@ -16,9 +16,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -33,7 +34,13 @@ from app.core.config import PROJECT_ROOT, load_settings
 from app.models.customer import Customer
 from app.models.customer_charge import CustomerCharge
 from app.models.delivery import DeliveryItem
-from app.models.finance import Invoice, ReturnReceiptItem, Statement, StatementItem
+from app.models.finance import (
+    FinanceManualMutation,
+    Invoice,
+    ReturnReceiptItem,
+    Statement,
+    StatementItem,
+)
 from app.models.invoice_task import (
     CustomerInvoiceItemRule,
     CustomerInvoiceProfile,
@@ -163,6 +170,7 @@ class TaskResultPayload(VersionPayload):
     invoice_number: str | None = Field(default=None, max_length=80)
     invoice_date: date | None = None
     failure_reason: str | None = Field(default=None, max_length=1000)
+    expected_ledger_version: int | None = Field(default=None, ge=1)
 
     @field_validator("invoice_number", "failure_reason")
     @classmethod
@@ -1116,6 +1124,7 @@ def _task_response(db: Session, task: FinanceInvoiceTask) -> dict[str, Any]:
         "statement_id": task.statement_id,
         "statement_month": statement.statement_month if statement else None,
         "statement_version": task.statement_version,
+        "ledger_version": statement.ledger_version if statement else None,
         "customer_id": task.customer_id,
         "customer_name": (
             statement.settlement_name_snapshot
@@ -1135,6 +1144,129 @@ def _task_response(db: Session, task: FinanceInvoiceTask) -> dict[str, Any]:
     }
 
 
+def _invoice_task_result_request_hash(
+    task: FinanceInvoiceTask,
+    payload: TaskResultPayload,
+) -> str:
+    encoded = json.dumps(
+        {
+            "mutation_type": "register_invoice_task",
+            "task_id": task.id,
+            "statement_id": task.statement_id,
+            "status": payload.status,
+            "invoice_number": payload.invoice_number,
+            "invoice_date": (
+                payload.invoice_date.isoformat() if payload.invoice_date else None
+            ),
+            "failure_reason": payload.failure_reason,
+            "expected_version": payload.expected_version,
+            "expected_ledger_version": payload.expected_ledger_version,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest().upper()
+
+
+def _invoice_task_result_replay(
+    mutation: FinanceManualMutation,
+    *,
+    statement_id: int,
+    request_hash: str,
+    actor_id: int,
+) -> dict[str, Any]:
+    if (
+        mutation.mutation_type != "register_invoice_task"
+        or mutation.statement_id != statement_id
+        or mutation.request_hash != request_hash
+        or mutation.actor_id != actor_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该开票任务成功结果已由不同操作者或不同请求载荷登记",
+        )
+    try:
+        response = json.loads(mutation.response_json)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=500,
+            detail="开票任务幂等响应事实损坏，请停止重试并联系管理员",
+        ) from error
+    if not isinstance(response, dict):
+        raise HTTPException(
+            status_code=500,
+            detail="开票任务幂等响应事实格式错误，请停止重试并联系管理员",
+        )
+    return response
+
+
+def _reserve_invoice_task_result(
+    db: Session,
+    *,
+    task: FinanceInvoiceTask,
+    request_hash: str,
+    actor_id: int,
+) -> tuple[FinanceManualMutation | None, dict[str, Any] | None]:
+    idempotency_key = f"system:invoice-task-result:{task.id}"
+    existing = db.scalar(
+        select(FinanceManualMutation).where(
+            FinanceManualMutation.idempotency_key == idempotency_key
+        )
+    )
+    if existing is not None:
+        return None, _invoice_task_result_replay(
+            existing,
+            statement_id=task.statement_id,
+            request_hash=request_hash,
+            actor_id=actor_id,
+        )
+    mutation = FinanceManualMutation(
+        idempotency_key=idempotency_key,
+        mutation_type="register_invoice_task",
+        statement_id=task.statement_id,
+        request_hash=request_hash,
+        actor_id=actor_id,
+        response_json="{}",
+    )
+    db.add(mutation)
+    try:
+        db.flush()
+    except IntegrityError as error:
+        db.rollback()
+        existing = db.scalar(
+            select(FinanceManualMutation).where(
+                FinanceManualMutation.idempotency_key == idempotency_key
+            )
+        )
+        if existing is None:
+            raise HTTPException(
+                status_code=409,
+                detail="开票任务成功结果正在由另一请求登记，请刷新后重试",
+            ) from error
+        return None, _invoice_task_result_replay(
+            existing,
+            statement_id=task.statement_id,
+            request_hash=request_hash,
+            actor_id=actor_id,
+        )
+    return mutation, None
+
+
+def _record_invoice_task_result_response(
+    mutation: FinanceManualMutation,
+    response: dict[str, Any],
+) -> dict[str, Any]:
+    encoded = jsonable_encoder(response)
+    mutation.response_json = json.dumps(
+        encoded,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return encoded
+
+
 @router.post("/statements/{statement_id}/confirm")
 def confirm_statement_for_invoice(
     statement_id: int,
@@ -1147,7 +1279,12 @@ def confirm_statement_for_invoice(
     if statement.version != payload.expected_version:
         raise HTTPException(status_code=409, detail={"message": "对账单版本已变化，请刷新后重试", "current_version": statement.version})
     if statement.confirmation_status == "confirmed":
-        return {"id": statement.id, "confirmation_status": statement.confirmation_status, "version": statement.version}
+        return {
+            "id": statement.id,
+            "confirmation_status": statement.confirmation_status,
+            "version": statement.version,
+            "ledger_version": statement.ledger_version,
+        }
     if statement.confirmation_status == "cancelled":
         raise HTTPException(status_code=409, detail="已取消的对账单不能确认")
     if not _task_rows(db, statement.id):
@@ -1158,7 +1295,12 @@ def confirm_statement_for_invoice(
     statement.version += 1
     _audit(db, user=user, action="CONFIRM_FINANCE_STATEMENT", resource="Statement", entity_id=statement.id, customer=customer, details={"statement_number": statement.statement_number, "version": statement.version}, description="核对并确认月结对账单")
     db.commit()
-    return {"id": statement.id, "confirmation_status": statement.confirmation_status, "version": statement.version}
+    return {
+        "id": statement.id,
+        "confirmation_status": statement.confirmation_status,
+        "version": statement.version,
+        "ledger_version": statement.ledger_version,
+    }
 
 
 @router.post("/statements/{statement_id}/invoice-tasks", status_code=201)
@@ -1419,6 +1561,238 @@ def _ensure_task_source_current(db: Session, task: FinanceInvoiceTask) -> None:
         raise HTTPException(status_code=409, detail="对账来源已变化或未确认；请作废旧任务后重新生成")
 
 
+def _raise_invoice_task_ledger_conflict(
+    db: Session,
+    *,
+    task: FinanceInvoiceTask,
+    expected_ledger_version: int,
+) -> None:
+    db.expire_all()
+    statement = db.get(Statement, task.statement_id)
+    if (
+        statement is None
+        or statement.confirmation_status != "confirmed"
+        or statement.version != task.statement_version
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="对账来源已变化或未确认；请作废旧任务后重新生成",
+        )
+    if statement.ledger_version != expected_ledger_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "对账单财务流水版本已变化，请刷新后重试",
+                "current_ledger_version": statement.ledger_version,
+            },
+        )
+    raise HTTPException(status_code=409, detail="累计开票金额不能超过对账应收")
+
+
+def _legacy_issued_invoice_task_replay(
+    db: Session,
+    *,
+    task: FinanceInvoiceTask,
+    payload: TaskResultPayload,
+    user: User,
+    mutation: FinanceManualMutation,
+) -> dict[str, Any]:
+    invoice = db.scalar(
+        select(Invoice).where(Invoice.invoice_task_id == task.id)
+    )
+    if (
+        invoice is None
+        or invoice.invoice_number != payload.invoice_number
+        or invoice.invoice_date != payload.invoice_date
+        or invoice.confirmed_by != user.id
+        or payload.expected_ledger_version is not None
+        or payload.expected_version != task.version - 1
+    ):
+        raise HTTPException(status_code=409, detail="该任务已登记开票成功")
+    response = _record_invoice_task_result_response(
+        mutation,
+        {
+            **_task_response(db, task),
+            "invoice_id": invoice.id,
+            "invoice_number": invoice.invoice_number,
+        },
+    )
+    db.commit()
+    return response
+
+
+def _register_issued_invoice_task_result(
+    db: Session,
+    *,
+    task: FinanceInvoiceTask,
+    payload: TaskResultPayload,
+    user: User,
+) -> dict[str, Any]:
+    if not payload.invoice_number or payload.invoice_date is None:
+        raise HTTPException(status_code=422, detail="开票成功必须填写发票号码和开票日期")
+
+    request_hash = _invoice_task_result_request_hash(task, payload)
+    try:
+        mutation, replay = _reserve_invoice_task_result(
+            db,
+            task=task,
+            request_hash=request_hash,
+            actor_id=int(user.id),
+        )
+        if replay is not None:
+            return replay
+        assert mutation is not None
+
+        if task.status == "issued":
+            return _legacy_issued_invoice_task_replay(
+                db,
+                task=task,
+                payload=payload,
+                user=user,
+                mutation=mutation,
+            )
+        if payload.expected_ledger_version is None:
+            raise HTTPException(
+                status_code=422,
+                detail="开票成功必须提供 expected_ledger_version",
+            )
+        if task.version != payload.expected_version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "任务版本已变化，请刷新后重试",
+                    "current_version": task.version,
+                },
+            )
+        if task.status != "exported":
+            raise HTTPException(
+                status_code=409,
+                detail="请先下载税局 Excel 并由财务人工核对后再登记成功",
+            )
+        _ensure_task_source_current(db, task)
+
+        updated_statement = db.execute(
+            text(
+                """
+                UPDATE finance_statements
+                SET invoiced_amount = invoiced_amount + :amount,
+                    ledger_version = ledger_version + 1
+                WHERE id = :statement_id
+                  AND confirmation_status = 'confirmed'
+                  AND version = :statement_version
+                  AND ledger_version = :expected_ledger_version
+                  AND invoiced_amount + :amount <= total_receivable
+                RETURNING id, total_receivable, invoiced_amount, settled_amount,
+                          status, confirmation_status, version, ledger_version
+                """
+            ),
+            {
+                "statement_id": task.statement_id,
+                "statement_version": task.statement_version,
+                "expected_ledger_version": payload.expected_ledger_version,
+                "amount": str(task.total_amount),
+            },
+        ).mappings().one_or_none()
+        if updated_statement is None:
+            _raise_invoice_task_ledger_conflict(
+                db,
+                task=task,
+                expected_ledger_version=payload.expected_ledger_version,
+            )
+
+        updated_task = db.execute(
+            text(
+                """
+                UPDATE finance_invoice_tasks
+                SET status = 'issued',
+                    failure_reason = NULL,
+                    version = version + 1
+                WHERE id = :task_id
+                  AND status = 'exported'
+                  AND version = :expected_version
+                RETURNING id, version
+                """
+            ),
+            {
+                "task_id": task.id,
+                "expected_version": payload.expected_version,
+            },
+        ).mappings().one_or_none()
+        if updated_task is None:
+            db.expire_all()
+            current_task = db.get(FinanceInvoiceTask, task.id)
+            if current_task is None:
+                raise HTTPException(status_code=404, detail="开票任务不存在")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "任务版本已变化，请刷新后重试",
+                    "current_version": current_task.version,
+                },
+            )
+
+        invoice = Invoice(
+            statement_id=task.statement_id,
+            invoice_number=payload.invoice_number,
+            invoice_date=payload.invoice_date,
+            invoice_amount=task.total_amount,
+            invoice_task_id=task.id,
+            seller_entity_id=task.seller_entity_id,
+            net_amount=task.net_amount,
+            tax_amount=task.tax_amount,
+            total_amount=task.total_amount,
+            invoice_status="issued",
+            source="invoice_task",
+            confirmed_by=user.id,
+            confirmed_at=datetime.now(),
+            created_by=user.id,
+        )
+        db.add(invoice)
+        db.flush()
+        _audit(
+            db,
+            user=user,
+            action="REGISTER_INVOICE_TASK_SUCCESS",
+            resource="FinanceInvoiceTask",
+            entity_id=task.id,
+            customer=db.get(Customer, task.customer_id),
+            details={
+                "task_number": task.task_number,
+                "invoice_number": invoice.invoice_number,
+                "invoice_amount": task.total_amount,
+                "expected_ledger_version": payload.expected_ledger_version,
+                "statement_version": updated_statement["version"],
+                "ledger_version": updated_statement["ledger_version"],
+            },
+            description="登记税局开票成功",
+        )
+        db.expire_all()
+        current_task = db.get(FinanceInvoiceTask, task.id)
+        assert current_task is not None
+        response = _record_invoice_task_result_response(
+            mutation,
+            {
+                **_task_response(db, current_task),
+                "invoice_id": invoice.id,
+                "invoice_number": invoice.invoice_number,
+            },
+        )
+        db.commit()
+        return response
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="发票号码已存在或开票任务已登记",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.post("/invoice-tasks/{task_id}/confirm")
 def confirm_invoice_task(
     task_id: int,
@@ -1508,49 +1882,86 @@ def register_invoice_task_result(
     user: User = Depends(can_register),
 ) -> dict[str, Any]:
     task = _task_for_user(db, task_id, user)
+    if payload.status == "issued":
+        return _register_issued_invoice_task_result(
+            db,
+            task=task,
+            payload=payload,
+            user=user,
+        )
+
     customer = db.get(Customer, task.customer_id)
-    if task.version != payload.expected_version:
-        raise HTTPException(status_code=409, detail={"message": "任务版本已变化，请刷新后重试", "current_version": task.version})
-    if payload.status == "failed":
+    try:
+        if task.version != payload.expected_version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "任务版本已变化，请刷新后重试",
+                    "current_version": task.version,
+                },
+            )
         if not payload.failure_reason:
             raise HTTPException(status_code=422, detail="请填写税局导入或开具失败原因")
         if task.status == "issued":
             raise HTTPException(status_code=409, detail="已开票任务不能登记为失败")
-        task.status = "failed"
-        task.failure_reason = payload.failure_reason
-        task.version += 1
-        _audit(db, user=user, action="REGISTER_INVOICE_TASK_FAILURE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "failure_reason": payload.failure_reason}, description="登记税局开票失败")
+        updated = db.execute(
+            text(
+                """
+                UPDATE finance_invoice_tasks
+                SET status = 'failed',
+                    failure_reason = :failure_reason,
+                    version = version + 1
+                WHERE id = :task_id
+                  AND status != 'issued'
+                  AND version = :expected_version
+                RETURNING id, version
+                """
+            ),
+            {
+                "task_id": task.id,
+                "failure_reason": payload.failure_reason,
+                "expected_version": payload.expected_version,
+            },
+        ).mappings().one_or_none()
+        if updated is None:
+            db.expire_all()
+            current_task = db.get(FinanceInvoiceTask, task.id)
+            if current_task is None:
+                raise HTTPException(status_code=404, detail="开票任务不存在")
+            if current_task.status == "issued":
+                raise HTTPException(status_code=409, detail="已开票任务不能登记为失败")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "任务版本已变化，请刷新后重试",
+                    "current_version": current_task.version,
+                },
+            )
+        _audit(
+            db,
+            user=user,
+            action="REGISTER_INVOICE_TASK_FAILURE",
+            resource="FinanceInvoiceTask",
+            entity_id=task.id,
+            customer=customer,
+            details={
+                "task_number": task.task_number,
+                "failure_reason": payload.failure_reason,
+            },
+            description="登记税局开票失败",
+        )
+        db.expire_all()
+        current_task = db.get(FinanceInvoiceTask, task.id)
+        assert current_task is not None
+        response = _task_response(db, current_task)
         db.commit()
-        return _task_response(db, task)
-    if not payload.invoice_number or payload.invoice_date is None:
-        raise HTTPException(status_code=422, detail="开票成功必须填写发票号码和开票日期")
-    if task.status == "issued":
-        invoice = db.scalar(select(Invoice).where(Invoice.invoice_task_id == task.id))
-        if invoice and invoice.invoice_number == payload.invoice_number:
-            return {**_task_response(db, task), "invoice_id": invoice.id, "invoice_number": invoice.invoice_number}
-        raise HTTPException(status_code=409, detail="该任务已登记开票成功")
-    if task.status != "exported":
-        raise HTTPException(status_code=409, detail="请先下载税局 Excel 并由财务人工核对后再登记成功")
-    _ensure_task_source_current(db, task)
-    statement = db.get(Statement, task.statement_id)
-    if statement is None:
-        raise HTTPException(status_code=409, detail="对账单不存在")
-    if Decimal(str(statement.invoiced_amount)) + Decimal(str(task.total_amount)) > Decimal(str(statement.total_receivable)):
-        raise HTTPException(status_code=409, detail="累计开票金额不能超过对账应收")
-    try:
-        invoice = Invoice(statement_id=statement.id, invoice_number=payload.invoice_number, invoice_date=payload.invoice_date, invoice_amount=task.total_amount, invoice_task_id=task.id, seller_entity_id=task.seller_entity_id, net_amount=task.net_amount, tax_amount=task.tax_amount, total_amount=task.total_amount, invoice_status="issued", source="invoice_task", confirmed_by=user.id, confirmed_at=datetime.now(), created_by=user.id)
-        db.add(invoice)
-        statement.invoiced_amount = (Decimal(str(statement.invoiced_amount)) + Decimal(str(task.total_amount))).quantize(MONEY)
-        task.status = "issued"
-        task.failure_reason = None
-        task.version += 1
-        db.flush()
-        _audit(db, user=user, action="REGISTER_INVOICE_TASK_SUCCESS", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "invoice_number": invoice.invoice_number, "invoice_amount": task.total_amount}, description="登记税局开票成功")
-        db.commit()
-    except IntegrityError as error:
+        return response
+    except HTTPException:
         db.rollback()
-        raise HTTPException(status_code=409, detail="发票号码已存在或开票任务已登记") from error
-    return {**_task_response(db, task), "invoice_id": invoice.id, "invoice_number": invoice.invoice_number}
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/invoice-tasks/{task_id}/void")
@@ -1562,18 +1973,80 @@ def void_invoice_task(
 ) -> dict[str, Any]:
     task = _task_for_user(db, task_id, user)
     customer = db.get(Customer, task.customer_id)
-    if task.version != payload.expected_version:
-        raise HTTPException(status_code=409, detail={"message": "任务版本已变化，请刷新后重试", "current_version": task.version})
-    if task.status == "issued":
-        raise HTTPException(status_code=409, detail="已登记发票不能在本阶段自动作废")
-    if task.status != "voided":
-        task.status = "voided"
-        task.voided_by = user.id
-        task.voided_at = datetime.now()
-        task.version += 1
-        _audit(db, user=user, action="VOID_INVOICE_TASK", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number}, description="作废冻结开票任务")
+    try:
+        if task.version != payload.expected_version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "任务版本已变化，请刷新后重试",
+                    "current_version": task.version,
+                },
+            )
+        if task.status == "issued":
+            raise HTTPException(status_code=409, detail="已登记发票不能在本阶段自动作废")
+        if task.status == "voided":
+            return _task_response(db, task)
+
+        updated = db.execute(
+            text(
+                """
+                UPDATE finance_invoice_tasks
+                SET status = 'voided',
+                    voided_by = :voided_by,
+                    voided_at = :voided_at,
+                    version = version + 1
+                WHERE id = :task_id
+                  AND status NOT IN ('issued', 'voided')
+                  AND version = :expected_version
+                RETURNING id, version
+                """
+            ),
+            {
+                "task_id": task.id,
+                "voided_by": user.id,
+                "voided_at": datetime.now(),
+                "expected_version": payload.expected_version,
+            },
+        ).mappings().one_or_none()
+        if updated is None:
+            db.expire_all()
+            current_task = db.get(FinanceInvoiceTask, task.id)
+            if current_task is None:
+                raise HTTPException(status_code=404, detail="开票任务不存在")
+            if current_task.status == "issued":
+                raise HTTPException(
+                    status_code=409,
+                    detail="已登记发票不能在本阶段自动作废",
+                )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "任务版本已变化，请刷新后重试",
+                    "current_version": current_task.version,
+                },
+            )
+        _audit(
+            db,
+            user=user,
+            action="VOID_INVOICE_TASK",
+            resource="FinanceInvoiceTask",
+            entity_id=task.id,
+            customer=customer,
+            details={"task_number": task.task_number},
+            description="作废冻结开票任务",
+        )
+        db.expire_all()
+        current_task = db.get(FinanceInvoiceTask, task.id)
+        assert current_task is not None
+        response = _task_response(db, current_task)
         db.commit()
-    return _task_response(db, task)
+        return response
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _attachment_root() -> Path:

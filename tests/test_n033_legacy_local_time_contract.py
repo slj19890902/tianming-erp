@@ -49,6 +49,7 @@ def test_floor3_legacy_local_timestamps_keep_beijing_offset():
         z_index=0,
         version=1,
         source_type="manual",
+        layout_kind="physical_pallet",
         updated_at=legacy_local,
     )
     pallet = SimpleNamespace(

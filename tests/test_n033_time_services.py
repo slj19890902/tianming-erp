@@ -318,6 +318,11 @@ def test_production_response_datetimes_are_explicit_and_nullable(
         "_active_customer_board_preparation_sources",
         lambda *_args, **_kwargs: [],
     )
+    monkeypatch.setattr(
+        production_workflow,
+        "_receipt_purpose_summaries_by_order_item_ids",
+        lambda *_args, **_kwargs: {},
+    )
 
     task_payload = production_workflow.list_production_tasks(
         db,

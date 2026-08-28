@@ -28,7 +28,9 @@ def test_production_first_screen_has_only_a_compact_conditional_maintenance_entr
     assert "productionWaitingLabels" not in production
     assert "refreshProductionLabelPlan(row)" not in production
     assert "loadProductionWaitingLabelPage" not in load
-    assert "loadProductionPage(this.pages.productionPending || 1)" in load
+    assert "this.loadProductionHistory()" in load
+    assert "this.loadProductionPlacement()" in load
+    assert "loadProductionPage(" not in load
     assert 'status:"waiting_material"' not in load
 
 

@@ -222,7 +222,12 @@ def get_current_user(
     request: Request,
     db: Session = Depends(get_db),
 ) -> User:
-    current = load_settings()
+    # Runtime settings are immutable for the lifetime of a worker and were
+    # already validated during application startup.  Reloading them here used
+    # to repeat the full UAT path/identity validation once for every protected
+    # request (and a second time while decoding the token on UAT), adding about
+    # half a second to otherwise inexpensive endpoints on Windows.
+    current = getattr(request.app.state, "erp_settings", None) or load_settings()
     token = request.cookies.get(current.session_cookie_name)
     if not token:
         raise HTTPException(
@@ -230,7 +235,10 @@ def get_current_user(
             detail="未登录或登录已失效",
         )
     try:
-        user_id, token_auth_version = decode_session_token(token)
+        user_id, token_auth_version = decode_session_token(
+            token,
+            secret_key=current.secret_key,
+        )
     except ValueError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

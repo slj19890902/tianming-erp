@@ -135,8 +135,12 @@ def test_external_purchase_confirmation_uses_explicit_utc_rfc3339() -> None:
     assert "from app.core.time_contract import beijing_today, utc_naive_to_api" in (
         PURCHASE_SERVICE
     )
-    assert PURCHASE_SERVICE.count("utc_naive_to_api(") == 3
+    # The service now serializes cancellation timestamps through the same UTC
+    # contract as well, so the safety assertion must not cap future fields at
+    # the original three confirmation call sites.
+    assert PURCHASE_SERVICE.count("utc_naive_to_api(") >= 3
     assert ".confirmed_at.isoformat()" not in PURCHASE_SERVICE
+    assert ".cancelled_at.isoformat()" not in PURCHASE_SERVICE
 
 
 def test_phone_governance_export_is_session_bound_and_logout_releases_state() -> None:
@@ -398,10 +402,10 @@ def test_supplier_print_remains_read_only_and_structurally_redacted() -> None:
         assert forbidden not in PRINT_PAGE
 
 
-def test_release_note_keeps_formal_acceptance_pending_and_no_migration() -> None:
-    assert "确定性展示修正" in VERSION
-    assert "电话" in VERSION
-    assert "RFC3339" in VERSION
-    assert "开发验证通过" in VERSION
-    assert "正式 ERP 人工验收待完成" in VERSION
-    assert "无新增 migration" in VERSION
+def test_deterministic_display_keeps_current_release_external_acceptance_gate() -> None:
+    # The concrete phone, RFC3339 and display contracts are asserted in this
+    # module.  Historical candidate wording is not a permanent current-version
+    # title; later releases retain the durable external-acceptance flag.
+    assert "APP_VERSION = " in VERSION
+    assert "APP_VERSION_NAME = " in VERSION
+    assert "APP_EXTERNAL_ACCEPTANCE_REQUIRED = True" in VERSION

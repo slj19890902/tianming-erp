@@ -95,6 +95,8 @@ const vm = {{
   deliverySourceModeFromLines() {{ return "order_only"; }},
   createDeliveryLine(value) {{ return {{...value}}; }},
   deliveryFormSignature() {{ return "saved"; }},
+  resetDeliveryReminderState() {{}},
+  loadDeliveryRemindersForCustomer: async () => true,
   loadDeliveryPendingItems: async () => true,
   showToast(message, error) {{ toasts.push({{message,error}}); }},
 }};

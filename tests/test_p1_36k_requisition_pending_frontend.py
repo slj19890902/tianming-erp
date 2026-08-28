@@ -32,31 +32,33 @@ def _run_node(source: str, tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_pending_page_uses_server_totals_and_current_page_selection() -> None:
+def test_pending_page_uses_full_list_totals_and_client_side_supplier_selection() -> None:
     page = INDEX.split(
         '<template v-else-if="activePage === \'requisition\'">', 1
     )[1].split('<template v-else-if="activePage === \'incoming\'">', 1)[0]
     assert "待报料 {{ requisitionPendingOverallTotal }}" in page
     assert "全部供应商（{{ requisitionPendingOverallTotal }}）" in page
     assert "全选本页" in page
-    assert ':page="pages.requisitionPending"' in page
-    assert ':total="requisitionPendingTotal"' in page
-    assert ':filter-count="requisitionSupplierFilter ? 1 : 0"' in page
+    assert ':page="pages.requisitionPending"' not in page
+    assert ':total="requisitionPendingTotal"' not in page
+    assert ':filter-count="requisitionSupplierFilter ? 1 : 0"' not in page
     assert "requisitionPendingLoading" in page
     assert "requisitionPendingError" in page
     assert "selectRequisitionSupplierFilter" in page
-    assert "changeRequisitionPendingPage" in page
+    assert "changeRequisitionPendingPage" not in page
     assert (
         "this.ordersUnfinishedTotal + this.requisitionPendingOverallTotal + "
         "this.incomingPendingTotal"
     ) in INDEX
     assert "filteredRequisitionPending()" in INDEX
-    assert "return this.requisitionPending;" in _method_body(
+    filtered = _method_body(
         "filteredRequisitionPending() {", "filteredMergeSuggestions() {"
     )
+    assert "if (!supplier) return this.requisitionPending;" in filtered
+    assert ".filter(row =>" in filtered
 
 
-def test_page_latest_wins_failure_keeps_last_good_and_success_clears_selection(
+def test_full_list_latest_wins_failure_keeps_last_good_and_success_clears_selection(
     tmp_path: Path,
 ) -> None:
     current = _method_body(
@@ -117,13 +119,13 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
   const latest=vm.loadRequisitionPendingPage({{page:3,clearSelection:true}});
   expect(pending.length===2,"page loads did not issue one GET each");
   expect(pending.every(call=>call.url==="/api/requisition/pending"),"page load called a non-pending endpoint");
-  expect(pending.every(call=>call.options.params.page_size===25),"page size missing");
-  pending[1].resolve({{data:{{items:[{{item_id:3}}],total:1,overall_total:61,page:3,page_size:25,supplier_counts:[{{supplier_name:"鸣朋",count:61}}]}}}});
+  expect(pending.every(call=>Object.keys(call.options.params||{{}}).length===0),"full-list load sent paging or supplier params");
+  pending[1].resolve({{data:{{items:[{{item_id:3}}],total:1,supplier_counts:[{{supplier_name:"鸣朋",count:1}}]}}}});
   expect(await latest===true,"latest page failed");
-  pending[0].resolve({{data:{{items:[{{item_id:2}}],total:25,overall_total:60,page:2,page_size:25,supplier_counts:[]}}}});
+  pending[0].resolve({{data:{{items:[{{item_id:2}}],total:1,supplier_counts:[]}}}});
   expect(await old===false,"stale page was accepted");
-  expect(vm.requisitionPending[0].item_id===3&&vm.pages.requisitionPending===3,"stale page replaced latest rows");
-  expect(vm.requisitionPendingOverallTotal===61&&vm.requisitionPendingTotal===1,"server totals were not applied");
+  expect(vm.requisitionPending[0].item_id===3&&vm.pages.requisitionPending===1,"stale load replaced latest rows");
+  expect(vm.requisitionPendingOverallTotal===1&&vm.requisitionPendingTotal===1,"full-list totals were not applied");
   expect(vm.selectedPendingKeys.length===0&&vm.selectedBomSnapshotIds.length===0,"successful page change kept cross-page selection");
   expect(vm.requisitionPendingLoading===false,"stale request closed latest loading incorrectly");
 
@@ -131,16 +133,16 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
   const failed=vm.loadRequisitionPendingPage({{page:4,clearSelection:true}});
   pending[2].reject(new Error("network down"));
   expect(await failed===false,"failed page reported success");
-  expect(vm.requisitionPending[0].item_id===3&&vm.pages.requisitionPending===3,"failure discarded last good page");
+  expect(vm.requisitionPending[0].item_id===3&&vm.pages.requisitionPending===1,"failure discarded last good list");
   expect(vm.selectedPendingKeys[0]==="order_item:3","failure discarded last good selection");
   expect(vm.requisitionPendingError.includes("network down"),"failure did not expose a Chinese retry state");
   expect(vm.marks.join(",")==="requisition","failed/stale request marked page cache");
 
   const retrying=vm.retryRequisitionPendingPage();
-  expect(pending[3].options.params.page===4,"retry fell back to the last good page instead of the failed target");
-  pending[3].resolve({{data:{{items:[{{item_id:4}}],total:1,overall_total:61,page:4,page_size:25,supplier_counts:[]}}}});
-  expect(await retrying===true,"retry did not recover the failed target page");
-  expect(vm.pages.requisitionPending===4&&vm.requisitionPending[0].item_id===4,"retry response was not applied");
+  expect(Object.keys(pending[3].options.params||{{}}).length===0,"retry sent obsolete paging or supplier params");
+  pending[3].resolve({{data:{{items:[{{item_id:4}}],total:1,supplier_counts:[]}}}});
+  expect(await retrying===true,"retry did not recover the failed full-list load");
+  expect(vm.pages.requisitionPending===1&&vm.requisitionPending[0].item_id===4,"retry response was not applied");
   expect(vm.selectedPendingKeys.length===0,"successful retry kept the previous page selection");
 }})().catch(error=>{{console.error(error);process.exit(1);}});
 """

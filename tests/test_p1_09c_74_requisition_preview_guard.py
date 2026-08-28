@@ -78,7 +78,7 @@ def test_latest_requisition_preview_response_wins(tmp_path: Path) -> None:
     )
     opened = _method_body(
         "async openSupplierRequisitionDraft(rows = null) {",
-        "async openCompositeRequisition(rows) {",
+        "compositePhysicalMergeKey(line) {",
     )
     script = _runtime(opened, signature, cancel) + """
 (async()=>{
@@ -109,7 +109,7 @@ def test_changed_selection_blocks_old_preview_without_opening(tmp_path: Path) ->
     )
     opened = _method_body(
         "async openSupplierRequisitionDraft(rows = null) {",
-        "async openCompositeRequisition(rows) {",
+        "compositePhysicalMergeKey(line) {",
     )
     script = _runtime(opened, signature, cancel) + """
 (async()=>{
@@ -136,7 +136,7 @@ def test_stale_error_and_leave_page_cannot_open_preview(tmp_path: Path) -> None:
     )
     opened = _method_body(
         "async openSupplierRequisitionDraft(rows = null) {",
-        "async openCompositeRequisition(rows) {",
+        "compositePhysicalMergeKey(line) {",
     )
     script = _runtime(opened, signature, cancel) + """
 (async()=>{
@@ -161,7 +161,7 @@ def test_navigation_away_cancels_pending_preview() -> None:
 def test_preview_remains_non_persisting_and_uses_frozen_snapshot() -> None:
     opened = _method_body(
         "async openSupplierRequisitionDraft(rows = null) {",
-        "async openCompositeRequisition(rows) {",
+        "compositePhysicalMergeKey(line) {",
     )
     assert "JSON.parse(JSON.stringify" in opened
     assert "axios.post(" in opened

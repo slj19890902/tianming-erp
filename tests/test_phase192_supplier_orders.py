@@ -176,6 +176,17 @@ def session_factory(api_app):
 
 
 @pytest.fixture(scope="module")
+def replenishment_customer_id(session_factory):
+    from app.models.customer import Customer
+
+    with session_factory() as db:
+        customer = Customer(name="七层补库测试客户")
+        db.add(customer)
+        db.commit()
+        return int(customer.id)
+
+
+@pytest.fixture(scope="module")
 def admin_cookies(client, session_factory):
     from app.core.security import hash_password
     from app.models.user import User
@@ -205,6 +216,7 @@ def admin_cookies(client, session_factory):
 @pytest.mark.parametrize("flute_type", ["AAA", "ABC"])
 def test_replenishment_item_preserves_seven_layer_material(
     session_factory,
+    replenishment_customer_id,
     flute_type,
 ):
     db = session_factory()
@@ -213,6 +225,7 @@ def test_replenishment_item_preserves_seven_layer_material(
             db,
             StockReplenishmentItemPayload(
                 target_inventory_type="semi_finished",
+                customer_id=replenishment_customer_id,
                 product_name=f"七层库存片料-{flute_type}",
                 material_code="A12345B",
                 layer_count=7,
@@ -236,6 +249,7 @@ def test_replenishment_item_preserves_seven_layer_material(
 @pytest.mark.parametrize("flute_type", [None, "", "A", "B", "E", "AB", "BE"])
 def test_replenishment_item_rejects_invalid_seven_layer_flute(
     session_factory,
+    replenishment_customer_id,
     flute_type,
 ):
     from app.services.stock_replenishment import StockReplenishmentError
@@ -247,6 +261,7 @@ def test_replenishment_item_rejects_invalid_seven_layer_flute(
                 db,
                 StockReplenishmentItemPayload(
                     target_inventory_type="semi_finished",
+                    customer_id=replenishment_customer_id,
                     product_name="七层无效楞型库存片料",
                     material_code="A12345B",
                     layer_count=7,

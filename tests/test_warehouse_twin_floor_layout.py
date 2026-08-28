@@ -168,7 +168,10 @@ def test_checked_in_twin_asset_contains_locked_shared_lift_projected_columns_and
     assert sum(1 for item in one["features"] if item["subtype"] == "custom_wall") >= 22
     assert set(three["erp_area_codes"]) == {
         "A1", "A2", "AB1", "AB2", "B1", "B2", "C1", "C2", "CD1", "D1", "D2",
-        "DE1", "E1", "E2", "E3", "E4", "F1", "F2", "F3", "F4", "F12", "F34",
+        "DE1", "E1", "E2", "E3", "F1", "F2", "F3", "F4", "F12", "F34",
+        "FG-004", "FG-005", "FG-006", "FG-007", "FG-008", "FG-009",
+        "FIN-LOOSE-001", "RAW-001", "RAW-004", "SEMI-006", "SEMI-008",
+        "SEMI-010", "SEMI-011",
     }
     assert one["pallets_inventory_linked"] is False
     assert three["pallets_inventory_linked"] is False

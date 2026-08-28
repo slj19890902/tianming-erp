@@ -63,6 +63,8 @@ def _product_payload(
         product_name=f"匿名客户定长护角 {length_mm}",
         unit="根",
         sale_unit_price=sale_unit_price,
+        external_packaging_default_order_quantity_basis="1",
+        external_packaging_default_purchase_quantity_basis="1",
     )
     payload["external_supply"]["customer_specification"] = (
         _customer_specification(length_mm)

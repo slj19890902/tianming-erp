@@ -13258,20 +13258,10 @@ def list_locations(
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
-    query = (
-        select(WarehouseLocation)
-        .options(selectinload(WarehouseLocation.floor3_layout))
-        .where(_formal_inventory_location_condition())
-    )
+    query = select(WarehouseLocation).where(_formal_inventory_location_condition())
     if not include_inactive:
         query = query.where(WarehouseLocation.is_active.is_(True))
-    rows = db.scalars(
-        query.options(
-            selectinload(WarehouseLocation.address_area).selectinload(
-                WarehouseArea.floor
-            )
-        ).order_by(WarehouseLocation.location_code)
-    ).all()
+    rows = db.scalars(query.order_by(WarehouseLocation.location_code)).all()
     projection_contexts = load_warehouse_location_projection_contexts(db, rows)
     return {
         "items": [

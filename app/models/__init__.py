@@ -145,6 +145,7 @@ from app.models.inventory_onboarding_posting import (  # noqa: E402,F401
     InventoryOnboardingPosting,
 )
 from app.models.finance import (  # noqa: E402,F401
+    FinanceManualMutation,
     Invoice,
     ReturnReceipt,
     ReturnReceiptItem,

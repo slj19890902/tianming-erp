@@ -27,9 +27,9 @@ def test_production_history_has_admin_reversal_and_inventory_deep_link() -> None
     assert 'if (!this.pageAllowed("warehouse"))' in INDEX
     assert "当前账号没有访问仓库库存管理的权限" in INDEX
     assert 'params.set("lot_id"' in INDEX
-    assert 'new URLSearchParams({ embedded:"1", tab:"finished" })' in INDEX
-    assert 'this.ensureWarehouseFrame(`/warehouse.html?${params.toString()}`)' in INDEX
-    assert 'window.location.href = `/warehouse.html?${params.toString()}`' not in INDEX
+    assert 'new URLSearchParams({ tab:"locations", view:"2d" })' in INDEX
+    assert 'params.set("location_id", String(currentLocationId))' in INDEX
+    assert 'window.open(`/warehouse.html?${params.toString()}`, "_blank", "noopener")' in INDEX
 
 
 def test_order_group_detail_keeps_active_page_else_if_chain_adjacent() -> None:

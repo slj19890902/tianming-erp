@@ -17,7 +17,7 @@ def test_n034_product_editor_has_compact_internal_bom_cards() -> None:
     assert "同客户常用箱" in INDEX
     assert "@search=\"searchBomProducts\"" in INDEX
     assert "每套数量" in INDEX
-    assert "送货单显示" in INDEX
+    assert "交付标签和成品方式" in INDEX
     assert "必需" in INDEX
     assert "内部编码：{{ bomComponentInternalCode(component) }}" in INDEX
     assert ".bom-component-compact-row {" in INDEX
@@ -27,8 +27,10 @@ def test_n034_product_editor_has_compact_internal_bom_cards() -> None:
     bom_end = INDEX.index("</fieldset>", bom_start) + len("</fieldset>")
     bom_block = INDEX[bom_start:bom_end]
     assert "<table" not in bom_block
-    assert "父件按套下单" in bom_block
-    assert "组件用于内部生产" in bom_block
+    assert "整套统一计价" in bom_block
+    assert "组件分别计价" in bom_block
+    assert "父件交付" in bom_block
+    assert "子件交付" in bom_block
 
 
 def test_n034_bom_uses_same_customer_products_and_versioned_get_put() -> None:
@@ -56,7 +58,9 @@ def test_n034_bom_uses_same_customer_products_and_versioned_get_put() -> None:
     bom_start = INDEX.index('<fieldset class="bom-editor-panel"')
     bom_end = INDEX.index("</fieldset>", bom_start) + len("</fieldset>")
     bom_block = INDEX[bom_start:bom_end]
-    assert 'v-model="component.show_on_delivery"' in bom_block
+    # P1-79 将客户单据展示收口为父件级交付模式，不再允许逐组件制造混合口径。
+    assert 'v-model="productForm.composite_fulfillment_mode"' in bom_block
+    assert 'v-model="component.show_on_delivery"' not in bom_block
     assert 'value="production"' not in bom_block
     assert 'value="requisition"' not in bom_block
     assert 'value="all_internal"' not in bom_block

@@ -139,7 +139,7 @@ def test_requisition_modal_has_frontend_dimension_validation_and_friendly_error_
 
 def test_requisition_submitted_list_offers_incoming_entry_and_delivery_page_explains_received_requirement() -> None:
     assert "/incoming.html" in INDEX
-    assert "去入库" in INDEX
+    assert "材料到厂后：去来料入库" in INDEX
     assert "只有已入库，或已被成品库存全额预占" in INDEX
 
 
@@ -187,7 +187,11 @@ def test_requisition_page_keeps_pending_and_submitted_views() -> None:
 
 def test_finance_settlement_no_longer_prompts_for_account() -> None:
     assert 'prompt("请输入收款账户")' not in INDEX
-    assert 'axios.put(`/api/finance/statements/${statementId}/settle`, {amount,settlement_date:settlementDate})' in INDEX
+    snippet = INDEX.split("async settle(row) {", 1)[1].split("beginBackupAction(", 1)[0]
+    assert 'axios.put(`/api/finance/statements/${statementId}/settle`, payload)' in snippet
+    assert "expected_version:expectedVersion" in snippet
+    assert "expected_ledger_version:expectedLedgerVersion" in snippet
+    assert "idempotency_key:createIdempotencyKey()" in snippet
 
 
 def test_delivery_and_statement_controls_show_undo_and_edit_cancel_actions() -> None:
@@ -204,7 +208,8 @@ def test_delivery_and_statement_controls_show_undo_and_edit_cancel_actions() -> 
 def test_board_dimensions_render_as_integer_mm_in_daily_pages() -> None:
     assert "formatBoardDimension" in INDEX
     assert "formatBoardSpec" in INDEX
-    assert "formatBoardSpec(row.cardboard_len,row.cardboard_width)" in INDEX
+    assert "incomingDimensionMm(row.cardboard_len)" in INDEX
+    assert "incomingDimensionMm(row.cardboard_width)" in INDEX
     assert "mm" in INDEX
     assert "formatBoardSpec(item.cardboard_len, item.cardboard_width)" in INCOMING
 
@@ -280,7 +285,7 @@ def test_order_badge_uses_undelivered_count_and_has_workflow_rollback() -> None:
 
 
 def test_finance_settlement_error_uses_friendly_validation_message() -> None:
-    snippet = INDEX.split("async settle(row) {", 1)[1].split("},", 1)[0]
+    snippet = INDEX.split("async settle(row) {", 1)[1].split("beginBackupAction(", 1)[0]
     assert "normalizeValidationErrors" in snippet
     assert "settlement_date" in snippet
     assert "account" in snippet

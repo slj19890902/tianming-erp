@@ -400,7 +400,14 @@ def test_finished_then_semi_multi_dispatch_cancel_and_desktop_sources(
             f"/api/deliveries/{first['id']}/dispatch"
         )
         requisition_after_first = client.get("/api/requisition/pending")
+        pending_after_first = client.get("/api/deliveries/pending_items")
+        searched_after_first = client.get(
+            "/api/deliveries/pending-items/search",
+            params={"customer_id": 1, "list_all": "true"},
+        )
         second = create_delivery(client, item_id, 5)
+        second_detail = client.get(f"/api/deliveries/{second['id']}")
+        listed_before_second = client.get("/api/deliveries")
         dispatched_second = client.put(
             f"/api/deliveries/{second['id']}/dispatch"
         )
@@ -426,6 +433,49 @@ def test_finished_then_semi_multi_dispatch_cancel_and_desktop_sources(
     }
     assert actual_sources["finished"]["quantity_to_pick_stock"] == 4
     assert actual_sources["semi_finished"]["quantity_to_pick_stock"] == 1
+    assert pending_after_first.status_code == 200, pending_after_first.text
+    assert searched_after_first.status_code == 200, searched_after_first.text
+    assert second_detail.status_code == 200, second_detail.text
+    assert listed_before_second.status_code == 200, listed_before_second.text
+    assert dispatched_second.status_code == 200, dispatched_second.text
+    assert cancelled_second.status_code == 200, cancelled_second.text
+    pending_after_first_item = next(
+        row
+        for row in pending_after_first.json()["items"]
+        if row["order_item_id"] == item_id
+    )
+    searched_after_first_item = next(
+        row
+        for row in searched_after_first.json()["items"]
+        if row["order_item_id"] == item_id
+    )
+    listed_second_item = next(
+        row
+        for row in listed_before_second.json()["items"]
+        if row["id"] == second["id"]
+    )["items"][0]
+    source_projections = (
+        pending_after_first_item,
+        searched_after_first_item,
+        second_detail.json()["items"][0],
+        listed_second_item,
+    )
+    for projection in source_projections:
+        assert sum(
+            int(source["quantity_to_pick_requirement"] or 0)
+            for source in projection["inventory_sources"]
+            if source["source_type"] == "semi_finished"
+        ) == 5
+    assert sum(
+        int(source["quantity_to_pick_requirement"] or 0)
+        for source in dispatched_second.json()["items"][0]["inventory_sources"]
+        if source["source_type"] == "semi_finished"
+    ) == 5
+    assert sum(
+        int(source["quantity_to_pick_requirement"] or 0)
+        for source in cancelled_second.json()["items"][0]["inventory_sources"]
+        if source["source_type"] == "semi_finished"
+    ) == 5
     first_listed = next(
         row for row in listed.json()["items"] if row["id"] == first["id"]
     )
@@ -436,8 +486,6 @@ def test_finished_then_semi_multi_dispatch_cancel_and_desktop_sources(
         row["product_code"] == "B2-SINGLE"
         for row in requisition_after_first.json()["items"]
     )
-    assert dispatched_second.status_code == 200, dispatched_second.text
-    assert cancelled_second.status_code == 200, cancelled_second.text
     assert printed.status_code == 200
     forbidden_fragments = ("location", "lot", "source")
     assert not any(
@@ -461,7 +509,9 @@ def test_finished_then_semi_multi_dispatch_cancel_and_desktop_sources(
             row for row in reservations if row.reservation_type == "semi_order"
         )
         assert item.delivered_quantity == 5
-        assert active_finished_reserved_qty(db, item_id) == 4
+        # Canonical order coverage is delivered quantity plus remaining
+        # finished reservation credit; source composition is asserted below.
+        assert active_finished_reserved_qty(db, item_id) == 5
         assert finished.consumed_stock_quantity == 4
         assert semi.consumed_requirement_quantity == 1
         assert (finished_lot.quantity_reserved, finished_lot.quantity_consumed) == (0, 4)

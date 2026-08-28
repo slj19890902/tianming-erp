@@ -3791,6 +3791,7 @@
                   <button class="btn" @click="resetReportedFilters()">清空</button>
                 </div>
                 <div class="reported-item-toolbar">
+                  <span class="muted">默认不选；只打印人工明确勾选的明细</span>
                   <span class="reported-item-selection-summary">已选 <strong>{{ reportedSelectedItems().length }}</strong> 条</span>
                   <button class="btn small" type="button" :disabled="reportedItemPrintBusy || !reportedSelectedItems().length" @click="clearReportedItemSelections">清空已选</button>
                   <button class="btn small primary" type="button" :disabled="reportedItemPrintBusy || !reportedSelectedItems().length" @click="prepareReportedItemTaskPrint">{{ reportedItemPrintBusy ? '正在核验…' : '打印待来料任务单' }}</button>
@@ -3899,6 +3900,7 @@
                 </dl>
                 <div class="toolbar-group" style="margin-top:18px;flex-wrap:wrap">
                   <button class="btn primary" type="button" @click="openReportedItemDocument(reportedItemDetail)">{{ reportedItemDetail.can_view_supplier_order ? '查看采购单并定位本行' : '查看原单据' }}</button>
+                  <button v-if="reportedItemDetail.stock_replenishment_can_void" class="btn danger" type="button" :disabled="stockReplenishmentVoidBusy(reportedItemDetail) || stockReplenishmentVoidUncertain(reportedItemDetail)" @click="voidReportedReplenishment(reportedItemDetail)">{{ stockReplenishmentVoidBusy(reportedItemDetail) ? '撤销中…' : (stockReplenishmentVoidUncertain(reportedItemDetail) ? '请刷新核对' : '撤销补库报料') }}</button>
                   <button v-if="reportedItemDetail.composite_group_can_void" class="btn danger" type="button" @click="voidReportedCompositeRequisition(reportedItemDetail)">撤销整组 BOM 报料</button>
                   <button v-if="reportedItemDetail.can_void_item" class="btn danger" type="button" :disabled="reportedItemVoidBusy(reportedItemDetail)" @click="voidReportedItem(reportedItemDetail)">{{ reportedItemVoidButtonText(reportedItemDetail) }}</button>
                 </div>
@@ -4249,7 +4251,7 @@
                         <tr v-for="statement in row.statements" :key="statement.id">
                           <td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_payment_amount) }}</td>
                           <td><span v-if="statement.invoice_status==='invoiced'" class="status green">已开票</span><status-tag v-else :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div></td>
-                          <td class="toolbar-group"><button class="btn small" @click="openStatementDetail(statement)">查看</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementEdit(statement)">编辑</button><button v-if="canConfirmStatement && statement.confirmation_status!=='confirmed'" class="btn small success" :disabled="!!financeStatementOperationState.action" @click="confirmFinanceStatement(statement)">{{ financeStatementOperationState.action==='confirm' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '确认中…' : '核对并确认' }}</button><button v-if="canGenerateInvoiceTask" class="btn small" :disabled="statement.confirmation_status!=='confirmed' || !!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button v-if="canFinance" class="btn small danger" :disabled="!!financeStatementOperationState.action" @click="cancelStatement(statement)">{{ financeStatementOperationState.action==='cancel' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '取消中…' : '取消' }}</button><button class="btn small" @click="exportStatement(statement)">导出 Excel</button><button v-if="canFinance" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(statement)">{{ financeStatementOperationState.action==='register' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '登记中…' : '登记开票' }}</button><button v-if="canFinance" class="btn small success" :disabled="Number(statement.pending_payment_amount)<=0 || !!financeStatementOperationState.action" @click="settle(statement)">{{ financeStatementOperationState.action==='settle' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '核销中…' : '收款核销' }}</button></td>
+                          <td class="toolbar-group"><button class="btn small" @click="openStatementDetail(statement)">查看</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementEdit(statement)">编辑</button><button v-if="canConfirmStatement && statement.confirmation_status!=='confirmed'" class="btn small success" :disabled="!!financeStatementOperationState.action" @click="confirmFinanceStatement(statement)">{{ financeStatementOperationState.action==='confirm' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '确认中…' : '核对并确认' }}</button><button v-if="canGenerateInvoiceTask" class="btn small" :disabled="statement.confirmation_status!=='confirmed' || !!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button v-if="canFinance" class="btn small danger" :disabled="!!financeStatementOperationState.action" @click="cancelStatement(statement)">{{ financeStatementOperationState.action==='cancel' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '取消中…' : '取消' }}</button><button class="btn small" @click="exportStatement(statement)">导出 Excel</button><button v-if="canFinance" class="btn small" :disabled="statement.confirmation_status!=='confirmed' || Number(statement.pending_invoice_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(statement)">{{ financeStatementOperationState.action==='register' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '登记中…' : '登记开票' }}</button><button v-if="canFinance" class="btn small success" :disabled="statement.confirmation_status!=='confirmed' || Number(statement.pending_payment_amount)<=0 || !!financeStatementOperationState.action" @click="settle(statement)">{{ financeStatementOperationState.action==='settle' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '核销中…' : '收款核销' }}</button></td>
                         </tr>
                       </tbody></table></div>
                     </td></tr>
@@ -4387,7 +4389,7 @@
                 <div class="panel">
                   <div class="section-title">全部对账单</div>
                   <div class="table-wrap"><table><thead><tr><th>对账单号</th><th>客户</th><th>月份</th><th class="sensitive-price">应收金额</th><th class="sensitive-price">已开票</th><th class="sensitive-price">已收款</th><th>状态</th><th>操作</th></tr></thead>
-                  <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><span v-if="Number(row.total_receivable)>0 && Number(row.invoiced_amount)>=Number(row.total_receivable)" class="status green">已开票</span><status-tag v-else :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementEdit(row)">编辑</button><button v-if="canFinance" class="btn small danger" :disabled="!!financeStatementOperationState.action" @click="cancelStatement(row)">{{ financeStatementOperationState.action==='cancel' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '取消中…' : '取消' }}</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button v-if="canFinance" class="btn small" :disabled="Number(row.total_receivable)-Number(row.invoiced_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(row)">{{ financeStatementOperationState.action==='register' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '登记中…' : '登记开票' }}</button><button v-if="canFinance" class="btn small success" :disabled="Number(row.total_receivable)-Number(row.settled_amount)<=0 || !!financeStatementOperationState.action" @click="settle(row)">{{ financeStatementOperationState.action==='settle' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '核销中…' : '收款核销' }}</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
+                  <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><span v-if="Number(row.total_receivable)>0 && Number(row.invoiced_amount)>=Number(row.total_receivable)" class="status green">已开票</span><status-tag v-else :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementEdit(row)">编辑</button><button v-if="canFinance" class="btn small danger" :disabled="!!financeStatementOperationState.action" @click="cancelStatement(row)">{{ financeStatementOperationState.action==='cancel' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '取消中…' : '取消' }}</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button v-if="canFinance" class="btn small" :disabled="row.confirmation_status!=='confirmed' || Number(row.total_receivable)-Number(row.invoiced_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(row)">{{ financeStatementOperationState.action==='register' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '登记中…' : '登记开票' }}</button><button v-if="canFinance" class="btn small success" :disabled="row.confirmation_status!=='confirmed' || Number(row.total_receivable)-Number(row.settled_amount)<=0 || !!financeStatementOperationState.action" @click="settle(row)">{{ financeStatementOperationState.action==='settle' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '核销中…' : '收款核销' }}</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
                   <pager :page="pages.statements" :total="statementsTotal" :page-size="pageSize" @change="pages.statements=$event; loadFinance()"></pager>
                 </div>
                 <div class="panel" style="margin-top:10px">
@@ -6582,7 +6584,7 @@
                     <button v-if="canStatusOrders" class="btn small danger" :disabled="orderGroupSaveState.saving" @click="dangerChangeOrderGroupStatus('dead')">标记死单</button>
                     <button v-if="canDeleteOrders" class="btn small danger" :disabled="orderGroupSaveState.saving" @click="dangerDeleteOrderGroup()">删除此订单组</button>
                   </div>
-                  <div class="muted" style="font-size:11px;margin-top:6px">以上操作会先显示一次影响确认。撤回会删除关联送货/对账/开票/收款记录。</div>
+                  <div class="muted" style="font-size:11px;margin-top:6px">以上操作会先显示一次影响确认。撤回仅清理未确认且无财务事实的草稿链；已确认对账、开票任务、开票或收款会被安全阻断。</div>
                 </div>
               </div>
             </div>
@@ -8682,10 +8684,11 @@
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
             deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryCustomerSources:{orders:true,inventory:false}, deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliveryLabelOpenState:{busy:false,deliveryId:null}, deliveryLabelRecoveryUrl:"", deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, deliveryReminderState:{loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
-            invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
+            invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null,expected_ledger_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
             invoiceTaskUploadState:{uploading:false,taskId:null,taskNumber:"",error:""},
-            financeStatementOperationState:{action:"",statementId:null},
+            financeStatementOperationState:{action:"",statementId:null,actorId:null,authGeneration:null,idempotencyKey:""},
+            financeManualMutationAttempts:{register:null,settle:null}, financeManualMutationRecoveryError:"",
             invoiceSellers: [], invoiceSellerForm:{id:null,seller_code:"",seller_name:"",tax_no:"",address:"",phone:"",bank_name:"",bank_account:"",is_enabled:true,confirmation_status:"pending",version:null}, invoiceSellerState:{loading:false,error:"",saving:false,loaded:false},
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""},
             customerInvoiceRule:{project_name:"纸箱",tax_classification_code:"1060105010000000000",unit:"PCS",tax_rate:"0.13",spec_source:"product_code_snapshot",fill_unit_price:true,confirmation_status:"pending",version:null,error:""},
@@ -10066,6 +10069,7 @@
         async mounted() {
           window.erpAuthRequired = () => {
             this.authGeneration += 1;
+            this.clearFinanceManualMutationSessionState();
             this.resetPagePerformanceState();
             this.resetModalA11ySession({discardModal:true});
             this.uiModeSaving = false;
@@ -13066,6 +13070,7 @@
               if (!requestIsCurrent()) return;
               const sessionUser = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
               this.user = sessionUser;
+              this.restoreFinanceManualMutationAttemptsForCurrentUser();
               if (!requestIsCurrent() || Number(this.user?.id || 0) !== Number(sessionUser.id || 0)) return;
               if (this.user?.role === "delivery_picker" && this.user?.must_change_password) {
                 this.openChangePassword(true);
@@ -13104,6 +13109,7 @@
               if (!requestIsCurrent()) return;
               const loginUser = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
               this.user = loginUser;
+              this.restoreFinanceManualMutationAttemptsForCurrentUser();
               if (!requestIsCurrent() || Number(this.user?.id || 0) !== Number(loginUser.id || 0)) return;
               const currentPassword = loginPayload.password;
               if (this.user?.role === "delivery_picker" && this.user?.must_change_password) {
@@ -13138,6 +13144,7 @@
           },
           async logout() {
             this.authGeneration += 1;
+            this.clearFinanceManualMutationSessionState();
             this.resetPagePerformanceState();
             this.resetModalA11ySession({discardModal:true});
             this.uiModeSaving = false;
@@ -13878,10 +13885,21 @@
             }
           },
           async loadKpi() {
+            const requestAuthGeneration = this.authGeneration;
+            const requestUserId = this.user?.id ?? null;
+            const sessionIsCurrent = () => (
+              requestAuthGeneration === this.authGeneration
+              && requestUserId === (this.user?.id ?? null)
+            );
             try {
-              this.kpi = (await axios.get("/api/dashboard/kpi")).data;
+              const {data} = await axios.get("/api/dashboard/kpi");
+              if (!sessionIsCurrent()) return false;
+              this.kpi = data;
+              return true;
             } catch (error) {
+              if (!sessionIsCurrent()) return false;
               this.kpi = {};
+              return false;
             }
           },
           async loadCustomers() {
@@ -19496,7 +19514,15 @@
             this.loadDeliveries();
           },
           async loadFinance() {
-            if (this.financeView === "invoice_tasks") return this.loadInvoiceTasks();
+            const requestAuthGeneration = this.authGeneration;
+            const requestUserId = this.user?.id ?? null;
+            const sessionIsCurrent = () => (
+              requestAuthGeneration === this.authGeneration
+              && requestUserId === (this.user?.id ?? null)
+            );
+            if (this.financeView === "invoice_tasks") {
+              return this.loadInvoiceTasks({authGeneration:requestAuthGeneration,userId:requestUserId});
+            }
             if (this.financeView === "reports") {
               this.financeReportState.loading = true;
               this.financeReportState.error = "";
@@ -19509,6 +19535,7 @@
                   statement_month:filters.statement_month || undefined,
                   customer_id:filters.customer_id || undefined,
                 } });
+                if (!sessionIsCurrent()) return false;
                 this.financeReportData = {
                   monthly:data.monthly || [],
                   yearly_summary:data.yearly_summary || {},
@@ -19524,10 +19551,11 @@
                 this.financeReportState.loaded = true;
                 return true;
               } catch (error) {
+                if (!sessionIsCurrent()) return false;
                 this.financeReportState.error = this.errorMessage(error);
                 return false;
               } finally {
-                this.financeReportState.loading = false;
+                if (sessionIsCurrent()) this.financeReportState.loading = false;
               }
             }
             if (this.financeView === "settled_history") {
@@ -19548,18 +19576,20 @@
                   settlement_date_from:filters.settlement_date_from || undefined,
                   settlement_date_to:filters.settlement_date_to || undefined,
                 } });
+                if (!sessionIsCurrent()) return false;
                 this.financeSettledRows = data.items || [];
                 this.financeSettledTotal = Number(data.total || 0);
                 this.financeSettledSummary = data.summary || {};
                 this.financeSettledState.loaded = true;
                 return true;
               } catch (error) {
+                if (!sessionIsCurrent()) return false;
                 this.financeSettledTotal = 0;
                 this.financeSettledSummary = {};
                 this.financeSettledState.error = this.errorMessage(error);
                 return false;
               } finally {
-                this.financeSettledState.loading = false;
+                if (sessionIsCurrent()) this.financeSettledState.loading = false;
               }
             }
             if (this.financeView === "statements") {
@@ -19567,6 +19597,7 @@
                 axios.get("/api/finance/statements", { params:{ page:this.pages.statements, page_size:this.pageSize } }),
                 axios.get("/api/finance/invoices", { params:{ page:this.pages.invoices, page_size:this.pageSize } }),
               ]);
+              if (!sessionIsCurrent()) return false;
               this.statements = statements.data.items || [];
               this.statementsTotal = Number(statements.data.total || 0);
               this.invoices = invoices.data.items || [];
@@ -19585,6 +19616,7 @@
                 balance_type:this.financeFilters.balance_type || undefined,
                 customer_id:this.financeFilters.customer_id || undefined,
               } });
+              if (!sessionIsCurrent()) return false;
               this.financeCurrentRows = data.items || [];
               this.financeCurrentTotal = Number(data.total || 0);
               this.financeCustomersTotal = this.financeCurrentTotal;
@@ -19592,13 +19624,14 @@
               this.financeCurrentState.loaded = true;
               return true;
             } catch (error) {
+              if (!sessionIsCurrent()) return false;
               this.financeCurrentTotal = 0;
               this.financeCustomersTotal = 0;
               this.financeCurrentSummary = {};
               this.financeCurrentState.error = this.errorMessage(error);
               return false;
             } finally {
-              this.financeCurrentState.loading = false;
+              if (sessionIsCurrent()) this.financeCurrentState.loading = false;
             }
           },
           financeGroupKey(row) {
@@ -19639,10 +19672,20 @@
           },
           financeConfirmationText(statement) { return statement?.confirmation_status === "confirmed" ? `已确认 · v${statement.version || 1}` : `待核对 · v${statement?.version || 1}`; },
           invoiceTaskStatusText(status) { return ({draft:"待补资料",ready:"可导出",exported:"已导出待登记",issued:"已开票",failed:"失败",voided:"已作废"})[status] || "待核对"; },
-          async loadInvoiceTasks() {
+          async loadInvoiceTasks(sessionContext = null) {
             if (!this.canViewInvoiceTasks) return true;
+            const requestAuthGeneration = sessionContext?.authGeneration ?? this.authGeneration;
+            const requestUserId = sessionContext?.userId ?? (this.user?.id ?? null);
+            const sessionIsCurrent = () => (
+              requestAuthGeneration === this.authGeneration
+              && requestUserId === (this.user?.id ?? null)
+            );
             const requestKey = "finance:invoice-tasks";
             const controller = this.beginLatestRequest(requestKey);
+            const requestIsCurrent = () => (
+              latestRequestControllers.get(requestKey) === controller
+              && sessionIsCurrent()
+            );
             const filters = {...this.invoiceTaskFilters};
             this.invoiceTaskState.loading = true;
             this.invoiceTaskState.error = "";
@@ -19651,18 +19694,18 @@
                 params:filters,
                 signal:controller.signal,
               });
-              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              if (!requestIsCurrent()) return false;
               this.invoiceTasks = data.items || [];
               return true;
             } catch (error) {
-              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+              if (!this.isCancelledRequest(error) && requestIsCurrent()) {
                 this.invoiceTasks = [];
                 this.invoiceTaskState.error = this.errorMessage(error);
               }
               return false;
             } finally {
               if (latestRequestControllers.get(requestKey) === controller) {
-                this.invoiceTaskState.loading = false;
+                if (sessionIsCurrent()) this.invoiceTaskState.loading = false;
                 this.finishLatestRequest(requestKey, controller);
               }
             }
@@ -19798,7 +19841,7 @@
           downloadInvoiceTaxTemplate(task) { window.location.href=`/api/finance/invoice-tasks/${task.id}/tax-template.xlsx`; },
           openInvoiceTaskResult(task) {
             if (this.invoiceTaskOperationState.resultSaving) return false;
-            this.invoiceTaskResult = {task_id:Number(task.id),status:"issued",invoice_number:"",invoice_date:today(),failure_reason:"",expected_version:Number(task.version || 1)};
+            this.invoiceTaskResult = {task_id:Number(task.id),status:"issued",invoice_number:"",invoice_date:today(),failure_reason:"",expected_version:Number(task.version || 1),expected_ledger_version:Number(task.ledger_version || 0)};
             this.modal = {type:"invoiceTaskResult",title:`登记开票结果 ${task.task_number}`};
             return true;
           },
@@ -19812,8 +19855,10 @@
               invoice_date:String(form.invoice_date || ""),
               failure_reason:String(form.failure_reason || "").trim(),
               expected_version:Number(form.expected_version || 1),
+              expected_ledger_version:Number(form.expected_ledger_version || 0),
             };
             if (submitted.status === "issued" && !submitted.invoice_number) { this.showToast("请填写发票号码",true); return false; }
+            if (submitted.status === "issued" && submitted.expected_ledger_version <= 0) { this.showToast("对账单台账版本缺失，请刷新开票任务后重试",true); return false; }
             if (submitted.status === "failed" && !submitted.failure_reason) { this.showToast("请填写失败原因",true); return false; }
             this.invoiceTaskOperationState.resultSaving = true;
             let succeeded = false;
@@ -19824,6 +19869,7 @@
                 invoice_date:submitted.status === "issued" ? submitted.invoice_date : null,
                 failure_reason:submitted.status === "failed" ? submitted.failure_reason : null,
                 expected_version:submitted.expected_version,
+                expected_ledger_version:submitted.status === "issued" ? submitted.expected_ledger_version : null,
               });
               succeeded = true;
               this.showToast(submitted.status === "issued" ? "开票成功已登记" : "开票失败已登记");
@@ -24718,14 +24764,14 @@
             }
           },
           stockReplenishmentVoidBusy(row) {
-            return Number(this.stockReplenishmentVoidState.orderId) === Number(row?.id);
+            return Number(this.stockReplenishmentVoidState.orderId) === Number(row?.document_id || row?.id);
           },
           stockReplenishmentVoidUncertain(row) {
-            return !!this.stockReplenishmentVoidState.uncertainIds[Number(row?.id)];
+            return !!this.stockReplenishmentVoidState.uncertainIds[Number(row?.document_id || row?.id)];
           },
           async voidReportedReplenishment(row) {
             if (this.stockReplenishmentVoidBusy(row) || this.stockReplenishmentVoidUncertain(row)) return false;
-            const orderId = Number(row.id);
+            const orderId = Number(row?.document_id || row?.id);
             const documentNumber = String(row.document_number || `#${orderId}`);
             if (!orderId) {
               this.showToast("补库报料单不存在，无法撤销", true);
@@ -24757,6 +24803,7 @@
               }
               row.status = "voided";
               row.can_void = false;
+              row.stock_replenishment_can_void = false;
               row.incoming_status = "已作废";
               const refreshed = await Promise.allSettled([
                 this.loadRequisition(),
@@ -26950,7 +26997,7 @@
           async dangerRollbackOrderGroup() {
             const orders = this.orderEditGroup?.orders || [];
             if (!orders.length) return;
-            if (!confirm(`确认撤回当前订单组的 ${orders.length} 张订单吗？\n将删除各订单关联的送货、回单、对账、开票和收款记录，并退回未报料状态；不符合条件的订单会拒绝。`)) return;
+            if (!confirm(`确认撤回当前订单组的 ${orders.length} 张订单吗？\n仅未确认且无财务事实的送货、回单和对账草稿会被清理；已确认对账、开票任务、开票或收款会拒绝撤回。`)) return;
             let succeeded=0;
             for (const order of orders) {
               if (await this.rollbackOrderWorkflow(order,{confirmed:true,reload:false,quiet:true})) succeeded += 1;
@@ -28501,7 +28548,7 @@
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async rollbackOrderWorkflow(order, options={}) {
-            if (!options.confirmed && !confirm(`确认撤回订单 ${this.displayOrderNumber(order)} 吗？\n将删除关联送货、回单、对账、开票和收款记录，并退回未报料状态。`)) return false;
+            if (!options.confirmed && !confirm(`确认撤回订单 ${this.displayOrderNumber(order)} 吗？\n仅未确认且无财务事实的送货、回单和对账草稿会被清理；已确认对账、开票任务、开票或收款会拒绝撤回。`)) return false;
             try {
               await axios.put(`/api/orders/${order.id}/rollback-workflow`,{});
               if (options.reload !== false) await Promise.all([this.loadOrders(),this.loadRequisition(),this.loadDeliveries(),this.loadFinance(),this.loadKpi()]);
@@ -31485,12 +31532,21 @@
             const state = this.orderCreateSaveState || {};
             if (state.saving || state.committed || state.outcomeUncertain) return {_in_flight:true};
             const payload = JSON.parse(JSON.stringify(orderPayload));
-            const repairConfirmation = await this.prepareMoldRepairConfirmation({
-              product_ids:(payload.items || []).map(item => item.product_id),
-            });
-            if (!repairConfirmation.confirmed) return {_cancelled:true};
-            payload.mold_repair_confirmation_token = repairConfirmation.confirmation_token;
             this.orderCreateSaveState = {saving:true,committed:false,outcomeUncertain:false,result:null};
+            let repairConfirmation;
+            try {
+              repairConfirmation = await this.prepareMoldRepairConfirmation({
+                product_ids:(payload.items || []).map(item => item.product_id),
+              });
+            } catch (error) {
+              this.orderCreateSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+              throw error;
+            }
+            if (!repairConfirmation.confirmed) {
+              this.orderCreateSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+              return {_cancelled:true};
+            }
+            payload.mold_repair_confirmation_token = repairConfirmation.confirmation_token;
             let data;
             try {
               ({data} = await axios.post("/api/orders", payload));
@@ -31531,10 +31587,19 @@
             const frozenItemId = Number(orderItemId);
             if (!Number.isInteger(frozenItemId) || frozenItemId <= 0) throw new Error("订单明细不存在，不能保存");
             const payload = JSON.parse(JSON.stringify(orderItemPayload || {}));
-            const repairConfirmation = await this.prepareMoldRepairConfirmation({order_item_ids:[frozenItemId]});
-            if (!repairConfirmation.confirmed) return {_cancelled:true};
-            payload.mold_repair_confirmation_token = repairConfirmation.confirmation_token;
             this.orderItemSaveState = {saving:true,committed:false,outcomeUncertain:false,result:null};
+            let repairConfirmation;
+            try {
+              repairConfirmation = await this.prepareMoldRepairConfirmation({order_item_ids:[frozenItemId]});
+            } catch (error) {
+              this.orderItemSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+              throw error;
+            }
+            if (!repairConfirmation.confirmed) {
+              this.orderItemSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+              return {_cancelled:true};
+            }
+            payload.mold_repair_confirmation_token = repairConfirmation.confirmation_token;
             let response;
             try {
               response = await this.putIndirectProductUpdate(
@@ -31591,10 +31656,19 @@
             ));
             if (!frozenIds.length) throw new Error("订单组没有可保存的正式订单");
             const payload = JSON.parse(JSON.stringify(orderPayload || {}));
-            const repairConfirmation = await this.prepareMoldRepairConfirmation({order_ids:frozenIds});
-            if (!repairConfirmation.confirmed) return {_cancelled:true};
-            payload.mold_repair_confirmation_token = repairConfirmation.confirmation_token;
             this.orderGroupSaveState = {saving:true,committed:false,outcomeUncertain:false,result:null};
+            let repairConfirmation;
+            try {
+              repairConfirmation = await this.prepareMoldRepairConfirmation({order_ids:frozenIds});
+            } catch (error) {
+              this.orderGroupSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+              throw error;
+            }
+            if (!repairConfirmation.confirmed) {
+              this.orderGroupSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+              return {_cancelled:true};
+            }
+            payload.mold_repair_confirmation_token = repairConfirmation.confirmation_token;
             const results = await Promise.allSettled(
               frozenIds.map(orderId => axios.put(
                 `/api/orders/${orderId}`,
@@ -32528,91 +32602,384 @@
               }
             }
           },
+          financeManualMutationStorageKey(actorId) {
+            const normalizedActorId = Number(actorId || 0);
+            return normalizedActorId > 0
+              ? `erp_finance_manual_mutation_attempts_v1:${normalizedActorId}`
+              : "";
+          },
+          persistFinanceManualMutationAttemptsForActor(actorId) {
+            const storageKey = this.financeManualMutationStorageKey(actorId);
+            if (!storageKey) return false;
+            const payload = {
+              register:this.financeManualMutationAttempts.register || null,
+              settle:this.financeManualMutationAttempts.settle || null,
+            };
+            try {
+              if (payload.register || payload.settle) {
+                sessionStorage.setItem(storageKey, JSON.stringify(payload));
+              } else {
+                sessionStorage.removeItem(storageKey);
+              }
+              return true;
+            } catch (_error) {
+              return false;
+            }
+          },
+          restoreFinanceManualMutationAttemptsForCurrentUser() {
+            const actorId = Number(this.user?.id || 0);
+            const storageKey = this.financeManualMutationStorageKey(actorId);
+            this.financeManualMutationAttempts = {register:null,settle:null};
+            this.financeManualMutationRecoveryError = "";
+            this.financeStatementOperationState = {action:"",statementId:null,actorId:null,authGeneration:null,idempotencyKey:""};
+            if (!storageKey) return false;
+            try {
+              const serialized = sessionStorage.getItem(storageKey);
+              if (!serialized) return true;
+              const parsed = JSON.parse(serialized);
+              const restored = {register:null,settle:null};
+              let invalidAttempt = false;
+              for (const kind of ["register", "settle"]) {
+                const attempt = parsed?.[kind];
+                const payload = attempt?.payload;
+                const key = String(attempt?.payload?.idempotency_key || "").trim();
+                const statementId = Number(attempt?.statementId || 0);
+                const expectedVersion = Number(payload?.expected_version || 0);
+                const expectedLedgerVersion = Number(payload?.expected_ledger_version || 0);
+                const amount = Number(kind === "register" ? payload?.invoice_amount : payload?.amount);
+                const businessDate = String(kind === "register" ? payload?.invoice_date : payload?.settlement_date || "");
+                const kindPayloadValid = kind === "register"
+                  ? Number(payload?.statement_id || 0) === statementId && !!String(payload?.invoice_number || "").trim()
+                  : true;
+                const valid = (
+                  attempt
+                  && Number(attempt.actorId) === actorId
+                  && statementId > 0
+                  && Number.isInteger(expectedVersion) && expectedVersion > 0
+                  && Number.isInteger(expectedLedgerVersion) && expectedLedgerVersion > 0
+                  && Number.isFinite(amount) && amount > 0
+                  && /^\d{4}-\d{2}-\d{2}$/.test(businessDate)
+                  && key.length >= 8 && key.length <= 120
+                  && !key.toLowerCase().startsWith("system:")
+                  && kindPayloadValid
+                );
+                if (valid) {
+                  restored[kind] = {
+                    ...attempt,
+                    actorId,
+                    authGeneration:this.authGeneration,
+                    payload:{...attempt.payload,idempotency_key:key},
+                  };
+                } else if (attempt) {
+                  invalidAttempt = true;
+                }
+              }
+              this.financeManualMutationAttempts = restored;
+              if (restored.register && restored.settle) invalidAttempt = true;
+              if (invalidAttempt) {
+                this.financeManualMutationRecoveryError = "检测到无法校验的财务重试记录，请联系管理员核对后再操作";
+                return false;
+              }
+              return true;
+            } catch (_error) {
+              this.financeManualMutationRecoveryError = "财务重试记录读取失败，请联系管理员核对后再操作";
+              return false;
+            }
+          },
+          clearFinanceManualMutationSessionState({forgetStored=false}={}) {
+            const actorId = Number(this.user?.id || 0);
+            const storageKey = this.financeManualMutationStorageKey(actorId);
+            this.financeManualMutationAttempts = {register:null,settle:null};
+            this.financeManualMutationRecoveryError = "";
+            this.financeStatementOperationState = {action:"",statementId:null,actorId:null,authGeneration:null,idempotencyKey:""};
+            if (forgetStored && storageKey) {
+              try { sessionStorage.removeItem(storageKey); } catch (_error) { /* fail closed in memory */ }
+            }
+          },
+          financeManualMutationAttemptIsCurrent(attempt) {
+            return !!attempt
+              && Number(attempt.actorId) === Number(this.user?.id || 0)
+              && Number(attempt.authGeneration) === Number(this.authGeneration);
+          },
+          financeManualMutationRequestIsCurrent(kind, attempt) {
+            const current = this.financeManualMutationAttempts?.[kind];
+            return this.financeManualMutationAttemptIsCurrent(attempt)
+              && String(current?.payload?.idempotency_key || "") === String(attempt?.payload?.idempotency_key || "");
+          },
+          setFinanceManualMutationAttempt(kind, attempt) {
+            const actorId = Number(this.user?.id || 0);
+            if (!actorId || !["register", "settle"].includes(kind)) return null;
+            const frozen = {
+              ...attempt,
+              actorId,
+              authGeneration:this.authGeneration,
+              payload:{...attempt.payload},
+            };
+            this.financeManualMutationAttempts = {
+              ...this.financeManualMutationAttempts,
+              [kind]:frozen,
+            };
+            if (!this.persistFinanceManualMutationAttemptsForActor(actorId)) {
+              this.financeManualMutationAttempts = {
+                ...this.financeManualMutationAttempts,
+                [kind]:null,
+              };
+              return null;
+            }
+            return frozen;
+          },
+          clearFinanceManualMutationAttempt(kind, attempt) {
+            const actorId = Number(attempt?.actorId || this.user?.id || 0);
+            const current = this.financeManualMutationAttempts?.[kind];
+            if (
+              attempt
+              && String(current?.payload?.idempotency_key || "") !== String(attempt?.payload?.idempotency_key || "")
+            ) return false;
+            this.financeManualMutationAttempts = {
+              ...this.financeManualMutationAttempts,
+              [kind]:null,
+            };
+            this.persistFinanceManualMutationAttemptsForActor(actorId);
+            return true;
+          },
+          financeManualMutationIsDefiniteRejection(error) {
+            const statusCode = Number(error?.response?.status || 0);
+            return statusCode >= 400
+              && statusCode < 500
+              && ![408, 425, 429].includes(statusCode);
+          },
           exportStatement(row) { window.location.href=`/api/finance/statements/${row.id}/export`; },
           async registerInvoice(row) {
             if (this.financeStatementOperationState.action) return false;
-            const invoiceNumber = String(prompt("请输入发票号码") || "").trim();
-            if (!invoiceNumber) return false;
             const statementId = Number(row.id);
-            const remaining = Number(row.pending_invoice_amount ?? (Number(row.total_receivable) - Number(row.invoiced_amount)));
-            const amountInput = prompt("请输入本次开票金额", remaining.toFixed(2));
-            if (amountInput === null) return false;
-            const amountNumber = Number(amountInput);
-            if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
-              this.showToast("本次开票金额必须大于 0", true);
+            if (this.financeManualMutationRecoveryError) {
+              this.showToast(this.financeManualMutationRecoveryError, true);
               return false;
             }
-            if (amountNumber > remaining + 0.000001) {
-              this.showToast(`本次开票金额不能超过待开票余额 ${remaining.toFixed(2)}`, true);
+            if (row?.confirmation_status !== "confirmed") {
+              this.showToast("请先核对并确认对账单，再登记开票", true);
               return false;
             }
-            const invoiceAmount = amountNumber.toFixed(2);
-            const invoiceDate = today();
-            this.financeStatementOperationState.action = "register";
-            this.financeStatementOperationState.statementId = statementId;
-            try {
-              try {
-                await axios.post("/api/finance/invoices", {statement_id:statementId,invoice_number:invoiceNumber,invoice_date:invoiceDate,invoice_amount:invoiceAmount});
-              } catch(error) {
-                this.showToast(this.errorMessage(error), true);
+            if (this.financeManualMutationAttempts.settle) {
+              if (!this.financeManualMutationAttemptIsCurrent(this.financeManualMutationAttempts.settle)) {
+                this.showToast("登录身份已变化，旧收款重试记录不会发送，请重新登录原账号核对", true);
                 return false;
               }
+              this.showToast("上一笔收款结果尚未确认，请先按原操作重试核对", true);
+              return false;
+            }
+            let attempt = this.financeManualMutationAttempts.register;
+            if (attempt && !this.financeManualMutationAttemptIsCurrent(attempt)) {
+              this.showToast("登录身份已变化，旧开票重试记录不会发送，请重新登录原账号核对", true);
+              return false;
+            }
+            if (attempt && Number(attempt.statementId) !== statementId) {
+              this.showToast("上一笔开票结果尚未确认，请先在原对账单按原操作重试", true);
+              return false;
+            }
+            if (!attempt) {
+              const invoiceNumber = String(prompt("请输入发票号码") || "").trim();
+              if (!invoiceNumber) return false;
+              const remaining = Number(row.pending_invoice_amount ?? (Number(row.total_receivable) - Number(row.invoiced_amount)));
+              const amountInput = prompt("请输入本次开票金额", remaining.toFixed(2));
+              if (amountInput === null) return false;
+              const amountNumber = Number(amountInput);
+              if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+                this.showToast("本次开票金额必须大于 0", true);
+                return false;
+              }
+              if (amountNumber > remaining + 0.000001) {
+                this.showToast(`本次开票金额不能超过待开票余额 ${remaining.toFixed(2)}`, true);
+                return false;
+              }
+              const expectedVersion = Number(row.version);
+              if (!Number.isInteger(expectedVersion) || expectedVersion <= 0) {
+                this.showToast("对账单来源版本缺失，请刷新后重试", true);
+                return false;
+              }
+              const expectedLedgerVersion = Number(row.ledger_version);
+              if (!Number.isInteger(expectedLedgerVersion) || expectedLedgerVersion <= 0) {
+                this.showToast("对账单台账版本缺失，请刷新页面后重试", true);
+                return false;
+              }
+              attempt = this.setFinanceManualMutationAttempt("register", {
+                statementId,
+                payload:{
+                  statement_id:statementId,
+                  invoice_number:invoiceNumber,
+                  invoice_date:today(),
+                  invoice_amount:amountNumber.toFixed(2),
+                  expected_version:expectedVersion,
+                  expected_ledger_version:expectedLedgerVersion,
+                  idempotency_key:createIdempotencyKey(),
+                },
+              });
+              if (!attempt) {
+                this.showToast("浏览器无法安全保存本次开票重试标识，已停止发送，请检查会话存储设置", true);
+                return false;
+              }
+            }
+            const payload = {...attempt.payload};
+            const sessionIsCurrent = () => (
+              Number(attempt.actorId) === Number(this.user?.id || 0)
+              && Number(attempt.authGeneration) === Number(this.authGeneration)
+            );
+            const requestIsCurrent = () => sessionIsCurrent()
+              && this.financeManualMutationRequestIsCurrent("register", attempt);
+            this.financeStatementOperationState = {
+              action:"register", statementId, actorId:attempt.actorId,
+              authGeneration:attempt.authGeneration,
+              idempotencyKey:String(payload.idempotency_key || ""),
+            };
+            try {
+              try {
+                await axios.post("/api/finance/invoices", payload);
+              } catch(error) {
+                if (!requestIsCurrent()) return false;
+                if (this.financeManualMutationIsDefiniteRejection(error)) {
+                  this.clearFinanceManualMutationAttempt("register", attempt);
+                  this.showToast(this.errorMessage(error), true);
+                } else {
+                  this.showToast(`开票登记结果暂未确认：${this.errorMessage(error)}。再次点击“登记开票”将使用同一请求核对，请不要改号或重复新建。`, true);
+                }
+                return false;
+              }
+              if (!requestIsCurrent()) return false;
+              this.clearFinanceManualMutationAttempt("register", attempt);
               this.showToast("开票登记成功");
               try {
                 await this.loadFinance();
               } catch(error) {
-                this.showToast(`发票已经登记，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复登记。`, true);
+                if (sessionIsCurrent()) this.showToast(`发票已经登记，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复登记。`, true);
               }
-              return true;
+              return sessionIsCurrent();
             } finally {
-              if (this.financeStatementOperationState.action === "register" && Number(this.financeStatementOperationState.statementId) === statementId) {
-                this.financeStatementOperationState.action = "";
-                this.financeStatementOperationState.statementId = null;
+              if (
+                sessionIsCurrent()
+                && this.financeStatementOperationState.action === "register"
+                && Number(this.financeStatementOperationState.statementId) === statementId
+                && String(this.financeStatementOperationState.idempotencyKey || "") === String(payload.idempotency_key || "")
+              ) {
+                this.financeStatementOperationState = {action:"",statementId:null,actorId:null,authGeneration:null,idempotencyKey:""};
               }
             }
           },
           async settle(row) {
             if (this.financeStatementOperationState.action) return false;
             const statementId = Number(row.id);
-            const remaining = Number(row.pending_payment_amount ?? (Number(row.total_receivable) - Number(row.settled_amount)));
-            const amountInput = prompt("请输入本次收款金额", remaining.toFixed(2));
-            if (amountInput === null) return false;
-            const amountNumber = Number(amountInput);
-            if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
-              this.showToast("本次收款金额必须大于 0", true);
+            if (this.financeManualMutationRecoveryError) {
+              this.showToast(this.financeManualMutationRecoveryError, true);
               return false;
             }
-            if (amountNumber > remaining + 0.000001) {
-              this.showToast(`本次收款金额不能超过待收余额 ${remaining.toFixed(2)}`, true);
+            if (row?.confirmation_status !== "confirmed") {
+              this.showToast("请先核对并确认对账单，再登记收款", true);
               return false;
             }
-            const amount = amountNumber.toFixed(2);
-            const settlementDate = today();
-            this.financeStatementOperationState.action = "settle";
-            this.financeStatementOperationState.statementId = statementId;
-            try {
-              try {
-                await axios.put(`/api/finance/statements/${statementId}/settle`, {amount,settlement_date:settlementDate});
-              } catch(error) {
-                const validation = this.normalizeValidationErrors(error, {
-                  amount: "本次收款金额",
-                  settlement_date: "收款日期",
-                  account: "收款账户"
-                });
-                this.showToast(validation || this.errorMessage(error), true);
+            if (this.financeManualMutationAttempts.register) {
+              if (!this.financeManualMutationAttemptIsCurrent(this.financeManualMutationAttempts.register)) {
+                this.showToast("登录身份已变化，旧开票重试记录不会发送，请重新登录原账号核对", true);
                 return false;
               }
+              this.showToast("上一笔开票结果尚未确认，请先按原操作重试核对", true);
+              return false;
+            }
+            let attempt = this.financeManualMutationAttempts.settle;
+            if (attempt && !this.financeManualMutationAttemptIsCurrent(attempt)) {
+              this.showToast("登录身份已变化，旧收款重试记录不会发送，请重新登录原账号核对", true);
+              return false;
+            }
+            if (attempt && Number(attempt.statementId) !== statementId) {
+              this.showToast("上一笔收款结果尚未确认，请先在原对账单按原操作重试", true);
+              return false;
+            }
+            if (!attempt) {
+              const remaining = Number(row.pending_payment_amount ?? (Number(row.total_receivable) - Number(row.settled_amount)));
+              const amountInput = prompt("请输入本次收款金额", remaining.toFixed(2));
+              if (amountInput === null) return false;
+              const amountNumber = Number(amountInput);
+              if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+                this.showToast("本次收款金额必须大于 0", true);
+                return false;
+              }
+              if (amountNumber > remaining + 0.000001) {
+                this.showToast(`本次收款金额不能超过待收余额 ${remaining.toFixed(2)}`, true);
+                return false;
+              }
+              const expectedVersion = Number(row.version);
+              if (!Number.isInteger(expectedVersion) || expectedVersion <= 0) {
+                this.showToast("对账单来源版本缺失，请刷新后重试", true);
+                return false;
+              }
+              const expectedLedgerVersion = Number(row.ledger_version);
+              if (!Number.isInteger(expectedLedgerVersion) || expectedLedgerVersion <= 0) {
+                this.showToast("对账单台账版本缺失，请刷新页面后重试", true);
+                return false;
+              }
+              attempt = this.setFinanceManualMutationAttempt("settle", {
+                statementId,
+                payload:{
+                  amount:amountNumber.toFixed(2),
+                  settlement_date:today(),
+                  expected_version:expectedVersion,
+                  expected_ledger_version:expectedLedgerVersion,
+                  idempotency_key:createIdempotencyKey(),
+                },
+              });
+              if (!attempt) {
+                this.showToast("浏览器无法安全保存本次收款重试标识，已停止发送，请检查会话存储设置", true);
+                return false;
+              }
+            }
+            const payload = {...attempt.payload};
+            const sessionIsCurrent = () => (
+              Number(attempt.actorId) === Number(this.user?.id || 0)
+              && Number(attempt.authGeneration) === Number(this.authGeneration)
+            );
+            const requestIsCurrent = () => sessionIsCurrent()
+              && this.financeManualMutationRequestIsCurrent("settle", attempt);
+            this.financeStatementOperationState = {
+              action:"settle", statementId, actorId:attempt.actorId,
+              authGeneration:attempt.authGeneration,
+              idempotencyKey:String(payload.idempotency_key || ""),
+            };
+            try {
+              try {
+                await axios.put(`/api/finance/statements/${statementId}/settle`, payload);
+              } catch(error) {
+                if (!requestIsCurrent()) return false;
+                if (this.financeManualMutationIsDefiniteRejection(error)) {
+                  this.clearFinanceManualMutationAttempt("settle", attempt);
+                  const validation = this.normalizeValidationErrors(error, {
+                    amount: "本次收款金额",
+                    settlement_date: "收款日期",
+                    account: "收款账户",
+                    expected_version: "对账单来源版本",
+                    expected_ledger_version: "对账单台账版本",
+                    idempotency_key: "收款请求标识"
+                  });
+                  this.showToast(validation || this.errorMessage(error), true);
+                } else {
+                  this.showToast(`收款核销结果暂未确认：${this.errorMessage(error)}。再次点击“收款核销”将使用同一请求核对，请不要重复登记。`, true);
+                }
+                return false;
+              }
+              if (!requestIsCurrent()) return false;
+              this.clearFinanceManualMutationAttempt("settle", attempt);
               this.showToast("收款核销成功");
               try {
                 await Promise.all([this.loadFinance(), this.loadKpi()]);
               } catch(error) {
-                this.showToast(`收款已经核销，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复核销。`, true);
+                if (sessionIsCurrent()) this.showToast(`收款已经核销，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复核销。`, true);
               }
-              return true;
+              return sessionIsCurrent();
             } finally {
-              if (this.financeStatementOperationState.action === "settle" && Number(this.financeStatementOperationState.statementId) === statementId) {
-                this.financeStatementOperationState.action = "";
-                this.financeStatementOperationState.statementId = null;
+              if (
+                sessionIsCurrent()
+                && this.financeStatementOperationState.action === "settle"
+                && Number(this.financeStatementOperationState.statementId) === statementId
+                && String(this.financeStatementOperationState.idempotencyKey || "") === String(payload.idempotency_key || "")
+              ) {
+                this.financeStatementOperationState = {action:"",statementId:null,actorId:null,authGeneration:null,idempotencyKey:""};
               }
             }
           },

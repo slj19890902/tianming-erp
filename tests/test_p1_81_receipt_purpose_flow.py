@@ -797,7 +797,11 @@ def test_pending_projection_refreshes_frozen_receipt_tokens_and_keeps_legacy_ope
         assert frozen_before["expected_order_purpose_sheet_qty"] == 500
         assert frozen_before["expected_reserve_purpose_sheet_qty"] == 100
         assert frozen_before["expected_finished_output_qty"] == 500
-        assert frozen_before["finished_location_name"] == "成品待送堆放区 001 号位"
+        assert (
+            frozen_before["finished_location_name"]
+            == "一楼 匿名真实成品待送区·FIN-001-1"
+        )
+        assert frozen_before["finished_location_name"] != "成品待送堆放区 001 号位"
         assert frozen_before["reserve_location_name"] == "三楼左区半成品原料备料位"
         assert frozen_before["purpose_issue"]
 
@@ -836,7 +840,11 @@ def test_pending_projection_refreshes_frozen_receipt_tokens_and_keeps_legacy_ope
         assert frozen_after["expected_order_purpose_sheet_qty"] == 500
         assert frozen_after["expected_reserve_purpose_sheet_qty"] == 100
         assert frozen_after["expected_finished_output_qty"] == 500
-        assert frozen_after["finished_location_name"] == "成品待送堆放区 001 号位"
+        assert (
+            frozen_after["finished_location_name"]
+            == "一楼 匿名真实成品待送区·FIN-001-1"
+        )
+        assert frozen_after["finished_location_name"] != "成品待送堆放区 001 号位"
         assert frozen_after["reserve_location_name"] == "三楼左区半成品原料备料位"
         assert "purpose_issue" not in frozen_after
 
@@ -1044,7 +1052,11 @@ def test_pending_frozen_preview_reports_capacity_warning_without_blocking(
             if str(item["item_id"]) == source.route_key
         )
         assert row["receipt_fact_ready"] is True
-        assert row["finished_location_name"] == "成品待送堆放区 002 号位"
+        assert (
+            row["finished_location_name"]
+            == "一楼 匿名真实成品待送区·FIN-001-2"
+        )
+        assert row["finished_location_name"] != "成品待送堆放区 002 号位"
         assert row["finished_location_ready"] is True
         assert row["finished_capacity_warning"]
 
@@ -1146,8 +1158,16 @@ def test_frozen_500_600_receipts_split_450_580_600_620_and_cost_exactly(
     assert fourth["reserve_planned_sheet_qty"] == 100
     assert fourth["reserve_actual_sheet_qty"] == 120
     assert fourth["reserve_variance_sheet_qty"] == 20
-    assert fourth["finished_location_name"].startswith("成品待送堆放区 ")
-    assert fourth["reserve_location_name"] == "三楼左区半成品原料备料位"
+    assert (
+        fourth["finished_location_name"]
+        == "一楼 匿名真实成品待送区·FIN-001-2"
+    )
+    assert fourth["finished_location_name"] != "成品待送堆放区 002 号位"
+    assert (
+        fourth["reserve_location_name"]
+        == "三楼 匿名三楼左区原料备料区·RAW-001-1"
+    )
+    assert fourth["reserve_location_name"] != "三楼左区半成品原料备料位"
     assert "F1-DISPATCH-01" not in fourth["finished_location_name"]
 
     from app.models.production import ProductionTask

@@ -471,6 +471,9 @@ def test_selected_scope_rejects_customer_b_writes_and_allows_customer_a(
                     "invoice_number": "BLOCKED-N028",
                     "invoice_date": "2026-07-16",
                     "invoice_amount": "1.00",
+                    "expected_version": 1,
+                    "expected_ledger_version": 1,
+                    "idempotency_key": "n028-blocked-invoice",
                 },
             ).status_code
             == 403
@@ -482,6 +485,9 @@ def test_selected_scope_rejects_customer_b_writes_and_allows_customer_a(
                     "amount": "1.00",
                     "settlement_date": "2026-07-16",
                     "account": "Blocked",
+                    "expected_version": 1,
+                    "expected_ledger_version": 1,
+                    "idempotency_key": "n028-blocked-payment",
                 },
             ).status_code
             == 403

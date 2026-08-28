@@ -1881,6 +1881,9 @@ def test_receiving_partial_supplier_order_keeps_unreported_remainder_pending(
         # consumed for delivery.  That same-order output proves fulfilment but
         # is not another material deduction on top of the 200-sheet report.
         with session_factory() as session:
+            item = session.get(OrderItem, 1)
+            assert item is not None
+            item.delivered_quantity = 200
             task = session.scalar(
                 select(ProductionTask).where(ProductionTask.order_item_id == 1)
             )
@@ -3823,7 +3826,13 @@ def test_phase11_migration_is_additive_and_preserves_order_items(
         )
         connection.commit()
 
-    command.upgrade(config, "head")
+    # fj45 and later intentionally require owner-confirmed current-map facts
+    # whenever business orders already exist.  This historical Phase 11
+    # additive fixture has no factory map evidence, so carry the old order
+    # through the last data-independent revision instead of fabricating a
+    # snapshot or weakening the production fail-closed preflight.  The full
+    # empty-database chain to the current head is covered separately.
+    command.upgrade(config, "fi44v8x9z33")
     migration = (
         Path(__file__).resolve().parents[1]
         / "alembic"

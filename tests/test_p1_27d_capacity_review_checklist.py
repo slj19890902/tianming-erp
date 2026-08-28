@@ -257,6 +257,7 @@ def test_render_checklist_distinguishes_empty_zero_capacity_complete_and_pending
             _javascript_function("warehouseCapacityReviewLabel"),
             _javascript_function("warehouseCapacityReviewComplete"),
             _javascript_function("warehouseCapacityReviewRows"),
+            _javascript_function("readableArea"),
             _javascript_function("renderCapacityReviewChecklist"),
         )
     )

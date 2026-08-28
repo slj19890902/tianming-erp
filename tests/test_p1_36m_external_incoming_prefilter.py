@@ -279,6 +279,11 @@ def _legacy_overview(
     totals = receiving._received_totals(db, item_ids)
     rows = []
     for purchase in purchases:
+        # Current receiving policy only exposes purchase orders that still have
+        # at least one source line eligible to move forward.  A legacy empty
+        # purchase is therefore not a pending-receipt row.
+        if not purchase.items:
+            continue
         sales_order = sales_orders.get(purchase.batch.sales_order_id)
         if sales_order is None:
             continue
@@ -420,11 +425,11 @@ def test_prefilter_is_deeply_equal_for_all_receiving_states_and_scope(
     pending_ids = {row["id"] for row in pending["purchase_orders"]}
     assert expected["partial"] in pending_ids
     assert expected["mixed"] in pending_ids
-    assert expected["empty"] in pending_ids
     assert expected["micro_partial"] in pending_ids
     assert expected["completed"] not in pending_ids
     assert expected["fractional_complete"] not in pending_ids
     assert expected["micro_complete"] not in pending_ids
+    assert expected["empty"] not in pending_ids
     assert expected["hidden"] not in pending_ids
 
     partial_row = next(
@@ -438,11 +443,6 @@ def test_prefilter_is_deeply_equal_for_all_receiving_states_and_scope(
     assert mixed_row["status"] == "partially_received"
     assert len(mixed_row["items"]) == 1
     assert mixed_row["items"][0]["remaining_quantity"] == "15"
-    empty_row = next(
-        row for row in pending["purchase_orders"] if row["id"] == expected["empty"]
-    )
-    assert empty_row["status"] == "pending_receipt"
-    assert empty_row["items"] == []
     micro_partial_row = next(
         row
         for row in pending["purchase_orders"]

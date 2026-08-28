@@ -35,6 +35,10 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
+    WarehouseGroundOccupancy,
+    WarehouseGroundOccupancySlot,
     WarehouseLocation,
 )
 
@@ -48,6 +52,30 @@ FRONTEND = (
     / "WarehouseTwinApp.tsx"
 )
 STOCKTAKE_DRAFT = FRONTEND.with_name("warehouseStocktakeDraft.mjs")
+
+
+def _fixture_published_floor_identity(floor_number: int) -> dict:
+    floor_code = f"{int(floor_number)}F"
+    area_codes = {
+        1: ("FG", "SEMI", "DISPATCH"),
+        2: ("FG",),
+        3: ("FG", "DRAFT"),
+    }[int(floor_number)]
+    zones_by_id = {
+        f"zone-{floor_code.lower()}-{area_code.lower()}": area_code
+        for area_code in area_codes
+    }
+    return {
+        "floor_code": floor_code,
+        "revision": "p1-47d-formal-map",
+        "feature_ids": frozenset(zones_by_id),
+        "erp_area_codes": frozenset(area_codes),
+        "zones_by_id": zones_by_id,
+        "zone_ids_by_area": {
+            area_code: (feature_id,)
+            for feature_id, area_code in zones_by_id.items()
+        },
+    }
 
 
 def _published_area(
@@ -201,10 +229,17 @@ def _semi_lot(
 
 
 @pytest.fixture()
-def stocktake_app(tmp_path: Path):
+def stocktake_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.warehouse import router as warehouse_router
+    from app.services import location_candidates
+
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        _fixture_published_floor_identity,
+    )
 
     database = tmp_path / "p1-47d-stocktake-batch.sqlite3"
     engine = create_sqlite_engine(database)
@@ -355,6 +390,59 @@ def stocktake_app(tmp_path: Path):
         db.add_all(list(locations.values()))
         db.flush()
 
+        for area_index, area in enumerate(areas, start=1):
+            if area.storage_policy.status != "published":
+                continue
+            ground_locations = [
+                location
+                for location in locations.values()
+                if location.storage_type == "ground"
+                and location.warehouse_floor == area.floor.floor_number
+                and location.area_code == area.area_code
+            ]
+            if not ground_locations:
+                continue
+            plan = WarehouseGroundLayoutPlan(
+                area_id=area.id,
+                status="published",
+                target_slot_count=len(ground_locations),
+                numbering_origin="south",
+                row_direction="from_aisle_inward",
+                slot_direction="left_to_right",
+                row_start_no=1,
+                slot_start_no=1,
+                draft_map_revision="p1-47d-formal-map",
+                published_map_revision="p1-47d-formal-map",
+                preview_fingerprint=f"{area_index:x}" * 64,
+                version=1,
+                publish_idempotency_key=f"p1-47d-plan-{area.id}",
+                publish_request_hash=f"{area_index:x}" * 64,
+                updated_by=admin.id,
+                published_by=admin.id,
+                published_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+            db.add(plan)
+            db.flush()
+            db.add_all(
+                [
+                    WarehouseGroundLayoutSlot(
+                        plan_id=plan.id,
+                        location_id=location.id,
+                        route_sequence=slot_index,
+                        row_no=1,
+                        slot_no=slot_index,
+                        x_mm=Decimal(1000 + slot_index * 1400),
+                        y_mm=Decimal("1000"),
+                        width_mm=1200,
+                        depth_mm=1000,
+                    )
+                    for slot_index, location in enumerate(
+                        ground_locations, start=1
+                    )
+                ]
+            )
+        db.flush()
+
         lots = {
             "normal": _finished_lot(
                 number="FG-P147D-NORMAL",
@@ -433,6 +521,27 @@ def stocktake_app(tmp_path: Path):
         )
         db.add(zero_pallet)
         db.flush()
+        zero_occupancy = WarehouseGroundOccupancy(
+            pallet_id=zero_pallet.id,
+            primary_location_id=locations["fg3"].id,
+            customer_id=customer.id,
+            product_id=product.id,
+            footprint_kind="single",
+            capacity_quantity=10,
+            status="active",
+            version=1,
+            created_by=admin.id,
+        )
+        db.add(zero_occupancy)
+        db.flush()
+        db.add(
+            WarehouseGroundOccupancySlot(
+                occupancy_id=zero_occupancy.id,
+                location_id=locations["fg3"].id,
+                slot_sequence=1,
+                status="active",
+            )
+        )
         db.add(
             InventoryPalletItem(
                 pallet_id=zero_pallet.id,
@@ -1452,6 +1561,84 @@ def test_confirmed_capacity_allows_existing_occupancy_but_blocks_a_new_slot(
             )
         ) == 0
         assert _counts(db) == (10, 2, 2)
+
+
+def test_confirmed_capacity_allows_an_existing_rack_pallet_only(
+    stocktake_app,
+) -> None:
+    from app.services.warehouse_inventory import (
+        WarehouseInventoryError,
+        manual_finished_in,
+    )
+
+    _app, factory, ids, _database = stocktake_app
+    with factory() as db:
+        rack_location = db.get(WarehouseLocation, ids["loc_fg1_rack"])
+        assert rack_location is not None
+        area = db.scalar(
+            select(WarehouseArea)
+            .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
+            .where(
+                WarehouseFloor.floor_number == rack_location.warehouse_floor,
+                WarehouseArea.area_code == rack_location.area_code,
+            )
+        )
+        assert area is not None
+        area.planned_pallet_capacity = 1
+        area.capacity_review_status = "confirmed"
+        area.capacity_eligible = True
+        area.confirmed_pallet_capacity = 1
+        area.capacity_reviewed_by = "P1-47D 容量复核员"
+        area.capacity_reviewed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        rack_pallet = InventoryPallet(
+            pallet_code="PLT-P147D-RACK-CAPACITY",
+            location_id=rack_location.id,
+            location_occupancy_key="PRIMARY",
+            status="active",
+            is_current=True,
+            version=1,
+            created_by=ids["admin"],
+        )
+        db.add(rack_pallet)
+        db.commit()
+        rack_pallet_id = int(rack_pallet.id)
+
+    with factory() as db:
+        added = manual_finished_in(
+            db,
+            customer_id=ids["customer"],
+            product_id=ids["product"],
+            location_id=ids["loc_fg1_rack"],
+            quantity=2,
+            stock_date=date(2026, 8, 1),
+            source_type="stocktake",
+            remarks="既有货架栈板容量回归",
+            operator_id=ids["admin"],
+            idempotency_key="p147d-rack-capacity-existing",
+            pallet_id=rack_pallet_id,
+            expected_layout_version=1,
+        )
+        db.commit()
+        assert added.pallet_item is not None
+        assert added.pallet_item.pallet_id == rack_pallet_id
+
+    with factory() as db:
+        with pytest.raises(WarehouseInventoryError, match="容量"):
+            manual_finished_in(
+                db,
+                customer_id=ids["customer"],
+                product_id=ids["product"],
+                location_id=ids["loc_fg1_add"],
+                quantity=1,
+                stock_date=date(2026, 8, 1),
+                source_type="stocktake",
+                remarks="新地堆栈板容量阻断回归",
+                operator_id=ids["admin"],
+                idempotency_key="p147d-ground-capacity-new",
+                pallet_id=rack_pallet_id,
+                expected_layout_version=1,
+            )
+        db.rollback()
 
 
 def test_finished_add_rejects_snapshot_only_current_pallet_without_any_write(

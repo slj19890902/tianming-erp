@@ -2287,7 +2287,7 @@ def test_legacy_v11_area_name_draft_survives_overlay_and_publish_keeps_identity(
             )
             assert changed["applied"] is True
             assert changed["item"]["formal_area_name"] == "三楼右侧成品整箱区"
-            assert changed["item"]["employee_area_name"] == "三楼右侧成品整箱区"
+            assert changed["item"]["employee_area_name"] == "右区F1·右侧成品整箱区"
             assert changed["item"]["legacy_v11_name_only"] is True
             assert db.get(WarehouseArea, area_id).area_name == "F1 区"
 
@@ -2300,7 +2300,7 @@ def test_legacy_v11_area_name_draft_survives_overlay_and_publish_keeps_identity(
                 if item["id"] == "zone-f1"
             )
             assert draft_feature["formal_area_name"] == "三楼右侧成品整箱区"
-            assert draft_feature["employee_area_name"] == "三楼右侧成品整箱区"
+            assert draft_feature["employee_area_name"] == "右区F1·右侧成品整箱区"
 
             validated = warehouse_api.validate_twin_layout_draft(
                 "3F",
@@ -2419,24 +2419,26 @@ def test_legacy_v11_area_name_draft_survives_overlay_and_publish_keeps_identity(
                 lots=[],
                 pallets=[],
                 as_of=date(2026, 8, 25),
-                projection_context={
-                    "floor": floor,
-                    "area": restored_area,
-                    "policy": None,
-                },
+                    projection_context={
+                        "floor": floor,
+                        "area": restored_area,
+                        "policy": None,
+                        "area_sequence": 1,
+                    },
             )
             address_payload = location_address_payload(
                 restored_location,
                 area=restored_area,
                 floor=floor,
                 position_status="mapped",
+                area_sequence=1,
             )
-            assert area_payload["employee_area_name"] == "三楼右侧成品整箱区"
-            assert candidate["area_name"] == "三楼右侧成品整箱区"
-            assert twin_payload["area_name"] == "三楼右侧成品整箱区"
-            assert address_payload["area_name"] == "三楼右侧成品整箱区"
+            assert area_payload["employee_area_name"] == "右区F1·右侧成品整箱区"
+            assert candidate["area_name"] == "右区F1·右侧成品整箱区"
+            assert twin_payload["area_name"] == "右区F1·右侧成品整箱区"
+            assert address_payload["area_name"] == "右区F1·右侧成品整箱区"
             assert candidate["employee_location_name"].startswith(
-                "三楼右侧成品整箱区·"
+                "三楼 右区F1·右侧成品整箱区·"
             )
             assert twin_payload["employee_location_name"] == candidate[
                 "employee_location_name"
@@ -3384,7 +3386,11 @@ def test_one_step_raw_material_area_creates_shared_pallet_positions(
             )
             assert pallet_result['pallet']['location_id'] == rows[0].id
             assert pallet_result['pallet']['items'][0]['item_type'] == 'raw_material'
-            dashboard = warehouse_api.get_warehouse_twin_dashboard(30, db, admin)
+            dashboard = warehouse_api.get_warehouse_twin_dashboard(
+                days=30,
+                db=db,
+                user=admin,
+            )
             dashboard_location = next(
                 item
                 for item in dashboard['locations']

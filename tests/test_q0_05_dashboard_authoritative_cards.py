@@ -364,6 +364,7 @@ def test_composite_pending_delivery_summary_uses_fixed_query_count(
                 task = ProductionTask(
                     order_item_id=item.id,
                     sales_order_item_bom_component_id=snapshot.id,
+                    task_role="component_internal",
                     status="completed",
                     planned_quantity=10,
                     finished_coverage_snapshot=0,

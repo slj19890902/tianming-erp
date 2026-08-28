@@ -99,6 +99,31 @@ def test_session_tokens_require_current_auth_version(auth_revocation_context) ->
         create_session_token(2, auth_version=0)
 
 
+def test_authenticated_request_reuses_startup_validated_settings(
+    auth_revocation_context,
+    monkeypatch,
+) -> None:
+    from app.api import auth as auth_api
+    from app.api import deps as deps_api
+    from app.core.config import load_settings
+    from app.core import security
+
+    app, _ = auth_revocation_context
+    app.state.erp_settings = load_settings()
+
+    def reject_reload():
+        raise AssertionError("request hot path must reuse startup settings")
+
+    monkeypatch.setattr(auth_api, "load_settings", reject_reload)
+    monkeypatch.setattr(deps_api, "load_settings", reject_reload)
+    monkeypatch.setattr(security, "load_settings", reject_reload)
+
+    with TestClient(app) as client:
+        _login(client, "workshop", "WorkshopPass123!")
+        assert client.get("/api/auth/me").status_code == 200
+        assert client.post("/api/auth/logout").status_code == 200
+
+
 def test_logout_revokes_all_browser_sessions_and_clears_cookie(auth_revocation_context) -> None:
     app, session_factory = auth_revocation_context
     with TestClient(app) as first, TestClient(app) as second:

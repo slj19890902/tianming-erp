@@ -216,12 +216,34 @@ def test_floor1_candidate_confirmation_is_atomic_and_idempotent(tmp_path: Path) 
             assert len(replay.areas) == 16
             assert len(replay.locations) == 0
 
+            formal_bindings = {
+                feature_id: (area_id, floor_id)
+                for feature_id, area_id, floor_id in db.execute(
+                    select(
+                        WarehouseAreaStoragePolicy.map_feature_id,
+                        WarehouseAreaStoragePolicy.area_id,
+                        WarehouseArea.floor_id,
+                    ).join(
+                        WarehouseArea,
+                        WarehouseArea.id == WarehouseAreaStoragePolicy.area_id,
+                    )
+                ).all()
+            }
+            published_features = [
+                {
+                    **feature,
+                    "formal_area_id": formal_bindings[feature["id"]][0],
+                    "formal_floor_id": formal_bindings[feature["id"]][1],
+                }
+                for feature in layout["features"]
+                if feature.get("id") in formal_bindings
+            ]
             republished = publish_floor_area_policies(
                 db,
                 floor_code="1F",
                 published_revision="next-map-revision",
                 operator_id=1,
-                published_features=list(layout["features"]),
+                published_features=published_features,
             )
             assert len(republished) == 16
             assert all(

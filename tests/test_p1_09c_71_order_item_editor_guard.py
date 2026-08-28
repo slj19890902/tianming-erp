@@ -45,7 +45,7 @@ const vm={{
   isCancelledRequest(error){{return error?.name==="CanceledError";}},
   showToast(message,isError){{toasts.push({{message,isError}});}},displayOrderNumber(order){{return order.order_number;}},
   money(value){{return Number(value||0).toFixed(2);}},normalizeBoxTypeDisplay(value){{return value||"";}},normalizeCuttingMode(value){{return value||"一开一";}},
-  displayMaterialText(value){{return value||"";}},buildMaterialDisplay(){{return "";}},
+  displayMaterialText(value){{return value||"";}},buildMaterialDisplay(){{return "";}},orderSpecificationText(value){{return value||"";}},
   loadFinishedInventoryReservations:async()=>true,loadExistingOrderItemBom:async()=>true
 }};
 vm.openOrderItem=new AsyncFunction("order","item",{json.dumps(open_body, ensure_ascii=False)}).bind(vm);

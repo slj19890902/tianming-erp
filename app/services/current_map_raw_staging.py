@@ -138,7 +138,23 @@ def _preflight(connection: sa.Connection) -> list[dict[str, Any]] | None:
         raise RuntimeError("P0-25 preflight failed: current-map snapshot table is missing.")
     rows = _target_locations(connection)
     if not rows:
-        if _scalar(connection, "SELECT COUNT(*) FROM warehouse_locations") == 0:
+        snapshot_count = _scalar(
+            connection,
+            f"SELECT COUNT(*) FROM {SNAPSHOT_TABLE}",
+        )
+        business_fact_count = _scalar(
+            connection,
+            "SELECT (SELECT COUNT(*) FROM inventory_lots) + "
+            "(SELECT COUNT(*) FROM inventory_pallets) + "
+            "(SELECT COUNT(*) FROM sales_orders)",
+        )
+        # fg42 deliberately skips the owner-confirmed current-map rewrite for
+        # brand-new installations.  Earlier generic migrations still seed the
+        # 398 inactive/legacy V11 location rows, so location count alone cannot
+        # distinguish that supported path from a drifted factory replica.
+        # A formal/copy database either has the audited current-map snapshot or
+        # order/inventory facts and must continue to fail closed.
+        if snapshot_count == 0 and business_fact_count == 0:
             return None
         raise RuntimeError("P0-25 preflight failed: current RAW-001 rack is missing.")
     if tuple(row["location_code"] for row in rows) != TARGET_LOCATION_CODES:

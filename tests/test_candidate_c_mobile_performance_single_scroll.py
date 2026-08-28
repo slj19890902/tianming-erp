@@ -108,12 +108,17 @@ def test_performance_diagnostics_are_sanitized_and_mark_first_content() -> None:
     assert "window.requestAnimationFrame" in INCOMING
 
 
-def test_current_mobile_incoming_release_note_covers_identity_fix() -> None:
-    assert "手机待收料身份响应修复" in VERSION
-    assert "待收料接口" in VERSION
-    assert "HTTP响应头" in VERSION
-    assert "登录版本" in VERSION
-    assert "无数据库迁移" in VERSION
+def test_historical_mobile_incoming_release_note_covers_identity_fix() -> None:
+    release_note = _block(
+        VERSION,
+        "_V022138_CHANGES = [",
+        "_V022138_VERIFICATION_STEPS = [",
+    )
+    assert "待收料接口" in release_note
+    assert "HTTP响应头" in release_note
+    assert "登录版本" in release_note
+    assert "无数据库迁移" in release_note
+    assert '*(f"v0.22.138：本次更新｜{item}" for item in _V022138_CHANGES)' in VERSION
 
 
 def test_initial_pending_never_applies_before_authorization(tmp_path: Path) -> None:
@@ -200,7 +205,7 @@ global.AbortController=FakeAbortController;
 const requestControllers=new Map();
 const nodes=new Proxy({{}},{{get:(target,key)=>target[key]||=(key==="pendingDimensionMode"?{{value:"any"}}:key==="pendingSearchInput"?{{value:""}}:{{hidden:true,textContent:"",innerHTML:""}})}});
 const $=id=>nodes[id];
-const state={{activeTab:"pending",pending:[],pendingTotal:0,pendingPage:1,pendingPageSize:20,pendingRetryPage:1,pendingLoading:false,pendingError:"",pendingAppliedQuery:"",pendingAppliedDimensionMode:"any",pendingAsOf:"",expandedIds:new Set(),authGeneration:1,user:{{id:2}},permissions:["incoming.view"],sessionIdentity:{{user_id:2,auth_version:4}},initialContentReported:false,performanceRequests:[],received:[],receivedLoaded:false,receivedLoading:false,receivedError:"",locations:[],locationsLoading:false,busyItemIds:new Set(),receiveIdempotencyKeys:new Map(),revertingItemId:null,revertSubmitting:false,productionDetailRouteId:null}};
+const state={{activeTab:"pending",pending:[],pendingTotal:0,pendingPage:1,pendingPageSize:20,pendingRetryPage:1,pendingLoading:false,pendingError:"",pendingAppliedQuery:"",pendingAppliedDimensionMode:"any",pendingAsOf:"",expandedIds:new Set(),authGeneration:1,user:{{id:2}},permissions:["incoming.view"],sessionIdentity:{{user_id:2,auth_version:4}},initialContentReported:false,performanceRequests:[],received:[],receivedLoaded:false,receivedLoading:false,receivedError:"",locations:[],locationsLoading:false,busyItemIds:new Set(),receiveIdempotencyKeys:new Map(),revertIdempotencyKeys:new Map(),revertingItemId:null,revertSubmitting:false,productionDetailRouteId:null}};
 async function api(){{return {{items:[{{item_id:"foreign",remaining_quantity:9}}],total:1,page:1,page_size:20,session_identity_header:"1:7"}};}}
 function render(){{}} function toChineseMessage(error){{return String(error?.message||error);}} function reportIncomingContentReady(){{throw new Error("foreign content ready");}}
 {reset}
@@ -259,7 +264,7 @@ global.AbortController=FakeAbortController;
 const requestControllers=new Map();
 const nodes=new Proxy({{}},{{get:(target,key)=>target[key]||=(key==="pendingDimensionMode"?{{value:"any"}}:key==="pendingSearchInput"?{{value:""}}:{{hidden:true,textContent:"",innerHTML:""}})}});
 const $=id=>nodes[id];
-const state={{activeTab:"pending",pending:[{{item_id:"a-last-good"}}],pendingTotal:1,pendingPage:1,pendingPageSize:20,pendingRetryPage:1,pendingLoading:false,pendingError:"",pendingAppliedQuery:"",pendingAppliedDimensionMode:"any",pendingAsOf:"",expandedIds:new Set(),authGeneration:4,user:{{id:1}},permissions:["incoming.view"],sessionIdentity:{{user_id:1,auth_version:3}},initialContentReported:true,performanceRequests:[],received:[],receivedLoaded:false,receivedLoading:false,receivedError:"",locations:[],locationsLoading:false,busyItemIds:new Set(),receiveIdempotencyKeys:new Map(),revertingItemId:null,revertSubmitting:false,productionDetailRouteId:null}};
+const state={{activeTab:"pending",pending:[{{item_id:"a-last-good"}}],pendingTotal:1,pendingPage:1,pendingPageSize:20,pendingRetryPage:1,pendingLoading:false,pendingError:"",pendingAppliedQuery:"",pendingAppliedDimensionMode:"any",pendingAsOf:"",expandedIds:new Set(),authGeneration:4,user:{{id:1}},permissions:["incoming.view"],sessionIdentity:{{user_id:1,auth_version:3}},initialContentReported:true,performanceRequests:[],received:[],receivedLoaded:false,receivedLoading:false,receivedError:"",locations:[],locationsLoading:false,busyItemIds:new Set(),receiveIdempotencyKeys:new Map(),revertIdempotencyKeys:new Map(),revertingItemId:null,revertSubmitting:false,productionDetailRouteId:null}};
 async function api(){{return {{items:[{{item_id:"b-secret",remaining_quantity:9}}],total:1,page:1,page_size:20,session_identity_header:"2:8"}};}}
 function render(){{}} function toChineseMessage(error){{return String(error?.message||error);}}
 {reset}

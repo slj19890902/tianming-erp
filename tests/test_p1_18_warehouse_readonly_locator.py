@@ -80,7 +80,7 @@ def _projection_context(row: SimpleNamespace) -> dict:
                 placement_status="placed",
                 layout=object(),
             ),
-            "floor3_mapped",
+            "current_map_mapped",
         ),
         (
             _location(
@@ -156,7 +156,7 @@ def test_legacy_v11_ground_position_keeps_the_unique_runtime_zone_compatibility(
 
     assert (
         warehouse._location_map_status(row, _projection_context(row))
-        == "floor3_mapped"
+        == "current_map_mapped"
     )
 
 

@@ -1799,15 +1799,26 @@ def test_incoming_receipt_migration_round_trip_on_copy(
     } <= trigger_names
     assert temporary_tables == []
 
-    # This round-trip uses a disposable tmp_path database.  Explicitly
-    # acknowledge the auth-version data-loss guard before crossing N031;
-    # production downgrades must continue to fail closed without it.
-    monkeypatch.setenv(
-        "N031_AUTH_VERSION_DOWNGRADE_CONFIRM",
-        "DOWNTIME_COMPLETE_AND_SESSION_SECRET_ROTATED",
-    )
+    # Keep the current-head smoke database at head: later gn49 retirement is
+    # intentionally irreversible.  Exercise the N005 round-trip on a second
+    # disposable database whose chain stops at the N005 target revision.
+    roundtrip_database_path = tmp_path / "n005_roundtrip.sqlite3"
+    monkeypatch.setenv("ERP_DATABASE_PATH", str(roundtrip_database_path))
+    command.upgrade(config, "an41v7w8x9j31")
+    with sqlite3.connect(roundtrip_database_path) as connection:
+        assert {
+            "incoming_receipts",
+            "incoming_receipt_items",
+        } <= {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
     command.downgrade(config, "aj37v7w8x9f27")
-    with sqlite3.connect(database_path) as connection:
+    with sqlite3.connect(roundtrip_database_path) as connection:
         tables = {
             row[0]
             for row in connection.execute(
@@ -1826,7 +1837,7 @@ def test_incoming_receipt_migration_round_trip_on_copy(
     assert "resolution_action" not in finance_columns
 
     command.upgrade(config, "an41v7w8x9j31")
-    with sqlite3.connect(database_path) as connection:
+    with sqlite3.connect(roundtrip_database_path) as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute(

@@ -9,6 +9,7 @@ from io import BytesIO
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -31,6 +32,7 @@ from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.finance import (
+    FinanceManualMutation,
     Invoice,
     ReturnReceipt,
     ReturnReceiptItem,
@@ -408,11 +410,17 @@ def _statement_period(
     )
 
 
-class InvoiceCreate(BaseModel):
+class LedgerMutationVersionPayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    expected_ledger_version: int = Field(gt=0)
+
+
+class InvoiceCreate(LedgerMutationVersionPayload):
     statement_id: int
     invoice_number: str
     invoice_date: date
     invoice_amount: Decimal
+    idempotency_key: str = Field(min_length=8, max_length=120)
 
     @field_validator("invoice_number")
     @classmethod
@@ -430,11 +438,22 @@ class InvoiceCreate(BaseModel):
             raise ValueError("开票金额必须大于 0")
         return amount
 
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 8:
+            raise ValueError("开票幂等键至少需要 8 个字符")
+        if normalized.casefold().startswith("system:"):
+            raise ValueError("开票幂等键不能使用系统保留前缀")
+        return normalized
 
-class SettlementCreate(BaseModel):
+
+class SettlementCreate(LedgerMutationVersionPayload):
     amount: Decimal
     settlement_date: date
     account: str | None = None
+    idempotency_key: str = Field(min_length=8, max_length=120)
 
     @field_validator("amount")
     @classmethod
@@ -451,6 +470,16 @@ class SettlementCreate(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 8:
+            raise ValueError("收款幂等键至少需要 8 个字符")
+        if normalized.casefold().startswith("system:"):
+            raise ValueError("收款幂等键不能使用系统保留前缀")
+        return normalized
 
 
 @router.get("/statements")
@@ -511,6 +540,7 @@ def list_statements(
                     "status": statement.status,
                     "confirmation_status": statement.confirmation_status,
                     "version": statement.version,
+                    "ledger_version": statement.ledger_version,
                     "created_at": statement.created_at,
                 },
                 user,
@@ -721,6 +751,7 @@ def _statement_detail_response(
             "status": statement.status,
             "confirmation_status": statement.confirmation_status,
             "version": statement.version,
+            "ledger_version": statement.ledger_version,
             "status_label": "已结清" if statement.status == "settled" else "未结清",
             "item_count": len(items),
             "invoice_count": len(invoices),
@@ -1039,6 +1070,160 @@ def _audit(
             description=description,
         )
     )
+
+
+def _finance_manual_request_hash(payload: dict) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest().upper()
+
+
+def _finance_manual_replay(
+    mutation: FinanceManualMutation,
+    *,
+    mutation_type: str,
+    statement_id: int,
+    request_hash: str,
+    actor_id: int,
+) -> dict:
+    if (
+        mutation.mutation_type != mutation_type
+        or mutation.statement_id != statement_id
+        or mutation.request_hash != request_hash
+        or mutation.actor_id != actor_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该财务幂等键已由不同操作者或不同请求载荷使用",
+        )
+    try:
+        response = json.loads(mutation.response_json)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=500,
+            detail="财务幂等响应事实损坏，请停止重试并联系管理员",
+        ) from error
+    if not isinstance(response, dict):
+        raise HTTPException(
+            status_code=500,
+            detail="财务幂等响应事实格式错误，请停止重试并联系管理员",
+        )
+    return response
+
+
+def _reserve_finance_manual_mutation(
+    db: Session,
+    *,
+    idempotency_key: str,
+    mutation_type: str,
+    statement_id: int,
+    request_hash: str,
+    actor_id: int,
+) -> tuple[FinanceManualMutation | None, dict | None]:
+    existing = db.scalar(
+        select(FinanceManualMutation).where(
+            FinanceManualMutation.idempotency_key == idempotency_key
+        )
+    )
+    if existing is not None:
+        return None, _finance_manual_replay(
+            existing,
+            mutation_type=mutation_type,
+            statement_id=statement_id,
+            request_hash=request_hash,
+            actor_id=actor_id,
+        )
+
+    mutation = FinanceManualMutation(
+        idempotency_key=idempotency_key,
+        mutation_type=mutation_type,
+        statement_id=statement_id,
+        request_hash=request_hash,
+        actor_id=actor_id,
+        response_json="{}",
+    )
+    db.add(mutation)
+    try:
+        db.flush()
+    except IntegrityError as error:
+        db.rollback()
+        existing = db.scalar(
+            select(FinanceManualMutation).where(
+                FinanceManualMutation.idempotency_key == idempotency_key
+            )
+        )
+        if existing is None:
+            raise HTTPException(
+                status_code=409,
+                detail="财务幂等键已被另一请求占用，请刷新后重试",
+            ) from error
+        return None, _finance_manual_replay(
+            existing,
+            mutation_type=mutation_type,
+            statement_id=statement_id,
+            request_hash=request_hash,
+            actor_id=actor_id,
+        )
+    return mutation, None
+
+
+def _raise_finance_manual_cas_conflict(
+    db: Session,
+    *,
+    statement_id: int,
+    expected_version: int,
+    expected_ledger_version: int,
+    amount_kind: str,
+) -> None:
+    db.expire_all()
+    statement = db.get(Statement, statement_id)
+    if statement is None:
+        raise HTTPException(status_code=404, detail="对账单不存在")
+    if statement.confirmation_status != "confirmed":
+        raise HTTPException(
+            status_code=409,
+            detail="请先核对并确认对账单，再登记人工开票或收款",
+        )
+    if statement.version != expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "对账单来源版本已变化，请刷新后重试",
+                "current_version": statement.version,
+            },
+        )
+    if statement.ledger_version != expected_ledger_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "对账单财务流水版本已变化，请刷新后重试",
+                "current_ledger_version": statement.ledger_version,
+            },
+        )
+    message = (
+        "累计开票金额不能超过应收总额"
+        if amount_kind == "invoice"
+        else "累计收款金额不能超过应收总额"
+    )
+    raise HTTPException(status_code=409, detail=message)
+
+
+def _record_finance_manual_response(
+    mutation: FinanceManualMutation,
+    response: dict,
+) -> dict:
+    encoded = jsonable_encoder(response)
+    mutation.response_json = json.dumps(
+        encoded,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return encoded
 
 
 def _next_statement_number(db: Session, month: str) -> str:
@@ -2707,6 +2892,7 @@ def current_customer_months(
             Statement.status,
             Statement.confirmation_status,
             Statement.version,
+            Statement.ledger_version,
             Statement.created_at,
         )
         .join(Customer, Customer.id == Statement.customer_id)
@@ -2814,6 +3000,7 @@ def current_customer_months(
                 "status": statement["status"],
                 "confirmation_status": statement["confirmation_status"],
                 "version": int(statement["version"]),
+                "ledger_version": int(statement["ledger_version"]),
                 "invoice_status": (
                     "invoiced"
                     if receivable > Decimal("0.00")
@@ -3195,6 +3382,9 @@ def settled_customer_months(
                 Statement.invoiced_amount,
                 Statement.settled_amount,
                 Statement.status,
+                Statement.confirmation_status,
+                Statement.version,
+                Statement.ledger_version,
                 Statement.created_at,
             )
             .where(or_(*group_conditions))
@@ -3271,6 +3461,9 @@ def settled_customer_months(
                         statement["settled_amount"]
                     ),
                     "status": statement["status"],
+                    "confirmation_status": statement["confirmation_status"],
+                    "version": int(statement["version"]),
+                    "ledger_version": int(statement["ledger_version"]),
                     "created_at": statement["created_at"],
                     "invoices": invoices,
                     "settlements": settlements,
@@ -3576,6 +3769,9 @@ def create_statement(
                 "total_receivable": statement.total_receivable,
                 "total_gross_profit": statement.total_gross_profit,
                 "status": statement.status,
+                "confirmation_status": statement.confirmation_status,
+                "version": statement.version,
+                "ledger_version": statement.ledger_version,
             },
             user,
         )
@@ -3597,27 +3793,63 @@ def create_invoice(
     user: User = Depends(can_operate),
 ) -> dict:
     _statement_for_user(db, payload.statement_id, user)
+    actor_id = int(user.id)
+    expected_version = payload.expected_version
+    expected_ledger_version = payload.expected_ledger_version
+    request_hash = _finance_manual_request_hash(
+        {
+            "mutation_type": "register_invoice",
+            "statement_id": payload.statement_id,
+            "expected_version": expected_version,
+            "expected_ledger_version": expected_ledger_version,
+            "invoice_number": payload.invoice_number,
+            "invoice_date": payload.invoice_date.isoformat(),
+            "invoice_amount": format(payload.invoice_amount, ".2f"),
+        }
+    )
     try:
+        mutation, replay = _reserve_finance_manual_mutation(
+            db,
+            idempotency_key=payload.idempotency_key,
+            mutation_type="register_invoice",
+            statement_id=payload.statement_id,
+            request_hash=request_hash,
+            actor_id=actor_id,
+        )
+        if replay is not None:
+            return replay
+        assert mutation is not None
         updated = db.execute(
             text(
                 """
                 UPDATE finance_statements
-                SET invoiced_amount = invoiced_amount + :amount
+                SET invoiced_amount = invoiced_amount + :amount,
+                    ledger_version = ledger_version + 1
                 WHERE id = :statement_id
+                  AND confirmation_status = 'confirmed'
+                  AND version = :expected_version
+                  AND ledger_version = :expected_ledger_version
                   AND invoiced_amount + :amount <= total_receivable
                 RETURNING id, statement_number, total_receivable,
-                          invoiced_amount, settled_amount, status
+                          invoiced_amount, settled_amount, status,
+                          confirmation_status, version, ledger_version
                 """
             ),
             {
                 "statement_id": payload.statement_id,
                 "amount": str(payload.invoice_amount),
+                "expected_version": expected_version,
+                "expected_ledger_version": expected_ledger_version,
             },
         ).mappings().one_or_none()
         if updated is None:
-            if db.get(Statement, payload.statement_id) is None:
-                raise HTTPException(status_code=404, detail="对账单不存在")
-            raise HTTPException(status_code=409, detail="累计开票金额不能超过应收总额")
+            _raise_finance_manual_cas_conflict(
+                db,
+                statement_id=payload.statement_id,
+                expected_version=expected_version,
+                expected_ledger_version=expected_ledger_version,
+                amount_kind="invoice",
+            )
 
         invoice = Invoice(
             statement_id=payload.statement_id,
@@ -3640,21 +3872,33 @@ def create_invoice(
                 "invoice_date": payload.invoice_date,
                 "invoice_amount": payload.invoice_amount,
                 "invoiced_amount": updated["invoiced_amount"],
+                "expected_version": expected_version,
+                "expected_ledger_version": expected_ledger_version,
+                "version": updated["version"],
+                "ledger_version": updated["ledger_version"],
+                "idempotency_key": payload.idempotency_key,
             },
             description="登记客户发票",
         )
+        response = _record_finance_manual_response(
+            mutation,
+            {
+                "id": invoice.id,
+                "statement_id": payload.statement_id,
+                "invoice_number": invoice.invoice_number,
+                "invoice_date": invoice.invoice_date,
+                "invoice_amount": invoice.invoice_amount,
+                "total_receivable": updated["total_receivable"],
+                "invoiced_amount": updated["invoiced_amount"],
+                "settled_amount": updated["settled_amount"],
+                "status": updated["status"],
+                "confirmation_status": updated["confirmation_status"],
+                "version": updated["version"],
+                "ledger_version": updated["ledger_version"],
+            },
+        )
         db.commit()
-        return {
-            "id": invoice.id,
-            "statement_id": payload.statement_id,
-            "invoice_number": invoice.invoice_number,
-            "invoice_date": invoice.invoice_date,
-            "invoice_amount": invoice.invoice_amount,
-            "total_receivable": updated["total_receivable"],
-            "invoiced_amount": updated["invoiced_amount"],
-            "settled_amount": updated["settled_amount"],
-            "status": updated["status"],
-        }
+        return response
     except HTTPException:
         db.rollback()
         raise
@@ -3674,7 +3918,32 @@ def settle_statement(
     user: User = Depends(can_operate),
 ) -> dict:
     _statement_for_user(db, statement_id, user)
+    actor_id = int(user.id)
+    expected_version = payload.expected_version
+    expected_ledger_version = payload.expected_ledger_version
+    request_hash = _finance_manual_request_hash(
+        {
+            "mutation_type": "settle_statement",
+            "statement_id": statement_id,
+            "expected_version": expected_version,
+            "expected_ledger_version": expected_ledger_version,
+            "amount": format(payload.amount, ".2f"),
+            "settlement_date": payload.settlement_date.isoformat(),
+            "account": payload.account or "",
+        }
+    )
     try:
+        mutation, replay = _reserve_finance_manual_mutation(
+            db,
+            idempotency_key=payload.idempotency_key,
+            mutation_type="settle_statement",
+            statement_id=statement_id,
+            request_hash=request_hash,
+            actor_id=actor_id,
+        )
+        if replay is not None:
+            return replay
+        assert mutation is not None
         updated = db.execute(
             text(
                 """
@@ -3684,22 +3953,33 @@ def settle_statement(
                         WHEN settled_amount + :amount = total_receivable
                         THEN 'settled'
                         ELSE 'unsettled'
-                    END
+                    END,
+                    ledger_version = ledger_version + 1
                 WHERE id = :statement_id
+                  AND confirmation_status = 'confirmed'
+                  AND version = :expected_version
+                  AND ledger_version = :expected_ledger_version
                   AND settled_amount + :amount <= total_receivable
                 RETURNING id, statement_number, total_receivable,
-                          invoiced_amount, settled_amount, status
+                          invoiced_amount, settled_amount, status,
+                          confirmation_status, version, ledger_version
                 """
             ),
             {
                 "statement_id": statement_id,
                 "amount": str(payload.amount),
+                "expected_version": expected_version,
+                "expected_ledger_version": expected_ledger_version,
             },
         ).mappings().one_or_none()
         if updated is None:
-            if db.get(Statement, statement_id) is None:
-                raise HTTPException(status_code=404, detail="对账单不存在")
-            raise HTTPException(status_code=409, detail="累计收款金额不能超过应收总额")
+            _raise_finance_manual_cas_conflict(
+                db,
+                statement_id=statement_id,
+                expected_version=expected_version,
+                expected_ledger_version=expected_ledger_version,
+                amount_kind="settlement",
+            )
 
         settlement = SettlementRecord(
             statement_id=statement_id,
@@ -3723,25 +4003,43 @@ def settle_statement(
                 "account": payload.account or "",
                 "settled_amount": updated["settled_amount"],
                 "status": updated["status"],
+                "expected_version": expected_version,
+                "expected_ledger_version": expected_ledger_version,
+                "version": updated["version"],
+                "ledger_version": updated["ledger_version"],
+                "idempotency_key": payload.idempotency_key,
             },
             description="登记客户收款并核销对账单",
         )
+        response = _record_finance_manual_response(
+            mutation,
+            {
+                "id": statement_id,
+                "statement_number": updated["statement_number"],
+                "total_receivable": updated["total_receivable"],
+                "invoiced_amount": updated["invoiced_amount"],
+                "settled_amount": updated["settled_amount"],
+                "status": updated["status"],
+                "status_label": (
+                    "已结清" if updated["status"] == "settled" else "未结清"
+                ),
+                "settlement_record_id": settlement.id,
+                "confirmation_status": updated["confirmation_status"],
+                "version": updated["version"],
+                "ledger_version": updated["ledger_version"],
+            },
+        )
         db.commit()
-        return {
-            "id": statement_id,
-            "statement_number": updated["statement_number"],
-            "total_receivable": updated["total_receivable"],
-            "invoiced_amount": updated["invoiced_amount"],
-            "settled_amount": updated["settled_amount"],
-            "status": updated["status"],
-            "status_label": (
-                "已结清" if updated["status"] == "settled" else "未结清"
-            ),
-            "settlement_record_id": settlement.id,
-        }
+        return response
     except HTTPException:
         db.rollback()
         raise
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="收款登记冲突，请刷新后重试",
+        ) from error
     except Exception:
         db.rollback()
         raise

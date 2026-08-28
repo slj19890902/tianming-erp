@@ -227,6 +227,7 @@ def test_statement_settlement_allows_missing_account(tmp_path: Path) -> None:
             total_receivable=Decimal("280.80"),
             total_gross_profit=Decimal("0"),
             status="unsettled",
+            confirmation_status="confirmed",
         )
         session.add(statement)
         session.flush()
@@ -257,7 +258,13 @@ def test_statement_settlement_allows_missing_account(tmp_path: Path) -> None:
         _login(client, "finance")
         response = client.put(
             "/api/finance/statements/1/settle",
-            json={"amount": "100.00", "settlement_date": "2026-06-21"},
+            json={
+                "amount": "100.00",
+                "settlement_date": "2026-06-21",
+                "expected_version": 1,
+                "expected_ledger_version": 1,
+                "idempotency_key": "phase15-finance-payment-001",
+            },
         )
 
     assert response.status_code == 200, response.text

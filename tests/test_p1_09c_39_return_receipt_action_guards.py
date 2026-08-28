@@ -51,7 +51,10 @@ def test_open_save_and_cancel_receipt_are_single_flight_and_freeze_targets(
         "async saveReceipt() {",
         "resetDeliveryReminderState({preserveAcknowledgement=false} = {}) {",
     )
-    cancel_body = _method_body("async cancelReceipt(row) {", "exportStatement(row) {")
+    cancel_body = _method_body(
+        "async cancelReceipt(row) {",
+        "financeManualMutationStorageKey(actorId) {",
+    )
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
 const pending = [];
@@ -138,7 +141,10 @@ def test_receipt_success_is_not_misreported_when_refresh_fails(tmp_path: Path) -
         "async saveReceipt() {",
         "resetDeliveryReminderState({preserveAcknowledgement=false} = {}) {",
     )
-    cancel_body = _method_body("async cancelReceipt(row) {", "exportStatement(row) {")
+    cancel_body = _method_body(
+        "async cancelReceipt(row) {",
+        "financeManualMutationStorageKey(actorId) {",
+    )
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
 let mode = "refresh-fails";

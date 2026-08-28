@@ -282,6 +282,10 @@ def apply_transport_security(application: FastAPI, current) -> None:
 def create_app() -> FastAPI:
     application = legacy.app
     current = load_settings()
+    # Settings and UAT path identities are immutable for a worker lifetime.
+    # Keep the startup-validated snapshot on the app so authentication does
+    # not repeat expensive Windows path/handle validation on every request.
+    application.state.erp_settings = current
     application.router.lifespan_context = phase2_lifespan
     index_path = Path(__file__).resolve().parents[1] / "static" / "index.html"
     spa_page_paths = {

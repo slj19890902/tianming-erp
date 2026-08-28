@@ -153,7 +153,7 @@ async function drainTimers() {{
     calls.products.push(this.pages.products);
     return outcomes.products;
   }};
-  vm.loadOrders = async function() {{
+  vm.loadCurrentOrderWorkspace = async function() {{
     calls.orders.push(this.pages.orders);
     return outcomes.orders;
   }};

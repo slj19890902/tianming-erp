@@ -267,15 +267,15 @@ def test_cp72_to_cj66_marks_legacy_dates_unknown_and_round_trips(
         _health(connection, TARGET_REVISION)
 
 
-def test_head_deep_downgrade_through_cj66_round_trips(
+def test_current_head_smoke_and_cj66_round_trip_both_pass(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database = tmp_path / "n081-b0-head-deep-round-trip.sqlite3"
-    config = _config(monkeypatch, database)
+    head_database = tmp_path / "n081-b0-current-head.sqlite3"
+    head_config = _config(monkeypatch, head_database)
 
-    command.upgrade(config, "head")
-    with sqlite3.connect(database) as connection:
+    command.upgrade(head_config, "head")
+    with sqlite3.connect(head_database) as connection:
         head_revision = str(
             connection.execute(
                 "SELECT version_num FROM alembic_version"
@@ -287,6 +287,11 @@ def test_head_deep_downgrade_through_cj66_round_trips(
             "stock_date_original_text",
         } <= _columns(connection, "inventory_lots")
 
+    # gn49 deliberately cannot be downgraded.  Exercise cj66's own reversible
+    # boundary on a second database that stops at the historical target.
+    database = tmp_path / "n081-b0-cj66-round-trip.sqlite3"
+    config = _config(monkeypatch, database)
+    command.upgrade(config, TARGET_REVISION)
     command.downgrade(config, PREVIOUS_REVISION)
     with sqlite3.connect(database) as connection:
         _health(connection, PREVIOUS_REVISION)
@@ -305,9 +310,9 @@ def test_head_deep_downgrade_through_cj66_round_trips(
             "trg_inventory_lots_unknown_date_source_update",
         } & _inventory_lot_related_triggers(connection).keys()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, TARGET_REVISION)
     with sqlite3.connect(database) as connection:
-        _health(connection, head_revision)
+        _health(connection, TARGET_REVISION)
         assert {
             "stock_date_accuracy",
             "stock_date_original_text",

@@ -80,23 +80,14 @@ def _ancestors(node: _Node):
         current = current.parent
 
 
-def _has_table_class(panel: _Node, table_class: str) -> bool:
-    return any(
-        node.tag == "table"
-        and table_class in node.attrs.get("class", "").split()
-        for node in _walk(panel)
-    )
-
-
 def _requisition_tab_guards(node: _Node) -> list[str]:
     guards: list[str] = []
     for ancestor in _ancestors(node):
         expression = ancestor.attrs.get("v-if", "")
-        match = re.fullmatch(
-            r"\s*requisitionTab\s*===\s*(['\"])(pending|waiting|submitted)\1\s*",
+        for match in re.finditer(
+            r"requisitionTab\s*===\s*(['\"])(pending|waiting|submitted)\1",
             expression,
-        )
-        if match:
+        ):
             guards.append(match.group(2))
     return guards
 
@@ -108,19 +99,20 @@ def test_each_requisition_table_has_only_its_own_tab_visibility_guard() -> None:
     tables = {
         "pending": "requisition-pending-table",
         "waiting": "requisition-hold-table",
-        "submitted": "reported-compact-table",
+        "submitted": "reported-item-table",
     }
     all_nodes = list(_walk(parser.root))
 
     for expected_tab, table_class in tables.items():
-        panels = [
+        matched_tables = [
             node
             for node in all_nodes
-            if node.tag == "data-panel" and _has_table_class(node, table_class)
+            if node.tag == "table"
+            and table_class in node.attrs.get("class", "").split()
         ]
-        assert len(panels) == 1, (expected_tab, len(panels))
+        assert len(matched_tables) == 1, (expected_tab, len(matched_tables))
 
-        guards = _requisition_tab_guards(panels[0])
+        guards = _requisition_tab_guards(matched_tables[0])
         assert guards == [expected_tab], (
             f"{expected_tab} table is nested under contradictory tab guards: {guards}"
         )

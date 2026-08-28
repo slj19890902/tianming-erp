@@ -95,7 +95,8 @@ def test_warehouse_exposes_multi_product_assignment_and_mold_location() -> None:
     assert "data.binding_scope" in WAREHOUSE
     assert "模具与位置查询" in WAREHOUSE
     assert "/api/warehouse/molds" in WAREHOUSE
-    assert "保存模具" in WAREHOUSE
+    assert "保存为新模具" in WAREHOUSE
+    assert 'textContent=editing?"保存修改":"保存为新模具"' in WAREHOUSE
     assert "productForm.mold_tool_id" in INDEX
     assert "mold_tool_id: f.mold_tool_id" in INDEX
 

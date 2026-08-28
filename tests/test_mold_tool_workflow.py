@@ -940,6 +940,8 @@ def test_workshop_can_open_structured_location_label_and_qr(
             "product_count",
             "label_identity",
             "label_customer_name",
+            "label_mold_name",
+            "label_mold_chinese_short_name",
             "label_mold_number",
             "label_mold_name",
             "label_mold_chinese_short_name",

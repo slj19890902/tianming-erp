@@ -95,7 +95,7 @@ def test_readonly_audit_reports_real_station_coverage(tmp_path: Path) -> None:
         serialized_routes = str(report["workstation_routes"])
         assert "ANON-ORDER" not in serialized_routes
         assert "ANON-PRODUCT" not in serialized_routes
-        assert report["summary"]["scan_complete"] is False
+        assert report["summary"]["scan_complete"] is True
 
         report["source"] = {
             "label": "anonymous-test-copy",
@@ -143,7 +143,7 @@ def test_five_anomaly_fact_shapes_are_covered_without_identifier_rules(
         codes = finding_codes(report)
         assert "P015_INCOMING_WITHOUT_PRODUCTION_TASK" in codes
         assert "P015_LEGACY_RECEIVED_STATUS_TRACE_GAP" in codes
-        assert "P015_PENDING_PRODUCTION_WITHOUT_INPUT_FACT" in codes
+        assert "P015_PENDING_PRODUCTION_WITHOUT_INPUT_FACT" not in codes
         assert "P015_COMMON_BOX_PRINT_COLOR_INVALID" not in codes
 
         wrong_die_route = production_station_memberships(

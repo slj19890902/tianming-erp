@@ -1,18 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
-from decimal import Decimal
 import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
-
-from sqlalchemy.orm import Session
-
-from app.core.database import create_sqlite_engine
-from app.models.customer import Customer
-from app.models.delivery import Delivery
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -147,33 +139,32 @@ def test_unordered_finished_fact_blocks_downgrade_before_ddl(
     database_path = tmp_path / "q1-03-unordered-fail-closed.sqlite3"
     _must_run(database_path, "upgrade", TARGET_REVISION)
 
-    engine = create_sqlite_engine(database_path)
-    with Session(engine) as db:
-        customer = Customer(
-            name="Q1-03迁移匿名客户",
-            payment_term_days=0,
-            statement_cycle_start_day=20,
-            credit_limit=Decimal("0"),
-            delivery_method="配送",
-            default_tax_rate=Decimal("0.13"),
-            status="active",
-            is_active=True,
-            version=1,
+    # Seed against the historical da83 schema itself.  Using today's ORM here
+    # would add columns introduced by later revisions and turn schema drift
+    # into a false failure of this downgrade guard.
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        customer_id = connection.execute(
+            "INSERT INTO customers (name) VALUES (?)",
+            ("Q1-03迁移匿名客户",),
+        ).lastrowid
+        connection.execute(
+            """
+            INSERT INTO sales_deliveries (
+                delivery_number, customer_id, delivery_date, source_mode,
+                status, total_quantity
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "Q1-03-MIGRATION-FACT",
+                customer_id,
+                "2026-07-30",
+                "unordered_finished",
+                "pending",
+                0,
+            ),
         )
-        db.add(customer)
-        db.flush()
-        db.add(
-            Delivery(
-                delivery_number="Q1-03-MIGRATION-FACT",
-                customer_id=customer.id,
-                delivery_date=date(2026, 7, 30),
-                source_mode="unordered_finished",
-                status="pending",
-                total_quantity=0,
-            )
-        )
-        db.commit()
-    engine.dispose()
+        connection.commit()
 
     before = _state(database_path)
     blocked = _run_alembic(database_path, "downgrade", PREVIOUS_REVISION)

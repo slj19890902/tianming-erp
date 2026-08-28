@@ -21,13 +21,13 @@ def test_incoming_success_guide_is_short_permission_scoped_and_truthful() -> Non
         '<section v-if="incomingNextStepGuide.visible',
         '<section v-if="warehouseFrameUrl"',
     )
-    assert "纸板已实收，下一步去生产确认。" in guide
-    assert "已收纸板可先生产，未到齐的继续留在待入库。" in guide
-    assert "下一步：去生产" in guide
+    assert "纸板已实收并自动形成成品，下一步直接去送货。" in guide
+    assert "已收部分已自动形成成品并可送货，未到齐的继续留在待入库。" in guide
+    assert "下一步：去送货" in guide
     assert "继续收料" in guide
-    assert "canProductionExecute && pageAllowed('production')" in guide
-    assert "请交给有生产确认权限的账号继续" in guide
-    assert "自动生产" not in guide
+    assert "canDelivery && pageAllowed('deliveries')" in guide
+    assert "请交给有送货权限的账号继续" in guide
+    assert "下一步去生产确认" not in guide
 
 
 def test_single_receipt_guides_only_order_linked_success() -> None:
@@ -73,7 +73,7 @@ def test_non_receipt_paths_do_not_claim_new_incoming_success() -> None:
     assert "showIncomingNextStepGuide" not in payload
 
 
-def test_production_guide_action_only_opens_existing_pending_production_page(tmp_path: Path) -> None:
+def test_incoming_guide_action_only_opens_existing_pending_delivery_page(tmp_path: Path) -> None:
     node = shutil.which("node")
     assert node, "Node.js is required for frontend behavior validation"
 
@@ -103,22 +103,22 @@ const methods = sandbox.definition.methods;
 const calls = [];
 const context = {
   ...methods,
-  canProductionExecute:true,
-  productionTab:"history",
+  canDelivery:true,
+  deliveryDashboardMode:"all",
   incomingNextStepGuide:{visible:true,count:2,pendingBalance:true},
-  pageAllowed(page){return page === "production";},
+  pageAllowed(page){return page === "deliveries";},
   invalidatePageCache(page){calls.push(`invalidate:${page}`);},
   async go(page){calls.push(`go:${page}`);},
   showToast(message,isError){calls.push(`toast:${message}:${!!isError}`);},
 };
 (async () => {
-  const result = await methods.goToProductionFromIncomingGuide.call(context);
+  const result = await methods.goToDeliveryFromIncomingGuide.call(context);
   if (!result) throw new Error("Authorized guide did not navigate");
-  if (context.productionTab !== "pending") throw new Error("Guide did not select pending production");
+  if (context.deliveryDashboardMode !== "pending_customers") throw new Error("Guide did not select pending deliveries");
   if (context.incomingNextStepGuide.visible) throw new Error("Guide did not close after navigation");
-  if (calls.join("|") !== "invalidate:production|go:production") throw new Error(calls.join("|"));
-  const body = methods.goToProductionFromIncomingGuide.toString();
-  if (/axios\.|\/api\//.test(body)) throw new Error("Guide action must not write production or inventory data");
+  if (calls.join("|") !== "invalidate:deliveries|go:deliveries") throw new Error(calls.join("|"));
+  const body = methods.goToDeliveryFromIncomingGuide.toString();
+  if (/axios\.|\/api\//.test(body)) throw new Error("Guide action must not write delivery or inventory data");
 })().catch(error => { console.error(error); process.exitCode=1; });
 ''',
         encoding="utf-8",

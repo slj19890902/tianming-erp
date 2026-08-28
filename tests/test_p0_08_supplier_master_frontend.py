@@ -24,7 +24,7 @@ def test_supplier_master_is_compact_dynamic_and_keeps_history_readable() -> None
         '<div v-else-if="modal.type === \'supplier\'">',
         1,
     )[1].split(
-        '<div v-else-if="modal.type === \'quotationConvert\'"',
+        '<div v-else-if="modal.type === \'supplierPackagingCatalog\'"',
         1,
     )[0]
     supplier_methods = INDEX.split(
@@ -103,10 +103,14 @@ def test_new_business_material_candidates_only_use_active_supplier_master() -> N
         ':options="materialSelectOptions(productForm._material_supplier, '
         'productForm.layer_count, productForm.flute_type)"'
     ) in INDEX
-    assert (
-        ':options="materialSelectOptions(requisitionMaterialForm.supplier_name,'
-        'requisitionMaterialForm.layer_count,requisitionMaterialForm.flute_type)"'
-    ) in INDEX
+    assert ':options="requisitionMaterialOptions"' in INDEX
+    requisition_options = INDEX.split("requisitionMaterialOptions() {", 1)[1].split(
+        "dashboardTabs()", 1
+    )[0]
+    assert "this.filteredMaterialOptions(" in requisition_options
+    assert "form.supplier_name" in requisition_options
+    assert "form.layer_count" in requisition_options
+    assert "form.flute_type" in requisition_options
 
     # 供应商可用性完全来自动态主档，不再硬编码佳丰或其它固定供应商名单。
     assert '["苏州嘉林亿", "昆山鸣朋", "苏州佳丰"]' not in INDEX

@@ -98,7 +98,10 @@ def test_all_visible_rollback_entries_use_admin_and_fixed_audit_reason() -> None
     assert "来料实收历史回退（管理员一次确认）" not in incoming_method
     assert "row._revert_idempotency_key" in incoming_method
     assert "idempotency_key:row._revert_idempotency_key" in incoming_method
-    assert 'v-else-if="canAdmin" class="btn small danger"' in INDEX
+    assert (
+        'v-if="canAdmin && row.receipt_status===\'posted\'" '
+        'class="btn small danger"'
+    ) in INDEX
 
     assert 'state.user?.role === "admin"' in INCOMING
     assert "revertReason" not in INCOMING

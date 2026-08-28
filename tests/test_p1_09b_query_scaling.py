@@ -455,8 +455,11 @@ def test_delivery_list_batches_formal_like_inventory_sources_with_fixed_query_ce
     assert len(full_selects) <= _select_count(first_sql) + 2
     assert sum(" from inventory_reservations " in row for row in full_selects) == 1
     assert sum(" from inventory_lots " in row for row in full_selects) == 1
-    assert sum(" from warehouse_locations " in row for row in full_selects) == 1
-    assert sum(" from warehouse_floors" in row for row in full_selects) == 1
+    # One query loads the inventory locations; one fixed query loads their
+    # same-area peers so the canonical employee address sequence is stable.
+    # Neither query count may grow with the number of delivery rows.
+    assert sum(" from warehouse_locations " in row for row in full_selects) == 2
+    assert sum(" from warehouse_floors" in row for row in full_selects) == 2
     assert sum(" from warehouse_areas " in row for row in full_selects) == 1
 
 
@@ -573,6 +576,10 @@ def test_composite_delivery_summary_keeps_fixed_query_families_and_full_quantity
         ).all()
         assert len(rows) == 24
         for index, (_delivery_item, order_item) in enumerate(rows, start=1):
+            # Build a valid frozen parent-delivery history.  A dispatched
+            # component-delivery order would also require immutable component
+            # allocation facts; this performance fixture intentionally has none.
+            order_item.composite_fulfillment_mode_snapshot = "parent_delivery"
             db.add(
                 SalesOrderItemBomComponent(
                     sales_order_item_id=order_item.id,
@@ -620,10 +627,9 @@ def test_composite_delivery_summary_keeps_fixed_query_families_and_full_quantity
     for summary_row in large.json()["items"]:
         full_row = full_by_id[summary_row["id"]]
         assert summary_row["total_actual_goods_quantity"] == full_row["total_actual_goods_quantity"]
-        if summary_row["status"] == "pending":
-            assert summary_row["total_actual_goods_quantity"] == 10
-        else:
-            assert summary_row["total_actual_goods_quantity"] == 5
+        # P1-79 makes parent and component delivery mutually exclusive; a
+        # pending note no longer double-counts its parent plus visible child.
+        assert summary_row["total_actual_goods_quantity"] == 5
 
 
 def test_pending_delivery_search_scales_by_limit_without_writes_or_scope_leak(delivery_scaling_app) -> None:

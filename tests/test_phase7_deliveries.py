@@ -230,6 +230,92 @@ def _create_payload() -> dict:
     }
 
 
+def _seed_historical_finished_delivery_inventory(
+    session_factory,
+    *order_item_ids: int,
+) -> None:
+    """Give legacy delivered rows the formal stock facts required today."""
+
+    from app.models.customer import Customer
+    from app.models.order import OrderItem
+    from app.models.warehouse_inventory import (
+        FinishedGoodsInventoryDetail,
+        InventoryLot,
+        InventoryReservation,
+        WarehouseLocation,
+    )
+
+    with session_factory() as session:
+        location = WarehouseLocation(
+            location_code="PHASE7-FG",
+            location_name="Phase 7 成品测试库位",
+            warehouse_type="finished",
+            is_active=True,
+        )
+        session.add(location)
+        session.flush()
+        for order_item_id in order_item_ids:
+            item = session.get(OrderItem, order_item_id)
+            assert item is not None
+            order = item.order
+            product = item.product
+            assert order is not None and product is not None
+            customer = session.get(Customer, order.customer_id)
+            assert customer is not None
+            ordered_quantity = int(item.quantity or 0)
+            consumed_quantity = int(item.delivered_quantity or 0)
+            reserved_quantity = max(ordered_quantity - consumed_quantity, 0)
+            lot = InventoryLot(
+                lot_number=f"PHASE7-FG-{order_item_id}",
+                inventory_type="finished",
+                warehouse_location_id=location.id,
+                quantity_available=0,
+                quantity_reserved=reserved_quantity,
+                quantity_consumed=consumed_quantity,
+                quantity_damaged=0,
+                quantity_scrapped=0,
+                unit="boxes",
+                status="active",
+                source_type="manual",
+                stock_date=date.today(),
+                last_movement_at=datetime.now(),
+                version=1,
+            )
+            session.add(lot)
+            session.flush()
+            session.add(
+                FinishedGoodsInventoryDetail(
+                    inventory_lot_id=lot.id,
+                    owner_customer_id=order.customer_id,
+                    owner_customer_name_snapshot=customer.name,
+                    is_general=False,
+                    product_id=product.id,
+                    inventory_code_snapshot=product.product_code,
+                    product_name_snapshot=product.product_name,
+                )
+            )
+            session.add(
+                InventoryReservation(
+                    reservation_number=f"PHASE7-FG-RES-{order_item_id}",
+                    inventory_lot_id=lot.id,
+                    reservation_type="finished_order",
+                    order_id=order.id,
+                    order_item_id=item.id,
+                    reserved_stock_quantity=ordered_quantity,
+                    credited_requirement_quantity=ordered_quantity,
+                    yield_factor=1,
+                    consumed_stock_quantity=consumed_quantity,
+                    released_stock_quantity=0,
+                    consumed_requirement_quantity=consumed_quantity,
+                    released_requirement_quantity=0,
+                    status="active" if reserved_quantity else "consumed",
+                    reservation_group_key=f"PHASE7-FG-GROUP-{order_item_id}",
+                    idempotency_key=f"phase7-fg-res-{order_item_id}",
+                )
+            )
+        session.commit()
+
+
 def test_pending_items_use_strict_filter_and_remaining_quantity(
     delivery_api_app,
 ) -> None:
@@ -301,6 +387,7 @@ def test_create_combined_delivery_then_partial_dispatch_once(
     from app.models.order import OrderItem
 
     app, session_factory = delivery_api_app
+    _seed_historical_finished_delivery_inventory(session_factory, 1, 2)
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post("/api/deliveries", json=_create_payload())
@@ -591,7 +678,8 @@ def test_telescoping_lid_delivery_search_uses_components_when_parent_status_stal
 def test_delivery_can_be_marked_printed_and_returns_print_status(
     delivery_api_app,
 ) -> None:
-    app, _ = delivery_api_app
+    app, session_factory = delivery_api_app
+    _seed_historical_finished_delivery_inventory(session_factory, 1, 2)
     with TestClient(app) as client:
         _login(client, "admin")
         created = client.post("/api/deliveries", json=_create_payload())
@@ -1088,7 +1176,8 @@ def test_route_suggestions_mark_same_address_customers_as_one_stop(
 
 
 def test_delivery_list_keeps_newest_created_delivery_first(delivery_api_app) -> None:
-    app, _ = delivery_api_app
+    app, session_factory = delivery_api_app
+    _seed_historical_finished_delivery_inventory(session_factory, 1)
     first_payload = {
         "customer_id": 1,
         "delivery_date": "2026-06-13",

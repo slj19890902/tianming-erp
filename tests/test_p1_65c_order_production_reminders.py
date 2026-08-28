@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 
 @pytest.fixture()
-def order_reminder_app(tmp_path: Path):
+def order_reminder_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.orders import router as orders_router
@@ -26,6 +26,9 @@ def order_reminder_app(tmp_path: Path):
     from app.models.fulfillment_reminder import FulfillmentReminder
     from app.models.product import Product
     from app.models.user import User
+    from app.services import fulfillment_reminders as reminder_service
+
+    monkeypatch.setattr(reminder_service, "beijing_today", lambda: date(2026, 8, 16))
 
     engine = create_sqlite_engine(tmp_path / "p1-65c.sqlite3")
     Base.metadata.create_all(engine)

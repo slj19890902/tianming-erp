@@ -18,7 +18,8 @@ def test_rollback_request_accepts_missing_blank_or_null_reason() -> None:
 
 def test_rollback_ui_uses_one_impact_confirmation_without_reason_prompt() -> None:
     assert "请输入原因" not in INDEX[INDEX.index("async rollbackOrderWorkflow"):INDEX.index("async openMobileEntry")]
-    assert "送货、回单、对账、开票和收款记录" in INDEX
+    assert "仅未确认且无财务事实的送货、回单和对账草稿会被清理" in INDEX
+    assert "已确认对账、开票任务、开票或收款会拒绝撤回" in INDEX
     assert 'axios.put(`/api/orders/${order.id}/rollback-workflow`,{})' in INDEX
 
 

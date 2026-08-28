@@ -37,7 +37,7 @@ def test_direct_completion_shows_guide_only_after_formal_post_succeeds() -> None
     assert direct.index(post) < direct.index(guide) < direct.index("delete this.productionDirectAttempts[row.id]")
     assert 'mode:row.is_component_task ? "component" : "direct"' in direct
     assert "return;" in direct[direct.index("catch (error)") : direct.index(guide)]
-    assert 'this.productionTab = "pending";' in direct
+    assert 'this.productionTab = "history";' in direct
 
 
 def test_component_completion_never_gets_delivery_primary_action() -> None:
@@ -62,10 +62,10 @@ def test_stock_batch_guide_counts_only_succeeded_rows_and_keeps_failures() -> No
     assert "if (succeededRows.length)" in batch
     assert 'mode:"stock"' in batch
     assert "count:succeededRows.length" in batch
-    assert "this.productionLocation(row.location_id)?.location_code" in batch
+    assert "this.inventoryLocation(this.productionLocation(row.location_id))" in batch
     assert "失败项已保留，可直接重试" in batch
     assert batch.index("this.showProductionNextStepGuide({") < batch.index("await Promise.all([")
-    assert 'this.productionTab = "pending";' in batch
+    assert 'this.productionTab = "history";' in batch
 
 
 def test_delivery_guide_action_only_opens_pending_customer_view(tmp_path: Path) -> None:

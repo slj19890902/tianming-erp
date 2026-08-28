@@ -896,6 +896,45 @@ def test_cleanup_stops_serving_child_even_when_wrapper_already_exited(
     }
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows process termination semantics")
+def test_windows_owned_process_cleanup_accepts_access_denied_only_after_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, int]] = []
+
+    class FakeFunction:
+        def __init__(self, name: str, result: int) -> None:
+            self.name = name
+            self.result = result
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args):
+            if self.name == "WaitForSingleObject":
+                calls.append((self.name, int(args[1])))
+            return self.result
+
+    class FakeKernel32:
+        OpenProcess = FakeFunction("OpenProcess", 123)
+        TerminateProcess = FakeFunction("TerminateProcess", 0)
+        WaitForSingleObject = FakeFunction("WaitForSingleObject", 0)
+        CloseHandle = FakeFunction("CloseHandle", 1)
+
+    monkeypatch.setattr(isolation.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32())
+    monkeypatch.setattr(isolation.ctypes, "get_last_error", lambda: 5)
+    monkeypatch.setattr(
+        isolation,
+        "_creation_token_from_handle",
+        lambda _handle: "0011223344556677",
+    )
+
+    assert isolation._terminate_owned_windows_process(
+        43210,
+        "0011223344556677",
+    ) is True
+    assert calls == [("WaitForSingleObject", 10_000)]
+
+
 def test_spawn_ownership_failure_terminates_exact_popen_handle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

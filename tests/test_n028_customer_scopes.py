@@ -1412,7 +1412,9 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
         StockReplenishmentOrderItem,
     )
     from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
         WarehouseArea,
+        WarehouseAreaStoragePolicy,
         WarehouseFloor,
         WarehouseLocation,
     )
@@ -1451,14 +1453,40 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
         )
         db.add(floor3)
         db.flush()
+        finished_area = WarehouseArea(
+            floor_id=floor3.id,
+            area_code="FG",
+            area_name="Finished goods",
+            construction_status="enabled",
+        )
+        raw_area = WarehouseArea(
+            floor_id=floor3.id,
+            area_code="RAW-001",
+            area_name="左区L3 原料区（上段）",
+            construction_status="enabled",
+        )
+        db.add_all([finished_area, raw_area])
+        db.flush()
         db.add(
-            WarehouseArea(
-                floor_id=floor3.id,
-                area_code="FG",
-                area_name="Finished goods",
-                construction_status="enabled",
+            WarehouseAreaStoragePolicy(
+                area_id=raw_area.id,
+                map_feature_id="98ddeb13-805f-4a63-83e1-120ebf38b27f",
+                allowed_inventory_types_json='["raw_material"]',
+                storage_layout="rack",
+                status="published",
+                published_map_revision="3994317ae14a7f18",
             )
         )
+        semi_location.warehouse_floor = 3
+        semi_location.area_code = "RAW-001"
+        semi_location.storage_type = "rack"
+        semi_location.placement_status = "placed"
+        semi_location.source_version = "CURRENT_MAP"
+        semi_location.address_kind = "rack_slot"
+        semi_location.address_area_id = raw_area.id
+        semi_location.rack_code = "A"
+        semi_location.level_no = 1
+        semi_location.slot_no = 1
         finished_location = WarehouseLocation(
             location_code="N028-STOCK-FG",
             location_name="N028 stock finished",
@@ -1480,6 +1508,18 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
             source_version="P1-36L",
         )
         db.add_all([finished_location, semi_location, raw_staging])
+        db.flush()
+        db.add(
+            Floor3LocationLayout(
+                location_id=semi_location.id,
+                left_pct=0,
+                top_pct=0,
+                width_pct=25,
+                height_pct=100,
+                source_type="seeded",
+                layout_kind="physical_rack",
+            )
+        )
         db.commit()
         product_ids = {
             customer_id: product.id for customer_id, product in products.items()

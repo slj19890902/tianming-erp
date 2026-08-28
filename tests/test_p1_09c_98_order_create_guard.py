@@ -56,6 +56,7 @@ const factory=new Function("axios","return async function(orderPayload) {{"+body
 const source={{customer_id:5,customer_po:"PO-1",items:[{{client_line_id:"L1",quantity:10}}]}};
 const vm={{
   orderCreateSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},
+  prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   closeModal(){{closeCount+=1;}},loadOrders:async()=>true,loadKpi:async()=>true,
   showToast(){{}},showOrderNextStepGuide(){{}},errorMessage:error=>error.message,
 }};
@@ -88,6 +89,7 @@ const factory=new Function("axios","return async function(orderPayload) {{"+body
 const toasts=[];let closed=false;
 const vm={{
   orderCreateSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},
+  prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   closeModal(){{closed=true;}},loadOrders:async()=>{{throw new Error("orders offline");}},loadKpi:async()=>true,
   showToast:(message,isError)=>toasts.push({{message,isError}}),showOrderNextStepGuide(){{}},errorMessage:error=>error.message,
 }};
@@ -108,6 +110,7 @@ const body={json.dumps(body, ensure_ascii=False)};
 const factory=axios=>new Function("axios","return async function(orderPayload) {{"+body+"}}")(axios);
 const makeVm=()=>({{
   orderCreateSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},
+  prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   closeCount:0,closeModal(){{this.closeCount+=1;}},loadOrders:async()=>true,loadKpi:async()=>true,
   showToast(){{}},showOrderNextStepGuide(){{}},errorMessage:error=>error.message,
 }});
@@ -135,7 +138,7 @@ def test_save_modal_routes_new_order_outcome_without_losing_existing_errors() ->
     body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     assert 'if (this.modal?.type === "order" && (this.orderCreateSaveState.saving' in body
     assert "const createdOrder = await this.saveNewOrder(orderPayload);" in body
-    assert "if (createdOrder?._in_flight) return false;" in body
+    assert "if (createdOrder?._in_flight || createdOrder?._cancelled) return false;" in body
     assert "if (!error?._orderCreateOutcomeUncertain)" in body
     assert "this.applyOrderRequisitionFailure(error, message);" in body
     assert "if (error?._orderCreateOutcomeUncertain)" in body

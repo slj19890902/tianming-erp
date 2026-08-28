@@ -98,8 +98,9 @@ def test_n083_mobile_page_is_location_first_and_keeps_exceptions_collapsed() -> 
     for marker in (
         "location_groups",
         "renderLocationGroup",
-        "pallet_code",
         "group.label",
+        "group.employee_location_name",
+        "group.current_address_name",
         "group.needs_relocation",
         "有缺货或数量不一致时再登记",
         "/complete-planned",

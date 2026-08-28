@@ -132,15 +132,17 @@ def test_sales_amount_and_cost_rendering_use_separate_positive_capabilities() ->
             token in line
             for token in ("unit_price", "subtotal", "total_amount", "单价", "金额", "总价")
         ):
-            assert 'v-if="canViewSalesAmounts"' in line, (
+            assert re.search(r'v-if="[^"]*\bcanViewSalesAmounts\b[^"]*"', line), (
                 f"order sales amount only relies on CSS at block line {line_number}: {line.strip()}"
             )
+            assert "!canViewSalesAmounts" not in line
         if "cost-sensitive" in line and any(
             token in line for token in ("estimated", "成本", "毛利", "利润")
         ):
-            assert 'v-if="canViewCosts"' in line, (
+            assert re.search(r'v-if="[^"]*\bcanViewCosts\b[^"]*"', line), (
                 f"order cost only relies on CSS at block line {line_number}: {line.strip()}"
             )
+            assert "!canViewCosts" not in line
 
 
 def test_logout_and_401_reset_clear_cached_order_amount_payloads() -> None:

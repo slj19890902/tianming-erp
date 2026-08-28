@@ -15,6 +15,7 @@ from app.models.customer import Customer
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.warehouse_inventory import (
+    Floor3LocationLayout,
     FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryLotTransfer,
@@ -23,9 +24,13 @@ from app.models.warehouse_inventory import (
     InventoryPalletItem,
     InventoryReservation,
     WarehouseArea,
+    WarehouseAreaStoragePolicy,
     WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
     WarehouseLocation,
 )
+from app.models.user import User
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     transfer_staging_finished_lot,
@@ -263,10 +268,33 @@ def test_whole_transfer_keeps_same_lot_and_reservations(db: Session) -> None:
 
 def test_transfer_to_published_floor_one_map_slot_creates_physical_pallet(
     db: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    current_revision = "p1-25c2-floor1-map-v1"
+    monkeypatch.setattr(
+        "app.services.location_candidates.load_warehouse_twin_published_floor_identity",
+        lambda floor_number: (
+            {
+                "revision": current_revision,
+                "zones_by_id": {"zone-out-e1": "OUT-E1"},
+                "zone_ids_by_area": {"OUT-E1": ("zone-out-e1",)},
+            }
+            if int(floor_number) == 1
+            else None
+        ),
+    )
     source, _legacy_target, _ = _case(
         db, available=8, reserved=12, suffix="OUTDOOR"
     )
+    operator = User(
+        username="p1-25c2-map-publisher",
+        password_hash="not-used-by-this-service-test",
+        role="admin",
+        real_name="地图发布测试员",
+        display_name="地图发布测试员",
+        must_change_password=False,
+    )
+    db.add(operator)
     floor = WarehouseFloor(
         floor_number=1,
         floor_code="F1",
@@ -292,8 +320,68 @@ def test_transfer_to_published_floor_one_map_slot_creates_physical_pallet(
         storage_type="ground",
         placement_status="placed",
         source_version="TWIN_V1",
+        address_kind="ground_slot",
+        address_area_id=area.id,
+        ground_row_no=1,
+        slot_no=1,
     )
     db.add(target)
+    db.flush()
+    db.add(
+        WarehouseAreaStoragePolicy(
+            area_id=area.id,
+            map_feature_id="zone-out-e1",
+            allowed_inventory_types_json='["finished"]',
+            storage_layout="pallet_ground",
+            status="published",
+            published_map_revision=current_revision,
+            version=1,
+            updated_by=operator.id,
+        )
+    )
+    target.floor3_layout = Floor3LocationLayout(
+        left_pct=Decimal("10"),
+        top_pct=Decimal("10"),
+        width_pct=Decimal("5"),
+        height_pct=Decimal("5"),
+        version=1,
+        source_type="manual",
+        layout_kind="physical_pallet",
+    )
+    plan = WarehouseGroundLayoutPlan(
+        area_id=area.id,
+        status="published",
+        target_slot_count=1,
+        numbering_origin="south",
+        row_direction="from_aisle_inward",
+        slot_direction="left_to_right",
+        row_start_no=1,
+        slot_start_no=1,
+        draft_map_revision=current_revision,
+        published_map_revision=current_revision,
+        preview_fingerprint="a" * 64,
+        version=1,
+        publish_idempotency_key="p1-25c2-floor1-ground-publish",
+        publish_request_hash="b" * 64,
+        updated_by=operator.id,
+        published_by=operator.id,
+        published_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    db.add(plan)
+    db.flush()
+    db.add(
+        WarehouseGroundLayoutSlot(
+            plan_id=plan.id,
+            location_id=target.id,
+            route_sequence=1,
+            row_no=1,
+            slot_no=1,
+            x_mm=Decimal("1000"),
+            y_mm=Decimal("1000"),
+            width_mm=1200,
+            depth_mm=1000,
+        )
+    )
     db.flush()
 
     result = transfer_staging_finished_lot(
@@ -302,8 +390,9 @@ def test_transfer_to_published_floor_one_map_slot_creates_physical_pallet(
         expected_version=1,
         quantity=20,
         location_id=target.id,
-        operator_id=None,
+        operator_id=operator.id,
         idempotency_key="p1-37g-outdoor-pallet",
+        expected_target_layout_version=1,
     )
     db.flush()
 

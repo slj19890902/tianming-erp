@@ -36,9 +36,9 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.207"
+    assert APP_VERSION == "v0.22.208"
     assert APP_VERSION_NAME == "仓库地图中文统一与操作区精简"
-    assert APP_BUILD_DATE == "2026-08-27"
+    assert APP_BUILD_DATE == "2026-08-28"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
     assert metadata["external_acceptance_required"] is True
@@ -59,7 +59,19 @@ def test_factory_update_reports_current_release_version() -> None:
         and "真实货位" in item
         for item in current_release
     )
-    assert any("如何验证｜" in item and "v0.22.207" in item and "gn49v8x9z38" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.208" in item and "gn49v8x9z38" in item for item in current_release)
+    assert any(
+        item.startswith("v0.22.207：本次更新｜")
+        and "完工历史" in item
+        and "客户中文简称" in item
+        for item in APP_CHANGELOG
+    )
+    assert any(
+        item.startswith("v0.22.207：如何验证｜")
+        and "v0.22.207" in item
+        and "gn49v8x9z38" in item
+        for item in APP_CHANGELOG
+    )
     assert any(
         item.startswith("v0.22.206：本次更新｜")
         and "当前库位" in item
@@ -433,7 +445,7 @@ def test_factory_update_reports_current_release_version() -> None:
         for item in APP_CHANGELOG
     )
     assert any(
-        "如何验证｜" in item and "v0.22.207" in item and "gn49" in item
+        "如何验证｜" in item and "v0.22.208" in item and "gn49" in item
         for item in current_release
     )
     assert any(

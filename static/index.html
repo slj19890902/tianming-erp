@@ -2364,12 +2364,16 @@
       .production-placement-table th,
       .production-placement-table td { padding:5px 6px; line-height:1.2; vertical-align:middle; }
       .production-placement-table .placement-two-lines { display:grid; gap:2px; min-width:0; }
-      .production-placement-table .placement-line,
-      .production-placement-table .placement-current-location {
+      .production-placement-table .placement-line {
         min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
       }
+      .production-placement-table .placement-current-location {
+        min-width:0; overflow:hidden; white-space:normal; line-height:1.2;
+        display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+        line-clamp:2; max-height:2.4em;
+      }
       .production-placement-table .production-location-picker {
-        display:grid; grid-template-columns:74px 108px minmax(150px,1fr) auto;
+        display:grid; grid-template-columns:74px 108px clamp(150px,14vw,210px) auto;
         gap:4px; align-items:center; width:100%; min-width:0;
       }
       .production-placement-table .select,
@@ -4079,7 +4083,7 @@
                   <div v-if="productionPlacementError" class="status orange" style="display:block;margin:8px 0">{{ productionPlacementError }} <button class="btn small" @click="loadProductionPlacement()">重试</button></div>
                   <data-panel :empty="!productionPlacement.length">
                     <table class="production-placement-table" style="table-layout:fixed;width:100%">
-                      <thead><tr><th style="width:10%">客户订单号 / 中文简称</th><th style="width:12%">存货编码 / 产品</th><th style="width:8%">实际完工</th><th style="width:12%">当前待送位置</th><th>现场实际位置</th></tr></thead>
+                      <thead><tr><th style="width:12%">客户订单号 / 中文简称</th><th style="width:18%">存货编码 / 产品</th><th style="width:8%">实际完工</th><th style="width:18%">当前待送位置</th><th>现场实际位置</th></tr></thead>
                       <tbody><tr v-for="row in productionPlacement" :key="`placement-${row.id}`"><td><div class="placement-two-lines"><strong class="placement-line" :title="row.customer_order_number || ''">{{ row.customer_order_number || '客户订单号未填写' }}</strong><span class="placement-line muted" :title="row.customer_short_name || ''">{{ row.customer_short_name || '中文简称未填写' }}</span></div></td><td><div class="placement-two-lines" :title="productionProductTitle(row)"><strong class="placement-line">{{ row.product_code || '-' }}</strong><span class="placement-line">{{ row.product_name || '-' }}</span></div></td><td><strong>{{ row.actual_output_quantity || row.quantity || 0 }}</strong></td><td><div class="placement-current-location" :title="row.warehouse_location_name || row.warehouse_location_code || '一楼待送区'">{{ row.warehouse_location_name || row.warehouse_location_code || '一楼待送区' }}</div></td><td><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选实际位置' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}</option></select><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">归位</button></div></td></tr></tbody>
                     </table>
                   </data-panel>

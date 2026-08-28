@@ -42,10 +42,10 @@ def test_fully_delivered_history_rows_offer_no_modify_or_revert_action() -> None
 
 def test_placement_uses_customer_po_short_name_and_compact_columns() -> None:
     table = _placement_table()
-    assert '<th style="width:10%">客户订单号 / 中文简称</th>' in table
-    assert '<th style="width:12%">存货编码 / 产品</th>' in table
+    assert '<th style="width:12%">客户订单号 / 中文简称</th>' in table
+    assert '<th style="width:18%">存货编码 / 产品</th>' in table
     assert '<th style="width:8%">实际完工</th>' in table
-    assert '<th style="width:12%">当前待送位置</th>' in table
+    assert '<th style="width:18%">当前待送位置</th>' in table
     assert "row.customer_order_number || '客户订单号未填写'" in table
     assert "row.customer_short_name || '中文简称未填写'" in table
     assert "row.item_order_number || row.order_number" not in table
@@ -57,10 +57,12 @@ def test_placement_location_controls_stay_in_one_compact_row() -> None:
     assert table.count('<select class="select"') == 3
     assert ">归位</button>" in table
     assert "归位并同步地图" not in table
-    assert "grid-template-columns:74px 108px minmax(150px,1fr) auto" in INDEX
+    assert "grid-template-columns:74px 108px clamp(150px,14vw,210px) auto" in INDEX
     assert ".production-placement-table .production-location-picker" in INDEX
     assert ".production-placement-table .select" in INDEX
     assert ".production-placement-table .btn" in INDEX
+    assert "-webkit-line-clamp:2" in INDEX
+    assert "white-space:normal" in INDEX
     assert "height:32px" in INDEX
 
 
@@ -101,8 +103,8 @@ def test_real_desktop_dom_keeps_placement_controls_on_one_row_without_inner_scro
         <body><div class=\"ui-large\" style=\"width:1580px\">
         <div class=\"table-wrap\" id=\"history-wrap\"><table class=\"production-history-table\"><tbody>{history_rows}</tbody></table></div>
         <div class=\"table-wrap\" id=\"placement-wrap\"><table class=\"production-placement-table\" style=\"table-layout:fixed;width:100%\">
-        <thead><tr><th style=\"width:10%\">客户订单号 / 中文简称</th><th style=\"width:12%\">存货编码 / 产品</th><th style=\"width:8%\">实际完工</th><th style=\"width:12%\">当前待送位置</th><th>现场实际位置</th></tr></thead>
-        <tbody><tr id=\"placement-row\"><td>PO-20260828<br>驿力</td><td>Z.001.000205<br>组合产品</td><td>1200</td><td>一楼待送区</td><td><div class=\"production-location-picker\"><select class=\"select\"><option>3F</option></select><select class=\"select\"><option>左区成品</option></select><select class=\"select\"><option>3F-左区-成品-001</option></select><button class=\"btn small success\">归位</button></div></td></tr></tbody></table></div></div>
+        <thead><tr><th style=\"width:12%\">客户订单号 / 中文简称</th><th style=\"width:18%\">存货编码 / 产品</th><th style=\"width:8%\">实际完工</th><th style=\"width:18%\">当前待送位置</th><th>现场实际位置</th></tr></thead>
+        <tbody><tr id=\"placement-row\"><td>PO-20260828<br>驿力</td><td>Z.001.000205<br>组合产品完整名称不得遮挡</td><td>1200</td><td><div id=\"current-location\" class=\"placement-current-location\">三楼左区成品仓库超长实际货位名称第二行完整展示</div></td><td><div class=\"production-location-picker\"><select class=\"select\"><option>3F</option></select><select class=\"select\"><option>左区成品</option></select><select class=\"select\" id=\"actual-location-select\"><option>3F-左区-成品-001</option></select><button class=\"btn small success\">归位</button></div></td></tr></tbody></table></div></div>
         <script>requestAnimationFrame(() => {{
           const controls=[...document.querySelectorAll('.production-location-picker > *')];
           const tops=controls.map(node => node.getBoundingClientRect().top);
@@ -115,6 +117,10 @@ def test_real_desktop_dom_keeps_placement_controls_on_one_row_without_inner_scro
           document.body.dataset.placementMaxHeight=getComputedStyle(placementWrap).maxHeight;
           document.body.dataset.historyNoInnerScroll=String(historyWrap.scrollHeight<=historyWrap.clientHeight+1);
           document.body.dataset.placementNoInnerScroll=String(placementWrap.scrollHeight<=placementWrap.clientHeight+1);
+          const currentLocation=document.getElementById('current-location');
+          const currentLineHeight=parseFloat(getComputedStyle(currentLocation).lineHeight);
+          document.body.dataset.currentLocationLines=String(Math.round(currentLocation.getBoundingClientRect().height/currentLineHeight));
+          document.body.dataset.actualLocationWidth=String(Math.round(document.getElementById('actual-location-select').getBoundingClientRect().width));
           document.body.dataset.complete='true';
         }});</script></body>""",
         encoding="utf-8",
@@ -148,5 +154,8 @@ def test_real_desktop_dom_keeps_placement_controls_on_one_row_without_inner_scro
     assert 'data-placement-max-height="none"' in result.stdout
     assert 'data-history-no-inner-scroll="true"' in result.stdout
     assert 'data-placement-no-inner-scroll="true"' in result.stdout
+    assert 'data-current-location-lines="2"' in result.stdout
+    width_match = re.search(r'data-actual-location-width="(\d+)"', result.stdout)
+    assert width_match and 150 <= int(width_match.group(1)) <= 215
     match = re.search(r'data-placement-row-height="(\d+)"', result.stdout)
     assert match and int(match.group(1)) <= 52

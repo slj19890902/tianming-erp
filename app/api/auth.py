@@ -90,6 +90,7 @@ PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     "deliveries.execute": ("deliveries", "送货操作"),
     "finance.view": ("finance", "财务查看"),
     "finance.execute": ("finance", "财务操作"),
+    "finance.return_receipt.period.adjust": ("finance", "回单对账归属月份调整"),
     "finance.statement.confirm": ("finance", "确认月结对账单"),
     "finance.invoice_task.generate": ("finance", "生成并导出开票任务"),
     "finance.invoice_result.register": ("finance", "登记开票结果"),

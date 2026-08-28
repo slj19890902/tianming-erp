@@ -9,6 +9,7 @@ from io import BytesIO
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -31,6 +32,7 @@ from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.finance import (
+    FinanceIdempotencyRecord,
     Invoice,
     ReturnReceipt,
     ReturnReceiptItem,
@@ -84,6 +86,9 @@ from app.services.product_specification import resolved_product_specification
 router = APIRouter()
 can_read = PermissionChecker("finance.view")
 can_operate = PermissionChecker("finance.execute")
+can_adjust_reconciliation_period = PermissionChecker(
+    "finance.return_receipt.period.adjust"
+)
 MONEY = Decimal("0.00")
 STATEMENT_COST_FIELDS = frozenset(
     {"total_gross_profit", "unit_cost_snapshot", "gross_profit_amount"}
@@ -293,6 +298,8 @@ class FulfillmentReminderTransition(BaseModel):
 class ReturnReceiptCreate(BaseModel):
     delivery_id: int
     actual_received_date: date
+    reconciliation_month: str | None = None
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     signed_by: str | None = None
     items: list[ReturnReceiptLineCreate]
     reminders: list[FulfillmentReminderDraft] = Field(default_factory=list)
@@ -311,6 +318,16 @@ class ReturnReceiptCreate(BaseModel):
             raise ValueError("回单明细不能重复")
         return value
 
+    @field_validator("reconciliation_month")
+    @classmethod
+    def validate_reconciliation_month(cls, value: str | None) -> str | None:
+        return None if value is None else _validated_month(value, "对账归属月份")
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str | None) -> str | None:
+        return value.strip() if value else None
+
     @model_validator(mode="after")
     def validate_reminder_bundle(self):
         if len(self.reminders) > MAX_INITIAL_REMINDERS:
@@ -326,6 +343,9 @@ class ReturnReceiptCreate(BaseModel):
 
 class ReturnReceiptUpdate(BaseModel):
     actual_received_date: date
+    reconciliation_month: str | None = None
+    expected_version: int | None = Field(default=None, gt=0)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     signed_by: str | None = None
     items: list[ReturnReceiptLineCreate]
 
@@ -339,10 +359,37 @@ class ReturnReceiptUpdate(BaseModel):
             raise ValueError("回单明细不能重复")
         return value
 
+    @field_validator("reconciliation_month")
+    @classmethod
+    def validate_reconciliation_month(cls, value: str | None) -> str | None:
+        return None if value is None else _validated_month(value, "对账归属月份")
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str | None) -> str | None:
+        return value.strip() if value else None
+
+
+class ReturnReceiptReconciliationMonthUpdate(BaseModel):
+    reconciliation_month: str
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @field_validator("reconciliation_month")
+    @classmethod
+    def validate_reconciliation_month(cls, value: str) -> str:
+        return _validated_month(value, "对账归属月份")
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str) -> str:
+        return value.strip()
+
 
 class StatementCreate(BaseModel):
     customer_id: int
     statement_month: str
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     delivery_ids: list[int] = Field(default_factory=list)
     # 兼容旧客户端；后端仍会校验这些明细是否覆盖完整送货单。
     return_receipt_item_ids: list[int] = Field(default_factory=list)
@@ -353,6 +400,11 @@ class StatementCreate(BaseModel):
         if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value):
             raise ValueError("对账月份格式必须为 YYYY-MM")
         return value
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str | None) -> str | None:
+        return value.strip() if value else None
 
     @field_validator("delivery_ids", "return_receipt_item_ids")
     @classmethod
@@ -405,6 +457,121 @@ def _statement_period(
     return (
         date(previous_month_end.year, previous_month_end.month, cycle_start_day),
         date(year, month, cycle_start_day) - timedelta(days=1),
+    )
+
+
+def _validated_month(value: str, label: str) -> str:
+    normalized = str(value or "").strip()
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", normalized):
+        raise ValueError(f"{label}格式必须为 YYYY-MM")
+    return normalized
+
+
+def _current_reconciliation_month() -> str:
+    return beijing_today().strftime("%Y-%m")
+
+
+def _shift_month(month: str, offset: int) -> str:
+    year, month_number = (int(part) for part in month.split("-"))
+    absolute = year * 12 + month_number - 1 + offset
+    shifted_year, shifted_month = divmod(absolute, 12)
+    return f"{shifted_year:04d}-{shifted_month + 1:02d}"
+
+
+def _historical_reconciliation_month(
+    delivery_date: date,
+    cycle_start_day: int,
+) -> str:
+    cycle_day = int(cycle_start_day or 1)
+    if cycle_day == 1 or delivery_date.day < cycle_day:
+        return delivery_date.strftime("%Y-%m")
+    return _shift_month(delivery_date.strftime("%Y-%m"), 1)
+
+
+def _effective_reconciliation_month(
+    receipt: ReturnReceipt,
+    *,
+    delivery_date: date,
+    cycle_start_day: int,
+) -> tuple[str, str]:
+    if receipt.reconciliation_month:
+        return receipt.reconciliation_month, "explicit"
+    return (
+        _historical_reconciliation_month(delivery_date, cycle_start_day),
+        "historical_rule",
+    )
+
+
+def _finance_request_hash(action: str, value: dict) -> str:
+    normalized = json.dumps(
+        {"action": action, "payload": value},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _finance_idempotency_replay(
+    db: Session,
+    *,
+    idempotency_key: str | None,
+    request_hash: str,
+    action: str,
+    actor: User,
+) -> tuple[dict | None, FinanceIdempotencyRecord | None]:
+    if not idempotency_key:
+        return None, None
+    record = db.scalar(
+        select(FinanceIdempotencyRecord).where(
+            FinanceIdempotencyRecord.idempotency_key == idempotency_key
+        )
+    )
+    if record is None:
+        return None, None
+    if (
+        record.actor_user_id != actor.id
+        or record.action != action
+        or record.request_hash != request_hash
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "finance_idempotency_conflict",
+                "message": "该幂等键已用于不同操作者或不同内容，请刷新后重试",
+            },
+        )
+    return json.loads(record.response_json), record
+
+
+def _record_finance_idempotency(
+    db: Session,
+    *,
+    idempotency_key: str | None,
+    request_hash: str,
+    action: str,
+    actor: User,
+    resource_type: str,
+    resource_id: int,
+    response: dict,
+) -> None:
+    if not idempotency_key:
+        return
+    db.add(
+        FinanceIdempotencyRecord(
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            action=action,
+            actor_user_id=actor.id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            response_json=json.dumps(
+                jsonable_encoder(response),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
     )
 
 
@@ -584,6 +751,8 @@ def list_statement_customers(
         grouped = _pending_statement_groups(
             db,
             customer.id,
+            statement_month=statement_month,
+            cycle_start_day=customer.statement_cycle_start_day,
             period_start=period_start,
             period_end=period_end,
         )
@@ -1214,8 +1383,59 @@ def _claim_return_receipt_status(
         )
 
 
+def _claim_return_receipt_version(
+    db: Session,
+    *,
+    receipt_id: int,
+    expected_status: str,
+    expected_version: int,
+) -> int:
+    new_version = expected_version + 1
+    try:
+        claimed = db.execute(
+            update(ReturnReceipt)
+            .where(
+                ReturnReceipt.id == receipt_id,
+                ReturnReceipt.status == expected_status,
+                ReturnReceipt.version == expected_version,
+            )
+            .values(version=new_version)
+            .execution_options(synchronize_session=False)
+        )
+    except OperationalError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "return_receipt_write_conflict",
+                "message": "回单正在被其他操作修改，请刷新后重试",
+            },
+        ) from error
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "return_receipt_version_conflict",
+                "message": "回单版本已变化，请刷新后重试",
+            },
+        )
+    return new_version
+
+
 def _receipt_response(db: Session, receipt_id: int) -> dict:
     receipt = db.get(ReturnReceipt, receipt_id)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="回单不存在")
+    delivery = db.get(Delivery, receipt.delivery_id)
+    customer = db.get(Customer, delivery.customer_id) if delivery else None
+    if delivery is None or customer is None:
+        raise HTTPException(status_code=409, detail="回单关联送货单或客户不存在")
+    effective_month, month_source = _effective_reconciliation_month(
+        receipt,
+        delivery_date=delivery.delivery_date,
+        cycle_start_day=customer.statement_cycle_start_day,
+    )
     rows = db.execute(
         select(
             ReturnReceiptItem.id,
@@ -1257,6 +1477,11 @@ def _receipt_response(db: Session, receipt_id: int) -> dict:
         "id": receipt.id,
         "delivery_id": receipt.delivery_id,
         "actual_received_date": receipt.actual_received_date,
+        "actual_confirmed_at": receipt.created_at,
+        "reconciliation_month": receipt.reconciliation_month,
+        "effective_reconciliation_month": effective_month,
+        "reconciliation_month_source": month_source,
+        "version": receipt.version,
         "signed_by": receipt.signed_by,
         "status": receipt.status,
         "items": [
@@ -1469,15 +1694,50 @@ def get_return_receipt(
     return _receipt_response(db, receipt_id)
 
 
+@router.get("/reconciliation-month-options")
+def reconciliation_month_options(
+    _user: User = Depends(can_read),
+) -> dict:
+    current = _current_reconciliation_month()
+    return {
+        "previous": _shift_month(current, -1),
+        "current": current,
+        "next": _shift_month(current, 1),
+    }
+
+
 @router.post("/return_receipts", status_code=status.HTTP_201_CREATED)
 def create_return_receipt(
     payload: ReturnReceiptCreate,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
+    _period_permission: User = Depends(can_adjust_reconciliation_period),
     _write_guard: None = Depends(fulfillment_reminder_write_guard),
 ) -> dict:
+    del _period_permission
     del _write_guard
     _delivery_for_user(db, payload.delivery_id, user)
+    # Refreshed clients always submit a finance idempotency key.  Calls from an
+    # older cached bundle without that contract keep the legacy NULL grouping
+    # instead of being silently moved to the server's current month during a
+    # rolling deployment.
+    reconciliation_month = payload.reconciliation_month or (
+        _current_reconciliation_month() if payload.idempotency_key else None
+    )
+    request_value = payload.model_dump(exclude={"idempotency_key"})
+    request_value["reconciliation_month"] = reconciliation_month
+    request_hash = _finance_request_hash("return_receipt_create", request_value)
+    replay, replay_record = _finance_idempotency_replay(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action="return_receipt_create",
+        actor=user,
+    )
+    if replay is not None:
+        assert replay_record is not None
+        _return_receipt_for_user(db, replay_record.resource_id, user)
+        return replay
     try:
         reminder_bundle_key = payload.reminder_bundle_idempotency_key
         reminder_bundle_hash = None
@@ -1553,6 +1813,8 @@ def create_return_receipt(
             receipt = ReturnReceipt(
                 delivery_id=delivery.id,
                 actual_received_date=payload.actual_received_date,
+                reconciliation_month=reconciliation_month,
+                version=1,
                 signed_by=(payload.signed_by or "").strip() or None,
                 status="confirmed",
                 created_by=user.id,
@@ -1566,6 +1828,8 @@ def create_return_receipt(
                 )
             )
             receipt.actual_received_date = payload.actual_received_date
+            receipt.reconciliation_month = reconciliation_month
+            receipt.version = int(receipt.version or 1) + 1
             receipt.signed_by = (payload.signed_by or "").strip() or None
             receipt.status = "confirmed"
         affected_order_ids: set[int] = set()
@@ -1639,6 +1903,7 @@ def create_return_receipt(
             details={
                 "delivery_id": delivery.id,
                 "actual_received_date": payload.actual_received_date,
+                "reconciliation_month": reconciliation_month,
                 "item_count": len(delivery_items),
                 "items": audit_items,
             },
@@ -1677,6 +1942,16 @@ def create_return_receipt(
                 actor=user,
                 response=response,
             )
+        _record_finance_idempotency(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="return_receipt_create",
+            actor=user,
+            resource_type="return_receipt",
+            resource_id=receipt.id,
+            response=response,
+        )
         db.commit()
         return response
     except FulfillmentReminderError as error:
@@ -1687,6 +1962,17 @@ def create_return_receipt(
         raise
     except IntegrityError as error:
         db.rollback()
+        replay, replay_record = _finance_idempotency_replay(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="return_receipt_create",
+            actor=user,
+        )
+        if replay is not None:
+            assert replay_record is not None
+            _return_receipt_for_user(db, replay_record.resource_id, user)
+            return replay
         raise HTTPException(status_code=409, detail="该送货单已经提交回单") from error
     except WarehouseInventoryError as error:
         db.rollback()
@@ -1705,18 +1991,43 @@ def update_return_receipt(
     payload: ReturnReceiptUpdate,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
+    _period_permission: User = Depends(can_adjust_reconciliation_period),
     _write_guard: None = Depends(fulfillment_reminder_write_guard),
 ) -> dict:
+    del _period_permission
     del _write_guard
     receipt = _return_receipt_for_user(db, receipt_id, user)
+    target_month = (
+        payload.reconciliation_month
+        if payload.reconciliation_month is not None
+        else receipt.reconciliation_month
+    )
+    request_value = payload.model_dump(exclude={"idempotency_key"})
+    request_value["reconciliation_month"] = target_month
+    request_hash = _finance_request_hash(
+        "return_receipt_update",
+        {"receipt_id": receipt_id, **request_value},
+    )
+    replay, replay_record = _finance_idempotency_replay(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action="return_receipt_update",
+        actor=user,
+    )
+    if replay is not None:
+        assert replay_record is not None
+        _return_receipt_for_user(db, replay_record.resource_id, user)
+        return replay
     claimed_status = receipt.status
     if claimed_status not in {"confirmed", "cancelled"}:
         raise HTTPException(status_code=409, detail="回单状态不允许修改")
-    _claim_return_receipt_status(
+    expected_version = payload.expected_version or int(receipt.version or 1)
+    _claim_return_receipt_version(
         db,
         receipt_id=receipt.id,
         expected_status=claimed_status,
-        next_status=claimed_status,
+        expected_version=expected_version,
     )
     db.expire(receipt)
     receipt_items = db.scalars(
@@ -1836,6 +2147,7 @@ def update_return_receipt(
         if order_id is not None:
             affected_order_ids.add(order_id)
     receipt.actual_received_date = payload.actual_received_date
+    receipt.reconciliation_month = target_month
     receipt.signed_by = (payload.signed_by or "").strip() or None
     receipt.status = "confirmed"
     sync_receipt_source(
@@ -1852,16 +2164,189 @@ def update_return_receipt(
         action="UPDATE_RETURN_RECEIPT",
         resource="ReturnReceipt",
         entity_id=receipt.id,
-        details={"before": before, "after": payload.model_dump()},
+        details={
+            "before": before,
+            "after": {
+                **payload.model_dump(exclude={"idempotency_key"}),
+                "reconciliation_month": target_month,
+                "version": expected_version + 1,
+            },
+        },
         description="修改客户送货回单",
     )
+    response = _receipt_response(db, receipt.id)
+    _record_finance_idempotency(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action="return_receipt_update",
+        actor=user,
+        resource_type="return_receipt",
+        resource_id=receipt.id,
+        response=response,
+    )
     db.commit()
-    return _receipt_response(db, receipt.id)
+    return response
+
+
+def _reconciliation_month_block_reason(
+    db: Session,
+    receipt_item_ids: list[int],
+) -> str | None:
+    if not receipt_item_ids:
+        return None
+    row = db.execute(
+        select(
+            Statement.statement_number,
+            Statement.confirmation_status,
+        )
+        .join(StatementItem, StatementItem.statement_id == Statement.id)
+        .where(StatementItem.return_receipt_item_id.in_(receipt_item_ids))
+        .limit(1)
+    ).first()
+    if row is None:
+        return None
+    statement_number, confirmation_status = row
+    stage = "已确认对账单" if confirmation_status == "confirmed" else "对账草稿"
+    return (
+        f"回单已进入{stage} {statement_number}，不能直接调整归属月份；"
+        "请先按现有流程取消或撤销下游业务。"
+    )
+
+
+@router.put("/return_receipts/{receipt_id}/reconciliation-month")
+def update_return_receipt_reconciliation_month(
+    receipt_id: int,
+    payload: ReturnReceiptReconciliationMonthUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+    _period_permission: User = Depends(can_adjust_reconciliation_period),
+) -> dict:
+    del _period_permission
+    receipt = _return_receipt_for_user(db, receipt_id, user)
+    request_hash = _finance_request_hash(
+        "return_receipt_reconciliation_month_update",
+        {
+            "receipt_id": receipt_id,
+            "reconciliation_month": payload.reconciliation_month,
+            "expected_version": payload.expected_version,
+        },
+    )
+    replay, replay_record = _finance_idempotency_replay(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action="return_receipt_reconciliation_month_update",
+        actor=user,
+    )
+    if replay is not None:
+        assert replay_record is not None
+        _return_receipt_for_user(db, replay_record.resource_id, user)
+        return replay
+
+    receipt_item_ids = list(
+        db.scalars(
+            select(ReturnReceiptItem.id).where(
+                ReturnReceiptItem.return_receipt_id == receipt.id
+            )
+        ).all()
+    )
+    block_reason = _reconciliation_month_block_reason(db, receipt_item_ids)
+    if block_reason:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "reconciliation_month_locked",
+                "message": block_reason,
+            },
+        )
+    before = _receipt_response(db, receipt.id)
+    if (
+        receipt.reconciliation_month == payload.reconciliation_month
+        and int(receipt.version or 1) == payload.expected_version
+    ):
+        _record_finance_idempotency(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="return_receipt_reconciliation_month_update",
+            actor=user,
+            resource_type="return_receipt",
+            resource_id=receipt.id,
+            response=before,
+        )
+        db.commit()
+        return before
+
+    new_version = _claim_return_receipt_version(
+        db,
+        receipt_id=receipt.id,
+        expected_status=receipt.status,
+        expected_version=payload.expected_version,
+    )
+    db.expire(receipt)
+    receipt.reconciliation_month = payload.reconciliation_month
+    _audit(
+        db,
+        user=user,
+        action="UPDATE_RETURN_RECONCILIATION_MONTH",
+        resource="ReturnReceipt",
+        entity_id=receipt.id,
+        details={
+            "before": {
+                "reconciliation_month": before["reconciliation_month"],
+                "effective_reconciliation_month": before[
+                    "effective_reconciliation_month"
+                ],
+                "version": before["version"],
+            },
+            "after": {
+                "reconciliation_month": payload.reconciliation_month,
+                "version": new_version,
+            },
+        },
+        description="调整客户回单对账归属月份",
+    )
+    response = _receipt_response(db, receipt.id)
+    _record_finance_idempotency(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action="return_receipt_reconciliation_month_update",
+        actor=user,
+        resource_type="return_receipt",
+        resource_id=receipt.id,
+        response=response,
+    )
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        replay, replay_record = _finance_idempotency_replay(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="return_receipt_reconciliation_month_update",
+            actor=user,
+        )
+        if replay is not None:
+            assert replay_record is not None
+            _return_receipt_for_user(db, replay_record.resource_id, user)
+            return replay
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "finance_idempotency_conflict",
+                "message": "归属月份已被其他操作修改，请刷新后重试",
+            },
+        ) from error
+    return response
 
 
 def _pending_statement_query(
     customer_id: int,
     *,
+    statement_month: str | None = None,
     period_start: date | None = None,
     period_end: date | None = None,
 ):
@@ -1877,6 +2362,7 @@ def _pending_statement_query(
             ReturnReceiptItem.id.label("return_receipt_item_id"),
             ReturnReceipt.id.label("return_receipt_id"),
             ReturnReceipt.actual_received_date,
+            ReturnReceipt.reconciliation_month,
             Delivery.id.label("delivery_id"),
             Delivery.delivery_number,
             Delivery.delivery_date,
@@ -1945,10 +2431,24 @@ def _pending_statement_query(
             ReturnReceiptItem.id,
         )
     )
-    if period_start is not None:
-        query = query.where(Delivery.delivery_date >= period_start)
-    if period_end is not None:
-        query = query.where(Delivery.delivery_date <= period_end)
+    if statement_month is not None:
+        if period_start is None or period_end is None:
+            raise ValueError("对账月份筛选缺少客户周期边界")
+        query = query.where(
+            or_(
+                ReturnReceipt.reconciliation_month == statement_month,
+                and_(
+                    ReturnReceipt.reconciliation_month.is_(None),
+                    Delivery.delivery_date >= period_start,
+                    Delivery.delivery_date <= period_end,
+                ),
+            )
+        )
+    else:
+        if period_start is not None:
+            query = query.where(Delivery.delivery_date >= period_start)
+        if period_end is not None:
+            query = query.where(Delivery.delivery_date <= period_end)
     return query
 
 
@@ -1956,6 +2456,8 @@ def _pending_statement_groups(
     db: Session,
     customer_id: int,
     *,
+    statement_month: str | None = None,
+    cycle_start_day: int = 1,
     period_start: date | None = None,
     period_end: date | None = None,
 ) -> list[dict]:
@@ -1964,6 +2466,7 @@ def _pending_statement_groups(
         for row in db.execute(
             _pending_statement_query(
                 customer_id,
+                statement_month=statement_month,
                 period_start=period_start,
                 period_end=period_end,
             )
@@ -1984,6 +2487,15 @@ def _pending_statement_groups(
     }
     grouped: dict[int, dict] = {}
     for data in raw_rows:
+        explicit_month = data.get("reconciliation_month")
+        effective_month = explicit_month or _historical_reconciliation_month(
+            data["delivery_date"],
+            cycle_start_day,
+        )
+        data["effective_reconciliation_month"] = effective_month
+        data["reconciliation_month_source"] = (
+            "explicit" if explicit_month else "historical_rule"
+        )
         data["specification"] = resolved_product_specification(
             data.get("specification"),
             length_mm=data.pop("product_length_mm", None),
@@ -2011,6 +2523,11 @@ def _pending_statement_groups(
                 "delivery_number": data["delivery_number"],
                 "delivery_date": data["delivery_date"],
                 "actual_received_date": data["actual_received_date"],
+                "reconciliation_month": explicit_month,
+                "effective_reconciliation_month": effective_month,
+                "reconciliation_month_source": data[
+                    "reconciliation_month_source"
+                ],
                 "return_receipt_id": data["return_receipt_id"],
                 "items": [],
             },
@@ -2117,6 +2634,7 @@ def pending_statement_customer_summaries(
             Delivery.customer_id,
             Delivery.id.label("delivery_id"),
             Delivery.delivery_date,
+            ReturnReceipt.reconciliation_month,
             func.count(ReturnReceiptItem.id).label("item_count"),
             pending_item_count.label("pending_item_count"),
             func.coalesce(pending_amount, 0).label("pending_amount"),
@@ -2132,11 +2650,22 @@ def pending_statement_customer_summaries(
         )
         .where(
             ReturnReceipt.status == "confirmed",
-            Delivery.delivery_date >= broad_start,
-            Delivery.delivery_date <= broad_end,
+            or_(
+                ReturnReceipt.reconciliation_month == statement_month,
+                and_(
+                    ReturnReceipt.reconciliation_month.is_(None),
+                    Delivery.delivery_date >= broad_start,
+                    Delivery.delivery_date <= broad_end,
+                ),
+            ),
             Delivery.customer_id.in_(tuple(customer_periods)),
         )
-        .group_by(Delivery.customer_id, Delivery.id, Delivery.delivery_date)
+        .group_by(
+            Delivery.customer_id,
+            Delivery.id,
+            Delivery.delivery_date,
+            ReturnReceipt.reconciliation_month,
+        )
         .order_by(Delivery.customer_id, Delivery.delivery_date, Delivery.id)
     )
 
@@ -2145,7 +2674,10 @@ def pending_statement_customer_summaries(
         customer_id = int(row["customer_id"])
         period_start, period_end = customer_periods[customer_id]
         delivery_date = row["delivery_date"]
-        if delivery_date < period_start or delivery_date > period_end:
+        if (
+            row["reconciliation_month"] is None
+            and (delivery_date < period_start or delivery_date > period_end)
+        ):
             continue
         remaining_count = int(row["pending_item_count"] or 0)
         if remaining_count <= 0:
@@ -3317,6 +3849,8 @@ def pending_statements(
     deliveries = _pending_statement_groups(
         db,
         customer_id,
+        statement_month=statement_month,
+        cycle_start_day=customer.statement_cycle_start_day,
         period_start=period_start,
         period_end=period_end,
     )
@@ -3343,6 +3877,21 @@ def create_statement(
     user: User = Depends(can_operate),
 ) -> dict:
     require_customer_access(payload.customer_id, user, db)
+    request_hash = _finance_request_hash(
+        "statement_create",
+        payload.model_dump(exclude={"idempotency_key"}),
+    )
+    replay, replay_record = _finance_idempotency_replay(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action="statement_create",
+        actor=user,
+    )
+    if replay is not None:
+        assert replay_record is not None
+        _statement_for_user(db, replay_record.resource_id, user)
+        return replay
     customer = db.get(Customer, payload.customer_id)
     if customer is None:
         raise HTTPException(status_code=400, detail="客户不存在")
@@ -3432,13 +3981,17 @@ def create_statement(
                     status_code=409,
                     detail="该送货单已有明细进入对账单，请先处理原对账单。",
                 )
-            if not period_start <= delivery.delivery_date <= period_end:
+            effective_month, _month_source = _effective_reconciliation_month(
+                receipt,
+                delivery_date=delivery.delivery_date,
+                cycle_start_day=customer.statement_cycle_start_day,
+            )
+            if effective_month != payload.statement_month:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"送货单 {delivery.delivery_number} 的送货日期"
-                        f"不属于 {payload.statement_month} 对账周期"
-                        f"（{period_start} 至 {period_end}）。"
+                        f"送货单 {delivery.delivery_number} 的对账归属月份为"
+                        f" {effective_month}，不能进入 {payload.statement_month}。"
                     ),
                 )
             if receipt.id not in claimed_receipt_ids:
@@ -3566,8 +4119,7 @@ def create_statement(
             },
             description="生成客户月结对账单",
         )
-        db.commit()
-        return _redact_statement_costs(
+        response = _redact_statement_costs(
             {
                 "id": statement.id,
                 "statement_number": statement.statement_number,
@@ -3579,11 +4131,34 @@ def create_statement(
             },
             user,
         )
+        _record_finance_idempotency(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="statement_create",
+            actor=user,
+            resource_type="statement",
+            resource_id=statement.id,
+            response=response,
+        )
+        db.commit()
+        return response
     except HTTPException:
         db.rollback()
         raise
     except IntegrityError as error:
         db.rollback()
+        replay, replay_record = _finance_idempotency_replay(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="statement_create",
+            actor=user,
+        )
+        if replay is not None:
+            assert replay_record is not None
+            _statement_for_user(db, replay_record.resource_id, user)
+            return replay
         raise HTTPException(status_code=409, detail="对账明细已被其他对账单使用") from error
     except Exception:
         db.rollback()
@@ -3902,11 +4477,19 @@ def update_statement(
             customer.statement_cycle_start_day,
         )
         delivery_rows = db.execute(
-            select(Delivery.delivery_number, Delivery.delivery_date)
+            select(
+                Delivery.delivery_number,
+                Delivery.delivery_date,
+                ReturnReceipt.reconciliation_month,
+            )
             .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
             .join(
                 ReturnReceiptItem,
                 ReturnReceiptItem.delivery_item_id == DeliveryItem.id,
+            )
+            .join(
+                ReturnReceipt,
+                ReturnReceipt.id == ReturnReceiptItem.return_receipt_id,
             )
             .join(
                 StatementItem,
@@ -3917,14 +4500,18 @@ def update_statement(
         ).all()
         invalid_deliveries = [
             delivery_number
-            for delivery_number, delivery_date in delivery_rows
-            if not period_start <= delivery_date <= period_end
+            for delivery_number, delivery_date, reconciliation_month in delivery_rows
+            if (
+                reconciliation_month != payload.statement_month
+                if reconciliation_month is not None
+                else not period_start <= delivery_date <= period_end
+            )
         ]
         if invalid_deliveries:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "对账月份必须覆盖全部送货单的送货日期；不属于该周期的送货单："
+                    "对账月份必须匹配全部回单的归属月份；不匹配的送货单："
                     + "、".join(invalid_deliveries)
                 ),
             )

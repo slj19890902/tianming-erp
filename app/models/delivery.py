@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -52,6 +53,14 @@ class Delivery(Base):
         Index("ix_sales_deliveries_customer_id", "customer_id"),
         Index("ix_sales_deliveries_delivery_date", "delivery_date"),
         Index("ix_sales_deliveries_status", "status"),
+        CheckConstraint("version >= 1", name="ck_sales_deliveries_version"),
+        CheckConstraint(
+            "(is_historical_backfill = 0 AND backfilled_by IS NULL "
+            "AND backfilled_at IS NULL) OR "
+            "(is_historical_backfill = 1 AND backfilled_by IS NOT NULL "
+            "AND backfilled_at IS NOT NULL)",
+            name="ck_sales_deliveries_historical_backfill_audit",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -61,6 +70,27 @@ class Delivery(Base):
         nullable=False,
     )
     delivery_date: Mapped[date] = mapped_column(Date, nullable=False)
+    is_historical_backfill: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="0",
+        nullable=False,
+    )
+    backfilled_by: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="RESTRICT",
+            name="fk_sales_deliveries_backfilled_by_users",
+        ),
+        nullable=True,
+    )
+    backfilled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
     vehicle_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     source_mode: Mapped[str] = mapped_column(
         String(30),

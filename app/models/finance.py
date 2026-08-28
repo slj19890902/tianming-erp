@@ -47,6 +47,14 @@ class ReturnReceipt(Base):
             "ix_finance_return_receipts_received_date",
             "actual_received_date",
         ),
+        Index(
+            "ix_finance_return_receipts_reconciliation_month",
+            "reconciliation_month",
+        ),
+        CheckConstraint(
+            "version >= 1",
+            name="ck_finance_return_receipts_version",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -55,6 +63,18 @@ class ReturnReceipt(Base):
         nullable=False,
     )
     actual_received_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # Migration-era rows remain NULL so their legacy delivery-date/customer-
+    # cycle grouping stays unchanged. New confirmations freeze an explicit month.
+    reconciliation_month: Mapped[str | None] = mapped_column(
+        String(7),
+        nullable=True,
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
     signed_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(
         String(20),
@@ -77,6 +97,38 @@ class ReturnReceipt(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="ReturnReceiptItem.id",
+    )
+
+
+class FinanceIdempotencyRecord(Base):
+    __tablename__ = "finance_idempotency_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_finance_idempotency_records_key",
+        ),
+        Index(
+            "ix_finance_idempotency_records_resource",
+            "resource_type",
+            "resource_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    actor_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    resource_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    resource_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    response_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        nullable=False,
     )
 
 

@@ -4161,7 +4161,7 @@
                   <tr>
                     <td>{{ row.delivery_number }}</td>
                     <td>{{ row.customer_name }}</td>
-                    <td>{{ row.delivery_date }}</td>
+                    <td>{{ row.delivery_date }}<div v-if="row.is_historical_backfill" class="status blue" style="margin-top:4px">历史补录</div><div v-if="row.created_at" class="muted">ERP录入 {{ formatDateTime(row.created_at) }}</div></td>
                     <td>{{ row.vehicle_number || "-" }}</td>
                     <td>{{ deliveryActualGoodsQuantity(row) }}</td>
                     <td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
@@ -4183,6 +4183,7 @@
                           <a v-if="deliveryLabelRecoveryUrl && Number(deliveryLabelOpenState.deliveryId)===Number(row.id)" class="btn small" :href="deliveryLabelRecoveryUrl" target="_blank" rel="noopener">重新打开标签页</a>
                           <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small success" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : '直接发货打印' }}</button>
                           <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="editDelivery(row)">编辑</button>
+                          <button v-if="canDelivery && canAdjustReconciliationPeriod && row.status!=='voided'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="correctDeliveryActualDate(row)">更正实际日期</button>
                           <button v-if="canDelivery && row.status==='pending'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
                           <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="cancelReceipt(row)">{{ receiptOperationState.action==='cancel' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消回单' }}</button>
                           <button v-if="row.status==='dispatched'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="printDelivery(row)">{{ deliveryOperationState.action==='reprint' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '打开中…' : '补打' }}</button>
@@ -7463,7 +7464,7 @@
             </div>
             <div v-else-if="modal.type === 'receipt'">
               <div class="notice" style="margin-bottom:10px"><strong>客户：{{ receiptForm.customer_name || '客户未登记' }}</strong><span style="margin-left:12px">送货单：{{ receiptForm.delivery_number || '-' }}</span></div>
-              <div class="form-grid"><div class="field"><label>实际签收日期</label><input class="input" type="date" v-model="receiptForm.actual_received_date" /></div><div class="field"><label>签收人</label><input class="input" v-model.trim="receiptForm.signed_by" /></div></div>
+              <div class="form-grid"><div class="field"><label>实际签收日期</label><input class="input" type="date" v-model="receiptForm.actual_received_date" /></div><div class="field"><label>对账归属月份</label><input class="input" type="month" v-model="receiptForm.reconciliation_month" /><div class="toolbar-group" style="margin-top:6px"><button class="btn small" type="button" @click="receiptForm.reconciliation_month=receiptMonthOptions.previous">上月</button><button class="btn small" type="button" @click="receiptForm.reconciliation_month=receiptMonthOptions.current">本月</button><button class="btn small" type="button" @click="receiptForm.reconciliation_month=receiptMonthOptions.next">下月</button></div><div class="muted">只决定进入哪个月的对账，不改实际送货和签收日期。</div></div><div class="field"><label>签收人</label><input class="input" v-model.trim="receiptForm.signed_by" /></div></div>
               <table><thead><tr><th>产品</th><th>发货数</th><th>实际签收数</th><th>差异处理</th><th>退回放哪里</th><th>差异备注（可选）</th></tr></thead><tbody><tr v-for="line in receiptForm.items" :key="line.delivery_item_id" :class="{'warning-row':Number(line.actual_received_quantity)!==Number(line.delivered_quantity)}"><td>{{ line.product_code }} / {{ line.product_name }}</td><td>{{ line.delivered_quantity }}</td><td><input class="input compact-input" type="number" min="0" v-model.number="line.actual_received_quantity" @change="normalizeReceiptResolution(line)" /></td><td><select v-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择短收处理</option><option value="continue_delivery">保留剩余数量，继续待送</option><option value="accept_short">按本次实收数量结单</option></select><select v-else-if="Number(line.actual_received_quantity)>Number(line.delivered_quantity)" class="select" v-model="line.resolution_action"><option value="">请选择超收处理</option><option value="accept_over">确认按实际超收数量入账</option></select><span v-else class="muted">无差异</span></td><td><div v-if="receiptLineNeedsReturnLocation(line)" class="receipt-return-location-picker"><select class="select" v-model.number="line.return_floor_number" @change="onReceiptReturnFloorChange(line)"><option :value="null">先选楼层</option><option v-for="floor in receiptLocationFloors(line)" :key="floor.number" :value="floor.number">{{ floor.label }}</option></select><select class="select" v-model="line.return_area_code" :disabled="!line.return_floor_number" @change="onReceiptReturnAreaChange(line)"><option value="">再选区域</option><option v-for="area in receiptAreasForFloor(line,line.return_floor_number)" :key="area.code" :value="area.code">{{ area.label }}</option></select><select class="select" v-model.number="line.return_location_id" :disabled="!line.return_area_code" @change="onReceiptReturnLocationChange(line)"><option :value="null">再选库位</option><option v-for="location in receiptLocationsForArea(line,line.return_floor_number,line.return_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}</option></select></div><span v-else-if="Number(line.actual_received_quantity)<Number(line.delivered_quantity) && line.source_type==='unordered_finished'" class="muted">自动退回原批次</span><span v-else class="muted">无需退回</span></td><td><input class="input" v-model.trim="line.difference_reason" placeholder="可选" /></td></tr></tbody></table>
               <div class="panel" style="margin-top:12px;max-height:48vh;overflow:auto" aria-label="内部履约备忘">
                 <div class="toolbar" style="margin-bottom:8px"><div><strong>内部履约备忘</strong><div class="muted">只供厂内后续送货、生产和印刷核对；不会出现在客户打印、对账或开票资料中。</div></div><div class="toolbar-group"><button class="btn small" type="button" :disabled="receiptReminderState.saving" @click="openReceiptReminderEditor()">新增备忘</button><button v-if="receiptForm.id" class="btn small" type="button" :disabled="receiptReminderState.loading" @click="toggleReceiptReminderHistory">{{ receiptReminderState.historyMode ? '返回有效备忘' : '查看已处理历史' }}</button></div></div>
@@ -7512,7 +7513,8 @@
               </div>
               <div class="form-grid delivery-header-grid">
                 <div :class="['field',{'delivery-guide-target':deliveryGuideStage === 'customer'}]"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && deliveryCandidateError" class="status orange" style="white-space:normal">客户候选加载失败：{{ deliveryCandidateError }} <button class="btn small" type="button" @click="loadDeliveryCustomerOptions">重试</button></div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
-                <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
+                <div class="field"><label>业务类型</label><label v-if="!deliveryForm.editingId" class="delivery-customer-source-option"><input type="checkbox" v-model="deliveryForm.historical_backfill" @change="onDeliveryHistoricalBackfillChange" />补录历史送货</label><span v-else :class="['status',deliveryForm.historical_backfill?'blue':'green']">{{ deliveryForm.historical_backfill ? '历史补录' : '普通送货' }}</span><div class="muted">普通送货自动使用服务器当天，不增加输入。</div></div>
+                <div v-if="deliveryForm.historical_backfill || deliveryForm.editingId" class="field"><label>{{ deliveryForm.historical_backfill ? '实际送货日期' : '送货日期' }}</label><input class="input" type="date" v-model="deliveryForm.delivery_date" :disabled="deliveryForm.editingId && !deliveryForm.historical_backfill" /><div v-if="deliveryForm.historical_backfill" class="muted">不得早于关联订单日期，不得晚于服务器今天。</div></div>
                 <div v-if="!deliveryForm.editingId" class="field delivery-customer-source-field"><label>选择客户范围</label><div class="delivery-customer-source-options"><label class="delivery-customer-source-option"><input type="checkbox" v-model="deliveryCustomerSources.orders" @change="onDeliveryCustomerSourceFilterChange" />有订单客户</label><label class="delivery-customer-source-option"><input type="checkbox" v-model="deliveryCustomerSources.inventory" @change="onDeliveryCustomerSourceFilterChange" />有库存客户</label></div></div>
               </div>
               <div v-if="deliveryForm.customer_id" class="panel" style="margin-bottom:10px" aria-label="内部送货提醒">
@@ -7538,7 +7540,7 @@
                 <div class="toolbar-group">
                   <span class="delivery-source-toolbar-label">送货来源</span>
                   <button class="btn small" :class="{primary: deliveryForm.source_tab === 'order'}" type="button" :disabled="!deliveryForm.customer_id" @click="setDeliverySourceMode('order'); toggleDeliveryBatchPicker()">选择待送订单（{{ deliveryPendingCountForSelectedCustomer() }} 款）</button>
-                  <button class="btn small" :class="{primary: deliveryForm.source_tab === 'unordered_finished'}" type="button" @click="setDeliverySourceMode('unordered_finished')">无订单成品库存</button>
+                  <button class="btn small" :class="{primary: deliveryForm.source_tab === 'unordered_finished'}" type="button" :disabled="deliveryForm.historical_backfill" @click="setDeliverySourceMode('unordered_finished')">无订单成品库存</button>
                   <span v-if="deliverySourceModeFromLines(deliveryForm.lines.filter(line => deliveryLineHasInput(line))) === 'mixed'" class="status blue">本单混合两类来源</span>
                 </div>
               </div>
@@ -8830,7 +8832,7 @@
               selected:{}, selection_sequence:0, request_id:0,
             },
             requisitionForm: { supplier_name: "", items: [] },
-            receiptForm: { items: [], reminder_drafts:[] }, orderItemForm: {}, estimatedCostForm:{},
+            receiptForm: { items: [], reminder_drafts:[] }, receiptMonthOptions:{previous:"",current:month(),next:""}, orderItemForm: {}, estimatedCostForm:{},
             costPanelTab:"gaps",
             costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
@@ -8957,12 +8959,12 @@
             incomingSelected: {}, incomingReceiveAttempts: {}, incomingBatchReceiveAttempt: null,
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
-            deliveryForm: { editingId: null, delivery_number: "", source_mode: "order", source_tab: "order", customer_id: null, delivery_date: today(), vehicle_number: "", lines: [], saved_signature: "", pick_task: null },
+            deliveryForm: { editingId: null, delivery_number: "", source_mode: "order", source_tab: "order", customer_id: null, delivery_date: today(), historical_backfill:false, version:1, idempotency_key:null, vehicle_number: "", lines: [], saved_signature: "", pick_task: null },
             deliveryRoutePlan: { origin_address:null, customer_count:0, groups:[], disclaimer:"" },
             deliveryBatchPicker: { visible: false, loading: false, keyword: "", items: [], selected: {}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message: "", error: false },
             unorderedFinishedPicker: { visible: false, loading: false, keyword:"", items: [], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message: "", error: false },
             tianhuaPreimport: { files:[], preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
-            statementForm: { customer_id: null, statement_month: month(), selected: {} },
+            statementForm: { customer_id: null, statement_month: month(), selected: {}, idempotency_key:null },
             expandedStatementDeliveries: {}, statementCyclePeriod: "",
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
             resetPasswordForm: { username: "", new_password: "", confirm_password: "" },
@@ -9566,6 +9568,7 @@
             );
           },
           canFinance() { return this.hasPermission("finance.execute"); },
+          canAdjustReconciliationPeriod() { return this.hasPermission("finance.return_receipt.period.adjust"); },
           canViewInvoiceTasks() { return this.hasPermission("finance.view") && (this.hasPermission("finance.invoice_task.generate") || this.hasPermission("finance.invoice_result.register")); },
           canConfirmStatement() { return this.hasPermission("finance.statement.confirm"); },
           canGenerateInvoiceTask() { return this.hasPermission("finance.invoice_task.generate"); },
@@ -30071,7 +30074,12 @@
             this.resetReceiptReminderModalState();
             this.receiptOperationState = {action:"open",deliveryId,receiptId,deliveryNumber};
             try {
-              const delivery = (await axios.get(`/api/deliveries/${deliveryId}`)).data;
+              const [deliveryResponse, monthOptionsResponse] = await Promise.all([
+                axios.get(`/api/deliveries/${deliveryId}`),
+                axios.get("/api/finance/reconciliation-month-options"),
+              ]);
+              const delivery = deliveryResponse.data;
+              this.receiptMonthOptions = monthOptionsResponse.data || {previous:"",current:month(),next:""};
               let receipt = null;
               if (receiptId) receipt = (await axios.get(`/api/finance/return_receipts/${receiptId}`)).data;
               const saved = new Map((receipt?.items || []).map(item => [item.delivery_item_id,item]));
@@ -30085,6 +30093,8 @@
                 customer_name:delivery.customer_name || row?.customer_name || "客户未登记",
                 delivery_number:delivery.delivery_number || deliveryNumber,
                 actual_received_date:receipt?.actual_received_date || today(), signed_by:receipt?.signed_by || "客户签收",
+                reconciliation_month:receipt?.reconciliation_month || receipt?.effective_reconciliation_month || (delivery.is_historical_backfill ? delivery.suggested_reconciliation_month : this.receiptMonthOptions.current),
+                version:Number(receipt?.version || 1), idempotency_key:null, _mutation_signature:"",
                 reminder_drafts:[],
                 items:(delivery.items || []).map(item => ({
                   delivery_item_id:item.id, product_code:item.product_code, product_name:item.product_name,
@@ -30135,6 +30145,7 @@
             }
             const payload = {
               actual_received_date:this.receiptForm.actual_received_date,
+              reconciliation_month:this.receiptForm.reconciliation_month,
               signed_by:this.receiptForm.signed_by,
               items:(this.receiptForm.items || []).map(({product_code,product_name,delivered_quantity,source_type,requires_return_location,return_floor_number,return_area_code,...line}) => ({
                 ...line, difference_reason:line.difference_reason || null,
@@ -30142,6 +30153,17 @@
                 expected_return_layout_version:line.expected_return_layout_version || null
               }))
             };
+            if (!payload.reconciliation_month) {
+              this.showToast("请选择对账归属月份", true);
+              return false;
+            }
+            if (receiptId) payload.expected_version = Number(this.receiptForm.version || 1);
+            const mutationSignature = JSON.stringify({receipt_id:receiptId,delivery_id:deliveryId,payload});
+            if (this.receiptForm._mutation_signature !== mutationSignature) {
+              this.receiptForm._mutation_signature = mutationSignature;
+              this.receiptForm.idempotency_key = createIdempotencyKey();
+            }
+            payload.idempotency_key = this.receiptForm.idempotency_key;
             if (!receiptId && (this.receiptForm.reminder_drafts || []).length) {
               const reminders = this.receiptForm.reminder_drafts.map(row => this.receiptReminderPayload(row));
               const signature = JSON.stringify({delivery_id:deliveryId,payload,reminders});
@@ -30523,7 +30545,7 @@
             this.unorderedFinishedRequestSequence = Number(this.unorderedFinishedRequestSequence || 0) + 1;
             this.deliveryForm.lines = [];
             const candidate = this.selectedDeliveryCustomerCandidate();
-            const inventoryOnly = !!candidate && !candidate.has_pending_orders && !!candidate.has_unordered_finished;
+            const inventoryOnly = !this.deliveryForm.historical_backfill && !!candidate && !candidate.has_pending_orders && !!candidate.has_unordered_finished;
             this.deliveryForm.source_mode = inventoryOnly ? "unordered_finished" : "order";
             this.deliveryForm.source_tab = inventoryOnly ? "unordered_finished" : "order";
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message:"", error:false };
@@ -30544,11 +30566,26 @@
           },
           setDeliverySourceMode(sourceMode) {
             if (!["order", "unordered_finished"].includes(sourceMode)) return;
+            if (this.deliveryForm.historical_backfill && sourceMode !== "order") {
+              this.showToast("历史补录只能选择可追溯到正式订单的明细", true);
+              return;
+            }
             this.deliveryForm.source_tab = sourceMode;
             if (sourceMode === "order") {
               this.unorderedFinishedPicker.visible = false;
             } else {
               this.deliveryBatchPicker.visible = false;
+            }
+          },
+          onDeliveryHistoricalBackfillChange() {
+            this.deliveryForm.idempotency_key = null;
+            if (this.deliveryForm.historical_backfill) {
+              this.deliveryForm.delivery_date = "";
+              this.deliveryForm.source_mode = "order";
+              this.deliveryForm.source_tab = "order";
+              this.unorderedFinishedPicker.visible = false;
+            } else {
+              this.deliveryForm.delivery_date = today();
             }
           },
           unorderedFinishedLotId(item) {
@@ -30679,6 +30716,7 @@
               source_mode: this.deliverySourceModeFromLines(deliveryItems),
               customer_id: Number(this.deliveryForm.customer_id || 0),
               delivery_date: String(this.deliveryForm.delivery_date || ""),
+              historical_backfill: !!this.deliveryForm.historical_backfill,
               vehicle_number: String(this.deliveryForm.vehicle_number || "").trim(),
               items: deliveryItems,
             });
@@ -30789,6 +30827,9 @@
             this.deliverySaveState = {saving:true,committed:true,outcomeUncertain:false,result:data};
             this.deliveryForm.editingId = Number(data.id);
             this.deliveryForm.delivery_number = data.delivery_number || this.deliveryForm.delivery_number || "";
+            this.deliveryForm.version = Number(data.version || this.deliveryForm.version || 1);
+            this.deliveryForm.historical_backfill = !!data.is_historical_backfill;
+            this.deliveryForm.idempotency_key = null;
             this.deliveryForm.pick_task = data.pick_task || this.deliveryForm.pick_task || null;
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
             this.invalidateDeliveryListDetail(Number(data.id));
@@ -30874,6 +30915,11 @@
             const seen = new Set();
             const active = lines.filter(line => this.deliveryLineHasInput(line));
             if (!active.length) return "至少填写一条送货明细";
+            if (this.deliveryForm.historical_backfill) {
+              if (!this.canAdjustReconciliationPeriod) return "历史送货补录需要对账月份调整权限";
+              if (!this.deliveryForm.delivery_date) return "请填写真实实际送货日期";
+              if (active.some(line => line.source_type === "unordered_finished")) return "历史补录只能使用可追溯到正式订单的明细";
+            }
             const allocatedLots = new Set();
             const selectedOrderByProductCode = {};
             for (let index = 0; index < active.length; index += 1) {
@@ -31084,7 +31130,7 @@
             this.resetDeliveryReminderState();
             this.deliverySaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
             this.deliveryCustomerSources = {orders:true, inventory:false};
-            this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", source_tab:"order", customer_id:null, delivery_date:today(), vehicle_number:"", lines:[], saved_signature:"", pick_task:null };
+            this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", source_tab:"order", customer_id:null, delivery_date:today(), historical_backfill:false, version:1, idempotency_key:null, vehicle_number:"", lines:[], saved_signature:"", pick_task:null };
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
@@ -31227,7 +31273,7 @@
           },
           async openStatement(statementMonth = null, preferredCustomerId = null) {
             if (statementMonth && typeof statementMonth !== "string") statementMonth = null;
-            this.statementForm = { customer_id:preferredCustomerId ? Number(preferredCustomerId) : null, statement_month:statementMonth || month(), selected:{} };
+            this.statementForm = { customer_id:preferredCustomerId ? Number(preferredCustomerId) : null, statement_month:statementMonth || month(), selected:{}, idempotency_key:null };
             this.expandedStatementDeliveries = {};
             this.statementCyclePeriod = "";
             this.modal = { type:"statement", title:"生成月结对账单" };
@@ -32203,9 +32249,16 @@
                 const payload = {
                   source_mode:sourceMode,
                   delivery_date:this.deliveryForm.delivery_date,
+                  historical_backfill:!!this.deliveryForm.historical_backfill,
                   vehicle_number:this.deliveryForm.vehicle_number,
                   items,
                 };
+                if (this.deliveryForm.historical_backfill) {
+                  if (!payload.delivery_date) throw new Error("请填写实际送货日期");
+                  if (!this.deliveryForm.idempotency_key) this.deliveryForm.idempotency_key = createIdempotencyKey();
+                  payload.idempotency_key = this.deliveryForm.idempotency_key;
+                  if (editingId) payload.expected_version = Number(this.deliveryForm.version || 1);
+                }
                 if (!editingId) payload.customer_id = Number(this.deliveryForm.customer_id);
                 const savedDelivery = await this.saveCurrentDeliveryDraft(editingId, payload);
                 if (savedDelivery?._in_flight) return false;
@@ -32220,7 +32273,9 @@
                 if (!this.statementForm.customer_id) throw new Error("请先选择客户");
                 const ids = this.pendingStatements.filter(row => !row.selection_blocked && this.statementForm.selected[row.delivery_id]).map(row => row.delivery_id);
                 if (!ids.length) throw new Error("至少选择一张待对账送货单");
-                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, delivery_ids:ids });
+                if (!this.statementForm.idempotency_key) this.statementForm.idempotency_key = createIdempotencyKey();
+                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, delivery_ids:ids, idempotency_key:this.statementForm.idempotency_key });
+                this.statementForm.idempotency_key = null;
                 await this.loadFinance();
               }
               if (this.modal.type === "statementEdit") {
@@ -32395,6 +32450,39 @@
               }
             }
           },
+          async correctDeliveryActualDate(row) {
+            if (!this.canDelivery || !this.canAdjustReconciliationPeriod || this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
+            const deliveryId = Number(row?.id || 0);
+            if (!deliveryId) return false;
+            const targetDate = prompt("填写真实实际送货日期（YYYY-MM-DD）。ERP录入时间不会改变；已进入对账或开票后系统会拒绝直接更正。", row.delivery_date || "");
+            if (targetDate === null) return false;
+            const normalized = String(targetDate || "").trim();
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+              this.showToast("实际送货日期格式必须为 YYYY-MM-DD", true);
+              return false;
+            }
+            if (!confirm(`确认把送货单 ${row.delivery_number || deliveryId} 的实际送货日期从 ${row.delivery_date || '-'} 更正为 ${normalized} 吗？\nERP录入时间、数量、库存和金额不会改变。`)) return false;
+            this.deliveryOperationState = {action:"correct-date",deliveryId,deliveryNumber:row.delivery_number || `#${deliveryId}`};
+            try {
+              const {data} = await axios.put(`/api/deliveries/${deliveryId}/actual-date`, {
+                actual_delivery_date:normalized,
+                expected_version:Number(row.version || 1),
+                idempotency_key:createIdempotencyKey(),
+              });
+              Object.assign(row, data);
+              this.invalidateDeliveryListDetail(deliveryId);
+              await Promise.all([this.loadDeliveries(), this.loadFinance(), this.loadKpi()]);
+              this.showToast("实际送货日期已更正，ERP录入时间保持不变");
+              return true;
+            } catch(error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              if (this.deliveryOperationState.action === "correct-date" && Number(this.deliveryOperationState.deliveryId) === deliveryId) {
+                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
+              }
+            }
+          },
           async editDelivery(row) {
             if (!row?.detail_loaded || !Array.isArray(row?.items)) {
               const detailLoaded = await this.loadDeliveryListDetail(row);
@@ -32457,7 +32545,7 @@
                 candidate_error: false,
               });
             });
-            this.deliveryForm = { editingId:row.id, delivery_number:row.delivery_number || "", source_mode:sourceMode, source_tab:hasOrderLines ? "order" : "unordered_finished", customer_id:row.customer_id, delivery_date:row.delivery_date, vehicle_number:row.vehicle_number || "", lines, saved_signature:"", pick_task:row.pick_task || null };
+            this.deliveryForm = { editingId:row.id, delivery_number:row.delivery_number || "", source_mode:sourceMode, source_tab:hasOrderLines ? "order" : "unordered_finished", customer_id:row.customer_id, delivery_date:row.delivery_date, historical_backfill:!!row.is_historical_backfill, version:Number(row.version || 1), idempotency_key:null, vehicle_number:row.vehicle_number || "", lines, saved_signature:"", pick_task:row.pick_task || null };
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };

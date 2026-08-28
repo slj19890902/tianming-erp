@@ -1149,7 +1149,11 @@ def test_phase8_migration_preserves_legacy_finance_tables(
     monkeypatch.setenv("ERP_BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("ERP_SECRET_KEY", "phase8-migration-test")
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-    command.upgrade(config, "head")
+    # This contract belongs to the original phase-8 boundary.  Later governed
+    # warehouse migrations intentionally require a populated formal-map
+    # baseline, so upgrading an artificial two-table database all the way to
+    # the repository head no longer exercises a valid deployment path.
+    command.upgrade(config, "e82d4a6f1b30")
 
     with sqlite3.connect(database_path) as connection:
         tables = {

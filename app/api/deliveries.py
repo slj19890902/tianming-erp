@@ -9,6 +9,7 @@ from typing import Literal
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import String, and_, case, cast, delete, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -33,7 +34,13 @@ from app.models.delivery import (
     DeliveryPickTask,
     DeliveryPickTaskItem,
 )
-from app.models.finance import ReturnReceipt
+from app.models.finance import (
+    FinanceIdempotencyRecord,
+    ReturnReceipt,
+    ReturnReceiptItem,
+    Statement,
+    StatementItem,
+)
 from app.models.external_packaging_purchase import (
     ExternalPackagingPurchaseCancellation,
     ExternalPackagingPurchaseItem,
@@ -184,6 +191,176 @@ PICK_TASK_STATUSES = {"pushed", "driver_confirmed", "exception", "applied", "dis
 
 def _utc_now() -> datetime:
     return utc_now_naive()
+
+
+def _require_historical_delivery_permissions(user: User) -> None:
+    required = (
+        "deliveries.execute",
+        "finance.return_receipt.period.adjust",
+    )
+    missing = [code for code in required if not has_permission(user, code)]
+    if missing:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "historical_delivery_permission_denied",
+                "message": "历史送货补录需要同时具备送货操作和对账月份调整权限",
+                "missing_permissions": missing,
+            },
+        )
+
+
+def _delivery_request_hash(action: str, value: dict) -> str:
+    normalized = json.dumps(
+        {"action": action, "payload": value},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _delivery_idempotency_replay(
+    db: Session,
+    *,
+    idempotency_key: str | None,
+    request_hash: str,
+    action: str,
+    actor: User,
+) -> tuple[dict | None, FinanceIdempotencyRecord | None]:
+    if not idempotency_key:
+        return None, None
+    record = db.scalar(
+        select(FinanceIdempotencyRecord).where(
+            FinanceIdempotencyRecord.idempotency_key == idempotency_key
+        )
+    )
+    if record is None:
+        return None, None
+    if (
+        record.actor_user_id != actor.id
+        or record.action != action
+        or record.request_hash != request_hash
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "delivery_idempotency_conflict",
+                "message": "该幂等键已用于不同操作者或不同内容，请刷新后重试",
+            },
+        )
+    return json.loads(record.response_json), record
+
+
+def _record_delivery_idempotency(
+    db: Session,
+    *,
+    idempotency_key: str | None,
+    request_hash: str,
+    action: str,
+    actor: User,
+    delivery_id: int,
+    response: dict,
+) -> None:
+    if not idempotency_key:
+        return
+    db.add(
+        FinanceIdempotencyRecord(
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            action=action,
+            actor_user_id=actor.id,
+            resource_type="delivery",
+            resource_id=delivery_id,
+            response_json=json.dumps(
+                jsonable_encoder(response),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
+    )
+
+
+def _historical_delivery_date_lower_bound(
+    db: Session,
+    order_item_ids: list[int],
+) -> date:
+    unique_ids = {int(value) for value in order_item_ids if value}
+    if not unique_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="历史送货补录仅支持可追溯到正式订单的送货明细",
+        )
+    rows = db.execute(
+        select(OrderItem.id, Order.order_date)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(OrderItem.id.in_(unique_ids))
+    ).all()
+    found_ids = {int(row.id) for row in rows}
+    if found_ids != unique_ids or any(row.order_date is None for row in rows):
+        raise HTTPException(
+            status_code=409,
+            detail="关联订单日期缺失或来源不完整，不能补录历史送货",
+        )
+    return max(row.order_date for row in rows)
+
+
+def _validate_historical_delivery_date(
+    db: Session,
+    *,
+    actual_delivery_date: date,
+    order_item_ids: list[int],
+) -> date:
+    today = beijing_today()
+    if actual_delivery_date > today:
+        raise HTTPException(status_code=400, detail="实际送货日期不能晚于服务器今天")
+    lower_bound = _historical_delivery_date_lower_bound(db, order_item_ids)
+    if actual_delivery_date < lower_bound:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"实际送货日期不能早于关联订单中最晚下单日期 {lower_bound}"
+            ),
+        )
+    return lower_bound
+
+
+def _suggested_reconciliation_month(delivery_date: date, cycle_day: int) -> str:
+    normalized_day = int(cycle_day or 1)
+    if normalized_day == 1 or delivery_date.day < normalized_day:
+        return delivery_date.strftime("%Y-%m")
+    month_index = delivery_date.year * 12 + delivery_date.month
+    year, month_zero = divmod(month_index, 12)
+    return f"{year:04d}-{month_zero + 1:02d}"
+
+
+def _delivery_finance_chain_block_reason(
+    db: Session,
+    delivery_id: int,
+) -> str | None:
+    row = db.execute(
+        select(Statement.statement_number, Statement.confirmation_status)
+        .join(StatementItem, StatementItem.statement_id == Statement.id)
+        .join(
+            ReturnReceiptItem,
+            ReturnReceiptItem.id == StatementItem.return_receipt_item_id,
+        )
+        .join(
+            DeliveryItem,
+            DeliveryItem.id == ReturnReceiptItem.delivery_item_id,
+        )
+        .where(DeliveryItem.delivery_id == delivery_id)
+        .limit(1)
+    ).first()
+    if row is None:
+        return None
+    statement_number, confirmation_status = row
+    stage = "已确认对账" if confirmation_status == "confirmed" else "对账草稿"
+    return (
+        f"送货单已进入{stage} {statement_number} 或其开票/收款下游，"
+        "不能直接更正实际送货日期"
+    )
 
 
 def _print_product_code(value: str | None) -> str:
@@ -549,6 +726,8 @@ class DeliveryLineCreate(BaseModel):
 class DeliveryCreate(BaseModel):
     customer_id: int
     delivery_date: date | None = None
+    historical_backfill: bool = False
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     vehicle_number: str | None = None
     source_mode: str = "order"
     items: list[DeliveryLineCreate] = Field(default_factory=list)
@@ -563,6 +742,12 @@ class DeliveryCreate(BaseModel):
             raise ValueError("送货单至少需要一条明细")
         self.items = selected
         self.lines = []
+        key = (self.idempotency_key or "").strip()
+        if self.historical_backfill and len(key) < 8:
+            raise ValueError("补录历史送货必须提供幂等键")
+        if not self.historical_backfill and key:
+            raise ValueError("普通送货不要提交历史补录幂等键")
+        self.idempotency_key = key or None
         if self.source_mode == "unordered_finished":
             for line in selected:
                 if line.source_type == "finished_stock":
@@ -572,6 +757,9 @@ class DeliveryCreate(BaseModel):
 
 class DeliveryUpdate(BaseModel):
     delivery_date: date | None = None
+    historical_backfill: bool | None = None
+    expected_version: int | None = Field(default=None, gt=0)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     vehicle_number: str | None = None
     source_mode: str = "order"
     items: list[DeliveryLineCreate] = Field(default_factory=list)
@@ -586,11 +774,23 @@ class DeliveryUpdate(BaseModel):
             raise ValueError("送货单至少需要一条明细")
         self.items = selected
         self.lines = []
+        self.idempotency_key = (self.idempotency_key or "").strip() or None
         if self.source_mode == "unordered_finished":
             for line in selected:
                 if line.source_type == "finished_stock":
                     line.source_type = "unordered_finished"
         return self
+
+
+class DeliveryDateCorrection(BaseModel):
+    actual_delivery_date: date
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str) -> str:
+        return value.strip()
 
 
 class DeliveryPackagingLabelJobItemRequest(BaseModel):
@@ -4549,6 +4749,19 @@ def _delivery_summary_response(delivery_id: int, *, context: dict) -> dict:
         "customer_id": delivery.customer_id,
         "customer_name": customer.name if customer else None,
         "delivery_date": delivery.delivery_date,
+        "created_at": utc_naive_to_api(delivery.created_at),
+        "is_historical_backfill": bool(delivery.is_historical_backfill),
+        "backfilled_by": delivery.backfilled_by,
+        "backfilled_at": (
+            utc_naive_to_api(delivery.backfilled_at)
+            if delivery.backfilled_at
+            else None
+        ),
+        "version": int(delivery.version or 1),
+        "suggested_reconciliation_month": _suggested_reconciliation_month(
+            delivery.delivery_date,
+            customer.statement_cycle_start_day if customer else 1,
+        ),
         "vehicle_number": delivery.vehicle_number,
         "source_mode": delivery.source_mode,
         "status": delivery.status,
@@ -4864,6 +5077,19 @@ def _delivery_response(
         "customer_id": delivery.customer_id,
         "customer_name": customer.name if customer else None,
         "delivery_date": delivery.delivery_date,
+        "created_at": utc_naive_to_api(delivery.created_at),
+        "is_historical_backfill": bool(delivery.is_historical_backfill),
+        "backfilled_by": delivery.backfilled_by,
+        "backfilled_at": (
+            utc_naive_to_api(delivery.backfilled_at)
+            if delivery.backfilled_at
+            else None
+        ),
+        "version": int(delivery.version or 1),
+        "suggested_reconciliation_month": _suggested_reconciliation_month(
+            delivery.delivery_date,
+            customer.statement_cycle_start_day if customer else 1,
+        ),
         "vehicle_number": delivery.vehicle_number,
         "source_mode": delivery.source_mode,
         "status": delivery.status,
@@ -7727,7 +7953,47 @@ def create_delivery(
     customer = db.get(Customer, payload.customer_id)
     if customer is None:
         raise HTTPException(status_code=400, detail="客户不存在")
-    delivery_date = payload.delivery_date or beijing_today()
+    today = beijing_today()
+    if payload.historical_backfill:
+        _require_historical_delivery_permissions(user)
+        if payload.delivery_date is None:
+            raise HTTPException(status_code=400, detail="补录历史送货必须填写实际送货日期")
+        if any(
+            line.source_type != "order" or line.order_item_id is None
+            for line in payload.items
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="历史送货补录仅支持可追溯到正式订单的送货明细",
+            )
+        _validate_historical_delivery_date(
+            db,
+            actual_delivery_date=payload.delivery_date,
+            order_item_ids=[int(line.order_item_id) for line in payload.items],
+        )
+        delivery_date = payload.delivery_date
+    else:
+        if payload.delivery_date is not None and payload.delivery_date != today:
+            raise HTTPException(
+                status_code=400,
+                detail="非当天实际送货必须主动选择“补录历史送货”",
+            )
+        delivery_date = today
+    request_hash = _delivery_request_hash(
+        "historical_delivery_create",
+        payload.model_dump(exclude={"idempotency_key"}),
+    )
+    replay, replay_record = _delivery_idempotency_replay(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action="historical_delivery_create",
+        actor=user,
+    )
+    if replay is not None:
+        assert replay_record is not None
+        _delivery_for_user(db, replay_record.resource_id, user)
+        return replay
     try:
         delivery = Delivery(
             delivery_number=next_delivery_number(
@@ -7737,6 +8003,10 @@ def create_delivery(
             ),
             customer_id=payload.customer_id,
             delivery_date=delivery_date,
+            is_historical_backfill=payload.historical_backfill,
+            backfilled_by=(user.id if payload.historical_backfill else None),
+            backfilled_at=(_utc_now() if payload.historical_backfill else None),
+            version=1,
             vehicle_number=(payload.vehicle_number or "").strip() or None,
             source_mode=payload.source_mode,
             status="pending",
@@ -7821,12 +8091,28 @@ def create_delivery(
                 "source_mode": delivery.source_mode,
                 "item_count": len(payload.items),
                 "total_quantity": total_quantity,
+                "is_historical_backfill": payload.historical_backfill,
+                "actual_delivery_date": delivery_date,
+                "erp_created_at_preserved": True,
             },
-            description="创建待发货送货单",
+            description=(
+                "补录历史待发货送货单"
+                if payload.historical_backfill
+                else "创建待发货送货单"
+            ),
         )
-        db.commit()
         response = _delivery_response(db, delivery.id)
         response["warnings"] = warnings
+        _record_delivery_idempotency(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="historical_delivery_create",
+            actor=user,
+            delivery_id=delivery.id,
+            response=response,
+        )
+        db.commit()
         return response
     except DeliveryNumberingError as error:
         db.rollback()
@@ -7836,6 +8122,17 @@ def create_delivery(
         raise
     except IntegrityError as error:
         db.rollback()
+        replay, replay_record = _delivery_idempotency_replay(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="historical_delivery_create",
+            actor=user,
+        )
+        if replay is not None:
+            assert replay_record is not None
+            _delivery_for_user(db, replay_record.resource_id, user)
+            return replay
         raise HTTPException(status_code=409, detail="送货单数据冲突") from error
     except Exception:
         db.rollback()
@@ -8254,7 +8551,64 @@ def update_delivery(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    _delivery_for_user(db, delivery_id, user)
+    existing_delivery = _delivery_for_user(db, delivery_id, user)
+    historical_backfill = bool(existing_delivery.is_historical_backfill)
+    if (
+        payload.historical_backfill is not None
+        and bool(payload.historical_backfill) != historical_backfill
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="送货单保存后不能切换普通送货与历史补录模式",
+        )
+    if historical_backfill:
+        _require_historical_delivery_permissions(user)
+        if payload.expected_version is None or payload.idempotency_key is None:
+            raise HTTPException(
+                status_code=400,
+                detail="编辑历史补录送货单必须提交版本和幂等键",
+            )
+        if any(
+            line.source_type != "order" or line.order_item_id is None
+            for line in payload.items
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="历史送货补录仅支持可追溯到正式订单的送货明细",
+            )
+        target_delivery_date = payload.delivery_date or existing_delivery.delivery_date
+        _validate_historical_delivery_date(
+            db,
+            actual_delivery_date=target_delivery_date,
+            order_item_ids=[int(line.order_item_id) for line in payload.items],
+        )
+    else:
+        target_delivery_date = existing_delivery.delivery_date
+        if (
+            payload.delivery_date is not None
+            and payload.delivery_date != existing_delivery.delivery_date
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="普通送货单的实际日期不能在编辑明细时改写，请使用受控日期更正",
+            )
+        if payload.idempotency_key is not None:
+            raise HTTPException(status_code=400, detail="普通送货编辑不要提交补录幂等键")
+    request_hash = _delivery_request_hash(
+        "historical_delivery_update",
+        {"delivery_id": delivery_id, **payload.model_dump(exclude={"idempotency_key"})},
+    )
+    replay, replay_record = _delivery_idempotency_replay(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action="historical_delivery_update",
+        actor=user,
+    )
+    if replay is not None:
+        assert replay_record is not None
+        _delivery_for_user(db, replay_record.resource_id, user)
+        return replay
     try:
         _validate_delivery_source_contract(payload.source_mode, payload.items)
     except ValueError as error:
@@ -8286,6 +8640,18 @@ def update_delivery(
                 detail="送货单已确认发货，不能编辑，请先取消发货",
             )
         delivery = _delivery_or_404(db, delivery_id)
+        current_version = int(delivery.version or 1)
+        if (
+            payload.expected_version is not None
+            and payload.expected_version != current_version
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "delivery_version_conflict",
+                    "message": "送货单版本已变化，请刷新后重试",
+                },
+            )
         if payload.source_mode != delivery.source_mode:
             raise HTTPException(
                 status_code=409,
@@ -8377,11 +8743,11 @@ def update_delivery(
                 )
             )
         total_quantity = order_quantity + unordered_quantity
-        if payload.delivery_date is not None:
-            delivery.delivery_date = payload.delivery_date
+        delivery.delivery_date = target_delivery_date
         if payload.vehicle_number is not None:
             delivery.vehicle_number = payload.vehicle_number.strip() or None
         delivery.total_quantity = total_quantity
+        delivery.version = current_version + 1
         _write_audit(
             db,
             user=user,
@@ -8393,22 +8759,209 @@ def update_delivery(
                 "source_mode": delivery.source_mode,
                 "item_count": len(payload.items),
                 "total_quantity": total_quantity,
+                "is_historical_backfill": historical_backfill,
+                "actual_delivery_date": delivery.delivery_date,
+                "before_version": current_version,
+                "after_version": delivery.version,
             },
             description="编辑待发货送货单",
         )
-        db.commit()
         response = _delivery_response(db, delivery.id)
         response["warnings"] = warnings
+        _record_delivery_idempotency(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="historical_delivery_update",
+            actor=user,
+            delivery_id=delivery.id,
+            response=response,
+        )
+        db.commit()
         return response
     except HTTPException:
         db.rollback()
         raise
     except IntegrityError as error:
         db.rollback()
+        replay, replay_record = _delivery_idempotency_replay(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="historical_delivery_update",
+            actor=user,
+        )
+        if replay is not None:
+            assert replay_record is not None
+            _delivery_for_user(db, replay_record.resource_id, user)
+            return replay
         raise HTTPException(status_code=409, detail="送货单数据冲突") from error
     except Exception:
         db.rollback()
         raise
+
+
+@router.put("/{delivery_id}/actual-date")
+def correct_delivery_actual_date(
+    delivery_id: int,
+    payload: DeliveryDateCorrection,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    delivery = _delivery_for_user(db, delivery_id, user)
+    _require_historical_delivery_permissions(user)
+    if delivery.status == "voided":
+        raise HTTPException(status_code=409, detail="已作废送货单不能更正实际日期")
+    order_item_ids = list(
+        db.scalars(
+            select(DeliveryItem.order_item_id)
+            .where(DeliveryItem.delivery_id == delivery.id)
+            .order_by(DeliveryItem.id)
+        ).all()
+    )
+    if not order_item_ids or any(value is None for value in order_item_ids):
+        raise HTTPException(
+            status_code=409,
+            detail="送货来源包含无订单库存，无法证明订单日期下限，禁止直接更正",
+        )
+    lower_bound = _validate_historical_delivery_date(
+        db,
+        actual_delivery_date=payload.actual_delivery_date,
+        order_item_ids=[int(value) for value in order_item_ids],
+    )
+    request_hash = _delivery_request_hash(
+        "delivery_actual_date_update",
+        {"delivery_id": delivery_id, **payload.model_dump(exclude={"idempotency_key"})},
+    )
+    replay, replay_record = _delivery_idempotency_replay(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action="delivery_actual_date_update",
+        actor=user,
+    )
+    if replay is not None:
+        assert replay_record is not None
+        _delivery_for_user(db, replay_record.resource_id, user)
+        return replay
+    block_reason = _delivery_finance_chain_block_reason(db, delivery.id)
+    if block_reason:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "delivery_actual_date_locked",
+                "message": block_reason,
+            },
+        )
+    if int(delivery.version or 1) != payload.expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "delivery_version_conflict",
+                "message": "送货单版本已变化，请刷新后重试",
+            },
+        )
+    before = {
+        "delivery_date": delivery.delivery_date,
+        "is_historical_backfill": bool(delivery.is_historical_backfill),
+        "version": int(delivery.version or 1),
+        "created_at": delivery.created_at,
+    }
+    if delivery.delivery_date == payload.actual_delivery_date:
+        response = _delivery_response(db, delivery.id)
+        _record_delivery_idempotency(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="delivery_actual_date_update",
+            actor=user,
+            delivery_id=delivery.id,
+            response=response,
+        )
+        db.commit()
+        return response
+    new_version = payload.expected_version + 1
+    try:
+        claimed = db.execute(
+            update(Delivery)
+            .where(
+                Delivery.id == delivery.id,
+                Delivery.version == payload.expected_version,
+                Delivery.status != "voided",
+            )
+            .values(
+                delivery_date=payload.actual_delivery_date,
+                is_historical_backfill=True,
+                backfilled_by=func.coalesce(Delivery.backfilled_by, user.id),
+                backfilled_at=func.coalesce(Delivery.backfilled_at, _utc_now()),
+                version=new_version,
+            )
+            .execution_options(synchronize_session=False)
+        )
+    except Exception:
+        db.rollback()
+        raise
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "delivery_version_conflict",
+                "message": "送货单日期已被其他操作修改，请刷新后重试",
+            },
+        )
+    db.expire(delivery)
+    _write_audit(
+        db,
+        user=user,
+        action="CORRECT_ACTUAL_DELIVERY_DATE",
+        resource="Delivery",
+        entity_id=delivery.id,
+        details={
+            "before": before,
+            "after": {
+                "delivery_date": payload.actual_delivery_date,
+                "is_historical_backfill": True,
+                "version": new_version,
+                "created_at": before["created_at"],
+            },
+            "order_date_lower_bound": lower_bound,
+        },
+        description="更正送货单实际送货日期",
+    )
+    response = _delivery_response(db, delivery.id)
+    _record_delivery_idempotency(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action="delivery_actual_date_update",
+        actor=user,
+        delivery_id=delivery.id,
+        response=response,
+    )
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        replay, replay_record = _delivery_idempotency_replay(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="delivery_actual_date_update",
+            actor=user,
+        )
+        if replay is not None:
+            assert replay_record is not None
+            _delivery_for_user(db, replay_record.resource_id, user)
+            return replay
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "delivery_idempotency_conflict",
+                "message": "实际送货日期已被其他操作修改，请刷新后重试",
+            },
+        ) from error
+    return response
 
 
 @router.get("/{delivery_id}/production-packaging-label-package")

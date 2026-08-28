@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.212"
-    assert APP_VERSION_NAME == "仓库地图操作区上移与合并筛选精简"
+    assert APP_VERSION == "v0.22.213"
+    assert APP_VERSION_NAME == "历史送货补录与对账归属月份闭环"
     assert APP_BUILD_DATE == "2026-08-28"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,17 +49,24 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "栈板尺寸读取失败" in item for item in current_release)
-    assert any("本次更新｜" in item and "授权客户" in item and "多条件" in item for item in current_release)
-    assert any("本次更新｜" in item and "ERP顶部" in item and "四个移动动作" in item for item in current_release)
+    assert any("本次更新｜" in item and "历史送货补录" in item and "双权限" in item for item in current_release)
+    assert any("本次更新｜" in item and "对账归属月份" in item and "旧回单" in item for item in current_release)
+    assert any("本次更新｜" in item and "gp51v8x9z40" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.213" in item and "gp51v8x9z40" in item for item in current_release)
+    previous_release = [
+        item for item in APP_CHANGELOG if item.startswith("v0.22.212：")
+    ]
+    assert any("本次更新｜" in item and "栈板尺寸读取失败" in item for item in previous_release)
+    assert any("本次更新｜" in item and "授权客户" in item and "多条件" in item for item in previous_release)
+    assert any("本次更新｜" in item and "ERP顶部" in item and "四个移动动作" in item for item in previous_release)
     assert any(
         "本次更新｜" in item
         and "内部栈板编号" in item
         and "淡绿通道" in item
         and "紫色选中" in item
-        for item in current_release
+        for item in previous_release
     )
-    assert any("如何验证｜" in item and "v0.22.212" in item and "gn49v8x9z38" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.212" in item and "gn49v8x9z38" in item for item in previous_release)
     assert any(
         item.startswith("v0.22.211：本次更新｜")
         and "默认只显示查询和台账" in item
@@ -505,7 +512,7 @@ def test_factory_update_reports_current_release_version() -> None:
     )
     assert any(
         "如何验证｜" in item and "v0.22.212" in item and "gn49" in item
-        for item in current_release
+        for item in previous_release
     )
     assert any(
         item.startswith("v0.22.79：本次更新｜") and "完整工作区高度" in item

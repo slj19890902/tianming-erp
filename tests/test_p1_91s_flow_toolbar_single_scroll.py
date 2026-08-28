@@ -49,6 +49,7 @@ def test_flow_tables_delegate_vertical_scrolling_to_the_main_page() -> None:
         ".table-wrap:has(> .requisition-hold-table)",
         ".table-wrap:has(> .production-table)",
         ".table-wrap:has(> .production-history-table)",
+        ".table-wrap:has(> .production-placement-table)",
     ):
         assert selector in shared
     assert "max-height:none" in shared
@@ -103,8 +104,8 @@ def test_compact_flow_page_sizes_are_server_driven_and_mode_specific() -> None:
         "REQUISITION_HOLD_PAGE_SIZE_LARGE = 6",
         "PRODUCTION_PENDING_PAGE_SIZE_STANDARD = 6",
         "PRODUCTION_PENDING_PAGE_SIZE_LARGE = 4",
-        "PRODUCTION_HISTORY_PAGE_SIZE_STANDARD = 8",
-        "PRODUCTION_HISTORY_PAGE_SIZE_LARGE = 6",
+        "PRODUCTION_HISTORY_PAGE_SIZE_STANDARD = 13",
+        "PRODUCTION_HISTORY_PAGE_SIZE_LARGE = 11",
     ):
         assert declaration in INDEX
 

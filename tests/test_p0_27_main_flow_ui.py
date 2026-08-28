@@ -81,7 +81,8 @@ def test_production_defaults_to_history_adjustment_and_staging_placement() -> No
     assert "待送成品归位" in production
     assert "modifyProductionActualQuantity(row)" in production
     assert "productionPlacement" in production
-    assert "归位并同步地图" in production
+    assert ">归位</button>" in production
+    assert "归位并同步地图" not in production
 
     adjust = _method(
         "async modifyProductionActualQuantity(row)",

@@ -1793,7 +1793,8 @@
       .table-wrap:has(> .requisition-pending-table),
       .table-wrap:has(> .requisition-hold-table),
       .table-wrap:has(> .production-table),
-      .table-wrap:has(> .production-history-table) { max-height:none; overflow-x:auto; overflow-y:visible; }
+      .table-wrap:has(> .production-history-table),
+      .table-wrap:has(> .production-placement-table) { max-height:none; overflow-x:auto; overflow-y:visible; }
       .incoming-compact-table th,.incoming-compact-table td { padding:4px 5px; line-height:1.15; }
       .incoming-compact-table th:nth-child(1) { width:5.5%; }
       .incoming-compact-table th:nth-child(2),.incoming-compact-table th:nth-child(4) { width:5.3%; }
@@ -2360,6 +2361,27 @@
         overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer;
       }
       .production-history-table .history-delivered { color:#7c3aed; font-weight:800; }
+      .production-placement-table th,
+      .production-placement-table td { padding:5px 6px; line-height:1.2; vertical-align:middle; }
+      .production-placement-table .placement-two-lines { display:grid; gap:2px; min-width:0; }
+      .production-placement-table .placement-line,
+      .production-placement-table .placement-current-location {
+        min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+      }
+      .production-placement-table .production-location-picker {
+        display:grid; grid-template-columns:74px 108px minmax(150px,1fr) auto;
+        gap:4px; align-items:center; width:100%; min-width:0;
+      }
+      .production-placement-table .select,
+      .ui-large .production-placement-table .select {
+        width:100%; min-width:0; min-height:32px; height:32px; padding:3px 6px; font-size:13px;
+      }
+      .production-placement-table .btn,
+      .ui-large .production-placement-table .btn,
+      .ui-large .production-placement-table .btn.small {
+        width:auto; min-width:0; min-height:32px; height:32px; padding:3px 7px;
+        font-size:13px; line-height:1; white-space:nowrap; justify-self:start;
+      }
       .audit-tabs {
         display: inline-flex; gap: 4px; padding: 4px;
         border: 1px solid var(--line-strong); border-radius: 999px; background: #f2f2f4;
@@ -4047,9 +4069,9 @@
                     <td class="production-history-time">{{ formatDateTime(row.completed_at) }}</td>
                     <td><div class="history-two-lines"><strong class="history-line" :title="row.customer_name || ''">{{ row.customer_short_name || '中文简称未填写' }}</strong><span class="history-line muted" :title="row.customer_order_number || ''">{{ row.customer_order_number || '客户订单号未填写' }}</span></div></td>
                     <td><div class="history-two-lines" :title="productionProductTitle(row)"><strong class="history-line"><span v-if="row.is_component_task">组件｜</span>{{ row.product_code || '-' }}</strong><span class="history-line">{{ row.product_name || '-' }}</span></div></td>
-                    <td><div class="history-two-lines"><div class="history-line"><template v-if="row._actual_editing"><div class="history-inline-edit"><span>实际</span><input class="input" type="number" min="1" step="1" v-model.number="row._actual_draft" :disabled="productionBusy" @keydown.enter.prevent="modifyProductionActualQuantity(row)" @keydown.esc.prevent="cancelProductionActualQuantityEdit(row)"><button class="btn small success" :disabled="productionBusy" @click="modifyProductionActualQuantity(row)">保存</button><button class="btn small" :disabled="productionBusy" @click="cancelProductionActualQuantityEdit(row)">取消</button></div></template><template v-else><strong>实际 {{ row.actual_output_quantity ?? row.quantity ?? 0 }}</strong><button v-if="['admin','boss'].includes(user?.role) && row.can_adjust_actual_quantity" class="btn small warning" :disabled="productionBusy" @click="beginProductionActualQuantityEdit(row)">修改</button></template></div><span class="history-line muted">理论 {{ row.planned_output_quantity ?? 0 }}</span></div></td>
+                    <td><div class="history-two-lines"><div class="history-line"><template v-if="row._actual_editing"><div class="history-inline-edit"><span>实际</span><input class="input" type="number" min="1" step="1" v-model.number="row._actual_draft" :disabled="productionBusy" @keydown.enter.prevent="modifyProductionActualQuantity(row)" @keydown.esc.prevent="cancelProductionActualQuantityEdit(row)"><button class="btn small success" :disabled="productionBusy" @click="modifyProductionActualQuantity(row)">保存</button><button class="btn small" :disabled="productionBusy" @click="cancelProductionActualQuantityEdit(row)">取消</button></div></template><template v-else><strong>实际 {{ row.actual_output_quantity ?? row.quantity ?? 0 }}</strong><button v-if="['admin','boss'].includes(user?.role) && !row.is_fully_delivered && row.can_adjust_actual_quantity" class="btn small warning" :disabled="productionBusy" @click="beginProductionActualQuantityEdit(row)">修改</button></template></div><span class="history-line muted">理论 {{ row.planned_output_quantity ?? 0 }}</span></div></td>
                     <td><div class="history-two-lines"><span v-if="row.status==='reversed'" class="history-line status orange">已撤销</span><span v-else-if="row.is_fully_delivered" class="history-line history-delivered">已送完</span><button v-else-if="productionCurrentLocationClickable(row)" class="history-link" type="button" :title="row.current_warehouse_location_name || ''" @click="openProductionInventory(row)">{{ row.current_warehouse_location_name || '位置名称待完善' }}</button><strong v-else-if="row.current_inventory_status==='located'" class="history-line">{{ row.current_warehouse_location_name || '位置名称待完善' }}</strong><span v-else class="history-line muted">暂无当前库存</span><span v-if="row.status==='reversed'" class="history-line muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</span><span v-else-if="!row.is_fully_delivered && (row.current_warehouse_location_map_issue || row.current_location_issue)" class="history-line status orange" :title="row.current_warehouse_location_map_issue || row.current_location_issue">{{ row.current_warehouse_location_map_issue || row.current_location_issue }}</span></div></td>
-                    <td class="production-history-actions"><button v-if="user?.role==='admin' && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销</button><span v-else class="muted">-</span></td>
+                    <td class="production-history-actions"><button v-if="user?.role==='admin' && !row.is_fully_delivered && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销</button><span v-else class="muted">-</span></td>
                   </tr></tbody>
                   </table>
                 </data-panel>
@@ -4057,8 +4079,8 @@
                   <div v-if="productionPlacementError" class="status orange" style="display:block;margin:8px 0">{{ productionPlacementError }} <button class="btn small" @click="loadProductionPlacement()">重试</button></div>
                   <data-panel :empty="!productionPlacement.length">
                     <table class="production-placement-table" style="table-layout:fixed;width:100%">
-                      <thead><tr><th style="width:20%">订单 / 客户</th><th style="width:24%">存货编码 / 产品</th><th style="width:12%">实际完工</th><th style="width:18%">当前待送位置</th><th>现场实际位置</th></tr></thead>
-                      <tbody><tr v-for="row in productionPlacement" :key="`placement-${row.id}`"><td style="white-space:normal"><strong>{{ row.item_order_number || row.order_number || '-' }}</strong><br><span class="muted">{{ row.customer_name || '-' }}</span></td><td style="white-space:normal"><strong>{{ row.product_code || '-' }}</strong><br>{{ row.product_name || '-' }}</td><td><strong>{{ row.actual_output_quantity || row.quantity || 0 }}</strong></td><td style="white-space:normal">{{ row.warehouse_location_name || row.warehouse_location_code || '一楼待送区' }}</td><td><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选实际位置' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}</option></select><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">归位并同步地图</button></div></td></tr></tbody>
+                      <thead><tr><th style="width:10%">客户订单号 / 中文简称</th><th style="width:12%">存货编码 / 产品</th><th style="width:8%">实际完工</th><th style="width:12%">当前待送位置</th><th>现场实际位置</th></tr></thead>
+                      <tbody><tr v-for="row in productionPlacement" :key="`placement-${row.id}`"><td><div class="placement-two-lines"><strong class="placement-line" :title="row.customer_order_number || ''">{{ row.customer_order_number || '客户订单号未填写' }}</strong><span class="placement-line muted" :title="row.customer_short_name || ''">{{ row.customer_short_name || '中文简称未填写' }}</span></div></td><td><div class="placement-two-lines" :title="productionProductTitle(row)"><strong class="placement-line">{{ row.product_code || '-' }}</strong><span class="placement-line">{{ row.product_name || '-' }}</span></div></td><td><strong>{{ row.actual_output_quantity || row.quantity || 0 }}</strong></td><td><div class="placement-current-location" :title="row.warehouse_location_name || row.warehouse_location_code || '一楼待送区'">{{ row.warehouse_location_name || row.warehouse_location_code || '一楼待送区' }}</div></td><td><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选实际位置' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}</option></select><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">归位</button></div></td></tr></tbody>
                     </table>
                   </data-panel>
                 </div>
@@ -8261,8 +8283,8 @@
       const REQUISITION_HOLD_PAGE_SIZE_LARGE = 6;
       const PRODUCTION_PENDING_PAGE_SIZE_STANDARD = 6;
       const PRODUCTION_PENDING_PAGE_SIZE_LARGE = 4;
-      const PRODUCTION_HISTORY_PAGE_SIZE_STANDARD = 8;
-      const PRODUCTION_HISTORY_PAGE_SIZE_LARGE = 6;
+      const PRODUCTION_HISTORY_PAGE_SIZE_STANDARD = 13;
+      const PRODUCTION_HISTORY_PAGE_SIZE_LARGE = 11;
       const latestRequestControllers = new Map();
       const searchDebounceTimers = new Map();
       const pageSearchGenerations = new Map();
@@ -17964,7 +17986,7 @@
             } finally { this.productionBusy = false; }
           },
           beginProductionActualQuantityEdit(row) {
-            if (this.productionBusy || !["admin","boss"].includes(this.user?.role) || !row?.can_adjust_actual_quantity) return;
+            if (this.productionBusy || !["admin","boss"].includes(this.user?.role) || row?.is_fully_delivered || !row?.can_adjust_actual_quantity) return;
             row._actual_draft = Number(row.actual_output_quantity ?? row.quantity ?? 0);
             row._actual_editing = true;
           },
@@ -17974,7 +17996,7 @@
             delete row._actual_draft;
           },
           async modifyProductionActualQuantity(row) {
-            if (this.productionBusy || !["admin","boss"].includes(this.user?.role) || !row?.can_adjust_actual_quantity) return;
+            if (this.productionBusy || !["admin","boss"].includes(this.user?.role) || row?.is_fully_delivered || !row?.can_adjust_actual_quantity) return;
             const current = Number(row.actual_output_quantity || row.quantity || 0);
             const desired = Number(row._actual_draft);
             if (!Number.isInteger(desired) || desired <= 0) {
@@ -18081,7 +18103,7 @@
             );
           },
           async revertProductionCompletion(row) {
-            if (this.productionBusy || !row?.can_revert || this.user?.role !== "admin") return;
+            if (this.productionBusy || row?.is_fully_delivered || !row?.can_revert || this.user?.role !== "admin") return;
             if (!confirm(`确认撤销 ${row.item_order_number || row.order_number || "该订单"} 的生产确认吗？\n\n系统会撤回本次生成的临时成品库存或直接完工效果，并把任务退回待生产确认。已经送货、占用或移动的库存不会允许撤销。`)) return;
             this.productionBusy = true;
             try {

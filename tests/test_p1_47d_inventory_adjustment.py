@@ -36,6 +36,10 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
+    WarehouseGroundOccupancy,
+    WarehouseGroundOccupancySlot,
     WarehouseLocation,
 )
 
@@ -202,10 +206,42 @@ def _semi_lot(
 
 
 @pytest.fixture()
-def stocktake_app(tmp_path: Path):
+def stocktake_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.warehouse import router as warehouse_router
+    from app.services import location_candidates
+
+    def published_floor_identity(floor_number: int) -> dict[str, object]:
+        area_codes = {
+            1: ("FG", "SEMI", "DISPATCH"),
+            2: ("FG",),
+            3: ("FG", "DRAFT"),
+        }.get(int(floor_number), ())
+        zones_by_id = {
+            f"zone-{int(floor_number)}f-{area_code.lower()}": area_code
+            for area_code in area_codes
+        }
+        return {
+            "floor_code": f"{int(floor_number)}F",
+            "revision": "p1-47d-formal-map",
+            "feature_ids": frozenset(zones_by_id),
+            "erp_area_codes": frozenset(area_codes),
+            "zones_by_id": zones_by_id,
+            "zone_ids_by_area": {
+                area_code: (feature_id,)
+                for feature_id, area_code in zones_by_id.items()
+            },
+        }
+
+    # This module exercises a synthetic warehouse ledger. Keep its published
+    # map identity synthetic too, so later edits to the real map asset cannot
+    # turn an otherwise valid stocktake fixture into a stale-map failure.
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        published_floor_identity,
+    )
 
     database = tmp_path / "p1-47d-stocktake-batch.sqlite3"
     engine = create_sqlite_engine(database)
@@ -356,6 +392,67 @@ def stocktake_app(tmp_path: Path):
         db.add_all(list(locations.values()))
         db.flush()
 
+        areas_by_key = {
+            (int(area.floor.floor_number), str(area.area_code)): area
+            for area in areas
+            if area.storage_policy is not None
+            and area.storage_policy.status == "published"
+        }
+        ground_locations_by_key: dict[tuple[int, str], list[WarehouseLocation]] = {}
+        for location in locations.values():
+            key = (int(location.warehouse_floor or 0), str(location.area_code or ""))
+            if (
+                key in areas_by_key
+                and location.storage_type in {"ground", "temporary_aisle"}
+                and key[0] in {1, 3}
+            ):
+                ground_locations_by_key.setdefault(key, []).append(location)
+        for (floor_number, area_code), area_locations in ground_locations_by_key.items():
+            plan = WarehouseGroundLayoutPlan(
+                area_id=areas_by_key[(floor_number, area_code)].id,
+                status="published",
+                target_slot_count=len(area_locations),
+                numbering_origin="south",
+                row_direction="from_aisle_inward",
+                slot_direction="left_to_right",
+                row_start_no=1,
+                slot_start_no=1,
+                draft_map_revision="p1-47d-formal-map",
+                published_map_revision="p1-47d-formal-map",
+                preview_fingerprint=(
+                    f"{floor_number}{area_code}".encode().hex() + "0" * 64
+                )[:64],
+                version=1,
+                publish_idempotency_key=(
+                    f"p1-47d-ground-{floor_number}f-{area_code.lower()}"
+                ),
+                publish_request_hash=(
+                    f"{area_code}{floor_number}".encode().hex() + "0" * 64
+                )[:64],
+                updated_by=admin.id,
+                published_by=admin.id,
+                published_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            )
+            db.add(plan)
+            db.flush()
+            db.add_all(
+                [
+                    WarehouseGroundLayoutSlot(
+                        plan_id=plan.id,
+                        location_id=location.id,
+                        route_sequence=index,
+                        row_no=1,
+                        slot_no=index,
+                        x_mm=Decimal(1000 + index * 1400),
+                        y_mm=Decimal("1000"),
+                        width_mm=1200,
+                        depth_mm=1000,
+                    )
+                    for index, location in enumerate(area_locations, start=1)
+                ]
+            )
+        db.flush()
+
         lots = {
             "normal": _finished_lot(
                 number="FG-P147D-NORMAL",
@@ -455,6 +552,27 @@ def stocktake_app(tmp_path: Path):
                 quantity=Decimal("5"),
                 unit="boxes",
                 match_status="matched",
+            )
+        )
+        zero_occupancy = WarehouseGroundOccupancy(
+            pallet_id=zero_pallet.id,
+            primary_location_id=locations["fg3"].id,
+            customer_id=customer.id,
+            product_id=product.id,
+            footprint_kind="single",
+            capacity_quantity=5,
+            status="active",
+            version=1,
+            created_by=admin.id,
+        )
+        db.add(zero_occupancy)
+        db.flush()
+        db.add(
+            WarehouseGroundOccupancySlot(
+                occupancy_id=zero_occupancy.id,
+                location_id=locations["fg3"].id,
+                slot_sequence=1,
+                status="active",
             )
         )
         db.add(
@@ -699,7 +817,7 @@ def test_multi_item_add_finished_and_semi_plus_decrease_records_formal_facts(
             )
         )
         assert [row.movement_type for row in movements] == ["manual_in", "manual_in", "adjust"]
-        assert all(row.operator_id == ids["operator"] for row in movements)
+        assert all(row.operator_id == ids["admin"] for row in movements)
         assert [(row.before_available, row.after_available) for row in movements] == [
             (0, 7),
             (0, 9),
@@ -720,7 +838,7 @@ def test_multi_item_add_finished_and_semi_plus_decrease_records_formal_facts(
         details = json.loads(audit.details or "{}")
         assert details["request_hash"] == body["request_hash"]
         assert details["result"]["items"] == body["items"]
-        assert audit.actor_user_id_snapshot == ids["operator"]
+        assert audit.actor_user_id_snapshot == ids["admin"]
         assert audit.created_at is not None
 
 

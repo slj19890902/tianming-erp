@@ -156,6 +156,7 @@ def test_tianhua_manual_utc_datetime_serialization_uses_z(
     module_name = "app.services.tianhua_pre_delivery"
     services_package = importlib.import_module("app.services")
     marker = object()
+    previous_module = sys.modules.get(module_name, marker)
     previous_attribute = getattr(services_package, "tianhua_pre_delivery", marker)
     monkeypatch.setitem(sys.modules, "cv2", SimpleNamespace())
     monkeypatch.setitem(sys.modules, "numpy", SimpleNamespace())
@@ -174,6 +175,8 @@ def test_tianhua_manual_utc_datetime_serialization_uses_z(
     assert payload["mobile_picked_at"] == "2026-07-17T16:00:00Z"
 
     sys.modules.pop(module_name, None)
+    if previous_module is not marker:
+        sys.modules[module_name] = previous_module
     if previous_attribute is marker:
         if hasattr(services_package, "tianhua_pre_delivery"):
             delattr(services_package, "tianhua_pre_delivery")

@@ -174,7 +174,7 @@ def test_p1_16e2_current_twin_only_lists_compatible_target_pallets() -> None:
     assert "normalizePalletMergeCandidate(selectedLocation, pallet)" in WAREHOUSE_TWIN
     assert "palletMergeCompatibility(mergeSources[0], mergeCandidate.candidate)" in WAREHOUSE_TWIN
     assert "palletMergeTargetChoices(mergeSources)" in WAREHOUSE_TWIN
-    assert "目标必须是上方已选集合中的一块" in WAREHOUSE_TWIN
+    assert "已选集合中没有通过位置门禁的目标栈板" in WAREHOUSE_TWIN
     assert "原生单位" in WAREHOUSE_TWIN or "warehousePalletMergeDraft" in WAREHOUSE_TWIN
 
 

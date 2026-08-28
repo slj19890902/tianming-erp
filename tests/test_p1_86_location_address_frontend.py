@@ -61,7 +61,8 @@ def test_search_map_labels_and_cross_module_views_prefer_current_chinese_address
     assert "function readableLocation(row)" in warehouse
     assert "function readableAssetLocation(row)" in warehouse
     assert "employee_location_name||row?.current_address_name||row?.location_name" in warehouse
-    assert 'guide.kind==="manual"?"位置待人工核对"' in warehouse
+    assert "位置待人工核对" not in warehouse
+    assert "位置待确认" in warehouse
     assert '${h(readableAssetLocation(row))}' in warehouse
     assert '${h(readableLocation(row.location))}' in warehouse
     assert "result.location_match" in warehouse

@@ -176,7 +176,6 @@ def test_mold_print_status_frontend_uses_registered_single_and_batch_actions() -
         encoding="utf-8"
     )
     for marker in (
-        "已打印",
         "未打印",
         "label_print_status",
         "registerAndOpenMoldLabels",
@@ -189,5 +188,6 @@ def test_mold_print_status_frontend_uses_registered_single_and_batch_actions() -
         "只会打开页面，不会重复登记",
     ):
         assert marker in warehouse
+    assert "正常启用与已打印" not in warehouse
     assert re.search(r'onclick="openMoldLabel\(\$\{row\.id\}\)"', warehouse)
     assert "window.open('/mold-label.html?mold_id=${row.id}'" not in warehouse

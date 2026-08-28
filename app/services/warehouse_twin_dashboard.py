@@ -137,13 +137,25 @@ def _lot_business_fields(row: InventoryLot) -> dict:
         }
     if row.semi_finished_detail is not None:
         detail = row.semi_finished_detail
+        allowed_product_ids = sorted(
+            {
+                int(binding.product_id)
+                for binding in row.allowed_products
+                if binding.product_id is not None
+            }
+        )
         dimensions = (
             f"{detail.board_length_mm}×{detail.board_width_mm}mm"
             if detail.board_length_mm and detail.board_width_mm
             else None
         )
         return {
-            "product_id": None,
+            "product_id": (
+                allowed_product_ids[0]
+                if len(allowed_product_ids) == 1
+                else None
+            ),
+            "allowed_product_ids": allowed_product_ids,
             "inventory_code": detail.material_code_snapshot,
             "product_name": (
                 detail.internal_name

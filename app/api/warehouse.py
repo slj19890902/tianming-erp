@@ -8321,6 +8321,12 @@ def confirm_twin_stocktake_batch(
 ) -> dict:
     """Atomically confirm one map stocktake draft into the formal ledger."""
 
+    if any(item.operation == "add" for item in payload.items) and user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="盘点补录会增加正式库存，只能由管理员确认；普通盘点人员仍可调减或定位现有库存。",
+        )
+
     items = [
         WarehouseStocktakeBatchItem(
             client_item_id=item.client_item_id,

@@ -613,6 +613,25 @@ def test_phase2c12_location_first_product_selection_and_collapsed_rack_details()
     assert "twin-rack-product-detail" in SOURCE
 
 
+def test_p1_123_stocktake_accepts_current_map_and_guides_existing_move_before_admin_supplement() -> None:
+    assert '["TWIN_V1", "CURRENT_MAP"].includes(sourceVersion)' in STOCKTAKE_DRAFT
+    assert "缺少受支持的正式地图来源" not in STOCKTAKE_DRAFT
+    assert "stocktakeBlockResolution" in STOCKTAKE_DRAFT
+    assert "stocktakeExistingProductLocations" in STOCKTAKE_DRAFT
+    assert "不可盘点调减：{stocktakeBlockReason}" in SOURCE
+    assert "解决方法：{stocktakeBlockResolution(stocktakeBlockReason)}" in SOURCE
+    assert "解决方法：${stocktakeBlockResolution(message)}" in SOURCE
+    assert "选择本区域盘点货位" in SOURCE
+    assert 'aria-label="盘点目标货位"' in SOURCE
+    assert "客户全称、中文简称、缩写或客户编码" in SOURCE
+    assert "存货编码、客户料号或产品名称" in SOURCE
+    assert "先核对仓库现有库存" in SOURCE
+    assert "先移入这里" in SOURCE
+    assert "现存数量仍不足，补录缺少部分" in SOURCE
+    assert "盘点补录会增加正式库存，只能由管理员确认" in SOURCE
+    assert "补录会建立独立的盘点库存批次，不挂到已有订单" in SOURCE
+
+
 def test_built_twin_entry_uses_versioned_assets() -> None:
     assert 'id="warehouse-twin-root"' in BUILT
     assert "/factory-twin-assets/assets/" in BUILT

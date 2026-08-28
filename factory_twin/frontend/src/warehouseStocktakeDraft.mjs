@@ -29,11 +29,11 @@ export function stocktakeLocationBlockReason(location) {
   if (!positiveInteger(location.map_position?.version)) return "该货位缺少当前地图版本，请刷新后重试。";
   const floorCode = String(location.floor_code || "");
   const sourceVersion = String(location.source_version || "");
-  const supportedSource = sourceVersion === "TWIN_V1"
+  const supportedSource = ["TWIN_V1", "CURRENT_MAP"].includes(sourceVersion)
     ? ["1F", "3F"].includes(floorCode)
     : sourceVersion === "V11" && floorCode === "3F";
   if (!supportedSource) {
-    return "该货位缺少受支持的正式地图来源，仅允许 TWIN_V1 一楼/三楼或 V11 三楼库位。";
+    return "该货位尚未接入可盘点的正式地图。";
   }
   if (!normalized(location.area_code) || !normalized(location.location_code)) {
     return "该货位缺少正式区域或库位编码，不能加入盘点草稿。";
@@ -76,6 +76,91 @@ export function stocktakeDecreaseBlockReason(item) {
   if (item.stocktake_decrease_eligible === true) return null;
   return String(item.stocktake_decrease_block_reason || "").trim()
     || "该批次未通过盘点调减资格校验，请刷新后核对库存状态。";
+}
+
+export function stocktakeBlockResolution(reason) {
+  const message = String(reason || "").trim();
+  if (!message) return "刷新地图后重新选择该货位；仍有提示时请联系管理员核对正式库存。";
+  if (/预占|待送分配|业务任务/.test(message)) {
+    return "先在对应订单或送货任务中释放占用，再刷新地图重新盘点。";
+  }
+  if (/冻结/.test(message)) {
+    return "先由管理员完成冻结库存复核和解冻；冻结期间不能直接调减。";
+  }
+  if (/生产完工|生产任务|采购用途/.test(message)) {
+    return "该库存仍有业务来源约束，请从对应生产、来料或任务单处理，不能用盘点绕过。";
+  }
+  if (/尚未发布|正式地图|地图位置|地图版本|正式区域|正式楼层|正式货位|位置不可用|已停用/.test(message)) {
+    return "请管理员在区域规划中完成区域启用、货位发布和位置保存，然后刷新地图再盘点。";
+  }
+  if (/未完成盘点|盘点任务/.test(message)) {
+    return "先完成或撤销已有盘点单，再刷新地图重新操作。";
+  }
+  if (/报损|报废/.test(message)) {
+    return "先在库存明细中处理报损或报废数量，再对剩余可用库存盘点。";
+  }
+  if (/单位|类型/.test(message)) {
+    return "请改选与货位用途、库存类型和单位一致的正式货物；不要直接改写数量。";
+  }
+  return "刷新地图并核对最新库存；仍无法处理时请管理员从库存明细解除对应约束。";
+}
+
+function locationInventoryItems(location) {
+  const palletItems = Array.isArray(location?.pallets)
+    ? location.pallets.flatMap((pallet) => Array.isArray(pallet?.items) ? pallet.items : [])
+    : Array.isArray(location?.pallet?.items)
+      ? location.pallet.items
+      : [];
+  const looseItems = Array.isArray(location?.loose_items) ? location.loose_items : [];
+  return [...palletItems, ...looseItems];
+}
+
+export function stocktakeExistingProductLocations(
+  locations,
+  { customerId, productId, inventoryType, targetFloorCode, targetAreaCode, targetLocationId } = {}
+) {
+  const customer = positiveInteger(customerId);
+  const product = positiveInteger(productId);
+  if (!customer || !product || !["finished", "semi_finished"].includes(inventoryType)) return [];
+  const targetArea = normalized(targetAreaCode);
+  const targetFloor = normalized(targetFloorCode);
+  const targetLocation = positiveInteger(targetLocationId);
+  const matches = [];
+  for (const location of Array.isArray(locations) ? locations : []) {
+    for (const item of locationInventoryItems(location)) {
+      const allowedProductIds = Array.isArray(item?.allowed_product_ids)
+        ? item.allowed_product_ids.map(positiveInteger).filter(Boolean)
+        : [];
+      const productMatches = positiveInteger(item?.product_id) === product
+        || allowedProductIds.includes(product);
+      if (
+        positiveInteger(item?.customer_id) !== customer
+        || !productMatches
+        || item?.inventory_type !== inventoryType
+        || Number(item?.available_quantity || 0) <= 0
+      ) continue;
+      matches.push({
+        ...item,
+        source_location_id: positiveInteger(location.location_id),
+        source_floor_code: String(location.floor_code || ""),
+        source_area_code: location.area_code || null,
+        source_location_code: location.location_code || "",
+        source_location_name: location.employee_location_name || location.location_name || "位置名称待完善",
+        source_layout_version: positiveInteger(location.map_position?.version),
+        is_target_location: positiveInteger(location.location_id) === targetLocation,
+        is_outside_target_area: Boolean(targetArea) && (
+          normalized(location.area_code) !== targetArea
+          || Boolean(targetFloor) && normalized(location.floor_code) !== targetFloor
+        )
+      });
+    }
+  }
+  return matches.sort((left, right) => (
+    Number(right.is_outside_target_area) - Number(left.is_outside_target_area)
+    || String(left.source_floor_code).localeCompare(String(right.source_floor_code), "zh-CN", { numeric: true })
+    || String(left.source_location_name).localeCompare(String(right.source_location_name), "zh-CN", { numeric: true })
+    || Number(left.lot_id || 0) - Number(right.lot_id || 0)
+  ));
 }
 
 export function validateStocktakeDraft(draft) {

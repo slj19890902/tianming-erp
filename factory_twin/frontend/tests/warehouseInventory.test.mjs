@@ -48,7 +48,9 @@ import {
   clearStocktakeDrafts,
   removeStocktakeDraft,
   stocktakeAddBlockReason,
+  stocktakeBlockResolution,
   stocktakeDecreaseBlockReason,
+  stocktakeExistingProductLocations,
   stocktakeLocationBlockReason,
   upsertStocktakeDraft,
   validateStocktakeDraft
@@ -1024,14 +1026,16 @@ test("stocktake location gates reject unsupported floors and dispatch while pres
   assert.equal(stocktakeLocationBlockReason(ground), null);
   assert.equal(stocktakeAddBlockReason(ground, "finished"), null);
   assert.equal(stocktakeLocationBlockReason({ ...ground, floor_code: "1F" }), null);
+  assert.equal(stocktakeLocationBlockReason({ ...ground, source_version: "CURRENT_MAP" }), null);
+  assert.equal(stocktakeLocationBlockReason({ ...ground, source_version: "CURRENT_MAP", floor_code: "1F" }), null);
   assert.equal(stocktakeLocationBlockReason({ ...ground, source_version: "V11" }), null);
-  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: undefined }), /正式地图来源/);
-  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: "twin_v1" }), /正式地图来源/);
-  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: " TWIN_V1 " }), /正式地图来源/);
-  assert.match(stocktakeLocationBlockReason({ ...ground, floor_code: "3f" }), /正式地图来源/);
-  assert.match(stocktakeLocationBlockReason({ ...ground, floor_code: " 3F " }), /正式地图来源/);
-  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: "V11", floor_code: "1F" }), /正式地图来源/);
-  assert.match(stocktakeLocationBlockReason({ ...ground, floor_code: "2F" }), /正式地图来源/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: undefined }), /正式地图/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: "twin_v1" }), /正式地图/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: " TWIN_V1 " }), /正式地图/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, floor_code: "3f" }), /正式地图/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, floor_code: " 3F " }), /正式地图/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, source_version: "V11", floor_code: "1F" }), /正式地图/);
+  assert.match(stocktakeLocationBlockReason({ ...ground, floor_code: "2F" }), /正式地图/);
   assert.match(stocktakeLocationBlockReason({ ...ground, area_code: null }), /正式区域或库位编码/);
   assert.match(stocktakeLocationBlockReason({ ...ground, location_code: null }), /正式区域或库位编码/);
   assert.match(stocktakeLocationBlockReason({ ...ground, area_code: "dispatch" }), /待送区/);
@@ -1042,6 +1046,48 @@ test("stocktake location gates reject unsupported floors and dispatch while pres
   const rack = { ...ground, location_code: "3F-F1-R01", storage_type: "rack" };
   assert.match(stocktakeAddBlockReason(rack, "finished"), /成品.*不支持货架位/);
   assert.equal(stocktakeAddBlockReason({ ...rack, warehouse_type: "semi_finished" }, "semi_finished"), null);
+});
+
+test("stocktake blocked goods include a concrete recovery path", () => {
+  assert.match(stocktakeBlockResolution("库存仍有待送分配预占"), /释放占用/);
+  assert.match(stocktakeBlockResolution("该库存处于冻结状态"), /解冻/);
+  assert.match(stocktakeBlockResolution("该货位尚未接入可盘点的正式地图"), /区域规划.*货位发布/);
+  assert.match(stocktakeBlockResolution("当前仍有未完成盘点任务"), /完成或撤销/);
+});
+
+test("stocktake product lookup finds exact existing stock and sorts other areas first", () => {
+  const item = {
+    lot_id: 71, version: 4, inventory_type: "finished", unit: "boxes",
+    customer_id: 7, product_id: 99, inventory_code: "CP-099", product_name: "五层箱",
+    available_quantity: 12
+  };
+  const locations = [
+    {
+      location_id: 21, floor_code: "3F", area_code: "A1", location_code: "A1-01",
+      location_name: "A1-01", map_position: { version: 3 }, loose_items: [{ ...item, lot_id: 72, available_quantity: 5 }]
+    },
+    {
+      location_id: 31, floor_code: "1F", area_code: "B2", location_code: "B2-01",
+      employee_location_name: "一楼 B2-01", map_position: { version: 6 },
+      pallets: [{ items: [item, { ...item, lot_id: 73, product_id: 100 }] }]
+    },
+    {
+      location_id: 41, floor_code: "3F", area_code: "C1", location_code: "C1-01",
+      location_name: "C1-01", map_position: { version: 2 },
+      loose_items: [{ ...item, lot_id: 74, inventory_type: "semi_finished", product_id: null, allowed_product_ids: [99], unit: "sheets", available_quantity: 20 }]
+    }
+  ];
+  const finished = stocktakeExistingProductLocations(locations, {
+    customerId: 7, productId: 99, inventoryType: "finished", targetFloorCode: "3F", targetAreaCode: "A1", targetLocationId: 21
+  });
+  assert.deepEqual(finished.map((row) => row.lot_id), [71, 72]);
+  assert.equal(finished[0].is_outside_target_area, true);
+  assert.equal(finished[0].source_location_name, "一楼 B2-01");
+  assert.equal(finished[1].is_target_location, true);
+  const semi = stocktakeExistingProductLocations(locations, {
+    customerId: 7, productId: 99, inventoryType: "semi_finished", targetAreaCode: "A1"
+  });
+  assert.deepEqual(semi.map((row) => row.lot_id), [74]);
 });
 
 test("stocktake decrease eligibility fails closed and preserves the backend block reason", () => {

@@ -1127,6 +1127,7 @@ body.warehouse-twin-page {
 .twin-location-item.correction-selected { border-color: #0f766e; background: #e7f6f3; box-shadow: 0 0 0 2px #0f766e1c; }
 .twin-location-item.stocktake-ineligible { border-color: #d8c7c3; border-left-color: #a75548; color: #6f5a56; background: #fff7f5; cursor: not-allowed; opacity: .86; }
 .twin-stocktake-block-reason { margin: 0; padding: 5px 6px; border-left: 3px solid #b42318; color: #8f241b; background: #fff1f0; font-size: 8px; font-weight: 800; line-height: 1.45; }
+.twin-stocktake-resolution { margin: 0; padding: 5px 6px; border-left: 3px solid #0f766e; color: #245c56; background: #ecfdf5; font-size: 8px; font-weight: 700; line-height: 1.45; }
 .twin-formal-divider { position: relative; margin: 5px 0 2px; display: grid; place-items: center; border-top: 1px solid #bdd5d1; }
 .twin-formal-divider span { margin-top: -7px; padding: 0 7px; color: #526b77; background: #f2f9f8; font-size: 8px; font-weight: 800; }
 .twin-correction-form { padding: 8px; display: grid; gap: 7px; border: 1px solid #e2b7a8; border-radius: 3px; background: #fff8f4; }
@@ -1415,6 +1416,23 @@ body.warehouse-twin-page {
 .twin-stocktake-operation { border-color: #0f766e; background: linear-gradient(145deg, #ecfdf5, #f8fafc); }
 .twin-stocktake-operation .twin-correction-form { padding: 7px; display: grid; gap: 6px; border: 1px solid #f4b46c; border-radius: 3px; background: #fffaf2; }
 .twin-stocktake-operation .twin-correction-form > button { padding: 6px 8px; border: 1px solid #b45309; border-radius: 3px; color: #fff; background: #b45309; font-size: 9px; font-weight: 800; }
+.twin-stocktake-area-target { padding: 7px; display: grid; gap: 6px; border: 1px solid #9fc8c0; border-radius: 3px; background: #edf8f6; }
+.twin-stocktake-area-target select { min-width: 0; min-height: 32px; padding: 5px 7px; border: 1px solid #8db9b1; border-radius: 3px; color: #173b49; background: #fff; font-size: 9px; }
+.twin-stocktake-existing-panel { padding: 7px; display: grid; gap: 6px; border: 1px solid #9fc8c0; border-radius: 3px; background: #f3fbf9; }
+.twin-stocktake-existing-panel > p { margin: 0; color: #486963; font-size: 8px; line-height: 1.45; }
+.twin-stocktake-existing-list { max-height: 190px; display: grid; gap: 5px; overflow-y: auto; }
+.twin-stocktake-existing-list article { min-width: 0; padding: 5px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: 5px; border: 1px solid #c9dfda; border-radius: 3px; background: #fff; }
+.twin-stocktake-existing-list button { min-width: 0; border-radius: 3px; font-size: 8px; font-weight: 800; }
+.twin-stocktake-existing-focus { padding: 5px 6px; display: grid; gap: 2px; border: 1px solid #c9dfda; color: #274f4a; background: #fff; text-align: left; }
+.twin-stocktake-existing-focus b,
+.twin-stocktake-existing-focus span,
+.twin-stocktake-existing-focus small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.twin-stocktake-existing-focus b { color: #0f665f; font-size: 9px; }
+.twin-stocktake-existing-focus span,
+.twin-stocktake-existing-focus small { color: #59736f; font-size: 8px; }
+.twin-stocktake-existing-move { padding: 5px 7px; border: 1px solid #0f766e; color: #fff; background: #0f766e; white-space: nowrap; }
+.twin-stocktake-existing-move:disabled { cursor: not-allowed; opacity: .45; }
+.twin-stocktake-supplement-toggle { padding: 6px 8px; border: 1px solid #b45309; border-radius: 3px; color: #8a4305; background: #fff7ed; font-size: 9px; font-weight: 800; }
 .twin-move-draft-heading { min-width: 0; display: grid; align-content: center; gap: 4px; }
 .twin-move-draft-heading div { display: grid; gap: 2px; }
 .twin-move-draft-heading small { color: #a16207; font: 800 8px Consolas, monospace; letter-spacing: .09em; }

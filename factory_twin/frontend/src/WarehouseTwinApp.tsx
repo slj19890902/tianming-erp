@@ -69,11 +69,13 @@ import {
   clearStocktakeDrafts,
   removeStocktakeDraft,
   stocktakeAddBlockReason,
+  stocktakeBlockResolution,
   stocktakeDecreaseBlockReason,
+  stocktakeExistingProductLocations,
   stocktakeLocationBlockReason,
   upsertStocktakeDraft
 } from "./warehouseStocktakeDraft.mjs";
-import type { WarehouseStocktakeDraft } from "./warehouseStocktakeDraft.mjs";
+import type { StocktakeExistingProductLocation, WarehouseStocktakeDraft } from "./warehouseStocktakeDraft.mjs";
 import type {
   AssetTemplate,
   CameraPreset,
@@ -184,6 +186,7 @@ interface InventoryItem {
   specification?: string | null;
   material?: string | null;
   composite_parent_group_key?: string | null;
+  allowed_product_ids?: number[];
   composite_parent_summary?: {
     group_key: string;
     order_item_id: number;
@@ -522,6 +525,7 @@ interface CustomerOption {
   id: number;
   name: string;
   customer_code?: string | null;
+  chinese_short_name?: string | null;
 }
 
 interface CustomerOptionsResponse {
@@ -1583,6 +1587,7 @@ export function WarehouseTwinApp() {
   const [stocktakeProductCandidates, setStocktakeProductCandidates] = useState<ProductCandidate[]>([]);
   const [stocktakeProductId, setStocktakeProductId] = useState("");
   const [stocktakeAddQuantity, setStocktakeAddQuantity] = useState("");
+  const [stocktakeSupplementConfirmed, setStocktakeSupplementConfirmed] = useState(false);
   const [stocktakeStockDate, setStocktakeStockDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [rackFocusId, setRackFocusId] = useState<string | null>(null);
   const [stocktakeLotId, setStocktakeLotId] = useState<number | null>(null);
@@ -2401,6 +2406,42 @@ export function WarehouseTwinApp() {
   const selectedAreaLocations = visualLocations.filter(
     (item) => item.floor_code === floorCode && item.area_code === selectedAreaCode && item.is_active
   );
+  const stocktakeAreaTargetLocations = selectedAreaLocations
+    .filter((location) => (
+      !locationDrafts[location.location_id]
+      && !palletColumnConflictIds.has(`erp-location-${location.location_id}`)
+      && !stocktakeLocationBlockReason(location)
+    ))
+    .sort((left, right) => employeeLocationName(left).localeCompare(
+      employeeLocationName(right), "zh-CN", { numeric: true }
+    ));
+  const stocktakeExistingLocations = useMemo<StocktakeExistingProductLocation[]>(
+    () => stocktakeExistingProductLocations(visualLocations, {
+      customerId: stocktakeCustomerId,
+      productId: stocktakeProductId,
+      inventoryType: stocktakeInventoryType,
+      targetFloorCode: selectedLocation?.floor_code || floorCode,
+      targetAreaCode: selectedLocation?.area_code || selectedAreaCode,
+      targetLocationId: selectedLocation?.location_id
+    }),
+    [
+      visualLocations,
+      stocktakeCustomerId,
+      stocktakeProductId,
+      stocktakeInventoryType,
+      selectedLocation?.floor_code,
+      selectedLocation?.area_code,
+      selectedLocation?.location_id,
+      floorCode,
+      selectedAreaCode
+    ]
+  );
+  const stocktakeOutsideAreaLocations = stocktakeExistingLocations.filter(
+    (item) => item.is_outside_target_area && !item.is_target_location
+  );
+  const stocktakeOutsideAreaAvailable = stocktakeOutsideAreaLocations.reduce(
+    (total, item) => total + Number(item.available_quantity || 0), 0
+  );
   const selectedAreaLocationCount = selectedAreaLocations.length;
   const selectedAreaLayoutVersions = Object.fromEntries(
     selectedAreaLocations
@@ -2740,6 +2781,7 @@ export function WarehouseTwinApp() {
     setStocktakeProductCandidates([]);
     setStocktakeProductId("");
     setStocktakeAddQuantity("");
+    setStocktakeSupplementConfirmed(false);
     setStocktakeLotId(null);
     setStocktakeDecreaseQuantity("");
     setWarehouseOperationMessage("");
@@ -3231,19 +3273,21 @@ export function WarehouseTwinApp() {
     );
   };
 
-  const queueMoveDraft = (source: WarehouseMoveSource, target: DashboardLocation) => {
+  const queueMoveDraft = (source: WarehouseMoveSource, target: DashboardLocation, quantityOverride?: number) => {
     if (!target.map_position) {
       setWarehouseOperationMessage("目标货位布局版本缺失，请刷新地图后重试。");
-      return;
+      return false;
     }
     if (source.source_location_id === target.location_id) {
       setWarehouseOperationMessage("来源与目标不能是同一货位。");
-      return;
+      return false;
     }
-    const quantity = source.operation === "lot_transfer" ? Number(moveQuantity || source.quantity) : undefined;
+    const quantity = source.operation === "lot_transfer"
+      ? Number(quantityOverride ?? (moveQuantity || source.quantity))
+      : undefined;
     if (source.operation === "lot_transfer" && (!Number.isFinite(quantity) || Number(quantity) <= 0 || Number(quantity) > Number(source.max_quantity || 0))) {
       setWarehouseOperationMessage(`移动数量必须大于 0，且不能超过可移动 ${formatNumber(source.max_quantity)} ${inventoryUnitLabel(source.unit)}。`);
-      return;
+      return false;
     }
     const draft: WarehouseMoveDraft = {
       ...source,
@@ -3259,12 +3303,13 @@ export function WarehouseTwinApp() {
     const result = upsertMoveDraft(moveDrafts, draft);
     if (result.error) {
       setWarehouseOperationMessage(result.error);
-      return;
+      return false;
     }
     setMoveDrafts(result.items);
     setMoveBatchIdempotencyKey(operationKey("warehouse-move-batch"));
     setMoveDraftTargetLocationId("");
     setWarehouseOperationMessage(`已加入页面草稿：${source.source_location_name} → ${target.location_name}；尚未写入，底部一次确认后才提交。`);
+    return true;
   };
 
   const addSelectedMoveDraft = () => {
@@ -3735,7 +3780,78 @@ export function WarehouseTwinApp() {
     }
   };
 
+  const selectStocktakeTargetLocation = (locationId: number) => {
+    const target = visualLocations.find((item) => item.location_id === locationId);
+    if (!target) {
+      setWarehouseOperationMessage("该货位已不在当前地图中，请刷新后重新选择。");
+      return;
+    }
+    if (target.warehouse_type === "semi_finished") setStocktakeInventoryType("semi_finished");
+    if (target.warehouse_type === "finished") setStocktakeInventoryType("finished");
+    setStocktakeSupplementConfirmed(false);
+    setSelected({ kind: "pallet", id: `erp-location-${target.location_id}` });
+    cameraFocusSequenceRef.current += 1;
+    setCameraFocusTarget({
+      entity: { kind: "pallet", id: `erp-location-${target.location_id}` },
+      token: cameraFocusSequenceRef.current,
+      source: "search"
+    });
+    setWarehouseOperationMessage(`已选择盘点目标：${employeeLocationName(target)}。先查客户和产品，系统会优先列出现有库存位置。`);
+  };
+
+  const focusStocktakeExistingLocation = (match: StocktakeExistingProductLocation) => {
+    if (match.source_floor_code === "1F" || match.source_floor_code === "3F") {
+      setFloorCode(match.source_floor_code);
+    }
+    if (match.source_location_id) {
+      setPendingLocationId(match.source_location_id);
+    }
+    setWarehouseOperationMessage(
+      `已定位现有库存：${match.source_location_name} · 可用 ${formatNumber(match.available_quantity)} ${inventoryUnitLabel(match.unit)}。`
+    );
+  };
+
+  const queueStocktakeExistingMove = (match: StocktakeExistingProductLocation) => {
+    if (!canExecuteWarehouse || !selectedLocation) {
+      setWarehouseOperationMessage("当前账号不能执行移货，或尚未选择目标货位。请联系有移货权限的管理员处理。");
+      return;
+    }
+    if (selectedLocation.occupancy_status !== "empty") {
+      setWarehouseOperationMessage("优先移入现有库存需要选择一个空货位作为目标；当前位置已有货物，请改选同区域空货位。");
+      return;
+    }
+    const sourceLocation = visualLocations.find((item) => item.location_id === match.source_location_id);
+    const sourceItem = sourceLocation
+      ? inventoryLocationItems(sourceLocation).find((item) => item.lot_id === match.lot_id) as InventoryItem | undefined
+      : undefined;
+    const source = sourceLocation && sourceItem ? lotMoveSource(sourceLocation, sourceItem) : null;
+    if (!source || source.operation !== "lot_transfer" || sourceItem?.inventory_type !== "finished") {
+      setWarehouseOperationMessage("该现有库存目前只能定位查看，不能从盘点页直接移入；请先使用移动位置处理，不能用新增代替移货。");
+      return;
+    }
+    const requested = Number(stocktakeAddQuantity);
+    const available = Number(match.available_quantity || 0);
+    const quantity = Number.isInteger(requested) && requested > 0
+      ? Math.min(requested, available)
+      : available;
+    if (!queueMoveDraft(source, selectedLocation, quantity)) return;
+    setMoveAction("relocate");
+    setMoveSource(null);
+    setMoveQuantity("");
+    setWarehouseOperationMessage(
+      `已优先加入现有库存移货草稿：${match.source_location_name} → ${employeeLocationName(selectedLocation)} · ${formatNumber(quantity)} ${inventoryUnitLabel(match.unit)}。请先提交移货，再回到盘点补录确实缺少的数量。`
+    );
+  };
+
   const queueStocktakeAddDraft = () => {
+    if (!canEditLocations) {
+      setWarehouseOperationMessage("盘点补录会增加正式库存，只能由管理员确认；普通盘点人员可先定位或移入现有库存。");
+      return;
+    }
+    if (stocktakeOutsideAreaLocations.length && !stocktakeSupplementConfirmed) {
+      setWarehouseOperationMessage("仓库其他区域已有该产品，请先移入现有库存；确认现存数量仍不足后，才能补录缺少部分。");
+      return;
+    }
     if (selectedLocationAddBlockReason) {
       setWarehouseOperationMessage(selectedLocationAddBlockReason);
       return;
@@ -3823,7 +3939,8 @@ export function WarehouseTwinApp() {
       setStocktakeBatchIdempotencyKey(operationKey("warehouse-stocktake-batch"));
       setWarehouseOperationMessage("盘点调整已整批成功，地图已刷新。");
     } catch (reason) {
-      setWarehouseOperationMessage(`盘点整批提交失败：${(reason as Error).message}。页面草稿与本次幂等键已保留，可核对后重试。`);
+      const message = (reason as Error).message;
+      setWarehouseOperationMessage(`盘点整批提交失败：${message}。解决方法：${stocktakeBlockResolution(message)} 页面草稿与本次幂等键已保留，可核对后重试。`);
     } finally {
       setStocktakeBatchBusy(false);
     }
@@ -5024,7 +5141,10 @@ export function WarehouseTwinApp() {
               <div className="twin-location-item-code"><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>
               <h4>{item.product_name || "产品名称待补充"}</h4>
               <div className="twin-location-item-summary"><span>{item.customer_name || "客户待确认"}</span></div>
-              {stocktakeBlockReason && <small className="twin-stocktake-block-reason">不可盘点调减：{stocktakeBlockReason}</small>}
+              {stocktakeBlockReason && <>
+                <small className="twin-stocktake-block-reason">不可盘点调减：{stocktakeBlockReason}</small>
+                <small className="twin-stocktake-resolution">解决方法：{stocktakeBlockResolution(stocktakeBlockReason)}</small>
+              </>}
             </button>;
           })}
           {mapMode === "lookup" && selectedLocationLookupItems.length > 4 && <button type="button" className="twin-detail-toggle" aria-expanded={locationItemsExpanded} onClick={() => setLocationItemsExpanded((current) => !current)}>{locationItemsExpanded ? "收起货物" : `查看全部 ${selectedLocationLookupItems.length} 条非组合货物`}</button>}
@@ -5095,21 +5215,34 @@ export function WarehouseTwinApp() {
             <div className="twin-formal-operation-title"><b>正式货位盘点调整</b><span>{selectedLocation.floor_code} · {selectedLocation.area_code || "未分区"} · {selectedLocation.location_name}</span></div>
             <p className="twin-map-pick-hint">这里只加入页面草稿；底部一次确认后，整批写正式盘点流水。无需填写原因，不会新建客户或产品。</p>
             <div className="twin-map-inbound-type" role="tablist" aria-label="盘点新增库存类型">
-              <button type="button" className={stocktakeInventoryType === "finished" ? "active" : ""} disabled={Boolean(selectedLocationFinishedAddBlockReason)} title={selectedLocationFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); }}>成品 · 固定单位箱</button>
-              <button type="button" className={stocktakeInventoryType === "semi_finished" ? "active" : ""} disabled={Boolean(selectedLocationSemiFinishedAddBlockReason)} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("semi_finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); }}>半成品 · 固定单位张</button>
+              <button type="button" className={stocktakeInventoryType === "finished" ? "active" : ""} disabled={Boolean(selectedLocationFinishedAddBlockReason)} title={selectedLocationFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>成品 · 固定单位箱</button>
+              <button type="button" className={stocktakeInventoryType === "semi_finished" ? "active" : ""} disabled={Boolean(selectedLocationSemiFinishedAddBlockReason)} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("semi_finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>半成品 · 固定单位张</button>
             </div>
             {selectedLocationAddBlockReason && <p className="twin-stocktake-block-reason">当前新增类型不可用：{selectedLocationAddBlockReason}</p>}
-            <label><span>1　查找已有客户</span><input value={stocktakeCustomerQuery} onChange={(event) => { setStocktakeCustomerQuery(event.target.value); setStocktakeCustomerId(""); setStocktakeProductId(""); }} placeholder="客户全称、简称或客户编码" /></label>
-            <label><span>确认已有客户</span><select value={stocktakeCustomerId} onChange={(event) => { setStocktakeCustomerId(event.target.value); setStocktakeProductQuery(""); setStocktakeProductId(""); }}><option value="">请选择客户</option>{stocktakeCustomers.map((item) => <option key={item.id} value={item.id}>{item.customer_code ? `${item.customer_code} · ` : ""}{item.name}</option>)}</select></label>
-            <label><span>2　筛选该客户已有产品</span><input value={stocktakeProductQuery} disabled={!stocktakeCustomerId} onChange={(event) => { setStocktakeProductQuery(event.target.value); setStocktakeProductId(""); }} placeholder={stocktakeCustomerId ? "存货编码或产品名称；留空显示候选" : "请先确认客户"} /></label>
-            <label><span>确认已有产品</span><select value={stocktakeProductId} disabled={!stocktakeCustomerId} onChange={(event) => setStocktakeProductId(event.target.value)}><option value="">请选择产品</option>{stocktakeProductCandidates.map((item) => <option key={item.product_id} value={item.product_id}>{item.product_code || item.customer_material_code || item.product_id} · {item.product_name}</option>)}</select></label>
+            <label><span>1　查找已有客户</span><input value={stocktakeCustomerQuery} onChange={(event) => { setStocktakeCustomerQuery(event.target.value); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }} placeholder="客户全称、中文简称、缩写或客户编码" /></label>
+            <label><span>确认已有客户</span><select value={stocktakeCustomerId} onChange={(event) => { setStocktakeCustomerId(event.target.value); setStocktakeProductQuery(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}><option value="">请选择客户</option>{stocktakeCustomers.map((item) => <option key={item.id} value={item.id}>{item.chinese_short_name ? `${item.chinese_short_name} · ` : ""}{item.customer_code ? `${item.customer_code} · ` : ""}{item.name}</option>)}</select></label>
+            <label><span>2　筛选该客户已有产品</span><input value={stocktakeProductQuery} disabled={!stocktakeCustomerId} onChange={(event) => { setStocktakeProductQuery(event.target.value); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }} placeholder={stocktakeCustomerId ? "存货编码、客户料号或产品名称；留空显示候选" : "请先确认客户"} /></label>
+            <label><span>确认已有产品</span><select value={stocktakeProductId} disabled={!stocktakeCustomerId} onChange={(event) => { setStocktakeProductId(event.target.value); setStocktakeSupplementConfirmed(false); }}><option value="">请选择产品</option>{stocktakeProductCandidates.map((item) => <option key={item.product_id} value={item.product_id}>{item.product_code || item.customer_material_code || item.product_id} · {item.product_name}</option>)}</select></label>
             {selectedStocktakeProduct && <small className="twin-formal-selected">{selectedStocktakeProduct.customer_name} / {selectedStocktakeProduct.product_code || selectedStocktakeProduct.customer_material_code || "编码待补充"} / {selectedStocktakeProduct.product_name}</small>}
-            <div className="twin-formal-operation-grid"><label><span>盘点新增数量（{stocktakeInventoryType === "finished" ? "箱" : "张"}）</span><input type="number" min="1" step="1" value={stocktakeAddQuantity} onChange={(event) => setStocktakeAddQuantity(event.target.value)} /></label><label><span>库存日期</span><input type="date" value={stocktakeStockDate} onChange={(event) => setStocktakeStockDate(event.target.value)} /></label></div>
-            <button type="button" className="twin-primary-action" title={selectedLocationAddBlockReason || ""} disabled={!selectedStocktakeCustomer || !selectedStocktakeProduct || !stocktakeAddQuantity || !stocktakeStockDate || !selectedLocationCanReceiveStocktakeProduct} onClick={queueStocktakeAddDraft}>加入盘点新增草稿</button>
+            {selectedStocktakeProduct && <div className="twin-stocktake-existing-panel">
+              <div className="twin-formal-operation-title"><b>先核对仓库现有库存</b><span>{stocktakeOutsideAreaAvailable} {inventoryUnitLabel(stocktakeInventoryType === "finished" ? "boxes" : "sheets")} 在其他区域可用</span></div>
+              {stocktakeOutsideAreaLocations.length ? <div className="twin-stocktake-existing-list">{stocktakeOutsideAreaLocations.map((match) => <article key={`stocktake-existing-${match.lot_id}`}>
+                <button type="button" className="twin-stocktake-existing-focus" onClick={() => focusStocktakeExistingLocation(match)}><b>{match.source_location_name}</b><span>{match.inventory_code || selectedStocktakeProduct.product_name}</span><small>可用 {formatNumber(match.available_quantity)} {inventoryUnitLabel(match.unit)}</small></button>
+                {match.inventory_type === "finished" && canExecuteWarehouse && <button type="button" className="twin-stocktake-existing-move" disabled={selectedLocation.occupancy_status !== "empty" || !match.version} onClick={() => queueStocktakeExistingMove(match)}>先移入这里</button>}
+              </article>)}</div> : <p>其他区域没有该产品的可用库存，可以按现场实际缺少数量补录。</p>}
+              {stocktakeOutsideAreaLocations.length > 0 && selectedLocation.occupancy_status !== "empty" && <small className="twin-stocktake-block-reason">当前位置已有货物。要优先移入现有库存，请先在本区域选择空货位。</small>}
+              {stocktakeOutsideAreaLocations.length > 0 && !canExecuteWarehouse && <small className="twin-stocktake-block-reason">当前账号只能盘点，不能移货；请联系有移货权限的管理员先处理现有库存。</small>}
+              {stocktakeOutsideAreaLocations.some((item) => item.inventory_type === "semi_finished") && <small className="twin-stocktake-resolution">半成品现有库存先按位置定位核对；当前盘点页不伪造半成品移货，需使用库存明细的正式转位流程。</small>}
+            </div>}
+            <div className="twin-formal-operation-grid"><label><span>本次需处理数量（{stocktakeInventoryType === "finished" ? "箱" : "张"}）</span><input type="number" min="1" step="1" value={stocktakeAddQuantity} onChange={(event) => { setStocktakeAddQuantity(event.target.value); setStocktakeSupplementConfirmed(false); }} /></label><label><span>库存日期</span><input type="date" value={stocktakeStockDate} onChange={(event) => setStocktakeStockDate(event.target.value)} /></label></div>
+            {!canEditLocations && <p className="twin-stocktake-block-reason">盘点补录会增加正式库存，只能由管理员确认；你仍可定位现有库存并按权限移货或调减。</p>}
+            {canEditLocations && stocktakeOutsideAreaLocations.length > 0 && !stocktakeSupplementConfirmed && <button type="button" className="twin-stocktake-supplement-toggle" onClick={() => setStocktakeSupplementConfirmed(true)}>现存数量仍不足，补录缺少部分</button>}
+            {canEditLocations && (!stocktakeOutsideAreaLocations.length || stocktakeSupplementConfirmed) && <button type="button" className="twin-primary-action" title={selectedLocationAddBlockReason || ""} disabled={!selectedStocktakeCustomer || !selectedStocktakeProduct || !stocktakeAddQuantity || !stocktakeStockDate || !selectedLocationCanReceiveStocktakeProduct} onClick={queueStocktakeAddDraft}>加入盘点补录草稿</button>}
+            {canEditLocations && <small className="twin-stocktake-resolution">补录会建立独立的盘点库存批次，不挂到已有订单；库存总数和地图位置仍进入同一正式台账。</small>}
             {selectedLocationItems.length > 0 && <div className="twin-formal-divider"><span>调减当前真实批次</span></div>}
-            {selectedStocktakeItem?.version ? <div className="twin-correction-form"><b>{selectedStocktakeItem.inventory_code || selectedStocktakeItem.lot_number} · 可用 {formatNumber(selectedStocktakeItem.available_quantity)} {inventoryUnitLabel(selectedStocktakeItem.unit)}</b><label><span>本次调减数量</span><input type="number" min="1" max={selectedStocktakeItem.available_quantity || undefined} step="1" value={stocktakeDecreaseQuantity} onChange={(event) => setStocktakeDecreaseQuantity(event.target.value)} /></label>{selectedStocktakeDecreaseBlockReason && <small className="twin-stocktake-block-reason">不可盘点调减：{selectedStocktakeDecreaseBlockReason}</small>}<button type="button" title={selectedStocktakeDecreaseBlockReason || ""} disabled={Boolean(selectedStocktakeDecreaseBlockReason) || !stocktakeDecreaseQuantity || Number(stocktakeDecreaseQuantity) > Number(selectedStocktakeItem.available_quantity || 0)} onClick={queueStocktakeDecreaseDraft}>加入盘点调减草稿</button><small>调减至零后地图只隐藏空卡；批次、流水和审计历史保留。</small></div> : selectedLocationItems.length > 0 && <p className="twin-correction-hint">点击上方一个可盘点调减的真实产品卡，再输入调减数量；不能大于当前可用量。</p>}
+            {selectedStocktakeItem?.version ? <div className="twin-correction-form"><b>{selectedStocktakeItem.inventory_code || selectedStocktakeItem.lot_number} · 可用 {formatNumber(selectedStocktakeItem.available_quantity)} {inventoryUnitLabel(selectedStocktakeItem.unit)}</b><label><span>本次调减数量</span><input type="number" min="1" max={selectedStocktakeItem.available_quantity || undefined} step="1" value={stocktakeDecreaseQuantity} onChange={(event) => setStocktakeDecreaseQuantity(event.target.value)} /></label>{selectedStocktakeDecreaseBlockReason && <><small className="twin-stocktake-block-reason">不可盘点调减：{selectedStocktakeDecreaseBlockReason}</small><small className="twin-stocktake-resolution">解决方法：{stocktakeBlockResolution(selectedStocktakeDecreaseBlockReason)}</small></>}<button type="button" title={selectedStocktakeDecreaseBlockReason || ""} disabled={Boolean(selectedStocktakeDecreaseBlockReason) || !stocktakeDecreaseQuantity || Number(stocktakeDecreaseQuantity) > Number(selectedStocktakeItem.available_quantity || 0)} onClick={queueStocktakeDecreaseDraft}>加入盘点调减草稿</button><small>调减至零后地图只隐藏空卡；批次、流水和审计历史保留。</small></div> : selectedLocationItems.length > 0 && <p className="twin-correction-hint">点击上方一个可盘点调减的真实产品卡，再输入调减数量；不能大于当前可用量。</p>}
           </section>}
-          {canStocktake && mapMode === "move" && moveAction === "stocktake" && viewMode === "2d" && !locationEditMode && !selectedLocationBaseReceivable && <p className="twin-location-readonly-note">{selectedLocationStocktakeBlockReason || "该位置不能加入盘点草稿。"}</p>}
+          {canStocktake && mapMode === "move" && moveAction === "stocktake" && viewMode === "2d" && !locationEditMode && !selectedLocationBaseReceivable && <div className="twin-location-readonly-note"><b>{selectedLocationStocktakeBlockReason || "该位置不能加入盘点草稿。"}</b><span>解决方法：{stocktakeBlockResolution(selectedLocationStocktakeBlockReason)}</span></div>}
           {locationEditMode && advancedAreaMaintenanceOpen && canEditLocations && <div className="twin-location-edit-actions">
             <button type="button" disabled={!selectedLocation.map_position || locationEditBusy} onClick={exchangeLocationDraft}>{swapSourceLocationId === null ? "设为交换起点" : swapSourceLocationId === selectedLocation.location_id ? "已选交换起点" : `与 ${visualLocations.find((item) => item.location_id === swapSourceLocationId)?.location_code || "起点"} 交换位置`}</button>
             <button type="button" className="danger" disabled={selectedLocation.occupancy_status !== "empty" || !selectedLocation.map_position || locationEditBusy} onClick={disableSelectedLocation}>停用空库位</button>
@@ -5120,6 +5253,14 @@ export function WarehouseTwinApp() {
           {selectedAreaFeature ? <>
             <div className="twin-inventory-title"><div><small>{locationEditMode && canEditLocations ? `当前规划区域 · ${selectedAreaCode || selectedAreaFeature.feature_code}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b></div><span>{selectedAreaActivationLabel}</span></div>
             <div className="twin-selection-summary area"><span><small>区域状态</small><b>{selectedAreaActivationLabel}</b></span><span><small>最大容量</small><b>{selectedAreaCapacitySummary}</b></span><span><small>{selectedAreaIsMold ? "当前模具" : "当前库存"}</small><b>{selectedAreaIsMold ? `${moldAreaResponse?.total || 0} 件` : selectedAreaQuantitySummary === "0" ? "0 · 当前无货" : selectedAreaQuantitySummary}</b></span></div>
+            {selectedFeature && canStocktake && mapMode === "move" && moveAction === "stocktake" && viewMode === "2d" && !locationEditMode && <div className="twin-stocktake-area-target">
+              <div className="twin-formal-operation-title"><b>选择本区域盘点货位</b><span>{stocktakeAreaTargetLocations.length} 个当前可用</span></div>
+              <select aria-label="盘点目标货位" defaultValue="" onChange={(event) => {
+                const locationId = Number(event.target.value);
+                if (locationId > 0) selectStocktakeTargetLocation(locationId);
+              }}><option value="">请选择具体货位</option>{stocktakeAreaTargetLocations.map((location) => <option value={location.location_id} key={location.location_id}>{employeeLocationName(location)} · {location.occupancy_status === "empty" ? "空位" : "已有货物"}</option>)}</select>
+              {!stocktakeAreaTargetLocations.length && <p className="twin-stocktake-block-reason">本区域没有可盘点货位。解决方法：请管理员先在区域规划中启用区域、发布货位并保存现场位置。</p>}
+            </div>}
             {(areaInventorySearch || (selectedAreaIsMold ? (moldAreaResponse?.total || 0) > 5 : selectedInventory.length > 5)) && <label className="twin-area-filter twin-area-filter-prominent">
               <span>{selectedAreaIsMold ? "当前区域模具筛选" : "当前区域库存筛选"}</span>
               <input value={areaInventorySearch} onChange={(event) => { setAreaInventorySearch(event.target.value); setMoldAreaPage(1); }} placeholder={selectedAreaIsMold ? "模具编号、名称、客户或存货编码" : "存货编码、产品、客户、位置"} />

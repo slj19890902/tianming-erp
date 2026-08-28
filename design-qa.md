@@ -67,13 +67,15 @@ final result: passed
 
 ---
 
-# P0-29 仓库定位联动与合并信息精简 Design QA（2026-08-28）
+# P0-29 仓库定位联动、顶部空间与合并筛选 Design QA（2026-08-28）
 
 ## Comparison target
 
 - Source: the four 1294×920 warehouse screenshots annotated by the owner in this task, covering the ERP warehouse shell, embedded command bar, toolbar and right inventory inspector.
-- Implementation: v0.22.209 candidate assets built from `factory_twin/frontend` in the isolated worktree.
-- Required viewport: 1294×920, matching the supplied screenshots.
+- Implementation: v0.22.211 replacement candidate assets built from `factory_twin/frontend` in the isolated worktree.
+- Required viewports: 1294×920, matching the supplied screenshots, plus 1600×1000 desktop expansion.
+- Implementation screenshot (compact): `D:\tm-worktrees\p0-29-warehouse-interactions-20260828\warehouse-ui-merge-1294x920.png`.
+- Implementation screenshot (desktop): `D:\tm-worktrees\p0-29-warehouse-interactions-20260828\warehouse-ui-merge-1600x1000.png`.
 
 ## Implemented fidelity and interaction changes
 
@@ -82,21 +84,26 @@ final result: passed
 - Merge selection removes grey instructional paragraphs and internal pallet identifiers, uses one horizontal row of location and quantity chips, and highlights every selected map location in purple.
 - The map palette uses pale green aisles, green empty locations, blue occupied locations, and purple selected or located results. The selection marker is a rectangular location highlight instead of a circular ring.
 - Merge mode expands the right inventory inspector and raises the warehouse UI minimum readable text size to 12px.
+- Warehouse metrics now occupy the top ERP bar beside the warehouse entry; the embedded map no longer spends a separate row on those metrics or the `库存与库位` heading.
+- High-frequency map controls and the four movement actions occupy the compact top command row, increasing the usable map height.
+- Pallet merge now supports an authorized-customer selector plus multi-term stock-code, product, specification and location filtering before pallet selection.
 
 ## Automated evidence
 
-- Node interaction tests: 91 passed.
-- Python frontend and warehouse integration group: 75 passed.
+- Node interaction tests: 92 passed.
+- Python shell, warehouse-viewer and P0-29 integration group: 65 passed.
 - TypeScript `tsc --noEmit`: passed.
 - Vite production build: passed; HTML and generated asset references are closed.
 
 ## Browser comparison status
 
-- Chrome was selected as required by repository policy. The extension repeatedly timed out while claiming and reading the already-open warehouse tab, including after a fresh connection.
-- The prohibited in-app browser was not used as a substitute. No formal database, runtime map or production service was changed for this QA attempt.
-- Therefore the code and interaction gates pass, but the same-viewport visual comparison and click-through acceptance remain blocked until Chrome control is available or factory personnel perform the listed acceptance steps.
+- Chrome loaded the isolated candidate shell with live GET-only warehouse data; the prohibited in-app browser was not used.
+- At 1294×920 the top bar has no horizontal overflow and the rightmost logout action remains fully inside the viewport. At 1600×1000 the iframe expands from 982×792 to 1288×872 without leaving a fixed two-thirds-width map.
+- The owner-supplied screenshots and the two candidate screenshots were compared at the same compact state. The redundant warehouse heading/status rows are removed, the map begins higher, and the merge inspector remains fully visible.
+- Automatic merge was opened in Chrome, customer `天华` was selected and stock condition `TM` entered. The customer and keyword controls remained operable, the movement actions stayed in the top row, and no write/confirm action was invoked.
+- Browser warning/error log count for the candidate tab: 0. No formal database, runtime map or production service was changed.
 
-final result: blocked
+final result: passed
 
 ---
 
@@ -285,4 +292,4 @@ final result: passed
 
 ## Current task final result
 
-blocked
+passed

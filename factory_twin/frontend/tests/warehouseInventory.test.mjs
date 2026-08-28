@@ -39,6 +39,7 @@ import {
   normalizePalletMergeCandidate,
   palletMergeCompatibility,
   palletMergeSuggestionProductKey,
+  palletMergeSuggestionMatchesFilter,
   palletMergeTargetChoices,
   togglePalletMergeSource
 } from "../src/warehousePalletMergeDraft.mjs";
@@ -970,6 +971,29 @@ test("merge suggestions use inventory code and specification instead of internal
   assert.equal(palletMergeSuggestionProductKey([
     { inventory_code: "", specification: "500×300", quantity: 3 }
   ]), null);
+});
+
+test("merge suggestions can be narrowed by customer and multi-term inventory search", () => {
+  const suggestion = {
+    label: "CPN-001 · 500×300",
+    candidates: [normalizePalletMergeCandidate(
+      mergeLocation({ location_code: "A2-7", location_name: "右区A2 A2-7" }),
+      mergePallet(18, { items: [{
+        ...mergePallet(18).items[0],
+        customer_id: 7,
+        customer_name: "苏州思迈尔包装有限公司",
+        customer_short_name: "思迈尔",
+        inventory_code: "CPN-001",
+        product_name: "五层加强纸箱",
+        specification: "500×300"
+      }] })
+    ).candidate]
+  };
+  assert.equal(palletMergeSuggestionMatchesFilter(suggestion, "7", "CPN-001 500×300"), true);
+  assert.equal(palletMergeSuggestionMatchesFilter(suggestion, "7", "思迈尔 加强"), true);
+  assert.equal(palletMergeSuggestionMatchesFilter(suggestion, "7", "A2-7"), true);
+  assert.equal(palletMergeSuggestionMatchesFilter(suggestion, "8", "CPN-001"), false);
+  assert.equal(palletMergeSuggestionMatchesFilter(suggestion, "7", "CPN-002"), false);
 });
 
 test("stocktake drafts upsert by formal inventory identity and preserve the client item id", () => {

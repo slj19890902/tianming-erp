@@ -87,7 +87,8 @@ def test_operational_twin_declutters_labels_and_keeps_details_in_the_inspector()
     assert '<nav className="twin-floor-switch" aria-label="楼层切换">' in SOURCE
     assert "filterOperationalFeatures(raw.floor_code, raw.bounds_mm" in SOURCE
     assert 'onSelect={selectOperationalEntity}' in SOURCE
-    assert "库存与库位" in SOURCE
+    assert "库存与库位" not in SOURCE
+    assert '<aside className="twin-inspector">' in SOURCE
     assert 'className="twin-location-card"' in SOURCE
     assert 'if (layers.labels) {' in CANVAS
     assert "warehouseFrustumDivisor(layout.floor_code, visualTheme)" in CANVAS
@@ -303,7 +304,8 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert "advancedAreaMaintenanceOpen && <div className=\"twin-layout-draft-workflow\"" in SOURCE
     assert "高级维护" in SOURCE
     assert '<aside className="twin-context-rail">' in SOURCE
-    assert "库存与库位" in SOURCE
+    assert "库存与库位" not in SOURCE
+    assert '<aside className="twin-inspector">' in SOURCE
     assert "twin-stage-footer" not in SOURCE
     assert "twin-system-footer" not in SOURCE
 

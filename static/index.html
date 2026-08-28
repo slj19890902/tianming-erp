@@ -2298,6 +2298,36 @@
       .warehouse-top-shortcuts button.active { border-color:var(--primary); color:#fff; background:var(--primary); }
       .warehouse-top-shortcuts a:hover,
       .warehouse-top-shortcuts button:hover:not(.active) { border-color:var(--primary); color:var(--primary); }
+      .top-actions:has(.warehouse-top-metrics) { gap:5px; }
+      .topbar:has(.warehouse-top-metrics) { padding-inline:10px; gap:8px; }
+      .topbar:has(.warehouse-top-metrics) .brand {
+        flex:0 0 auto; gap:6px; font-size:13px; white-space:nowrap;
+      }
+      .topbar:has(.warehouse-top-metrics) .brand-logo {
+        width:42px; height:42px; object-fit:contain;
+      }
+      .topbar:has(.warehouse-top-metrics) .top-actions { min-width:0; gap:4px; }
+      .topbar:has(.warehouse-top-metrics) .top-user-name,
+      .topbar:has(.warehouse-top-metrics) .ui-mode-label { display:none; }
+      .topbar:has(.warehouse-top-metrics) .ui-mode-switch { gap:2px; padding:2px; }
+      .topbar:has(.warehouse-top-metrics) .ui-mode-button {
+        min-width:48px; min-height:30px; padding:4px 7px; font-size:12px;
+      }
+      .topbar:has(.warehouse-top-metrics) > .top-actions > .btn.small {
+        min-height:30px; padding:3px 7px;
+      }
+      .topbar:has(.warehouse-top-metrics) .warehouse-top-shortcuts { gap:3px; }
+      .topbar:has(.warehouse-top-metrics) .warehouse-top-shortcuts button,
+      .topbar:has(.warehouse-top-metrics) .warehouse-top-shortcuts a { padding-inline:6px; }
+      .warehouse-top-metrics { display:flex; align-items:center; gap:3px; }
+      .warehouse-top-metrics span {
+        min-height:28px; padding:3px 5px; display:inline-flex; align-items:center; gap:3px;
+        border:1px solid var(--line); border-radius:7px; color:var(--text-secondary); background:#f8fafc;
+        font-size:11px; font-weight:700; white-space:nowrap;
+      }
+      .warehouse-top-metrics b { color:#0f766e; font-size:12px; }
+      .warehouse-top-metrics .warning { border-color:#f0b6b1; color:#9f231b; background:#fff2f1; }
+      .warehouse-top-metrics .warning b { color:#b42318; }
       .main.warehouse-main { display:grid; grid-template-rows:minmax(0,1fr); gap:0; overflow:hidden; }
       .warehouse-main .workbench-nav { margin:0; }
       .warehouse-shell {
@@ -2479,6 +2509,13 @@
         <header class="topbar">
           <div class="brand"><img class="brand-logo" src="/static/assets/logo.png" alt="天明包装ERP" /><span>天明包装ERP</span></div>
           <div class="top-actions">
+            <div v-if="activePage==='warehouse'" class="warehouse-top-metrics" aria-label="仓库当前楼层状态">
+              <span><b>{{ warehouseTwinMetrics.active_lots }}</b>有效批次</span>
+              <span><b>{{ warehouseTwinMetrics.occupied_locations }}</b>占用库位</span>
+              <span><b>{{ warehouseTwinMetrics.mapped_locations }}</b>地图库位</span>
+              <span :class="{warning:warehouseTwinMetrics.unlocated_finished>0}"><b>{{ warehouseTwinMetrics.unlocated_finished }}</b>待定位成品</span>
+              <span :class="{warning:warehouseTwinMetrics.column_conflicts>0}"><b>{{ warehouseTwinMetrics.column_conflicts }}</b>柱子冲突</span>
+            </div>
             <button v-if="pageAllowed('warehouse')" type="button" :class="['btn','primary','topbar-warehouse-entry',{active:activePage==='warehouse'}]" :aria-current="activePage==='warehouse' ? 'page' : null" title="进入仓库页面" @click="goMenu('warehouse')"><span aria-hidden="true" v-html="navIcon('warehouse')"></span><span>仓库</span></button>
             <div v-if="activePage==='warehouse'" class="warehouse-top-shortcuts" role="group" aria-label="仓库楼层与台账">
               <button type="button" :class="{active:warehouseTwinFloor==='1F'}" @click="selectWarehouseFloor('1F')">1F 生产车间</button>
@@ -8584,6 +8621,7 @@
             productionNextStepGuide: {visible:false, mode:"", count:0, locations:""},
             pageCacheUpdatedAt: {},
             warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F",
+            warehouseTwinMetrics: {active_lots:0,occupied_locations:0,mapped_locations:0,unlocated_finished:0,unmatched_observations:0,column_conflicts:0},
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             overview: { cards: [], todos: [], summary: {} }, warehouseCapacitySummary:null, overviewError: "", overviewLoading: false,
             kpi: {}, customers: [], customerOptions: [], orderCustomerOptions: [], products: [], materials: [], orders: [],
@@ -13831,6 +13869,14 @@
             const payload = event.data || {};
             if (payload.source !== "tianming-warehouse" || payload.type !== "warehouse-state") return;
             if (payload.floor_code === "1F" || payload.floor_code === "3F") this.warehouseTwinFloor = payload.floor_code;
+            this.warehouseTwinMetrics = {
+              active_lots: Math.max(0, Number(payload.active_lots || 0)),
+              occupied_locations: Math.max(0, Number(payload.occupied_locations || 0)),
+              mapped_locations: Math.max(0, Number(payload.mapped_locations || 0)),
+              unlocated_finished: Math.max(0, Number(payload.unlocated_finished || 0)),
+              unmatched_observations: Math.max(0, Number(payload.unmatched_observations || 0)),
+              column_conflicts: Math.max(0, Number(payload.column_conflicts || 0)),
+            };
           },
           selectWarehouseFloor(floorCode) {
             if (floorCode !== "1F" && floorCode !== "3F") return;

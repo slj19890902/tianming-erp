@@ -73,3 +73,32 @@ def test_map_palette_and_employee_text_are_visible_without_ring_markers() -> Non
     assert "0x7c3aed" in CANVAS
     assert "#dcefe3" in (ROOT / "factory_twin" / "frontend" / "src" / "operationalView.mjs").read_text(encoding="utf-8")
     assert "--warehouse-min-readable-size: 12px" in CSS
+
+
+def test_warehouse_metrics_move_to_the_erp_topbar_and_leave_the_map_toolbar_compact() -> None:
+    assert 'class="warehouse-top-metrics"' in INDEX
+    assert "warehouseTwinMetrics.active_lots" in INDEX
+    assert "warehouseTwinMetrics.occupied_locations" in INDEX
+    assert "warehouseTwinMetrics.mapped_locations" in INDEX
+    assert "warehouseTwinMetrics.unlocated_finished" in INDEX
+    assert "warehouseTwinMetrics.column_conflicts" in INDEX
+    assert "active_lots: currentFloor?.active_lots || 0" in SOURCE
+    assert "occupied_locations: currentFloorOccupiedLocations" in SOURCE
+    assert 'className="twin-toolbar-summary"' not in SOURCE
+
+
+def test_move_actions_use_the_toolbar_space_and_inventory_heading_is_removed() -> None:
+    toolbar = SOURCE[SOURCE.index('<section className="twin-toolbar">'):SOURCE.index('<section className={`twin-workspace')]
+    inspector = SOURCE[SOURCE.index('<aside className="twin-inspector">'):SOURCE.index('</aside>', SOURCE.index('<aside className="twin-inspector">'))]
+    assert 'className="twin-toolbar-move-actions"' in toolbar
+    for label in ("移动位置", "地图存放", "合并栈板", "盘点调整"):
+        assert f">{label}</button>" in toolbar
+    assert "库存与库位" not in inspector
+    assert '<header><h2>' not in inspector
+
+
+def test_merge_panel_exposes_customer_and_inventory_filters() -> None:
+    assert 'aria-label="合并栈板客户筛选"' in SOURCE
+    assert 'placeholder="输入存货编码、名称、规格或货位"' in SOURCE
+    assert "filteredMergeSuggestions" in SOURCE
+    assert "palletMergeSuggestionMatchesFilter" in SOURCE

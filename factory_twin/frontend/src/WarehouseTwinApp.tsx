@@ -48,6 +48,7 @@ import {
   buildPalletMergeBatchPayload,
   normalizePalletMergeCandidate,
   palletMergeCompatibility,
+  palletMergeSuggestionMatchesFilter,
   palletMergeSuggestionProductKey,
   palletMergeTargetChoices,
   togglePalletMergeSource
@@ -1565,6 +1566,8 @@ export function WarehouseTwinApp() {
   const [moveAction, setMoveAction] = useState<"relocate" | "merge" | "stocktake" | "ground">("relocate");
   const [mergeSources, setMergeSources] = useState<PalletMergeCandidate[]>([]);
   const [mergeTarget, setMergeTarget] = useState<PalletMergeCandidate | null>(null);
+  const [mergeCustomerId, setMergeCustomerId] = useState("");
+  const [mergeKeyword, setMergeKeyword] = useState("");
   const [mergeBatchIdempotencyKey, setMergeBatchIdempotencyKey] = useState(() => operationKey("warehouse-pallet-merge-batch"));
   const [mergeBatchBusy, setMergeBatchBusy] = useState(false);
   const [locationDetailOpen, setLocationDetailOpen] = useState(false);
@@ -1965,6 +1968,21 @@ export function WarehouseTwinApp() {
       .map(([key, group]) => ({ key, ...group }))
       .sort((left, right) => right.candidates.length - left.candidates.length || left.label.localeCompare(right.label, "zh-CN", { numeric: true }));
   }, [visualLocations]);
+  const mergeCustomerOptions = useMemo(() => {
+    const customers = new Map<number, string>();
+    for (const suggestion of mergeSuggestions) {
+      for (const candidate of suggestion.candidates) {
+        customers.set(candidate.customer_id, employeeCustomerName(candidate));
+      }
+    }
+    return [...customers.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+  }, [mergeSuggestions]);
+  const filteredMergeSuggestions = useMemo(
+    () => mergeSuggestions.filter((suggestion) => palletMergeSuggestionMatchesFilter(suggestion, mergeCustomerId, mergeKeyword)),
+    [mergeSuggestions, mergeCustomerId, mergeKeyword]
+  );
   const unmatchedInventoryObservationCount = useMemo(
     () => visualLocations.reduce((total, location) => total + Number(location.unmatched_inventory_observation_count || 0), 0),
     [visualLocations]
@@ -4577,8 +4595,23 @@ export function WarehouseTwinApp() {
       source: "tianming-warehouse",
       type: "warehouse-state",
       floor_code: floorCode,
+      active_lots: currentFloor?.active_lots || 0,
+      occupied_locations: currentFloorOccupiedLocations,
+      mapped_locations: mappedLocationPallets.length,
+      unlocated_finished: unlocatedFinishedCount,
+      unmatched_observations: unmatchedInventoryObservationCount,
+      column_conflicts: palletColumnConflicts.length,
     }, window.location.origin);
-  }, [embedded, floorCode]);
+  }, [
+    embedded,
+    floorCode,
+    currentFloor?.active_lots,
+    currentFloorOccupiedLocations,
+    mappedLocationPallets.length,
+    unlocatedFinishedCount,
+    unmatchedInventoryObservationCount,
+    palletColumnConflicts.length,
+  ]);
 
   useEffect(() => {
     if (!embedded) return undefined;
@@ -4662,7 +4695,12 @@ export function WarehouseTwinApp() {
         <button type="button" disabled={spatialEditBusy} onClick={discardLayoutDraft}>{layoutDraftControl?.has_draft ? "放弃草稿" : "取消编辑"}</button>
       </div>}
       <div className="twin-toolbar-spacer" />
-      <div className="twin-toolbar-summary"><span><b>{currentFloor?.active_lots || 0}</b> 有效批次</span><span><b>{currentFloorOccupiedLocations}</b> 占用库位</span><span><b>{mappedLocationPallets.length}</b> 地图库位</span><button type="button" className="unlocated-blocker" disabled={!unlocatedFinishedCount} onClick={() => { setSearchPanelOpen(true); setSearchType("finished"); }}><b>{unlocatedFinishedCount}</b> 待定位成品</button>{unmatchedInventoryObservationCount > 0 && <span className="unmatched-observation"><b>{unmatchedInventoryObservationCount}</b> 现场未匹配</span>}{palletColumnConflicts.length > 0 && <span className="column-conflict"><b>{palletColumnConflicts.length}</b> 柱子冲突</span>}</div>
+      {(canExecuteWarehouse || canStocktake) && mapMode === "move" && <div className="twin-toolbar-move-actions" role="tablist" aria-label="仓库地图操作类型">
+        {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "relocate"} className={moveAction === "relocate" ? "active" : ""} onClick={() => { setMoveAction("relocate"); setWarehouseOperationMessage(moveDrafts.length ? `已切回移动位置；保留 ${moveDrafts.length} 条移货草稿。` : "已切回移动位置。"); }}>移动位置</button>}
+        {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "ground"} className={moveAction === "ground" ? "active" : ""} onClick={() => { setMoveAction("ground"); setMoveSource(null); setGroundStorageMessage("先选择楼层和地堆区域，再选择入库产品或转位批次。"); }}>地图存放</button>}
+        {P1_49C_ENABLED && canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "merge"} className={moveAction === "merge" ? "active" : ""} onClick={() => { setMoveAction("merge"); setMoveSource(null); setWarehouseOperationMessage(mergeSources.length ? `已切到合并栈板；保留 ${mergeSources.length} 块来源。` : "请选择需要合并的栈板。"); }}>合并栈板</button>}
+        {canStocktake && <button type="button" role="tab" aria-selected={moveAction === "stocktake"} className={moveAction === "stocktake" ? "active" : ""} onClick={() => { setMoveAction("stocktake"); setMoveSource(null); setWarehouseOperationMessage(stocktakeDrafts.length ? `已切到盘点调整；保留 ${stocktakeDrafts.length} 条草稿。` : "请选择正式货位进行盘点调整。"); }}>盘点调整</button>}
+      </div>}
     </section>
 
     <section className={`twin-workspace ${layerPanelOpen ? "layers-open" : "layers-collapsed"} ${searchPanelOpen ? "context-open" : "context-collapsed"} ${locationEditMode ? "location-editing" : ""} ${mapMode === "move" && moveAction === "merge" ? "merge-active" : ""}`}>
@@ -4759,7 +4797,6 @@ export function WarehouseTwinApp() {
       </div>
 
       <aside className="twin-inspector">
-        <header><h2>库存与库位</h2></header>
         {floor1CandidatePlan && <section className="twin-floor1-candidate-panel">
           <div className="twin-floor1-candidate-title"><div><small>1F · 实测地图候选</small><b>一次确认区域与库位</b></div><button type="button" disabled={floor1CandidateBusy} onClick={() => setFloor1CandidatePlan(null)}>关闭</button></div>
           <div className="twin-floor1-candidate-summary"><span><b>{floor1CandidatePlan.candidate_count}</b> 个区域</span><span><b>{floor1CandidatePlan.long_term_pallet_capacity}</b> 个长期栈板位</span><span><b>{floor1CandidatePlan.formal_location_count}</b> 个正式库存库位</span></div>
@@ -4808,12 +4845,6 @@ export function WarehouseTwinApp() {
         </section>}
         {(canExecuteWarehouse || canStocktake) && mapMode === "move" && <section className="twin-move-control-panel">
           <div className="twin-formal-operation-title"><b>{moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? "盘点调整草稿" : moveAction === "merge" ? "多栈合并草稿" : "移货页面草稿"}</b><span>楼层切换不丢页面草稿</span></div>
-          <div className="twin-move-action-tabs" role="tablist" aria-label="仓库地图操作类型">
-            {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "relocate"} className={moveAction === "relocate" ? "active" : ""} onClick={() => { setMoveAction("relocate"); setWarehouseOperationMessage(moveDrafts.length ? `已切回移动位置；保留 ${moveDrafts.length} 条移货草稿。` : "已切回移动位置。"); }}>移动位置</button>}
-            {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "ground"} className={moveAction === "ground" ? "active" : ""} onClick={() => { setMoveAction("ground"); setMoveSource(null); setGroundStorageMessage("先选择楼层和地堆区域，再选择入库产品或转位批次。"); }}>地图存放</button>}
-            {P1_49C_ENABLED && canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "merge"} className={moveAction === "merge" ? "active" : ""} onClick={() => { setMoveAction("merge"); setMoveSource(null); setWarehouseOperationMessage(mergeSources.length ? `已切到合并栈板；保留 ${mergeSources.length} 块来源。` : "请从真实位置逐块选择至少两块兼容系统栈板。"); }}>合并栈板</button>}
-            {canStocktake && <button type="button" role="tab" aria-selected={moveAction === "stocktake"} className={moveAction === "stocktake" ? "active" : ""} onClick={() => { setMoveAction("stocktake"); setMoveSource(null); setWarehouseOperationMessage(stocktakeDrafts.length ? `已切到盘点调整；保留 ${stocktakeDrafts.length} 条草稿。` : "请选择正式货位，新增已有产品或从真实批次调减。"); }}>盘点调整</button>}
-          </div>
           {moveAction === "ground" ? <div className="twin-ground-storage-panel">
             <div className="twin-map-inbound-type" role="tablist" aria-label="地图存放业务类型"><button type="button" className={groundOperation === "inbound" ? "active" : ""} onClick={() => { setGroundOperation("inbound"); setGroundTransferSource(null); }}>成品入库</button><button type="button" className={groundOperation === "transfer" ? "active" : ""} onClick={() => setGroundOperation("transfer")}>库存转位</button></div>
             <p className="twin-map-pick-hint">流程：选择楼层 → 点击地堆区域 → 显示四色候选 → 点击实际位置 → 核对中文位置 → 保存一次。</p>
@@ -4832,7 +4863,12 @@ export function WarehouseTwinApp() {
             {groundStorageMessage && <div className="twin-location-message">{groundStorageMessage}</div>}
             <div className="twin-ground-storage-actions"><button type="button" onClick={() => { setGroundCandidates(null); setGroundPrimaryLocationId(null); setGroundSecondaryLocationId(null); setGroundStorageMessage("已取消页面选择；库存零写入。"); }}>取消选择</button><button type="button" className="twin-primary-action" disabled={groundStorageBusy || !groundPrimaryLocationId || (groundLargeFootprint && !groundSecondaryLocationId)} onClick={saveGroundStorage}>{groundStorageBusy ? "正在保存…" : "保存到当前中文位置"}</button></div>
           </div> : moveAction === "stocktake" ? <p>盘点只在右侧所选正式货位形成新增或调减草稿；不拖动货物、不改变地图结构，底部一次确认整批提交。</p> : moveAction === "merge" ? <>
-            {mergeSuggestions.length > 0 && <div className="twin-merge-suggestions"><h3>可合并货位</h3>{mergeSuggestions.slice(0, 12).map((suggestion) => <article key={suggestion.key}><div><strong>{suggestion.label}</strong><span>{employeeCustomerName(suggestion.candidates[0])} · 合计 {formatNumber(suggestion.total)} {inventoryUnitLabel(suggestion.candidates[0].unit)}</span><div className="twin-merge-checklist">{suggestion.candidates.map((item) => {
+            <div className="twin-merge-filters">
+              <label><span>客户</span><select aria-label="合并栈板客户筛选" value={mergeCustomerId} onChange={(event) => setMergeCustomerId(event.target.value)}><option value="">全部客户</option>{mergeCustomerOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+              <label><span>存货条件</span><input value={mergeKeyword} onChange={(event) => setMergeKeyword(event.target.value)} placeholder="输入存货编码、名称、规格或货位" /></label>
+              {(mergeCustomerId || mergeKeyword) && <button type="button" onClick={() => { setMergeCustomerId(""); setMergeKeyword(""); }}>清除筛选</button>}
+            </div>
+            {filteredMergeSuggestions.length > 0 && <div className="twin-merge-suggestions"><h3>可合并货位</h3>{filteredMergeSuggestions.slice(0, 40).map((suggestion) => <article key={suggestion.key}><div><strong>{suggestion.label}</strong><span>{employeeCustomerName(suggestion.candidates[0])} · 合计 {formatNumber(suggestion.total)} {inventoryUnitLabel(suggestion.candidates[0].unit)}</span><div className="twin-merge-checklist">{suggestion.candidates.map((item) => {
               const selected = mergeSources.some((source) => source.pallet_id === item.pallet_id);
               return <label key={item.pallet_id}><input type="checkbox" checked={selected} disabled={mergeBatchBusy} onChange={() => {
                 const candidate = selected ? item : { ...item, client_item_id: operationKey("pallet-merge-source") };
@@ -4843,6 +4879,7 @@ export function WarehouseTwinApp() {
                 setMergeBatchIdempotencyKey(operationKey("warehouse-pallet-merge-batch"));
               }} /><span>{item.location_code || item.location_name}</span><b>{formatNumber(item.total_quantity)} {inventoryUnitLabel(item.unit)}</b></label>;
             })}</div></div><button type="button" disabled={mergeBatchBusy} onClick={() => useMergeSuggestion(suggestion.candidates)}>全选这组</button></article>)}</div>}
+            {!filteredMergeSuggestions.length && <p className="twin-merge-empty">当前条件下没有至少两块可合并栈板。</p>}
             {mergeSources.length > 0 && <div className="twin-merge-selection-line" aria-label="已选合并货位">{mergeSources.map((item) => <button type="button" key={item.pallet_id} disabled={mergeBatchBusy} onClick={() => {
               const result = togglePalletMergeSource(mergeSources, item);
               setMergeSources(result.items);

@@ -22,6 +22,29 @@ export function palletMergeSuggestionProductKey(items) {
   return [...keys][0];
 }
 
+export function palletMergeSuggestionMatchesFilter(suggestion, customerId, keyword) {
+  const candidates = Array.isArray(suggestion?.candidates) ? suggestion.candidates : [];
+  const selectedCustomerId = positiveInteger(customerId);
+  if (selectedCustomerId && !candidates.some((item) => positiveInteger(item?.customer_id) === selectedCustomerId)) return false;
+  const terms = String(keyword || "").trim().toLocaleLowerCase("zh-CN").split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
+  const haystack = [
+    suggestion?.label,
+    ...candidates.flatMap((item) => [
+      item?.customer_short_name,
+      item?.customer_name,
+      item?.inventory_code,
+      item?.product_name,
+      item?.specification,
+      item?.location_code,
+      item?.location_name,
+      item?.area_code,
+      item?.floor_code
+    ])
+  ].filter(Boolean).join(" ").toLocaleLowerCase("zh-CN");
+  return terms.every((term) => haystack.includes(term));
+}
+
 function oneValue(items, getter) {
   const normalized = items.map(getter);
   if (normalized.some((value) => value === null || value === undefined || value === "")) return null;

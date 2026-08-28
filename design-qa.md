@@ -72,7 +72,7 @@ final result: passed
 ## Comparison target
 
 - Source: the four 1294×920 warehouse screenshots annotated by the owner in this task, covering the ERP warehouse shell, embedded command bar, toolbar and right inventory inspector.
-- Implementation: v0.22.211 replacement candidate assets built from `factory_twin/frontend` in the isolated worktree.
+- Implementation: v0.22.212 candidate assets rebased onto the formal v0.22.211 baseline and built from `factory_twin/frontend` in the isolated worktree.
 - Required viewports: 1294×920, matching the supplied screenshots, plus 1600×1000 desktop expansion.
 - Implementation screenshot (compact): `D:\tm-worktrees\p0-29-warehouse-interactions-20260828\warehouse-ui-merge-1294x920.png`.
 - Implementation screenshot (desktop): `D:\tm-worktrees\p0-29-warehouse-interactions-20260828\warehouse-ui-merge-1600x1000.png`.
@@ -90,8 +90,8 @@ final result: passed
 
 ## Automated evidence
 
-- Node interaction tests: 92 passed.
-- Python shell, warehouse-viewer and P0-29 integration group: 65 passed.
+- Node interaction tests: 93 passed.
+- Python shell, warehouse-viewer, mold-location compatibility and P0-29 integration group: 77 passed.
 - TypeScript `tsc --noEmit`: passed.
 - Vite production build: passed; HTML and generated asset references are closed.
 
@@ -101,7 +101,7 @@ final result: passed
 - At 1294×920 the top bar has no horizontal overflow and the rightmost logout action remains fully inside the viewport. At 1600×1000 the iframe expands from 982×792 to 1288×872 without leaving a fixed two-thirds-width map.
 - The owner-supplied screenshots and the two candidate screenshots were compared at the same compact state. The redundant warehouse heading/status rows are removed, the map begins higher, and the merge inspector remains fully visible.
 - Automatic merge was opened in Chrome, customer `天华` was selected and stock condition `TM` entered. The customer and keyword controls remained operable, the movement actions stayed in the top row, and no write/confirm action was invoked.
-- Browser warning/error log count for the candidate tab: 0. No formal database, runtime map or production service was changed.
+- Application-origin browser warning/error log count: 0; unrelated Chrome-extension warnings were excluded. No formal database, runtime map or production service was changed.
 
 final result: passed
 

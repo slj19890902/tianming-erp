@@ -67,6 +67,39 @@ final result: passed
 
 ---
 
+# P0-29 仓库定位联动与合并信息精简 Design QA（2026-08-28）
+
+## Comparison target
+
+- Source: the four 1294×920 warehouse screenshots annotated by the owner in this task, covering the ERP warehouse shell, embedded command bar, toolbar and right inventory inspector.
+- Implementation: v0.22.209 candidate assets built from `factory_twin/frontend` in the isolated worktree.
+- Required viewport: 1294×920, matching the supplied screenshots.
+
+## Implemented fidelity and interaction changes
+
+- Floor switching no longer renders a transient pallet-size error while the requested floor's map and dashboard contracts are still loading; a settled, genuine contract mismatch remains fail-closed.
+- Delayed-dispatch products have an always-available map focus action, with the permitted move action separated from inspection.
+- Merge selection removes grey instructional paragraphs and internal pallet identifiers, uses one horizontal row of location and quantity chips, and highlights every selected map location in purple.
+- The map palette uses pale green aisles, green empty locations, blue occupied locations, and purple selected or located results. The selection marker is a rectangular location highlight instead of a circular ring.
+- Merge mode expands the right inventory inspector and raises the warehouse UI minimum readable text size to 12px.
+
+## Automated evidence
+
+- Node interaction tests: 91 passed.
+- Python frontend and warehouse integration group: 75 passed.
+- TypeScript `tsc --noEmit`: passed.
+- Vite production build: passed; HTML and generated asset references are closed.
+
+## Browser comparison status
+
+- Chrome was selected as required by repository policy. The extension repeatedly timed out while claiming and reading the already-open warehouse tab, including after a fresh connection.
+- The prohibited in-app browser was not used as a substitute. No formal database, runtime map or production service was changed for this QA attempt.
+- Therefore the code and interaction gates pass, but the same-viewport visual comparison and click-through acceptance remain blocked until Chrome control is available or factory personnel perform the listed acceptance steps.
+
+final result: blocked
+
+---
+
 # 编辑常用箱多箱型第二排布局修复 Design QA（2026-08-12）
 
 ## Comparison target
@@ -247,3 +280,9 @@ Fixes made:
 - Automated frontend contract/regression suite and API round-trip test passed.
 
 final result: passed
+
+---
+
+## Current task final result
+
+blocked

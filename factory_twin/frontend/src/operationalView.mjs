@@ -48,7 +48,7 @@ export function warehouseFrustumDivisor(floorCode, visualTheme) {
 
 export function warehouseAisleColor(floorCode, visualTheme, fallback) {
   if (visualTheme !== "warehouse") return fallback;
-  return "#16a34a";
+  return "#dcefe3";
 }
 
 export function aisleSurfaceStyle(visualTheme) {

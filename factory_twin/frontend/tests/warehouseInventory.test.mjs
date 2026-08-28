@@ -19,6 +19,7 @@ import {
   normalizeInventoryLocationProjection,
   normalizeStandardPalletContract,
   searchHighlightAreaCodes,
+  standardPalletDisplayIssue,
   standardPalletContractsMatch,
   warehouseSearchFloorSummaries,
   warehouseSearchLocationSummaries,
@@ -152,6 +153,30 @@ test("standard pallet contract fails closed when missing malformed or inconsiste
     loose_items: []
   };
   assert.deepEqual(buildMappedLocationPallets([zone], [location], "1F", null, "layout-1f"), []);
+});
+
+test("floor switching never reports a transient pallet-size failure", () => {
+  assert.equal(standardPalletDisplayIssue({
+    loading: true,
+    requestedFloorCode: "3F",
+    layoutFloorCode: "1F",
+    layoutContract: null,
+    dashboardContract: STANDARD_PALLET
+  }), "");
+  assert.equal(standardPalletDisplayIssue({
+    loading: false,
+    requestedFloorCode: "3F",
+    layoutFloorCode: "3F",
+    layoutContract: STANDARD_PALLET,
+    dashboardContract: STANDARD_PALLET
+  }), "");
+  assert.match(standardPalletDisplayIssue({
+    loading: false,
+    requestedFloorCode: "3F",
+    layoutFloorCode: "3F",
+    layoutContract: null,
+    dashboardContract: STANDARD_PALLET
+  }), /标准栈板尺寸合同缺失/);
 });
 
 const locations = [
@@ -305,6 +330,7 @@ test("full delivery leaves a mapped empty location while partial reserved and da
   assert.deepEqual(mapped.map((item) => item.visual_status), ["empty", "waiting", "waiting", "waiting"]);
   assert.deepEqual(mapped.map((item) => item.visual_kind), ["location_anchor", "physical_pallet", "physical_pallet", "physical_pallet"]);
   assert.deepEqual(rows.map((item) => item.occupancy_status), ["empty", "occupied", "occupied", "occupied"]);
+  assert.deepEqual(mapped.map((item) => item.candidate_status_color), ["#16a34a", "#2563eb", "#2563eb", "#2563eb"]);
 });
 
 test("unmatched goods and known-location discrepancies keep formal positions red", () => {

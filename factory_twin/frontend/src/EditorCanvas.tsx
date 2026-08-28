@@ -125,14 +125,13 @@ function addEntityHighlight(group: THREE.Group, object: THREE.Object3D, color: n
   group.add(helper);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
-  const halo = new THREE.Mesh(
-    new THREE.RingGeometry(Math.max(size.x, size.z) * 0.52, Math.max(size.x, size.z) * 0.62, 40),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.72, depthTest: false, depthWrite: false, side: THREE.DoubleSide })
+  const marker = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.max(size.x, 220), 26, Math.max(size.z, 220)),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.48, depthTest: false, depthWrite: false })
   );
-  halo.rotation.x = -Math.PI / 2;
-  halo.position.set(center.x, box.max.y + 90, center.z);
-  halo.renderOrder = 96;
-  group.add(halo);
+  marker.position.set(center.x, box.max.y + 90, center.z);
+  marker.renderOrder = 96;
+  group.add(marker);
 }
 
 function syncEntityHighlights(runtime: CanvasRuntime, selected: SelectedEntity, focusTarget: CanvasFocusTarget | null | undefined) {
@@ -141,11 +140,11 @@ function syncEntityHighlights(runtime: CanvasRuntime, selected: SelectedEntity, 
   const focusedKey = focusTarget ? entityKey(focusTarget.entity) : null;
   if (selected && entityKey(selected) !== focusedKey) {
     const selectedObject = runtime.entityNodes.get(entityKey(selected));
-    if (selectedObject) addEntityHighlight(runtime.selectionHighlight, selectedObject, 0x06b6d4, 90);
+    if (selectedObject) addEntityHighlight(runtime.selectionHighlight, selectedObject, 0x7c3aed, 90);
   }
   if (focusTarget) {
     const focusedObject = runtime.entityNodes.get(focusedKey!);
-    if (focusedObject) addEntityHighlight(runtime.searchHighlight, focusedObject, 0xff2d8b, 160);
+    if (focusedObject) addEntityHighlight(runtime.searchHighlight, focusedObject, 0x7c3aed, 160);
   }
   runtime.requestRender();
 }
@@ -154,11 +153,11 @@ function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], pall
   clearHighlightGroup(runtime.resultHighlight);
   for (const id of featureIds) {
     const object = runtime.entityNodes.get(`feature:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xf59e0b, 120);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, 0x7c3aed, 120);
   }
   for (const id of palletIds) {
     const object = runtime.entityNodes.get(`pallet:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xf59e0b, 100);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, 0x7c3aed, 100);
   }
   runtime.requestRender();
 }

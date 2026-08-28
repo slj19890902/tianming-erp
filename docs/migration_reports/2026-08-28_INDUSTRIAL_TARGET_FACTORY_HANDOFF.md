@@ -28,6 +28,7 @@
 - 混合发货来源：9 passed；送货读端/查询：4 passed；库存调整：30 passed；容量补充：10 passed。
 - Phase 11：52 passed；内联 JavaScript 最终门禁：4 passed。
 - 基线重定位后联合回归：187 passed；财务/开票任务内联 JavaScript 复验：2 passed。
+- 最终重定位到 v0.22.209 后，P1-121 完工历史/归位 UI、发布版本、仓库入口和财务按钮合同：37 passed。
 - Python compileall、pip check、git diff check 均通过；Alembic 唯一 head 为 `go50v8x9z39`。
 - 隔离迁移完成 `gn49 → go50 → gn49 → go50`，各阶段 `integrity_check=ok`、外键异常 0。
 - 目标模式 UAT 16 个核心入口均为 HTTP 200；日志没有 traceback、ERROR 或 5xx；端口和进程已安全释放。

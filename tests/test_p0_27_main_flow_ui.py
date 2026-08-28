@@ -66,7 +66,12 @@ def test_delivery_finance_headers_dropdown_and_manual_invoice_rule_are_visible()
     assert "finance-filter-panel" in INDEX
     assert ".finance-filter-panel { overflow:visible" in INDEX
     assert "canFinance && statement.confirmation_status!=='confirmed'" not in INDEX
-    assert 'v-if="canFinance" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0' in INDEX
+    assert (
+        'v-if="canFinance" class="btn small" '
+        ':disabled="statement.confirmation_status!==\'confirmed\' || '
+        'Number(statement.pending_invoice_amount)<=0'
+        in INDEX
+    )
     assert "statement.invoice_status==='invoiced'" in INDEX
 
 

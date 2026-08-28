@@ -97,6 +97,7 @@ from app.models.warehouse_inventory import (
     WarehouseGroundPlacementMutation,
     WarehouseLocation,
     WarehouseLocationAlias,
+    WarehouseRackLevelLabelPrintJob,
 )
 from app.services.floor3_locations import (
     Floor3LocationError,
@@ -324,6 +325,10 @@ from app.services.warehouse_location_address import (
     location_address_payload,
     location_alias_conflict,
     resolve_location_address,
+)
+from app.services.warehouse_rack_cells import (
+    WarehouseRackCellSyncError,
+    sync_published_rack_cells,
 )
 from app.services.requisition_quantities import cutting_factor, normalize_cutting_mode
 from app.services.product_specification import product_dimension_specification
@@ -9553,6 +9558,25 @@ class TwinLayoutDraftPublishPayload(BaseModel):
     operation_key: str = Field(min_length=8, max_length=120)
 
 
+class RackLevelLabelPrintPayload(BaseModel):
+    floor_code: str = Field(min_length=2, max_length=30)
+    map_rack_id: str = Field(min_length=1, max_length=80)
+    expected_map_revision: str = Field(min_length=1, max_length=64)
+    template_version: Literal["rack_level_80x40_v1"] = "rack_level_80x40_v1"
+    source: Literal["region_planning"] = "region_planning"
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @field_validator("floor_code")
+    @classmethod
+    def normalize_floor_code(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("map_rack_id", "idempotency_key")
+    @classmethod
+    def normalize_label_identity(cls, value: str) -> str:
+        return value.strip()
+
+
 class TwinLayoutDraftDiscardPayload(BaseModel):
     expected_revision: str = Field(min_length=1, max_length=64)
 
@@ -10279,6 +10303,19 @@ def _publish_twin_layout_draft_locked(
                     defer_location_readiness_for_feature_id
                 ),
             )
+        rack_cell_sync = sync_published_rack_cells(
+            db,
+            floor_layout=load_warehouse_twin_floor(floor_code),
+            operator_id=user.id,
+        )
+        rack_master_changed = any(
+            (
+                rack_cell_sync.created_location_ids,
+                rack_cell_sync.enabled_location_ids,
+                rack_cell_sync.disabled_location_ids,
+                rack_cell_sync.updated_location_ids,
+            )
+        )
         _validate_published_area_layouts_for_floor(
             db,
             floor_code=floor_code,
@@ -10288,7 +10325,7 @@ def _publish_twin_layout_draft_locked(
             getattr(published_policies, "legacy_name_update_count", 0)
         )
         formal_master_changed = bool(
-            published_policies or legacy_name_update_count
+            published_policies or legacy_name_update_count or rack_master_changed
         )
         if result.applied or formal_master_changed:
             _twin_layout_asset_log(
@@ -10319,6 +10356,18 @@ def _publish_twin_layout_draft_locked(
                     )
                 ),
                 "location_master_changed": formal_master_changed,
+                "rack_cell_created_location_ids": list(
+                    rack_cell_sync.created_location_ids
+                ),
+                "rack_cell_enabled_location_ids": list(
+                    rack_cell_sync.enabled_location_ids
+                ),
+                "rack_cell_disabled_location_ids": list(
+                    rack_cell_sync.disabled_location_ids
+                ),
+                "rack_cell_updated_location_ids": list(
+                    rack_cell_sync.updated_location_ids
+                ),
                 "inventory_changed": False,
             },
             )
@@ -10333,7 +10382,7 @@ def _publish_twin_layout_draft_locked(
         finally:
             db.rollback()
         _handle_twin_layout_edit_error(error)
-    except WarehouseAreaActivationError as error:
+    except (WarehouseAreaActivationError, WarehouseRackCellSyncError) as error:
         try:
             restore_warehouse_twin_publish_state(
                 publish_snapshot,
@@ -10368,6 +10417,234 @@ def _publish_twin_layout_draft_locked(
             getattr(published_policies, "legacy_name_update_count", 0)
         ),
     }
+
+
+def _rack_level_label_job_payload(
+    row: WarehouseRackLevelLabelPrintJob,
+    *,
+    replayed: bool = False,
+) -> dict:
+    try:
+        labels = json.loads(row.labels_json)
+    except (TypeError, json.JSONDecodeError):
+        labels = []
+    return {
+        "id": row.id,
+        "floor_code": row.floor_code,
+        "map_revision": row.map_revision,
+        "area_id": row.area_id,
+        "map_feature_id": row.map_feature_id,
+        "map_rack_id": row.map_rack_id,
+        "floor_name": row.floor_name_snapshot,
+        "area_name": row.area_name_snapshot,
+        "rack_name": row.rack_name_snapshot,
+        "level_count": row.level_count,
+        "labels": labels,
+        "template_version": row.template_version,
+        "source": row.source,
+        "created_at": beijing_naive_to_api(row.created_at),
+        "replayed": replayed,
+    }
+
+
+@router.post("/rack-level-labels/prints")
+def register_rack_level_label_print(
+    payload: RackLevelLabelPrintPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Freeze one 80 x 40 mm label per configured rack level.
+
+    Registration is intentionally independent from mold labels.  It records a
+    wording snapshot only and never changes warehouse inventory.
+    """
+
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        try:
+            published = load_warehouse_twin_floor(payload.floor_code)
+        except WarehouseTwinLayoutNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        map_revision = str(published.get("revision") or "").strip()
+        if map_revision != payload.expected_map_revision:
+            raise HTTPException(
+                status_code=409,
+                detail="正式地图版本已变化，请刷新后重新打印货架层标签。",
+            )
+        rack = next(
+            (
+                item
+                for item in published.get("racks") or []
+                if str(item.get("id") or "").strip() == payload.map_rack_id
+            ),
+            None,
+        )
+        if rack is None:
+            raise HTTPException(status_code=404, detail="正式地图中找不到该货架")
+        map_feature_id = str(rack.get("area_feature_id") or "").strip()
+        rack_code = str(rack.get("rack_code") or "").strip()
+        rack_name = str(rack.get("name") or rack_code or "").strip()
+        levels = int(rack.get("levels") or 0)
+        level_cell_counts = rack.get("level_cell_counts")
+        if (
+            not map_feature_id
+            or not rack_code
+            or not rack_name
+            or levels <= 0
+            or not isinstance(level_cell_counts, list)
+            or len(level_cell_counts) != levels
+            or any(int(value or 0) <= 0 for value in level_cell_counts)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="该货架的区域、名称或逐层格数尚未配置完整，不能打印。",
+            )
+        area = db.scalar(
+            select(WarehouseArea)
+            .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
+            .join(
+                WarehouseAreaStoragePolicy,
+                WarehouseAreaStoragePolicy.area_id == WarehouseArea.id,
+            )
+            .options(
+                selectinload(WarehouseArea.floor),
+                selectinload(WarehouseArea.storage_policy),
+            )
+            .where(
+                func.upper(WarehouseFloor.floor_code) == payload.floor_code,
+                WarehouseAreaStoragePolicy.map_feature_id == map_feature_id,
+                WarehouseAreaStoragePolicy.status == "published",
+                WarehouseAreaStoragePolicy.published_map_revision == map_revision,
+            )
+        )
+        if area is None or area.storage_policy is None:
+            raise HTTPException(
+                status_code=409,
+                detail="该货架所在区域尚未按当前地图版本正式发布。",
+            )
+        if location_warehouse_type_for_inventory_types(
+            policy_inventory_types(area.storage_policy)
+        ) is not None:
+            expected_cell_count = sum(int(value) for value in level_cell_counts)
+            actual_cell_count = int(
+                db.scalar(
+                    select(func.count(WarehouseLocation.id)).where(
+                        WarehouseLocation.map_rack_id == payload.map_rack_id,
+                        WarehouseLocation.address_area_id == area.id,
+                        WarehouseLocation.warehouse_floor == area.floor.floor_number,
+                        WarehouseLocation.is_active.is_(True),
+                    )
+                )
+                or 0
+            )
+            if actual_cell_count != expected_cell_count:
+                raise HTTPException(
+                    status_code=409,
+                    detail="正式货架层格尚未同步完整，请先重新发布地图。",
+                )
+        labels = [
+            {
+                "level_no": level_no,
+                "floor_name": area.floor.floor_name,
+                "area_name": area.area_name,
+                "rack_name": rack_name,
+                "display_text": f"{area.area_name}　{rack_name}　第{level_no}层",
+            }
+            for level_no in range(1, levels + 1)
+        ]
+        request_facts = {
+            "floor_code": payload.floor_code,
+            "map_rack_id": payload.map_rack_id,
+            "map_revision": map_revision,
+            "template_version": payload.template_version,
+            "source": payload.source,
+        }
+        request_hash = hashlib.sha256(
+            json.dumps(
+                request_facts,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        existing = db.scalar(
+            select(WarehouseRackLevelLabelPrintJob).where(
+                WarehouseRackLevelLabelPrintJob.idempotency_key
+                == payload.idempotency_key
+            )
+        )
+        if existing is not None:
+            if existing.request_hash != request_hash or existing.created_by != user.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该打印请求号已被不同内容使用，请刷新后重试。",
+                )
+            return _rack_level_label_job_payload(existing, replayed=True)
+        row = WarehouseRackLevelLabelPrintJob(
+            floor_code=payload.floor_code,
+            map_revision=map_revision,
+            area_id=area.id,
+            map_feature_id=map_feature_id,
+            map_rack_id=payload.map_rack_id,
+            map_rack_code=rack_code,
+            floor_name_snapshot=area.floor.floor_name,
+            area_name_snapshot=area.area_name,
+            rack_name_snapshot=rack_name,
+            level_count=levels,
+            labels_json=json.dumps(labels, ensure_ascii=False, separators=(",", ":")),
+            template_version=payload.template_version,
+            source=payload.source,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            created_by=user.id,
+        )
+        db.add(row)
+        db.flush()
+        append_audit_event(
+            db,
+            request=request,
+            actor=user,
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="warehouse",
+            action_code="warehouse.rack_level_labels.print",
+            legacy_action="RACK_LEVEL_LABEL_PRINT",
+            resource=f"warehouse/rack-level-labels/prints/{row.id}",
+            entity_type="warehouse_rack_level_label_print_job",
+            entity_id=row.id,
+            object_ref=f"{payload.floor_code}:{payload.map_rack_id}",
+            description="登记货架层标签打印快照；未改变库存事实",
+            details={
+                "map_revision": map_revision,
+                "area_id": area.id,
+                "level_count": levels,
+                "template_version": payload.template_version,
+                "inventory_changed": False,
+            },
+        )
+        try:
+            db.commit()
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="货架层标签打印请求已登记，请刷新后查看。",
+            ) from error
+        db.refresh(row)
+        return _rack_level_label_job_payload(row)
+
+
+@router.get("/rack-level-labels/prints/{print_job_id}")
+def get_rack_level_label_print(
+    print_job_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    row = db.get(WarehouseRackLevelLabelPrintJob, print_job_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="货架层标签打印记录不存在")
+    return _rack_level_label_job_payload(row)
 
 
 @router.post("/twin-layout/floors/{floor_code}/draft/discard")
@@ -12036,9 +12313,9 @@ def _twin_dashboard_source_rows(
 @router.get("/twin-dashboard/overview")
 def get_warehouse_twin_dashboard(
     days: int = Query(default=30),
-    dispatch_idle_days: int = Query(default=3, ge=1, le=30),
     db: Session = Depends(get_db),
     user: User = Depends(_can_locate_twin),
+    dispatch_idle_days: int = Query(default=3, ge=1, le=30),
 ) -> dict:
     if days not in {7, 30, 90}:
         raise HTTPException(status_code=422, detail="时间范围仅支持7、30或90天")

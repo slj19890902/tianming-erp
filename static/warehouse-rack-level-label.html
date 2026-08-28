@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>货架层标签 - 天明ERP</title>
+  <style>
+    @page{size:80mm 40mm;margin:0}
+    *{box-sizing:border-box}
+    body{margin:0;background:#e2e8f0;color:#111827;font:14px/1.35 Arial,"Microsoft YaHei",sans-serif}
+    .toolbar{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:center;gap:10px;padding:10px;background:#fff;border-bottom:1px solid #94a3b8}
+    button,a{height:36px;border:0;border-radius:7px;padding:0 16px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+    button{background:#1d4ed8;color:#fff}button:disabled{opacity:.45;cursor:not-allowed}a{background:#e2e8f0;color:#1e293b}
+    .state{max-width:760px;margin:12px auto;padding:10px 12px;border-radius:8px;background:#eff6ff;color:#1e3a8a}.state.error{background:#fee2e2;color:#991b1b}
+    .labels{display:flex;flex-direction:column;align-items:center;gap:14px;padding:0 12px 24px}
+    .label{width:80mm;height:40mm;background:#fff;border:0;page-break-after:always;break-after:page;display:grid;grid-template-rows:10mm 1fr 7mm;padding:3.2mm 4mm;overflow:hidden}
+    .label:last-child{page-break-after:auto;break-after:auto}
+    .floor{font-size:5mm;line-height:1;font-weight:900;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .identity{align-self:center;text-align:center;font-size:9mm;line-height:1.05;font-weight:900;letter-spacing:-.2mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .level{font-size:5mm;font-weight:900;text-align:right;color:#475569}
+    @media print{
+      html,body{width:80mm;height:auto;margin:0;background:#fff}
+      body>*:not(#labels){display:none!important}
+      #labels{display:block!important;width:80mm!important;margin:0!important;padding:0!important}
+      .label{display:grid!important;width:80mm!important;height:40mm!important;margin:0!important;padding:3.2mm 4mm!important}
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar"><strong>80 × 40 mm（固定）</strong><button id="printButton" type="button" disabled>打印全部层标签</button><a href="/warehouse.html">返回仓库</a></div>
+  <div id="state" class="state">正在读取货架层标签…</div>
+  <main id="labels" class="labels" hidden></main>
+  <script>
+    const params=new URLSearchParams(location.search),jobId=Number(params.get("print_job_id")),state=document.getElementById("state"),labels=document.getElementById("labels"),button=document.getElementById("printButton");
+    const h=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char]);
+    function loginNext(){location.href=`/?next=${encodeURIComponent(location.pathname+location.search)}`}
+    async function load(){
+      if(!Number.isInteger(jobId)||jobId<=0)throw new Error("打印记录无效，请从仓库地图重新打开。")
+      const response=await fetch(`/api/warehouse/rack-level-labels/prints/${jobId}`,{credentials:"same-origin",headers:{Accept:"application/json"}});
+      if(response.status===401){loginNext();return}
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data.detail||"货架层标签读取失败")
+      const rows=Array.isArray(data.labels)?data.labels:[];
+      if(!rows.length)throw new Error("该打印记录没有可打印的层标签")
+      labels.innerHTML=rows.map(row=>`<article class="label"><div class="floor">${h(row.floor_name)}</div><div class="identity">${h(row.area_name)}　${h(row.rack_name)}</div><div class="level">第 ${h(row.level_no)} 层</div></article>`).join("");
+      state.textContent=`${data.area_name} · ${data.rack_name} · 共 ${rows.length} 张；打印缩放保持 100%。`;
+      labels.hidden=false;button.disabled=false;
+    }
+    button.onclick=()=>window.print();
+    load().catch(error=>{state.classList.add("error");state.textContent=error?.message||"货架层标签读取失败";button.disabled=true});
+  </script>
+</body>
+</html>

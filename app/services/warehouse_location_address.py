@@ -398,6 +398,8 @@ def employee_area_name(
         right_label = f"右区{code}"
         if not formal_name or _is_generic_legacy_area_name(formal_name, code):
             return right_label
+        if re.match(r"^(?:[一二三四五六七八九十]+|\d+)楼", formal_name):
+            return formal_name
         if right_label in formal_name.replace(" ", ""):
             return formal_name
         description = re.sub(
@@ -463,7 +465,7 @@ def _measured_map_location_name(
     )
     prefix = area_name if has_floor_prefix else f"{floor_name} {area_name}"
     area_code = str(location.area_code or "").strip().upper()
-    if area_sequence:
+    if area_sequence or has_floor_prefix:
         return f"{prefix}·{area_code}-{sequence}"
     storage_type = str(location.storage_type or "").strip().lower()
     suffix_match = re.search(
@@ -498,6 +500,25 @@ def format_location_address(
     floor_number = int(
         (floor.floor_number if floor is not None else location.warehouse_floor) or 0
     )
+    if (
+        location.address_kind == "rack_slot"
+        and area is not None
+        and location.rack_display_name
+        and location.level_no
+        and location.slot_no
+        and floor_number
+    ):
+        area_name = employee_area_name(
+            area,
+            area_code=location.area_code,
+            floor_number=floor_number,
+        )
+        human = (
+            f"{_floor_name(floor_number)}·{area_name}·"
+            f"{location.rack_display_name}·{int(location.level_no)}层·"
+            f"{int(location.slot_no)}格"
+        )
+        return location.location_code, human
     if (
         location.address_kind == "rack_slot"
         and area is not None

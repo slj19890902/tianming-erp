@@ -307,6 +307,7 @@ class WarehouseLocation(Base):
         UniqueConstraint("location_code", name="uq_warehouse_locations_code"),
         Index("ix_warehouse_locations_type_active", "warehouse_type", "is_active"),
         Index("ix_warehouse_locations_address_area", "address_area_id"),
+        Index("ix_warehouse_locations_map_rack", "map_rack_id", "is_active"),
         Index(
             "uq_warehouse_locations_rack_path",
             "address_area_id",
@@ -353,6 +354,8 @@ class WarehouseLocation(Base):
         ForeignKey("warehouse_areas.id", ondelete="RESTRICT"), nullable=True
     )
     rack_code: Mapped[str | None] = mapped_column(String(1), nullable=True)
+    map_rack_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    rack_display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     ground_row_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     slot_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     address_version: Mapped[int] = mapped_column(
@@ -388,6 +391,61 @@ class WarehouseLocation(Base):
     address_aliases: Mapped[list["WarehouseLocationAlias"]] = relationship(
         back_populates="location",
         cascade="all, delete-orphan",
+    )
+
+
+class WarehouseRackLevelLabelPrintJob(Base):
+    """Immutable registration and wording snapshot for one rack-level print."""
+
+    __tablename__ = "warehouse_rack_level_label_print_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "template_version = 'rack_level_80x40_v1'",
+            name="ck_warehouse_rack_level_label_print_jobs_template",
+        ),
+        CheckConstraint(
+            "source = 'region_planning'",
+            name="ck_warehouse_rack_level_label_print_jobs_source",
+        ),
+        CheckConstraint(
+            "level_count > 0",
+            name="ck_warehouse_rack_level_label_print_jobs_levels",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_warehouse_rack_level_label_print_jobs_idempotency",
+        ),
+        Index(
+            "ix_warehouse_rack_level_label_print_jobs_rack",
+            "floor_code",
+            "map_rack_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    floor_code: Mapped[str] = mapped_column(String(30), nullable=False)
+    map_revision: Mapped[str] = mapped_column(String(64), nullable=False)
+    area_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_areas.id", ondelete="RESTRICT"), nullable=False
+    )
+    map_feature_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    map_rack_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    map_rack_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    floor_name_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    area_name_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    rack_name_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    level_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    labels_json: Mapped[str] = mapped_column(Text, nullable=False)
+    template_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
     )
 
 

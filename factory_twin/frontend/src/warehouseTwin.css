@@ -106,6 +106,14 @@ body.warehouse-twin-page {
   box-shadow: 0 0 18px #5eead42c, inset 0 0 18px #5eead419;
 }
 .twin-floor-switch button.active b { color: var(--twin-cyan); }
+.twin-floor-switch button.planning {
+  min-width: 78px;
+  border-style: dashed;
+  border-color: #64748b;
+  color: #94a3b8;
+  background: #142431;
+}
+.twin-floor-switch button.planning b { color: #cbd5e1; }
 
 .twin-command-status {
   min-width: 110px;
@@ -1313,6 +1321,34 @@ body.warehouse-twin-page {
 .twin-mold-rack-planner-actions button:disabled { border-color: #cbd5d9; color: #7b8b91; background: #e8edef; cursor: not-allowed; opacity: .62; }
 .twin-mold-rack-structure-editor > p { margin: 0; color: #647981; font-size: 8px; line-height: 1.5; }
 .twin-zone-simple-planner > button.advanced-toggle:disabled { cursor: not-allowed; opacity: .45; }
+.twin-region-planning-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding-top: 9px;
+  border-top: 1px solid #c9ddd9;
+}
+.twin-region-planning-actions button {
+  min-height: 38px;
+  padding: 6px;
+  border: 1px solid #8daaa8;
+  border-radius: 4px;
+  color: #244b55;
+  background: #fff;
+  font-size: 9px;
+  font-weight: 900;
+}
+.twin-region-planning-actions button.active {
+  border-color: #0f766e;
+  color: #fff;
+  background: #0f766e;
+}
+.twin-region-planning-actions button.publish {
+  border-color: #166534;
+  color: #fff;
+  background: #15803d;
+}
+.twin-region-planning-actions button:disabled { cursor: not-allowed; opacity: .45; }
 .twin-location-point-planner { padding: 10px; display: grid; gap: 8px; border: 1px solid #9fc8c2; border-radius: 5px; background: #fff; }
 .twin-location-point-planner > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .twin-location-point-planner b { color: #164d56; font-size: 11px; }

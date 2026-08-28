@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { buildRackFrontSlots } from "./rackFront.mjs";
+import { moldRackEmployeeName } from "./moldRackView.mjs";
 import type { Rack } from "./types";
 import type { RackFrontSlot } from "./rackFront.mjs";
 
@@ -25,7 +26,7 @@ export function RackFrontView({ rack, onClose }: Props) {
     <div className="rack-focus-backdrop" onClick={onClose} />
     <section className="rack-focus-stage">
       <header className="rack-focus-header">
-        <div><span className="rack-focus-kicker">INDUSTRIAL RACK ELEVATION</span><h2>{rack.rack_code} · {rack.name}</h2><p>{rack.width_mm} × {rack.depth_mm} × {rack.height_mm} mm · {rack.levels} 层 · 正面 {rack.access_side}</p></div>
+        <div><h2>{rack.rack_code} · {moldRackEmployeeName(rack)}</h2><p>{rack.width_mm} × {rack.depth_mm} × {rack.height_mm} mm · {rack.levels} 层 · 正面 {rack.access_side}</p></div>
         <button type="button" className="rack-focus-close" onClick={onClose}>返回平面图 <kbd>Esc</kbd></button>
       </header>
 

@@ -56,6 +56,7 @@ import {
   buildMoldLocationTarget,
   buildMoldRackView,
   buildMoldShelfSpines,
+  moldRackEmployeeName,
   moldRackLevelUsage,
   moldRacksForArea
 } from "./moldRackView.mjs";
@@ -1276,7 +1277,7 @@ function MoldRackElevation({
     <button className="twin-modal-backdrop" type="button" aria-label="关闭模具货架正视图" disabled={moveAttemptUncertain} onClick={onClose} />
     <section className="twin-rack-stage twin-mold-rack-stage">
       <header>
-        <div><small>实时模具货架 · {response?.rack.mold_rack_code || rack.mold_rack_code || rack.rack_code}</small><h2>{rack.name}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} 毫米 · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
+        <div><small>实时模具货架 · {response?.rack.mold_rack_code || rack.mold_rack_code || rack.rack_code}</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} 毫米 · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
         <button type="button" disabled={moveAttemptUncertain} onClick={onClose}>{moveAttemptUncertain ? "请先核对移动结果" : "返回孪生地图"}</button>
       </header>
       {response?.rack.uses_legacy_bays && <div className="twin-mold-rack-legacy-note">当前发布地图仍沿用旧统一 {rack.bays || 1} 格结构；请在“区域规划”中补齐每层实际格数，发布前不会改动任何模具位置。</div>}
@@ -1404,7 +1405,7 @@ function WarehouseRackElevation({
     <button className="twin-modal-backdrop" type="button" aria-label="关闭货架正视图" onClick={onClose} />
     <section className="twin-rack-stage">
       <header>
-      <div><small>仓储货架正视图</small><h2>{rack.name}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
+      <div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
         <button type="button" onClick={onClose}>返回孪生地图</button>
       </header>
       <div className="twin-rack-content">
@@ -5095,7 +5096,7 @@ export function WarehouseTwinApp() {
                   setSelected({ kind: "rack", id: rack.id });
                   setRackDrafts((current) => ({ ...current, [rack.id]: current[rack.id] || rackDraft(rack) }));
                   setLocationEditMessage(`已选择 ${rack.mold_rack_code || rack.rack_code}；可直接修改层数与每层格数，保存后仍是待发布草稿。`);
-                }}><b>{rack.mold_rack_code || rack.rack_code}</b><span>{rack.name}</span><small>{rack.levels} 层 · {counts.map((count, index) => blockedLevels.includes(index + 1) ? `第${index + 1}层 设备占用` : `第${index + 1}层 ${count} 格`).join(" / ")}</small></button>;
+                }}><b>{rack.mold_rack_code || rack.rack_code}</b><span>{moldRackEmployeeName(rack)}</span><small>{rack.levels} 层 · {counts.map((count, index) => blockedLevels.includes(index + 1) ? `第${index + 1}层 设备占用` : `第${index + 1}层 ${count} 格`).join(" / ")}</small></button>;
               })}</div>
               {selectedRackEditDraft?.mold_rack_code && selectedAreaMoldRacks.some((rack) => rack.id === selectedRackEditDraft.id) && <div className="twin-mold-rack-structure-editor">
                 <div><b>{selectedRackEditDraft.mold_rack_code} · {selectedRackEditDraft.name}</b><small>这里编辑的是待发布草稿；正式模具位置只读取已发布地图，不改变模具台账中的位置。</small></div>
@@ -5149,7 +5150,7 @@ export function WarehouseTwinApp() {
             {locationEditMode && advancedAreaMaintenanceOpen && canEditLocations && selectedAreaCode && selectedAreaHasFormalLedger && !selectedAreaCreatesInventoryLocations && <div className="twin-location-create"><p>该区域使用原料、模具、印版或临时周转台账，不生成成品/半成品库存库位；发布后按对应台账定位。</p></div>}
             {locationEditMode && advancedAreaMaintenanceOpen && canEditLocations && !selectedAreaCode && <div className="twin-location-create"><p>请先确认启用区域，之后才能生成可投入使用的库位。</p></div>}
             {selectedAreaIsMold ? <div className="twin-area-mold-list">
-              {!locationEditMode && selectedAreaMoldRacks.length > 0 && <div className="twin-mold-rack-lookup-shortcuts"><b>打开模具货架正视图</b><span>按正式模具台账读取，不显示模拟纸箱库存。</span><div>{selectedAreaMoldRacks.map((rack) => <button type="button" key={rack.id} onClick={() => { setRackFocusId(rack.id); setSelected({ kind: "rack", id: rack.id }); }}>{rack.mold_rack_code || rack.rack_code}<small>{rack.name}</small></button>)}</div></div>}
+              {!locationEditMode && selectedAreaMoldRacks.length > 0 && <div className="twin-mold-rack-lookup-shortcuts"><b>打开模具货架正视图</b><div>{selectedAreaMoldRacks.map((rack) => <button type="button" key={rack.id} onClick={() => { setRackFocusId(rack.id); setSelected({ kind: "rack", id: rack.id }); }}>{rack.mold_rack_code || rack.rack_code}<small>{moldRackEmployeeName(rack)}</small></button>)}</div></div>}
               {moldAreaLoading && <div className="twin-area-empty"><b>正在读取模具资产台账…</b><span>只读取已登记且位置属于当前实测区域的模具。</span></div>}
               {!moldAreaLoading && moldAreaError && <div className="twin-area-empty error"><b>模具台账读取失败</b><span>{moldAreaError}</span></div>}
               {!moldAreaLoading && !moldAreaError && !moldAreaResponse?.items.length && <div className="twin-area-empty"><b>当前区域没有已定位模具</b><span>未填写位置或仍使用旧自由文本位置的模具，不会被误算进该实测区域。</span></div>}

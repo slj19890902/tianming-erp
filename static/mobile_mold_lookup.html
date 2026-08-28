@@ -22,25 +22,22 @@
   <main>
     <section id="movePanel" class="move-panel">
       <h2>模具双码移动确认</h2>
-      <div class="muted">扫描结果可直接粘贴，也可手动输入。先预览当前与目标位置，再确认移动。</div>
       <div class="move-grid">
         <div class="field"><label>已选模具</label><div id="moveMoldDisplay" class="preview-code">请先从查询结果选择模具</div><input id="moveMoldCode" type="hidden"></div>
         <div class="field"><label for="moveLocationCode">模具位置码（1F / 3F）</label><input id="moveLocationCode" autocomplete="off" autocapitalize="characters" placeholder="例如 1F-M-R01-L2-G01"></div>
       </div>
       <div class="one-floor-builder">
-        <div class="muted">一楼位置快捷选择（只记录货架、层、格，不记录会变化的左右顺序）</div>
         <div class="one-floor-grid">
           <div class="field"><label for="oneFloorRack">货架</label><select id="oneFloorRack"></select></div>
           <div id="oneFloorLevelField" class="field"><label for="oneFloorLevel">层</label><select id="oneFloorLevel"></select></div>
           <div id="oneFloorGridField" class="field"><label for="oneFloorGrid">格</label><select id="oneFloorGrid"></select></div>
         </div>
-        <div id="oneFloorBuilderHint" class="builder-hint">正在读取一楼模具位置…</div>
+        <div id="oneFloorBuilderHint" class="builder-hint" hidden></div>
       </div>
       <div class="field" style="margin-top:10px"><label for="moveNote">备注（可选）</label><input id="moveNote" maxlength="500" placeholder="例如 现场整理后归位"></div>
       <div class="move-actions"><button id="previewButton" type="button">预览移动</button><button id="confirmButton" class="confirm" type="button" disabled>确认移动</button></div>
       <div id="moveMessage"></div><div id="movePreview"></div>
     </section>
-    <div class="hint">先看醒目的位置提示，再核对模具标签名称、存货编码和产品尺寸。大模具请按现场要求两人搬运。</div>
     <div id="message"></div>
     <div id="results"></div>
   </main>
@@ -57,10 +54,10 @@
     function selectedOneFloorRack(){return oneFloorLocationOptions.find(row=>row.rack_code===$("oneFloorRack").value)||null}
     function selectedOneFloorLevel(){const rack=selectedOneFloorRack(),level=Number.parseInt($("oneFloorLevel").value,10);return(rack?.levels||[]).find(row=>Number(row.level)===level)||null}
     function buildOneFloorLocation(){
-      const rack=selectedOneFloorRack();if(!rack)return;let code="",label="";
-      if(rack.location_depth==="rack"){code=`1F-M-${rack.rack_code}`;label=`${rack.rack_code} ${rack.name}；该区域没有层号或格号`}
-      else{const level=selectedOneFloorLevel();if(!level)return;if((level.grids||[]).length){const grid=Number.parseInt($("oneFloorGrid").value,10);if(!grid)return;code=`1F-M-${rack.rack_code}-L${level.level}-G${positionCode(grid)}`;label=`${rack.rack_code} ${rack.name} · 第${level.level}层 · 第${grid}格`}else{code=`1F-M-${rack.rack_code}-L${level.level}`;label=`${rack.rack_code} ${rack.name} · 第${level.level}层`}}
-      $("moveLocationCode").value=code;moveSource="manual_input";invalidateMovePreview();$("oneFloorBuilderHint").textContent=`已选择：${label}；左右顺序不记录`;
+      const rack=selectedOneFloorRack();if(!rack)return;let code="";
+      if(rack.location_depth==="rack"){code=`1F-M-${rack.rack_code}`}
+      else{const level=selectedOneFloorLevel();if(!level)return;if((level.grids||[]).length){const grid=Number.parseInt($("oneFloorGrid").value,10);if(!grid)return;code=`1F-M-${rack.rack_code}-L${level.level}-G${positionCode(grid)}`}else{code=`1F-M-${rack.rack_code}-L${level.level}`}}
+      $("moveLocationCode").value=code;moveSource="manual_input";invalidateMovePreview();$("oneFloorBuilderHint").hidden=true;
     }
     function renderOneFloorLevels(){
       const rack=selectedOneFloorRack(),levels=rack?.levels||[];$("oneFloorLevel").innerHTML=levels.map(row=>`<option value="${row.level}">第 ${row.level} 层 · ${row.kind==="vertical"?"竖放":"平放"}</option>`).join("");$("oneFloorLevelField").style.display=rack?.location_depth==="rack"?"none":"block";renderOneFloorGrids();
@@ -69,7 +66,7 @@
       const rack=selectedOneFloorRack(),level=selectedOneFloorLevel(),grids=level?.grids||[];$("oneFloorGrid").innerHTML=grids.map(grid=>`<option value="${grid}">第 ${grid} 格</option>`).join("");$("oneFloorGridField").style.display=grids.length?"block":"none";buildOneFloorLocation();
     }
     async function loadOneFloorLocationOptions(){
-      try{const data=await api("/api/warehouse/molds/location-options");oneFloorLocationOptions=data.racks||[];$("oneFloorRack").innerHTML=oneFloorLocationOptions.map(row=>`<option value="${h(row.rack_code)}">${h(row.rack_code)} · ${h(row.name)}</option>`).join("");renderOneFloorLevels()}catch(error){$("oneFloorBuilderHint").textContent=`一楼快捷位置读取失败：${error.message}`}
+      try{const data=await api("/api/warehouse/molds/location-options");oneFloorLocationOptions=data.racks||[];$("oneFloorRack").innerHTML=oneFloorLocationOptions.map(row=>`<option value="${h(row.rack_code)}">${h(row.rack_code)} · ${h(row.name)}</option>`).join("");$("oneFloorBuilderHint").hidden=true;renderOneFloorLevels()}catch(error){$("oneFloorBuilderHint").textContent=`一楼快捷位置读取失败：${error.message}`;$("oneFloorBuilderHint").hidden=false}
     }
     function loginNext(){const next=location.pathname+location.search;location.href=`/?next=${encodeURIComponent(next)}`}
     async function ensureCustomerReferences(){if(customerReferences)return customerReferences;const data=await api("/api/warehouse/references/customers");customerReferences=data.items||[];return customerReferences}
@@ -82,7 +79,7 @@
     }
     function selectMoldForMove(id){const row=visibleMolds.find(item=>Number(item.id)===Number(id));if(!row)return;$("moveMoldCode").value=row.internal_code||row.mold_code||"";$("moveMoldDisplay").textContent=row.display_name||row.mold_name||"当前模具";invalidateMovePreview();$("movePanel").scrollIntoView({behavior:"smooth",block:"start"})}
     function render(items){
-      visibleMolds=items;$("results").innerHTML=items.map(row=>`<article class="card"><div class="card-head"><div class="name">${h(row.display_name||row.mold_name||"名称待完善")}</div><div class="toolbar"><span class="code">${h(row.identity_ready?"正式标签资料":"历史资料待完善")}</span><span class="tag">关联 ${row.product_count} 款</span></div></div><div class="location"><div class="location-code">${h(row.rack_location)}</div><div class="prompt">${h(row.location_guide?.prompt||"")}</div></div><div class="products">${(row.products||[]).map(productHtml).join("")||'<div class="empty">该模具尚未绑定常用箱，请先联系管理员维护。</div>'}<div class="toolbar">${canMove?`<button class="label-link" type="button" onclick="selectMoldForMove(${Number(row.id)})">选择此模具移动</button>`:""}<a class="label-link" href="/mold-label.html?mold_id=${row.id}" target="_blank">查看/打印模具标签</a></div></div></article>`).join("")||'<div class="empty">没有找到模具。请换客户、标签名称、存货编码或产品名称。</div>';
+      visibleMolds=items;$("results").innerHTML=items.map(row=>`<article class="card"><div class="card-head"><div class="name">${h(row.display_name||row.mold_name||"名称待完善")}</div><div class="toolbar"><span class="code">${h(row.identity_ready?"正式标签资料":"历史资料待完善")}</span><span class="tag">关联 ${row.product_count} 款</span></div></div><div class="location"><div class="prompt">${h(row.location_guide?.prompt||row.rack_location||"位置待完善")}</div></div><div class="products">${(row.products||[]).map(productHtml).join("")||'<div class="empty">该模具尚未绑定常用箱，请先联系管理员维护。</div>'}<div class="toolbar">${canMove?`<button class="label-link" type="button" onclick="selectMoldForMove(${Number(row.id)})">选择此模具移动</button>`:""}<a class="label-link" href="/mold-label.html?mold_id=${row.id}" target="_blank">查看/打印模具标签</a></div></div></article>`).join("")||'<div class="empty">没有找到模具。请换客户、标签名称、存货编码或产品名称。</div>';
     }
     function setSearchLoading(loading){$("searchButton").disabled=loading;$("searchButton").textContent=loading?"查询中…":"查询"}
     function invalidateSearch(){searchRequestId+=1;setSearchLoading(false);$("message").innerHTML="";$("results").innerHTML=""}

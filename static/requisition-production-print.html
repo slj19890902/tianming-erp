@@ -423,7 +423,7 @@
           if (seen.has(key)) return;
           seen.add(key);
           const state = line.mold_is_active === false ? " · 已停用，请勿直接领用" : "";
-          rows.push(`<div class="mold-focus-row"><strong class="mold-focus-code">${escapeHtml(name)}</strong><span class="mold-focus-location">${escapeHtml(line.mold_location || "位置待完善")}${escapeHtml(state)}</span></div>`);
+          rows.push(`<div class="mold-focus-row"><strong class="mold-focus-code">${escapeHtml(name)}</strong><span class="mold-focus-location">${escapeHtml(line.mold_location_display || line.mold_location || "位置待完善")}${escapeHtml(state)}</span></div>`);
         });
         if (!rows.length) return "";
         return `<section class="mold-focus internal-only"><div class="mold-focus-title"><span>第 1 工序 · 模具名称与现场位置</span><span>先核对再领用</span></div>${rows.join("")}<div class="mold-focus-note">扫描模具上的固定二维码，可查看本任务其余信息并登记本次扫码时间；扫码不会自动开工。</div></section>`;

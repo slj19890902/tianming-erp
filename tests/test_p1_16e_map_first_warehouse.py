@@ -37,7 +37,7 @@ def test_row_ledgers_are_visible_read_entries_while_mutations_stay_admin_only() 
     assert '<a class="btn" href="/warehouse.html" target="_top">实测仓库地图</a>' in WAREHOUSE
     assert 'class="btn" type="button" onclick="switchTab(\'finished\')">高级库存台账' in WAREHOUSE
     assert 'class="btn" type="button" onclick="switchLocationView(\'ledger\')">库位结构维护' in WAREHOUSE
-    assert '<form id="moldForm" class="panel admin-only">' in WAREHOUSE
+    assert '<form id="moldForm" class="panel admin-only hidden">' in WAREHOUSE
     assert '<form id="printingPlateForm" class="panel admin-only">' in WAREHOUSE
     assert 'class="actions admin-only"' in WAREHOUSE
     assert 'state.user.role!=="admin"||state.readOnly' in WAREHOUSE

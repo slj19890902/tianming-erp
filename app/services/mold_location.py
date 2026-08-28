@@ -55,7 +55,7 @@ ONE_FLOOR_MOLD_RACKS = (
     {
         "rack": 1,
         "rack_code": "R01",
-        "name": "左架（模具002）",
+        "name": "左架",
         "zone_code": "ZONE-1F-MOLD-002",
         "blocked_levels": (1,),
         "levels": ({"level": 2, "kind": "flat"}, {"level": 3, "kind": "flat"}),
@@ -63,7 +63,7 @@ ONE_FLOOR_MOLD_RACKS = (
     {
         "rack": 2,
         "rack_code": "R02",
-        "name": "中架（模具002）",
+        "name": "中架",
         "zone_code": "ZONE-1F-MOLD-002",
         "blocked_levels": (1,),
         "levels": ({"level": 2, "kind": "flat"},),
@@ -71,7 +71,7 @@ ONE_FLOOR_MOLD_RACKS = (
     {
         "rack": 3,
         "rack_code": "R03",
-        "name": "右架（模具001）",
+        "name": "右架",
         "zone_code": "ZONE-1F-MOLD-001",
         "blocked_levels": (),
         "levels": (
@@ -145,7 +145,7 @@ def _area_text(value: str) -> str:
 def _floor_text(value: str) -> str:
     floor = _number(value[:-1])
     chinese = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六"}
-    return f"{chinese.get(floor, floor)}楼模具区"
+    return f"{chinese.get(floor, floor)}楼"
 
 
 def one_floor_mold_location_options(
@@ -219,7 +219,9 @@ def one_floor_mold_location_options(
             {
                 "rack": confirmed["rack"],
                 "rack_code": rack_code,
-                "name": str(layout.get("name") or confirmed["name"]),
+                # Employee-facing alias only.  The measured layout keeps its
+                # full physical rack name in the source map and audit facts.
+                "name": str(confirmed["name"]),
                 "zone_code": str(layout.get("area_code") or confirmed["zone_code"]),
                 "location_depth": "grid" if grid_count else ("level" if levels else "rack"),
                 "grid_count": grid_count,
@@ -428,7 +430,7 @@ def mold_rack_layout_usage_blockers(
 def _rack_prompt(floor: str, rack: int) -> str:
     if floor == "1F" and rack in _ONE_FLOOR_RACKS_BY_NUMBER:
         item = _ONE_FLOOR_RACKS_BY_NUMBER[rack]
-        return f"{item['rack_code']} {item['name']}"
+        return str(item["name"])
     return f"第{rack}号货架"
 
 
@@ -468,8 +470,8 @@ def describe_mold_location(value: str) -> dict:
             "row": None,
             "position": None,
             "prompt": (
-                f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
-                f"第{level}层、第{grid}排"
+                f"{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
+                f"第{level}层、第{grid}格"
             ),
         }
     storage_level = _STORAGE_LEVEL_PATTERN.fullmatch(normalized)
@@ -488,7 +490,7 @@ def describe_mold_location(value: str) -> dict:
             "row": None,
             "position": None,
             "prompt": (
-                f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
+                f"{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
                 f"第{level}层"
             ),
         }
@@ -507,7 +509,7 @@ def describe_mold_location(value: str) -> dict:
             "row": None,
             "position": None,
             "prompt": (
-                f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}"
+                f"{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}"
             ),
         }
     flat = _CANONICAL_FLAT_PATTERN.fullmatch(normalized)
@@ -515,7 +517,7 @@ def describe_mold_location(value: str) -> dict:
         parts = flat.groupdict()
         rack = _number(parts["rack"])
         prompt = (
-            f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
+            f"{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
             f"第{_number(parts['level'])}层、第{_number(parts['row'])}排"
         )
         return {
@@ -535,7 +537,7 @@ def describe_mold_location(value: str) -> dict:
         rack = _number(parts["rack"])
         level_text = "底层（第1层）" if _number(parts["level"]) == 1 else f"第{_number(parts['level'])}层"
         prompt = (
-            f"前往{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
+            f"{_floor_text(parts['floor'])}，{_rack_prompt(parts['floor'].upper(), rack)}，"
             f"{level_text}竖放区"
         )
         return {
@@ -562,7 +564,7 @@ def describe_mold_location(value: str) -> dict:
             "row": _number(parts["row"]),
             "position": _number(parts["position"]),
             "prompt": (
-                f"前往{_area_text(parts['area'])}第{_number(parts['rack'])}号模具架，"
+                f"{_area_text(parts['area'])}第{_number(parts['rack'])}号模具架，"
                 f"第{_number(parts['level'])}层、第{_number(parts['row'])}排"
             ),
         }
@@ -579,7 +581,7 @@ def describe_mold_location(value: str) -> dict:
             "row": None,
             "position": _number(parts["position"]),
             "prompt": (
-                f"前往{_area_text(parts['area'])}第{_number(parts['rack'])}号模具架，"
+                f"{_area_text(parts['area'])}第{_number(parts['rack'])}号模具架，"
                 f"第{_number(parts['level'])}层竖放区"
             ),
         }
@@ -592,7 +594,7 @@ def describe_mold_location(value: str) -> dict:
         "level": None,
         "row": None,
         "position": None,
-        "prompt": f"前往“{raw or '未登记位置'}”",
+        "prompt": raw or "未登记位置",
     }
 
 

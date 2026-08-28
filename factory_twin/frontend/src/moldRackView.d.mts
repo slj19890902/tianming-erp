@@ -84,3 +84,10 @@ export function buildMoldLocationTarget(
 ): string | null;
 
 export function moldRackLevelUsage<T extends MoldRackViewItem>(items: T[]): Map<number, number>;
+
+export function moldRackEmployeeName(rack: {
+  rack_code?: string | null;
+  mold_rack_code?: string | null;
+  area_code?: string | null;
+  name?: string | null;
+} | null | undefined): string;

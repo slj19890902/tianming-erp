@@ -87,7 +87,8 @@ def test_operational_twin_declutters_labels_and_keeps_details_in_the_inspector()
     assert '<nav className="twin-floor-switch" aria-label="楼层切换">' in SOURCE
     assert "filterOperationalFeatures(raw.floor_code, raw.bounds_mm" in SOURCE
     assert 'onSelect={selectOperationalEntity}' in SOURCE
-    assert "库存与库位" in SOURCE
+    assert "库存与库位" not in SOURCE
+    assert '<aside className="twin-inspector">' in SOURCE
     assert 'className="twin-location-card"' in SOURCE
     assert 'if (layers.labels) {' in CANVAS
     assert "warehouseFrustumDivisor(layout.floor_code, visualTheme)" in CANVAS
@@ -270,7 +271,8 @@ def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location
     assert 'const [searchPanelOpen, setSearchPanelOpen] = useState(true)' in SOURCE
     assert "searchHighlightAreaCodes(searchHighlightItems, floorCode)" in SOURCE
     assert "highlightFeatureIds={searchHighlightFeatureIds}" in SOURCE
-    assert "highlightedPalletIds={searchHighlightPalletIds}" in SOURCE
+    assert "highlightedPalletIds={mapHighlightPalletIds}" in SOURCE
+    assert "mergeHighlightPalletIds" in SOURCE
     assert "buildMappedLocationPallets(" in SOURCE
     assert 'item.position_status === "mapped"' in SOURCE
     assert "unlocated_inventory" in SOURCE
@@ -302,7 +304,8 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert "advancedAreaMaintenanceOpen && <div className=\"twin-layout-draft-workflow\"" in SOURCE
     assert "高级维护" in SOURCE
     assert '<aside className="twin-context-rail">' in SOURCE
-    assert "库存与库位" in SOURCE
+    assert "库存与库位" not in SOURCE
+    assert '<aside className="twin-inspector">' in SOURCE
     assert "twin-stage-footer" not in SOURCE
     assert "twin-system-footer" not in SOURCE
 
@@ -324,7 +327,8 @@ def test_stale_draft_has_an_explicit_recovery_without_mutating_inventory() -> No
 
 
 def test_same_inventory_and_specification_merge_is_only_a_confirmed_draft() -> None:
-    assert "同存货编码、同规格可合并建议" in SOURCE
+    assert "可合并货位" in SOURCE
+    assert "同存货编码、同规格可合并建议" not in SOURCE
     assert "useMergeSuggestion" in SOURCE
     assert "加入合并草稿" in SOURCE
     assert "请明确选择一块主栈板后再一次确认" in SOURCE
@@ -449,7 +453,8 @@ def test_phase2c9_admin_operations_and_read_only_locating_share_the_measured_map
     assert "模具编码或名称" in SOURCE
     assert "印刷版编码、产品或位置" in SOURCE
     assert "focusedResource.prompt" in SOURCE
-    assert 'setSelected({ kind: "pallet", id: `erp-location-${pendingLocationId}` })' in SOURCE
+    assert 'const entity = { kind: "pallet" as const, id: `erp-location-${pendingLocationId}` }' in SOURCE
+    assert 'setCameraFocusTarget({ entity, token: cameraFocusSequenceRef.current, source: "search" })' in SOURCE
     assert "只读定位" in SOURCE
     assert "当前是查货模式，只读真实库存和地图位置" in SOURCE
     assert "不执行入库、移货、盘点或布局写入" in SOURCE
@@ -530,7 +535,7 @@ def test_p1_42b_uses_only_measured_dispatch_zones_and_keeps_transfer_targets() -
     assert "在地图选择目标空货位" in SOURCE
     assert "已绑定实体栈板的货物卡拖到此处" in SOURCE
     assert "请先选来源，再按楼层、区域、具体货位" in SOURCE
-    assert "目标必须是上方已选集合中的一块" in SOURCE
+    assert "选择主货位" in SOURCE
     assert "点击上方栈板或散存标签后" in SOURCE
     assert '"/api/warehouse/twin-operations/move-batches"' in SOURCE
     assert "buildMoveBatchPayload(moveBatchIdempotencyKey, moveDrafts)" in SOURCE
@@ -548,7 +553,8 @@ def test_phase2c10_keeps_location_clicks_lightweight_and_focuses_search_hits() -
     assert "const handlersRef = useRef" in CANVAS
     assert "syncEntityHighlights(runtime, selected, focusTarget)" in CANVAS
     assert "animateFocus(runtime, focusTarget)" in CANVAS
-    assert "0xff2d8b" in CANVAS
+    assert "0x7c3aed" in CANVAS
+    assert "new THREE.BoxGeometry(Math.max(size.x, 220), 26, Math.max(size.z, 220))" in CANVAS
     assert "controls.mouseButtons.LEFT = THREE.MOUSE.PAN" in CANVAS
     assert "controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE" in CANVAS
     assert "renderer.shadowMap.enabled = viewMode === \"25d\" && !warehouseTheme" in CANVAS

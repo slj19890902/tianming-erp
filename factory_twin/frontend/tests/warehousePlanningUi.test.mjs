@@ -33,7 +33,8 @@ test("map-first toolbar hides delayed dispatch and exposes selective auto merge"
   assert.match(source, /延期待送 \{dashboard\.delayed_dispatch_relocation\.candidate_count\}/);
   assert.match(source, /delayedDispatchOpen && dashboard\?\.delayed_dispatch_relocation/);
   assert.match(source, />自动合并</);
-  assert.match(source, /只勾选现场要合并的栈板/);
+  assert.match(source, />可合并货位</);
+  assert.doesNotMatch(source, /只勾选现场要合并的栈板/);
   assert.match(source, /type="checkbox" checked=\{selected\}/);
 });
 

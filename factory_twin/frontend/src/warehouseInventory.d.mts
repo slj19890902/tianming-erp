@@ -183,6 +183,15 @@ export function standardPalletContractsMatch(
   right?: Partial<StandardPalletContract> | null
 ): boolean;
 
+export function standardPalletDisplayIssue(input: {
+  loading: boolean;
+  dashboardReady?: boolean;
+  requestedFloorCode: string;
+  layoutFloorCode?: string | null;
+  layoutContract?: Partial<StandardPalletContract> | null;
+  dashboardContract?: Partial<StandardPalletContract> | null;
+}): string;
+
 export function buildMeasuredDispatchPallets(
   features: Array<{ id: string; feature_kind: string; feature_code: string; subtype?: string | null; points: number[][] }>,
   dispatchLocation?: InventoryProjectionLocation | null,

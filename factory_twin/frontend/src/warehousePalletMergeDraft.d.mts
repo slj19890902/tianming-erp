@@ -64,6 +64,11 @@ export interface PalletMergeCandidate {
 }
 
 export function palletMergeSuggestionProductKey(items: PalletMergeInventoryItem[]): string | null;
+export function palletMergeSuggestionMatchesFilter(
+  suggestion: { label?: string | null; candidates?: PalletMergeCandidate[] | null },
+  customerId?: string | number | null,
+  keyword?: string | null
+): boolean;
 export function normalizePalletMergeCandidate(location: PalletMergeLocation, pallet: PalletMergePallet): { candidate: PalletMergeCandidate | null; error: string | null };
 export function palletMergeCompatibility(left: PalletMergeCandidate | null, right: PalletMergeCandidate | null): { compatible: boolean; error: string | null };
 export function togglePalletMergeSource(sources: PalletMergeCandidate[], candidate: PalletMergeCandidate | null): { items: PalletMergeCandidate[]; error: string | null };

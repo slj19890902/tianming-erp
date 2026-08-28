@@ -58,9 +58,9 @@ test("warehouse framing fills 1F while preserving the accepted 3F global fit", (
   assert.equal(warehouseFrustumDivisor("1F", "editor"), 1.8);
 });
 
-test("warehouse aisles use the same factory green on both floors", () => {
-  assert.equal(warehouseAisleColor("1F", "warehouse", "#22c55e"), "#16a34a");
-  assert.equal(warehouseAisleColor("3F", "warehouse", "#f59e0b"), "#16a34a");
+test("warehouse aisles use a pale green surface and reserve strong green for empty locations", () => {
+  assert.equal(warehouseAisleColor("1F", "warehouse", "#22c55e"), "#dcefe3");
+  assert.equal(warehouseAisleColor("3F", "warehouse", "#f59e0b"), "#dcefe3");
   assert.equal(warehouseAisleColor("1F", "editor", "#22c55e"), "#22c55e");
 });
 

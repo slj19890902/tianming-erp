@@ -19,6 +19,7 @@ import {
   normalizeInventoryLocationProjection,
   normalizeStandardPalletContract,
   searchHighlightAreaCodes,
+  standardPalletDisplayIssue,
   standardPalletContractsMatch,
   warehouseSearchFloorSummaries,
   warehouseSearchLocationSummaries,
@@ -38,6 +39,7 @@ import {
   normalizePalletMergeCandidate,
   palletMergeCompatibility,
   palletMergeSuggestionProductKey,
+  palletMergeSuggestionMatchesFilter,
   palletMergeTargetChoices,
   togglePalletMergeSource
 } from "../src/warehousePalletMergeDraft.mjs";
@@ -152,6 +154,30 @@ test("standard pallet contract fails closed when missing malformed or inconsiste
     loose_items: []
   };
   assert.deepEqual(buildMappedLocationPallets([zone], [location], "1F", null, "layout-1f"), []);
+});
+
+test("floor switching never reports a transient pallet-size failure", () => {
+  assert.equal(standardPalletDisplayIssue({
+    loading: true,
+    requestedFloorCode: "3F",
+    layoutFloorCode: "1F",
+    layoutContract: null,
+    dashboardContract: STANDARD_PALLET
+  }), "");
+  assert.equal(standardPalletDisplayIssue({
+    loading: false,
+    requestedFloorCode: "3F",
+    layoutFloorCode: "3F",
+    layoutContract: STANDARD_PALLET,
+    dashboardContract: STANDARD_PALLET
+  }), "");
+  assert.match(standardPalletDisplayIssue({
+    loading: false,
+    requestedFloorCode: "3F",
+    layoutFloorCode: "3F",
+    layoutContract: null,
+    dashboardContract: STANDARD_PALLET
+  }), /标准栈板尺寸合同缺失/);
 });
 
 const locations = [
@@ -305,6 +331,7 @@ test("full delivery leaves a mapped empty location while partial reserved and da
   assert.deepEqual(mapped.map((item) => item.visual_status), ["empty", "waiting", "waiting", "waiting"]);
   assert.deepEqual(mapped.map((item) => item.visual_kind), ["location_anchor", "physical_pallet", "physical_pallet", "physical_pallet"]);
   assert.deepEqual(rows.map((item) => item.occupancy_status), ["empty", "occupied", "occupied", "occupied"]);
+  assert.deepEqual(mapped.map((item) => item.candidate_status_color), ["#16a34a", "#2563eb", "#2563eb", "#2563eb"]);
 });
 
 test("unmatched goods and known-location discrepancies keep formal positions red", () => {
@@ -944,6 +971,29 @@ test("merge suggestions use inventory code and specification instead of internal
   assert.equal(palletMergeSuggestionProductKey([
     { inventory_code: "", specification: "500×300", quantity: 3 }
   ]), null);
+});
+
+test("merge suggestions can be narrowed by customer and multi-term inventory search", () => {
+  const suggestion = {
+    label: "CPN-001 · 500×300",
+    candidates: [normalizePalletMergeCandidate(
+      mergeLocation({ location_code: "A2-7", location_name: "右区A2 A2-7" }),
+      mergePallet(18, { items: [{
+        ...mergePallet(18).items[0],
+        customer_id: 7,
+        customer_name: "苏州思迈尔包装有限公司",
+        customer_short_name: "思迈尔",
+        inventory_code: "CPN-001",
+        product_name: "五层加强纸箱",
+        specification: "500×300"
+      }] })
+    ).candidate]
+  };
+  assert.equal(palletMergeSuggestionMatchesFilter(suggestion, "7", "CPN-001 500×300"), true);
+  assert.equal(palletMergeSuggestionMatchesFilter(suggestion, "7", "思迈尔 加强"), true);
+  assert.equal(palletMergeSuggestionMatchesFilter(suggestion, "7", "A2-7"), true);
+  assert.equal(palletMergeSuggestionMatchesFilter(suggestion, "8", "CPN-001"), false);
+  assert.equal(palletMergeSuggestionMatchesFilter(suggestion, "7", "CPN-002"), false);
 });
 
 test("stocktake drafts upsert by formal inventory identity and preserve the client item id", () => {

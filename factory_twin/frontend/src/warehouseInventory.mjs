@@ -292,6 +292,20 @@ export function standardPalletContractsMatch(left, right) {
   );
 }
 
+export function standardPalletDisplayIssue({
+  loading,
+  dashboardReady = true,
+  requestedFloorCode,
+  layoutFloorCode,
+  layoutContract,
+  dashboardContract
+}) {
+  if (loading || !dashboardReady || !layoutFloorCode || layoutFloorCode !== requestedFloorCode) return "";
+  return standardPalletContractsMatch(layoutContract, dashboardContract)
+    ? ""
+    : "标准栈板尺寸合同缺失或前后端不一致，系统已停止绘制实体栈板；请刷新或联系管理员。";
+}
+
 export function buildMeasuredDispatchPallets(
   _features,
   _dispatchLocation,
@@ -386,7 +400,8 @@ export function buildMappedLocationPallets(
         depth_mm: renderedDepthMm,
         height_mm: isLogicalAnchor ? 0 : standard.height_mm,
         rotation_deg: rotation,
-        color: hasRedInventoryIssue ? "#b91c1c" : occupied ? "#0f766e" : "#a16207",
+        color: hasRedInventoryIssue ? "#b91c1c" : occupied ? "#2563eb" : "#16a34a",
+        candidate_status_color: hasRedInventoryIssue ? "#b91c1c" : occupied ? "#2563eb" : "#16a34a",
         visual_status: occupied ? "waiting" : "empty",
         status_note: `${hasRedInventoryIssue ? `现场库存待核对 · ${unmatchedObservationCount || 1} 条红色异常 · ` : ""}${actualPalletCode
           ? `ERP正式库位 · ${actualPalletCode}`

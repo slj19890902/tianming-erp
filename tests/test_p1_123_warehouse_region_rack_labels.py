@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _layout(*, name: str = "聚晟达成品架", counts: list[int] | None = None) -> dict:
+    normalized_counts = counts or [2, 3]
     return {
         "floor_code": "3F",
         "revision": "rack-rev-1",
@@ -57,8 +58,8 @@ def _layout(*, name: str = "聚晟达成品架", counts: list[int] | None = None
                 "depth_mm": 1000,
                 "height_mm": 2200,
                 "rotation_deg": 0,
-                "levels": 2,
-                "level_cell_counts": counts or [2, 3],
+                "levels": len(normalized_counts),
+                "level_cell_counts": normalized_counts,
             }
         ],
     }
@@ -235,7 +236,9 @@ def test_rack_level_print_is_admin_only_idempotent_and_snapshot_based(
     from app.api.auth import router as auth_router
 
     with rack_factory() as db:
-        sync_published_rack_cells(db, floor_layout=_layout(), operator_id=1)
+        sync_published_rack_cells(
+            db, floor_layout=_layout(counts=[3, 3, 3]), operator_id=1
+        )
         db.commit()
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
@@ -246,7 +249,11 @@ def test_rack_level_print_is_admin_only_idempotent_and_snapshot_based(
             yield db
 
     app.dependency_overrides[get_db] = override_get_db
-    monkeypatch.setattr(warehouse_api, "load_warehouse_twin_floor", lambda _code: _layout())
+    monkeypatch.setattr(
+        warehouse_api,
+        "load_warehouse_twin_floor",
+        lambda _code: _layout(counts=[3, 3, 3]),
+    )
     body = {
         "floor_code": "3F",
         "map_rack_id": "rack-fin-001-01",
@@ -266,8 +273,8 @@ def test_rack_level_print_is_admin_only_idempotent_and_snapshot_based(
         created = client.post("/api/warehouse/rack-level-labels/prints", json=body)
         assert created.status_code == 200, created.text
         payload = created.json()
-        assert payload["level_count"] == 2
-        assert [item["level_no"] for item in payload["labels"]] == [1, 2]
+        assert payload["level_count"] == 3
+        assert [item["level_no"] for item in payload["labels"]] == [1, 2, 3]
         repeated = client.post("/api/warehouse/rack-level-labels/prints", json=body)
         assert repeated.status_code == 200
         assert repeated.json()["id"] == payload["id"]
@@ -279,6 +286,14 @@ def test_rack_level_print_is_admin_only_idempotent_and_snapshot_based(
         assert detail.json()["area_name"] == "右区客户成品区"
     with rack_factory() as db:
         assert len(db.scalars(select(WarehouseRackLevelLabelPrintJob)).all()) == 1
+        assert len(
+            db.scalars(
+                select(WarehouseLocation).where(
+                    WarehouseLocation.map_rack_id == "rack-fin-001-01",
+                    WarehouseLocation.is_active.is_(True),
+                )
+            ).all()
+        ) == 9
 
 
 def test_region_planning_ui_and_label_page_are_explicit() -> None:

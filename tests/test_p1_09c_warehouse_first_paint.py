@@ -153,7 +153,7 @@ def test_location_ledger_eager_loads_floor3_map_status_without_n_plus_one(tmp_pa
         event.remove(engine, "before_cursor_execute", count_selects)
 
     assert len(payload["items"]) == 30
-    assert {row["map_status"] for row in payload["items"]} == {"floor3_mapped"}
-    # One ledger query plus four fixed-size projection preload queries.  The
+    assert {row["map_status"] for row in payload["items"]} == {"current_map_mapped"}
+    # One ledger query plus five fixed-size projection preload queries.  The
     # count must not grow with the 30 locations.
-    assert selects == 5
+    assert selects == 6

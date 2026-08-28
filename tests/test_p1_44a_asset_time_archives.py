@@ -376,8 +376,8 @@ def test_time_archive_frontend_keeps_asset_detail_without_expanding_finished_age
     assert "function timelineHtml(events)" in source
     assert 'onclick="openLotDetail(${row.id})">详情</button>' in source
     assert 'onclick="openMoldDetail(${row.id})">详情</button>' in source
-    assert "archive.inbound_notice" in source
-    assert "archive.stocktake_notice" in source
+    assert "archive.inbound_notice" not in source
+    assert "archive.stocktake_notice" not in source
     assert "历史未建立/待确认" in source
     assert "latest_customer_order_use" in source
     assert "latest_actual_production_use" in source

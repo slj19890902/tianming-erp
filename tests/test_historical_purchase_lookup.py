@@ -83,7 +83,10 @@ def test_parser_repairs_invalid_excel_font_family_without_changing_source(
         members = {name: archive.read(name) for name in archive.namelist()}
     styles_name = "xl/styles.xml"
     styles = members[styles_name].decode("utf-8")
-    styles = styles.replace('<family val="2"/>', '<family val="15"/>', 1)
+    if '<family val="2"/>' in styles:
+        styles = styles.replace('<family val="2"/>', '<family val="15"/>', 1)
+    else:
+        styles = styles.replace("<font>", '<font><family val="15"/>', 1)
     assert '<family val="15"/>' in styles
     members[styles_name] = styles.encode("utf-8")
     with zipfile.ZipFile(workbook_path, "w", zipfile.ZIP_DEFLATED) as archive:

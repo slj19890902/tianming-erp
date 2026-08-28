@@ -20,7 +20,7 @@ def test_pdf_import_shows_common_box_adaptation_and_inline_full_editor() -> None
 
 def test_production_history_has_admin_reversal_and_inventory_deep_link() -> None:
     assert "撤销生产确认" in INDEX
-    assert 'user?.role===\'admin\' && row.can_revert' in INDEX
+    assert "user?.role==='admin' && !row.is_fully_delivered && row.can_revert" in INDEX
     assert "/api/production/completions/${row.id}/revert" in INDEX
     assert "当前仍按收料自动完工主链执行" in INDEX
     assert "openProductionInventory" in INDEX

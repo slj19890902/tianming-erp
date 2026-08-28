@@ -227,7 +227,7 @@ def test_frontend_contract_contains_required_editor_controls() -> None:
     canvas_source = (root / "EditorCanvas.tsx").read_text(encoding="utf-8")
 
     assert "二维 CAD" in app_source
-    assert "2.5D 等距" in app_source
+    assert "等距视图" in app_source
     assert "旋转 90°" in app_source
     assert "default_width_mm" in app_source
     assert 'setData("application/x-twin-asset"' in app_source

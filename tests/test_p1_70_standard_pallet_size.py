@@ -45,7 +45,8 @@ def test_backend_has_one_canonical_standard_and_planner_consumes_it() -> None:
 def test_operational_frontend_requires_backend_contract_without_local_fallback() -> None:
     assert "normalizeStandardPalletContract" in INVENTORY_SOURCE
     assert "standardPalletContractsMatch" in TWIN_SOURCE
-    assert "标准栈板尺寸合同缺失或前后端不一致" in TWIN_SOURCE
+    assert "standardPalletDisplayIssue" in TWIN_SOURCE
+    assert "标准栈板尺寸合同缺失或前后端不一致" in INVENTORY_SOURCE
     assert "width_mm: 1200" not in INVENTORY_SOURCE
     assert "depth_mm: 1000" not in INVENTORY_SOURCE
     assert "height_mm: 160" not in INVENTORY_SOURCE

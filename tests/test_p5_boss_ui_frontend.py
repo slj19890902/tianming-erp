@@ -76,7 +76,7 @@ def test_p5_large_mode_keeps_delivery_and_production_history_columns_reachable()
         '<td class="production-history-time">{{ formatDateTime(row.completed_at) }}</td>',
         ".ui-large .production-history-time { width: 154px; white-space: nowrap; }",
         '<th class="production-history-actions">操作</th>',
-        '<td class="production-history-actions"><button v-if="user?.role===\'admin\' && row.can_revert"',
+        '<td class="production-history-actions"><button v-if="user?.role===\'admin\' && !row.is_fully_delivered && row.can_revert"',
         ".ui-large .production-history-actions { width: 66px; white-space: nowrap; text-align:center; }",
     ):
         assert marker in INDEX

@@ -88,7 +88,7 @@
 - 当前地图“有订单不算空库”回归：通过。
 - Phase 11 陈旧历史夹具收窄到最后一个 data-independent revision 后，失败节点 `1 passed in 17.56s`；`tests/test_phase11_requisition.py` 最终整文件 `52 passed in 670.54s`。
 - 受影响的首页、财务、开票任务和来料内联 JavaScript 最终 Node 语法门禁：4 passed。
-- 重放到 `v0.22.208` 后，仓库 UI、版本历史、地图入口、首页与财务重叠回归：187 passed；财务/开票任务内联 JavaScript 语法复验：2 passed。最终重放到 `v0.22.209` 后另执行 P1-121 重叠合同复验，结果记录在工厂交付回执。
+- 重放到 `v0.22.208` 后，仓库 UI、版本历史、地图入口、首页与财务重叠回归：187 passed；财务/开票任务内联 JavaScript 语法复验：2 passed。最终重放到 `v0.22.209` 后，P1-121、发布版本、仓库入口和财务按钮重叠合同复验：37 passed。
 
 ## 6. 目标模式隔离运行
 

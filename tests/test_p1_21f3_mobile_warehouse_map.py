@@ -1128,7 +1128,7 @@ def test_mobile_map_frontend_defers_reads_and_writes_only_after_final_confirm(
     tmp_path: Path,
 ) -> None:
     for marker in (
-        "打开实测仓库地图",
+        "浏览实测仓库地图（可选）",
         "/api/mobile/erp/warehouse/map/floors",
         "warehouseMapGeneration",
         "generation !== state.warehouseMapGeneration",

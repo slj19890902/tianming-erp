@@ -64,10 +64,11 @@
     .metric strong { display: block; color: var(--green); font-size: 22px; }
     .metric span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
     .entry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-    .entry-card { min-height: 112px; padding: 13px; border: 1px solid var(--line); border-radius: 13px; background: #fff; color: var(--ink); text-align: left; }
+    .entry-card { min-height: 96px; padding: 13px; border: 1px solid var(--line); border-radius: 13px; background: #fff; color: var(--ink); text-align: left; }
     .entry-card strong { display: block; color: var(--green); font-size: 19px; }
     .entry-card span { display: block; margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .entry-card em { display: block; margin-top: 7px; color: var(--blue); font-size: 11px; font-style: normal; font-weight: 900; }
+    .more-entry-note { margin: 0 0 10px; padding: 9px 11px; border: 1px solid #bfdbfe; border-radius: 10px; background: var(--blue-soft); color: #174f78; font-size: 12px; line-height: 1.5; }
     .embedded-entry { width: 100%; min-height: calc(100vh - 150px); border: 0; border-radius: 12px; background: #fff; }
     body.incoming-frame-active { height: 100vh; height: 100dvh; overflow: hidden; }
     body.incoming-frame-active .app {
@@ -249,12 +250,12 @@
 
       <section id="searchPage" hidden>
         <h1 class="page-title">仓库</h1>
-        <p class="page-help">先按客户、存货编码、产品名称或规格找到货物，再看真实库存位置；有多个结果时必须自己点选。原料仓尚未建立时不会显示虚假数量。</p>
-        <button id="warehouseMapButton" class="search-btn warehouse-map-launch" type="button">打开实测仓库地图</button>
+        <p class="page-help">日常先按客户、存货编码、产品名称或规格查货；选中产品后直接看全部真实位置。只有需要浏览整仓时再打开地图。</p>
         <div class="searchbar">
           <input id="searchInput" maxlength="100" autocomplete="off" placeholder="输入客户、存货编码、产品名称或规格">
           <button id="searchButton" class="search-btn" type="button">查找</button>
         </div>
+        <button id="warehouseMapButton" class="small-btn warehouse-map-launch" type="button">浏览实测仓库地图（可选）</button>
         <div id="zeroStockControl" class="search-options" hidden>
           <label><input id="includeZeroStock" type="checkbox">包含零库存产品</label>
         </div>
@@ -307,6 +308,12 @@
         <p class="page-help">只显示当前账号有权查看的拿货任务；页面只在进入后加载。</p>
         <iframe id="preDeliveryFrame" class="embedded-entry" title="手机预送货拿货" src="about:blank"></iframe>
       </section>
+
+      <section id="morePage" hidden>
+        <h1 class="page-title">更多功能</h1>
+        <p class="more-entry-note">这里只放低频入口。常用的查货和当前现场任务仍保留在首页或底部导航。</p>
+        <div id="moreEntryCards" class="entry-grid"></div>
+      </section>
     </main>
   </div>
 
@@ -318,6 +325,7 @@
       <button class="nav-btn" type="button" data-page="warehouse">仓库</button>
       <button class="nav-btn" type="button" data-page="production">生产</button>
       <button class="nav-btn" type="button" data-page="pre_delivery">预送货</button>
+      <button class="nav-btn" type="button" data-page="more">更多</button>
     </div>
   </nav>
 
@@ -430,6 +438,9 @@
         warehouseMapCanExecute: false,
         warehouseMapCanCorrect: false,
         allowedPages: new Set(),
+        primaryEntryIds: [],
+        moreEntryIds: [],
+        homeEntryIds: [],
         activePage: "",
         scrollByPage: new Map(),
         loadedFrames: new Set(),
@@ -437,7 +448,7 @@
         incomingPerformanceActive: false,
         incomingPerformanceRequests: [],
       };
-      const mobilePages = new Set(["home", "lookup", "incoming", "warehouse", "production", "pre_delivery"]);
+      const mobilePages = new Set(["home", "lookup", "incoming", "warehouse", "production", "pre_delivery", "more"]);
       const mobilePortalStorageKey = "tm.mobile.portal.v1";
       const byId = id => document.getElementById(id);
       const incomingPerformancePrefix = "tm.mobile.incoming.";
@@ -678,6 +689,7 @@
         const isLookup = page === "lookup";
         const isIncoming = page === "incoming";
         const isWarehouse = page === "warehouse";
+        const isMore = page === "more";
         if (isIncoming && previousPage !== "incoming" && !incomingPerformanceStarted) startIncomingPerformance();
         document.body.classList.toggle("incoming-frame-active", isIncoming);
         if (!isIncoming) state.incomingPerformanceActive = false;
@@ -687,8 +699,12 @@
         byId("searchPage").hidden = !isWarehouse;
         byId("productionPage").hidden = page !== "production";
         byId("preDeliveryPage").hidden = page !== "pre_delivery";
+        byId("morePage").hidden = !isMore;
         document.querySelectorAll(".nav-btn").forEach(button => {
-          button.classList.toggle("active", button.dataset.page === page);
+          button.classList.toggle(
+            "active",
+            button.dataset.page === page || (button.dataset.page === "more" && state.moreEntryIds.includes(page)),
+          );
         });
         if (updateLocation && window.location.hash !== `#${page}`) {
           window.history.replaceState(null, "", `#${page}`);
@@ -705,9 +721,6 @@
         if (page === "pre_delivery" && !state.loadedFrames.has(page)) {
           byId("preDeliveryFrame").src = "/mobile/delivery-pick.html?embedded=1";
           state.loadedFrames.add(page);
-        }
-        if (isWarehouse) {
-          openWarehouseMap();
         }
         const outerScrollTop = isIncoming ? 0 : (state.scrollByPage.get(page) || 0);
         window.requestAnimationFrame(() => window.scrollTo(0, outerScrollTop));
@@ -731,24 +744,48 @@
         }
       }
 
+      function entryButton(entry) {
+        const button = node("button", "entry-card");
+        button.type = "button";
+        button.dataset.entry = entry.id;
+        const accessText = entry.can_execute ? "可执行已授权现场动作" : "只读查看";
+        button.append(
+          node("strong", "", entry.label),
+          node("span", "", entry.summary || "进入后按需读取"),
+          node("em", "", accessText),
+        );
+        button.addEventListener("click", () => setPage(entry.id));
+        return button;
+      }
+
       function renderEntryHome() {
         const entries = Array.isArray(state.shell?.entries) ? state.shell.entries : [];
+        const entriesById = new Map(entries.map(entry => [entry.id, entry]));
         const container = byId("entryCards");
         container.replaceChildren();
-        entries.forEach(entry => {
-          const button = node("button", "entry-card");
-          button.type = "button";
-          button.dataset.entry = entry.id;
-          const accessText = entry.can_execute ? "可执行已授权现场动作" : "只读查看";
-          button.append(
-            node("strong", "", entry.label),
-            node("span", "", entry.summary || "进入后按需读取"),
-            node("em", "", accessText),
-          );
-          button.addEventListener("click", () => setPage(entry.id));
-          container.append(button);
+        state.homeEntryIds.forEach(id => {
+          const entry = entriesById.get(id);
+          if (entry) container.append(entryButton(entry));
         });
+        if (state.moreEntryIds.length) {
+          const moreButton = node("button", "entry-card");
+          moreButton.type = "button";
+          moreButton.dataset.entry = "more";
+          moreButton.append(
+            node("strong", "", "更多功能"),
+            node("span", "", `${state.moreEntryIds.length} 个低频入口集中在这里`),
+            node("em", "", "需要时再打开"),
+          );
+          moreButton.addEventListener("click", () => setPage("more"));
+          container.append(moreButton);
+        }
         container.hidden = !entries.length;
+        const moreContainer = byId("moreEntryCards");
+        moreContainer.replaceChildren();
+        state.moreEntryIds.forEach(id => {
+          const entry = entriesById.get(id);
+          if (entry) moreContainer.append(entryButton(entry));
+        });
         byId("managementSummary").hidden = state.shell?.management_summary_allowed !== true;
         if (entries.length || state.shell?.management_summary_allowed === true) {
           byId("homeState").hidden = true;
@@ -2118,15 +2155,34 @@
           byId("userText").textContent = `${user.display_name || user.real_name || user.username || "当前账号"}｜${canOperate ? "现场作业" : "只读"}`;
           renderLookupCategories(state.shell.search_categories);
           const navContainer = document.querySelector(".bottom-inner");
-          const allowedEntryIds = new Set(entries.map(entry => entry.id));
-          ["home", "lookup", "incoming", "warehouse", "production", "pre_delivery"].forEach(page => {
+          const entryIds = entries.map(entry => entry.id);
+          const allowedEntryIds = new Set(entryIds);
+          if (entryIds.length <= 3) {
+            state.primaryEntryIds = [...entryIds];
+            state.moreEntryIds = [];
+          } else {
+            const primary = [];
+            if (allowedEntryIds.has("lookup")) primary.push("lookup");
+            if (allowedEntryIds.has("warehouse")) primary.push("warehouse");
+            for (const id of ["pre_delivery", "incoming", "production", ...entryIds]) {
+              if (primary.length >= 2) break;
+              if (allowedEntryIds.has(id) && !primary.includes(id)) primary.push(id);
+            }
+            state.primaryEntryIds = primary.slice(0, 2);
+            state.moreEntryIds = entryIds.filter(id => !state.primaryEntryIds.includes(id));
+          }
+          state.homeEntryIds = state.moreEntryIds.length
+            ? [...state.primaryEntryIds, ...state.moreEntryIds.slice(0, 1)]
+            : [...entryIds];
+          ["home", "lookup", "incoming", "warehouse", "production", "pre_delivery", "more"].forEach(page => {
             const button = document.querySelector(`[data-page="${page}"]`);
-            button.hidden = page !== "home" && !allowedEntryIds.has(page);
+            button.hidden = page !== "home"
+              && !(page === "more" ? state.moreEntryIds.length : state.primaryEntryIds.includes(page));
             navContainer.append(button);
           });
           byId("zeroStockControl").hidden = !allowedEntryIds.has("warehouse") || user.role !== "admin";
           let visibleNav = [...document.querySelectorAll(".nav-btn")].filter(button => !button.hidden);
-          state.allowedPages = new Set(visibleNav.map(button => button.dataset.page));
+          state.allowedPages = new Set(["home", ...entryIds, ...(state.moreEntryIds.length ? ["more"] : [])]);
           document.querySelector(".bottom-inner").style.setProperty("--nav-count", visibleNav.length || 1);
           byId("bottomNav").hidden = false;
           renderEntryHome();

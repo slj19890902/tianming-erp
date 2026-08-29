@@ -289,14 +289,15 @@ def test_task_location_without_measured_floor_fails_closed_to_text(
         assert payload["groups"][0]["location_code"] == "F2-B2-08"
 
 
-def test_mobile_warehouse_defaults_to_measured_map_and_pick_page_has_no_fake_grid() -> None:
+def test_mobile_warehouse_keeps_measured_map_explicit_and_pick_page_has_no_fake_grid() -> None:
     set_page = MOBILE_HTML[
         MOBILE_HTML.index("function setPage(page") : MOBILE_HTML.index(
             "function showStatus", MOBILE_HTML.index("function setPage(page")
         )
     ]
-    assert "if (isWarehouse)" in set_page
-    assert "openWarehouseMap();" in set_page
+    assert "openWarehouseMap();" not in set_page
+    assert 'id="warehouseMapButton"' in MOBILE_HTML
+    assert "浏览实测仓库地图（可选）" in MOBILE_HTML
     assert "返回仓库搜索" in MOBILE_HTML
 
     assert "/measured-map/floors" in PICK_HTML

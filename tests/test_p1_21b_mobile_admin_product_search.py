@@ -620,14 +620,15 @@ def test_mobile_page_is_compact_read_only_and_keeps_map_return_state() -> None:
         "仓库",
         "成品库存",
         "客户专用纸板备料",
-        "原料仓尚未建立",
-        "有多个结果时必须自己点选",
+        "日常先按客户、存货编码、产品名称或规格查货",
+        "只有需要浏览整仓时再打开地图",
         "返回产品",
         "输入客户、存货编码、产品名称或规格",
         "包含零库存产品",
         "查看位置",
         "当前无在库数量",
         "地图定位全部",
+        "更多功能",
     ):
         assert text in MOBILE_HTML
     assert "overflow-x: hidden" in MOBILE_HTML

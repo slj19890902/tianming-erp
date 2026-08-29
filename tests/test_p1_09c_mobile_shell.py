@@ -12,13 +12,13 @@ def test_mobile_shell_hides_navigation_until_permissions_are_known() -> None:
     assert 'aria-label="手机主导航" hidden' in MOBILE_HTML
     assert "allowedPages: new Set()" in MOBILE_HTML
     assert 'state.shell = await apiGet("/api/mobile/erp/shell")' in MOBILE_HTML
-    assert "const allowedEntryIds = new Set(entries.map(entry => entry.id));" in MOBILE_HTML
+    assert "const allowedEntryIds = new Set(entryIds);" in MOBILE_HTML
     assert "state.allowedPages.has(page)" in MOBILE_HTML
 
 
 def test_mobile_shell_keeps_only_safe_authorized_page_targets() -> None:
     assert "function safeRequestedPage()" in MOBILE_HTML
-    assert 'new Set(["home", "lookup", "incoming", "warehouse", "production", "pre_delivery"])' in MOBILE_HTML
+    assert 'new Set(["home", "lookup", "incoming", "warehouse", "production", "pre_delivery", "more"])' in MOBILE_HTML
     assert 'const requested = raw === "search" ? "warehouse" : raw;' in MOBILE_HTML
     assert "window.location.hash" in MOBILE_HTML
     assert "window.history.replaceState" in MOBILE_HTML

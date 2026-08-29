@@ -637,8 +637,9 @@ def _add(
     product_id: int,
     quantity: int,
     expected_layout_version: int = 1,
+    source_kind: str | None = None,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "client_item_id": client_item_id,
         "operation": "add",
         "location_id": location_id,
@@ -650,6 +651,9 @@ def _add(
         "quantity": quantity,
         "stock_date": "2026-08-13",
     }
+    if source_kind is not None:
+        payload["source_kind"] = source_kind
+    return payload
 
 
 def _decrease(
@@ -1902,37 +1906,72 @@ def test_overview_projection_fails_closed_when_formal_location_authority_breaks(
         assert expected_reason in lot["stocktake_decrease_block_reason"]
 
 
-def test_add_source_rack_and_dispatch_gates_keep_supported_semi_rack(
+def test_finished_and_semi_stocktake_support_rack_but_dispatch_stays_blocked(
     stocktake_app,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def published_floor_identity(floor_number: int) -> dict | None:
+        zones = {
+            1: {
+                "zone-1f-fg": "FG",
+                "zone-1f-semi": "SEMI",
+                "zone-1f-dispatch": "DISPATCH",
+            },
+            3: {"zone-3f-fg": "FG", "zone-3f-draft": "DRAFT"},
+        }.get(floor_number)
+        if zones is None:
+            return None
+        return {
+            "floor_code": f"{floor_number}F",
+            "revision": "p1-47d-formal-map",
+            "feature_ids": frozenset(zones),
+            "zones_by_id": zones,
+            "zone_ids_by_area": {
+                area: tuple(key for key, value in zones.items() if value == area)
+                for area in set(zones.values())
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.services.location_candidates.load_warehouse_twin_published_floor_identity",
+        published_floor_identity,
+    )
     app, factory, ids, _database = stocktake_app
-    blocked_items = [
-        _add(
-            client_item_id="finished-rack",
-            location_id=ids["loc_fg1_rack"],
-            inventory_type="finished",
-            customer_id=ids["customer"],
-            product_id=ids["product"],
-            quantity=2,
-        ),
-        _add(
-            client_item_id="dispatch-add",
-            location_id=ids["loc_dispatch"],
-            inventory_type="finished",
-            customer_id=ids["customer"],
-            product_id=ids["product"],
-            quantity=2,
-        ),
-    ]
     with factory() as db:
         before = _counts(db)
     with TestClient(app) as client:
         _login(client, "p147d-admin")
-        for index, item in enumerate(blocked_items):
-            response = client.post(
-                URL, json=_batch(f"p147d-add-strict-{index}", item)
-            )
-            assert response.status_code == 409, response.text
+        finished = client.post(
+            URL,
+            json=_batch(
+                "p1126-finished-rack-partner",
+                _add(
+                    client_item_id="finished-rack",
+                    location_id=ids["loc_fg1_rack"],
+                    inventory_type="finished",
+                    customer_id=ids["customer"],
+                    product_id=ids["product"],
+                    quantity=2,
+                    source_kind="partner_transfer",
+                ),
+            ),
+        )
+        assert finished.status_code == 200, finished.text
+        dispatch = client.post(
+            URL,
+            json=_batch(
+                "p1126-dispatch-blocked",
+                _add(
+                    client_item_id="dispatch-add",
+                    location_id=ids["loc_dispatch"],
+                    inventory_type="finished",
+                    customer_id=ids["customer"],
+                    product_id=ids["product"],
+                    quantity=2,
+                ),
+            ),
+        )
+        assert dispatch.status_code == 409, dispatch.text
         semi = client.post(
             URL,
             json=_batch(
@@ -1949,10 +1988,21 @@ def test_add_source_rack_and_dispatch_gates_keep_supported_semi_rack(
         )
         assert semi.status_code == 200, semi.text
 
+    finished_result = finished.json()["items"][0]
     result = semi.json()["items"][0]
     with factory() as db:
+        finished_lot = db.get(InventoryLot, finished_result["lot_id"])
+        finished_movement = db.get(InventoryMovement, finished_result["movement_id"])
         lot = db.get(InventoryLot, result["lot_id"])
         movement = db.get(InventoryMovement, result["movement_id"])
+        assert finished_lot is not None and finished_movement is not None
+        assert finished_lot.pallet_item is None
+        assert (finished_lot.inventory_type, finished_lot.unit, finished_lot.warehouse_location_id, finished_lot.quantity_available) == (
+            "finished", "boxes", ids["loc_fg1_rack"], 2
+        )
+        assert "合作纸箱厂搬入" in (finished_lot.remarks or "")
+        assert "合作纸箱厂搬入" in (finished_movement.reason or "")
+        assert finished_result["source_kind"] == "partner_transfer"
         assert lot is not None and movement is not None
         assert (
             lot.inventory_type,
@@ -1965,7 +2015,7 @@ def test_add_source_rack_and_dispatch_gates_keep_supported_semi_rack(
             0,
             5,
         )
-        assert _counts(db) == (before[0] + 1, before[1] + 1, before[2] + 1)
+        assert _counts(db) == (before[0] + 2, before[1] + 2, before[2] + 2)
 
 
 def test_frontend_uses_one_batch_post_cancel_is_zero_write_and_keeps_prior_modes() -> None:

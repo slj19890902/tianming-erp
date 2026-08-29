@@ -32,7 +32,7 @@ def test_warehouse_ledger_has_one_measured_map_entry_and_defaults_to_rows() -> N
 
 
 def test_row_ledgers_are_visible_read_entries_while_mutations_stay_admin_only() -> None:
-    assert 'class="btn active inventory-ledger-tab" data-tab="finished">高级成品台账' in WAREHOUSE
+    assert 'class="btn active inventory-ledger-tab" data-tab="finished">库存台账' in WAREHOUSE
     assert 'class="btn inventory-ledger-tab" data-tab="semi_finished">高级半成品台账' in WAREHOUSE
     assert '<a class="btn" href="/warehouse.html" target="_top">实测仓库地图</a>' in WAREHOUSE
     assert 'class="btn" type="button" onclick="switchTab(\'finished\')">高级库存台账' in WAREHOUSE

@@ -1,5 +1,6 @@
 export type StocktakeInventoryType = "finished" | "semi_finished";
 export type StocktakeUnit = "boxes" | "sheets";
+export type StocktakeSourceKind = "existing_stocktake" | "partner_transfer";
 
 export interface StocktakeLocationProjection {
   location_code?: string | null;
@@ -62,6 +63,7 @@ export interface StocktakeAddDraft extends StocktakeDraftBase {
   inventory_type: StocktakeInventoryType;
   unit: StocktakeUnit;
   stock_date: string;
+  source_kind: StocktakeSourceKind;
 }
 
 export interface StocktakeDecreaseDraft extends StocktakeDraftBase {

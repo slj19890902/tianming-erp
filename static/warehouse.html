@@ -13,6 +13,7 @@
     body.embedded>header{display:none}
     body.embedded .wrap{max-width:none;margin:0 auto;padding:8px 10px 14px}
     .tabs{margin-bottom:12px}.btn{border:1px solid #bdc9db;background:#fff;color:#26354d;border-radius:7px;padding:7px 12px;cursor:pointer;text-decoration:none}
+    .warehouse-secondary{margin:-4px 0 12px}.warehouse-secondary>summary{width:max-content;cursor:pointer;color:var(--muted);font-weight:700}.warehouse-secondary-links{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:8px;padding:9px;border:1px solid var(--line);border-radius:8px;background:#fff}.warehouse-secondary-links .btn{padding:5px 9px;font-size:12px}
     .btn:hover{border-color:var(--blue)}.btn.primary,.tabs .active{background:var(--blue);border-color:var(--blue);color:#fff}.btn.danger{color:var(--red)}
     .panel{background:#fff;border:1px solid var(--line);border-radius:10px;margin-bottom:14px;padding:14px}.panel h2{font-size:16px;margin:0 0 12px}
     .grid{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:10px}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
@@ -146,17 +147,23 @@
   </header>
   <main class="wrap">
     <div class="tabs">
-      <a class="btn" href="/warehouse.html" target="_top">实测仓库地图</a>
-      <button class="btn admin-only" type="button" onclick="openCapacityReviewLedger({focusChecklist:true})">容量复核</button>
-      <button class="btn" data-tab="insights">库存经营看板</button>
+      <button class="btn active inventory-ledger-tab" data-tab="finished">库存台账</button>
       <button class="btn" data-tab="movements">库存流水</button>
       <button class="btn" data-tab="molds">模具位置</button>
-      <button class="btn" data-tab="printing_plates">挂板位置</button>
-      <button class="btn active inventory-ledger-tab" data-tab="finished">高级成品台账</button>
-      <button class="btn inventory-ledger-tab" data-tab="semi_finished">高级半成品台账</button>
-      <button id="stocktakeReviewTab" class="btn stocktake-review-access hidden" data-tab="stocktake_review">盘点审核</button>
-      <button id="inventoryOnboardingTab" class="btn inventory-onboarding-access hidden" data-tab="inventory_onboarding">首次盘点入库</button>
+      <a id="mapStocktakeLink" class="btn hidden" href="/warehouse.html?mode=move&amp;action=stocktake&amp;view=2d" target="_top">盘点上架</a>
     </div>
+    <details class="warehouse-secondary">
+      <summary>低频管理与高级台账</summary>
+      <div class="warehouse-secondary-links">
+        <a class="btn" href="/warehouse.html" target="_top">实测仓库地图</a>
+        <button class="btn" data-tab="insights">库存经营看板</button>
+        <button class="btn inventory-ledger-tab" data-tab="semi_finished">高级半成品台账</button>
+        <button class="btn" data-tab="printing_plates">挂板位置</button>
+        <button class="btn admin-only" type="button" onclick="openCapacityReviewLedger({focusChecklist:true})">容量复核</button>
+        <button id="stocktakeReviewTab" class="btn stocktake-review-access hidden" data-tab="stocktake_review">盘点审核</button>
+        <button id="inventoryOnboardingTab" class="btn inventory-onboarding-access hidden" data-tab="inventory_onboarding">首次批量盘点导入</button>
+      </div>
+    </details>
     <div id="pageError" class="panel hidden" style="border-color:#fecaca;color:#991b1b"></div>
     <div id="locationViewTabs" class="location-view-tabs hidden" aria-hidden="true"></div>
 
@@ -847,6 +854,7 @@
     const canViewInventoryOnboarding=()=>hasPermission("warehouse.stocktake.view");
     const canEditInventoryOnboarding=()=>!state.readOnly&&hasPermission("warehouse.stocktake.submit");
     function revealInventoryOnboardingTab(){if(canViewInventoryOnboarding())$("inventoryOnboardingTab").classList.remove("hidden")}
+    function revealMapStocktakeLink(){if(!state.readOnly&&hasPermission("warehouse.stocktake.submit"))$("mapStocktakeLink").classList.remove("hidden")}
     function setInventoryOnboardingSectionVisibility(tab){$("inventoryOnboardingSection").classList.toggle("hidden",tab!=="inventory_onboarding")}
     const canOperate=()=>!state.readOnly&&hasPermission("warehouse.execute");
     const canArchiveMolds=()=>!state.readOnly&&["admin","boss"].includes(state.user?.role)&&hasPermission("warehouse.archive");
@@ -914,6 +922,7 @@
       }
       revealStocktakeReviewTab();
       revealInventoryOnboardingTab();
+      revealMapStocktakeLink();
       $("userName").textContent=state.user.real_name||state.user.username;
       if(state.user.role!=="admin"||state.readOnly)document.querySelectorAll(".admin-only").forEach(x=>x.classList.add("hidden"));
       if(!canOperate())document.querySelectorAll(".operate-only").forEach(x=>x.classList.add("hidden"));

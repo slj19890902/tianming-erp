@@ -1227,7 +1227,6 @@ def test_snapshot_mixed_and_non_finished_pallets_are_rejected_without_writes(
     [
         "disabled_target",
         "unplaced_target",
-        "rack_target",
         "wrong_type_target",
         "draft_target",
         "occupied_target",
@@ -1268,6 +1267,50 @@ def test_invalid_second_target_rolls_back_the_entire_batch(
         assert (loose.quantity_available, loose.quantity_reserved, loose.version) == (60, 40, 1)
         assert db.scalar(select(func.count(InventoryLocationMovement.id))) == 0
         assert db.scalar(select(func.count(InventoryLotTransfer.id))) == 0
+
+
+def test_rack_target_accepts_lot_transfer_but_rejects_whole_pallet(
+    move_batch_app,
+) -> None:
+    app, factory, ids, _database = move_batch_app
+    with TestClient(app) as client:
+        _login(client, "p147c-operator")
+        blocked = client.post(
+            MOVE_BATCH_URL,
+            json=_batch(
+                "p1126-whole-pallet-rack-blocked",
+                _pallet_move(
+                    client_item_id="whole-pallet-rack",
+                    pallet_id=ids["normal_pallet"],
+                    version=1,
+                    target=ids["rack_target"],
+                ),
+            ),
+        )
+        assert blocked.status_code == 409, blocked.text
+        moved = client.post(
+            MOVE_BATCH_URL,
+            json=_batch(
+                "p1126-loose-lot-rack-supported",
+                _lot_transfer(
+                    client_item_id="loose-lot-rack",
+                    lot_id=ids["loose_lot"],
+                    version=1,
+                    quantity=10,
+                    target=ids["rack_target"],
+                ),
+            ),
+        )
+        assert moved.status_code == 200, moved.text
+
+    result = moved.json()["items"][0]
+    with factory() as db:
+        pallet = db.get(InventoryPallet, ids["normal_pallet"])
+        target_lot = db.get(InventoryLot, result["target_lot_id"])
+        assert pallet is not None and target_lot is not None
+        assert (pallet.location_id, pallet.version) == (ids["floor1_source"], 1)
+        assert target_lot.warehouse_location_id == ids["rack_target"]
+        assert target_lot.pallet_item is None
 
 
 def test_stale_same_target_and_duplicate_source_are_rejected_without_writes(

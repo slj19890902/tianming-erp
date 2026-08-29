@@ -157,11 +157,12 @@ def _ensure_finished_projection_postcondition(
     ground_secondary_location_id: int | None = None,
     ground_capacity_quantity: int | None = None,
 ) -> InventoryPallet | None:
-    """Keep every new positive finished fact on one real map pallet.
+    """Keep every positive finished fact on one authoritative map projection.
 
-    Historical gaps stay visible as audit blockers.  A replay only validates
-    the previously committed projection; an in-flight authorized write may
-    create its missing pallet/ground occupancy in the same transaction.
+    Ground and temporary-aisle stock must stay on a real pallet.  Rack stock is
+    represented as a loose lot in one published rack cell, because a rack cell
+    is already the physical container.  Historical projection conflicts remain
+    fail-closed instead of being silently rewritten.
     """
 
     if lot.inventory_type != "finished" or _finished_lot_physical_quantity(lot) <= 0:
@@ -230,6 +231,20 @@ def _ensure_finished_projection_postcondition(
                 409,
             )
 
+    storage_type = str(location.storage_type or "").strip().lower()
+    if space_ledger_exists and storage_type == "rack":
+        if lot.pallet_item is not None:
+            raise WarehouseInventoryError(
+                "货架成品库存不能同时绑定实体栈板，请先核对历史空间事实",
+                409,
+            )
+        return None
+    if space_ledger_exists and storage_type not in {"ground", "temporary_aisle"}:
+        raise WarehouseInventoryError(
+            "该成品库位的存储方式不支持形成正式空间投影",
+            409,
+        )
+
     if current_pallet is None:
         if not create_missing:
             raise WarehouseInventoryError(
@@ -286,12 +301,6 @@ def _ensure_finished_projection_postcondition(
         # Pre-space-ledger test/installations retain the historical V11 pallet
         # projection.  Formal databases always have the floor/area ledger and
         # therefore cannot use this compatibility branch.
-        return current_pallet
-
-    if str(location.storage_type or "").strip().lower() not in {
-        "ground",
-        "temporary_aisle",
-    }:
         return current_pallet
 
     ground_layout = context.get("ground_layout")

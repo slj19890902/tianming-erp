@@ -38,10 +38,11 @@ def test_production_cold_entry_requests_only_current_action_queues() -> None:
 
     assert 'params: { status: "pending", page, page_size: this.productionPendingPageSize() }' in production
     assert "this.loadProductionPage(this.pages.productionPending || 1)" not in cold_load
-    assert 'if (this.productionTab === "placement") return this.loadProductionPlacement();' in cold_load
+    assert 'if (this.productionTab === "placement") {' in cold_load
     assert "this.loadProductionHistory()," in cold_load
     assert "this.loadProductionPlacement()," in cold_load
     assert "return historyResult;" in cold_load
+    assert "this.loadProductionHistory(),\n              this.loadProductionPlacement()," not in cold_load
     assert "this.loadProductionWaitingLabelPage(this.pages.productionWaitingLabels || 1)" not in cold_load
     assert 'status:"waiting_material"' not in cold_load
     assert "/api/production/temporary-locations" not in production

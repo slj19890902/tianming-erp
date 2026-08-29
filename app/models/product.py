@@ -46,6 +46,8 @@ class Product(Base):
             "product_name",
             name="uq_products_customer_product_code_name",
         ),
+        Index("ix_products_product_code", "product_code"),
+        Index("ix_products_customer_material_code", "customer_material_code"),
         CheckConstraint(
             "box_category IN ('normal', 'die_cut')",
             name="ck_products_box_category",

@@ -25,7 +25,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, false, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -144,6 +144,10 @@ from app.services.order_business_status import (
     BUSINESS_STATUS_ORDER,
     DERIVED_BUSINESS_STATUSES,
     build_order_business_statuses,
+)
+from app.services.order_history_query import (
+    completed_order_predicate,
+    order_completion_activity_since_predicate,
 )
 from app.services.order_status_policy import (
     ALL_ORDER_STATUSES,
@@ -305,12 +309,6 @@ can_rollback = PermissionChecker("orders.rollback")
 can_view_cost = PermissionChecker("cost.view")
 
 ORDER_SALES_AMOUNT_ROLES = frozenset({"admin", "boss", "sales", "finance"})
-
-
-def _include_order_list_unfinished_total() -> bool:
-    """Keep the public list badge while allowing internal scoped reuse to skip it."""
-
-    return True
 
 
 def _can_view_order_sales_amount(user: User) -> bool:
@@ -2569,6 +2567,7 @@ def list_orders(
     order_number: str | None = None,
     customer_po: str | None = None,
     product_code: str | None = None,
+    product_code_match: Literal["contains", "exact"] = "contains",
     product_name: str | None = None,
     specification: str | None = None,
     customer_name: str | None = None,
@@ -2581,11 +2580,13 @@ def list_orders(
     delivery_date_to: date | None = None,
     status_filter: list[str] | None = Query(default=None, alias="status"),
     scope: Literal["active", "completed", "cancelled", "all"] | None = Query(default=None),
+    history_mode: Literal["recent", "history"] | None = Query(default=None),
+    recent_days: int = Query(default=10, ge=1, le=365),
     stage: list[str] | None = Query(default=None),
     sort_by: Literal["customer_name", "order_date", "delivery_date"] | None = None,
     sort_direction: Literal["asc", "desc"] = "desc",
     detail_level: Literal["full", "summary"] = "full",
-    include_unfinished_total: bool = Depends(_include_order_list_unfinished_total),
+    include_unfinished_total: bool = Query(default=True),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -2607,8 +2608,6 @@ def list_orders(
         .join(Customer, Customer.id == Order.customer_id)
         .distinct()
     )
-    joined_items = False
-
     scoped_customer_ids = customer_scope_ids(user, db)
     is_customer_scope_restricted = not has_unrestricted_customer_access(user, db)
     if is_customer_scope_restricted:
@@ -2667,6 +2666,7 @@ def list_orders(
             resolved_scope = "active"
     else:
         resolved_scope = scope
+    can_view_finance = has_permission(user, "finance.view")
     if resolved_scope in {"active", "completed"}:
         ids_query = ids_query.where(
             Order.status.notin_(_BUSINESS_EXCLUDED_STATUSES),
@@ -2675,6 +2675,60 @@ def list_orders(
         ids_query = ids_query.where(Order.status.in_(_BUSINESS_EXCLUDED_STATUSES))
     if raw_status_filters:
         ids_query = ids_query.where(Order.status.in_(raw_status_filters))
+
+    history_search_required = False
+    if history_mode in {"recent", "history"} and resolved_scope in {
+        "completed",
+        "cancelled",
+    }:
+        recent_cutoff = utc_now_naive() - timedelta(days=recent_days)
+        recent_activity_predicate = (
+            order_completion_activity_since_predicate(Order.id, recent_cutoff)
+            if resolved_scope == "completed"
+            else or_(
+                Order.updated_at >= recent_cutoff,
+                and_(
+                    Order.updated_at.is_(None),
+                    Order.created_at >= recent_cutoff,
+                ),
+            )
+        )
+        if history_mode == "recent":
+            ids_query = ids_query.where(recent_activity_predicate)
+        else:
+            has_history_condition = any(
+                (
+                    requested_customer_ids,
+                    search_keyword,
+                    order_number and order_number.strip(),
+                    customer_po and customer_po.strip(),
+                    product_code and product_code.strip(),
+                    product_name and product_name.strip(),
+                    specification and specification.strip(),
+                    customer_name and customer_name.strip(),
+                    order_date,
+                    date_from,
+                    date_to,
+                    order_date_from,
+                    order_date_to,
+                    delivery_date_from,
+                    delivery_date_to,
+                )
+            )
+            if not has_history_condition:
+                history_search_required = True
+            else:
+                ids_query = ids_query.where(~recent_activity_predicate)
+
+    if resolved_scope in {"active", "completed"}:
+        completed_predicate = (
+            completed_order_predicate(Order.id) if can_view_finance else false()
+        )
+        ids_query = ids_query.where(
+            completed_predicate
+            if resolved_scope == "completed"
+            else ~completed_predicate
+        )
 
     if search_keyword:
         trimmed = search_keyword
@@ -2697,50 +2751,58 @@ def list_orders(
                 OrderItem.snapshot_material.ilike(f"%{trimmed}%"),
             )
         )
-        joined_items = True
 
     if order_number and order_number.strip():
         trimmed = order_number.strip()
-        if not joined_items:
-            ids_query = ids_query.outerjoin(
-                OrderItem, OrderItem.order_id == Order.id
-            )
         ids_query = ids_query.where(
             or_(
                 Order.order_number == trimmed,
-                OrderItem.item_order_number == trimmed,
+                Order.items.any(OrderItem.item_order_number == trimmed),
             )
         )
-
-    def _join_items_for_filter() -> None:
-        nonlocal ids_query, joined_items
-        if not joined_items:
-            ids_query = ids_query.outerjoin(
-                OrderItem, OrderItem.order_id == Order.id
-            ).outerjoin(Product, Product.id == OrderItem.product_id)
-            joined_items = True
 
     if customer_po and customer_po.strip():
         ids_query = ids_query.where(Order.customer_po.ilike(f"%{customer_po.strip()}%"))
     if product_code and product_code.strip():
-        _join_items_for_filter()
         trimmed = product_code.strip()
-        ids_query = ids_query.where(
-            or_(
+        if product_code_match == "exact":
+            matching_order_ids = select(OrderItem.order_id).where(
+                OrderItem.snapshot_product_code == trimmed
+            ).union(
+                select(OrderItem.order_id).where(
+                    OrderItem.product_id.in_(
+                        select(Product.id).where(Product.product_code == trimmed)
+                    )
+                ),
+                select(OrderItem.order_id).where(
+                    OrderItem.product_id.in_(
+                        select(Product.id).where(
+                            Product.customer_material_code == trimmed
+                        )
+                    )
+                ),
+            )
+            ids_query = ids_query.where(Order.id.in_(matching_order_ids))
+        else:
+            product_code_clause = or_(
                 OrderItem.snapshot_product_code.ilike(f"%{trimmed}%"),
-                Product.product_code.ilike(f"%{trimmed}%"),
-                Product.customer_material_code.ilike(f"%{trimmed}%"),
+                OrderItem.product.has(Product.product_code.ilike(f"%{trimmed}%")),
+                OrderItem.product.has(
+                    Product.customer_material_code.ilike(f"%{trimmed}%")
+                ),
+            )
+            ids_query = ids_query.where(Order.items.any(product_code_clause))
+    if product_name and product_name.strip():
+        ids_query = ids_query.where(
+            Order.items.any(
+                OrderItem.snapshot_product_name.ilike(f"%{product_name.strip()}%")
             )
         )
-    if product_name and product_name.strip():
-        _join_items_for_filter()
-        ids_query = ids_query.where(
-            OrderItem.snapshot_product_name.ilike(f"%{product_name.strip()}%")
-        )
     if specification and specification.strip():
-        _join_items_for_filter()
         ids_query = ids_query.where(
-            OrderItem.snapshot_spec.ilike(f"%{specification.strip()}%")
+            Order.items.any(
+                OrderItem.snapshot_spec.ilike(f"%{specification.strip()}%")
+            )
         )
 
     # Explicit table-header sorting is constrained to a fixed whitelist above.
@@ -2773,11 +2835,11 @@ def list_orders(
     candidate_orders: list[Order] = []
     candidate_order_map: dict[int, Order] = {}
     candidate_projection: dict[int, dict] = {}
-    needs_business_projection = bool(derived_status_filter) or resolved_scope in {
-        "active",
-        "completed",
-    }
-    if needs_business_projection:
+    needs_business_projection = bool(derived_status_filter)
+    if history_search_required:
+        total = 0
+        page_ids = []
+    elif needs_business_projection:
         candidate_ids = list(db.scalars(ids_query).all())
         if candidate_ids:
             candidate_orders = list(
@@ -2790,7 +2852,7 @@ def list_orders(
         candidate_projection = build_order_business_statuses(
             db,
             candidate_orders,
-            include_finance=has_permission(user, "finance.view"),
+            include_finance=can_view_finance,
         )
         candidate_order_map = {int(order.id): order for order in candidate_orders}
         matched_ids = [
@@ -2877,7 +2939,7 @@ def list_orders(
         else build_order_business_statuses(
             db,
             orders,
-            include_finance=has_permission(user, "finance.view"),
+            include_finance=can_view_finance,
         )
     )
     full_response_context = (
@@ -2939,7 +3001,7 @@ def list_orders(
             unfinished_projections = build_order_business_statuses(
                 db,
                 unfinished_orders,
-                include_finance=has_permission(user, "finance.view"),
+                include_finance=can_view_finance,
             )
         unfinished_total = sum(
             1
@@ -2949,7 +3011,10 @@ def list_orders(
         )
     return {
         "total": total,
-        "unfinished_total": unfinished_total,
+        "unfinished_total": unfinished_total if include_unfinished_total else None,
+        "history_mode": history_mode,
+        "history_search_required": history_search_required,
+        "recent_days": recent_days,
         "page": page,
         "page_size": page_size,
         "items": [
@@ -3280,6 +3345,8 @@ def list_order_cost_review(
 def list_order_customer_options(
     keyword: str | None = None,
     scope: Literal["active", "completed", "cancelled", "all"] = "active",
+    history_mode: Literal["recent", "history"] | None = Query(default=None),
+    recent_days: int = Query(default=10, ge=1, le=365),
     stage: list[str] | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
@@ -3292,7 +3359,16 @@ def list_order_customer_options(
     narrows customer identity fields and can never broaden the order scope.
     """
 
-    order_query = select(Order).options(selectinload(Order.items))
+    if history_mode == "history" and not (keyword or "").strip():
+        return {
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "items": [],
+            "history_search_required": True,
+        }
+
+    order_query = select(Order)
     scoped_customer_ids = customer_scope_ids(user, db)
     if not has_unrestricted_customer_access(user, db):
         order_query = order_query.where(Order.customer_id.in_(scoped_customer_ids))
@@ -3303,7 +3379,33 @@ def list_order_customer_options(
     elif scope == "cancelled":
         order_query = order_query.where(Order.status.in_(_BUSINESS_EXCLUDED_STATUSES))
 
-    candidates = list(db.scalars(order_query).all())
+    can_view_finance = has_permission(user, "finance.view")
+    if scope in {"active", "completed"}:
+        completed_predicate = (
+            completed_order_predicate(Order.id) if can_view_finance else false()
+        )
+        order_query = order_query.where(
+            completed_predicate if scope == "completed" else ~completed_predicate
+        )
+    if history_mode in {"recent", "history"} and scope in {
+        "completed",
+        "cancelled",
+    }:
+        cutoff = utc_now_naive() - timedelta(days=recent_days)
+        recent_activity_predicate = (
+            order_completion_activity_since_predicate(Order.id, cutoff)
+            if scope == "completed"
+            else or_(
+                Order.updated_at >= cutoff,
+                and_(Order.updated_at.is_(None), Order.created_at >= cutoff),
+            )
+        )
+        order_query = order_query.where(
+            recent_activity_predicate
+            if history_mode == "recent"
+            else ~recent_activity_predicate
+        )
+
     stage_values = tuple(
         dict.fromkeys(value.strip() for value in (stage or []) if value.strip())
     )
@@ -3313,27 +3415,36 @@ def list_order_customer_options(
             selected_stages.add(value)
         elif value in _DERIVED_STATUS_FILTER_GROUPS:
             selected_stages.update(_DERIVED_STATUS_FILTER_GROUPS[value])
-    needs_business_projection = bool(selected_stages) or scope in {"active", "completed"}
-    if needs_business_projection:
+    if selected_stages:
+        candidates = list(
+            db.scalars(order_query.options(selectinload(Order.items))).all()
+        )
         projections = build_order_business_statuses(
-            db, candidates, include_finance=has_permission(user, "finance.view")
+            db, candidates, include_finance=can_view_finance
         )
         candidates = [
             order
             for order in candidates
             if (
-                (scope != "active" or projections.get(int(order.id), {}).get("business_status") != "completed")
-                and (scope != "completed" or projections.get(int(order.id), {}).get("business_status") == "completed")
-                and (
-                    not selected_stages
-                    or projections.get(int(order.id), {}).get("business_status") in selected_stages
-                )
+                projections.get(int(order.id), {}).get("business_status")
+                in selected_stages
             )
         ]
-
-    order_counts: dict[int, int] = {}
-    for order in candidates:
-        order_counts[order.customer_id] = order_counts.get(order.customer_id, 0) + 1
+        order_counts: dict[int, int] = {}
+        for order in candidates:
+            order_counts[order.customer_id] = order_counts.get(order.customer_id, 0) + 1
+    else:
+        order_counts = {
+            int(customer_id): int(order_count)
+            for customer_id, order_count in db.execute(
+                order_query.with_only_columns(
+                    Order.customer_id,
+                    func.count(Order.id),
+                )
+                .order_by(None)
+                .group_by(Order.customer_id)
+            ).all()
+        }
     customer_ids = set(order_counts)
     customer_query = select(Customer).where(Customer.id.in_(customer_ids))
     customer_identity_filter = customer_identity_search_clause(keyword)

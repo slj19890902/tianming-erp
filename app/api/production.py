@@ -42,6 +42,7 @@ from app.services.production_workflow import (
     complete_production_batch,
     completion_customer_id,
     count_production_tasks,
+    list_production_completions_cursor,
     list_production_completions_page,
     list_production_completions,
     list_production_tasks,
@@ -449,6 +450,7 @@ def get_production_completions(
     customer_id: int | None = Query(default=None, gt=0),
     order_keyword: str | None = Query(default=None, max_length=150),
     product_code: str | None = Query(default=None, max_length=150),
+    product_code_match: Literal["contains", "exact"] = Query(default="contains"),
     product_name: str | None = Query(default=None, max_length=250),
     completed_date_from: date | None = Query(default=None),
     completed_date_to: date | None = Query(default=None),
@@ -457,6 +459,8 @@ def get_production_completions(
         alias="status",
     ),
     placement_pending: bool = Query(default=False),
+    pagination: Literal["offset", "cursor"] = Query(default="offset"),
+    cursor: str | None = Query(default=None, max_length=250),
     page: int | None = Query(default=None, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=200),
     user: User = Depends(can_read),
@@ -465,7 +469,7 @@ def get_production_completions(
     allowed_customer_ids = _allowed_customer_ids(user, db)
     # Keep the existing unpaged request compatible with the production page
     # until its UI is switched to the paged contract.
-    if page is None and page_size is None and not any(
+    if pagination == "offset" and page is None and page_size is None and not any(
         (
             customer_id,
             order_keyword,
@@ -484,14 +488,43 @@ def get_production_completions(
             )
         }
 
-    resolved_page = page or 1
     resolved_page_size = page_size or 50
+    if pagination == "cursor":
+        try:
+            items, has_more, next_cursor = list_production_completions_cursor(
+                db,
+                allowed_customer_ids=allowed_customer_ids,
+                customer_id=customer_id,
+                order_keyword=order_keyword,
+                product_code=product_code,
+                product_code_match=product_code_match,
+                product_name=product_name,
+                completed_date_from=completed_date_from,
+                completed_date_to=completed_date_to,
+                status=completion_status,
+                placement_pending=placement_pending,
+                cursor=cursor,
+                page_size=resolved_page_size,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {
+            "items": items,
+            "total": None,
+            "page_size": resolved_page_size,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+            "pagination": "cursor",
+        }
+
+    resolved_page = page or 1
     items, total = list_production_completions_page(
         db,
         allowed_customer_ids=allowed_customer_ids,
         customer_id=customer_id,
         order_keyword=order_keyword,
         product_code=product_code,
+        product_code_match=product_code_match,
         product_name=product_name,
         completed_date_from=completed_date_from,
         completed_date_to=completed_date_to,

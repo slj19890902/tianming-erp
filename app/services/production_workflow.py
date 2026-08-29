@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from hashlib import sha256
 import json
 from math import ceil
 from typing import Literal, Sequence
 
-from sqlalchemy import String, and_, case, cast, exists, func, or_, select, union, update
+from sqlalchemy import String, and_, case, cast, exists, func, or_, select, tuple_, union, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased, selectinload
 
@@ -6143,6 +6145,7 @@ def _completion_rows(
     customer_id: int | None = None,
     order_keyword: str | None = None,
     product_code: str | None = None,
+    product_code_match: Literal["contains", "exact"] = "contains",
     product_name: str | None = None,
     completed_date_from: date | None = None,
     completed_date_to: date | None = None,
@@ -6150,6 +6153,9 @@ def _completion_rows(
     placement_pending: bool = False,
     page: int | None = None,
     page_size: int | None = None,
+    cursor_completed_at: datetime | None = None,
+    cursor_id: int | None = None,
+    row_limit: int | None = None,
 ):
     query = (
         select(
@@ -6189,14 +6195,37 @@ def _completion_rows(
             )
         )
     if normalized_product_code := (product_code or "").strip():
-        pattern = f"%{normalized_product_code}%"
-        query = query.where(
-            or_(
-                Product.product_code.like(pattern),
-                Product.customer_material_code.like(pattern),
-                OrderItem.snapshot_product_code.like(pattern),
+        if product_code_match == "exact":
+            matching_order_item_ids = select(OrderItem.id).where(
+                OrderItem.snapshot_product_code == normalized_product_code
+            ).union(
+                select(OrderItem.id).where(
+                    OrderItem.product_id.in_(
+                        select(Product.id).where(
+                            Product.product_code == normalized_product_code
+                        )
+                    )
+                ),
+                select(OrderItem.id).where(
+                    OrderItem.product_id.in_(
+                        select(Product.id).where(
+                            Product.customer_material_code == normalized_product_code
+                        )
+                    )
+                ),
             )
-        )
+            query = query.where(
+                ProductionCompletion.order_item_id.in_(matching_order_item_ids)
+            )
+        else:
+            pattern = f"%{normalized_product_code}%"
+            query = query.where(
+                or_(
+                    Product.product_code.like(pattern),
+                    Product.customer_material_code.like(pattern),
+                    OrderItem.snapshot_product_code.like(pattern),
+                )
+            )
     if normalized_product_name := (product_name or "").strip():
         pattern = f"%{normalized_product_name}%"
         query = query.where(
@@ -6231,11 +6260,22 @@ def _completion_rows(
             ),
         )
 
+    if cursor_completed_at is not None and cursor_id is not None:
+        query = query.where(
+            tuple_(
+                ProductionCompletion.completed_at,
+                ProductionCompletion.id,
+            )
+            < tuple_(cursor_completed_at, cursor_id)
+        )
+
     query = query.order_by(
         ProductionCompletion.completed_at.desc(),
         ProductionCompletion.id.desc(),
     )
-    if page is not None and page_size is not None:
+    if row_limit is not None:
+        query = query.limit(row_limit)
+    elif page is not None and page_size is not None:
         query = query.offset((page - 1) * page_size).limit(page_size)
     return db.execute(query).all()
 
@@ -6247,6 +6287,7 @@ def _production_completion_total(
     customer_id: int | None,
     order_keyword: str | None,
     product_code: str | None,
+    product_code_match: Literal["contains", "exact"],
     product_name: str | None,
     completed_date_from: date | None,
     completed_date_to: date | None,
@@ -6280,14 +6321,37 @@ def _production_completion_total(
             )
         )
     if normalized_product_code := (product_code or "").strip():
-        pattern = f"%{normalized_product_code}%"
-        query = query.where(
-            or_(
-                Product.product_code.like(pattern),
-                Product.customer_material_code.like(pattern),
-                OrderItem.snapshot_product_code.like(pattern),
+        if product_code_match == "exact":
+            matching_order_item_ids = select(OrderItem.id).where(
+                OrderItem.snapshot_product_code == normalized_product_code
+            ).union(
+                select(OrderItem.id).where(
+                    OrderItem.product_id.in_(
+                        select(Product.id).where(
+                            Product.product_code == normalized_product_code
+                        )
+                    )
+                ),
+                select(OrderItem.id).where(
+                    OrderItem.product_id.in_(
+                        select(Product.id).where(
+                            Product.customer_material_code == normalized_product_code
+                        )
+                    )
+                ),
             )
-        )
+            query = query.where(
+                ProductionCompletion.order_item_id.in_(matching_order_item_ids)
+            )
+        else:
+            pattern = f"%{normalized_product_code}%"
+            query = query.where(
+                or_(
+                    Product.product_code.like(pattern),
+                    Product.customer_material_code.like(pattern),
+                    OrderItem.snapshot_product_code.like(pattern),
+                )
+            )
     if normalized_product_name := (product_name or "").strip():
         pattern = f"%{normalized_product_name}%"
         query = query.where(
@@ -6703,6 +6767,7 @@ def list_production_completions_page(
     customer_id: int | None = None,
     order_keyword: str | None = None,
     product_code: str | None = None,
+    product_code_match: Literal["contains", "exact"] = "contains",
     product_name: str | None = None,
     completed_date_from: date | None = None,
     completed_date_to: date | None = None,
@@ -6719,6 +6784,7 @@ def list_production_completions_page(
         customer_id=customer_id,
         order_keyword=order_keyword,
         product_code=product_code,
+        product_code_match=product_code_match,
         product_name=product_name,
         completed_date_from=completed_date_from,
         completed_date_to=completed_date_to,
@@ -6731,6 +6797,7 @@ def list_production_completions_page(
         customer_id=customer_id,
         order_keyword=order_keyword,
         product_code=product_code,
+        product_code_match=product_code_match,
         product_name=product_name,
         completed_date_from=completed_date_from,
         completed_date_to=completed_date_to,
@@ -6740,6 +6807,80 @@ def list_production_completions_page(
         page_size=page_size,
     )
     return _production_completion_dicts(db, rows), total
+
+
+def _encode_production_completion_cursor(
+    completed_at: datetime,
+    completion_id: int,
+) -> str:
+    payload = (
+        f"{completed_at.isoformat(timespec='microseconds')}|{int(completion_id)}"
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_production_completion_cursor(cursor: str) -> tuple[datetime, int]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        timestamp, raw_id = payload.rsplit("|", 1)
+        completed_at = datetime.fromisoformat(timestamp)
+        completion_id = int(raw_id)
+    except (ValueError, UnicodeError, binascii.Error) as error:
+        raise ValueError("完工历史游标无效，请重新查询") from error
+    if completed_at.tzinfo is not None or completion_id <= 0:
+        raise ValueError("完工历史游标无效，请重新查询")
+    return completed_at, completion_id
+
+
+def list_production_completions_cursor(
+    db: Session,
+    *,
+    allowed_customer_ids: set[int] | None,
+    customer_id: int | None = None,
+    order_keyword: str | None = None,
+    product_code: str | None = None,
+    product_code_match: Literal["contains", "exact"] = "contains",
+    product_name: str | None = None,
+    completed_date_from: date | None = None,
+    completed_date_to: date | None = None,
+    status: Literal["posted", "reversed"] | None = None,
+    placement_pending: bool = False,
+    cursor: str | None = None,
+    page_size: int = 50,
+) -> tuple[list[dict], bool, str | None]:
+    """Return a stable keyset page without a growing OFFSET or full COUNT."""
+
+    cursor_completed_at: datetime | None = None
+    cursor_id: int | None = None
+    if cursor:
+        cursor_completed_at, cursor_id = _decode_production_completion_cursor(cursor)
+    rows = _completion_rows(
+        db,
+        allowed_customer_ids=allowed_customer_ids,
+        customer_id=customer_id,
+        order_keyword=order_keyword,
+        product_code=product_code,
+        product_code_match=product_code_match,
+        product_name=product_name,
+        completed_date_from=completed_date_from,
+        completed_date_to=completed_date_to,
+        status=status,
+        placement_pending=placement_pending,
+        cursor_completed_at=cursor_completed_at,
+        cursor_id=cursor_id,
+        row_limit=page_size + 1,
+    )
+    has_more = len(rows) > page_size
+    page_rows = rows[:page_size]
+    next_cursor = None
+    if has_more and page_rows:
+        last_completion = page_rows[-1][0]
+        next_cursor = _encode_production_completion_cursor(
+            last_completion.completed_at,
+            last_completion.id,
+        )
+    return _production_completion_dicts(db, page_rows), has_more, next_cursor
 
 
 def completion_customer_id(db: Session, completion_id: int) -> int | None:

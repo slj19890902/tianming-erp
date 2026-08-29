@@ -240,6 +240,21 @@ class ProductionCompletion(Base):
             sqlite_where=text("status = 'posted' AND completion_type = 'primary'"),
             postgresql_where=text("status = 'posted' AND completion_type = 'primary'"),
         ),
+        Index(
+            "ix_production_completions_completed_at_id",
+            "completed_at",
+            "id",
+        ),
+        Index(
+            "ix_production_completions_status_completed_at_id",
+            "status",
+            "completed_at",
+            "id",
+        ),
+        Index(
+            "ix_production_completions_order_item_id",
+            "order_item_id",
+        ),
         UniqueConstraint(
             "inventory_lot_id", name="uq_production_completions_inventory_lot"
         ),

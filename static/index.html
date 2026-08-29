@@ -3439,6 +3439,9 @@
                       {{ showAdvancedFilter ? '收起筛选' : '筛选查找' }} ▾
                     </button>
                   </div>
+                  <div v-if="orderWorkspace === 'queue' && orderHistoryMode() === 'history' && !orderHistorySearchReady()" class="notice" style="margin:8px 0 0">
+                    10 天以前的历史默认不自动加载。请输入存货编码、订单号、客户、产品或日期后查询。
+                  </div>
                   <div v-if="showAdvancedFilter" class="order-filter-advanced">
                     <search-select v-model="filters.orderCustomer" :options="orderCustomerOptions" label-key="name" value-key="id" placeholder="客户筛选" :allow-empty="true" @change="applyOrderFilters()"></search-select>
                     <template v-if="orderWorkspace === 'queue'">
@@ -4091,7 +4094,7 @@
               <div class="production-compact-command-bar">
                 <div class="toolbar-group production-tab-strip">
                   <h2>生产与成品</h2>
-                  <button :class="['btn',{primary:productionTab==='history'}]" :disabled="productionBusy" @click="productionTab='history'; loadProductionHistory()">完工历史 {{ productionHistoryTotal }}</button>
+                  <button :class="['btn',{primary:productionTab==='history'}]" :disabled="productionBusy" @click="productionTab='history'; loadProductionHistory()">完工历史</button>
                   <button :class="['btn',{primary:productionTab==='placement'}]" :disabled="productionBusy" @click="productionTab='placement'; loadProductionPlacement()">待送成品归位 {{ productionPlacementTotal }}</button>
                 </div>
                 <div v-if="productionTab==='pending'" class="production-tab-actions">
@@ -4101,7 +4104,9 @@
                 </div>
                 <div v-else-if="productionTab==='history'" class="production-tab-actions">
                   <button class="btn" type="button" :aria-expanded="productionHistoryFilterVisible" @click="productionHistoryFilterVisible=!productionHistoryFilterVisible">{{ productionHistoryFilterVisible ? '收起筛选' : '筛选查找' }}</button>
-                  <pager :page="pages.productionHistory" :total="productionHistoryTotal" :page-size="productionHistoryPageSize()" :always="true" :compact="true" @change="pages.productionHistory=$event; loadProductionHistory()"></pager>
+                  <button class="btn small" :disabled="productionBusy || pages.productionHistory<=1" @click="previousProductionHistoryPage()">上一页</button>
+                  <span class="muted">第 {{ pages.productionHistory }} 页</span>
+                  <button class="btn small" :disabled="productionBusy || !productionHistoryHasMore" @click="nextProductionHistoryPage()">下一页</button>
                   <button class="btn" :disabled="productionBusy" @click="loadProductionHistory()">刷新</button>
                 </div>
                 <div v-else class="production-tab-actions">
@@ -4112,13 +4117,13 @@
               </div>
               <div v-if="productionTab==='history' && productionHistoryFilterVisible" class="production-filter-panel">
                 <search-select v-model="productionHistoryFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true"></search-select>
-                <input class="input" v-model.trim="productionHistoryFilters.order_keyword" placeholder="订单/客户单号" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
-                <input class="input" v-model.trim="productionHistoryFilters.product_code" placeholder="存货编码" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
-                <input class="input" v-model.trim="productionHistoryFilters.product_name" placeholder="产品名称" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
+                <input class="input" v-model.trim="productionHistoryFilters.order_keyword" placeholder="订单/客户单号" @keyup.enter="queryProductionHistory()" />
+                <input class="input" v-model.trim="productionHistoryFilters.product_code" placeholder="存货编码（精确）" @keyup.enter="queryProductionHistory()" />
+                <input class="input" v-model.trim="productionHistoryFilters.product_name" placeholder="产品名称" @keyup.enter="queryProductionHistory()" />
                 <input class="input" type="date" aria-label="完工开始日期" v-model="productionHistoryFilters.completed_date_from" />
                 <input class="input" type="date" aria-label="完工结束日期" v-model="productionHistoryFilters.completed_date_to" />
                 <select class="select" v-model="productionHistoryFilters.status"><option value="">全部状态</option><option value="posted">有效完工</option><option value="reversed">已撤销</option></select>
-                <button class="btn small primary" @click="pages.productionHistory=1; loadProductionHistory()">查询</button>
+                <button class="btn small primary" @click="queryProductionHistory()">查询</button>
                 <button class="btn small" @click="resetProductionHistoryFilters()">清空</button>
               </div>
               <div v-if="productionTab==='placement' && productionPlacementFilterVisible" class="production-filter-panel">
@@ -8884,7 +8889,7 @@
             incomingWorkspace: "board", incomingTab: "pending", incomingPending: [], incomingPendingTotal: 0, incomingPendingLoading: false, incomingPendingError: "", incomingPendingAppliedPage: 1, incomingPendingRetryPage: 1, incomingReceived: [], incomingReceivedTotal: 0, incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingProductionCardOpening: false, incomingProductionCardBatchBusy: false, incomingProductionCardSelections: {}, incomingProductionCardAttemptId: "", incomingProductionCardRecoveryUrl: "", incomingProductionCardRecoveryMessage: "", incomingHistoryFilterVisible: false,
             externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingFilter: "", externalIncomingLoaded: false, externalIncomingDrafts: {}, externalIncomingSavingId: null, externalIncomingSavingAttemptId: "",
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
-            productionTab: "history", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionHistoryFilterVisible: false, productionPlacement: [], productionPlacementTotal: 0, productionPlacementLoading: false, productionPlacementError: "", productionPlacementFilterVisible: false, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
+            productionTab: "history", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionHistoryCursor: "", productionHistoryCursorStack: [], productionHistoryNextCursor: "", productionHistoryHasMore: false, productionHistoryFilterVisible: false, productionPlacement: [], productionPlacementTotal: 0, productionPlacementLoading: false, productionPlacementError: "", productionPlacementFilterVisible: false, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
             productionPlacementFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionActualAdjustmentAttempts: {}, productionLabelRefreshAttempts: {},
@@ -8948,9 +8953,11 @@
             productTrashOpen: false, productTrashItems: [], productTrashLoading:false, productTrashError:"", productLifecycleAction:{action:"",productId:null}, customerLifecycleAction:{action:"",customerId:null}, materialLifecycleAction:{action:"",materialId:null},
             filters: { customerKeyword: "", showInactive:false, showInactiveProducts:false, productCustomer: "", productKeyword: "", productCode: "", productName: "", productSpec: "", productMaterial: "", orderCustomer: "", orderKeyword:"", orderNumber:"", orderCustomerPo:"", orderProductCode:"", orderProductName:"", orderSpecification:"", orderDateFrom:"", orderDateTo:"", orderDeliveryDateFrom:"", orderDeliveryDateTo:"", orderScope:"active", orderStage:"", orderStatus:"business", orderView:"customer_po", orderSortBy:"", orderSortDirection:"desc" },
             orderScopeTabs: [
-              { label: "进行中", value: "active" },
-              { label: "已完成", value: "completed" },
-              { label: "已作废/取消", value: "cancelled" },
+              { label: "全部待处理", value: "active", apiScope: "active" },
+              { label: "最近完成（10天）", value: "completed_recent", apiScope: "completed", historyMode: "recent" },
+              { label: "完成历史查询", value: "completed_history", apiScope: "completed", historyMode: "history" },
+              { label: "最近作废（10天）", value: "cancelled_recent", apiScope: "cancelled", historyMode: "recent" },
+              { label: "作废历史查询", value: "cancelled_history", apiScope: "cancelled", historyMode: "history" },
             ],
             orderStageOptions: [
               { label: "全部流程阶段", value: "" },
@@ -9915,6 +9922,33 @@
               .filter(([key, , value]) => key === "scope" || Boolean(String(value || "").trim()))
               .map(([key, label, value]) => ({ key, label, value }));
           },
+          orderScopeContract(scopeValue=this.filters.orderScope) {
+            return this.orderScopeTabs.find(row => row.value === scopeValue)
+              || this.orderScopeTabs[0]
+              || {value:"active",apiScope:"active"};
+          },
+          orderApiScope(scopeValue=this.filters.orderScope) {
+            return this.orderScopeContract(scopeValue)?.apiScope || "active";
+          },
+          orderHistoryMode(scopeValue=this.filters.orderScope) {
+            return this.orderScopeContract(scopeValue)?.historyMode || "";
+          },
+          orderHistorySearchReady() {
+            if (this.orderHistoryMode() !== "history") return true;
+            return [
+              this.filters.orderKeyword,
+              this.filters.orderCustomer,
+              this.filters.orderNumber,
+              this.filters.orderCustomerPo,
+              this.filters.orderProductCode,
+              this.filters.orderProductName,
+              this.filters.orderSpecification,
+              this.filters.orderDateFrom,
+              this.filters.orderDateTo,
+              this.filters.orderDeliveryDateFrom,
+              this.filters.orderDeliveryDateTo,
+            ].some(value => String(value ?? "").trim());
+          },
           filteredRequisitionPending() {
             const supplier = String(this.requisitionSupplierFilter || "").trim();
             if (!supplier) return this.requisitionPending;
@@ -10368,7 +10402,7 @@
                 this.pages.productionPlacement = 1;
                 return this.loadProductionPlacement();
               }
-              this.pages.productionHistory = 1;
+              this.resetProductionHistoryCursor();
               return this.loadProductionHistory();
             }
             return true;
@@ -13873,11 +13907,15 @@
                   await requirePageLoad(supplierPromise || this.loadSuppliers(true));
                 }
               }
-              if (page === "orders") await Promise.all([
-                requirePageLoad(this.loadCustomerOptions(force)),
-                requirePageLoad(this.loadOrderCustomerOptions()),
-                requirePageLoad(this.loadCurrentOrderWorkspace()),
-              ]);
+              if (page === "orders") {
+                await Promise.all([
+                  requirePageLoad(this.loadCustomerOptions(force)),
+                  requirePageLoad(this.loadCurrentOrderWorkspace()),
+                ]);
+                if (requestIsCurrent() && searchGenerationIsCurrent()) {
+                  void this.loadOrderCustomerOptions();
+                }
+              }
               if (page === "orders_legacy") await Promise.all([
                 requirePageLoad(this.loadCustomerOptions(force)),
                 requirePageLoad(this.loadOrders()),
@@ -13975,6 +14013,15 @@
             try {
               const data = (await axios.get("/api/dashboard/overview")).data || { cards: [], todos: [], summary: {} };
               this.overview = data;
+              const orderStatusCounts = data.business_status_counts || {};
+              this.ordersUnfinishedTotal = [
+                "pending_confirmation",
+                "pending_material",
+                "pending_incoming",
+                "pending_production",
+                "pending_delivery",
+                "partially_delivered",
+              ].reduce((total, key) => total + Number(orderStatusCounts[key] || 0), 0);
               await this.loadWarehouseCapacitySummary();
               if (data.kpi) this.kpi = data.kpi;
               else await this.loadKpi();
@@ -15878,12 +15925,19 @@
             const effectivePageSize = this.activePage === "orders" && this.orderWorkspace === "queue"
               ? this.orderListPageSize()
               : this.pageSize;
-            const params = { page: requestedPage, page_size: effectivePageSize };
+            const params = {
+              page: requestedPage,
+              page_size: effectivePageSize,
+              include_unfinished_total:false,
+            };
             if (this.activePage === "orders") params.detail_level = "summary";
             if (this.filters.orderCustomer) params.customer_id = this.filters.orderCustomer;
             if (this.filters.orderNumber) params.order_number = this.filters.orderNumber;
             if (this.filters.orderCustomerPo) params.customer_po = this.filters.orderCustomerPo;
-            if (this.filters.orderProductCode) params.product_code = this.filters.orderProductCode;
+            if (this.filters.orderProductCode) {
+              params.product_code = this.filters.orderProductCode;
+              params.product_code_match = "exact";
+            }
             if (this.filters.orderProductName) params.product_name = this.filters.orderProductName;
             if (this.filters.orderSpecification) params.specification = this.filters.orderSpecification;
             if (this.filters.orderDateFrom) params.order_date_from = this.filters.orderDateFrom;
@@ -15891,7 +15945,21 @@
             if (this.filters.orderDeliveryDateFrom) params.delivery_date_from = this.filters.orderDeliveryDateFrom;
             if (this.filters.orderDeliveryDateTo) params.delivery_date_to = this.filters.orderDeliveryDateTo;
             if (this.activePage === "orders") {
-              params.scope = this.filters.orderScope || "active";
+              const scopeValue = this.filters.orderScope || "active";
+              params.scope = scopeValue.startsWith("completed_")
+                ? "completed"
+                : scopeValue.startsWith("cancelled_")
+                  ? "cancelled"
+                  : scopeValue;
+              const historyMode = scopeValue.endsWith("_history")
+                ? "history"
+                : scopeValue.endsWith("_recent")
+                  ? "recent"
+                  : "";
+              if (historyMode) {
+                params.history_mode = historyMode;
+                params.recent_days = 10;
+              }
               if (this.filters.orderStage) params.stage = this.filters.orderStage;
             } else if (this.filters.orderStatus) {
               params.status = this.filters.orderStatus;
@@ -15912,7 +15980,10 @@
                 this.pages.orders = lastPage;
                 return this.loadOrders();
               }
-              this.orders = data.items; this.ordersTotal = total; this.ordersUnfinishedTotal = data.unfinished_total || 0;
+              this.orders = data.items; this.ordersTotal = total;
+              if (data.unfinished_total !== null && data.unfinished_total !== undefined) {
+                this.ordersUnfinishedTotal = Number(data.unfinished_total || 0);
+              }
               this.cancelOrderGroupDetailRequests();
               this.orderListGeneration += 1;
               this.expandedOrders = {};
@@ -17341,11 +17412,16 @@
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async loadProduction() {
-            if (this.productionTab === "placement") return this.loadProductionPlacement();
+            if (this.productionTab === "placement") {
+              const [, placementResult] = await Promise.all([
+                this.loadCustomerOptions(),
+                this.loadProductionPlacement(),
+              ]);
+              return placementResult;
+            }
             const [, historyResult] = await Promise.all([
               this.loadCustomerOptions(),
               this.loadProductionHistory(),
-              this.loadProductionPlacement(),
             ]);
             return historyResult;
           },
@@ -17586,31 +17662,91 @@
             }
           },
           async loadProductionHistory() {
+            const controller = this.beginLatestRequest("production:history");
             const params = {
-              page: this.pages.productionHistory,
+              pagination: "cursor",
               page_size: this.productionHistoryPageSize(),
             };
+            if (this.productionHistoryCursor) params.cursor = this.productionHistoryCursor;
             Object.entries(this.productionHistoryFilters || {}).forEach(([key,value]) => {
               if (value !== "" && value !== null && value !== undefined) params[key] = value;
             });
-            const { data } = await axios.get("/api/production/completions", { params });
-            const floorNumbers = [...new Set(this.productionLocations.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
-            const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
-            this.productionHistory = (data.items || []).map(row => ({
-              ...row,
-              transfer_floor_number: defaultFloorNumber,
-              transfer_area_code: "",
-              transfer_location_id: null,
-            }));
-            this.productionHistoryTotal = Number(data.total || 0);
-            if (this.productionHistory.some(row => row.status !== "reversed" && row.can_transfer_to_stock && this.canWarehouseExecute) && !this.productionLocations.length) {
-              const locationsReady = await this.ensureProductionLocations();
-              if (locationsReady) {
-                const loadedFloors = this.productionLocationFloors;
-                const singleFloor = loadedFloors.length === 1 ? loadedFloors[0].number : null;
-                this.productionHistory.forEach(row => { row.transfer_floor_number = singleFloor; });
+            if (params.product_code) params.product_code_match = "exact";
+            try {
+              const { data } = await axios.get("/api/production/completions", { params, signal:controller.signal });
+              if (latestRequestControllers.get("production:history") !== controller) return false;
+              const floorNumbers = [...new Set(this.productionLocations.filter(location => location.is_empty).map(location => Number(location.warehouse_floor)).filter(Boolean))];
+              const defaultFloorNumber = floorNumbers.length === 1 ? floorNumbers[0] : null;
+              this.productionHistory = (data.items || []).map(row => ({
+                ...row,
+                transfer_floor_number: defaultFloorNumber,
+                transfer_area_code: "",
+                transfer_location_id: null,
+              }));
+              this.productionHistoryTotal = Number(data.total || 0);
+              this.productionHistoryHasMore = Boolean(data.has_more);
+              this.productionHistoryNextCursor = String(data.next_cursor || "");
+              if (this.productionHistory.some(row => row.status !== "reversed" && row.can_transfer_to_stock && this.canWarehouseExecute) && !this.productionLocations.length) {
+                const locationsReady = await this.ensureProductionLocations();
+                if (locationsReady && latestRequestControllers.get("production:history") === controller) {
+                  const loadedFloors = this.productionLocationFloors;
+                  const singleFloor = loadedFloors.length === 1 ? loadedFloors[0].number : null;
+                  this.productionHistory.forEach(row => { row.transfer_floor_number = singleFloor; });
+                }
               }
+              return true;
+            } catch (error) {
+              if (!this.isCancelledRequest(error)) this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              this.finishLatestRequest("production:history", controller);
             }
+          },
+          resetProductionHistoryCursor() {
+            this.productionHistoryCursor = "";
+            this.productionHistoryCursorStack = [];
+            this.productionHistoryNextCursor = "";
+            this.productionHistoryHasMore = false;
+            this.pages.productionHistory = 1;
+          },
+          queryProductionHistory() {
+            this.resetProductionHistoryCursor();
+            return this.loadProductionHistory();
+          },
+          async previousProductionHistoryPage() {
+            if (this.pages.productionHistory <= 1) return;
+            const previousState = {
+              cursor:this.productionHistoryCursor,
+              stack:[...this.productionHistoryCursorStack],
+              page:this.pages.productionHistory,
+            };
+            this.productionHistoryCursor = String(this.productionHistoryCursorStack.pop() || "");
+            this.pages.productionHistory -= 1;
+            if (await this.loadProductionHistory() === false) {
+              this.productionHistoryCursor = previousState.cursor;
+              this.productionHistoryCursorStack = previousState.stack;
+              this.pages.productionHistory = previousState.page;
+              return false;
+            }
+            return true;
+          },
+          async nextProductionHistoryPage() {
+            if (!this.productionHistoryHasMore || !this.productionHistoryNextCursor) return;
+            const previousState = {
+              cursor:this.productionHistoryCursor,
+              stack:[...this.productionHistoryCursorStack],
+              page:this.pages.productionHistory,
+            };
+            this.productionHistoryCursorStack.push(this.productionHistoryCursor || "");
+            this.productionHistoryCursor = this.productionHistoryNextCursor;
+            this.pages.productionHistory += 1;
+            if (await this.loadProductionHistory() === false) {
+              this.productionHistoryCursor = previousState.cursor;
+              this.productionHistoryCursorStack = previousState.stack;
+              this.pages.productionHistory = previousState.page;
+              return false;
+            }
+            return true;
           },
           async loadProductionPlacement() {
             this.productionPlacementLoading = true;
@@ -17646,8 +17782,7 @@
           },
           resetProductionHistoryFilters() {
             this.productionHistoryFilters = { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" };
-            this.pages.productionHistory = 1;
-            this.loadProductionHistory();
+            return this.queryProductionHistory();
           },
           resetProductionPlacementFilters() {
             this.productionPlacementFilters = { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"" };
@@ -21035,7 +21170,20 @@
               this.orderCustomerOptions = [];
               return true;
             }
-            const params = { scope:this.filters.orderScope || "active" };
+            const scopeValue = this.filters.orderScope || "active";
+            const params = {scope:scopeValue.startsWith("completed_") ? "completed" : scopeValue.startsWith("cancelled_") ? "cancelled" : scopeValue};
+            const historyMode = scopeValue.endsWith("_history") ? "history" : scopeValue.endsWith("_recent") ? "recent" : "";
+            if (historyMode === "history") {
+              this.orderCustomerOptions = (this.customerOptions || []).map(row => ({
+                ...row,
+                name: `${row.name || "未命名客户"}${row.is_active === false ? "（已停用）" : ""}`,
+              }));
+              return true;
+            }
+            if (historyMode) {
+              params.history_mode = historyMode;
+              params.recent_days = 10;
+            }
             if (this.filters.orderStage) params.stage = this.filters.orderStage;
             const controller = this.beginLatestRequest("orders:customer-options");
             try {
@@ -27947,7 +28095,7 @@
             const params = {
               customer_id: group.customer_id,
               anchor_order_id: group.orders[0].id,
-              scope: this.filters.orderScope || "active",
+              scope: String(this.filters.orderScope || "active").startsWith("completed_") ? "completed" : String(this.filters.orderScope || "active").startsWith("cancelled_") ? "cancelled" : (this.filters.orderScope || "active"),
             };
             if (String(group.customer_po || "").trim()) params.customer_po = String(group.customer_po).trim();
             const promise = (async() => {

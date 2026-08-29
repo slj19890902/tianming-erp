@@ -169,7 +169,7 @@ def production_history_app(tmp_path: Path):
                 product_code="BX-001",
                 product_name="甲款外箱",
                 customer_po="PO-ALPHA",
-                completed_at=datetime(2026, 7, 27, 16, 0),
+                completed_at=datetime(2026, 7, 28, 16, 0),
             ),
             "a_new": add_completion(
                 key="A-NEW",
@@ -282,3 +282,85 @@ def test_production_history_keeps_customer_scope_after_paging(
     assert hidden_customer.status_code == 200
     assert hidden_customer.json()["total"] == 0
     assert hidden_customer.json()["items"] == []
+
+
+def test_production_history_cursor_is_stable_without_count_or_offset(
+    production_history_app,
+) -> None:
+    app, ids = production_history_app
+    with TestClient(app) as client:
+        _login(client, "p106-admin")
+        first = client.get(
+            "/api/production/completions?pagination=cursor&page_size=1"
+        )
+        assert first.status_code == 200, first.text
+        first_body = first.json()
+        second = client.get(
+            "/api/production/completions",
+            params={
+                "pagination": "cursor",
+                "page_size": 1,
+                "cursor": first_body["next_cursor"],
+            },
+        )
+        assert second.status_code == 200, second.text
+        second_body = second.json()
+        third = client.get(
+            "/api/production/completions",
+            params={
+                "pagination": "cursor",
+                "page_size": 1,
+                "cursor": second_body["next_cursor"],
+            },
+        )
+
+    assert first_body["total"] is None
+    assert first_body["pagination"] == "cursor"
+    assert first_body["has_more"] is True
+    assert [first_body["items"][0]["id"], second_body["items"][0]["id"], third.json()["items"][0]["id"]] == [
+        ids["b"],
+        ids["a_new"],
+        ids["a_old"],
+    ]
+    assert third.json()["has_more"] is False
+    assert third.json()["next_cursor"] is None
+
+
+def test_production_history_cursor_keeps_scope_and_supports_exact_code(
+    production_history_app,
+) -> None:
+    app, ids = production_history_app
+    with TestClient(app) as client:
+        _login(client, "p106-scoped")
+        scoped_first = client.get(
+            "/api/production/completions?pagination=cursor&page_size=1"
+        )
+        scoped_second = client.get(
+            "/api/production/completions",
+            params={
+                "pagination": "cursor",
+                "page_size": 1,
+                "cursor": scoped_first.json()["next_cursor"],
+            },
+        )
+        exact_miss = client.get(
+            "/api/production/completions",
+            params={
+                "pagination": "cursor",
+                "page_size": 50,
+                "product_code": "BX",
+                "product_code_match": "exact",
+            },
+        )
+        invalid_cursor = client.get(
+            "/api/production/completions?pagination=cursor&cursor=not-a-cursor"
+        )
+
+    assert [
+        scoped_first.json()["items"][0]["id"],
+        scoped_second.json()["items"][0]["id"],
+    ] == [ids["a_new"], ids["a_old"]]
+    assert scoped_second.json()["has_more"] is False
+    assert exact_miss.status_code == 200
+    assert exact_miss.json()["items"] == []
+    assert invalid_cursor.status_code == 422

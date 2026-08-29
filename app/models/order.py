@@ -62,6 +62,8 @@ class Order(Base):
         Index("ix_sales_orders_customer_po_group", "customer_id", "customer_po"),
         Index("ix_sales_orders_order_date", "order_date"),
         Index("ix_sales_orders_status", "status"),
+        Index("ix_sales_orders_created_at_id", "created_at", "id"),
+        Index("ix_sales_orders_updated_at_id", "updated_at", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

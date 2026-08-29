@@ -99,7 +99,7 @@ def test_requisition_spa_route_returns_index_page_after_refresh() -> None:
 
     assert response.status_code == 200
     assert "天明包装ERP" in response.text
-    assert "智能报料工作台" in response.text
+    assert "纸板报料" in response.text
     assert "Not Found" not in response.text
 
 
@@ -142,10 +142,11 @@ def test_n029_production_requests_disable_duplicates_and_reuse_idempotency_keys(
     start = INDEX.index("async loadProduction()")
     end = INDEX.index("async loadIncoming()", start)
     logic = INDEX[start:end]
-    assert 'if (this.productionTab === "placement") return this.loadProductionPlacement();' in logic
+    assert 'if (this.productionTab === "placement") {' in logic
     assert 'this.loadProductionHistory(),' in logic
     assert 'this.loadProductionPlacement(),' in logic
     assert 'return historyResult;' in logic
+    assert 'this.loadProductionHistory(),\n              this.loadProductionPlacement(),' not in logic
     assert "placement_pending:true" in logic
     assert 'axios.get("/api/production/completions", { params })' in logic
     assert 'axios.get("/api/production/temporary-locations", {signal:controller.signal})' in logic
@@ -191,8 +192,10 @@ def test_n029_production_tables_are_compact_and_do_not_require_horizontal_scroll
         "数量情况",
         "本次生产",
         "订单 / 多出",
-        "数量 / 操作人",
         "完工去向",
+        "完工时间",
+        "实际 / 理论数量",
+        "当前库位",
     ):
         assert merged_heading in page
 
@@ -396,7 +399,9 @@ def test_desktop_and_mobile_incoming_layout_support_editable_quantity() -> None:
     assert 'this.hasPermission("incoming.execute")' in INDEX
     assert '"/api/incoming/surplus-locations"' in INDEX
     assert '"/api/incoming/replenishment-locations"' not in INDEX
-    assert "进入一楼当前已发布原料区的真实排位" in INDEX
+    assert "row.reserve_location_name" in INDEX
+    assert "row.finished_location_name" in INDEX
+    assert "incomingSelectedLocationsReady(row)" in INDEX
     assert "incoming-table" in INDEX
     assert "本次后累计等于计划" not in INDEX
     assert "本次后累计等于计划" not in INCOMING

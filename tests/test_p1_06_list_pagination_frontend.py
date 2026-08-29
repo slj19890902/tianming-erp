@@ -24,7 +24,8 @@ def test_reported_incoming_production_and_delivery_use_server_pages() -> None:
     assert 'page: this.pages.incomingHistory' in INDEX
     assert 'this.incomingHistoryTotal = Number(data.total || 0)' in INDEX
     assert ':key="row.history_key || row.receipt_item_id || row.item_id"' in INDEX
-    assert 'page: this.pages.productionHistory' in INDEX
+    assert 'pagination: "cursor"' in INDEX
+    assert 'if (this.productionHistoryCursor) params.cursor = this.productionHistoryCursor' in INDEX
     assert 'this.productionHistoryTotal = Number(data.total || 0)' in INDEX
     assert 'axios.get("/api/production/completions", { params })' in INDEX
     assert 'Object.entries(this.deliveryListFilters || {})' in INDEX

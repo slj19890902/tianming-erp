@@ -800,6 +800,7 @@ def test_dashboard_keeps_future_due_accept_short_line_in_finance_chain(
         receipt = ReturnReceipt(
             delivery_id=delivery.id,
             actual_received_date=beijing_today(),
+            reconciliation_month=beijing_today().strftime("%Y-%m"),
             status="confirmed",
         )
         db.add(receipt)

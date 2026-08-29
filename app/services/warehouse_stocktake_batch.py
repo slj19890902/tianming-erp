@@ -33,11 +33,7 @@ from app.models.warehouse_inventory import (
     WarehouseFloor,
     WarehouseLocation,
 )
-from app.services.floor3_locations import (
-    Floor3LocationError,
-    bind_finished_lot_to_floor3_pallet,
-    clear_pallet,
-)
+from app.services.floor3_locations import Floor3LocationError, clear_pallet
 from app.services.location_candidates import operational_location_issue
 from app.services.location_candidates import claim_active_placed_location
 from app.services.warehouse_inventory import (
@@ -69,6 +65,7 @@ class WarehouseStocktakeBatchItem:
     stock_date: date | None = None
     lot_id: int | None = None
     expected_version: int | None = None
+    source_kind: Literal["existing_stocktake", "partner_transfer"] | None = None
 
 
 class WarehouseStocktakeBatchError(ValueError):
@@ -80,25 +77,30 @@ class WarehouseStocktakeBatchError(ValueError):
 def stocktake_batch_request_hash(
     *, batch_id: str, items: list[WarehouseStocktakeBatchItem]
 ) -> str:
+    def canonical_item(item: WarehouseStocktakeBatchItem) -> dict[str, object]:
+        value: dict[str, object] = {
+            "client_item_id": item.client_item_id,
+            "operation": item.operation,
+            "location_id": item.location_id,
+            "expected_layout_version": item.expected_layout_version,
+            "quantity": item.quantity,
+            "inventory_type": item.inventory_type,
+            "unit": item.unit,
+            "customer_id": item.customer_id,
+            "product_id": item.product_id,
+            "stock_date": item.stock_date.isoformat() if item.stock_date else None,
+            "lot_id": item.lot_id,
+            "expected_version": item.expected_version,
+        }
+        # Keep the legacy request hash stable for clients that do not send this
+        # newly added field. Explicit source selections remain part of the hash.
+        if item.source_kind is not None:
+            value["source_kind"] = item.source_kind
+        return value
+
     canonical = {
         "batch_id": batch_id,
-        "items": [
-            {
-                "client_item_id": item.client_item_id,
-                "operation": item.operation,
-                "location_id": item.location_id,
-                "expected_layout_version": item.expected_layout_version,
-                "quantity": item.quantity,
-                "inventory_type": item.inventory_type,
-                "unit": item.unit,
-                "customer_id": item.customer_id,
-                "product_id": item.product_id,
-                "stock_date": item.stock_date.isoformat() if item.stock_date else None,
-                "lot_id": item.lot_id,
-                "expected_version": item.expected_version,
-            }
-            for item in items
-        ],
+        "items": [canonical_item(item) for item in items],
     }
     return sha256(
         json.dumps(
@@ -169,6 +171,7 @@ def stocktake_batch_replay(
                         "version_after": values[11],
                         "status_after": values[12],
                         "released_pallet_id": values[13],
+                        "source_kind": values[14] if len(values) > 14 else None,
                     }
                     for values in compact["items"]
                 ],
@@ -214,6 +217,7 @@ def stocktake_batch_audit_details(
                 row.get("version_after"),
                 row.get("status_after"),
                 row.get("released_pallet_id"),
+                row.get("source_kind"),
             ]
             for row in result.get("items", [])
         ],
@@ -723,6 +727,7 @@ def _preflight_add(
         or item.stock_date is None
         or item.lot_id is not None
         or item.expected_version is not None
+        or item.source_kind not in {None, "existing_stocktake", "partner_transfer"}
     ):
         raise WarehouseStocktakeBatchError(
             "盘点新增字段不完整，且库存类型与单位必须严格匹配", 422
@@ -768,10 +773,6 @@ def _preflight_add(
         raise WarehouseStocktakeBatchError(
             "待送区不允许通过普通盘点直接新增库存", 409
         )
-    if item.inventory_type == "finished" and location.storage_type == "rack":
-        raise WarehouseStocktakeBatchError(
-            "成品盘点新增需要绑定真实栈板，当前不支持货架格", 409
-        )
     _, product = _active_customer_product(
         db,
         customer_id=item.customer_id,
@@ -793,6 +794,7 @@ def _preflight_decrease(
         or item.customer_id is not None
         or item.product_id is not None
         or item.stock_date is not None
+        or item.source_kind is not None
     ):
         raise WarehouseStocktakeBatchError(
             "盘点调减只允许填写货位、批次、版本和数量", 422
@@ -1011,6 +1013,12 @@ def _execute_add(
     assert item.customer_id is not None
     assert item.product_id is not None
     assert item.stock_date is not None
+    assert item.source_kind in {None, "existing_stocktake", "partner_transfer"}
+    source_label = (
+        "合作纸箱厂搬入"
+        if item.source_kind == "partner_transfer"
+        else "现场盘点发现"
+    )
     if item.inventory_type == "finished":
         current_pallet = db.scalar(
             select(InventoryPallet).where(
@@ -1026,24 +1034,13 @@ def _execute_add(
             quantity=item.quantity,
             stock_date=item.stock_date,
             source_type="stocktake",
-            remarks=f"盘点批次 {batch_id}",
+            remarks=f"{source_label}；盘点批次 {batch_id}",
             operator_id=operator_id,
             idempotency_key=subkey,
             pallet_id=current_pallet.id if current_pallet is not None else None,
-            movement_reason="盘点新增",
+            movement_reason=f"盘点新增（{source_label}）",
             expected_layout_version=item.expected_layout_version,
         )
-        if lot.pallet_item is None:
-            bind_finished_lot_to_floor3_pallet(
-                db,
-                lot=lot,
-                operator_id=operator_id,
-                pallet_id=(
-                    current_pallet.id if current_pallet is not None else None
-                ),
-                allow_operational_location=True,
-                require_no_live_inventory=current_pallet is None,
-            )
     else:
         product = db.get(Product, item.product_id)
         assert product is not None
@@ -1068,10 +1065,10 @@ def _execute_add(
             crease_middle_mm=product.crease_middle_mm,
             crease_right_mm=product.crease_right_mm,
             cutting_note=product.report_notes,
-            remarks=f"盘点批次 {batch_id}",
+            remarks=f"{source_label}；盘点批次 {batch_id}",
             operator_id=operator_id,
             idempotency_key=subkey,
-            movement_reason="盘点新增",
+            movement_reason=f"盘点新增（{source_label}）",
             expected_layout_version=item.expected_layout_version,
         )
         lot = replace_semi_finished_lot_allowed_products(
@@ -1099,6 +1096,7 @@ def _execute_add(
         "version_after": int(lot.version),
         "status_after": lot.status,
         "released_pallet_id": None,
+        "source_kind": item.source_kind or "existing_stocktake",
     }
 
 

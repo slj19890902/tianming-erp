@@ -1044,7 +1044,7 @@ test("stocktake location gates reject unsupported floors and dispatch while pres
   assert.match(stocktakeLocationBlockReason({ ...ground, position_status: "unplaced" }), /正式地图/);
 
   const rack = { ...ground, location_code: "3F-F1-R01", storage_type: "rack" };
-  assert.match(stocktakeAddBlockReason(rack, "finished"), /成品.*不支持货架位/);
+  assert.equal(stocktakeAddBlockReason(rack, "finished"), null);
   assert.equal(stocktakeAddBlockReason({ ...rack, warehouse_type: "semi_finished" }, "semi_finished"), null);
 });
 
@@ -1131,7 +1131,7 @@ test("stocktake batch strips display fields and never emits remove semantics", (
   assert.deepEqual(payload, {
     idempotency_key: "stocktake-batch-key", confirmed: true,
     items: [
-      { client_item_id: "add-1", operation: "add", location_id: 21, expected_layout_version: 3, customer_id: 7, product_id: 99, inventory_type: "finished", unit: "boxes", quantity: 20, stock_date: "2026-08-13" },
+      { client_item_id: "add-1", operation: "add", location_id: 21, expected_layout_version: 3, customer_id: 7, product_id: 99, inventory_type: "finished", unit: "boxes", quantity: 20, stock_date: "2026-08-13", source_kind: "existing_stocktake" },
       { client_item_id: "dec-1", operation: "decrease", location_id: 21, expected_layout_version: 3, lot_id: 88, expected_version: 4, quantity: 10 }
     ]
   });

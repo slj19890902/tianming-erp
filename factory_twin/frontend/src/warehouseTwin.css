@@ -1488,6 +1488,10 @@ body.warehouse-twin-page {
 .twin-move-draft-actions button { min-height: 31px; padding: 5px 10px; border: 1px solid #9fb1b8; border-radius: 3px; color: #405863; background: #fff; font-size: 9px; font-weight: 800; }
 .twin-move-draft-actions button.confirm { border-color: #0f766e; color: #fff; background: #0f766e; }
 .twin-move-draft-actions button:disabled { cursor: not-allowed; opacity: .45; }
+.twin-stocktake-label-results { min-width: 210px; padding: 7px; display: grid; align-content: center; gap: 5px; border: 1px solid #86b9ad; border-radius: 4px; background: #ecfdf5; }
+.twin-stocktake-label-results > b { color: #0f665f; font-size: 9px; }
+.twin-stocktake-label-results > span { display: flex; gap: 5px; flex-wrap: wrap; }
+.twin-stocktake-label-results button { padding: 5px 8px; border: 1px solid #0f766e; border-radius: 3px; color: #0f5d56; background: #fff; font-size: 8px; font-weight: 800; }
 
 @media (max-width: 880px) {
   .warehouse-twin-shell.move-mode { grid-template-rows: auto auto minmax(0, 1fr) auto; }
@@ -1737,4 +1741,287 @@ body.warehouse-twin-page {
   .twin-workspace.merge-active.layers-open.context-collapsed {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* P1-126: keep the measured warehouse map visually consistent with the ERP shell. */
+body.warehouse-twin-page {
+  --erp-bg: #f5f5f7;
+  --erp-panel: #ffffff;
+  --erp-sidebar: #fbfbfd;
+  --erp-line: #e8e8ed;
+  --erp-line-strong: #d2d2d7;
+  --erp-text: #1d1d1f;
+  --erp-text-secondary: #424245;
+  --erp-muted: #86868b;
+  --erp-primary: #0071e3;
+  --erp-primary-hover: #0077ed;
+  --erp-blue-soft: #e5f0ff;
+  --erp-success: #00a87e;
+  --erp-success-soft: #e3f6ea;
+  --erp-warning: #9a5b00;
+  --erp-warning-soft: #fdf0db;
+  --erp-danger: #b91c1c;
+  --erp-danger-soft: #fee2e2;
+  --erp-radius-card: 18px;
+  --erp-radius-input: 10px;
+  --erp-radius-button: 980px;
+  --erp-shadow-card: 0 1px 3px rgba(0, 0, 0, .05), 0 4px 16px rgba(0, 0, 0, .04);
+  margin: 0;
+  color: var(--erp-text);
+  background: var(--erp-bg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Helvetica Neue", Helvetica, "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.warehouse-twin-shell,
+.warehouse-twin-shell * {
+  font-family: inherit !important;
+}
+.warehouse-twin-shell .ticket-barcode { font-family: Consolas, monospace !important; }
+
+.warehouse-twin-shell {
+  --twin-bg: var(--erp-bg);
+  --twin-panel: var(--erp-panel);
+  --twin-panel-strong: var(--erp-sidebar);
+  --twin-line: var(--erp-line-strong);
+  --twin-line-soft: var(--erp-line);
+  --twin-cyan: var(--erp-primary);
+  --twin-blue: var(--erp-primary);
+  --twin-muted: var(--erp-muted);
+  color: var(--erp-text);
+  background: var(--erp-bg);
+}
+.warehouse-twin-shell::before {
+  opacity: .24;
+  background-image: linear-gradient(rgba(0, 113, 227, .035) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 113, 227, .035) 1px, transparent 1px);
+}
+
+.twin-command-bar,
+.twin-command-bar.embedded {
+  border-color: var(--erp-line);
+  background: linear-gradient(90deg, #fff, #fbfbfd 72%, #f4f8ff);
+  box-shadow: var(--erp-shadow-card);
+}
+.twin-toolbar {
+  border-color: var(--erp-line);
+  background: var(--erp-sidebar);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
+}
+.twin-layer-rail,
+.twin-context-rail,
+.twin-inspector,
+.twin-stage {
+  border-color: var(--erp-line);
+  border-radius: var(--erp-radius-card);
+  background: var(--erp-panel);
+  box-shadow: var(--erp-shadow-card);
+}
+.twin-context-rail > header,
+.twin-inspector > header {
+  border-color: var(--erp-line);
+  background: var(--erp-sidebar);
+}
+.twin-context-rail > header { border-radius: var(--erp-radius-card) var(--erp-radius-card) 0 0; }
+.twin-inspector > header { border-radius: var(--erp-radius-card) var(--erp-radius-card) 0 0; }
+.twin-stage { background: #f7f8fa; }
+
+.twin-brand h1,
+.twin-context-rail > header h2,
+.twin-inspector > header h2,
+.twin-stage-heading b,
+.twin-context-zone h3,
+.twin-location-card-title b,
+.twin-location-item h4 { color: var(--erp-text); }
+.twin-brand p,
+.twin-command-status small,
+.twin-global-search > small,
+.twin-empty-selection > p,
+.twin-object-card > p,
+.twin-view-note,
+.twin-stage-heading > span { color: var(--erp-muted); }
+.twin-brand small,
+.twin-context-rail > header small,
+.twin-inspector header small,
+.twin-stage-heading small,
+.twin-location-card-title small,
+.twin-inventory-title small { color: var(--erp-primary); }
+
+.warehouse-twin-shell input:not([type="checkbox"]):not([type="radio"]),
+.warehouse-twin-shell select,
+.warehouse-twin-shell textarea {
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid var(--erp-line-strong);
+  border-radius: var(--erp-radius-input);
+  outline: none;
+  color: var(--erp-text);
+  background: #fff;
+  transition: border-color .15s, box-shadow .15s;
+}
+.warehouse-twin-shell input:not([type="checkbox"]):not([type="radio"]):focus,
+.warehouse-twin-shell select:focus,
+.warehouse-twin-shell textarea:focus {
+  border-color: var(--erp-primary);
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, .15);
+}
+.twin-search {
+  min-height: 36px;
+  height: 36px;
+  border-color: var(--erp-line-strong);
+  border-radius: var(--erp-radius-input);
+  background: #fff;
+}
+.twin-search input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: 0;
+  height: 100%;
+  padding: 0 12px;
+  border: 0;
+  border-left: 1px solid var(--erp-line);
+  border-radius: 0;
+  box-shadow: none;
+}
+.twin-search:focus-within {
+  border-color: var(--erp-primary);
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, .15);
+}
+
+:is(
+  .twin-ledger-link,
+  .twin-floor-switch button,
+  .twin-operation-modes button,
+  .twin-segmented button,
+  .twin-camera-presets button,
+  .twin-reset,
+  .twin-layer-toggle,
+  .twin-warehouse-search-toggle,
+  .twin-delayed-toggle,
+  .twin-location-edit-toggle,
+  .twin-area-policy-toggle,
+  .twin-save-location-layout,
+  .twin-cancel-location-layout,
+  .twin-toolbar-move-actions button,
+  .twin-primary-action,
+  .twin-move-draft-actions button,
+  .twin-stocktake-label-results button
+) {
+  min-height: 32px;
+  padding: 5px 14px;
+  border-color: var(--erp-line-strong);
+  border-radius: var(--erp-radius-button);
+  color: var(--erp-text-secondary);
+  background: #fff;
+  font-weight: 600;
+  box-shadow: none;
+  transition: background .15s, border-color .15s, color .15s, box-shadow .15s;
+}
+:is(
+  .twin-ledger-link,
+  .twin-floor-switch button,
+  .twin-operation-modes button,
+  .twin-segmented button,
+  .twin-camera-presets button,
+  .twin-reset,
+  .twin-layer-toggle,
+  .twin-warehouse-search-toggle,
+  .twin-delayed-toggle,
+  .twin-location-edit-toggle,
+  .twin-area-policy-toggle,
+  .twin-toolbar-move-actions button
+):hover {
+  border-color: #b8b8c0;
+  color: var(--erp-text);
+  background: var(--erp-bg);
+}
+:is(
+  .twin-floor-switch button.active,
+  .twin-operation-modes button.active,
+  .twin-segmented button.active,
+  .twin-layer-toggle.active,
+  .twin-warehouse-search-toggle.active,
+  .twin-delayed-toggle.active,
+  .twin-location-edit-toggle.active,
+  .twin-area-policy-toggle.active,
+  .twin-toolbar-move-actions button.active,
+  .twin-primary-action,
+  .twin-save-location-layout
+) {
+  border-color: var(--erp-primary);
+  color: #fff;
+  background: var(--erp-primary);
+  box-shadow: 0 4px 12px rgba(0, 113, 227, .24);
+}
+.twin-floor-switch button.active b { color: #fff; }
+:is(.twin-primary-action, .twin-save-location-layout):hover { background: var(--erp-primary-hover); }
+.twin-move-draft-actions button.confirm {
+  border-color: var(--erp-success);
+  color: #fff;
+  background: var(--erp-success);
+  box-shadow: 0 4px 12px rgba(0, 168, 126, .22);
+}
+.twin-operation-modes button.warning {
+  border-color: #d49a46;
+  color: var(--erp-warning);
+  background: var(--erp-warning-soft);
+}
+.twin-cancel-location-layout {
+  border-color: #e7c983;
+  color: var(--erp-warning);
+  background: #fffaf0;
+}
+
+.twin-layer-rail > button,
+.twin-search-result-list > button,
+.twin-location-card,
+.twin-object-card,
+.twin-empty-selection,
+.twin-search-results,
+.twin-inventory-card,
+.twin-location-item,
+.twin-area-lot,
+.twin-move-draft-list article,
+.twin-stocktake-label-results {
+  border-color: var(--erp-line);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: none;
+}
+.twin-layer-rail > button.active,
+.twin-search-result-list > button.selected,
+.twin-search-result-list > button:hover {
+  border-color: #a9cdf5;
+  color: var(--erp-primary);
+  background: var(--erp-blue-soft);
+  box-shadow: inset 3px 0 var(--erp-primary);
+}
+.twin-stage-heading > div {
+  border-color: var(--erp-primary);
+  border-radius: 10px;
+  color: var(--erp-text);
+  background: rgba(255, 255, 255, .94);
+  box-shadow: var(--erp-shadow-card);
+}
+.twin-stage-heading > span {
+  border-radius: var(--erp-radius-button);
+  background: rgba(255, 255, 255, .94);
+  box-shadow: var(--erp-shadow-card);
+}
+.twin-command-status b,
+.twin-toolbar-summary b,
+.twin-context-metrics b,
+.twin-zone-summary b,
+.twin-inventory-title > span { color: var(--erp-primary); }
+.live { color: var(--erp-success); }
+.twin-stocktake-label-results {
+  border-color: #9fd8c5;
+  background: var(--erp-success-soft);
+}
+.twin-stocktake-label-results > b { color: #0a7d3c; }
+.warehouse-twin-shell button:disabled { cursor: not-allowed; opacity: .45; box-shadow: none; }
+
+@media (max-width: 1180px) {
+  .twin-layer-rail,
+  .twin-context-rail,
+  .twin-inspector,
+  .twin-stage { border-radius: 12px; }
 }

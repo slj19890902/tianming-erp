@@ -11,7 +11,8 @@ function draftIdentity(draft) {
       positiveInteger(draft.customer_id),
       positiveInteger(draft.product_id),
       draft.inventory_type,
-      draft.unit
+      draft.unit,
+      draft.source_kind
     ].join(":");
   }
   if (draft?.operation === "decrease") return `decrease:${positiveInteger(draft.lot_id) || ""}`;
@@ -59,11 +60,8 @@ export function stocktakeAddBlockReason(location, inventoryType) {
     return "所选货位类型与当前库存类型不匹配。";
   }
   const storageType = String(location.storage_type || "").trim().toLowerCase();
-  if (inventoryType === "finished" && storageType === "rack") {
-    return "本轮成品盘点新增尚不支持货架位，请选择正式地面位。";
-  }
-  if (inventoryType === "finished" && !["ground", "temporary_aisle"].includes(storageType)) {
-    return "本轮成品盘点新增只支持正式地面位。";
+  if (inventoryType === "finished" && !["ground", "rack", "temporary_aisle"].includes(storageType)) {
+    return "该成品货位的存储方式尚不支持盘点新增。";
   }
   if (inventoryType === "semi_finished" && !["ground", "rack", "temporary_aisle"].includes(storageType)) {
     return "该半成品货位的存储方式尚不支持盘点新增。";
@@ -171,6 +169,7 @@ export function validateStocktakeDraft(draft) {
   if (draft.operation === "add") {
     if (!positiveInteger(draft.customer_id) || !positiveInteger(draft.product_id)) return "盘点新增必须选择已有客户和已有产品。";
     if (!['finished', 'semi_finished'].includes(draft.inventory_type)) return "盘点新增库存类型无效。";
+    if (draft.source_kind && !['existing_stocktake', 'partner_transfer'].includes(draft.source_kind)) return "请选择成品库存的实际来源。";
     const expectedUnit = draft.inventory_type === "finished" ? "boxes" : "sheets";
     if (draft.unit !== expectedUnit) return `该库存类型的固定单位必须是 ${expectedUnit}。`;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(draft.stock_date || ""))) return "请选择有效库存日期。";
@@ -199,7 +198,7 @@ export function upsertStocktakeDraft(drafts, draft) {
     if (conflictingAdd) {
       return {
         items: drafts || [],
-        error: "同一货位不能在一个盘点批次中新增不同客户、产品、库存类型或单位。"
+        error: "同一货位不能在一个盘点批次中新增不同客户、产品、库存类型、单位或来源。"
       };
     }
   }
@@ -239,7 +238,8 @@ export function buildStocktakeBatchPayload(idempotencyKey, drafts) {
       inventory_type: draft.inventory_type,
       unit: draft.unit,
       quantity: draft.quantity,
-      stock_date: draft.stock_date
+      stock_date: draft.stock_date,
+      source_kind: draft.source_kind || "existing_stocktake"
     } : {
       client_item_id: draft.client_item_id,
       operation: "decrease",

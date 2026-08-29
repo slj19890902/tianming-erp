@@ -287,7 +287,7 @@ def preflight_warehouse_movement_batch(
             db,
             target,
             warehouse_types={"finished", "shared"},
-            pallet_storage_only=True,
+            pallet_storage_only=item.operation == "pallet_move",
             require_published=True,
             require_map_geometry=True,
             required_inventory_type="finished",

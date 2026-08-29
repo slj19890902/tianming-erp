@@ -445,7 +445,7 @@ def test_phase2c9_admin_operations_and_read_only_locating_share_the_measured_map
     assert "buildMoveBatchPayload(moveBatchIdempotencyKey, moveDrafts)" in SOURCE
     assert "idempotency_key: idempotencyKey" in MOVE_DRAFT
     assert "buildStocktakeBatchPayload(stocktakeBatchIdempotencyKey, stocktakeDrafts)" in SOURCE
-    assert 'inventoryType === "finished" && storageType === "rack"' in STOCKTAKE_DRAFT
+    assert 'inventoryType === "finished" && !["ground", "rack", "temporary_aisle"].includes(storageType)' in STOCKTAKE_DRAFT
     assert '["ground", "rack", "temporary_aisle"]' in STOCKTAKE_DRAFT
     assert "stocktakeLocationBlockReason" in STOCKTAKE_DRAFT
     assert '>前往移货</button>' in SOURCE

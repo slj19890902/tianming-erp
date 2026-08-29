@@ -1097,6 +1097,7 @@ class TwinStocktakeBatchItemPayload(BaseModel):
     stock_date: date | None = None
     lot_id: int | None = Field(default=None, gt=0)
     expected_version: int | None = Field(default=None, gt=0)
+    source_kind: Literal["existing_stocktake", "partner_transfer"] | None = None
 
     @field_validator("client_item_id")
     @classmethod
@@ -1121,6 +1122,7 @@ class TwinStocktakeBatchItemPayload(BaseModel):
                 or self.stock_date is None
                 or self.lot_id is not None
                 or self.expected_version is not None
+                or self.source_kind not in {None, "existing_stocktake", "partner_transfer"}
             ):
                 raise ValueError(
                     "盘点新增必须填写货位、客户、产品、类型、匹配单位、数量和库存日期"
@@ -1133,6 +1135,7 @@ class TwinStocktakeBatchItemPayload(BaseModel):
             or self.customer_id is not None
             or self.product_id is not None
             or self.stock_date is not None
+            or self.source_kind is not None
         ):
             raise ValueError("盘点调减只允许填写货位、批次、版本和数量")
         return self
@@ -8341,6 +8344,7 @@ def confirm_twin_stocktake_batch(
             stock_date=item.stock_date,
             lot_id=item.lot_id,
             expected_version=item.expected_version,
+            source_kind=item.source_kind,
         )
         for item in payload.items
     ]

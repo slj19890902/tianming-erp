@@ -536,6 +536,19 @@ interface LocationCandidatesResponse {
   items: MoveCandidate[];
 }
 
+interface StocktakeBatchResultItem {
+  operation: "add" | "decrease";
+  lot_id: number;
+  location_id: number;
+  inventory_type: "finished" | "semi_finished";
+  version_after: number;
+  source_kind?: "existing_stocktake" | "partner_transfer" | null;
+}
+
+interface StocktakeBatchResult {
+  items: StocktakeBatchResultItem[];
+}
+
 interface WarehouseMoveSource {
   source_key: string;
   operation: "pallet_move" | "lot_transfer";
@@ -1577,7 +1590,9 @@ export function WarehouseTwinApp() {
   const [moveDrafts, setMoveDrafts] = useState<WarehouseMoveDraft[]>([]);
   const [moveBatchIdempotencyKey, setMoveBatchIdempotencyKey] = useState(() => operationKey("warehouse-move-batch"));
   const [moveBatchBusy, setMoveBatchBusy] = useState(false);
-  const [moveAction, setMoveAction] = useState<"relocate" | "merge" | "stocktake" | "ground">("relocate");
+  const [moveAction, setMoveAction] = useState<"relocate" | "merge" | "stocktake" | "ground">(
+    query.get("action") === "stocktake" ? "stocktake" : "relocate"
+  );
   const [mergeSources, setMergeSources] = useState<PalletMergeCandidate[]>([]);
   const [mergeTarget, setMergeTarget] = useState<PalletMergeCandidate | null>(null);
   const [mergeCustomerId, setMergeCustomerId] = useState("");
@@ -1590,6 +1605,7 @@ export function WarehouseTwinApp() {
   const [stocktakeBatchIdempotencyKey, setStocktakeBatchIdempotencyKey] = useState(() => operationKey("warehouse-stocktake-batch"));
   const [stocktakeBatchBusy, setStocktakeBatchBusy] = useState(false);
   const [stocktakeInventoryType, setStocktakeInventoryType] = useState<StocktakeInventoryType>("finished");
+  const [stocktakeSourceKind, setStocktakeSourceKind] = useState<"existing_stocktake" | "partner_transfer">("existing_stocktake");
   const [stocktakeCustomerQuery, setStocktakeCustomerQuery] = useState("");
   const [stocktakeCustomers, setStocktakeCustomers] = useState<CustomerOption[]>([]);
   const [stocktakeCustomerId, setStocktakeCustomerId] = useState("");
@@ -1602,6 +1618,7 @@ export function WarehouseTwinApp() {
   const [rackFocusId, setRackFocusId] = useState<string | null>(null);
   const [stocktakeLotId, setStocktakeLotId] = useState<number | null>(null);
   const [stocktakeDecreaseQuantity, setStocktakeDecreaseQuantity] = useState("");
+  const [stocktakeLastResult, setStocktakeLastResult] = useState<StocktakeBatchResultItem[]>([]);
   const [groundLayoutTargetCount, setGroundLayoutTargetCount] = useState("1");
   const [groundNumberingOrigin, setGroundNumberingOrigin] = useState<"south" | "north" | "west" | "east">("south");
   const [groundRowDirection, setGroundRowDirection] = useState<"from_aisle_inward" | "from_inside_outward">("from_aisle_inward");
@@ -1716,7 +1733,7 @@ export function WarehouseTwinApp() {
     setMoveCandidatesLoading(true);
     setMoveCandidatesError("");
     requestJson<LocationCandidatesResponse>(
-      "/api/warehouse/location-candidates?inventory_type=finished&empty_only=true&pallet_storage_only=true&include_hierarchy=true&published_only=true"
+      "/api/warehouse/location-candidates?inventory_type=finished&empty_only=true&pallet_storage_only=false&include_hierarchy=true&published_only=true"
     ).then((value) => {
       if (active) setMoveCandidates(value.items || []);
     }).catch((reason: Error) => {
@@ -1914,9 +1931,15 @@ export function WarehouseTwinApp() {
       .map((item) => item.target_location_id),
     [moveDrafts, moveSource?.source_key]
   );
+  const eligibleMoveCandidates = useMemo(
+    () => moveSource?.operation === "pallet_move"
+      ? moveCandidates.filter((item) => String(item.storage_type || "").toLowerCase() !== "rack")
+      : moveCandidates,
+    [moveCandidates, moveSource?.operation]
+  );
   const mappedMoveTargets = useMemo(
-    () => intersectMappedMoveTargets(moveCandidates, visualLocations, moveReservedTargetIds, columnConflictLocationIds),
-    [moveCandidates, visualLocations, moveReservedTargetIds, columnConflictLocationIds]
+    () => intersectMappedMoveTargets(eligibleMoveCandidates, visualLocations, moveReservedTargetIds, columnConflictLocationIds),
+    [eligibleMoveCandidates, visualLocations, moveReservedTargetIds, columnConflictLocationIds]
   );
   const moveTargetFloors = useMemo(
     () => [...new Set(mappedMoveTargets.map((item) => item.floor_code))]
@@ -3881,7 +3904,7 @@ export function WarehouseTwinApp() {
       inventory_code: selectedStocktakeProduct.product_code || selectedStocktakeProduct.customer_material_code || String(selectedStocktakeProduct.product_id),
       product_name: selectedStocktakeProduct.product_name, inventory_type: stocktakeInventoryType,
       unit: stocktakeInventoryType === "finished" ? "boxes" : "sheets", quantity,
-      stock_date: stocktakeStockDate
+      stock_date: stocktakeStockDate, source_kind: stocktakeSourceKind
     };
     const result = upsertStocktakeDraft(stocktakeDrafts, draft);
     if (result.error) { setWarehouseOperationMessage(result.error); return; }
@@ -3937,17 +3960,18 @@ export function WarehouseTwinApp() {
     setStocktakeBatchBusy(true);
     setWarehouseOperationMessage("");
     try {
-      await mutateJson(
+      const result = await mutateJson(
         "/api/warehouse/twin-operations/stocktake-batches",
         "POST",
         buildStocktakeBatchPayload(stocktakeBatchIdempotencyKey, stocktakeDrafts)
-      );
+      ) as StocktakeBatchResult | null;
       await refreshDashboard();
       setStocktakeDrafts(clearStocktakeDrafts());
+      setStocktakeLastResult((result?.items || []).filter((item) => item.operation === "add"));
       setStocktakeLotId(null);
       setStocktakeDecreaseQuantity("");
       setStocktakeBatchIdempotencyKey(operationKey("warehouse-stocktake-batch"));
-      setWarehouseOperationMessage("盘点调整已整批成功，地图已刷新。");
+      setWarehouseOperationMessage("盘点调整已整批成功，地图已刷新；新增成品可立即打印位置和产品标签。");
     } catch (reason) {
       const message = (reason as Error).message;
       setWarehouseOperationMessage(`盘点整批提交失败：${message}。解决方法：${stocktakeBlockResolution(message)} 页面草稿与本次幂等键已保留，可核对后重试。`);
@@ -5322,6 +5346,7 @@ export function WarehouseTwinApp() {
               <button type="button" className={stocktakeInventoryType === "semi_finished" ? "active" : ""} disabled={Boolean(selectedLocationSemiFinishedAddBlockReason)} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("semi_finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>半成品 · 固定单位张</button>
             </div>
             {selectedLocationAddBlockReason && <p className="twin-stocktake-block-reason">当前新增类型不可用：{selectedLocationAddBlockReason}</p>}
+            <label><span>库存实际来源</span><select value={stocktakeSourceKind} onChange={(event) => setStocktakeSourceKind(event.target.value as typeof stocktakeSourceKind)}><option value="existing_stocktake">本厂现场盘点发现</option><option value="partner_transfer">合作纸箱厂搬入</option></select></label>
             <label><span>1　查找已有客户</span><input value={stocktakeCustomerQuery} onChange={(event) => { setStocktakeCustomerQuery(event.target.value); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }} placeholder="客户全称、中文简称、缩写或客户编码" /></label>
             <label><span>确认已有客户</span><select value={stocktakeCustomerId} onChange={(event) => { setStocktakeCustomerId(event.target.value); setStocktakeProductQuery(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}><option value="">请选择客户</option>{stocktakeCustomers.map((item) => <option key={item.id} value={item.id}>{item.chinese_short_name ? `${item.chinese_short_name} · ` : ""}{item.customer_code ? `${item.customer_code} · ` : ""}{item.name}</option>)}</select></label>
             <label><span>2　筛选该客户已有产品</span><input value={stocktakeProductQuery} disabled={!stocktakeCustomerId} onChange={(event) => { setStocktakeProductQuery(event.target.value); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }} placeholder={stocktakeCustomerId ? "存货编码、客户料号或产品名称；留空显示候选" : "请先确认客户"} /></label>
@@ -5508,6 +5533,7 @@ export function WarehouseTwinApp() {
           <button type="button" disabled={stocktakeBatchBusy} onClick={() => removeStocktakeDraftItem(item.client_item_id)}>撤销</button>
         </article>)}</div>
         <div className="twin-move-draft-actions"><button type="button" disabled={!stocktakeDrafts.length || stocktakeBatchBusy} onClick={cancelStocktakeDrafts}>取消全部草稿</button><button type="button" className="confirm" disabled={!stocktakeDrafts.length || stocktakeBatchBusy} onClick={confirmStocktakeDrafts}>{stocktakeBatchBusy ? "正在一次提交…" : `一次确认 ${stocktakeDrafts.length || ""} 条`}</button></div>
+        {stocktakeLastResult.length > 0 && <div className="twin-stocktake-label-results"><b>本次新增已入账，可贴标签</b>{stocktakeLastResult.map((item) => <span key={`stocktake-label-${item.lot_id}`}><button type="button" onClick={() => window.open(`/location-label.html?location_id=${encodeURIComponent(item.location_id)}`, "_blank", "noopener")}>打印位置标签</button>{item.inventory_type === "finished" && <button type="button" onClick={() => window.open(`/static/finished-goods-label.html?lot_id=${encodeURIComponent(item.lot_id)}&version=${encodeURIComponent(item.version_after)}`, "_blank", "noopener")}>打印产品标签</button>}</span>)}</div>}
       </> : moveAction === "merge" ? <>
         <div className="twin-move-draft-heading"><b>{mergeSources.length ? `已选 ${mergeSources.length} 块` : "请选择货位"}</b></div>
         <div className="twin-move-draft-list twin-merge-draft-line">{mergeSources.map((item) => <article className={mergeTarget?.pallet_id === item.pallet_id ? "merge-target" : ""} key={item.client_item_id || item.pallet_id}>

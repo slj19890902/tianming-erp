@@ -23,7 +23,10 @@ def test_embedded_map_uses_one_compact_chinese_command_row() -> None:
     assert ".warehouse-twin-shell.embedded-shell" in CSS
     assert ".warehouse-twin-shell.embedded-shell .twin-command-bar" in CSS
     assert 'className="twin-toolbar"' in SOURCE
-    assert "全仓查找" in SOURCE
+    toolbar = SOURCE[SOURCE.index('<section className="twin-toolbar">'):SOURCE.index('<section className={`twin-workspace')]
+    assert "twin-warehouse-search-toggle" not in toolbar
+    assert '<header><h2>查货</h2></header>' in SOURCE
+    assert "setSearchPanelOpen(true)" in SOURCE[SOURCE.index("const returnToLookupMode"):SOURCE.index("const enterWarehouseMoveMode")]
     for obsolete in (
         "TIANMING WAREHOUSE",
         "WAREHOUSE SEARCH",
@@ -100,6 +103,22 @@ def test_move_actions_use_the_toolbar_space_and_inventory_heading_is_removed() -
     assert '!!dashboard?.delayed_dispatch_relocation?.candidate_count' in toolbar
     assert "库存与库位" not in inspector
     assert '<header><h2>' not in inspector
+
+
+def test_area_planning_uses_compact_adaptive_fields_and_short_actions() -> None:
+    planner = SOURCE[SOURCE.index('className="twin-zone-simple-planner"'):SOURCE.index('className="twin-mold-rack-planner"')]
+    assert '<b>用途与容量</b>' in planner
+    assert ': "确认"}</button>' in planner
+    assert '>编辑</button>' in planner
+    assert '>货位/货架</button>' in planner
+    assert '>发布</button>' in planner
+    for obsolete in ("确认并启用此区域", "编辑区域", "整理货位/货架", "预览并发布"):
+        assert obsolete not in planner
+    assert "grid-template-columns: repeat(auto-fit, minmax(130px, 1fr))" in CSS
+    assert ".twin-zone-simple-planner > header" in CSS
+    assert ".twin-zone-simple-planner > .twin-location-point-planner" in CSS
+    assert ".twin-zone-simple-planner > .twin-region-planning-actions" in CSS
+    assert "overflow-y: hidden" in CSS
 
 
 def test_merge_panel_exposes_customer_and_inventory_filters() -> None:

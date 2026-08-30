@@ -40,6 +40,18 @@ test("map-first toolbar hides empty delayed dispatch and consolidates selective 
   assert.match(source, /type="checkbox" checked=\{selected\}/);
 });
 
+test("lookup has one entry and area planning uses short adaptive actions", () => {
+  const toolbar = source.slice(source.indexOf('<section className="twin-toolbar">'), source.indexOf('<section className={`twin-workspace'));
+  assert.doesNotMatch(toolbar, /twin-warehouse-search-toggle/);
+  assert.match(source, /<header><h2>查货<\/h2><\/header>/);
+  assert.match(source, /<b>用途与容量<\/b>/);
+  assert.match(source, /: "确认"\}<\/button>/);
+  assert.match(source, />编辑<\/button>/);
+  assert.match(source, />货位\/货架<\/button>/);
+  assert.match(source, />发布<\/button>/);
+  assert.doesNotMatch(source, />确认并启用此区域<\/button>/);
+});
+
 test("ordinary planning no longer offers tight automatic pallet packing", () => {
   assert.doesNotMatch(source, />自动均匀排布空闲系统货位</);
   assert.match(source, /系统不再强制把栈板紧贴均匀排布/);

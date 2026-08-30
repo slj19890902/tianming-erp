@@ -303,7 +303,7 @@ def test_region_planning_ui_and_label_page_are_explicit() -> None:
     label = (ROOT / "static/warehouse-rack-level-label.html").read_text(
         encoding="utf-8"
     )
-    for text in ("编辑区域", "整理货位/货架", "预览并发布"):
+    for text in (">编辑</button>", ">货位/货架</button>", ">发布</button>"):
         assert text in source
     for floor in ("2F", "4F", "5F"):
         assert f'<b>{floor}</b>' in source

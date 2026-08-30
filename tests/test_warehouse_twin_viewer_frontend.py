@@ -218,7 +218,7 @@ def test_unbound_measured_zone_does_not_offer_a_disconnected_capacity_review() -
     assert "尚未绑定正式区域" in SOURCE
     assert "直接使用下方简化表单确认用途、形式和容量" in SOURCE
     assert "选用现有未绑定区域" in SOURCE
-    assert "确认并启用此区域" in SOURCE
+    assert ': "确认"}</button>' in SOURCE
     assert "selectedAreaFeature.formal_binding_status === 'draft'" in SOURCE
     assert "区域绑定草稿待处理" in SOURCE
 
@@ -270,7 +270,8 @@ def test_published_policy_remains_operational_while_an_unrelated_layout_draft_ex
 
 
 def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location_pallets() -> None:
-    assert "全仓查找" in SOURCE
+    assert '<header><h2>查货</h2></header>' in SOURCE
+    assert 'aria-label="查货类型"' in SOURCE
     assert "库存编码定位" not in SOURCE
     assert "统一查货" in SOURCE
     assert 'const [searchPanelOpen, setSearchPanelOpen] = useState(true)' in SOURCE
@@ -288,11 +289,11 @@ def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location
 
 
 def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
-    assert "主要用来堆放" in SOURCE
-    assert "区域形式" in SOURCE
-    assert "最大可放栈板数" in SOURCE
-    assert "确认并启用此区域" in SOURCE
-    assert "系统自动完成保存、校验和启用；不会移动库存、栈板或产品" in SOURCE
+    assert "<span>用途</span>" in SOURCE
+    assert "<span>形式</span>" in SOURCE
+    assert "<span>最大栈板数</span>" in SOURCE
+    assert ': "确认"}</button>' in SOURCE
+    assert "保存区域设置，不移动库存" in SOURCE
     assert "/confirm-area`" in SOURCE
     assert 'primary_inventory_type: simpleAreaUsage' in SOURCE
     assert 'storage_layout: simpleAreaLayout' in SOURCE
@@ -305,7 +306,7 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert "主动留出通行、货物外伸和操作间距" in SOURCE
     assert "逻辑货位点（非实尺度）" in SOURCE
     assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
-    assert '区域规划 · 一次确认' in SOURCE
+    assert '<b>用途与容量</b>' in SOURCE
     assert "advancedAreaMaintenanceOpen && <div className=\"twin-layout-draft-workflow\"" in SOURCE
     assert "高级维护" in SOURCE
     assert '<aside className="twin-context-rail">' in SOURCE
@@ -389,7 +390,8 @@ def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
 
 def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> None:
     assert "库位布局" in SOURCE
-    assert "二维编辑" in SOURCE
+    assert "二维编辑" not in SOURCE
+    assert "二维平面" in SOURCE
     assert "等距视图仅查看库位与货物标签" in SOURCE
     assert "locationLayoutGeometry(" in SOURCE
     assert "/api/warehouse/spatial-layout/floors/${encodeURIComponent(floorCode)}/areas/${encodeURIComponent(areaCode)}" in SOURCE
@@ -415,7 +417,7 @@ def test_phase2c13_uses_2d_layout_mode_for_rack_and_area_spatial_modeling() -> N
     assert "层格数" in SOURCE
     assert "本层尚未分格" in SOURCE
     assert "level_cell_counts" in SOURCE
-    assert "地图发布后同步为模具台账逐层格位" in SOURCE
+    assert "发布后，成品和半成品货架会同步为稳定层格" in SOURCE
     assert "添加货架" in SOURCE
     assert "删除货架" in SOURCE
     assert "区域设置" in SOURCE

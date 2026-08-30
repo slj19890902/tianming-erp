@@ -4097,7 +4097,7 @@ export function WarehouseTwinApp() {
         ? "检测到当前楼层以前保留的高级维护草稿，员工仍只看到已发布地图；系统会保留该草稿。只要当前区域本身没有高级改动，仍可直接一次确认启用。"
         : raw.draft_control.has_other_floor_drafts
           ? `区域规划已开启；${(raw.draft_control.dirty_floor_codes || []).filter((code) => code !== floorCode).join("、") || "其他楼层"} 的草稿会独立保留，不影响当前楼层保存、校验和发布。`
-          : "区域规划已开启；选中区域后填写用途、形式和最大栈板数，一次确认即可启用。"
+          : "区域规划已开启：选择区域，填写用途、形式和容量后确认。"
       );
     } catch (reason) {
       const message = (reason as Error).message;
@@ -4911,7 +4911,7 @@ export function WarehouseTwinApp() {
       <div className="twin-operation-modes" role="tablist" aria-label="仓库地图操作模式">
         <button type="button" className={mapMode === "lookup" ? "active" : ""} onClick={returnToLookupMode}>查货</button>
         {(canExecuteWarehouse || canStocktake) && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}
-        {canEditLocations && <button type="button" className={mapMode === 'planning' ? 'active' : ''} disabled={spatialEditBusy} onClick={toggleLayoutEditor}>区域规划</button>}
+        {canEditLocations && <button type="button" className={mapMode === 'planning' ? 'active' : ''} disabled={spatialEditBusy} onClick={toggleLayoutEditor}>{mapMode === 'planning' ? '退出规划' : '区域规划'}</button>}
         {canEditLocations && staleLayoutDraft && <button type="button" className="warning" disabled={spatialEditBusy} onClick={rebuildStaleLayoutDraft}>放弃旧草稿并重新规划</button>}
       </div>
       {(canExecuteWarehouse || canStocktake) && mapMode === "move" && <div className="twin-toolbar-move-actions" role="tablist" aria-label="仓库地图操作类型">
@@ -4934,9 +4934,7 @@ export function WarehouseTwinApp() {
       </div>}
       <button type="button" className="twin-reset" onClick={() => { setCameraPreset("fit"); setViewResetToken((value) => value + 1); }}>全图复位</button>
       </div>
-      <button type="button" className={`twin-warehouse-search-toggle ${searchPanelOpen || searchResponse ? "active" : ""}`} aria-expanded={searchPanelOpen} onClick={() => setSearchPanelOpen((value) => !value)}>全仓查找{searchResponse ? ` ${searchType === "finished" ? searchProductGroups.length : searchResponse.resource_result_count}` : ""}</button>
       {!!dashboard?.delayed_dispatch_relocation?.candidate_count && <button type="button" className={`twin-delayed-toggle ${delayedDispatchOpen ? "active" : ""}`} aria-expanded={delayedDispatchOpen} onClick={() => setDelayedDispatchOpen((value) => !value)}>延期待送 {dashboard.delayed_dispatch_relocation.candidate_count}</button>}
-      {mapMode === "planning" && (viewMode === "2d" ? <button type="button" className={`twin-location-edit-toggle ${locationEditMode ? "active" : ""}`} disabled={!canEditLocations || spatialEditBusy} title={!canEditLocations ? "仅管理员可以规划区域" : "二维编辑先选择地图区域，再一次确认用途、形式和容量"} onClick={toggleLayoutEditor}>{locationEditMode ? "退出规划" : "开始规划"}</button> : <span className="twin-view-note">等距查看 · 详情见右侧</span>)}
       {mapMode === "planning" && floorCode === "1F" && viewMode === "2d" && canEditLocations && !locationEditMode && <button type="button" className={`twin-floor1-candidate-toggle ${floor1CandidatePlan ? "active" : ""}`} disabled={floor1CandidateBusy} onClick={previewFloor1FormalCandidates}>{floor1CandidateBusy ? "正在测算…" : "一楼区域自动生成"}</button>}
       {mapMode === "planning" && locationEditMode && (advancedAreaMaintenanceOpen || locationPointEditAreaCode) && <><button type="button" className="twin-save-location-layout" disabled={locationEditBusy || !activeLocationDraftCount} onClick={saveLocationDrafts}>{locationPointEditAreaCode ? "保存并固定" : "保存库位位置"} {activeLocationDraftCount || ""}</button><button type="button" className="twin-cancel-location-layout" disabled={locationEditBusy || (advancedAreaMaintenanceOpen && !activeLocationDraftCount)} onClick={locationPointEditAreaCode ? cancelLocationPointEditing : () => { setLocationDrafts({}); setSwapSourceLocationId(null); setLocationEditMessage("已取消未保存的库位位置草稿。"); }}>{locationPointEditAreaCode ? "取消点位调整" : "取消位置草稿"}</button></>}
       {mapMode === "planning" && locationEditMode && advancedAreaMaintenanceOpen && <div className="twin-layout-draft-workflow">
@@ -4959,7 +4957,7 @@ export function WarehouseTwinApp() {
       </aside>}
 
       {searchPanelOpen && <aside className="twin-context-rail">
-        <header><h2>全仓查找</h2></header>
+        <header><h2>查货</h2></header>
         <section className="twin-global-search">
           <div className="twin-context-heading"><b>统一查货</b>{search && <button type="button" onClick={() => { setSearch(""); setSearchResponse(null); setSearchError(""); setFocusedSearchItem(null); setFocusedSearchProductKey(null); setFocusedResource(null); setCameraFocusTarget(null); setAreaInventorySearch(""); }}>清除</button>}</div>
           {unlocatedFinishedCount > 0 && <div className="twin-unlocated-finished-blocker">
@@ -4973,7 +4971,7 @@ export function WarehouseTwinApp() {
               </button>)}
             </div>
           </div>}
-          <div className="twin-search-type-grid" role="tablist" aria-label="全仓查找类型">
+          <div className="twin-search-type-grid" role="tablist" aria-label="查货类型">
             <button type="button" className={searchType === "finished" ? "active" : ""} onClick={() => { setSearchType("finished"); setSearch(""); setSearchResponse(null); setFocusedResource(null); setFocusedSearchProductKey(null); }}>纸箱成品</button>
             <button type="button" className={searchType === "mold" ? "active" : ""} onClick={() => { setSearchType("mold"); setSearchResponse(null); setFocusedSearchItem(null); setFocusedSearchProductKey(null); }}>模具</button>
             <button type="button" className={searchType === "printing_plate" ? "active" : ""} onClick={() => { setSearchType("printing_plate"); setSearchResponse(null); setFocusedSearchItem(null); setFocusedSearchProductKey(null); }}>印刷版</button>
@@ -5404,13 +5402,13 @@ export function WarehouseTwinApp() {
             {locationEditMode && canEditLocations && selectedAreaFeature.capacity_review_status === 'confirmed' && !selectedAreaFeature.capacity_eligible && <div className="twin-location-readonly-note"><b>不计入长期容量</b></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature.capacity_review_status === 'excluded' && <div className="twin-location-readonly-note"><b>不计入长期容量</b></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature && <div className="twin-zone-simple-planner">
-              <header><div><small>当前规划区域</small><b>{formalAreaCodeDraft || selectedAreaFeature.feature_code} · {formalAreaNameDraft || employeeAreaName(selectedAreaFeature, { floorCode })}</b></div>{selectedAreaHasPublishedBinding && <span>已启用，可核对后更新</span>}</header>
-              {!selectedAreaFeature.formal_area_id && formalAreaOptions.length > 0 && <label><span>已有同楼层区域（如之前已建，可直接选）</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">使用地图规划编号，新建正式区域</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.area_code} · {employeeAreaName(area, { floorCode: area.floor_code })}</option>)}</select></label>}
-              <label><span>主要用来堆放</span><select value={simpleAreaUsage} onChange={(event) => setSimpleAreaUsage(event.target.value as InventoryUsage)}><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="raw_material">原材料</option><option value="mold">模具</option><option value="print_plate">印刷版</option><option value="temporary_turnover">临时周转</option></select></label>
-              <label><span>区域形式</span><select value={simpleAreaLayout} onChange={(event) => setSimpleAreaLayout(event.target.value as Exclude<StorageLayout, "mixed">)}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
-              <label><span>最大可放栈板数</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /><small>不放栈板的模具架、印版架等区域可填 0。</small></label>
-              <button type="button" className="confirm" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || simpleAreaCapacity === ""} onClick={confirmSelectedAreaOnce}>{spatialEditBusy ? "正在确认并启用…" : "确认并启用此区域"}</button>
-              <p>系统自动完成保存、校验和启用；不会移动库存、栈板或产品。</p>
+              <header><div><b>用途与容量</b></div>{selectedAreaHasPublishedBinding && <span>已启用，可更新</span>}</header>
+              {!selectedAreaFeature.formal_area_id && formalAreaOptions.length > 0 && <label className="twin-zone-simple-existing"><span>已有区域（可选）</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">按地图编号新建</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.area_code} · {employeeAreaName(area, { floorCode: area.floor_code })}</option>)}</select></label>}
+              <label><span>用途</span><select value={simpleAreaUsage} onChange={(event) => setSimpleAreaUsage(event.target.value as InventoryUsage)}><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="raw_material">原材料</option><option value="mold">模具</option><option value="print_plate">印刷版</option><option value="temporary_turnover">临时周转</option></select></label>
+              <label><span>形式</span><select value={simpleAreaLayout} onChange={(event) => setSimpleAreaLayout(event.target.value as Exclude<StorageLayout, "mixed">)}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
+              <label><span>最大栈板数</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /><small>模具架、印版架等可填 0。</small></label>
+              <button type="button" className="confirm" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || simpleAreaCapacity === ""} onClick={confirmSelectedAreaOnce}>{spatialEditBusy ? "确认中…" : "确认"}</button>
+              <p>保存区域设置，不移动库存。</p>
               {selectedAreaHasPublishedBinding && selectedAreaCreatesInventoryLocations && <div className="twin-location-point-planner">
                 <div><b>货位点位</b><small>{selectedAreaLocationCount} 个正式货位 · 只调整当前区域</small></div>
                 {locationPointEditAreaCode === selectedAreaCode ? <div className="actions">
@@ -5422,9 +5420,9 @@ export function WarehouseTwinApp() {
                 <p>{locationPointEditAreaCode === selectedAreaCode ? "请直接在二维地图拖到现场实际位置，可主动留出通行、货物外伸和操作间距；红色冲突必须先拖离。保存会同步权威排位，但不改库存、栈板绑定或数量。" : "点击后直接拖动空货位或有货货位；系统不再强制把栈板紧贴均匀排布。保存后查货、移货、盘点和手机版统一读取现场位置。"}</p>
               </div>}
               <div className="twin-region-planning-actions">
-                <button type="button" className={!advancedAreaMaintenanceOpen ? "active" : ""} disabled={Boolean(locationPointEditAreaCode)} onClick={() => { setAdvancedAreaMaintenanceOpen(false); setAreaPolicyEditMode(true); setLocationEditMessage("请核对当前区域名称、用途、形式和容量。"); }}>编辑区域</button>
-                <button type="button" className={advancedAreaMaintenanceOpen ? "active" : ""} disabled={Boolean(locationPointEditAreaCode)} title={locationPointEditAreaCode ? "请先保存并固定或取消点位调整" : ""} onClick={() => { setAdvancedAreaMaintenanceOpen(true); setAreaPolicyEditMode(true); setLocationEditMessage("请选择货架或货位，按现场尺寸整理并保存草稿。"); }}>整理货位/货架</button>
-                <button type="button" className="publish" disabled={spatialEditBusy || !layoutDraftControl?.has_draft || Boolean(locationPointEditAreaCode)} onClick={previewAndPublishLayout}>预览并发布</button>
+                <button type="button" className={!advancedAreaMaintenanceOpen ? "active" : ""} disabled={Boolean(locationPointEditAreaCode)} onClick={() => { setAdvancedAreaMaintenanceOpen(false); setAreaPolicyEditMode(true); setLocationEditMessage("请核对当前区域名称、用途、形式和容量。"); }}>编辑</button>
+                <button type="button" className={advancedAreaMaintenanceOpen ? "active" : ""} disabled={Boolean(locationPointEditAreaCode)} title={locationPointEditAreaCode ? "请先保存并固定或取消点位调整" : ""} onClick={() => { setAdvancedAreaMaintenanceOpen(true); setAreaPolicyEditMode(true); setLocationEditMessage("请选择货架或货位，按现场尺寸整理并保存草稿。"); }}>货位/货架</button>
+                <button type="button" className="publish" disabled={spatialEditBusy || !layoutDraftControl?.has_draft || Boolean(locationPointEditAreaCode)} onClick={previewAndPublishLayout}>发布</button>
               </div>
             </div>}
             {locationEditMode && canEditLocations && selectedAreaIsMold && <section className="twin-mold-rack-planner">

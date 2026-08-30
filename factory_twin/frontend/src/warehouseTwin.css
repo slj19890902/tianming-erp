@@ -1161,7 +1161,7 @@ body.warehouse-twin-page {
 .twin-workspace.location-editing .twin-location-create input,
 .twin-workspace.location-editing .twin-location-create button,
 .twin-workspace.location-editing .twin-area-filter input,
-.twin-workspace.location-editing .twin-location-edit-actions button { min-height: 38px; font-size: 13px; }
+.twin-workspace.location-editing .twin-location-edit-actions button { min-height: 32px; font-size: 12px; }
 .twin-workspace.location-editing .twin-location-create b { font-size: 15px; }
 .twin-workspace.location-editing .twin-location-create small,
 .twin-workspace.location-editing .twin-location-create p,
@@ -1231,6 +1231,7 @@ body.warehouse-twin-page {
 .twin-zone-policy-editor,
 .twin-area-layout-summary { margin: 7px; padding: 10px; display: grid; gap: 8px; border: 1px solid #a8cbc7; border-radius: 4px; background: #f5fbfa; }
 .twin-layout-map-tools { margin: 7px; padding: 10px; display: grid; gap: 8px; border: 1px solid #9fc6c1; border-radius: 5px; background: #f4faf9; }
+.twin-layout-map-tools-top { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(120px, .7fr); align-items: end; gap: 8px; }
 .twin-layout-map-tools-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .twin-layout-map-tools-title > div { min-width: 0; display: grid; gap: 1px; }
 .twin-layout-map-tools-title small { color: #657b83; font-size: 8px; }
@@ -1239,8 +1240,8 @@ body.warehouse-twin-page {
 .twin-layout-map-tools label { min-width: 0; display: grid; gap: 3px; color: #34515d; font-size: 9px; font-weight: 800; }
 .twin-layout-map-tools input,
 .twin-layout-map-tools select { min-width: 0; min-height: 34px; padding: 5px 7px; border: 1px solid #9ebbb8; border-radius: 3px; color: #173b49; background: #fff; font: 800 11px/1.2 inherit; }
-.twin-layout-map-tools-grid,
-.twin-zone-geometry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.twin-layout-map-tools-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.twin-zone-geometry-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
 .twin-layout-map-tools > p,
 .twin-layout-draft-note { margin: 0; color: #60747d; font-size: 8px; line-height: 1.45; }
 .twin-zone-geometry-editor { padding-top: 7px; display: grid; gap: 6px; border-top: 1px solid #c9ddd9; }
@@ -1271,9 +1272,16 @@ body.warehouse-twin-page {
 .twin-zone-policy-editor > label { display: grid; gap: 3px; color: #45606b; font-size: 9px; }
 .twin-rack-layout-editor input,
 .twin-rack-layout-editor select,
+.twin-zone-policy-editor input,
 .twin-zone-policy-editor select { min-width: 0; min-height: 32px; padding: 5px 7px; border: 1px solid #b8cccf; border-radius: 3px; color: #173b49; background: #fff; font-size: 10px; }
 .twin-rack-coordinate-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .twin-rack-dimension-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.twin-zone-primary-fields,
+.twin-zone-policy-fields,
+.twin-rack-primary-fields,
+.twin-mold-rack-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 6px; }
+.twin-zone-policy-fields label { min-width: 0; display: grid; gap: 3px; color: #45606b; font-size: 9px; }
+.twin-field-span-2 { grid-column: span 2; }
 .twin-rack-level-editor { padding: 7px; display: grid; gap: 6px; border: 1px solid #d4e2e0; background: #fff; }
 .twin-rack-level-editor > b { grid-column: 1 / -1; color: #355461; font-size: 9px; }
 .twin-rack-level-editor > small { color: #60747d; font-size: 8px; line-height: 1.4; }
@@ -1293,8 +1301,8 @@ body.warehouse-twin-page {
 .twin-area-layout-summary { margin: 7px 0; grid-template-columns: minmax(0, 1fr) auto; background: #eef8f6; }
 .twin-zone-policy-editor { margin: 7px 0; background: #f4faf9; }
 .twin-zone-policy-editor > div:first-child { align-items: flex-start; flex-direction: column; }
-.twin-zone-policy-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
-.twin-zone-policy-options label { min-height: 30px; padding: 5px 7px; display: flex; align-items: center; gap: 6px; border: 1px solid #c5d9d6; border-radius: 3px; color: #36535d; background: #fff; font-size: 9px; }
+.twin-zone-policy-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.twin-zone-policy-options label { min-height: 28px; padding: 4px 6px; display: flex; align-items: center; gap: 5px; border: 1px solid #c5d9d6; border-radius: 3px; color: #36535d; background: #fff; font-size: 9px; }
 .twin-zone-policy-options input { accent-color: #0f766e; }
 
 .twin-zone-simple-planner { margin: 8px 0; padding: 14px; display: grid; gap: 11px; border: 2px solid #0f766e; border-radius: 7px; background: #f4fbf9; }
@@ -1310,6 +1318,10 @@ body.warehouse-twin-page {
 .twin-zone-simple-planner > button.confirm { min-height: 46px; border: 1px solid #0f766e; border-radius: 4px; color: #fff; background: #0f766e; font-size: 14px; font-weight: 900; }
 .twin-zone-simple-planner > button.confirm:disabled { cursor: not-allowed; opacity: .45; }
 .twin-zone-simple-planner > p { margin: 0; color: #5e737b; font-size: 9px; line-height: 1.45; text-align: center; }
+.twin-zone-confirm-row { display: grid; grid-template-columns: minmax(90px, .45fr) minmax(0, 1.55fr); align-items: center; gap: 8px; }
+.twin-zone-confirm-row > button.confirm { min-height: 34px; border: 1px solid #0f766e; border-radius: 4px; color: #fff; background: #0f766e; font-weight: 900; }
+.twin-zone-confirm-row > button.confirm:disabled { cursor: not-allowed; opacity: .45; }
+.twin-zone-confirm-row > p { margin: 0; color: #5e737b; line-height: 1.35; text-align: left; }
 .twin-zone-simple-planner > button.advanced-toggle { min-height: 30px; border: 0; border-top: 1px solid #c9ddd9; color: #667b82; background: transparent; font-size: 9px; }
 .twin-mold-rack-planner { margin: 8px 0; padding: 12px; display: grid; gap: 9px; border: 2px solid #206c82; border-radius: 7px; background: #f3f9fb; }
 .twin-mold-rack-planner > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
@@ -1331,7 +1343,9 @@ body.warehouse-twin-page {
 .twin-mold-rack-structure-editor label { min-width: 0; display: grid; gap: 3px; color: #3b5661; font-size: 9px; font-weight: 800; }
 .twin-mold-rack-structure-editor input { min-width: 0; min-height: 36px; padding: 5px 7px; border: 1px solid #a9bfc6; border-radius: 3px; color: #173b49; background: #fff; font-size: 13px; font-weight: 800; }
 .twin-mold-rack-level-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.twin-mold-rack-fields label.blocked,
 .twin-mold-rack-level-counts label.blocked { opacity: .68; }
+.twin-mold-rack-fields label.blocked input,
 .twin-mold-rack-level-counts label.blocked input { color: #7c6b49; background: #eee9dc; }
 .twin-mold-rack-publish-state { padding: 8px; display: grid; gap: 6px; border: 1px solid #b4cfd5; border-radius: 4px; background: #edf7f9; }
 .twin-mold-rack-publish-state > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 6px; }
@@ -1388,12 +1402,13 @@ body.warehouse-twin-page {
 .twin-location-point-planner p { margin: 0; color: #705b22; font-size: 9px; line-height: 1.55; }
 
 .twin-workspace.location-editing .twin-rack-layout-editor,
-.twin-workspace.location-editing .twin-zone-policy-editor { padding: 13px; }
+.twin-workspace.location-editing .twin-zone-policy-editor { padding: 9px; gap: 7px; }
 .twin-workspace.location-editing .twin-rack-layout-editor input,
 .twin-workspace.location-editing .twin-rack-layout-editor select,
 .twin-workspace.location-editing .twin-rack-layout-editor button,
+.twin-workspace.location-editing .twin-zone-policy-editor input,
 .twin-workspace.location-editing .twin-zone-policy-editor select,
-.twin-workspace.location-editing .twin-zone-policy-editor button { min-height: 38px; font-size: 13px; }
+.twin-workspace.location-editing .twin-zone-policy-editor button { min-height: 32px; font-size: var(--warehouse-min-readable-size); }
 
 @media (max-width: 1180px) {
   .twin-workspace.layers-open.context-collapsed { grid-template-columns: 115px minmax(360px, 1fr) 260px; }
@@ -2088,12 +2103,14 @@ body.warehouse-twin-page {
   line-height: 1.35;
 }
 .warehouse-twin-shell .twin-zone-simple-planner {
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 8px;
-  padding: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  padding: 8px;
 }
 .warehouse-twin-shell .twin-zone-simple-planner > header,
 .warehouse-twin-shell .twin-zone-simple-planner > .twin-zone-simple-existing,
+.warehouse-twin-shell .twin-zone-simple-planner > .twin-zone-primary-fields,
+.warehouse-twin-shell .twin-zone-simple-planner > .twin-zone-confirm-row,
 .warehouse-twin-shell .twin-zone-simple-planner > .twin-location-point-planner,
 .warehouse-twin-shell .twin-zone-simple-planner > .twin-region-planning-actions {
   grid-column: 1 / -1;
@@ -2102,16 +2119,16 @@ body.warehouse-twin-page {
 .warehouse-twin-shell .twin-zone-simple-planner label { gap: 3px; }
 .warehouse-twin-shell .twin-zone-simple-planner select,
 .warehouse-twin-shell .twin-zone-simple-planner input {
-  min-height: 36px;
-  padding: 5px 8px;
+  min-height: 32px;
+  padding: 4px 7px;
   font-size: var(--warehouse-min-readable-size);
 }
-.warehouse-twin-shell .twin-zone-simple-planner > button.confirm {
-  min-height: 36px;
+.warehouse-twin-shell .twin-zone-confirm-row > button.confirm {
+  min-height: 32px;
   padding: 5px 10px;
   font-size: var(--warehouse-min-readable-size);
 }
-.warehouse-twin-shell .twin-zone-simple-planner > p {
+.warehouse-twin-shell .twin-zone-confirm-row > p {
   align-self: center;
   text-align: left;
 }
@@ -2120,9 +2137,35 @@ body.warehouse-twin-page {
   padding-top: 7px;
 }
 .warehouse-twin-shell .twin-region-planning-actions button {
-  min-height: 34px;
+  min-height: 32px;
   padding: 5px 7px;
   font-size: var(--warehouse-min-readable-size);
+}
+
+.warehouse-twin-shell .twin-layout-map-tools,
+.warehouse-twin-shell .twin-ground-layout-panel,
+.warehouse-twin-shell .twin-mold-rack-planner { margin: 7px; padding: 8px; gap: 6px; }
+.warehouse-twin-shell .twin-ground-layout-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.warehouse-twin-shell .twin-ground-layout-grid label { gap: 3px; }
+.warehouse-twin-shell .twin-ground-layout-grid input,
+.warehouse-twin-shell .twin-ground-layout-grid select { height: 32px; padding: 0 7px; font-size: var(--warehouse-min-readable-size); }
+.warehouse-twin-shell .twin-ground-layout-actions { gap: 6px; }
+.warehouse-twin-shell .twin-ground-layout-actions button { min-height: 32px; }
+.warehouse-twin-shell .twin-mold-rack-structure-editor { padding: 7px; gap: 6px; }
+.warehouse-twin-shell .twin-mold-rack-structure-editor input { min-height: 32px; font-size: var(--warehouse-min-readable-size); }
+.warehouse-twin-shell .twin-location-point-planner { padding: 7px; gap: 6px; }
+.warehouse-twin-shell .twin-location-point-planner button { min-height: 32px; }
+
+@media (max-width: 560px) {
+  .twin-layout-map-tools-top { grid-template-columns: minmax(0, 1fr); }
+  .twin-zone-geometry-grid,
+  .warehouse-twin-shell .twin-ground-layout-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .twin-zone-primary-fields,
+  .twin-zone-policy-fields,
+  .twin-rack-primary-fields,
+  .twin-mold-rack-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .twin-field-span-2 { grid-column: 1 / -1; }
+  .twin-zone-confirm-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 }
 
 @media (max-width: 1180px) {

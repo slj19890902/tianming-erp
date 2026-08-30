@@ -5220,17 +5220,19 @@ export function WarehouseTwinApp() {
         </section>}
         {locationEditMessage && <div className={`twin-location-message ${locationEditMessage.includes("失败") || locationEditMessage.includes("缺失") ? "error" : ""}`}><span>{locationEditMessage}</span>{(locationEditMessage.includes("先完成移货") || locationEditMessage.includes("移到其他已启用区域")) && <button type="button" onClick={() => { setLocationEditMode(false); setMapMode("move"); setMoveAction("relocate"); setWarehouseOperationMessage("请点选当前区域内的货物或实体栈板，再切换楼层并选择目标位置；提交前不会改动库存。"); }}>前往移货</button>}</div>}
         {mapMode === "planning" && locationEditMode && canEditLocations && <section className="twin-layout-map-tools">
-          <div className="twin-layout-map-tools-title"><div><small>区域规划</small><b>在地图直接调整</b></div><span>只保存草稿</span></div>
-          <label><span>地图操作</span><select aria-label="地图操作" value={layoutMapTool} disabled={spatialEditBusy} onChange={(event) => {
-            const next = event.target.value as typeof layoutMapTool;
-            setLayoutMapTool(next);
-            setLayoutDrawPoints([]);
-            setLocationEditMessage(next === "adjust"
-              ? "可直接拖动区域、通道或货架；右侧修改尺寸和方向，系统自动保存管理员草稿。"
-              : next === "zone"
-                ? "在地图点两下：第一点和第二点确定新区域的两个对角。"
-                : "先填写现场通道宽度，再在地图点起点和终点。");
-          }}><option value="adjust">调整布局</option><option value="zone">新增区域</option><option value="aisle">新增通道</option></select></label>
+          <div className="twin-layout-map-tools-top">
+            <div className="twin-layout-map-tools-title"><div><small>区域规划</small><b>在地图直接调整</b></div><span>只保存草稿</span></div>
+            <label><span>地图操作</span><select aria-label="地图操作" value={layoutMapTool} disabled={spatialEditBusy} onChange={(event) => {
+              const next = event.target.value as typeof layoutMapTool;
+              setLayoutMapTool(next);
+              setLayoutDrawPoints([]);
+              setLocationEditMessage(next === "adjust"
+                ? "可直接拖动区域、通道或货架；右侧修改尺寸和方向，系统自动保存管理员草稿。"
+                : next === "zone"
+                  ? "在地图点两下：第一点和第二点确定新区域的两个对角。"
+                  : "先填写现场通道宽度，再在地图点起点和终点。");
+            }}><option value="adjust">调整布局</option><option value="zone">新增区域</option><option value="aisle">新增通道</option></select></label>
+          </div>
           {layoutMapTool === "aisle" && <div className="twin-layout-map-tools-grid">
             <label><span>通道宽度 mm</span><input type="number" min="1" max="20000" value={newAisleWidth} onChange={(event) => setNewAisleWidth(event.target.value)} placeholder="按现场填写" /></label>
             <label><span>通行方向</span><select value={newAisleDirection} onChange={(event) => setNewAisleDirection(event.target.value as typeof newAisleDirection)}><option value="two_way">双向</option><option value="one_way">单向</option></select></label>
@@ -5336,22 +5338,18 @@ export function WarehouseTwinApp() {
         </section>}
         {locationEditMode && advancedAreaMaintenanceOpen && selectedRackEditDraft && <section className="twin-rack-layout-editor">
           <div className="twin-layout-editor-title"><div><small>货架编辑 · {selectedRackEditDraft.rack_code}</small><b>{selectedRackEditDraft.name}</b></div><em>草稿</em></div>
-          <label><span>货架名称</span><input value={selectedRackEditDraft.name} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { name: event.target.value })} /></label>
-          <div className="twin-rack-coordinate-grid">
+          <div className="twin-rack-primary-fields">
+            <label className="twin-field-span-2"><span>货架名称</span><input value={selectedRackEditDraft.name} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { name: event.target.value })} /></label>
+            <label><span>货架层数</span><input type="number" min="1" max="20" value={selectedRackEditDraft.levels} onChange={(event) => changeRackLevels(selectedRackEditDraft, Number(event.target.value))} /></label>
             <label><span>X 坐标 mm</span><input type="number" value={selectedRackEditDraft.x_mm} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { x_mm: Number(event.target.value) })} /></label>
             <label><span>Y 坐标 mm</span><input type="number" value={selectedRackEditDraft.y_mm} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { y_mm: Number(event.target.value) })} /></label>
-          </div>
-          <div className="twin-rack-dimension-grid">
             <label><span>长度 mm</span><input type="number" min="1" value={selectedRackEditDraft.width_mm} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { width_mm: Number(event.target.value) })} /></label>
             <label><span>宽度 mm</span><input type="number" min="1" value={selectedRackEditDraft.depth_mm} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { depth_mm: Number(event.target.value) })} /></label>
             <label><span>总高度 mm</span><input type="number" min="1" value={selectedRackEditDraft.height_mm} onChange={(event) => changeRackTotalHeight(selectedRackEditDraft, Number(event.target.value))} /></label>
-          </div>
-          <label><span>货架层数</span><input type="number" min="1" max="20" value={selectedRackEditDraft.levels} onChange={(event) => changeRackLevels(selectedRackEditDraft, Number(event.target.value))} /></label>
-          <div className="twin-rack-level-editor"><b>逐层设置（修改净高会自动合计总高度）</b>{selectedRackEditDraft.level_clear_heights_mm.map((height, index) => <div className="twin-rack-level-row" key={`${selectedRackEditDraft.id}-level-${index}`}><label><span>第 {index + 1} 层净高 mm</span><input type="number" min="1" value={height} onChange={(event) => changeRackLevelHeight(selectedRackEditDraft, index, Number(event.target.value))} /></label><label><span>第 {index + 1} 层格数</span><input type="number" min="0" max="50" value={selectedRackEditDraft.level_cell_counts[index]} onChange={(event) => changeRackLevelCellCount(selectedRackEditDraft, index, Number(event.target.value))} /></label></div>)}<small>格数填 0 表示本层不生成正式货位；发布后，成品和半成品货架会同步为稳定层格，其他用途仍走原有专项台账。</small></div>
-          <div className="twin-rack-coordinate-grid">
-            <label><span>正面操作方向</span><select value={selectedRackEditDraft.access_side} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { access_side: event.target.value as Rack["access_side"] })}><option value="north">北</option><option value="south">南</option><option value="east">东</option><option value="west">西</option><option value="both">双面</option></select></label>
+            <label><span>正面方向</span><select value={selectedRackEditDraft.access_side} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { access_side: event.target.value as Rack["access_side"] })}><option value="north">北</option><option value="south">南</option><option value="east">东</option><option value="west">西</option><option value="both">双面</option></select></label>
             <label><span>最小通道 mm</span><input type="number" min="0" value={selectedRackEditDraft.min_aisle_width_mm} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { min_aisle_width_mm: Number(event.target.value) })} /></label>
           </div>
+          <div className="twin-rack-level-editor"><b>逐层设置（修改净高会自动合计总高度）</b>{selectedRackEditDraft.level_clear_heights_mm.map((height, index) => <div className="twin-rack-level-row" key={`${selectedRackEditDraft.id}-level-${index}`}><label><span>第 {index + 1} 层净高 mm</span><input type="number" min="1" value={height} onChange={(event) => changeRackLevelHeight(selectedRackEditDraft, index, Number(event.target.value))} /></label><label><span>第 {index + 1} 层格数</span><input type="number" min="0" max="50" value={selectedRackEditDraft.level_cell_counts[index]} onChange={(event) => changeRackLevelCellCount(selectedRackEditDraft, index, Number(event.target.value))} /></label></div>)}<small>格数填 0 表示本层不生成正式货位；发布后，成品和半成品货架会同步为稳定层格，其他用途仍走原有专项台账。</small></div>
           <div className="twin-layout-editor-actions"><button type="button" className="primary" disabled={spatialEditBusy} onClick={saveSelectedRack}>保存到草稿</button><button type="button" disabled={spatialEditBusy} onClick={() => printPublishedRackLevelLabels(selectedRackEditDraft)}>打印正式层标签</button><button type="button" disabled={spatialEditBusy} onClick={() => setRackDrafts((current) => { const next = { ...current }; delete next[selectedRackEditDraft.id]; return next; })}>取消本次修改</button><button type="button" className="danger" disabled={spatialEditBusy || selectedRackEditDraft.is_locked} onClick={deleteSelectedRack}>从草稿删除</button></div>
           <p>保存后仍是管理员草稿；校验并发布前，员工地图、库存数量、栈板和正式库位均不改变。</p>
         </section>}
@@ -5584,11 +5582,12 @@ export function WarehouseTwinApp() {
             {locationEditMode && canEditLocations && selectedAreaFeature && <div className="twin-zone-simple-planner">
               <header><div><b>用途与容量</b></div>{selectedAreaHasPublishedBinding && <span>已启用，可更新</span>}</header>
               {!selectedAreaFeature.formal_area_id && formalAreaOptions.length > 0 && <label className="twin-zone-simple-existing"><span>已有区域（可选）</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">按地图编号新建</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.area_code} · {employeeAreaName(area, { floorCode: area.floor_code })}</option>)}</select></label>}
-              <label><span>用途</span><select value={simpleAreaUsage} onChange={(event) => setSimpleAreaUsage(event.target.value as InventoryUsage)}><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="raw_material">原材料</option><option value="mold">模具</option><option value="print_plate">印刷版</option><option value="temporary_turnover">临时周转</option></select></label>
-              <label><span>形式</span><select value={simpleAreaLayout} onChange={(event) => setSimpleAreaLayout(event.target.value as Exclude<StorageLayout, "mixed">)}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
-              <label><span>最大栈板数</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /><small>模具架、印版架等可填 0。</small></label>
-              <button type="button" className="confirm" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || simpleAreaCapacity === ""} onClick={confirmSelectedAreaOnce}>{spatialEditBusy ? "确认中…" : "确认"}</button>
-              <p>保存区域设置，不移动库存。</p>
+              <div className="twin-zone-primary-fields">
+                <label><span>用途</span><select value={simpleAreaUsage} onChange={(event) => setSimpleAreaUsage(event.target.value as InventoryUsage)}><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="raw_material">原材料</option><option value="mold">模具</option><option value="print_plate">印刷版</option><option value="temporary_turnover">临时周转</option></select></label>
+                <label><span>形式</span><select value={simpleAreaLayout} onChange={(event) => setSimpleAreaLayout(event.target.value as Exclude<StorageLayout, "mixed">)}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
+                <label><span>最大栈板数</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /></label>
+              </div>
+              <div className="twin-zone-confirm-row"><button type="button" className="confirm" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || simpleAreaCapacity === ""} onClick={confirmSelectedAreaOnce}>{spatialEditBusy ? "确认中…" : "确认"}</button><p>保存区域设置，不移动库存；模具架、印版架等容量可填 0。</p></div>
               {selectedAreaHasPublishedBinding && selectedAreaCreatesInventoryLocations && <div className="twin-location-point-planner">
                 <div><b>货位点位</b><small>{selectedAreaLocationCount} 个正式货位 · 只调整当前区域</small></div>
                 {locationPointEditAreaCode === selectedAreaCode ? <div className="actions">
@@ -5625,13 +5624,15 @@ export function WarehouseTwinApp() {
                   <em className={layoutDraftControl?.status || "none"}>{layoutDraftControl?.status === "validated" ? "草稿已校验，尚未发布" : layoutDraftControl?.has_draft ? "草稿已保存，正式仍未改变" : "本次修改尚未保存"}</em>
                 </div>
                 {selectedMoldRackHighestUsedLevel > selectedRackEditDraft.levels && <p className="twin-mold-rack-structure-blocker">正式台账仍有模具放在第 {selectedMoldRackHighestUsedLevel} 层；草稿可以继续保存，校验会预告数量，发布时这些模具将自动归入本货架首个可用格。</p>}
-                <label><span>货架总层数（含设备占用层）</span><input type="number" min="1" max="20" value={selectedRackEditDraft.levels} onChange={(event) => changeRackLevels(selectedRackEditDraft, Number(event.target.value))} /><small>已有模具使用到第 {selectedMoldRackHighestUsedLevel || 0} 层；缩减不会阻止保存，只有发布成功才自动归位。</small></label>
-                <div className="twin-mold-rack-level-counts">{selectedRackEditDraft.level_cell_counts.map((count, index) => {
-                  const level = index + 1;
-                  const machineBlocked = moldRackBlockedLevels(selectedRackEditDraft).includes(level);
-                  const usedCount = selectedMoldRackUsage.get(level) || 0;
-                  return <label className={machineBlocked ? "blocked" : ""} key={`${selectedRackEditDraft.id}-simple-grid-${level}`}><span>第 {level} 层格数{machineBlocked ? "（设备占用层）" : usedCount ? `（已有 ${usedCount} 件模具）` : ""}</span><input type="number" min="0" max="50" disabled={machineBlocked} value={machineBlocked ? 0 : count} onChange={(event) => changeRackLevelCellCount(selectedRackEditDraft, index, Number(event.target.value))} /></label>;
-                })}</div>
+                <div className="twin-mold-rack-fields">
+                  <label><span title="货架总层数（含设备占用层）">总层数</span><input type="number" min="1" max="20" value={selectedRackEditDraft.levels} onChange={(event) => changeRackLevels(selectedRackEditDraft, Number(event.target.value))} /><small>已用到第 {selectedMoldRackHighestUsedLevel || 0} 层</small></label>
+                  {selectedRackEditDraft.level_cell_counts.map((count, index) => {
+                    const level = index + 1;
+                    const machineBlocked = moldRackBlockedLevels(selectedRackEditDraft).includes(level);
+                    const usedCount = selectedMoldRackUsage.get(level) || 0;
+                    return <label className={machineBlocked ? "blocked" : ""} key={`${selectedRackEditDraft.id}-simple-grid-${level}`}><span>第 {level} 层格数{machineBlocked ? "（占用）" : usedCount ? `（已有 ${usedCount}）` : ""}</span><input type="number" min="0" max="50" disabled={machineBlocked} value={machineBlocked ? 0 : count} onChange={(event) => changeRackLevelCellCount(selectedRackEditDraft, index, Number(event.target.value))} /></label>;
+                  })}
+                </div>
                 <div className="twin-mold-rack-planner-actions">
                   <button type="button" className="primary" disabled={selectedMoldRackDraftWorkflow.save.disabled} title={selectedMoldRackDraftWorkflow.save.title} onClick={saveSelectedRack}>① 保存层格到草稿</button>
                   <button type="button" disabled={selectedMoldRackDraftWorkflow.validate.disabled} title={selectedMoldRackDraftWorkflow.validate.title} onClick={validateLayoutDraft}>② 校验当前楼层草稿</button>
@@ -5644,13 +5645,15 @@ export function WarehouseTwinApp() {
             {locationEditMode && advancedAreaMaintenanceOpen && areaPolicyEditMode && canEditLocations && selectedAreaFeature && selectedZonePolicy && <div className="twin-zone-policy-editor">
               <div><b>正式区域绑定</b><small>区域编号保存后不可与其他地图区域重复；发布前仍不会进入员工入库候选。</small></div>
               {!selectedAreaFeature.formal_area_id && <label><span>选用现有未绑定区域</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">不选，按下方编号建立新区域</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.floor_code} · {area.area_code} {employeeAreaName(area, { floorCode: area.floor_code })} · {area.capacity_review_status === "confirmed" ? `已确认 ${area.confirmed_pallet_capacity || 0} 栈板` : area.capacity_review_status === "excluded" ? "不计长期容量" : "容量待复核"}</option>)}</select>{formalAreaOptionsError && <small>现有区域读取失败：{formalAreaOptionsError}</small>} {!formalAreaOptionsError && formalAreaOptions.length === 0 && <small>当前楼层没有可选的未绑定区域；可使用下方新编号。</small>}</label>}
-              <label><span>正式区域编号</span><input maxLength={30} disabled={Boolean(selectedExistingAreaId)} value={formalAreaCodeDraft} onChange={(event) => setFormalAreaCodeDraft(event.target.value.toUpperCase())} placeholder="例如 FIN-001" /></label>
-              <label><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 右区C2 新振（主通道西侧）" /><small>区域名称由管理员按现场客户和方位维护；主通道两侧请按东侧/西侧填写，不根据屏幕上下方向猜测。</small></label>
+              <div className="twin-zone-policy-fields">
+                <label><span>区域编号</span><input maxLength={30} disabled={Boolean(selectedExistingAreaId)} value={formalAreaCodeDraft} onChange={(event) => setFormalAreaCodeDraft(event.target.value.toUpperCase())} placeholder="例如 FIN-001" /></label>
+                <label><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 右区C2 新振（主通道西侧）" /></label>
+                <label><span>存储形式</span><select value={selectedZonePolicy.storage_layout} onChange={(event) => setZonePolicyDrafts((current) => ({ ...current, [selectedAreaFeature.id]: { ...selectedZonePolicy, storage_layout: event.target.value as StorageLayout } }))}><option value="rack">货架区</option><option value="pallet_ground">栈板地堆区</option><option value="mixed">货架＋栈板混合区</option></select></label>
+              </div>
               <div><b>区域允许存放类型</b><small>可多选；只保存区域策略，不自动转换现有库存</small></div>
               <div className="twin-zone-policy-options">{([[
                 "finished", "成品"
               ], ["semi_finished", "半成品"], ["raw_material", "原材料"], ["mold", "模具"], ["print_plate", "印刷版"], ["temporary_turnover", "临时周转"]] as Array<[InventoryUsage, string]>).map(([value, label]) => <label key={value}><input type="checkbox" checked={selectedZonePolicy.allowed_inventory_types.includes(value)} onChange={() => toggleAreaUsage(value)} /><span>{label}</span></label>)}</div>
-              <label><span>空间存储形式</span><select value={selectedZonePolicy.storage_layout} onChange={(event) => setZonePolicyDrafts((current) => ({ ...current, [selectedAreaFeature.id]: { ...selectedZonePolicy, storage_layout: event.target.value as StorageLayout } }))}><option value="rack">货架区</option><option value="pallet_ground">栈板地堆区</option><option value="mixed">货架＋栈板混合区</option></select></label>
               <button type="button" className="primary" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || !selectedZonePolicy.allowed_inventory_types.length} onClick={saveSelectedZonePolicy}>绑定正式区域并保存策略</button>
             </div>}
             {locationEditMode && advancedAreaMaintenanceOpen && canEditLocations && selectedAreaCode && selectedAreaCreatesInventoryLocations && selectedAreaHasFormalLedger && <div className="twin-location-create">

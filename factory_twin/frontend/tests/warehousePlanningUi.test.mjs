@@ -4,6 +4,7 @@ import test from "node:test";
 
 const source = readFileSync(new URL("../src/WarehouseTwinApp.tsx", import.meta.url), "utf8");
 const sceneSource = readFileSync(new URL("../src/industrialScene.ts", import.meta.url), "utf8");
+const cssSource = readFileSync(new URL("../src/warehouseTwin.css", import.meta.url), "utf8");
 
 test("ordinary area planning exposes a current-area-only point editing workflow", () => {
   assert.match(source, />拖动并保存现场货位</);
@@ -50,6 +51,17 @@ test("lookup has one entry and area planning uses short adaptive actions", () =>
   assert.match(source, />货位\/货架<\/button>/);
   assert.match(source, />发布<\/button>/);
   assert.doesNotMatch(source, />确认并启用此区域<\/button>/);
+});
+
+test("area planning keeps short inputs in compact rows", () => {
+  assert.match(source, /className="twin-zone-primary-fields"/);
+  assert.match(source, /className="twin-zone-confirm-row"/);
+  assert.match(source, /className="twin-zone-policy-fields"/);
+  assert.match(source, /className="twin-rack-primary-fields"/);
+  assert.match(source, /className="twin-mold-rack-fields"/);
+  assert.match(cssSource, /\.twin-zone-primary-fields,[\s\S]*\.twin-mold-rack-fields\s*\{[\s\S]*repeat\(auto-fit, minmax\(100px, 1fr\)\)/);
+  assert.match(cssSource, /\.twin-zone-geometry-grid\s*\{[\s\S]*repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(cssSource, /\.twin-ground-layout-grid\s*\{[\s\S]*repeat\(3, minmax\(0, 1fr\)\)/);
 });
 
 test("ordinary planning no longer offers tight automatic pallet packing", () => {

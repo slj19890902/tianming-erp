@@ -400,10 +400,11 @@ def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> Non
     assert "available_actions" in SOURCE
     assert "系统按区域自动生成内部唯一编码" in SOURCE
     assert "/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable" in SOURCE
-    assert "palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}" in SOURCE
-    assert 'readOnly={(!locationEditMode || (!advancedAreaMaintenanceOpen && !locationPointEditAreaCode)) && !warehouseMoveModeActive}' in SOURCE
-    assert "rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}" in SOURCE
-    assert "featureEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen && areaPolicyEditMode}" in SOURCE
+    assert "palletEditingOnly={locationEditMode || warehouseMoveModeActive}" in SOURCE
+    assert "draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : locationPointEditPalletIds}" in SOURCE
+    assert 'readOnly={!locationEditMode && !warehouseMoveModeActive}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && layoutMapTool === "adjust"}' in SOURCE
+    assert 'featureEditingEnabled={locationEditMode && layoutMapTool === "adjust"}' in SOURCE
     assert "选择区域或设备" not in SOURCE
 
 
@@ -411,7 +412,7 @@ def test_phase2c13_uses_2d_layout_mode_for_rack_and_area_spatial_modeling() -> N
     assert 'if (locationEditMode)' in SOURCE
     assert 'setRackFocusId(null)' in SOURCE
     assert 'onMoveRack={moveRackDraft}' in SOURCE
-    assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && layoutMapTool === "adjust"}' in SOURCE
     assert 'className="twin-rack-layout-editor"' in SOURCE
     assert "逐层设置" in SOURCE
     assert "层格数" in SOURCE

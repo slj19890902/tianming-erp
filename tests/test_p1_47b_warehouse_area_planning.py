@@ -5257,6 +5257,111 @@ def test_invalid_zone_geometry_fails_before_creating_a_draft(
     assert sha256(published.read_bytes()).hexdigest() == published_before
 
 
+def test_layout_draft_can_add_zone_and_aisle_then_move_the_aisle(
+    tmp_path: Path,
+) -> None:
+    published = _published_layout(tmp_path / "published-layout-objects.json")
+    revision = _revision(published)
+
+    zone = editor.create_warehouse_twin_feature(
+        "3F",
+        expected_revision=revision,
+        operation_key="p1-128-create-zone-gesture",
+        feature_kind="zone",
+        points=[[500, 500], [3_000, 500], [3_000, 2_500], [500, 2_500]],
+        path=published,
+    )
+    assert zone.applied is True
+    assert zone.value["feature_kind"] == "zone"
+    assert zone.value["feature_code"] == "ZONE-3F-EDIT-001"
+    assert zone.value["status"] == "candidate"
+    assert zone.value["area_mm2"] == 5_000_000
+
+    aisle = editor.create_warehouse_twin_feature(
+        "3F",
+        expected_revision=zone.floor_revision,
+        operation_key="p1-128-create-aisle-gesture",
+        feature_kind="aisle",
+        points=[[4_000, 1_000], [8_000, 1_000]],
+        width_mm=1_800,
+        direction="two_way",
+        path=published,
+    )
+    assert aisle.applied is True
+    assert aisle.value["feature_kind"] == "aisle"
+    assert aisle.value["feature_code"] == "AISLE-3F-EDIT-001"
+    assert aisle.value["width_mm"] == 1_800
+    assert aisle.value["no_stacking"] is True
+
+    moved = editor.update_warehouse_twin_feature_geometry(
+        "3F",
+        aisle.value["id"],
+        expected_revision=aisle.floor_revision,
+        expected_version=1,
+        operation_key="p1-128-move-aisle-gesture",
+        points=[[4_000, 2_000], [8_000, 2_000]],
+        path=published,
+    )
+    assert moved.applied is True
+    assert moved.value["points"] == [[4_000.0, 2_000.0], [8_000.0, 2_000.0]]
+    assert moved.value["area_mm2"] == 7_200_000
+
+    replayed = editor.update_warehouse_twin_feature_geometry(
+        "3F",
+        aisle.value["id"],
+        expected_revision=moved.floor_revision,
+        expected_version=2,
+        operation_key="p1-128-move-aisle-gesture",
+        points=[[4_000, 2_000], [8_000, 2_000]],
+        path=published,
+    )
+    assert replayed.applied is False
+
+
+def test_new_layout_object_rejects_missing_aisle_width_and_out_of_bounds_zone(
+    tmp_path: Path,
+) -> None:
+    published = _published_layout(tmp_path / "invalid-layout-objects.json")
+    revision = _revision(published)
+
+    with pytest.raises(WarehouseTwinLayoutEditError, match="通道宽度"):
+        editor.create_warehouse_twin_feature(
+            "3F",
+            expected_revision=revision,
+            operation_key="p1-128-invalid-aisle-width",
+            feature_kind="aisle",
+            points=[[1_000, 1_000], [2_000, 1_000]],
+            width_mm=None,
+            path=published,
+        )
+
+    with pytest.raises(WarehouseTwinLayoutEditError, match="实测地图范围"):
+        editor.create_warehouse_twin_feature(
+            "3F",
+            expected_revision=revision,
+            operation_key="p1-128-invalid-zone-bounds",
+            feature_kind="zone",
+            points=[[-1, 0], [2_000, 0], [2_000, 2_000], [-1, 2_000]],
+            path=published,
+        )
+
+
+def test_simple_planning_uses_one_contextual_map_operation_workflow() -> None:
+    assert 'aria-label="地图操作"' in TWIN_SOURCE
+    assert '<option value="adjust">调整布局</option>' in TWIN_SOURCE
+    assert '<option value="zone">新增区域</option>' in TWIN_SOURCE
+    assert '<option value="aisle">新增通道</option>' in TWIN_SOURCE
+    assert 'drawMode={layoutDrawKind}' in TWIN_SOURCE
+    assert 'onDrawPoint={handleLayoutDrawPoint}' in TWIN_SOURCE
+    assert 'createLayoutFeature' in TWIN_SOURCE
+    assert '/features/${feature.id}/geometry' in TWIN_SOURCE
+    assert 'onBlur={saveSelectedZoneGeometry}' in TWIN_SOURCE
+    assert 'aria-label="货架方向"' in TWIN_SOURCE
+    assert 'saveRackDraftImmediately' in TWIN_SOURCE
+    assert '>新增区域</button>' not in TWIN_SOURCE
+    assert '>新增通道</button>' not in TWIN_SOURCE
+
+
 def test_stale_or_locked_geometry_fails_without_a_half_draft(
     tmp_path: Path,
     monkeypatch,

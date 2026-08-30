@@ -694,10 +694,14 @@ export function EditorCanvas({
       const editorFeatureInteraction = {
         draggable: feature.subtype !== "dxf_hidden" && !feature.is_locked && !protectedAnchor
       };
+      const planningFeatureEditable = !readOnly
+        && featureEditingEnabled
+        && ["zone", "aisle"].includes(feature.feature_kind)
+        && editorFeatureInteraction.draggable;
       group.userData = {
         entityKind: "feature",
         entityId: feature.id,
-        draggable: !readOnly && featureEditingEnabled && feature.feature_kind === 'zone' && editorFeatureInteraction.draggable
+        draggable: planningFeatureEditable
       };
       if (feature.feature_kind === "structure") {
         for (let index = 0; index < feature.points.length - 1; index += 1) {
@@ -809,7 +813,7 @@ export function EditorCanvas({
         );
         group.add(boundary);
       }
-      if (operationalEntitySelectable(visualTheme, "feature", feature.feature_kind)) {
+      if (operationalEntitySelectable(visualTheme, "feature", feature.feature_kind) || planningFeatureEditable) {
         interactive.push(warehouseTheme ? warehousePickProxy(group) || group : group);
       }
       scene.add(group);

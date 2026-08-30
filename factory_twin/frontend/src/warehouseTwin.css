@@ -1230,6 +1230,32 @@ body.warehouse-twin-page {
 .twin-rack-layout-editor,
 .twin-zone-policy-editor,
 .twin-area-layout-summary { margin: 7px; padding: 10px; display: grid; gap: 8px; border: 1px solid #a8cbc7; border-radius: 4px; background: #f5fbfa; }
+.twin-layout-map-tools { margin: 7px; padding: 10px; display: grid; gap: 8px; border: 1px solid #9fc6c1; border-radius: 5px; background: #f4faf9; }
+.twin-layout-map-tools-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.twin-layout-map-tools-title > div { min-width: 0; display: grid; gap: 1px; }
+.twin-layout-map-tools-title small { color: #657b83; font-size: 8px; }
+.twin-layout-map-tools-title b { color: #123f4c; font-size: 13px; }
+.twin-layout-map-tools-title > span { padding: 3px 6px; border-radius: 10px; color: #76550a; background: #fff1bf; font-size: 8px; font-weight: 900; white-space: nowrap; }
+.twin-layout-map-tools label { min-width: 0; display: grid; gap: 3px; color: #34515d; font-size: 9px; font-weight: 800; }
+.twin-layout-map-tools input,
+.twin-layout-map-tools select { min-width: 0; min-height: 34px; padding: 5px 7px; border: 1px solid #9ebbb8; border-radius: 3px; color: #173b49; background: #fff; font: 800 11px/1.2 inherit; }
+.twin-layout-map-tools-grid,
+.twin-zone-geometry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.twin-layout-map-tools > p,
+.twin-layout-draft-note { margin: 0; color: #60747d; font-size: 8px; line-height: 1.45; }
+.twin-zone-geometry-editor { padding-top: 7px; display: grid; gap: 6px; border-top: 1px solid #c9ddd9; }
+.twin-zone-geometry-editor > div:first-child { display: grid; gap: 2px; }
+.twin-zone-geometry-editor b,
+.twin-selected-aisle b { color: #164b57; font-size: 10px; }
+.twin-zone-geometry-editor small,
+.twin-selected-aisle small,
+.twin-rack-direction small { color: #687d85; font-size: 8px; line-height: 1.35; }
+.twin-zone-geometry-grid input { min-height: 31px; font-size: 10px; }
+.twin-selected-aisle { padding: 7px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 6px; border: 1px solid #bfd5d1; border-radius: 3px; background: #fff; }
+.twin-selected-aisle > span { color: #0f665f; font-size: 9px; font-weight: 800; }
+.twin-selected-aisle small { grid-column: 1 / -1; }
+.twin-rack-direction { padding-top: 7px; border-top: 1px solid #c9ddd9; }
+.twin-layout-draft-note { padding-top: 7px; border-top: 1px dashed #c9ddd9; }
 .twin-layout-editor-title,
 .twin-area-layout-summary > div,
 .twin-zone-policy-editor > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

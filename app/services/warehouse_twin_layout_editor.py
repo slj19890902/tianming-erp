@@ -816,6 +816,127 @@ def _next_rack_code(floor: dict[str, Any], area_code: str) -> str:
     return f"{prefix}{sequence:03d}"
 
 
+def _next_feature_code(floor: dict[str, Any], feature_kind: str) -> str:
+    prefix = "ZONE" if feature_kind == "zone" else "AISLE"
+    stem = f"{prefix}-{floor.get('floor_code')}-EDIT-"
+    used = {
+        str(item.get("feature_code") or "")
+        for item in floor.get("features") or []
+    }
+    sequence = 1
+    while f"{stem}{sequence:03d}" in used:
+        sequence += 1
+    return f"{stem}{sequence:03d}"
+
+
+def _ensure_points_within_floor(
+    floor: dict[str, Any], points: list[list[float]], *, label: str
+) -> None:
+    bounds = floor.get("bounds_mm") or {}
+    if not all(key in bounds for key in ("min_x", "min_y", "max_x", "max_y")):
+        raise WarehouseTwinLayoutEditError(
+            f"楼层实测边界不完整，不能{label}"
+        )
+    if any(
+        point[0] < float(bounds["min_x"])
+        or point[0] > float(bounds["max_x"])
+        or point[1] < float(bounds["min_y"])
+        or point[1] > float(bounds["max_y"])
+        for point in points
+    ):
+        raise WarehouseTwinLayoutEditError(
+            f"{label}不能超出本楼层实测地图范围"
+        )
+
+
+def create_warehouse_twin_feature(
+    floor_code: str,
+    *,
+    expected_revision: str,
+    operation_key: str,
+    feature_kind: str,
+    points: list[list[float]],
+    width_mm: float | None = None,
+    direction: str | None = None,
+    path: Path | None = None,
+) -> LayoutMutation:
+    normalized_kind = str(feature_kind or "").strip()
+    if normalized_kind == "zone":
+        normalized_points = _normalize_zone_points(points)
+        _reject_self_intersection(normalized_points)
+        normalized_width = None
+        normalized_direction = None
+    elif normalized_kind == "aisle":
+        normalized_points = _normalize_aisle_points(points)
+        try:
+            normalized_width = float(width_mm) if width_mm is not None else 0.0
+        except (TypeError, ValueError, OverflowError) as error:
+            raise WarehouseTwinLayoutEditError("通道宽度必须是有效毫米数值") from error
+        if not math.isfinite(normalized_width) or normalized_width <= 0 or normalized_width > 20_000:
+            raise WarehouseTwinLayoutEditError("通道宽度必须大于0且不超过20000毫米")
+        normalized_direction = str(direction or "two_way").strip()
+        if normalized_direction not in {"one_way", "two_way"}:
+            raise WarehouseTwinLayoutEditError("通道方向无效")
+    else:
+        raise WarehouseTwinLayoutEditError("只允许新增区域或通道")
+
+    def mutate(floor: dict[str, Any]) -> dict[str, Any]:
+        _ensure_points_within_floor(
+            floor,
+            normalized_points,
+            label="区域边界" if normalized_kind == "zone" else "通道",
+        )
+        code = _next_feature_code(floor, normalized_kind)
+        area_mm2 = (
+            _zone_area_mm2(normalized_points)
+            if normalized_kind == "zone"
+            else _aisle_area_mm2(normalized_points, float(normalized_width or 0))
+        )
+        feature = {
+            "id": str(uuid4()),
+            "feature_code": code,
+            "name": "新区域（待设置）" if normalized_kind == "zone" else "新通道",
+            "feature_kind": normalized_kind,
+            "subtype": "unassigned" if normalized_kind == "zone" else "shared_secondary",
+            "points": normalized_points,
+            "width_mm": normalized_width,
+            "direction": normalized_direction,
+            "no_stacking": normalized_kind == "aisle",
+            "storage_mode": "floor",
+            "elevation_mm": 0.0,
+            "storage_height_mm": 1_000.0 if normalized_kind == "zone" else 3_000.0,
+            "color": "#60a5fa" if normalized_kind == "zone" else "#22c55e",
+            "area_mm2": area_mm2,
+            "source": "manual",
+            "status": "candidate",
+            "is_locked": False,
+            "version": 1,
+            "erp_area_code": None,
+        }
+        floor.setdefault("features", []).append(feature)
+        return feature
+
+    mutation = _apply_mutation(
+        floor_code,
+        expected_revision=expected_revision,
+        operation_key=operation_key,
+        action="feature.create",
+        mutate=mutate,
+        path=path,
+    )
+    if not mutation.applied:
+        if (
+            mutation.value.get("feature_kind") != normalized_kind
+            or mutation.value.get("points") != normalized_points
+            or mutation.value.get("width_mm") != normalized_width
+            or mutation.value.get("direction") != normalized_direction
+        ):
+            raise WarehouseTwinLayoutEditConflictError(
+                "该操作键已用于不同的地图对象"
+            )
+    return mutation
+
+
 def create_warehouse_twin_rack(
     floor_code: str,
     *,
@@ -1061,12 +1182,46 @@ def _normalize_zone_points(points: list[list[float]]) -> list[list[float]]:
     return normalized
 
 
+def _normalize_aisle_points(points: list[list[float]]) -> list[list[float]]:
+    if len(points) < 2 or len(points) > 64:
+        raise WarehouseTwinLayoutEditError("通道至少需要起点和终点")
+    normalized: list[list[float]] = []
+    for point in points:
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            raise WarehouseTwinLayoutEditError("通道坐标必须是二维坐标")
+        try:
+            x_mm, y_mm = float(point[0]), float(point[1])
+        except (TypeError, ValueError, OverflowError) as error:
+            raise WarehouseTwinLayoutEditError("通道坐标必须是数值") from error
+        if not math.isfinite(x_mm) or not math.isfinite(y_mm):
+            raise WarehouseTwinLayoutEditError("通道坐标必须是有限数值")
+        if abs(x_mm) > 10_000_000 or abs(y_mm) > 10_000_000:
+            raise WarehouseTwinLayoutEditError("通道坐标超出允许范围")
+        normalized.append([round(x_mm, 3), round(y_mm, 3)])
+    if any(normalized[index] == normalized[index + 1] for index in range(len(normalized) - 1)):
+        raise WarehouseTwinLayoutEditError("通道相邻坐标不能重复")
+    return normalized
+
+
 def _zone_area_mm2(points: list[list[float]]) -> float:
     return round(abs(sum(
         points[index][0] * points[(index + 1) % len(points)][1]
         - points[(index + 1) % len(points)][0] * points[index][1]
         for index in range(len(points))
     )) / 2, 3)
+
+
+def _aisle_area_mm2(points: list[list[float]], width_mm: float) -> float:
+    length_mm = sum(
+        math.hypot(
+            points[index + 1][0] - points[index][0],
+            points[index + 1][1] - points[index][1],
+        )
+        for index in range(len(points) - 1)
+    )
+    if length_mm <= 0:
+        raise WarehouseTwinLayoutEditError("通道长度必须大于0")
+    return round(length_mm * width_mm, 3)
 
 
 def _segments_intersect(a: list[float], b: list[float], c: list[float], d: list[float]) -> bool:
@@ -1093,6 +1248,71 @@ def _reject_self_intersection(points: list[list[float]]) -> None:
                 raise WarehouseTwinLayoutEditError('区域边界不能自相交')
 
 
+def update_warehouse_twin_feature_geometry(
+    floor_code: str,
+    feature_id: str,
+    *,
+    expected_revision: str,
+    expected_version: int,
+    operation_key: str,
+    points: list[list[float]],
+    expected_kind: str | None = None,
+    action: str = "feature.geometry.update",
+    path: Path | None = None,
+) -> LayoutMutation:
+    def mutate(floor: dict[str, Any]) -> dict[str, Any]:
+        feature = _feature(floor, feature_id)
+        feature_kind = str(feature.get("feature_kind") or "")
+        if feature_kind not in {"zone", "aisle"}:
+            raise WarehouseTwinLayoutEditError("只有区域和通道可以调整布局")
+        if expected_kind is not None and feature_kind != expected_kind:
+            raise WarehouseTwinLayoutEditError("只有仓储区域可以修改实测边界")
+        normalized_points = (
+            _normalize_zone_points(points)
+            if feature_kind == "zone"
+            else _normalize_aisle_points(points)
+        )
+        if feature_kind == "zone":
+            _reject_self_intersection(normalized_points)
+        _ensure_version(feature, expected_version, '区域' if feature_kind == 'zone' else '通道')
+        if feature.get('is_locked'):
+            raise WarehouseTwinLayoutEditConflictError(
+                f"{'区域' if feature_kind == 'zone' else '通道'}已确认并锁定，必须先解除锁定"
+            )
+        _ensure_points_within_floor(
+            floor,
+            normalized_points,
+            label="区域边界" if feature_kind == "zone" else "通道",
+        )
+        feature['points'] = normalized_points
+        feature['area_mm2'] = (
+            _zone_area_mm2(normalized_points)
+            if feature_kind == "zone"
+            else _aisle_area_mm2(
+                normalized_points, float(feature.get("width_mm") or 0)
+            )
+        )
+        feature['status'] = 'candidate'
+        feature['version'] = int(feature.get('version') or 1) + 1
+        return dict(feature)
+
+    mutation = _apply_mutation(
+        floor_code,
+        expected_revision=expected_revision,
+        operation_key=operation_key,
+        action=action,
+        mutate=mutate,
+        path=path,
+    )
+    normalized_replay_points = [
+        [round(float(point[0]), 3), round(float(point[1]), 3)]
+        for point in points
+    ]
+    if not mutation.applied and mutation.value.get('points') != normalized_replay_points:
+        raise WarehouseTwinLayoutEditConflictError('该操作键已用于不同的区域边界')
+    return mutation
+
+
 def update_warehouse_twin_zone_geometry(
     floor_code: str,
     feature_id: str,
@@ -1103,44 +1323,17 @@ def update_warehouse_twin_zone_geometry(
     points: list[list[float]],
     path: Path | None = None,
 ) -> LayoutMutation:
-    normalized_points = _normalize_zone_points(points)
-    _reject_self_intersection(normalized_points)
-
-    def mutate(floor: dict[str, Any]) -> dict[str, Any]:
-        feature = _feature(floor, feature_id)
-        if feature.get('feature_kind') != 'zone':
-            raise WarehouseTwinLayoutEditError('只有仓储区域可以修改实测边界')
-        _ensure_version(feature, expected_version, '区域')
-        if feature.get('is_locked'):
-            raise WarehouseTwinLayoutEditConflictError('区域已确认并锁定，必须先解除锁定')
-        bounds = floor.get('bounds_mm') or {}
-        if not all(key in bounds for key in ('min_x', 'min_y', 'max_x', 'max_y')):
-            raise WarehouseTwinLayoutEditError('楼层实测边界不完整，不能修改区域')
-        if any(
-            point[0] < float(bounds.get('min_x', point[0]))
-            or point[0] > float(bounds.get('max_x', point[0]))
-            or point[1] < float(bounds.get('min_y', point[1]))
-            or point[1] > float(bounds.get('max_y', point[1]))
-            for point in normalized_points
-        ):
-            raise WarehouseTwinLayoutEditError('区域边界不能超出本楼层实测地图范围')
-        feature['points'] = normalized_points
-        feature['area_mm2'] = _zone_area_mm2(normalized_points)
-        feature['status'] = 'candidate'
-        feature['version'] = int(feature.get('version') or 1) + 1
-        return dict(feature)
-
-    mutation = _apply_mutation(
+    return update_warehouse_twin_feature_geometry(
         floor_code,
+        feature_id,
         expected_revision=expected_revision,
+        expected_version=expected_version,
         operation_key=operation_key,
-        action='zone.geometry.update',
-        mutate=mutate,
+        points=points,
+        expected_kind="zone",
+        action="zone.geometry.update",
         path=path,
     )
-    if not mutation.applied and mutation.value.get('points') != normalized_points:
-        raise WarehouseTwinLayoutEditConflictError('该操作键已用于不同的区域边界')
-    return mutation
 
 
 def _duplicate_values(items: list[dict[str, Any]], key: str) -> list[str]:

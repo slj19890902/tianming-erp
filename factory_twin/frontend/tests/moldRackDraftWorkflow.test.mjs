@@ -85,7 +85,7 @@ test("the live mold rack buttons use the tested workflow state", () => {
   );
   assert.match(
     appSource,
-    /rememberServerDraft\(response\.revision\);[\s\S]*delete next\[selectedRack\.id\]/
+    /const saveRackDraftImmediately = async[\s\S]*rememberServerDraft\(response\.revision\);[\s\S]*delete next\[rackId\]/
   );
   assert.match(
     appSource,

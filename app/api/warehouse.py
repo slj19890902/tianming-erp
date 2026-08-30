@@ -156,6 +156,7 @@ from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditNotFoundError,
     WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK,
     begin_warehouse_twin_one_step_publish,
+    create_warehouse_twin_feature,
     create_warehouse_twin_rack,
     delete_warehouse_twin_rack,
     discard_warehouse_twin_layout_draft,
@@ -169,6 +170,7 @@ from app.services.warehouse_twin_layout_editor import (
     snapshot_warehouse_twin_layout_draft,
     snapshot_warehouse_twin_publish_state,
     update_warehouse_twin_rack,
+    update_warehouse_twin_feature_geometry,
     update_warehouse_twin_zone_geometry,
     update_warehouse_twin_zone_policy,
     validate_warehouse_twin_layout_draft,
@@ -9479,6 +9481,22 @@ class TwinRackLayoutUpdatePayload(TwinRackLayoutFields):
     operation_key: str = Field(min_length=8, max_length=120)
 
 
+class TwinLayoutFeatureCreatePayload(BaseModel):
+    expected_revision: str = Field(min_length=1, max_length=64)
+    operation_key: str = Field(min_length=8, max_length=120)
+    feature_kind: Literal["zone", "aisle"]
+    points: list[tuple[float, float]] = Field(min_length=2, max_length=64)
+    width_mm: float | None = Field(default=None, gt=0, le=20_000)
+    direction: Literal["one_way", "two_way"] | None = None
+
+
+class TwinLayoutFeatureGeometryPayload(BaseModel):
+    expected_revision: str = Field(min_length=1, max_length=64)
+    expected_version: int = Field(ge=1)
+    operation_key: str = Field(min_length=8, max_length=120)
+    points: list[tuple[float, float]] = Field(min_length=2, max_length=64)
+
+
 class TwinZoneStoragePolicyPayload(BaseModel):
     expected_revision: str = Field(min_length=1, max_length=64)
     expected_version: int = Field(ge=1)
@@ -10742,6 +10760,116 @@ def rebuild_stale_twin_layout_draft(
                 restore_warehouse_twin_layout_draft(draft_snapshot)
             raise
         return {**result.value, "applied": result.applied}
+
+
+@router.post("/twin-layout/floors/{floor_code}/features", status_code=201)
+def create_twin_layout_feature(
+    floor_code: str,
+    payload: TwinLayoutFeatureCreatePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        draft_snapshot = snapshot_warehouse_twin_layout_draft()
+        mutation = None
+        try:
+            mutation = create_warehouse_twin_feature(
+                floor_code,
+                expected_revision=payload.expected_revision,
+                operation_key=payload.operation_key,
+                feature_kind=payload.feature_kind,
+                points=[list(point) for point in payload.points],
+                width_mm=payload.width_mm,
+                direction=payload.direction,
+            )
+            if mutation.applied:
+                _twin_layout_asset_log(
+                    db,
+                    request=request,
+                    user=user,
+                    action="TWIN_LAYOUT_FEATURE_CREATE",
+                    entity_type="twin_layout_feature",
+                    entity_id=str(mutation.value.get("id") or ""),
+                    description="二维仓库规划新增区域或通道",
+                    details={
+                        "floor_code": floor_code,
+                        "feature": mutation.value,
+                        "inventory_changed": False,
+                        "published_map_changed": False,
+                    },
+                )
+                db.commit()
+        except WarehouseTwinLayoutEditError as error:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            _handle_twin_layout_edit_error(error)
+        except Exception:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            raise
+        return {
+            "item": mutation.value,
+            "revision": mutation.floor_revision,
+            "applied": mutation.applied,
+        }
+
+
+@router.patch("/twin-layout/floors/{floor_code}/features/{feature_id}/geometry")
+def update_twin_layout_feature_geometry(
+    floor_code: str,
+    feature_id: str,
+    payload: TwinLayoutFeatureGeometryPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        draft_snapshot = snapshot_warehouse_twin_layout_draft()
+        mutation = None
+        try:
+            mutation = update_warehouse_twin_feature_geometry(
+                floor_code,
+                feature_id,
+                expected_revision=payload.expected_revision,
+                expected_version=payload.expected_version,
+                operation_key=payload.operation_key,
+                points=[list(point) for point in payload.points],
+            )
+            if mutation.applied:
+                _twin_layout_asset_log(
+                    db,
+                    request=request,
+                    user=user,
+                    action="TWIN_LAYOUT_FEATURE_GEOMETRY_UPDATE",
+                    entity_type="twin_layout_feature",
+                    entity_id=feature_id,
+                    description="二维仓库规划调整区域或通道位置",
+                    details={
+                        "floor_code": floor_code,
+                        "feature": mutation.value,
+                        "inventory_changed": False,
+                        "published_map_changed": False,
+                    },
+                )
+                db.commit()
+        except WarehouseTwinLayoutEditError as error:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            _handle_twin_layout_edit_error(error)
+        except Exception:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            raise
+        return {
+            "item": mutation.value,
+            "revision": mutation.floor_revision,
+            "applied": mutation.applied,
+        }
 
 
 @router.post("/twin-layout/floors/{floor_code}/racks", status_code=201)

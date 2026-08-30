@@ -5318,6 +5318,113 @@ def test_layout_draft_can_add_zone_and_aisle_then_move_the_aisle(
     assert replayed.applied is False
 
 
+def test_layout_draft_can_delete_an_unbound_zone_and_replay_safely(
+    tmp_path: Path,
+) -> None:
+    published = _published_layout(tmp_path / "delete-layout-object.json")
+    created = editor.create_warehouse_twin_feature(
+        "3F",
+        expected_revision=_revision(published),
+        operation_key="p1-128-create-zone-for-delete",
+        feature_kind="zone",
+        points=[[500, 500], [3_000, 500], [3_000, 2_500], [500, 2_500]],
+        path=published,
+    )
+
+    deleted = editor.delete_warehouse_twin_feature(
+        "3F",
+        created.value["id"],
+        expected_revision=created.floor_revision,
+        expected_version=1,
+        operation_key="p1-128-delete-zone-draft",
+        path=published,
+    )
+    assert deleted.applied is True
+    assert deleted.value == {
+        "id": created.value["id"],
+        "feature_code": created.value["feature_code"],
+        "feature_kind": "zone",
+        "deleted": True,
+        "inventory_changed": False,
+        "published_map_changed": False,
+    }
+    floor = json.loads(published.read_text(encoding="utf-8"))["floors"]["3F"]
+    assert created.value["id"] not in {item["id"] for item in floor["features"]}
+    assert floor["retired_features"][-1]["id"] == created.value["id"]
+
+    replayed = editor.delete_warehouse_twin_feature(
+        "3F",
+        created.value["id"],
+        expected_revision=deleted.floor_revision,
+        expected_version=1,
+        operation_key="p1-128-delete-zone-draft",
+        path=published,
+    )
+    assert replayed.applied is False
+    assert replayed.value == deleted.value
+
+
+def test_layout_draft_rejects_deleting_a_zone_that_still_owns_racks(
+    tmp_path: Path,
+) -> None:
+    published = _published_layout(tmp_path / "delete-zone-with-rack.json")
+    revision = _revision(published)
+    rack = editor.create_warehouse_twin_rack(
+        "3F",
+        expected_revision=revision,
+        operation_key="p1-128-rack-blocks-zone-delete",
+        area_feature_id="zone-f1",
+        values=_rack_values(levels=2, level_cell_counts=[0, 0]),
+        path=published,
+    )
+
+    with pytest.raises(WarehouseTwinLayoutEditConflictError, match="货架"):
+        editor.delete_warehouse_twin_feature(
+            "3F",
+            "zone-f1",
+            expected_revision=rack.floor_revision,
+            expected_version=1,
+            operation_key="p1-128-delete-zone-with-rack",
+            path=published,
+        )
+
+    floor = json.loads(published.read_text(encoding="utf-8"))["floors"]["3F"]
+    assert any(item["id"] == "zone-f1" for item in floor["features"])
+    assert any(item["id"] == rack.value["id"] for item in floor["racks"])
+
+
+def test_feature_delete_api_rejects_a_formally_bound_zone_before_draft_write(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-47b-admin"))
+            assert admin is not None
+            _bind_formal_area(db, admin=admin)
+            db.commit()
+
+            with pytest.raises(Exception) as caught:
+                warehouse_api.delete_twin_layout_feature(
+                    "3F",
+                    "zone-f1",
+                    expected_revision=_revision(published),
+                    expected_version=1,
+                    operation_key="p1-128-delete-formal-zone",
+                    request=_request(),
+                    db=db,
+                    user=admin,
+                )
+
+            assert getattr(caught.value, "status_code", None) == 409
+            assert "正式区域" in str(getattr(caught.value, "detail", caught.value))
+            assert not draft.exists()
+    finally:
+        engine.dispose()
+
+
 def test_new_layout_object_rejects_missing_aisle_width_and_out_of_bounds_zone(
     tmp_path: Path,
 ) -> None:
@@ -5356,6 +5463,10 @@ def test_simple_planning_uses_one_contextual_map_operation_workflow() -> None:
     assert 'createLayoutFeature' in TWIN_SOURCE
     assert '/features/${feature.id}/geometry' in TWIN_SOURCE
     assert 'onBlur={saveSelectedZoneGeometry}' in TWIN_SOURCE
+    assert 'zoneGeometryDraftsRef.current[selectedAreaFeature.id]' in TWIN_SOURCE
+    assert 'deleteSelectedLayoutFeature' in TWIN_SOURCE
+    assert '/features/${selectedLayoutFeature.id}?expected_revision=' in TWIN_SOURCE
+    assert 'mapPanLocked={locationEditMode && layoutMapTool === "adjust"}' in TWIN_SOURCE
     assert 'aria-label="货架方向"' in TWIN_SOURCE
     assert 'saveRackDraftImmediately' in TWIN_SOURCE
     assert '>新增区域</button>' not in TWIN_SOURCE
@@ -5403,6 +5514,7 @@ def test_layout_mutation_api_wrappers_share_one_transaction_lock() -> None:
         'publish_twin_layout_draft',
         'validate_twin_layout_draft',
         'discard_twin_layout_draft',
+        'delete_twin_layout_feature',
         'update_twin_zone_geometry',
         'update_twin_zone_storage_policy',
     ):
@@ -5427,7 +5539,7 @@ def test_p1_47b_frontend_exposes_admin_planning_without_leaking_drafts_to_lookup
     assert "returnToLookupMode" in TWIN_SOURCE
     assert "refreshPublishedTwinFloor" in TWIN_SOURCE
     assert "/api/warehouse/twin-layout/floors/${floorCode}/draft`" in TWIN_SOURCE
-    assert "/zones/${selectedAreaFeature.id}/geometry" in TWIN_SOURCE
+    assert "/features/${feature.id}/geometry" in TWIN_SOURCE
     assert "容量待复核" in TWIN_SOURCE
     assert "confirmed_pallet_capacity" in TWIN_SOURCE
     assert 'floorCode === "3F"\n          ? `/api/warehouse/floor3/layout/areas/' not in TWIN_SOURCE

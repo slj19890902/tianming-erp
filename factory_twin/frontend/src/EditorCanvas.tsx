@@ -55,6 +55,7 @@ interface Props {
   palletEditingOnly?: boolean;
   rackEditingEnabled?: boolean;
   featureEditingEnabled?: boolean;
+  mapPanLocked?: boolean;
   allowPalletSelection?: boolean;
   palletSnapEnabled: boolean;
   palletSnapThresholdMm: number;
@@ -363,6 +364,7 @@ export function EditorCanvas({
   palletEditingOnly = false,
   rackEditingEnabled = false,
   featureEditingEnabled = true,
+  mapPanLocked = false,
   allowPalletSelection = false,
   palletSnapEnabled,
   palletSnapThresholdMm,
@@ -457,7 +459,7 @@ export function EditorCanvas({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.enableRotate = viewMode === "25d";
-    controls.enablePan = true;
+    controls.enablePan = !mapPanLocked;
     controls.screenSpacePanning = true;
     controls.maxZoom = 12;
     controls.minZoom = 0.25;
@@ -1438,7 +1440,7 @@ export function EditorCanvas({
       });
       renderer.dispose();
     };
-  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, allowPalletSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
+  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, mapPanLocked, allowPalletSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

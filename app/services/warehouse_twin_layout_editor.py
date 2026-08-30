@@ -1050,6 +1050,63 @@ def delete_warehouse_twin_rack(
     )
 
 
+def delete_warehouse_twin_feature(
+    floor_code: str,
+    feature_id: str,
+    *,
+    expected_revision: str,
+    expected_version: int,
+    operation_key: str,
+    path: Path | None = None,
+) -> LayoutMutation:
+    def mutate(floor: dict[str, Any]) -> dict[str, Any]:
+        feature = _feature(floor, feature_id)
+        feature_kind = str(feature.get("feature_kind") or "")
+        if feature_kind not in {"zone", "aisle"}:
+            raise WarehouseTwinLayoutEditError("只有区域和通道可以从规划草稿删除")
+        label = "区域" if feature_kind == "zone" else "通道"
+        _ensure_version(feature, expected_version, label)
+        if feature.get("is_locked"):
+            raise WarehouseTwinLayoutEditConflictError(
+                f"{label}已确认并锁定，必须先解除锁定"
+            )
+        if feature_kind == "zone" and any(
+            rack.get("area_feature_id") == feature_id
+            for rack in floor.get("racks") or []
+        ):
+            raise WarehouseTwinLayoutEditConflictError(
+                "区域内仍有货架，请先处理货架后再删除区域"
+            )
+        floor["features"] = [
+            item
+            for item in floor.get("features") or []
+            if item.get("id") != feature_id
+        ]
+        retired = dict(feature)
+        retired["retired_at"] = _utc_iso()
+        retired["retired_reason"] = (
+            "管理员从二维规划草稿删除；正式区域、库存、库位和正式地图未改变"
+        )
+        floor.setdefault("retired_features", []).append(retired)
+        return {
+            "id": feature_id,
+            "feature_code": feature.get("feature_code"),
+            "feature_kind": feature_kind,
+            "deleted": True,
+            "inventory_changed": False,
+            "published_map_changed": False,
+        }
+
+    return _apply_mutation(
+        floor_code,
+        expected_revision=expected_revision,
+        operation_key=operation_key,
+        action="feature.delete",
+        mutate=mutate,
+        path=path,
+    )
+
+
 def update_warehouse_twin_zone_policy(
     floor_code: str,
     feature_id: str,

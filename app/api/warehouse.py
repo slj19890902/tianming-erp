@@ -158,6 +158,7 @@ from app.services.warehouse_twin_layout_editor import (
     begin_warehouse_twin_one_step_publish,
     create_warehouse_twin_feature,
     create_warehouse_twin_rack,
+    delete_warehouse_twin_feature,
     delete_warehouse_twin_rack,
     discard_warehouse_twin_layout_draft,
     load_effective_warehouse_twin_floor_for_edit,
@@ -10853,6 +10854,67 @@ def update_twin_layout_feature_geometry(
                         "inventory_changed": False,
                         "published_map_changed": False,
                     },
+                )
+                db.commit()
+        except WarehouseTwinLayoutEditError as error:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            _handle_twin_layout_edit_error(error)
+        except Exception:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            raise
+        return {
+            "item": mutation.value,
+            "revision": mutation.floor_revision,
+            "applied": mutation.applied,
+        }
+
+
+@router.delete("/twin-layout/floors/{floor_code}/features/{feature_id}")
+def delete_twin_layout_feature(
+    floor_code: str,
+    feature_id: str,
+    expected_revision: str = Query(min_length=1, max_length=64),
+    expected_version: int = Query(ge=1),
+    operation_key: str = Query(min_length=8, max_length=120),
+    request: Request = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        formal_policy = db.scalar(
+            select(WarehouseAreaStoragePolicy).where(
+                WarehouseAreaStoragePolicy.map_feature_id == feature_id
+            )
+        )
+        if formal_policy is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="区域已绑定正式区域，不能从规划草稿删除；请先按正式停用流程处理",
+            )
+        draft_snapshot = snapshot_warehouse_twin_layout_draft()
+        mutation = None
+        try:
+            mutation = delete_warehouse_twin_feature(
+                floor_code,
+                feature_id,
+                expected_revision=expected_revision,
+                expected_version=expected_version,
+                operation_key=operation_key,
+            )
+            if mutation.applied:
+                _twin_layout_asset_log(
+                    db,
+                    request=request,
+                    user=user,
+                    action="TWIN_LAYOUT_FEATURE_DELETE",
+                    entity_type="twin_layout_feature",
+                    entity_id=feature_id,
+                    description="二维仓库规划删除未启用区域或通道",
+                    details={"floor_code": floor_code, **mutation.value},
                 )
                 db.commit()
         except WarehouseTwinLayoutEditError as error:

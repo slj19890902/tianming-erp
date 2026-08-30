@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(new URL("../src/WarehouseTwinApp.tsx", import.meta.url), "utf8");
+const editorSource = readFileSync(new URL("../src/EditorCanvas.tsx", import.meta.url), "utf8");
 const sceneSource = readFileSync(new URL("../src/industrialScene.ts", import.meta.url), "utf8");
 const cssSource = readFileSync(new URL("../src/warehouseTwin.css", import.meta.url), "utf8");
 
@@ -62,6 +63,22 @@ test("area planning keeps short inputs in compact rows", () => {
   assert.match(cssSource, /\.twin-zone-primary-fields,[\s\S]*\.twin-mold-rack-fields\s*\{[\s\S]*repeat\(auto-fit, minmax\(100px, 1fr\)\)/);
   assert.match(cssSource, /\.twin-zone-geometry-grid\s*\{[\s\S]*repeat\(4, minmax\(0, 1fr\)\)/);
   assert.match(cssSource, /\.twin-ground-layout-grid\s*\{[\s\S]*repeat\(3, minmax\(0, 1fr\)\)/);
+});
+
+test("planning dimensions save the latest input and adjustment locks map panning", () => {
+  assert.match(source, /const zoneGeometryDraftsRef = useRef<Record<string, number\[\]\[\]>>\(\{\}\)/);
+  assert.match(source, /zoneGeometryDraftsRef\.current\[selectedAreaFeature\.id\]/);
+  assert.match(source, /mapPanLocked=\{locationEditMode && layoutMapTool === "adjust"\}/);
+  assert.match(editorSource, /mapPanLocked\?: boolean/);
+  assert.match(editorSource, /controls\.enablePan = !mapPanLocked/);
+});
+
+test("planning uses one contextual delete action for selected zones or aisles", () => {
+  assert.match(source, /deleteSelectedLayoutFeature/);
+  assert.match(source, /\/features\/\$\{selectedLayoutFeature\.id\}\?expected_revision=/);
+  assert.match(source, /selectedLayoutFeature\.feature_kind === "aisle" \? "删除通道" : "删除区域"/);
+  assert.doesNotMatch(source, />新增区域<\/button>/);
+  assert.doesNotMatch(source, />新增通道<\/button>/);
 });
 
 test("ordinary planning no longer offers tight automatic pallet packing", () => {

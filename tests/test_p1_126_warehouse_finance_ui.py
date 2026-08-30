@@ -50,19 +50,19 @@ def test_finance_navigation_and_statement_rows_keep_low_frequency_actions_folded
     nav_start = FINANCE.index('<div class="page-head finance-page-head">')
     nav_end = FINANCE.index('<template v-if="financeView===\'current\'">', nav_start)
     nav = FINANCE[nav_start:nav_end]
-    assert nav.count("<button") == 5
-    assert nav.count("<summary") == 1
-    assert '<details class="finance-row-more">' in nav
-    assert "月度年度报表" in nav and "全部单据" in nav
+    assert nav.count("<button") == 4
+    assert nav.count("<summary") == 0
+    for label in ("经营概览", "客户对账", "开票任务", "应付支出"):
+        assert label in nav
 
     row_start = FINANCE.index('<tr v-for="statement in row.statements"')
     row_end = FINANCE.index("</tr>", row_start)
     row = FINANCE[row_start:row_end]
     assert ">查看</button>" not in row
     assert "v-else-if=\"canGenerateInvoiceTask" in row
-    assert "登记开票" in row and "收款核销" in row
-    assert '<summary class="btn small">更多</summary>' in row
-    assert "导出 Excel" in row and "取消" in row
+    assert "生成开票任务" in row and "客户异议" in row
+    assert "Excel" in row and "PDF" in row
+    assert "收款核销" not in row
 
 
 def test_stocktake_records_partner_source_supports_rack_and_exposes_labels() -> None:

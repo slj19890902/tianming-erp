@@ -1,0 +1,44 @@
+{
+  "task_id": "P1-130",
+  "scope": "home isolated UAT only",
+  "source": {
+    "path": "D:\\tm-uat\\p1-128-factory-backup-view-20260830\\runs\\factory-20260820-144653-e7994493-candidate-a30c37a5\\backups\\carton_erp_before_upgrade_vv30_to_gs54_20260830.sqlite3",
+    "sha256": "3E1BA7FBCE2D8BE2AB76B926AF2C2282D046C61130404680F9B4D3024F07DD91",
+    "write_performed": false
+  },
+  "uat_copy": {
+    "path": "D:\\tm-uat\\p1-130-finance-20260830_230359\\carton_erp_p1130_uat.sqlite3",
+    "parent_revision": "gs54v8x9z43",
+    "target_revision": "ht55v8x9z44",
+    "pre_upgrade_backup": {
+      "path": "D:\\tm-uat\\p1-130-finance-20260830_230359\\backups\\carton_erp_before_ht55.sqlite3",
+      "sha256": "AA6645CC2543B4ABD5FDF2303BA3B33D555D3D6350E0EFACAA23D892F7FE2392"
+    },
+    "upgrade_downgrade_upgrade": "passed",
+    "quick_check": "ok",
+    "foreign_key_violations": 0,
+    "target_tables_present": true,
+    "target_columns_present": true
+  },
+  "uat_login": {
+    "note": "The isolated copy's admin credential was reset for local acceptance only; no production credential was changed or recorded.",
+    "pre_reset_backup": {
+      "path": "D:\\tm-uat\\p1-130-finance-20260830_230359\\backups\\carton_erp_before_uat_admin_reset_20260830.sqlite3",
+      "sha256": "DAF1B58CD1D01CF32237595B50A8F29DE3A6CA474EF1EC2736BA9FB228FB02A7"
+    }
+  },
+  "api_smoke": {
+    "health": true,
+    "role": "admin",
+    "overview_trend_months": 6,
+    "current_customer_month_total": 19,
+    "invoice_task_total": 0,
+    "payable_total": 0,
+    "collection_boundary": "Customer receipts remain outside ERP settlement."
+  },
+  "known_environment_gate": {
+    "empty_database_head_upgrade": "blocked by historical P0-25 RAW-001 data preflight before the P1-130 revision",
+    "assessment": "not introduced by ht55v8x9z44; the factory-shaped isolated copy completed the full round trip"
+  },
+  "production_database_written": false
+}

@@ -13,11 +13,10 @@ def _history_template() -> str:
 
 
 def test_finance_keeps_current_history_and_all_document_views() -> None:
-    assert "@click=\"setFinanceView('current')\">当前处理" in INDEX
-    assert (
-        "@click=\"setFinanceView('settled_history')\">已结清历史" in INDEX
-    )
-    assert "@click=\"setFinanceView('statements')\">全部单据" in INDEX
+    assert "@click=\"setFinanceView('overview')\">经营概览" in INDEX
+    assert "@click=\"setFinanceView('current')\">客户对账" in INDEX
+    assert "@click=\"setFinanceView('invoice_tasks')\">开票任务" in INDEX
+    assert "@click=\"setFinanceView('payables')\">应付支出" in INDEX
     assert "全部对账单（历史分区将在下一阶段完善）" not in INDEX
     assert '<div class="section-title">开票记录</div>' in INDEX
     assert 'axios.get("/api/finance/current-customer-months"' in INDEX
@@ -71,6 +70,6 @@ def test_settled_history_distinguishes_loading_error_and_empty_states() -> None:
 
 
 def test_finance_view_switch_keeps_dashboard_on_current_workbench() -> None:
-    assert "['current','settled_history','reports','statements'].includes(view)" in INDEX
-    assert 'this.financeView = "current";' in INDEX
+    assert "['overview','current','invoice_tasks','payables'].includes(view)" in INDEX
+    assert 'financeView: "overview"' in INDEX
     assert "this.pages.financeCurrent = 1" in INDEX

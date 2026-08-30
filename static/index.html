@@ -659,6 +659,23 @@
       .finance-filter-panel { overflow:visible; position:relative; z-index:25; }
       .finance-filter-panel .search-select:focus-within { z-index:300; }
       .finance-filter-panel .search-select-list { z-index:500; }
+      .finance-overview-grid { display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,.8fr);gap:10px;margin-bottom:10px; }
+      .finance-chart { min-height:260px; }
+      .finance-trend-bars { display:grid;grid-template-columns:repeat(6,minmax(76px,1fr));gap:8px;align-items:end;height:190px;padding:14px 8px 0;border-bottom:1px solid var(--line); }
+      .finance-trend-month { display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;align-items:end;height:165px;position:relative; }
+      .finance-trend-month > span { min-height:3px;border-radius:5px 5px 0 0; }
+      .finance-trend-month .income { background:#167d74; }
+      .finance-trend-month .invoice { background:#3b82f6; }
+      .finance-trend-month .expense { background:#d97706; }
+      .finance-trend-labels { display:grid;grid-template-columns:repeat(6,1fr);gap:8px;text-align:center;font-size:11px;color:var(--muted);padding-top:5px; }
+      .finance-legend { display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted); }
+      .finance-legend i { display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px; }
+      .finance-aging-row { display:grid;grid-template-columns:100px 1fr 92px;gap:8px;align-items:center;margin:9px 0; }
+      .finance-aging-track { height:10px;background:#e8efee;border-radius:999px;overflow:hidden; }
+      .finance-aging-track > span { display:block;height:100%;background:#167d74;border-radius:inherit; }
+      .finance-aging-row.overdue .finance-aging-track > span { background:#d97706; }
+      .payable-form-grid { display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;align-items:end; }
+      @media (max-width: 980px) { .finance-overview-grid{grid-template-columns:1fr}.payable-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))} }
       .table-wrap { overflow: auto; max-height: calc(100vh - 220px); }
       table { width: 100%; border-collapse: collapse; white-space: nowrap; }
       th, td { padding: 10px 16px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; }
@@ -2769,7 +2786,7 @@
       <div v-if="!user" class="login-shell">
         <form class="login-card" @submit.prevent="login">
           <h1><img src="/static/assets/logo.png" alt="天明包装ERP" style="width:40px;height:40px;vertical-align:middle;margin-right:8px;object-fit:contain" />天明包装ERP</h1>
-          <p>订单、来料、送货、回单、对账、开票与收款闭环</p>
+          <p>订单、来料、送货、回单、对账、开票与应付支出</p>
           <div class="field"><label for="erp-login-username">用户名</label><input id="erp-login-username" class="input" v-model.trim="loginForm.username" autocomplete="username" :aria-describedby="loginError ? 'erp-login-error' : null" :aria-invalid="!!loginError" /></div>
           <div class="field"><label for="erp-login-password">密码</label><input id="erp-login-password" class="input" v-model="loginForm.password" type="password" autocomplete="current-password" :aria-describedby="loginError ? 'erp-login-error' : null" :aria-invalid="!!loginError" /></div>
           <div class="remember-line"><input id="erp-login-remember" type="checkbox" v-model="loginForm.remember_me" /><label for="erp-login-remember">记住登录（常用电脑 30 天免重复登录）</label></div>
@@ -4547,21 +4564,44 @@
             </template>
 
             <template v-else-if="activePage === 'finance'">
-              <div class="page-head finance-page-head"><div><h2>对账、开票与收款</h2><div class="muted">当前待办和已结清历史分开显示；均按客户和月份汇总。</div></div>
+              <div class="page-head finance-page-head"><div><h2>对账与开票</h2><div class="muted">客户对账、开票任务和应付支出集中处理；收款仍以银行和承兑记录为准。</div></div>
                 <div class="toolbar-group">
-                  <button :class="['btn',{primary:financeView==='current'}]" @click="setFinanceView('current')">当前处理</button>
-                  <button :class="['btn',{primary:financeView==='settled_history'}]" @click="setFinanceView('settled_history')">已结清历史</button>
+                  <button :class="['btn',{primary:financeView==='overview'}]" @click="setFinanceView('overview')">经营概览</button>
+                  <button :class="['btn',{primary:financeView==='current'}]" @click="setFinanceView('current')">客户对账</button>
                   <button v-if="canViewInvoiceTasks" :class="['btn',{primary:financeView==='invoice_tasks'}]" @click="setFinanceView('invoice_tasks')">开票任务</button>
-                  <details class="finance-row-more"><summary :class="['btn',{primary:['reports','statements'].includes(financeView)}]">更多</summary><div class="finance-row-more-panel"><button :class="['btn small',{primary:financeView==='reports'}]" @click="setFinanceView('reports')">月度年度报表</button><button :class="['btn small',{primary:financeView==='statements'}]" @click="setFinanceView('statements')">全部单据</button></div></details>
+                  <button :class="['btn',{primary:financeView==='payables'}]" @click="setFinanceView('payables')">应付支出</button>
                 </div>
               </div>
+              <template v-if="financeView==='overview'">
+                <div v-if="financeOverviewState.error" class="notice warning" style="margin-bottom:10px">经营概览读取失败：{{ financeOverviewState.error }}</div>
+                <div v-if="financeOverviewState.loading" class="empty">正在读取近六个月经营趋势…</div>
+                <template v-else>
+                  <div class="finance-overview-grid">
+                    <div class="panel finance-chart">
+                      <div class="toolbar"><div><div class="section-title">近六个月对比</div><div class="finance-legend"><span><i style="background:#167d74"></i>已确认对账</span><span><i style="background:#3b82f6"></i>已开票</span><span><i style="background:#d97706"></i>应付与支出</span></div></div><input class="input" style="width:150px" type="month" v-model="financeOverviewMonth" @change="loadFinanceOverview" /></div>
+                      <div class="finance-trend-bars"><div v-for="row in financeOverview.trend" :key="row.month" class="finance-trend-month"><span class="income" :style="{height:financeTrendHeight(row.confirmed_statement_amount)}" :title="`已确认对账 ¥${money(row.confirmed_statement_amount)}`"></span><span class="invoice" :style="{height:financeTrendHeight(row.issued_invoice_amount)}" :title="`已开票 ¥${money(row.issued_invoice_amount)}`"></span><span class="expense" :style="{height:financeTrendHeight(row.payable_amount)}" :title="`应付支出 ¥${money(row.payable_amount)}`"></span></div></div>
+                      <div class="finance-trend-labels"><span v-for="row in financeOverview.trend" :key="`label-${row.month}`">{{ row.month.slice(5) }}月</span></div>
+                    </div>
+                    <div class="panel">
+                      <div class="section-title">应付账龄</div>
+                      <div v-for="item in financePayableAgingRows" :key="item.key" :class="['finance-aging-row',{overdue:item.key!=='not_due'}]"><span>{{ item.label }}</span><div class="finance-aging-track"><span :style="{width:financeAgingWidth(item.amount)}"></span></div><strong>¥{{ money(item.amount) }}</strong></div>
+                      <div class="notice" style="margin-top:12px">{{ financeOverview.collection_note }}</div>
+                    </div>
+                  </div>
+                  <div class="finance-overview-grid">
+                    <div class="panel"><div class="section-title">支出结构</div><div v-if="!financeOverview.expense_structure.length" class="empty">尚无已确认应付或支出。</div><div v-for="item in financeOverview.expense_structure" :key="item.category" class="finance-aging-row"><span>{{ payableCategoryText(item.category) }}</span><div class="finance-aging-track"><span :style="{width:financeExpenseWidth(item.amount)}"></span></div><strong>¥{{ money(item.amount) }}</strong></div></div>
+                    <div class="panel"><div class="section-title">成本覆盖</div><div style="font-size:28px;font-weight:700;color:var(--primary)">{{ percent(financeOverview.cost_coverage.coverage_rate) }}</div><div class="muted">{{ financeOverview.cost_coverage.covered_lines }} / {{ financeOverview.cost_coverage.total_lines }} 条明细已有材料成本</div><div style="margin-top:12px"><strong>{{ financeOverview.cost_coverage.label }}</strong><div class="sensitive-price">¥ {{ money(financeOverview.cost_coverage.material_gross_profit_reference) }}</div></div><div v-if="Number(financeOverview.cost_coverage.coverage_rate)<1" class="status orange" style="margin-top:10px">成本未覆盖完整，不把缺失成本当作 0</div></div>
+                  </div>
+                </template>
+              </template>
               <template v-if="financeView==='current'">
               <div class="panel finance-filter-panel" style="margin-bottom:10px">
                 <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
                   <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
                     <div class="field" style="width:150px"><label>对账月份</label><input class="input" type="month" v-model="financeFilters.statement_month" @change="onFinanceMonthChange" /></div>
                     <div class="field" style="width:240px"><label>客户</label><search-select v-model="financeFilters.customer_id" :options="financeCurrentCustomerOptions" label-key="name" value-key="id" placeholder="全部" :allow-empty="true" @change="reloadFinanceCurrent"></search-select></div>
-                    <div class="field" style="width:145px"><label>只看</label><select class="select" v-model="financeFilters.balance_type" @change="reloadFinanceCurrent"><option value="">全部待办</option><option value="pending_reconciliation">待对账</option><option value="pending_invoice">待开票</option><option value="pending_payment">待结款</option></select></div>
+                    <div class="field" style="width:145px"><label>只看</label><select class="select" v-model="financeFilters.balance_type" @change="reloadFinanceCurrent"><option value="">全部待办</option><option value="pending_reconciliation">待对账</option><option value="pending_invoice">待开票</option></select></div>
+                    <div class="field" style="width:155px"><label>导出排序</label><select class="select" v-model="financeStatementSort"><option value="business">送货日期顺序</option><option value="order_number">订单号从小到大</option></select></div>
                   </div>
                   <div class="toolbar-group">
                     <button v-if="canFinance" class="btn primary" @click="openStatement(financeFilters.statement_month)">生成月结对账单</button>
@@ -4573,7 +4613,7 @@
                   <button class="btn small" @click="clearFinanceDashboardFilter">查看全部待办</button>
                 </div>
                 <div v-if="financeCurrentState.loaded && !financeCurrentState.error" class="muted" style="margin-top:8px">
-                  {{ financeFilters.statement_month }}：{{ financeCurrentSummary.customer_count || 0 }} 位客户 · 待对账 ¥{{ money(financeCurrentSummary.pending_reconciliation_amount) }} · 待开票 ¥{{ money(financeCurrentSummary.pending_invoice_amount) }} · 待结款 ¥{{ money(financeCurrentSummary.pending_payment_amount) }}
+                  {{ financeFilters.statement_month }}：{{ financeCurrentSummary.customer_count || 0 }} 位客户 · 待对账 ¥{{ money(financeCurrentSummary.pending_reconciliation_amount) }} · 待开票 ¥{{ money(financeCurrentSummary.pending_invoice_amount) }}
                 </div>
               </div>
               <div v-if="financeCurrentState.error" class="notice warning" style="margin-bottom:10px">财务待办加载失败：{{ financeCurrentState.error }}</div>
@@ -4581,8 +4621,8 @@
                 <div class="section-title">当前处理</div>
                 <div v-if="financeCurrentState.loading" class="empty">正在读取本月财务待办…</div>
                 <div v-else-if="financeCurrentState.error" class="empty">请检查连接后重新刷新。</div>
-                <div v-else-if="financeCurrentState.loaded && !financeCurrentRows.length" class="empty">本月没有需要处理的对账、开票或收款。</div>
-                <div v-else class="table-wrap"><table class="finance-current-table"><thead><tr><th style="width:56px"></th><th style="width:16%">客户</th><th style="width:14%">月份 / 实际周期</th><th class="sensitive-price" style="width:14%">待对账 / 已对账</th><th class="sensitive-price" style="width:13%">待开票 / 已开票</th><th class="sensitive-price" style="width:13%">待结款 / 已收款</th><th style="width:12%">状态</th><th style="width:12%">下一步</th></tr></thead>
+                <div v-else-if="financeCurrentState.loaded && !financeCurrentRows.length" class="empty">本月没有需要处理的对账或开票。</div>
+                <div v-else class="table-wrap"><table class="finance-current-table"><thead><tr><th style="width:56px"></th><th style="width:18%">客户</th><th style="width:16%">月份 / 实际周期</th><th class="sensitive-price" style="width:17%">待对账 / 已对账</th><th class="sensitive-price" style="width:16%">待开票 / 已开票</th><th style="width:14%">状态</th><th style="width:14%">下一步</th></tr></thead>
                   <tbody v-for="row in financeCurrentRows" :key="financeGroupKey(row)">
                     <tr>
                       <td><button class="btn small" @click="toggleFinanceCurrentGroup(row)">{{ financeCurrentExpanded[financeGroupKey(row)] ? '收起' : '展开' }}</button></td>
@@ -4590,22 +4630,20 @@
                       <td>{{ row.statement_month }}<div class="muted">{{ row.period_start }} 至 {{ row.period_end }}</div></td>
                       <td class="sensitive-price"><strong>¥ {{ money(row.pending_reconciliation_amount) }}</strong><div class="muted">已对账 ¥ {{ money(row.reconciled_receivable_amount) }}</div></td>
                       <td class="sensitive-price"><strong>¥ {{ money(row.pending_invoice_amount) }}</strong><div class="muted">已开票 ¥ {{ money(row.invoiced_amount) }}</div></td>
-                      <td class="sensitive-price"><strong>¥ {{ money(row.pending_payment_amount) }}</strong><div class="muted">已收款 ¥ {{ money(row.settled_amount) }}</div></td>
                       <td>
                         <span v-if="row.pending_reconciliation_count || row.blocked_reconciliation_count" class="status orange">待对账</span>
                         <span v-if="Number(row.pending_invoice_amount)>0" class="status blue">待开票</span>
-                        <span v-if="Number(row.pending_payment_amount)>0" class="status orange">待结款</span>
                         <span v-if="row.status_anomaly_count" class="status red">状态需核对</span>
                       </td>
                       <td><button class="btn small primary" :disabled="row.primary_action_blocked" @click="runFinancePrimaryAction(row)">{{ financePrimaryActionLabel(row) }}</button><div v-if="row.primary_action_blocked" class="muted">先处理旧对账单</div></td>
                     </tr>
-                    <tr v-if="financeCurrentExpanded[financeGroupKey(row)]"><td colspan="8" style="padding:8px 12px;background:#f8fafc">
+                    <tr v-if="financeCurrentExpanded[financeGroupKey(row)]"><td colspan="7" style="padding:8px 12px;background:#f8fafc">
                       <div v-if="!row.statements.length" class="muted">尚未生成对账单，请点击“去对账”。</div>
-                      <div v-else class="table-wrap"><table><thead><tr><th>对账单号</th><th class="sensitive-price">应收</th><th class="sensitive-price">待开票</th><th class="sensitive-price">待结款</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                      <div v-else class="table-wrap"><table><thead><tr><th>对账单号</th><th class="sensitive-price">对账金额</th><th class="sensitive-price">待开票</th><th>状态</th><th>操作</th></tr></thead><tbody>
                         <tr v-for="statement in row.statements" :key="statement.id">
-                          <td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_payment_amount) }}</td>
+                          <td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td>
                           <td><span v-if="statement.invoice_status==='invoiced'" class="status green">已开票</span><status-tag v-else :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div></td>
-                          <td class="toolbar-group"><button v-if="canConfirmStatement && statement.confirmation_status!=='confirmed'" class="btn small success" :disabled="!!financeStatementOperationState.action" @click="confirmFinanceStatement(statement)">{{ financeStatementOperationState.action==='confirm' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '确认中…' : '核对并确认' }}</button><button v-else-if="canGenerateInvoiceTask && statement.confirmation_status==='confirmed'" class="btn small" :disabled="!!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button v-if="canFinance" class="btn small" :disabled="Number(statement.pending_invoice_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(statement)">{{ financeStatementOperationState.action==='register' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '登记中…' : '登记开票' }}</button><button v-if="canFinance" class="btn small success" :disabled="Number(statement.pending_payment_amount)<=0 || !!financeStatementOperationState.action" @click="settle(statement)">{{ financeStatementOperationState.action==='settle' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '核销中…' : '收款核销' }}</button><details class="finance-row-more"><summary class="btn small">更多</summary><div class="finance-row-more-panel"><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementEdit(statement)">编辑</button><button class="btn small" @click="exportStatement(statement)">导出 Excel</button><button v-if="canFinance" class="btn small danger" :disabled="!!financeStatementOperationState.action" @click="cancelStatement(statement)">{{ financeStatementOperationState.action==='cancel' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '取消中…' : '取消' }}</button></div></details></td>
+                          <td class="toolbar-group"><button v-if="canConfirmStatement && statement.confirmation_status!=='confirmed'" class="btn small success" :disabled="!!financeStatementOperationState.action" @click="confirmFinanceStatement(statement)">{{ financeStatementOperationState.action==='confirm' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '确认中…' : '确认' }}</button><button v-else-if="canGenerateInvoiceTask && statement.confirmation_status==='confirmed'" class="btn small" :disabled="!!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button class="btn small" @click="exportStatement(statement,'xlsx')">Excel</button><button class="btn small" @click="exportStatement(statement,'pdf')">PDF</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementDispute(statement)">{{ statement.confirmation_status==='confirmed' ? '客户异议' : '调整' }}</button></td>
                         </tr>
                       </tbody></table></div>
                     </td></tr>
@@ -4732,6 +4770,23 @@
                   </div>
                 </template>
               </template>
+              <template v-else-if="financeView==='payables'">
+                <div class="panel finance-filter-panel" style="margin-bottom:10px">
+                  <div class="toolbar"><div><div class="section-title">新增应付 / 支出</div><div class="muted">只做应付与支出登记，不生成会计凭证。</div></div><button class="btn" :disabled="financePayableState.loading" @click="loadFinancePayables">刷新</button></div>
+                  <div class="payable-form-grid" style="margin-top:8px">
+                    <div class="field"><label>类别</label><select class="select" v-model="financePayableForm.category"><option v-for="item in payableCategoryOptions" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
+                    <div class="field"><label>供应商（可不选）</label><select class="select" v-model.number="financePayableForm.supplier_id" @change="applyPayableSupplier"><option :value="null">其他单位 / 支出</option><option v-for="item in financePayableSuppliers" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
+                    <div class="field"><label>收款单位</label><input class="input" v-model.trim="financePayableForm.counterparty_name" /></div>
+                    <div class="field"><label>金额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financePayableForm.amount" /></div>
+                    <div class="field"><label>单据日期</label><input class="input" type="date" v-model="financePayableForm.document_date" /></div>
+                    <div class="field"><label>到期日（可不填）</label><input class="input" type="date" v-model="financePayableForm.due_date" /></div>
+                    <div class="field"><label>单据号（可不填）</label><input class="input" v-model.trim="financePayableForm.document_number" /></div>
+                    <div class="field"><label>备注</label><input class="input" v-model.trim="financePayableForm.note" /></div>
+                  </div>
+                  <div class="toolbar-group" style="justify-content:flex-end;margin-top:8px"><button v-if="canFinance" class="btn primary" :disabled="financePayableState.saving" @click="createFinancePayable">{{ financePayableState.saving ? '保存中…' : '保存草稿' }}</button></div>
+                </div>
+                <div class="panel"><div class="section-title">应付与支出记录</div><div v-if="financePayableState.error" class="notice warning">{{ financePayableState.error }}</div><div v-if="financePayableState.loading" class="empty">正在读取…</div><div v-else class="table-wrap"><table><thead><tr><th>日期</th><th>单位 / 单据</th><th>类别</th><th class="sensitive-price">金额</th><th>到期日</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in financePayables" :key="row.id"><td>{{ row.document_date }}</td><td><strong>{{ row.counterparty_name }}</strong><div class="muted">{{ row.document_number || row.note || '-' }}</div></td><td>{{ payableCategoryText(row.category) }}</td><td class="sensitive-price">¥ {{ money(row.amount) }}</td><td>{{ row.due_date || '-' }}</td><td><span :class="['status',row.status==='paid'?'green':row.status==='voided'?'gray':row.status==='confirmed'?'blue':'orange']">{{ payableStatusText(row.status) }}</span></td><td class="toolbar-group"><button v-if="canFinance && row.status==='draft'" class="btn small success" @click="transitionFinancePayable(row,'confirm')">确认</button><button v-if="canFinance && row.status==='confirmed'" class="btn small" @click="transitionFinancePayable(row,'paid')">标记已付</button><button v-if="canFinance && ['draft','confirmed'].includes(row.status)" class="btn small danger" @click="transitionFinancePayable(row,'void')">作废</button></td></tr><tr v-if="!financePayables.length"><td colspan="7" class="empty">尚无应付或支出记录。</td></tr></tbody></table></div></div>
+              </template>
               <template v-else-if="financeView==='invoice_tasks'">
                 <input ref="invoiceTaskPdfInput" type="file" accept="application/pdf,.pdf" style="display:none" @change="onInvoiceTaskPdfSelected" />
                 <div v-if="invoiceTaskUploadState.error" class="notice danger" style="margin-bottom:10px">原始 PDF 上传失败：{{ invoiceTaskUploadState.error }} <button class="btn small" type="button" :disabled="invoiceTaskUploadState.uploading" @click="retryInvoiceTaskPdf">重新选择</button></div>
@@ -4743,7 +4798,7 @@
                 <div class="panel">
                   <div class="section-title">全部对账单</div>
                   <div class="table-wrap"><table><thead><tr><th>对账单号</th><th>客户</th><th>月份</th><th class="sensitive-price">应收金额</th><th class="sensitive-price">已开票</th><th class="sensitive-price">已收款</th><th>状态</th><th>操作</th></tr></thead>
-                  <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><span v-if="Number(row.total_receivable)>0 && Number(row.invoiced_amount)>=Number(row.total_receivable)" class="status green">已开票</span><status-tag v-else :value="row.status"></status-tag></td><td class="toolbar-group"><button v-if="canFinance" class="btn small" :disabled="Number(row.total_receivable)-Number(row.invoiced_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(row)">{{ financeStatementOperationState.action==='register' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '登记中…' : '登记开票' }}</button><button v-if="canFinance" class="btn small success" :disabled="Number(row.total_receivable)-Number(row.settled_amount)<=0 || !!financeStatementOperationState.action" @click="settle(row)">{{ financeStatementOperationState.action==='settle' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '核销中…' : '收款核销' }}</button><details class="finance-row-more"><summary class="btn small">更多</summary><div class="finance-row-more-panel"><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementEdit(row)">编辑</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button v-if="canFinance" class="btn small danger" :disabled="!!financeStatementOperationState.action" @click="cancelStatement(row)">{{ financeStatementOperationState.action==='cancel' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '取消中…' : '取消' }}</button></div></details></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
+                  <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><span v-if="Number(row.total_receivable)>0 && Number(row.invoiced_amount)>=Number(row.total_receivable)" class="status green">已开票</span><status-tag v-else :value="row.status"></status-tag></td><td class="toolbar-group"><button v-if="canFinance" class="btn small" :disabled="Number(row.total_receivable)-Number(row.invoiced_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(row)">{{ financeStatementOperationState.action==='register' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '登记中…' : '登记开票' }}</button><button class="btn small" @click="exportStatement(row,'xlsx')">导出 Excel</button><button v-if="canFinance" class="btn small" @click="openStatementDispute(row)">客户异议</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
                   <pager :page="pages.statements" :total="statementsTotal" :page-size="pageSize" @change="pages.statements=$event; loadFinance()"></pager>
                 </div>
                 <div class="panel" style="margin-top:10px">
@@ -5447,6 +5502,30 @@
                 <div v-else class="table-wrap" style="margin-top:12px"><table><thead><tr><th>销方编号</th><th>销方</th><th>税号</th><th>资料</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="seller in invoiceSellers" :key="seller.id"><td>{{ seller.seller_code }}</td><td>{{ seller.seller_name || seller.name }}</td><td>{{ seller.tax_no || '-' }}</td><td>{{ seller.confirmation_status==='confirmed'?'已确认':'待确认' }}</td><td>{{ seller.is_enabled===false?'停用':'启用' }}</td><td><button class="btn small" :disabled="invoiceSellerState.saving" @click="editInvoiceSeller(seller)">编辑</button></td></tr></tbody></table></div>
               </template>
             </div>
+            <div v-else-if="modal.type === 'settlementEntities'">
+              <div class="notice">合作纸箱厂作为独立结算对象维护。关联客户仍保留各自订单、送货和回单，只在新对账单中汇总。</div>
+              <div v-if="settlementEntityState.loading" class="empty">正在读取结算对象…</div>
+              <div v-else-if="settlementEntityState.error" class="empty"><div class="notice danger">结算对象读取失败：{{ settlementEntityState.error }}</div><button class="btn" @click="loadSettlementEntities">重试</button></div>
+              <template v-else>
+                <fieldset class="form-grid" :disabled="settlementEntityState.saving" style="margin-top:10px">
+                  <div class="field"><label>编号</label><input class="input" v-model.trim="settlementEntityForm.entity_code" /></div>
+                  <div class="field"><label>公司名称</label><input class="input" v-model.trim="settlementEntityForm.entity_name" /></div>
+                  <div class="field"><label>简称</label><input class="input" v-model.trim="settlementEntityForm.short_name" /></div>
+                  <div class="field"><label>税号</label><input class="input" v-model.trim="settlementEntityForm.tax_no" /></div>
+                  <div class="field"><label>开票地址</label><input class="input" v-model.trim="settlementEntityForm.invoice_address" /></div>
+                  <div class="field"><label>开票电话</label><input class="input" v-model.trim="settlementEntityForm.invoice_phone" /></div>
+                  <div class="field"><label>开户行</label><input class="input" v-model.trim="settlementEntityForm.bank_name" /></div>
+                  <div class="field"><label>银行账号</label><input class="input" v-model.trim="settlementEntityForm.bank_account" /></div>
+                  <div class="field"><label>默认销方</label><select class="select" v-model.number="settlementEntityForm.default_seller_id"><option :value="null">请选择</option><option v-for="seller in invoiceSellers.filter(row=>row.is_enabled!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select></div>
+                  <div class="field"><label>结转日</label><input class="input" type="number" min="1" max="28" v-model.number="settlementEntityForm.statement_cycle_start_day" /></div>
+                  <div class="field"><label>状态</label><select class="select" v-model="settlementEntityForm.confirmation_status"><option value="pending">待确认</option><option value="confirmed">已确认</option></select></div>
+                  <div class="field"><label>启用</label><select class="select" v-model="settlementEntityForm.is_enabled"><option :value="true">启用</option><option :value="false">停用</option></select></div>
+                </fieldset>
+                <button class="btn primary" style="margin-top:8px" :disabled="settlementEntityState.saving" @click="saveSettlementEntity">{{ settlementEntityState.saving ? '保存中…' : (settlementEntityForm.id ? '保存' : '新增') }}</button>
+                <div v-if="!settlementEntities.length" class="empty">暂无合作结算对象。</div>
+                <div v-else class="table-wrap" style="margin-top:12px"><table><thead><tr><th>编号</th><th>结算对象</th><th>默认销方</th><th>结转日</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in settlementEntities" :key="row.id"><td>{{ row.entity_code }}</td><td>{{ row.entity_name }}<div class="muted">{{ row.short_name || '-' }}</div></td><td>{{ invoiceSellers.find(s=>Number(s.id)===Number(row.default_seller_id))?.seller_name || '未设置' }}</td><td>{{ row.statement_cycle_start_day }}日</td><td>{{ row.confirmation_status==='confirmed'?'已确认':'待确认' }}</td><td><button class="btn small" @click="editSettlementEntity(row)">编辑</button></td></tr></tbody></table></div>
+              </template>
+            </div>
             <div v-else-if="modal.type === 'customer'">
               <div v-if="customerForm.id && !canEditCustomers" class="notice readonly-hint">当前为只读查看；客户资料控件已禁用。</div>
               <fieldset class="form-grid" :class="'readonly-fieldset'" :disabled="!!customerForm.id && !canEditCustomers">
@@ -5473,12 +5552,13 @@
                   <div class="field"><label>开票电话</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_phone" /></div>
                   <div class="field"><label>开户行</label><input class="input" v-model.trim="customerInvoiceProfile.bank_name" /></div>
                   <div class="field"><label>银行账号</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div>
-                  <div class="field"><label>默认销方</label><div class="toolbar-group" style="flex-wrap:nowrap"><select class="select" style="min-width:0;flex:1 1 auto" v-model.number="customerInvoiceProfile.default_seller_id" :disabled="invoiceSellerState.loading || !invoiceSellerState.loaded"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_enabled!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select><button class="btn small" type="button" :disabled="invoiceSellerState.loading" @click="openInvoiceSellersFromCustomer">维护销方</button></div><div v-if="invoiceSellerState.loading" class="muted">正在读取销方…</div><div v-else-if="invoiceSellerState.error" class="danger-text">销方读取失败，请点“维护销方”重试。</div><div v-else-if="invoiceSellerState.loaded && !invoiceSellers.length" class="muted">尚未维护销方主体，请先录入两个公司开票抬头。</div></div>
+                  <div class="field"><label>合作模式</label><div class="toolbar-group" style="flex-wrap:nowrap"><select class="select" style="min-width:0;flex:1 1 auto" v-model.number="customerInvoiceProfile.settlement_entity_id" :disabled="settlementEntityState.loading || !settlementEntityState.loaded"><option :value="null">本客户直接对账开票</option><option v-for="row in settlementEntities.filter(item=>item.is_enabled!==false)" :key="row.id" :value="row.id">归集到 {{ row.entity_name }}</option></select><button class="btn small" type="button" @click="openSettlementEntitiesFromCustomer">维护</button></div><div class="muted">选择合作方后，新对账单按合作方汇总；历史单据不变。</div></div>
+                  <div class="field"><label>默认销方</label><div class="toolbar-group" style="flex-wrap:nowrap"><select class="select" style="min-width:0;flex:1 1 auto" v-model.number="customerInvoiceProfile.default_seller_id" :disabled="invoiceSellerState.loading || !invoiceSellerState.loaded || !!customerInvoiceProfile.settlement_entity_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_enabled!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select><button class="btn small" type="button" :disabled="invoiceSellerState.loading" @click="openInvoiceSellersFromCustomer">维护销方</button></div><div v-if="customerInvoiceProfile.settlement_entity_id" class="muted">销方由所选合作结算对象统一决定。</div><div v-else-if="invoiceSellerState.loading" class="muted">正在读取销方…</div><div v-else-if="invoiceSellerState.error" class="danger-text">销方读取失败，请点“维护销方”重试。</div><div v-else-if="invoiceSellerState.loaded && !invoiceSellers.length" class="muted">尚未维护销方主体，请先录入两个公司开票抬头。</div></div>
                   <div class="field"><label>常用箱与订单单价口径</label><select class="select" v-model="customerInvoiceProfile.price_tax_mode"><option value="tax_inclusive">含税价</option><option value="tax_exclusive">未税价</option></select><div class="muted">只改变价格解释和以后生成的订单快照，不换算、不覆盖现有常用箱价格。</div></div>
                   <div class="field"><label>默认税率</label><input class="input" type="number" min="0" max="1" step="0.01" v-model="customerInvoiceProfile.default_tax_rate" /></div>
                   <div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceProfile.confirmation_status"><option value="pending">待确认</option><option value="confirmed">已确认</option></select></div>
                 </fieldset>
-                <div class="toolbar-group" style="margin-top:8px"><button class="btn small primary" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !invoiceSellerState.loaded || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceProfile">{{ customerInvoiceState.profileSaving ? '税务资料保存中…' : '保存税务资料' }}</button></div>
+                <div class="toolbar-group" style="margin-top:8px"><button class="btn small primary" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !invoiceSellerState.loaded || !settlementEntityState.loaded || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceProfile">{{ customerInvoiceState.profileSaving ? '税务资料保存中…' : '保存税务资料' }}</button></div>
                 <div class="panel" style="margin-top:10px;padding:8px">
                   <div class="toolbar"><strong>客户默认开票项目规则</strong><span v-if="customerInvoiceState.ruleLoading" class="status blue">默认规则读取中</span><button class="btn small" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving" @click="loadCustomerInvoiceRule(customerForm.id)">{{ customerInvoiceState.ruleLoading ? '读取中…' : '刷新' }}</button></div>
                   <div v-if="customerInvoiceRule.error" class="notice danger">{{ customerInvoiceRule.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceRule(customerForm.id)">重新读取默认规则</button></div>
@@ -8047,47 +8127,41 @@
                 <div class="field"><label>客户</label><div>{{ statementDetail.customer_name }}</div></div>
                 <div class="field"><label>对账月份</label><div>{{ statementDetail.statement_month }}</div></div>
                 <div class="field"><label>状态</label><div><status-tag :value="statementDetail.status"></status-tag></div></div>
-                <div class="field sensitive-price"><label>应收金额</label><div>¥ {{ money(statementDetail.total_receivable) }}</div></div>
+                <div class="field sensitive-price"><label>对账金额</label><div>¥ {{ money(statementDetail.total_receivable) }}</div></div>
                 <div class="field sensitive-price"><label>已开票</label><div>¥ {{ money(statementDetail.invoiced_amount) }}</div></div>
-                <div class="field sensitive-price"><label>已收款</label><div>¥ {{ money(statementDetail.settled_amount) }}</div></div>
-                <div class="field sensitive-price"><label>毛利</label><div>¥ {{ money(statementDetail.total_gross_profit) }}</div></div>
               </div>
               <div class="toolbar-group" style="margin:10px 0">
-                <button class="btn primary" @click="openStatementEdit(statementDetail)">编辑</button>
-                <button class="btn danger" @click="cancelStatement(statementDetail)">取消</button>
+                <button class="btn primary" @click="exportStatement(statementDetail,'xlsx')">导出 Excel</button>
+                <button class="btn" @click="exportStatement(statementDetail,'pdf')">导出 PDF</button>
+                <button v-if="canFinance" class="btn" @click="openStatementDispute(statementDetail)">{{ statementDetail.confirmation_status==='confirmed' ? '客户异议' : '调整明细' }}</button>
               </div>
               <table>
                 <thead>
                   <tr>
-                    <th>回单日期</th>
+                    <th>送货日期</th>
                     <th>送货单</th>
                     <th>客户单号</th>
-                    <th>产品</th>
-                    <th>规格</th>
-                    <th>材质</th>
-                    <th>实收数量</th>
+                    <th>存货编码</th>
+                    <th>产品名称</th>
+                    <th>数量</th>
                     <th class="sensitive-price">单价</th>
-                    <th class="sensitive-price">应收金额</th>
-                    <th>差异原因</th>
+                    <th class="sensitive-price">金额</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-for="item in statementDetail.items" :key="item.statement_item_id">
-                    <td>{{ item.source_type==='customer_charge' ? '附加收费' : item.actual_received_date }}</td>
+                    <td>{{ item.source_type==='customer_charge' ? '-' : item.delivery_date || item.actual_received_date }}</td>
                     <td>{{ item.delivery_number || '-' }}</td>
                     <td>{{ item.customer_po }}</td>
-                    <td>{{ item.source_type==='customer_charge' ? item.product_name : `${item.product_code || '-'} / ${item.product_name || '-'}` }}</td>
-                    <td>{{ item.source_type==='customer_charge' ? `${item.charge_quantity} ${item.unit_snapshot}` : (item.specification || '-') }}</td>
-                    <td>{{ item.source_type==='customer_charge' ? '客户独立应收' : (item.material || '-') }}</td>
-                    <td>{{ item.source_type==='customer_charge' ? '-' : item.actual_received_quantity }}</td>
+                    <td>{{ item.product_code || '-' }}</td>
+                    <td>{{ item.product_name || '-' }}</td>
+                    <td>{{ item.source_type==='customer_charge' ? item.charge_quantity : item.actual_received_quantity }}</td>
                     <td class="sensitive-price">¥ {{ money(item.unit_price_snapshot) }}</td>
                     <td class="sensitive-price">¥ {{ money(item.receivable_amount) }}</td>
-                    <td>{{ item.difference_reason || "-" }}</td>
                   </tr>
                 </tbody>
               </table>
-              <div v-if="statementDetail.invoices?.length" class="status blue" style="margin-top:10px">已有 {{ statementDetail.invoice_count }} 条开票记录，取消前请先处理开票。</div>
-              <div v-if="statementDetail.settlements?.length" class="status orange" style="margin-top:10px">已有 {{ statementDetail.settlement_count }} 条收款记录，取消前请先处理收款。</div>
+              <div v-if="statementDetail.invoices?.length" class="status blue" style="margin-top:10px">已有 {{ statementDetail.invoice_count }} 条开票记录；已正式开票时系统会禁止直接改历史。</div>
             </div>
             <div v-else-if="modal.type === 'statementEdit'">
               <div class="form-grid">
@@ -8096,6 +8170,15 @@
                 <div class="field"><label>对账月份</label><input class="input" type="month" v-model="statementEditForm.statement_month" /></div>
               </div>
               <div class="muted">如果该对账单已开票或已收款，系统会拒绝保存。已结清时请先撤销收款再编辑。</div>
+            </div>
+            <div v-else-if="modal.type === 'statementDispute' && statementDetail">
+              <div class="notice">初次对账仍按整张送货单；这里只处理客户提出异议后的例外调整，不修改送货和回单数量。</div>
+              <div class="form-grid" style="margin-top:10px"><div class="field wide"><label>客户异议原因 *</label><input class="input" v-model.trim="statementDisputeForm.reason" placeholder="例如：客户要求两条明细延至下月核对" /></div><div class="field"><label>移至月份</label><input class="input" type="month" v-model="statementDisputeForm.target_month" /></div></div>
+              <div class="section-title" style="margin-top:12px">从本期移出</div>
+              <div class="table-wrap"><table><thead><tr><th>选择</th><th>送货单</th><th>客户单号</th><th>存货编码 / 产品</th><th>数量</th><th class="sensitive-price">金额</th></tr></thead><tbody><tr v-for="item in statementDetail.items.filter(row=>row.source_type==='delivery')" :key="`remove-${item.statement_item_id}`"><td><input type="checkbox" v-model="statementDisputeForm.remove[item.statement_item_id]" /></td><td>{{ item.delivery_number }}</td><td>{{ item.customer_po || '-' }}</td><td>{{ item.product_code || '-' }} / {{ item.product_name || '-' }}</td><td>{{ item.actual_received_quantity }}</td><td class="sensitive-price">¥ {{ money(item.receivable_amount) }}</td></tr></tbody></table></div>
+              <div class="section-title" style="margin-top:12px">补入以前遗漏</div>
+              <div v-if="statementDisputeState.loading" class="empty">正在读取可补入明细…</div><div v-else-if="!statementDisputeCandidates.length" class="empty">没有已回单且尚未进入其他对账单的历史明细。</div><div v-else class="table-wrap"><table><thead><tr><th>选择</th><th>原归属月</th><th>送货单</th><th>客户单号</th><th>存货编码 / 产品</th><th>数量</th></tr></thead><tbody><tr v-for="item in statementDisputeCandidates" :key="`add-${item.return_receipt_item_id}`"><td><input type="checkbox" v-model="statementDisputeForm.add[item.return_receipt_item_id]" /></td><td>{{ item.effective_reconciliation_month }}</td><td>{{ item.delivery_number }}</td><td>{{ item.customer_po || '-' }}</td><td>{{ item.product_code || '-' }} / {{ item.product_name || '-' }}</td><td>{{ item.actual_received_quantity }}</td></tr></tbody></table></div>
+              <div class="toolbar-group" style="justify-content:flex-end;margin-top:12px"><button class="btn primary" :disabled="statementDisputeState.saving" @click="saveStatementDispute">{{ statementDisputeState.saving ? '保存中…' : '撤销确认并保存调整' }}</button></div>
             </div>
             <div v-else-if="modal.type === 'password'" class="form-grid">
               <div v-if="modal.force" class="field wide danger-text">当前为临时密码，修改完成后才能继续使用系统。</div>
@@ -9070,7 +9153,8 @@
             invoiceTaskUploadState:{uploading:false,taskId:null,taskNumber:"",error:""},
             financeStatementOperationState:{action:"",statementId:null},
             invoiceSellers: [], invoiceSellerForm:{id:null,seller_code:"",seller_name:"",tax_no:"",address:"",phone:"",bank_name:"",bank_account:"",is_enabled:true,confirmation_status:"pending",version:null}, invoiceSellerState:{loading:false,error:"",saving:false,loaded:false}, invoiceSellerReturnCustomerId:null,
-            customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""},
+            settlementEntities: [], settlementEntityForm:{id:null,entity_code:"",entity_name:"",short_name:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,statement_cycle_start_day:20,is_enabled:true,confirmation_status:"pending",version:null}, settlementEntityState:{loading:false,error:"",saving:false,loaded:false}, settlementEntityReturnCustomerId:null,
+            customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,settlement_entity_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""},
             customerInvoiceRule:{project_name:"纸箱",tax_classification_code:"1060105010000000000",unit:"PCS",tax_rate:"0.13",spec_source:"product_code_snapshot",fill_unit_price:true,confirmation_status:"pending",version:null,error:""},
             customerInvoiceState:{profileLoading:false,profileSaving:false,profileLoadedCustomerId:null,ruleLoading:false,ruleSaving:false,ruleLoadedCustomerId:null},
             pendingStatements: [], pendingStatementCharges: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
@@ -9190,7 +9274,11 @@
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
             deliveryListFilters: { customer_id:"", keyword:"", date_from:"", date_to:"", status:"", return_status:"" },
             deliveryDashboardMode: "",
-            financeView: "current",
+            financeView: "overview",
+            financeOverviewMonth: month(),
+            financeOverview: { trend:[], payable_aging:{}, expense_structure:[], cost_coverage:{covered_lines:0,total_lines:0,coverage_rate:0,covered_revenue:0,material_gross_profit_reference:0,label:"材料毛利参考"}, collection_note:"" },
+            financeOverviewState: { loading:false, error:"" },
+            financeStatementSort: "business",
             financeFilters: { statement_month:month(), balance_type:"", customer_id:"" },
             financeCurrentRows: [], financeCurrentTotal: 0, financeCurrentSummary: {}, financeCurrentCustomerOptions: [],
             financeCurrentState: { loading:false, error:"", loaded:false }, financeCurrentExpanded: {},
@@ -9200,6 +9288,9 @@
             financeReportFilters: { year:month().slice(0,4), statement_month:month(), customer_id:"" },
             financeReportData: { monthly:[], yearly_summary:{}, selected_month_summary:{}, selected_month_customers:[], customer_balances:[], aging:[], as_of:"", included_through_statement_month:"" },
             financeReportState: { loading:false, error:"", loaded:false },
+            financePayables: [], financePayableSuppliers: [], financePayableState:{loading:false,saving:false,error:""},
+            financePayableForm:{supplier_id:null,counterparty_name:"",category:"material",document_number:"",document_date:today(),due_date:"",amount:"",note:""},
+            statementDisputeForm:{reason:"",target_month:"",remove:{},add:{}}, statementDisputeCandidates:[], statementDisputeState:{loading:false,saving:false,error:""},
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
             pages: { customers: 1, products: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, externalPurchaseHistory: 1, incomingPending: 1, incomingReceived: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, productionPlacement: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
             productTab: "products", modal: null,
@@ -9322,7 +9413,7 @@
               {key:"incoming",label:"来料",page:"incoming",hint:"供应商到料后确认收货"},
               {key:"production",label:"生产",page:"production",hint:"确认合格数量和完工去向"},
               {key:"deliveries",label:"送货",page:"deliveries",hint:"拿货、发货并确认回单"},
-              {key:"finance",label:"回单/对账",page:"finance",hint:"按回单数量对账、开票和收款"},
+              {key:"finance",label:"回单/对账",page:"finance",hint:"按回单实收数量对账并开票"},
             ];
           },
           businessFlowCurrentStep() {
@@ -10105,7 +10196,7 @@
               },
               { key: "production", label: "生产与成品", count: this.productionPlacementTotal },
               { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
-              { key: "finance", label: "对账开票收款" },
+              { key: "finance", label: "对账与开票" },
               { key: "master", label: "主数据" },
               { key: "system_hub", label: "系统管理" }
             ];
@@ -10414,6 +10505,24 @@
           allStatementSelected() {
             const selectable = this.pendingStatements.filter(row => !row.selection_blocked);
             return selectable.length > 0 && selectable.every(row => this.statementForm.selected[row.delivery_id]);
+          },
+          payableCategoryOptions() {
+            return [
+              {value:"material",label:"纸板/材料"},{value:"outsourcing",label:"外协加工"},
+              {value:"freight",label:"运费"},{value:"utilities",label:"水电能耗"},
+              {value:"rent",label:"房租"},{value:"wages",label:"工资"},
+              {value:"maintenance",label:"维修保养"},{value:"tax_fee",label:"税费"},
+              {value:"other",label:"其他支出"},
+            ];
+          },
+          financePayableAgingRows() {
+            const aging = this.financeOverview.payable_aging || {};
+            return [
+              {key:"not_due",label:"未到期",amount:Number(aging.not_due||0)},
+              {key:"overdue_1_30",label:"逾期 1-30 天",amount:Number(aging.overdue_1_30||0)},
+              {key:"overdue_31_60",label:"逾期 31-60 天",amount:Number(aging.overdue_31_60||0)},
+              {key:"overdue_61_plus",label:"逾期 61 天+",amount:Number(aging.overdue_61_plus||0)},
+            ];
           }
         },
         watch: {
@@ -10723,6 +10832,7 @@
             return icons[key] || '';
           },
           money(value) { return Number(value || 0).toFixed(2); },
+          percent(value) { return `${(Number(value || 0) * 100).toFixed(1)}%`; },
           squarePrice(value) {
             if (value === null || value === undefined || value === "") return "-";
             return Number(value).toFixed(4);
@@ -19962,6 +20072,8 @@
             this.loadDeliveries();
           },
           async loadFinance() {
+            if (this.financeView === "overview") return this.loadFinanceOverview();
+            if (this.financeView === "payables") return this.loadFinancePayables();
             if (this.financeView === "invoice_tasks") return this.loadInvoiceTasks();
             if (this.financeView === "reports") {
               this.financeReportState.loading = true;
@@ -20069,6 +20181,94 @@
               this.financeCurrentState.loading = false;
             }
           },
+          async loadFinanceOverview() {
+            this.financeOverviewState.loading = true;
+            this.financeOverviewState.error = "";
+            try {
+              const {data} = await axios.get("/api/finance/overview", {params:{through_month:this.financeOverviewMonth || month()}});
+              this.financeOverview = {
+                trend:data.trend || [], payable_aging:data.payable_aging || {},
+                expense_structure:data.expense_structure || [],
+                cost_coverage:data.cost_coverage || {covered_lines:0,total_lines:0,coverage_rate:0},
+                collection_note:data.collection_note || "",
+              };
+              return true;
+            } catch (error) {
+              this.financeOverviewState.error = this.errorMessage(error);
+              return false;
+            } finally {
+              this.financeOverviewState.loading = false;
+            }
+          },
+          financeTrendHeight(value) {
+            const values = (this.financeOverview.trend || []).flatMap(row => [Number(row.confirmed_statement_amount||0),Number(row.issued_invoice_amount||0),Number(row.payable_amount||0)]);
+            const maxValue = Math.max(1,...values);
+            return `${Math.max(3,Math.round(Number(value||0)/maxValue*160))}px`;
+          },
+          financeAgingWidth(value) {
+            const maxValue = Math.max(1,...this.financePayableAgingRows.map(row=>Number(row.amount||0)));
+            return `${Math.max(Number(value||0)>0?4:0,Math.round(Number(value||0)/maxValue*100))}%`;
+          },
+          financeExpenseWidth(value) {
+            const maxValue = Math.max(1,...(this.financeOverview.expense_structure||[]).map(row=>Number(row.amount||0)));
+            return `${Math.max(Number(value||0)>0?4:0,Math.round(Number(value||0)/maxValue*100))}%`;
+          },
+          payableCategoryText(value) {
+            return this.payableCategoryOptions.find(row=>row.value===value)?.label || value || "其他";
+          },
+          payableStatusText(value) {
+            return ({draft:"草稿",confirmed:"待付款",paid:"已付",voided:"已作废"})[value] || value;
+          },
+          async loadFinancePayables() {
+            this.financePayableState.loading = true;
+            this.financePayableState.error = "";
+            try {
+              const [payables,suppliers] = await Promise.all([
+                axios.get("/api/finance/payables"), axios.get("/api/finance/payable-suppliers")
+              ]);
+              this.financePayables = payables.data.items || [];
+              this.financePayableSuppliers = suppliers.data.items || [];
+              return true;
+            } catch (error) {
+              this.financePayableState.error = this.errorMessage(error);
+              return false;
+            } finally {
+              this.financePayableState.loading = false;
+            }
+          },
+          applyPayableSupplier() {
+            const supplier = this.financePayableSuppliers.find(row=>Number(row.id)===Number(this.financePayableForm.supplier_id));
+            if (supplier) this.financePayableForm.counterparty_name = supplier.name;
+          },
+          async createFinancePayable() {
+            const form = {...this.financePayableForm};
+            if (!String(form.counterparty_name||"").trim() || Number(form.amount||0)<=0 || !form.document_date) {
+              this.showToast("请填写收款单位、金额和单据日期", true); return false;
+            }
+            this.financePayableState.saving = true;
+            try {
+              await axios.post("/api/finance/payables", {
+                supplier_id:form.supplier_id ? Number(form.supplier_id) : null,
+                counterparty_name:String(form.counterparty_name).trim(), category:form.category,
+                document_number:String(form.document_number||"").trim() || null,
+                document_date:form.document_date, due_date:form.due_date || null,
+                amount:Number(form.amount), note:String(form.note||"").trim() || null,
+                idempotency_key:createIdempotencyKey(),
+              });
+              this.financePayableForm={supplier_id:null,counterparty_name:"",category:"material",document_number:"",document_date:today(),due_date:"",amount:"",note:""};
+              await this.loadFinancePayables(); this.showToast("应付/支出草稿已保存"); return true;
+            } catch (error) { this.showToast(this.errorMessage(error), true); return false; }
+            finally { this.financePayableState.saving = false; }
+          },
+          async transitionFinancePayable(row, action) {
+            let reason = null;
+            if (action === "void") { reason = prompt("请输入作废原因"); if (!String(reason||"").trim()) return; }
+            if (action !== "void" && !confirm(action === "confirm" ? "确认这笔应付/支出吗？" : "确认已完成付款吗？")) return;
+            try {
+              await axios.post(`/api/finance/payables/${row.id}/${action}`, {expected_version:Number(row.version),reason});
+              await this.loadFinancePayables(); this.showToast("状态已更新");
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
           financeGroupKey(row) {
             return `${row.statement_month}:${row.customer_id}`;
           },
@@ -20076,10 +20276,7 @@
             return `${row.year}:${row.statement_month}:${row.customer_id}`;
           },
           async setFinanceView(view) {
-            // Keep the original four finance workbenches as the compatibility
-            // baseline; FIN-001 adds its task view without changing their
-            // navigation contract.
-            if (!['current','settled_history','reports','statements'].includes(view) && view !== 'invoice_tasks') return;
+            if (!['overview','current','invoice_tasks','payables'].includes(view)) return;
             this.financeView = view;
             this.invalidatePageCache("finance");
             await this.loadFinance();
@@ -20510,6 +20707,85 @@
               ? "未税单价（元/PCS）"
               : "含税单价（元/PCS）";
           },
+          resetSettlementEntityForm() {
+            this.settlementEntityForm = {id:null,entity_code:"",entity_name:"",short_name:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,statement_cycle_start_day:20,is_enabled:true,confirmation_status:"pending",version:null};
+          },
+          async loadSettlementEntities() {
+            if (!this.canManageInvoiceProfiles) return false;
+            const requestKey = "finance:settlement-entities";
+            const controller = this.beginLatestRequest(requestKey);
+            this.settlementEntityState.loading = true;
+            this.settlementEntityState.error = "";
+            this.settlementEntityState.loaded = false;
+            try {
+              const {data} = await axios.get("/api/finance/settlement-entities", {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.settlementEntities = data.items || [];
+              this.settlementEntityState.loaded = true;
+              return true;
+            } catch(error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
+                this.settlementEntities = [];
+                this.settlementEntityState.error = this.errorMessage(error);
+              }
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                this.settlementEntityState.loading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
+            }
+          },
+          async openSettlementEntities() {
+            if (!this.canManageInvoiceProfiles) return false;
+            if (this.modal?.type !== "customer") this.settlementEntityReturnCustomerId = null;
+            this.resetSettlementEntityForm();
+            this.modal = {type:"settlementEntities",title:"合作结算对象"};
+            await Promise.all([this.loadInvoiceSellers(), this.loadSettlementEntities()]);
+            return true;
+          },
+          async openSettlementEntitiesFromCustomer() {
+            const customerId = Number(this.customerForm?.id || 0);
+            if (!customerId || !this.canManageInvoiceProfiles) return false;
+            if (!confirm("打开结算对象维护后会重新读取当前客户税务资料，尚未保存的修改将丢失。是否继续？")) return false;
+            this.settlementEntityReturnCustomerId = customerId;
+            return this.openSettlementEntities();
+          },
+          editSettlementEntity(row) {
+            if (this.settlementEntityState.saving) return;
+            this.settlementEntityForm = {...row,short_name:row.short_name||"",tax_no:row.tax_no||"",invoice_address:row.invoice_address||"",invoice_phone:row.invoice_phone||"",bank_name:row.bank_name||"",bank_account:row.bank_account||"",is_enabled:row.is_enabled!==false,confirmation_status:row.confirmation_status||"pending"};
+          },
+          async saveSettlementEntity() {
+            if (this.settlementEntityState.saving) return false;
+            const form = {...this.settlementEntityForm};
+            if (!String(form.entity_code||"").trim() || !String(form.entity_name||"").trim()) {
+              this.showToast("请填写结算对象编号和公司名称", true);
+              return false;
+            }
+            const payload = {
+              entity_code:String(form.entity_code).trim(), entity_name:String(form.entity_name).trim(),
+              short_name:String(form.short_name||"").trim()||null, tax_no:String(form.tax_no||"").trim()||null,
+              invoice_address:String(form.invoice_address||"").trim()||null, invoice_phone:String(form.invoice_phone||"").trim()||null,
+              bank_name:String(form.bank_name||"").trim()||null, bank_account:String(form.bank_account||"").trim()||null,
+              default_seller_id:form.default_seller_id?Number(form.default_seller_id):null,
+              statement_cycle_start_day:Number(form.statement_cycle_start_day||20), is_enabled:form.is_enabled!==false,
+              confirmation_status:form.confirmation_status||"pending", expected_version:form.id?Number(form.version||1):null,
+            };
+            this.settlementEntityState.saving = true;
+            try {
+              if (form.id) await axios.put(`/api/finance/settlement-entities/${form.id}`, payload);
+              else await axios.post("/api/finance/settlement-entities", payload);
+              this.resetSettlementEntityForm();
+              await this.loadSettlementEntities();
+              this.showToast(form.id ? "结算对象已保存" : "结算对象已新增");
+              return true;
+            } catch(error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally {
+              this.settlementEntityState.saving = false;
+            }
+          },
           async loadCustomerInvoiceProfile(customerId=this.customerForm?.id) {
             const requestedCustomerId = Number(customerId || 0);
             if (!this.canManageInvoiceProfiles || !requestedCustomerId || Number(this.customerForm?.id) !== requestedCustomerId) return false;
@@ -20558,6 +20834,7 @@
               bank_name:String(form.bank_name || "").trim() || null,
               bank_account:String(form.bank_account || "").trim() || null,
               default_seller_id:form.default_seller_id ? Number(form.default_seller_id) : null,
+              settlement_entity_id:form.settlement_entity_id ? Number(form.settlement_entity_id) : null,
               price_tax_mode:form.price_tax_mode,
               default_tax_rate:Number(form.default_tax_rate),
               is_enabled:form.is_enabled !== false,
@@ -20810,7 +21087,7 @@
               contracts:"合同", orders:"订单", order:"订单", requisition:"报料",
               incoming:"来料入库", production:"生产", warehouse:"仓库库存",
               deliveries:"送货", delivery:"送货", receipts:"回单", receipt:"回单",
-              finance:"对账开票收款", system:"系统", migration:"系统升级",
+              finance:"对账与开票", system:"系统", migration:"系统升级",
             };
             return labels[key] || value || "其他";
           },
@@ -21404,7 +21681,7 @@
             if (!row) next.customer_number = Math.max(0, ...this.customers.map(c => Number(c.customer_number || 0))) + 1;
             if (!Number.isInteger(Number(next.statement_cycle_start_day)) || Number(next.statement_cycle_start_day) < 1 || Number(next.statement_cycle_start_day) > 28) next.statement_cycle_start_day = 20;
             this.customerForm = next;
-            this.customerInvoiceProfile = {invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""};
+            this.customerInvoiceProfile = {invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,settlement_entity_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""};
             this.customerInvoiceRule = {project_name:"纸箱",tax_classification_code:"1060105010000000000",unit:"PCS",tax_rate:"0.13",spec_source:"product_code_snapshot",fill_unit_price:true,confirmation_status:"pending",version:null,error:""};
             this.customerInvoiceState.profileLoading = false;
             this.customerInvoiceState.profileLoadedCustomerId = null;
@@ -21412,7 +21689,7 @@
             this.customerInvoiceState.ruleLoadedCustomerId = null;
             this.customerQuotePreferenceDraft = this.blankCustomerQuotePreferenceDraft();
             this.loadCustomerQuotePreferences(next.id);
-            if (next.id && this.canManageInvoiceProfiles) { this.loadInvoiceSellers(); this.loadCustomerInvoiceProfile(next.id); this.loadCustomerInvoiceRule(next.id); }
+            if (next.id && this.canManageInvoiceProfiles) { this.loadInvoiceSellers(); this.loadSettlementEntities(); this.loadCustomerInvoiceProfile(next.id); this.loadCustomerInvoiceRule(next.id); }
             this.beginMasterEdit("customer",this.customerForm);
             this.modal = { type:"customer", title: row ? (this.canEditCustomers ? "编辑客户" : "查看客户") : "新增客户" };
             this.ensureCustomerQuotePreferenceOptions();
@@ -31936,6 +32213,49 @@
             this.statementDetail = (await axios.get(`/api/finance/statements/${row.id}`)).data;
             this.modal = { type:"statementDetail", title:`对账单详情 ${this.statementDetail.statement_number}` };
           },
+          nextStatementMonth(value) {
+            const matched = /^(\d{4})-(\d{2})$/.exec(String(value||""));
+            if (!matched) return month();
+            const next = new Date(Number(matched[1]), Number(matched[2]), 1);
+            return `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,"0")}`;
+          },
+          async openStatementDispute(row) {
+            const detail = this.statementDetail?.id === row.id ? this.statementDetail : (await axios.get(`/api/finance/statements/${row.id}`)).data;
+            this.statementDetail = detail;
+            this.statementDisputeForm={reason:"",target_month:this.nextStatementMonth(detail.statement_month),remove:{},add:{}};
+            this.statementDisputeCandidates=[];
+            this.statementDisputeState={loading:true,saving:false,error:""};
+            this.modal={type:"statementDispute",title:`客户异议调整 ${detail.statement_number}`};
+            try {
+              const {data}=await axios.get(`/api/finance/statements/${detail.id}/adjustment-candidates`);
+              this.statementDisputeCandidates=data.items||[];
+            } catch(error) { this.statementDisputeState.error=this.errorMessage(error); this.showToast(this.statementDisputeState.error,true); }
+            finally { this.statementDisputeState.loading=false; }
+          },
+          async saveStatementDispute() {
+            if (this.statementDisputeState.saving || !this.statementDetail) return false;
+            const reason=String(this.statementDisputeForm.reason||"").trim();
+            const removeIds=Object.keys(this.statementDisputeForm.remove||{}).filter(key=>this.statementDisputeForm.remove[key]).map(Number);
+            const addIds=Object.keys(this.statementDisputeForm.add||{}).filter(key=>this.statementDisputeForm.add[key]).map(Number);
+            if (!reason) { this.showToast("请填写客户异议原因",true); return false; }
+            if (!removeIds.length && !addIds.length) { this.showToast("请选择要移出或补入的明细",true); return false; }
+            if (removeIds.length && !this.statementDisputeForm.target_month) { this.showToast("请选择移入月份",true); return false; }
+            this.statementDisputeState.saving=true;
+            try {
+              const detail=this.statementDetail;
+              const adjusted=await axios.post(`/api/finance/statements/${detail.id}/adjust-dispute`,{
+                expected_version:Number(detail.version),reason,
+                remove_lines:removeIds.map(statement_item_id=>({statement_item_id,target_month:this.statementDisputeForm.target_month})),
+                add_return_receipt_item_ids:addIds,
+              });
+              this.statementDetail=adjusted.data;
+              this.closeModal();
+              await this.loadFinance();
+              this.showToast("异议明细已调整，请重新导出给客户核对并再次确认");
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.statementDisputeState.saving=false; }
+          },
           async openStatementEdit(row) {
             const detail = this.statementDetail?.id === row.id ? this.statementDetail : (await axios.get(`/api/finance/statements/${row.id}`)).data;
             this.statementEditForm = {
@@ -31984,6 +32304,9 @@
 	            if (this.isForcedPassword) return;
               const invoiceSellerReturnCustomerId = this.modal?.type === "invoiceSellers"
                 ? Number(this.invoiceSellerReturnCustomerId || 0)
+                : 0;
+              const settlementEntityReturnCustomerId = this.modal?.type === "settlementEntities"
+                ? Number(this.settlementEntityReturnCustomerId || 0)
                 : 0;
               const productionLabelMaintenanceScrollY = this.modal?.type === "productionLabelMaintenance"
                 ? Number(this.productionLabelMaintenanceScrollY || 0)
@@ -32049,6 +32372,10 @@
               }
               if (this.modal?.type === "invoiceSellers" && this.invoiceSellerState.saving) {
                 this.showToast("销方资料正在保存，请稍候", true);
+                return;
+              }
+              if (this.modal?.type === "settlementEntities" && this.settlementEntityState.saving) {
+                this.showToast("结算对象正在保存，请稍候", true);
                 return;
               }
               if (this.modal?.type === "orderTrace") {
@@ -32128,6 +32455,11 @@
             if (invoiceSellerReturnCustomerId) {
               this.invoiceSellerReturnCustomerId = null;
               const customer = this.customers.find(row => Number(row.id) === invoiceSellerReturnCustomerId);
+              if (customer) this.openCustomer(customer);
+            }
+            if (settlementEntityReturnCustomerId) {
+              this.settlementEntityReturnCustomerId = null;
+              const customer = this.customers.find(row => Number(row.id) === settlementEntityReturnCustomerId);
               if (customer) this.openCustomer(customer);
             }
           },
@@ -32873,11 +33205,11 @@
               }
               if (this.modal.type === "statement") {
                 if (!this.statementForm.customer_id) throw new Error("请先选择客户");
-                const ids = this.pendingStatements.filter(row => !row.selection_blocked && this.statementForm.selected[row.delivery_id]).map(row => row.delivery_id);
+                const deliveryIds = this.pendingStatements.filter(row => !row.selection_blocked && this.statementForm.selected[row.delivery_id]).map(row => Number(row.delivery_id));
                 const chargeIds = this.pendingStatementCharges.filter(row => this.statementForm.selectedCharges[row.id]).map(row => row.id);
-                if (!ids.length && !chargeIds.length) throw new Error("至少选择一张待对账送货单或一条已确认附加收费");
+                if (!deliveryIds.length && !chargeIds.length) throw new Error("至少选择一张待对账送货单或一条已确认附加收费");
                 if (!this.statementForm.idempotency_key) this.statementForm.idempotency_key = createIdempotencyKey();
-                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, delivery_ids:ids, customer_charge_ids:chargeIds, idempotency_key:this.statementForm.idempotency_key });
+                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, delivery_ids:deliveryIds, customer_charge_ids:chargeIds, idempotency_key:this.statementForm.idempotency_key });
                 this.statementForm.idempotency_key = null;
                 await this.loadFinance();
               }
@@ -33267,7 +33599,10 @@
               }
             }
           },
-          exportStatement(row) { window.location.href=`/api/finance/statements/${row.id}/export`; },
+          exportStatement(row, format="xlsx") {
+            const suffix = format === "pdf" ? "pdf" : "xlsx";
+            window.location.href=`/api/finance/statements/${row.id}/customer-export.${suffix}?sort_by=${encodeURIComponent(this.financeStatementSort||"business")}`;
+          },
           async registerInvoice(row) {
             if (this.financeStatementOperationState.action) return false;
             const invoiceNumber = String(prompt("请输入发票号码") || "").trim();
@@ -33341,7 +33676,7 @@
                 this.showToast(validation || this.errorMessage(error), true);
                 return false;
               }
-              this.showToast("收款核销成功");
+              this.showToast("旧版结算记录已登记");
               try {
                 await Promise.all([this.loadFinance(), this.loadKpi()]);
               } catch(error) {

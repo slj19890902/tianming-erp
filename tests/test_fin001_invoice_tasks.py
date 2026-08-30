@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 from fastapi import FastAPI
@@ -505,6 +506,8 @@ def test_fin002a_tax_exclusive_statement_task_and_export_are_frozen(fin001_app) 
 
         exported = client.get(f"/api/finance/invoice-tasks/{task['id']}/tax-template.xlsx")
         assert exported.status_code == 200, exported.text
+        disposition = unquote(exported.headers["content-disposition"])
+        assert "2026-08导入模板.xlsx" in disposition
         workbook = load_workbook(BytesIO(exported.content), read_only=False, data_only=False)
         try:
             assert workbook.sheetnames == ["1-明细模板", "excelVersion", "xzqhdm", "2-特定业务信息"]

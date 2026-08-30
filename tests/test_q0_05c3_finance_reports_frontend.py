@@ -12,12 +12,13 @@ def _report_section() -> str:
 
 
 def test_finance_keeps_four_views_and_reports_use_authoritative_api() -> None:
-    assert "@click=\"setFinanceView('current')\">当前处理" in INDEX
-    assert "@click=\"setFinanceView('settled_history')\">已结清历史" in INDEX
-    assert "@click=\"setFinanceView('reports')\">月度年度报表" in INDEX
-    assert "@click=\"setFinanceView('statements')\">全部单据" in INDEX
-    assert "['current','settled_history','reports','statements'].includes(view)" in INDEX
-    assert 'axios.get("/api/finance/reports/monthly-yearly"' in INDEX
+    assert "@click=\"setFinanceView('overview')\">经营概览" in INDEX
+    assert "@click=\"setFinanceView('current')\">客户对账" in INDEX
+    assert "@click=\"setFinanceView('invoice_tasks')\">开票任务" in INDEX
+    assert "@click=\"setFinanceView('payables')\">应付支出" in INDEX
+    assert "['overview','current','invoice_tasks','payables'].includes(view)" in INDEX
+    assert 'axios.get("/api/finance/overview"' in INDEX
+    assert 'axios.get("/api/finance/payables"' in INDEX
 
 
 def test_report_has_independent_filters_loading_error_and_empty_states() -> None:

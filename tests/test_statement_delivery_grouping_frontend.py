@@ -27,7 +27,7 @@ def test_statement_modal_groups_deliveries_and_submits_delivery_ids() -> None:
     assert "toggleStatementDeliveryExpanded(row)" in INDEX
     assert "row.items" in INDEX
     assert "this.statementForm.selected[row.delivery_id] = true" in INDEX
-    assert "delivery_ids:ids" in INDEX
+    assert "delivery_ids:deliveryIds" in INDEX
     assert "statementForm.selected[row.return_receipt_item_id]" not in INDEX
     assert "return_receipt_item_ids:ids" not in INDEX
 

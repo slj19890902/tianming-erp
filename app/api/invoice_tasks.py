@@ -11,6 +11,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -40,6 +41,7 @@ from app.models.invoice_task import (
     FinanceInvoiceAttachment,
     FinanceInvoiceTask,
     FinanceInvoiceTaskItem,
+    FinanceSettlementEntity,
     InvoiceSellerEntity,
 )
 from app.models.order import OrderItem
@@ -108,6 +110,7 @@ class InvoiceProfilePayload(BaseModel):
     bank_name: str | None = Field(default=None, max_length=200)
     bank_account: str | None = Field(default=None, max_length=200)
     default_seller_id: int | None = Field(default=None, ge=1)
+    settlement_entity_id: int | None = Field(default=None, ge=1)
     price_tax_mode: Literal["tax_inclusive", "tax_exclusive"] = "tax_inclusive"
     default_tax_rate: Decimal | None = Field(default=Decimal("0.13"), ge=0, le=1)
     is_enabled: bool = True
@@ -127,6 +130,22 @@ class InvoiceRulePayload(BaseModel):
     fill_unit_price: bool = False
     effective_from: date | None = None
     effective_to: date | None = None
+    confirmation_status: Literal["pending", "confirmed"] = "pending"
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class SettlementEntityPayload(BaseModel):
+    entity_code: str = Field(min_length=1, max_length=40)
+    entity_name: str = Field(min_length=1, max_length=200)
+    short_name: str | None = Field(default=None, max_length=50)
+    tax_no: str | None = Field(default=None, max_length=100)
+    invoice_address: str | None = Field(default=None, max_length=1000)
+    invoice_phone: str | None = Field(default=None, max_length=100)
+    bank_name: str | None = Field(default=None, max_length=200)
+    bank_account: str | None = Field(default=None, max_length=200)
+    default_seller_id: int | None = Field(default=None, ge=1)
+    statement_cycle_start_day: int = Field(default=20, ge=1, le=28)
+    is_enabled: bool = True
     confirmation_status: Literal["pending", "confirmed"] = "pending"
     expected_version: int | None = Field(default=None, ge=1)
 
@@ -153,6 +172,11 @@ class TaskResultPayload(VersionPayload):
 
 def _text(value: str | None) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _safe_export_filename(value: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", value).strip(" .")
+    return cleaned[:180] or "开票导入模板.xlsx"
 
 
 def _audit(
@@ -197,7 +221,30 @@ def _statement_for_user(db: Session, statement_id: int, user: User) -> Statement
     statement = db.get(Statement, statement_id)
     if statement is None:
         raise HTTPException(status_code=404, detail="对账单不存在")
-    require_customer_access(statement.customer_id, user, db)
+    customer_ids: set[int] = {statement.customer_id}
+    if statement.settlement_customer_ids_snapshot_json:
+        try:
+            customer_ids.update(
+                int(value)
+                for value in json.loads(
+                    statement.settlement_customer_ids_snapshot_json
+                )
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    customer_ids.update(
+        int(value)
+        for value in db.scalars(
+            select(StatementItem.source_customer_id)
+            .where(
+                StatementItem.statement_id == statement.id,
+                StatementItem.source_customer_id.is_not(None),
+            )
+            .distinct()
+        ).all()
+    )
+    for customer_id in customer_ids:
+        require_customer_access(customer_id, user, db)
     return statement
 
 
@@ -205,7 +252,7 @@ def _task_for_user(db: Session, task_id: int, user: User) -> FinanceInvoiceTask:
     task = db.get(FinanceInvoiceTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="开票任务不存在")
-    require_customer_access(task.customer_id, user, db)
+    _statement_for_user(db, task.statement_id, user)
     return task
 
 
@@ -233,6 +280,7 @@ def _seller_missing_items(seller: InvoiceSellerEntity | None) -> list[str]:
 def _profile_missing_items(
     profile: CustomerInvoiceProfile | None,
     seller: InvoiceSellerEntity | None,
+    settlement_entity: FinanceSettlementEntity | None = None,
 ) -> list[str]:
     if profile is None:
         return ["客户开票档案"]
@@ -241,16 +289,19 @@ def _profile_missing_items(
         missing.append("客户开票档案已停用")
     if profile.confirmation_status != "confirmed":
         missing.append("客户开票档案未确认")
-    for name, value in (
-        ("购方抬头", profile.invoice_title),
-        ("购方税号", profile.tax_no),
-        ("购方开票地址", profile.invoice_address),
-        ("购方开票电话", profile.invoice_phone),
-        ("购方开户行", profile.bank_name),
-        ("购方银行账号", profile.bank_account),
-    ):
-        if not _text(value):
-            missing.append(name)
+    if settlement_entity is None:
+        for name, value in (
+            ("购方抬头", profile.invoice_title),
+            ("购方税号", profile.tax_no),
+            ("购方开票地址", profile.invoice_address),
+            ("购方开票电话", profile.invoice_phone),
+            ("购方开户行", profile.bank_name),
+            ("购方银行账号", profile.bank_account),
+        ):
+            if not _text(value):
+                missing.append(name)
+    else:
+        missing.extend(_settlement_entity_missing_items(settlement_entity))
     if profile.default_tax_rate is None:
         missing.append("默认税率")
     missing.extend(_seller_missing_items(seller))
@@ -268,6 +319,7 @@ def _profile_response(profile: CustomerInvoiceProfile | None) -> dict[str, Any]:
             "bank_name": "",
             "bank_account": "",
             "default_seller_id": None,
+            "settlement_entity_id": None,
             "price_tax_mode": "tax_inclusive",
             "default_tax_rate": Decimal("0.13"),
             "is_enabled": True,
@@ -288,6 +340,7 @@ def _profile_response(profile: CustomerInvoiceProfile | None) -> dict[str, Any]:
         "bank_name": profile.bank_name or "",
         "bank_account": profile.bank_account or "",
         "default_seller_id": profile.default_seller_id,
+        "settlement_entity_id": profile.settlement_entity_id,
         "price_tax_mode": profile.price_tax_mode,
         "default_tax_rate": profile.default_tax_rate,
         "is_enabled": profile.is_enabled,
@@ -312,6 +365,50 @@ def _seller_response(seller: InvoiceSellerEntity) -> dict[str, Any]:
         "confirmation_status": seller.confirmation_status,
         "version": seller.version,
     }
+
+
+def _settlement_entity_response(row: FinanceSettlementEntity) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "entity_code": row.entity_code,
+        "entity_name": row.entity_name,
+        "short_name": row.short_name,
+        "tax_no": row.tax_no,
+        "invoice_address": row.invoice_address,
+        "invoice_phone": row.invoice_phone,
+        "bank_name": row.bank_name,
+        "bank_account": row.bank_account,
+        "default_seller_id": row.default_seller_id,
+        "statement_cycle_start_day": row.statement_cycle_start_day,
+        "is_enabled": row.is_enabled,
+        "confirmation_status": row.confirmation_status,
+        "version": row.version,
+    }
+
+
+def _settlement_entity_missing_items(
+    row: FinanceSettlementEntity | None,
+) -> list[str]:
+    if row is None:
+        return ["结算对象"]
+    missing: list[str] = []
+    if not row.is_enabled:
+        missing.append("结算对象已停用")
+    if row.confirmation_status != "confirmed":
+        missing.append("结算对象资料未确认")
+    for label, value in (
+        ("结算对象名称", row.entity_name),
+        ("结算对象税号", row.tax_no),
+        ("结算对象开票地址", row.invoice_address),
+        ("结算对象开票电话", row.invoice_phone),
+        ("结算对象开户行", row.bank_name),
+        ("结算对象银行账号", row.bank_account),
+    ):
+        if not _text(value):
+            missing.append(label)
+    if row.default_seller_id is None:
+        missing.append("结算对象默认销方")
+    return missing
 
 
 def _rule_response(rule: CustomerInvoiceItemRule) -> dict[str, Any]:
@@ -431,6 +528,103 @@ def update_invoice_seller(
     return _seller_response(seller)
 
 
+@router.get("/settlement-entities")
+def list_settlement_entities(
+    db: Session = Depends(get_db),
+    user: User = Depends(can_profile_manage),
+) -> dict[str, list[dict[str, Any]]]:
+    rows = db.scalars(
+        select(FinanceSettlementEntity).order_by(
+            FinanceSettlementEntity.entity_name, FinanceSettlementEntity.id
+        )
+    ).all()
+    return {"items": [_settlement_entity_response(row) for row in rows]}
+
+
+@router.post("/settlement-entities", status_code=201)
+def create_settlement_entity(
+    payload: SettlementEntityPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_profile_manage),
+) -> dict[str, Any]:
+    seller = (
+        db.get(InvoiceSellerEntity, payload.default_seller_id)
+        if payload.default_seller_id
+        else None
+    )
+    if payload.default_seller_id and seller is None:
+        raise HTTPException(status_code=409, detail="结算对象默认销方不存在")
+    row = FinanceSettlementEntity(
+        entity_code=payload.entity_code.strip(),
+        entity_name=payload.entity_name.strip(),
+        short_name=_text(payload.short_name),
+        tax_no=_text(payload.tax_no),
+        invoice_address=_text(payload.invoice_address),
+        invoice_phone=_text(payload.invoice_phone),
+        bank_name=_text(payload.bank_name),
+        bank_account=_text(payload.bank_account),
+        default_seller_id=payload.default_seller_id,
+        statement_cycle_start_day=payload.statement_cycle_start_day,
+        is_enabled=payload.is_enabled,
+        confirmation_status=payload.confirmation_status,
+    )
+    if row.confirmation_status == "confirmed":
+        missing = _settlement_entity_missing_items(row) + _seller_missing_items(seller)
+        if missing:
+            raise HTTPException(status_code=409, detail={"message": "结算对象资料不完整", "missing_items": list(dict.fromkeys(missing))})
+        row.confirmed_by = user.id
+        row.confirmed_at = datetime.now()
+    db.add(row)
+    try:
+        db.flush()
+        _audit(db, user=user, action="CREATE_SETTLEMENT_ENTITY", resource="FinanceSettlementEntity", entity_id=row.id, customer=None, details={"entity_code": row.entity_code}, description="新增合作结算对象")
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="结算对象编号已存在") from error
+    return _settlement_entity_response(row)
+
+
+@router.put("/settlement-entities/{entity_id}")
+def update_settlement_entity(
+    entity_id: int,
+    payload: SettlementEntityPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_profile_manage),
+) -> dict[str, Any]:
+    row = db.get(FinanceSettlementEntity, entity_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="结算对象不存在")
+    if payload.expected_version != row.version:
+        raise HTTPException(status_code=409, detail={"message": "结算对象已被修改", "current_version": row.version})
+    seller = db.get(InvoiceSellerEntity, payload.default_seller_id) if payload.default_seller_id else None
+    if payload.default_seller_id and seller is None:
+        raise HTTPException(status_code=409, detail="结算对象默认销方不存在")
+    for field in ("entity_code", "entity_name", "statement_cycle_start_day", "is_enabled", "confirmation_status", "default_seller_id"):
+        setattr(row, field, getattr(payload, field))
+    for field in ("short_name", "tax_no", "invoice_address", "invoice_phone", "bank_name", "bank_account"):
+        setattr(row, field, _text(getattr(payload, field)))
+    row.entity_code = row.entity_code.strip()
+    row.entity_name = row.entity_name.strip()
+    row.version += 1
+    if row.confirmation_status == "confirmed":
+        missing = _settlement_entity_missing_items(row) + _seller_missing_items(seller)
+        if missing:
+            raise HTTPException(status_code=409, detail={"message": "结算对象资料不完整", "missing_items": list(dict.fromkeys(missing))})
+        row.confirmed_by = user.id
+        row.confirmed_at = datetime.now()
+    else:
+        row.confirmed_by = None
+        row.confirmed_at = None
+    try:
+        _audit(db, user=user, action="UPDATE_SETTLEMENT_ENTITY", resource="FinanceSettlementEntity", entity_id=row.id, customer=None, details={"entity_code": row.entity_code, "version": row.version}, description="修改合作结算对象")
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="结算对象编号已存在") from error
+    return _settlement_entity_response(row)
+
+
 @customer_router.get("/{customer_id}/invoice-profile")
 def get_customer_invoice_profile(
     customer_id: int,
@@ -461,6 +655,13 @@ def save_customer_invoice_profile(
     seller = db.get(InvoiceSellerEntity, payload.default_seller_id) if payload.default_seller_id else None
     if payload.default_seller_id and seller is None:
         raise HTTPException(status_code=409, detail="默认销方主体不存在")
+    settlement_entity = (
+        db.get(FinanceSettlementEntity, payload.settlement_entity_id)
+        if payload.settlement_entity_id
+        else None
+    )
+    if payload.settlement_entity_id and settlement_entity is None:
+        raise HTTPException(status_code=409, detail="结算对象不存在")
     if profile is None:
         profile = CustomerInvoiceProfile(customer_id=customer_id)
         db.add(profile)
@@ -471,6 +672,7 @@ def save_customer_invoice_profile(
     profile.bank_name = _text(payload.bank_name)
     profile.bank_account = _text(payload.bank_account)
     profile.default_seller_id = payload.default_seller_id
+    profile.settlement_entity_id = payload.settlement_entity_id
     profile.price_tax_mode = payload.price_tax_mode
     profile.default_tax_rate = payload.default_tax_rate
     profile.is_enabled = payload.is_enabled
@@ -478,7 +680,12 @@ def save_customer_invoice_profile(
     if profile.id is not None:
         profile.version += 1
     if profile.confirmation_status == "confirmed":
-        missing = _profile_missing_items(profile, seller)
+        effective_seller = (
+            db.get(InvoiceSellerEntity, settlement_entity.default_seller_id)
+            if settlement_entity is not None and settlement_entity.default_seller_id
+            else seller
+        )
+        missing = _profile_missing_items(profile, effective_seller, settlement_entity)
         has_rule = db.scalar(select(CustomerInvoiceItemRule.id).where(CustomerInvoiceItemRule.customer_id == customer_id, CustomerInvoiceItemRule.product_id.is_(None), CustomerInvoiceItemRule.confirmation_status == "confirmed").limit(1))
         if not has_rule:
             missing.append("已确认的客户默认项目规则")
@@ -628,20 +835,62 @@ def _snapshot_for_statement(
     seller: InvoiceSellerEntity,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
     profile = db.scalar(select(CustomerInvoiceProfile).where(CustomerInvoiceProfile.customer_id == statement.customer_id))
-    missing = _profile_missing_items(profile, seller)
+    settlement_entity = (
+        db.get(FinanceSettlementEntity, statement.settlement_entity_id)
+        if statement.settlement_entity_id
+        else None
+    )
+    missing = _profile_missing_items(profile, seller, settlement_entity)
     if profile is None:
         return {}, [], missing
     task_rows = _task_rows(db, statement.id)
-    rules = _confirmed_rule_by_product(
-        db,
-        statement.customer_id,
-        effective_on=date.today(),
-    )
-    default_rule = rules.get(None)
-    if default_rule is None and any(row[1] is not None for row in task_rows):
-        missing.append("已确认的客户默认项目规则")
+    source_customer_ids = {
+        int(statement_item.source_customer_id or statement.customer_id)
+        for statement_item, *_rest in task_rows
+    }
+    profiles_by_customer = {
+        row.customer_id: row
+        for row in db.scalars(
+            select(CustomerInvoiceProfile).where(
+                CustomerInvoiceProfile.customer_id.in_(source_customer_ids)
+            )
+        ).all()
+    }
+    rules_by_customer = {
+        source_customer_id: _confirmed_rule_by_product(
+            db,
+            source_customer_id,
+            effective_on=date.today(),
+        )
+        for source_customer_id in source_customer_ids
+    }
+    delivery_customer_ids = {
+        int(statement_item.source_customer_id or statement.customer_id)
+        for statement_item, delivery_item, *_rest in task_rows
+        if delivery_item is not None
+    }
+    for source_customer_id in sorted(source_customer_ids):
+        source_profile = profiles_by_customer.get(source_customer_id)
+        if source_profile is None:
+            missing.append(f"客户 {source_customer_id} 缺少开票档案")
+            continue
+        if not source_profile.is_enabled or source_profile.confirmation_status != "confirmed":
+            missing.append(f"客户 {source_customer_id} 的开票档案未确认或已停用")
+        if source_profile.default_tax_rate is None:
+            missing.append(f"客户 {source_customer_id} 缺少默认税率")
+        if (
+            source_customer_id in delivery_customer_ids
+            and rules_by_customer[source_customer_id].get(None) is None
+        ):
+            missing.append(f"客户 {source_customer_id} 缺少已确认的默认项目规则")
     lines: list[dict[str, Any]] = []
     for statement_item, delivery_item, order_item, product, charge in task_rows:
+        source_customer_id = int(
+            statement_item.source_customer_id or statement.customer_id
+        )
+        source_profile = profiles_by_customer.get(source_customer_id) or profile
+        rules = rules_by_customer.get(source_customer_id, {})
+        default_rule = rules.get(None)
         if charge is not None:
             mode = statement_item.price_tax_mode_snapshot
             rate_value = statement_item.tax_rate_snapshot
@@ -739,7 +988,7 @@ def _snapshot_for_statement(
                 order_item.price_tax_mode_snapshot
                 if order_item is not None
                 and order_item.price_tax_mode_snapshot in VALID_PRICE_TAX_MODES
-                else profile.price_tax_mode
+                else source_profile.price_tax_mode
             )
         )
         if mode not in VALID_PRICE_TAX_MODES:
@@ -753,8 +1002,8 @@ def _snapshot_for_statement(
                     order_item.tax_rate_snapshot
                     if order_item is not None and order_item.tax_rate_snapshot is not None
                     else (
-                        profile.default_tax_rate
-                        if profile.default_tax_rate is not None
+                        source_profile.default_tax_rate
+                        if source_profile.default_tax_rate is not None
                         else rule.tax_rate
                     )
                 )
@@ -825,7 +1074,16 @@ def _snapshot_for_statement(
         "statement_id": statement.id,
         "statement_version": statement.version,
         "customer_id": statement.customer_id,
-        "profile_version": profile.version,
+        "profile_versions": {
+            str(customer_id): source_profile.version
+            for customer_id, source_profile in sorted(profiles_by_customer.items())
+        },
+        "settlement_entity_id": (
+            settlement_entity.id if settlement_entity is not None else None
+        ),
+        "settlement_entity_version": (
+            settlement_entity.version if settlement_entity is not None else None
+        ),
         "seller_id": seller.id,
         "seller_version": seller.version,
         "price_tax_mode": (
@@ -859,7 +1117,11 @@ def _task_response(db: Session, task: FinanceInvoiceTask) -> dict[str, Any]:
         "statement_month": statement.statement_month if statement else None,
         "statement_version": task.statement_version,
         "customer_id": task.customer_id,
-        "customer_name": customer.name if customer else "",
+        "customer_name": (
+            statement.settlement_name_snapshot
+            if statement and statement.settlement_name_snapshot
+            else (customer.name if customer else "")
+        ),
         "seller_entity_id": task.seller_entity_id,
         "seller_name": seller.seller_name if seller else "",
         "price_tax_mode": task.price_tax_mode,
@@ -949,7 +1211,21 @@ def create_invoice_task(
     if conflicting_replay is not None:
         raise HTTPException(status_code=409, detail="幂等键已用于不同的开票任务请求")
     profile = db.scalar(select(CustomerInvoiceProfile).where(CustomerInvoiceProfile.customer_id == statement.customer_id))
-    seller_id = payload.seller_entity_id or (profile.default_seller_id if profile else None)
+    settlement_entity = (
+        db.get(FinanceSettlementEntity, statement.settlement_entity_id)
+        if statement.settlement_entity_id
+        else None
+    )
+    seller_id = payload.seller_entity_id or (
+        settlement_entity.default_seller_id
+        if settlement_entity is not None
+        else (profile.default_seller_id if profile else None)
+    )
+    effective_default_seller_id = (
+        settlement_entity.default_seller_id
+        if settlement_entity is not None
+        else (profile.default_seller_id if profile else None)
+    )
     seller = db.get(InvoiceSellerEntity, seller_id) if seller_id else None
     if seller is None:
         raise HTTPException(status_code=409, detail={"message": "客户缺少默认销方主体", "missing_items": ["默认销方主体"]})
@@ -962,19 +1238,21 @@ def create_invoice_task(
         raise HTTPException(status_code=409, detail="该对账版本已有冻结开票任务；请先作废旧任务后重新生成")
     if missing:
         raise HTTPException(status_code=409, detail={"message": "开票资料不完整，不能生成可导出任务", "missing_items": missing})
-    if payload.seller_entity_id and profile and seller.id != profile.default_seller_id:
+    if payload.seller_entity_id and seller.id != effective_default_seller_id:
         if payload.seller_change_type is None or not _text(payload.seller_change_reason):
             raise HTTPException(status_code=409, detail="临时或永久换销方必须选择类型并填写原因")
         if payload.seller_change_type == "permanent" and not payload.confirm_permanent_change:
             raise HTTPException(status_code=409, detail="永久修改默认销方需要再次确认")
     buyer_snapshot = {
-        "invoice_title": profile.invoice_title,
-        "tax_no": profile.tax_no,
-        "invoice_address": profile.invoice_address,
-        "invoice_phone": profile.invoice_phone,
-        "bank_name": profile.bank_name,
-        "bank_account": profile.bank_account,
+        "invoice_title": settlement_entity.entity_name if settlement_entity else profile.invoice_title,
+        "tax_no": settlement_entity.tax_no if settlement_entity else profile.tax_no,
+        "invoice_address": settlement_entity.invoice_address if settlement_entity else profile.invoice_address,
+        "invoice_phone": settlement_entity.invoice_phone if settlement_entity else profile.invoice_phone,
+        "bank_name": settlement_entity.bank_name if settlement_entity else profile.bank_name,
+        "bank_account": settlement_entity.bank_account if settlement_entity else profile.bank_account,
         "profile_version": profile.version,
+        "settlement_entity_id": settlement_entity.id if settlement_entity else None,
+        "settlement_entity_version": settlement_entity.version if settlement_entity else None,
     }
     seller_snapshot = {
         "seller_code": seller.seller_code,
@@ -1033,12 +1311,16 @@ def create_invoice_task(
                     rule_version=line["rule_version"],
                 )
             )
-        if payload.seller_entity_id and profile and seller.id != profile.default_seller_id:
+        if payload.seller_entity_id and seller.id != effective_default_seller_id:
             change_type = payload.seller_change_type or "temporary"
-            db.add(CustomerInvoiceSellerChange(customer_id=customer.id, old_seller_id=profile.default_seller_id, new_seller_id=seller.id, change_type=change_type, statement_id=statement.id, invoice_task_id=task.id, reason=payload.seller_change_reason or "", created_by=user.id))
+            db.add(CustomerInvoiceSellerChange(customer_id=customer.id, old_seller_id=effective_default_seller_id, new_seller_id=seller.id, change_type=change_type, statement_id=statement.id, invoice_task_id=task.id, reason=payload.seller_change_reason or "", created_by=user.id))
             if change_type == "permanent":
-                profile.default_seller_id = seller.id
-                profile.version += 1
+                if settlement_entity is not None:
+                    settlement_entity.default_seller_id = seller.id
+                    settlement_entity.version += 1
+                else:
+                    profile.default_seller_id = seller.id
+                    profile.version += 1
         _audit(db, user=user, action="CREATE_INVOICE_TASK", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"statement_id": statement.id, "statement_version": statement.version, "seller_id": seller.id, "task_number": task.task_number, "total_amount": total, "line_count": len(lines), "request_idempotency_key": payload.idempotency_key}, description="生成冻结开票任务")
         db.commit()
     except IntegrityError as error:
@@ -1183,7 +1465,28 @@ def download_tax_template(
     _ensure_task_source_current(db, task)
     items = db.scalars(select(FinanceInvoiceTaskItem).where(FinanceInvoiceTaskItem.task_id == task.id).order_by(FinanceInvoiceTaskItem.sequence_no)).all()
     export_dir = _invoice_export_dir()
-    output = export_dir / f"{task.task_number}-{task.source_snapshot_hash[:12]}.xlsx"
+    statement = db.get(Statement, task.statement_id)
+    settlement_entity = (
+        db.get(FinanceSettlementEntity, statement.settlement_entity_id)
+        if statement is not None and statement.settlement_entity_id
+        else None
+    )
+    short_name = (
+        (settlement_entity.short_name or settlement_entity.entity_name).strip()
+        if settlement_entity is not None
+        else (
+            (customer.chinese_short_name or "").strip()
+            if customer is not None
+            else ""
+        )
+    ) or (customer.name[:12] if customer is not None else "客户")
+    statement_month = statement.statement_month if statement is not None else ""
+    download_name = _safe_export_filename(
+        f"{short_name}{statement_month}导入模板.xlsx"
+    )
+    output = export_dir / (
+        f"{task.task_number}-{task.source_snapshot_hash[:12]}-{download_name}"
+    )
     try:
         export = generate_invoice_tax_template(template_path=TAX_TEMPLATE_PATH, output_path=output, lines=[{"project_name": item.project_name, "tax_classification_code": item.tax_classification_code, "specification": item.specification, "unit": item.unit, "quantity": item.quantity, "unit_price": item.unit_price, "amount": item.amount, "tax_rate": item.tax_rate} for item in items])
     except InvoiceTaxTemplateError as error:
@@ -1194,7 +1497,7 @@ def download_tax_template(
     task.last_exported_at = datetime.now()
     _audit(db, user=user, action="EXPORT_INVOICE_TAX_TEMPLATE", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"task_number": task.task_number, "file_hash": export.sha256, "line_count": export.line_count, "warnings": list(export.warnings)}, description="生成税局开票导入文件")
     db.commit()
-    return FileResponse(export.path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=f"{task.task_number}.xlsx")
+    return FileResponse(export.path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=download_name)
 
 
 @router.post("/invoice-tasks/{task_id}/result")

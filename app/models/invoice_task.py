@@ -65,6 +65,54 @@ class InvoiceSellerEntity(Base):
     )
 
 
+class FinanceSettlementEntity(Base):
+    """Independent buyer/settlement master for consolidated customer billing."""
+
+    __tablename__ = "finance_settlement_entities"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_finance_settlement_entities_version"),
+        CheckConstraint(
+            "confirmation_status IN ('pending','confirmed')",
+            name="ck_finance_settlement_entities_confirmation_status",
+        ),
+        CheckConstraint(
+            "statement_cycle_start_day BETWEEN 1 AND 28",
+            name="ck_finance_settlement_entities_cycle_day",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    entity_code: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    entity_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    short_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    tax_no: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    invoice_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    invoice_phone: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    bank_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    bank_account: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    default_seller_id: Mapped[int | None] = mapped_column(
+        ForeignKey("invoice_seller_entities.id", ondelete="RESTRICT"), nullable=True
+    )
+    statement_cycle_start_day: Mapped[int] = mapped_column(
+        Integer, default=20, server_default="20", nullable=False
+    )
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
+    confirmation_status: Mapped[str] = mapped_column(
+        String(20), default="pending", server_default="pending", nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    confirmed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, onupdate=func.current_timestamp(), nullable=True
+    )
+
+
 class CustomerInvoiceProfile(Base):
     __tablename__ = "customer_invoice_profiles"
     __table_args__ = (
@@ -96,6 +144,9 @@ class CustomerInvoiceProfile(Base):
     bank_account: Mapped[str | None] = mapped_column(String(200), nullable=True)
     default_seller_id: Mapped[int | None] = mapped_column(
         ForeignKey("invoice_seller_entities.id", ondelete="RESTRICT"), nullable=True
+    )
+    settlement_entity_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_settlement_entities.id", ondelete="RESTRICT"), nullable=True
     )
     invoice_type: Mapped[str] = mapped_column(
         String(40), default="digital_vat_special", nullable=False

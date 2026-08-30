@@ -39,8 +39,16 @@ from app.models.finance import (
     ReturnReceiptItem,
     SettlementRecord,
     Statement,
+    StatementAdjustment,
     StatementItem,
 )
+from app.models.finance_payable import FinancePayable
+from app.models.invoice_task import (
+    CustomerInvoiceProfile,
+    FinanceInvoiceTask,
+    FinanceSettlementEntity,
+)
+from app.models.supplier import Supplier
 from app.models.fulfillment_reminder import FulfillmentReminder
 from app.models.order import Order, OrderItem
 from app.models.mold_tool import MoldToolCustomer
@@ -84,6 +92,7 @@ from app.services.ordered_finished_receipt_return import (
 )
 from app.services.warehouse_inventory import WarehouseInventoryError
 from app.services.product_specification import resolved_product_specification
+from app.services.statement_pdf import render_customer_statement_pdf
 
 
 router = APIRouter()
@@ -108,6 +117,73 @@ def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
     if has_unrestricted_customer_access(user, db):
         return None
     return customer_scope_ids(user, db)
+
+
+def _settlement_context_for_customer(
+    db: Session, customer_id: int
+) -> tuple[FinanceSettlementEntity | None, set[int]]:
+    profile = db.scalar(
+        select(CustomerInvoiceProfile).where(
+            CustomerInvoiceProfile.customer_id == customer_id
+        )
+    )
+    if profile is None or profile.settlement_entity_id is None:
+        return None, {customer_id}
+    entity = db.get(FinanceSettlementEntity, profile.settlement_entity_id)
+    if (
+        entity is None
+        or not entity.is_enabled
+        or entity.confirmation_status != "confirmed"
+    ):
+        raise HTTPException(status_code=409, detail="客户关联的结算对象未确认或已停用")
+    customer_ids = set(
+        db.scalars(
+            select(CustomerInvoiceProfile.customer_id).where(
+                CustomerInvoiceProfile.settlement_entity_id == entity.id,
+                CustomerInvoiceProfile.is_enabled.is_(True),
+                CustomerInvoiceProfile.confirmation_status == "confirmed",
+            )
+        ).all()
+    )
+    if customer_id not in customer_ids:
+        customer_ids.add(customer_id)
+    return entity, customer_ids
+
+
+def _statement_scope_customer_ids(db: Session, statement: Statement) -> set[int]:
+    """Return the customer scope frozen when the statement was created."""
+
+    if statement.settlement_customer_ids_snapshot_json:
+        try:
+            values = json.loads(statement.settlement_customer_ids_snapshot_json)
+            customer_ids = {
+                int(value)
+                for value in values
+                if isinstance(value, int) or str(value).isdigit()
+            }
+            if customer_ids:
+                return customer_ids
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    source_ids = set(
+        db.scalars(
+            select(StatementItem.source_customer_id)
+            .where(
+                StatementItem.statement_id == statement.id,
+                StatementItem.source_customer_id.is_not(None),
+            )
+            .distinct()
+        ).all()
+    )
+    source_ids.add(statement.customer_id)
+    return {int(customer_id) for customer_id in source_ids}
+
+
+def _statement_cycle_day(db: Session, statement: Statement) -> int:
+    if statement.statement_cycle_start_day_snapshot is not None:
+        return int(statement.statement_cycle_start_day_snapshot)
+    customer = db.get(Customer, statement.customer_id)
+    return int(customer.statement_cycle_start_day if customer else 1)
 
 
 def _redact_statement_costs(payload: dict, user: User) -> dict:
@@ -138,7 +214,8 @@ def _statement_for_user(
     statement = db.get(Statement, statement_id)
     if statement is None:
         raise HTTPException(status_code=404, detail="对账单不存在")
-    require_customer_access(statement.customer_id, user, db)
+    for source_customer_id in _statement_scope_customer_ids(db, statement):
+        require_customer_access(source_customer_id, user, db)
     return statement
 
 
@@ -530,6 +607,100 @@ class StatementUpdate(BaseModel):
         if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value):
             raise ValueError("对账月份格式必须为 YYYY-MM")
         return value
+
+
+class StatementReopen(BaseModel):
+    expected_version: int = Field(gt=0)
+    reason: str = Field(min_length=2, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        return value.strip()
+
+
+class StatementLineRemoval(BaseModel):
+    statement_item_id: int = Field(gt=0)
+    target_month: str
+
+    @field_validator("target_month")
+    @classmethod
+    def validate_target_month(cls, value: str) -> str:
+        return _validated_month(value, "移入月份")
+
+
+class StatementDisputeAdjustment(BaseModel):
+    expected_version: int = Field(gt=0)
+    reason: str = Field(min_length=2, max_length=500)
+    remove_lines: list[StatementLineRemoval] = Field(default_factory=list)
+    add_return_receipt_item_ids: list[int] = Field(default_factory=list)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("add_return_receipt_item_ids")
+    @classmethod
+    def validate_add_ids(cls, value: list[int]) -> list[int]:
+        if len(value) != len(set(value)) or any(item_id <= 0 for item_id in value):
+            raise ValueError("补入明细不能重复且必须为正整数")
+        return value
+
+    @model_validator(mode="after")
+    def validate_changes(self):
+        removal_ids = [item.statement_item_id for item in self.remove_lines]
+        if len(removal_ids) != len(set(removal_ids)):
+            raise ValueError("移出明细不能重复")
+        if not removal_ids and not self.add_return_receipt_item_ids:
+            raise ValueError("至少选择一条移出或补入明细")
+        return self
+
+
+class PayableCreate(BaseModel):
+    supplier_id: int | None = Field(default=None, gt=0)
+    counterparty_name: str = Field(min_length=1, max_length=200)
+    category: str
+    document_number: str | None = Field(default=None, max_length=100)
+    document_date: date
+    due_date: date | None = None
+    amount: Decimal = Field(gt=0)
+    note: str | None = Field(default=None, max_length=1000)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized not in {
+            "material", "outsourcing", "freight", "utilities", "rent",
+            "wages", "maintenance", "tax_fee", "other",
+        }:
+            raise ValueError("应付/支出类别无效")
+        return normalized
+
+    @field_validator("counterparty_name", "idempotency_key")
+    @classmethod
+    def normalize_required_payable_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("document_number", "note")
+    @classmethod
+    def normalize_optional_payable_text(cls, value: str | None) -> str | None:
+        normalized = (value or "").strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_payable(self):
+        self.amount = self.amount.quantize(MONEY, rounding=ROUND_HALF_UP)
+        if self.due_date is not None and self.due_date < self.document_date:
+            raise ValueError("到期日不能早于单据日期")
+        return self
+
+
+class PayableTransition(BaseModel):
+    expected_version: int = Field(gt=0)
+    reason: str | None = Field(default=None, max_length=500)
 
 
 def _statement_period(
@@ -1137,7 +1308,12 @@ def list_statements(
     if balance_type not in {None, "pending_invoice", "pending_payment"}:
         raise HTTPException(status_code=400, detail="未知的财务待办筛选")
     query = (
-        select(Statement, Customer.name.label("customer_name"))
+        select(
+            Statement,
+            func.coalesce(
+                Statement.settlement_name_snapshot, Customer.name
+            ).label("customer_name"),
+        )
         .join(Customer, Customer.id == Statement.customer_id)
         .order_by(Statement.statement_month.desc(), Statement.id.desc())
     )
@@ -1148,6 +1324,16 @@ def list_statements(
         visible_customer_ids = _visible_customer_ids(user, db)
         if visible_customer_ids is not None:
             query = query.where(Statement.customer_id.in_(visible_customer_ids))
+            unauthorized_source = (
+                select(StatementItem.id)
+                .where(
+                    StatementItem.statement_id == Statement.id,
+                    StatementItem.source_customer_id.is_not(None),
+                    StatementItem.source_customer_id.not_in(visible_customer_ids),
+                )
+                .exists()
+            )
+            query = query.where(~unauthorized_source)
     if statement_month:
         query = query.where(Statement.statement_month == statement_month)
     if balance_type == "pending_invoice":
@@ -1191,6 +1377,119 @@ def list_statements(
     }
 
 
+def _aggregate_settlement_customer_summaries(
+    db: Session,
+    summaries: list[dict],
+    *,
+    statement_month: str,
+    visible_customer_ids: set[int] | None,
+) -> list[dict]:
+    if not summaries:
+        return []
+    candidate_ids = {int(row["customer_id"]) for row in summaries}
+    entity_rows = db.execute(
+        select(
+            CustomerInvoiceProfile.customer_id,
+            FinanceSettlementEntity.id,
+            FinanceSettlementEntity.entity_name,
+            FinanceSettlementEntity.statement_cycle_start_day,
+        )
+        .join(
+            FinanceSettlementEntity,
+            FinanceSettlementEntity.id == CustomerInvoiceProfile.settlement_entity_id,
+        )
+        .where(
+            CustomerInvoiceProfile.customer_id.in_(candidate_ids),
+            CustomerInvoiceProfile.is_enabled.is_(True),
+            CustomerInvoiceProfile.confirmation_status == "confirmed",
+            FinanceSettlementEntity.is_enabled.is_(True),
+            FinanceSettlementEntity.confirmation_status == "confirmed",
+        )
+    ).all()
+    entity_by_customer = {
+        int(customer_id): (int(entity_id), entity_name, int(cycle_day))
+        for customer_id, entity_id, entity_name, cycle_day in entity_rows
+    }
+    entity_ids = {value[0] for value in entity_by_customer.values()}
+    members_by_entity: dict[int, set[int]] = {}
+    if entity_ids:
+        for entity_id, customer_id in db.execute(
+            select(
+                CustomerInvoiceProfile.settlement_entity_id,
+                CustomerInvoiceProfile.customer_id,
+            ).where(
+                CustomerInvoiceProfile.settlement_entity_id.in_(entity_ids),
+                CustomerInvoiceProfile.is_enabled.is_(True),
+                CustomerInvoiceProfile.confirmation_status == "confirmed",
+            )
+        ).all():
+            members_by_entity.setdefault(int(entity_id), set()).add(int(customer_id))
+
+    grouped: dict[tuple[str, int], dict] = {}
+    for source in summaries:
+        customer_id = int(source["customer_id"])
+        entity_info = entity_by_customer.get(customer_id)
+        if entity_info is not None:
+            entity_id, entity_name, cycle_day = entity_info
+            member_ids = members_by_entity.get(entity_id, {customer_id})
+            if (
+                visible_customer_ids is not None
+                and not member_ids.issubset(visible_customer_ids)
+            ):
+                # A partial customer scope must not reveal or create a partial
+                # consolidated statement for the settlement entity.
+                continue
+            key = ("entity", entity_id)
+            representative_id = min(member_ids)
+            period_start, period_end = _statement_period(statement_month, cycle_day)
+            target = grouped.setdefault(
+                key,
+                {
+                    "id": representative_id,
+                    "name": entity_name,
+                    "settlement_entity_id": entity_id,
+                    "customer_ids": sorted(member_ids),
+                    "pending_count": 0,
+                    "blocked_count": 0,
+                    "pending_item_count": 0,
+                    "amount": Decimal("0.00"),
+                    "statement_cycle_start_day": cycle_day,
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "delivery_ids": [],
+                },
+            )
+        else:
+            key = ("customer", customer_id)
+            target = grouped.setdefault(
+                key,
+                {
+                    "id": customer_id,
+                    "name": source["customer_name"],
+                    "settlement_entity_id": None,
+                    "customer_ids": [customer_id],
+                    "pending_count": 0,
+                    "blocked_count": 0,
+                    "pending_item_count": 0,
+                    "amount": Decimal("0.00"),
+                    "statement_cycle_start_day": source[
+                        "statement_cycle_start_day"
+                    ],
+                    "period_start": source["period_start"],
+                    "period_end": source["period_end"],
+                    "delivery_ids": [],
+                },
+            )
+        target["pending_count"] += int(source.get("pending_count") or 0)
+        target["blocked_count"] += int(source.get("blocked_count") or 0)
+        target["pending_item_count"] += int(source.get("pending_item_count") or 0)
+        target["amount"] = (
+            Decimal(str(target["amount"])) + Decimal(str(source.get("amount") or 0))
+        ).quantize(MONEY, rounding=ROUND_HALF_UP)
+        target["delivery_ids"].extend(source.get("delivery_ids") or [])
+    return sorted(grouped.values(), key=lambda row: (str(row["name"]), row["id"]))
+
+
 @router.get("/statement-customers")
 def list_statement_customers(
     statement_month: str | None = None,
@@ -1208,20 +1507,12 @@ def list_statement_customers(
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return {
-            "items": [
-                {
-                    "id": row["customer_id"],
-                    "name": row["customer_name"],
-                    "pending_count": row["pending_count"],
-                    "blocked_count": row["blocked_count"],
-                    "statement_cycle_start_day": row[
-                        "statement_cycle_start_day"
-                    ],
-                    "period_start": row["period_start"],
-                    "period_end": row["period_end"],
-                }
-                for row in summaries
-            ]
+            "items": _aggregate_settlement_customer_summaries(
+                db,
+                summaries,
+                statement_month=statement_month,
+                visible_customer_ids=visible_customer_ids,
+            )
         }
     candidate_query = (
         select(Delivery.customer_id)
@@ -1305,12 +1596,16 @@ def _statement_detail_response(
     if row is None:
         raise HTTPException(status_code=404, detail="对账单不存在")
     statement, customer_name = row
-    require_customer_access(statement.customer_id, user, db)
+    _statement_for_user(db, statement.id, user)
+    source_customer = aliased(Customer)
     items = db.execute(
         select(
             StatementItem.id.label("statement_item_id"),
+            StatementItem.source_customer_id,
+            source_customer.name.label("source_customer_name"),
             StatementItem.return_receipt_item_id,
             ReturnReceipt.actual_received_date,
+            Delivery.delivery_date,
             Delivery.delivery_number,
             case(
                 (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
@@ -1361,6 +1656,10 @@ def _statement_detail_response(
             Product.id
             == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
         )
+        .outerjoin(
+            source_customer,
+            source_customer.id == StatementItem.source_customer_id,
+        )
         .where(StatementItem.statement_id == statement.id)
         .order_by(StatementItem.id)
     ).all()
@@ -1395,6 +1694,8 @@ def _statement_detail_response(
     charge_items = db.execute(
         select(
             StatementItem.id.label("statement_item_id"),
+            StatementItem.source_customer_id,
+            source_customer.name.label("source_customer_name"),
             StatementItem.customer_charge_id,
             CustomerCharge.confirmed_at.label("actual_received_date"),
             Order.customer_po,
@@ -1413,6 +1714,10 @@ def _statement_detail_response(
             CustomerCharge.id == StatementItem.customer_charge_id,
         )
         .join(Order, Order.id == CustomerCharge.order_id)
+        .outerjoin(
+            source_customer,
+            source_customer.id == StatementItem.source_customer_id,
+        )
         .where(StatementItem.statement_id == statement.id)
         .order_by(StatementItem.id)
     ).all()
@@ -1440,7 +1745,11 @@ def _statement_detail_response(
             "id": statement.id,
             "statement_number": statement.statement_number,
             "customer_id": statement.customer_id,
-            "customer_name": customer_name,
+            "customer_name": statement.settlement_name_snapshot or customer_name,
+            "settlement_entity_id": statement.settlement_entity_id,
+            "source_customer_ids": sorted(
+                _statement_scope_customer_ids(db, statement)
+            ),
             "statement_month": statement.statement_month,
             "total_receivable": statement.total_receivable,
             "total_gross_profit": statement.total_gross_profit,
@@ -1732,6 +2041,312 @@ def export_statement_excel(
                 f'attachment; filename="statement.xlsx"; filename*=UTF-8\'\'{encoded}'
             ),
         },
+    )
+
+
+def _customer_statement_export_data(
+    db: Session,
+    *,
+    statement: Statement,
+    customer: Customer,
+    sort_by: str,
+) -> dict:
+    settlement_entity = (
+        db.get(FinanceSettlementEntity, statement.settlement_entity_id)
+        if statement.settlement_entity_id is not None
+        else None
+    )
+    display_name = statement.settlement_name_snapshot or customer.name
+    short_name = (
+        (settlement_entity.short_name or settlement_entity.entity_name).strip()
+        if settlement_entity is not None
+        else (customer.chinese_short_name or _customer_abbr(customer.name))
+    )
+    delivery_rows = db.execute(
+        select(
+            StatementItem.id.label("statement_item_id"),
+            Delivery.delivery_date,
+            Delivery.delivery_number,
+            Order.order_number,
+            case(
+                (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
+                else_=Order.customer_po,
+            ).label("customer_po"),
+            func.coalesce(
+                DeliveryItem.product_code_snapshot,
+                OrderItem.snapshot_product_code,
+                Product.product_code,
+            ).label("product_code"),
+            func.coalesce(
+                DeliveryItem.product_name_snapshot,
+                OrderItem.snapshot_product_name,
+                Product.product_name,
+            ).label("product_name"),
+            StatementItem.actual_received_quantity.label("quantity"),
+            StatementItem.unit_price_snapshot.label("unit_price"),
+            StatementItem.receivable_amount,
+            StatementItem.price_tax_mode_snapshot,
+        )
+        .join(
+            ReturnReceiptItem,
+            ReturnReceiptItem.id == StatementItem.return_receipt_item_id,
+        )
+        .join(DeliveryItem, DeliveryItem.id == ReturnReceiptItem.delivery_item_id)
+        .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+        .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .outerjoin(Order, Order.id == OrderItem.order_id)
+        .outerjoin(
+            Product,
+            Product.id == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
+        )
+        .where(StatementItem.statement_id == statement.id)
+    ).all()
+    rows: list[dict] = []
+    modes: set[str] = set()
+    for row in delivery_rows:
+        mode = (
+            row.price_tax_mode_snapshot
+            if row.price_tax_mode_snapshot in VALID_PRICE_TAX_MODES
+            else "tax_inclusive"
+        )
+        modes.add(mode)
+        quantity = Decimal(str(row.quantity or 0))
+        unit_price = Decimal(str(row.unit_price or 0))
+        amount = (
+            (quantity * unit_price).quantize(MONEY, rounding=ROUND_HALF_UP)
+            if mode == "tax_exclusive"
+            else Decimal(str(row.receivable_amount)).quantize(MONEY)
+        )
+        rows.append(
+            {
+                "statement_item_id": row.statement_item_id,
+                "delivery_date": row.delivery_date,
+                "delivery_number": row.delivery_number,
+                "order_number": row.order_number or "",
+                "customer_po": row.customer_po,
+                "product_code": row.product_code,
+                "product_name": row.product_name,
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "amount": amount,
+                "price_tax_mode": mode,
+            }
+        )
+    charge_rows = db.execute(
+        select(
+            StatementItem.id.label("statement_item_id"),
+            Order.order_number,
+            Order.customer_po,
+            CustomerCharge.display_name,
+            StatementItem.charge_quantity_snapshot,
+            StatementItem.unit_price_snapshot,
+            StatementItem.receivable_amount,
+            StatementItem.price_tax_mode_snapshot,
+        )
+        .join(CustomerCharge, CustomerCharge.id == StatementItem.customer_charge_id)
+        .join(Order, Order.id == CustomerCharge.order_id)
+        .where(StatementItem.statement_id == statement.id)
+    ).all()
+    for row in charge_rows:
+        mode = (
+            row.price_tax_mode_snapshot
+            if row.price_tax_mode_snapshot in VALID_PRICE_TAX_MODES
+            else "tax_inclusive"
+        )
+        modes.add(mode)
+        quantity = Decimal(str(row.charge_quantity_snapshot or 0))
+        unit_price = Decimal(str(row.unit_price_snapshot or 0))
+        amount = Decimal(str(row.receivable_amount)).quantize(MONEY)
+        rows.append(
+            {
+                "statement_item_id": row.statement_item_id,
+                "delivery_date": None,
+                "delivery_number": "",
+                "order_number": row.order_number or "",
+                "customer_po": row.customer_po,
+                "product_code": "",
+                "product_name": row.display_name,
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "amount": amount,
+                "price_tax_mode": mode,
+            }
+        )
+    if sort_by == "order_number":
+        rows.sort(
+            key=lambda item: (
+                str(item["order_number"]),
+                item["delivery_date"] or date.min,
+                str(item["delivery_number"]),
+                item["statement_item_id"],
+            )
+        )
+    else:
+        rows.sort(
+            key=lambda item: (
+                item["delivery_date"] or date.max,
+                str(item["delivery_number"]),
+                item["statement_item_id"],
+            )
+        )
+    only_mode = next(iter(modes)) if len(modes) == 1 else None
+    label_prefix = (
+        "未税" if only_mode == "tax_exclusive" else "含税"
+        if only_mode == "tax_inclusive"
+        else "按客户口径"
+    )
+    return {
+        "rows": rows,
+        "quantity_total": sum((item["quantity"] for item in rows), Decimal("0")),
+        "amount_total": sum((item["amount"] for item in rows), Decimal("0")).quantize(MONEY),
+        "price_label": f"{label_prefix}单价",
+        "amount_label": f"{label_prefix}金额",
+        "customer_name": display_name,
+        "customer_short_name": short_name,
+    }
+
+
+def _statement_export_context(
+    db: Session,
+    *,
+    statement_id: int,
+    sort_by: str,
+    user: User,
+) -> tuple[Statement, Customer, dict]:
+    if sort_by not in {"business", "order_number"}:
+        raise HTTPException(status_code=400, detail="对账单排序方式无效")
+    result = db.execute(
+        select(Statement, Customer)
+        .join(Customer, Customer.id == Statement.customer_id)
+        .where(Statement.id == statement_id)
+    ).one_or_none()
+    if result is None:
+        raise HTTPException(status_code=404, detail="对账单不存在")
+    statement, customer = result
+    _statement_for_user(db, statement.id, user)
+    return statement, customer, _customer_statement_export_data(
+        db, statement=statement, customer=customer, sort_by=sort_by
+    )
+
+
+@router.get("/statements/{statement_id}/customer-export.xlsx")
+def export_customer_statement_excel(
+    statement_id: int,
+    sort_by: str = Query(default="business"),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> StreamingResponse:
+    statement, customer, data = _statement_export_context(
+        db, statement_id=statement_id, sort_by=sort_by, user=user
+    )
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "对账单"
+    sheet.merge_cells("A1:H1")
+    sheet["A1"] = "对账单"
+    sheet["A1"].font = Font(size=16, bold=True, color="123B3A")
+    sheet["A1"].alignment = Alignment(horizontal="center")
+    sheet.merge_cells("A2:H2")
+    sheet["A2"] = (
+        f"客户：{data['customer_name']}    月份：{statement.statement_month}    "
+        f"对账单号：{statement.statement_number}"
+    )
+    headers = [
+        "送货日期", "送货单号", "客户单号", "存货编码", "产品名称", "数量",
+        data["price_label"], data["amount_label"],
+    ]
+    sheet.append([])
+    sheet.append(headers)
+    for cell in sheet[4]:
+        cell.font = Font(bold=True, color="123B3A")
+        cell.fill = PatternFill("solid", fgColor="E7F2F0")
+        cell.alignment = Alignment(horizontal="center")
+    for item in data["rows"]:
+        sheet.append(
+            [
+                item["delivery_date"], item["delivery_number"], item["customer_po"],
+                item["product_code"], item["product_name"], float(item["quantity"]),
+                float(item["unit_price"]), float(item["amount"]),
+            ]
+        )
+    total_row = sheet.max_row + 1
+    sheet.cell(total_row, 5, "合计")
+    sheet.cell(total_row, 6, float(data["quantity_total"]))
+    sheet.cell(total_row, 8, float(data["amount_total"]))
+    for cell in sheet[total_row]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="F5F8F8")
+    for column, width in zip("ABCDEFGH", (13, 20, 20, 19, 32, 12, 14, 16)):
+        sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = "A5"
+    sheet.auto_filter.ref = f"A4:H{max(4, sheet.max_row - 1)}"
+    for row in range(5, sheet.max_row + 1):
+        sheet.cell(row, 7).number_format = "0.0000"
+        sheet.cell(row, 8).number_format = "0.00"
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    filename = _safe_filename(
+        f"{data['customer_short_name']}{statement.statement_month}对账单.xlsx"
+    )
+    encoded = quote(filename, safe="")
+    _audit(
+        db,
+        user=user,
+        action="EXPORT_CUSTOMER_STATEMENT_XLSX",
+        resource="Statement",
+        entity_id=statement.id,
+        details={"filename": filename, "sort_by": sort_by, "line_count": len(data["rows"])},
+        description="导出客户核对版对账单 Excel",
+    )
+    db.commit()
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=statement.xlsx; filename*=UTF-8''{encoded}"},
+    )
+
+
+@router.get("/statements/{statement_id}/customer-export.pdf")
+def export_customer_statement_pdf(
+    statement_id: int,
+    sort_by: str = Query(default="business"),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> StreamingResponse:
+    statement, customer, data = _statement_export_context(
+        db, statement_id=statement_id, sort_by=sort_by, user=user
+    )
+    content = render_customer_statement_pdf(
+        title="对账单",
+        subtitle=(
+            f"客户：{data['customer_name']}    月份：{statement.statement_month}    "
+            f"对账单号：{statement.statement_number}"
+        ),
+        price_label=data["price_label"],
+        amount_label=data["amount_label"],
+        rows=data["rows"],
+        quantity_total=data["quantity_total"],
+        amount_total=data["amount_total"],
+    )
+    filename = _safe_filename(
+        f"{data['customer_short_name']}{statement.statement_month}对账单.pdf"
+    )
+    encoded = quote(filename, safe="")
+    _audit(
+        db,
+        user=user,
+        action="EXPORT_CUSTOMER_STATEMENT_PDF",
+        resource="Statement",
+        entity_id=statement.id,
+        details={"filename": filename, "sort_by": sort_by, "line_count": len(data["rows"])},
+        description="导出客户核对版对账单 PDF",
+    )
+    db.commit()
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=statement.pdf; filename*=UTF-8''{encoded}"},
     )
 
 
@@ -2963,6 +3578,7 @@ def _pending_statement_query(
             ReturnReceipt.id.label("return_receipt_id"),
             ReturnReceipt.actual_received_date,
             ReturnReceipt.reconciliation_month,
+            ReturnReceiptItem.reconciliation_month_override,
             Delivery.id.label("delivery_id"),
             Delivery.delivery_number,
             Delivery.delivery_date,
@@ -3036,11 +3652,17 @@ def _pending_statement_query(
             raise ValueError("对账月份筛选缺少客户周期边界")
         query = query.where(
             or_(
-                ReturnReceipt.reconciliation_month == statement_month,
+                ReturnReceiptItem.reconciliation_month_override == statement_month,
                 and_(
-                    ReturnReceipt.reconciliation_month.is_(None),
-                    Delivery.delivery_date >= period_start,
-                    Delivery.delivery_date <= period_end,
+                    ReturnReceiptItem.reconciliation_month_override.is_(None),
+                    or_(
+                        ReturnReceipt.reconciliation_month == statement_month,
+                        and_(
+                            ReturnReceipt.reconciliation_month.is_(None),
+                            Delivery.delivery_date >= period_start,
+                            Delivery.delivery_date <= period_end,
+                        ),
+                    ),
                 ),
             )
         )
@@ -3087,14 +3709,18 @@ def _pending_statement_groups(
     }
     grouped: dict[int, dict] = {}
     for data in raw_rows:
-        explicit_month = data.get("reconciliation_month")
+        explicit_month = data.get("reconciliation_month_override") or data.get(
+            "reconciliation_month"
+        )
         effective_month = explicit_month or _historical_reconciliation_month(
             data["delivery_date"],
             cycle_start_day,
         )
         data["effective_reconciliation_month"] = effective_month
         data["reconciliation_month_source"] = (
-            "explicit" if explicit_month else "historical_rule"
+            "line_override"
+            if data.get("reconciliation_month_override")
+            else ("explicit" if explicit_month else "historical_rule")
         )
         data["specification"] = resolved_product_specification(
             data.get("specification"),
@@ -3120,6 +3746,7 @@ def _pending_statement_groups(
             data["delivery_id"],
             {
                 "delivery_id": data["delivery_id"],
+                "customer_id": data["customer_id"],
                 "delivery_number": data["delivery_number"],
                 "delivery_date": data["delivery_date"],
                 "actual_received_date": data["actual_received_date"],
@@ -3196,11 +3823,37 @@ def pending_statement_customer_summaries(
     if not customer_rows:
         return []
 
+    entity_cycle_days = {
+        int(customer_id): int(cycle_day)
+        for customer_id, cycle_day in db.execute(
+            select(
+                CustomerInvoiceProfile.customer_id,
+                FinanceSettlementEntity.statement_cycle_start_day,
+            )
+            .join(
+                FinanceSettlementEntity,
+                FinanceSettlementEntity.id
+                == CustomerInvoiceProfile.settlement_entity_id,
+            )
+            .where(
+                CustomerInvoiceProfile.customer_id.in_(
+                    [int(row[0]) for row in customer_rows]
+                ),
+                CustomerInvoiceProfile.is_enabled.is_(True),
+                CustomerInvoiceProfile.confirmation_status == "confirmed",
+                FinanceSettlementEntity.is_enabled.is_(True),
+                FinanceSettlementEntity.confirmation_status == "confirmed",
+            )
+        ).all()
+    }
+
     customer_periods: dict[int, tuple[date, date]] = {}
     customer_names: dict[int, str] = {}
     customer_cycle_days: dict[int, int] = {}
     for customer_id, customer_name, cycle_start_day in customer_rows:
-        cycle_day = int(cycle_start_day or 1)
+        cycle_day = entity_cycle_days.get(
+            int(customer_id), int(cycle_start_day or 1)
+        )
         customer_periods[int(customer_id)] = _statement_period(
             statement_month,
             cycle_day,
@@ -3235,6 +3888,7 @@ def pending_statement_customer_summaries(
             Delivery.id.label("delivery_id"),
             Delivery.delivery_date,
             ReturnReceipt.reconciliation_month,
+            ReturnReceiptItem.reconciliation_month_override,
             func.count(ReturnReceiptItem.id).label("item_count"),
             pending_item_count.label("pending_item_count"),
             func.coalesce(pending_amount, 0).label("pending_amount"),
@@ -3251,11 +3905,18 @@ def pending_statement_customer_summaries(
         .where(
             ReturnReceipt.status == "confirmed",
             or_(
-                ReturnReceipt.reconciliation_month == statement_month,
+                ReturnReceiptItem.reconciliation_month_override
+                == statement_month,
                 and_(
-                    ReturnReceipt.reconciliation_month.is_(None),
-                    Delivery.delivery_date >= broad_start,
-                    Delivery.delivery_date <= broad_end,
+                    ReturnReceiptItem.reconciliation_month_override.is_(None),
+                    or_(
+                        ReturnReceipt.reconciliation_month == statement_month,
+                        and_(
+                            ReturnReceipt.reconciliation_month.is_(None),
+                            Delivery.delivery_date >= broad_start,
+                            Delivery.delivery_date <= broad_end,
+                        ),
+                    ),
                 ),
             ),
             Delivery.customer_id.in_(tuple(customer_periods)),
@@ -3265,6 +3926,7 @@ def pending_statement_customer_summaries(
             Delivery.id,
             Delivery.delivery_date,
             ReturnReceipt.reconciliation_month,
+            ReturnReceiptItem.reconciliation_month_override,
         )
         .order_by(Delivery.customer_id, Delivery.delivery_date, Delivery.id)
     )
@@ -3274,10 +3936,15 @@ def pending_statement_customer_summaries(
         customer_id = int(row["customer_id"])
         period_start, period_end = customer_periods[customer_id]
         delivery_date = row["delivery_date"]
-        if (
-            row["reconciliation_month"] is None
-            and (delivery_date < period_start or delivery_date > period_end)
-        ):
+        effective_month = (
+            row["reconciliation_month_override"]
+            or row["reconciliation_month"]
+            or _historical_reconciliation_month(
+                delivery_date,
+                customer_cycle_days[customer_id],
+            )
+        )
+        if effective_month != statement_month:
             continue
         remaining_count = int(row["pending_item_count"] or 0)
         if remaining_count <= 0:
@@ -4510,22 +5177,55 @@ def pending_statements(
     customer = db.get(Customer, customer_id)
     if customer is None:
         raise HTTPException(status_code=404, detail="客户不存在")
+    settlement_entity, allowed_customer_ids = _settlement_context_for_customer(
+        db, customer_id
+    )
+    for allowed_customer_id in allowed_customer_ids:
+        require_customer_access(allowed_customer_id, user, db)
+    cycle_start_day = (
+        settlement_entity.statement_cycle_start_day
+        if settlement_entity is not None
+        else customer.statement_cycle_start_day
+    )
     period_start = period_end = None
     if statement_month:
         try:
             period_start, period_end = _statement_period(
                 statement_month,
-                customer.statement_cycle_start_day,
+                cycle_start_day,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-    deliveries = _pending_statement_groups(
-        db,
-        customer_id,
-        statement_month=statement_month,
-        cycle_start_day=customer.statement_cycle_start_day,
-        period_start=period_start,
-        period_end=period_end,
+    customer_names = dict(
+        db.execute(
+            select(Customer.id, Customer.name).where(
+                Customer.id.in_(allowed_customer_ids)
+            )
+        ).all()
+    )
+    deliveries: list[dict] = []
+    for source_customer_id in sorted(allowed_customer_ids):
+        source_groups = _pending_statement_groups(
+            db,
+            source_customer_id,
+            statement_month=statement_month,
+            cycle_start_day=cycle_start_day,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        for group in source_groups:
+            group["source_customer_id"] = source_customer_id
+            group["source_customer_name"] = customer_names.get(source_customer_id, "")
+            for item in group["items"]:
+                item["source_customer_id"] = source_customer_id
+                item["source_customer_name"] = group["source_customer_name"]
+        deliveries.extend(source_groups)
+    deliveries.sort(
+        key=lambda row: (
+            row["delivery_date"],
+            str(row["delivery_number"]),
+            int(row["delivery_id"]),
+        )
     )
     # 保留旧版平铺字段供尚未刷新前端的页面只读使用；只返回可整单选择的明细。
     rows = [
@@ -4541,7 +5241,7 @@ def pending_statements(
             StatementItem.customer_charge_id == CustomerCharge.id,
         )
         .where(
-            CustomerCharge.customer_id == customer_id,
+            CustomerCharge.customer_id.in_(allowed_customer_ids),
             CustomerCharge.status == "confirmed",
             StatementItem.id.is_(None),
         )
@@ -4558,9 +5258,18 @@ def pending_statements(
         "customer_charges": [
             _customer_charge_response(db, charge) for charge in charges
         ],
-        "statement_cycle_start_day": customer.statement_cycle_start_day,
+        "statement_cycle_start_day": cycle_start_day,
         "period_start": period_start,
         "period_end": period_end,
+        "settlement_entity_id": (
+            settlement_entity.id if settlement_entity is not None else None
+        ),
+        "settlement_name": (
+            settlement_entity.entity_name
+            if settlement_entity is not None
+            else customer.name
+        ),
+        "customer_ids": sorted(allowed_customer_ids),
     }
 
 
@@ -4589,10 +5298,21 @@ def create_statement(
     customer = db.get(Customer, payload.customer_id)
     if customer is None:
         raise HTTPException(status_code=400, detail="客户不存在")
+    settlement_entity, allowed_customer_ids = _settlement_context_for_customer(
+        db, payload.customer_id
+    )
+    for allowed_customer_id in allowed_customer_ids:
+        require_customer_access(allowed_customer_id, user, db)
+    representative_customer_id = min(allowed_customer_ids)
+    cycle_start_day = (
+        settlement_entity.statement_cycle_start_day
+        if settlement_entity is not None
+        else customer.statement_cycle_start_day
+    )
     try:
         period_start, period_end = _statement_period(
             payload.statement_month,
-            customer.statement_cycle_start_day,
+            cycle_start_day,
         )
         compatibility_item_ids = set(payload.return_receipt_item_ids)
         selected_delivery_ids = set(payload.delivery_ids)
@@ -4611,7 +5331,7 @@ def create_statement(
                 raise HTTPException(status_code=400, detail="回单明细不存在")
             selected_delivery_ids = {row[1] for row in mapped_rows}
 
-        selected_rows = db.execute(
+        selected_rows_query = (
             select(
                 ReturnReceiptItem,
                 ReturnReceipt,
@@ -4640,21 +5360,41 @@ def create_statement(
                 StatementItem,
                 StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
             )
-            .where(Delivery.id.in_(selected_delivery_ids))
             .order_by(Delivery.id, ReturnReceiptItem.id)
-        ).all()
+        )
+        if compatibility_item_ids:
+            selected_rows_query = selected_rows_query.where(
+                ReturnReceiptItem.id.in_(compatibility_item_ids)
+            )
+        else:
+            selected_rows_query = selected_rows_query.where(
+                Delivery.id.in_(selected_delivery_ids)
+            )
+        selected_rows = db.execute(selected_rows_query).all()
         found_delivery_ids = {row[2].id for row in selected_rows}
         if found_delivery_ids != selected_delivery_ids:
             raise HTTPException(
                 status_code=400,
                 detail="所选送货单不存在已确认的客户回单明细",
             )
-        all_item_ids = {row[0].id for row in selected_rows}
-        if compatibility_item_ids and compatibility_item_ids != all_item_ids:
-            raise HTTPException(
-                status_code=400,
-                detail="送货单必须整单对账，不能只选择其中部分存货编码。",
+        if compatibility_item_ids and not any(
+            row[0].reconciliation_month_override for row in selected_rows
+        ):
+            all_delivery_item_ids = set(
+                db.scalars(
+                    select(ReturnReceiptItem.id)
+                    .join(
+                        DeliveryItem,
+                        DeliveryItem.id == ReturnReceiptItem.delivery_item_id,
+                    )
+                    .where(DeliveryItem.delivery_id.in_(selected_delivery_ids))
+                ).all()
             )
+            if compatibility_item_ids != all_delivery_item_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail="初次整单对账必须整张送货单选择；客户异议后的跨期明细可单独进入目标月份。",
+                )
         claimed_receipt_ids: set[int] = set()
         for row in selected_rows:
             (
@@ -4667,7 +5407,7 @@ def create_statement(
                 existing_id,
             ) = row
             require_customer_access(delivery.customer_id, user, db)
-            if delivery.customer_id != payload.customer_id:
+            if delivery.customer_id not in allowed_customer_ids:
                 raise HTTPException(status_code=400, detail="送货单客户不匹配")
             if receipt.status != "confirmed":
                 raise HTTPException(status_code=409, detail="已取消回单不能生成对账单")
@@ -4676,11 +5416,14 @@ def create_statement(
                     status_code=409,
                     detail="该送货单已有明细进入对账单，请先处理原对账单。",
                 )
-            effective_month, _month_source = _effective_reconciliation_month(
-                receipt,
-                delivery_date=delivery.delivery_date,
-                cycle_start_day=customer.statement_cycle_start_day,
-            )
+            if receipt_item.reconciliation_month_override:
+                effective_month = receipt_item.reconciliation_month_override
+            else:
+                effective_month, _month_source = _effective_reconciliation_month(
+                    receipt,
+                    delivery_date=delivery.delivery_date,
+                    cycle_start_day=cycle_start_day,
+                )
             if effective_month != payload.statement_month:
                 raise HTTPException(
                     status_code=400,
@@ -4714,7 +5457,7 @@ def create_statement(
             raise HTTPException(status_code=400, detail="所选客户附加收费不存在")
         for charge, existing_id in selected_charge_rows:
             require_customer_access(charge.customer_id, user, db)
-            if charge.customer_id != payload.customer_id:
+            if charge.customer_id not in allowed_customer_ids:
                 raise HTTPException(status_code=400, detail="附加收费客户不匹配")
             if charge.status != "confirmed":
                 raise HTTPException(status_code=409, detail="只有已确认收费可以进入对账单")
@@ -4734,7 +5477,19 @@ def create_statement(
                 db,
                 payload.statement_month,
             ),
-            customer_id=payload.customer_id,
+            customer_id=representative_customer_id,
+            settlement_entity_id=(
+                settlement_entity.id if settlement_entity is not None else None
+            ),
+            settlement_name_snapshot=(
+                settlement_entity.entity_name
+                if settlement_entity is not None
+                else customer.name
+            ),
+            settlement_customer_ids_snapshot_json=json.dumps(
+                sorted(allowed_customer_ids), ensure_ascii=False
+            ),
+            statement_cycle_start_day_snapshot=cycle_start_day,
             statement_month=payload.statement_month,
             total_receivable=Decimal("0"),
             total_gross_profit=Decimal("0"),
@@ -4745,15 +5500,18 @@ def create_statement(
         db.flush()
         total_receivable = Decimal("0")
         total_profit = Decimal("0")
-        current_price_tax_terms = resolve_customer_price_tax_terms(
-            db, payload.customer_id
-        )
+        price_tax_terms_by_customer = {
+            source_customer_id: resolve_customer_price_tax_terms(
+                db, source_customer_id
+            )
+            for source_customer_id in allowed_customer_ids
+        }
         statement_price_tax_modes: set[str] = set()
         for row in selected_rows:
             (
                 receipt_item,
                 _receipt,
-                _delivery,
+                delivery,
                 delivery_item,
                 order_item,
                 product,
@@ -4780,6 +5538,9 @@ def create_statement(
                 )
             unit_cost = Decimal(str(product.cost_unit_price or 0))
             quantity = Decimal(receipt_item.actual_received_quantity)
+            current_price_tax_terms = price_tax_terms_by_customer[
+                delivery.customer_id
+            ]
             price_tax_mode = (
                 order_item.price_tax_mode_snapshot
                 if order_item is not None
@@ -4814,6 +5575,7 @@ def create_statement(
             db.add(
                 StatementItem(
                     statement_id=statement.id,
+                    source_customer_id=delivery.customer_id,
                     return_receipt_item_id=receipt_item.id,
                     actual_received_quantity=receipt_item.actual_received_quantity,
                     unit_price_snapshot=unit_price,
@@ -4830,6 +5592,7 @@ def create_statement(
             db.add(
                 StatementItem(
                     statement_id=statement.id,
+                    source_customer_id=charge.customer_id,
                     customer_charge_id=charge.id,
                     actual_received_quantity=None,
                     charge_quantity_snapshot=charge.quantity,
@@ -4871,6 +5634,8 @@ def create_statement(
                 "id": statement.id,
                 "statement_number": statement.statement_number,
                 "customer_id": statement.customer_id,
+                "customer_name": statement.settlement_name_snapshot or customer.name,
+                "settlement_entity_id": statement.settlement_entity_id,
                 "statement_month": statement.statement_month,
                 "total_receivable": statement.total_receivable,
                 "total_gross_profit": statement.total_gross_profit,
@@ -5183,6 +5948,420 @@ def get_statement(
     return _statement_detail_response(db, statement_id, user)
 
 
+def _recalculate_statement_totals(db: Session, statement: Statement) -> None:
+    totals = db.execute(
+        select(
+            func.coalesce(func.sum(StatementItem.receivable_amount), 0),
+            func.coalesce(func.sum(StatementItem.gross_profit_amount), 0),
+        ).where(StatementItem.statement_id == statement.id)
+    ).one()
+    statement.total_receivable = Decimal(str(totals[0])).quantize(MONEY)
+    statement.total_gross_profit = Decimal(str(totals[1])).quantize(MONEY)
+
+
+def _statement_adjustment_log(
+    db: Session,
+    *,
+    statement: Statement,
+    action: str,
+    reason: str,
+    before_version: int,
+    details: dict,
+    user: User,
+) -> None:
+    db.add(
+        StatementAdjustment(
+            statement_id=statement.id,
+            action=action,
+            reason=reason,
+            before_version=before_version,
+            after_version=statement.version,
+            details_json=json.dumps(
+                jsonable_encoder(details), ensure_ascii=False, sort_keys=True
+            ),
+            created_by=user.id,
+        )
+    )
+
+
+@router.post("/statements/{statement_id}/reopen")
+def reopen_statement_for_dispute(
+    statement_id: int,
+    payload: StatementReopen,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    try:
+        statement = _statement_for_user(db, statement_id, user)
+        if statement.version != payload.expected_version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "对账单版本已变化，请刷新后重试",
+                    "current_version": statement.version,
+                },
+            )
+        issued_invoice = db.scalar(
+            select(Invoice.id).where(
+                Invoice.statement_id == statement.id,
+                Invoice.invoice_status == "issued",
+            ).limit(1)
+        )
+        tasks = db.scalars(
+            select(FinanceInvoiceTask).where(
+                FinanceInvoiceTask.statement_id == statement.id,
+                FinanceInvoiceTask.status != "voided",
+            )
+        ).all()
+        if issued_invoice is not None or any(task.status == "issued" for task in tasks):
+            raise HTTPException(
+                status_code=409,
+                detail="该对账单已登记开票，不能直接撤销；请按红冲/重开流程处理。",
+            )
+        if statement.confirmation_status != "confirmed":
+            return _statement_detail_response(db, statement.id, user)
+        before_version = statement.version
+        voided_tasks: list[int] = []
+        for task in tasks:
+            task.status = "voided"
+            task.voided_by = user.id
+            task.voided_at = datetime.now()
+            task.version += 1
+            voided_tasks.append(task.id)
+        statement.confirmation_status = "draft"
+        statement.confirmed_by = None
+        statement.confirmed_at = None
+        statement.version += 1
+        _statement_adjustment_log(
+            db,
+            statement=statement,
+            action="reopen_for_dispute",
+            reason=payload.reason,
+            before_version=before_version,
+            details={"voided_invoice_task_ids": voided_tasks},
+            user=user,
+        )
+        _audit(
+            db,
+            user=user,
+            action="REOPEN_STATEMENT_FOR_DISPUTE",
+            resource="Statement",
+            entity_id=statement.id,
+            details={
+                "reason": payload.reason,
+                "before_version": before_version,
+                "after_version": statement.version,
+                "voided_invoice_task_ids": voided_tasks,
+            },
+            description="客户异议撤销对账确认",
+        )
+        db.commit()
+        return _statement_detail_response(db, statement.id, user)
+    except HTTPException:
+        db.rollback()
+        raise
+
+
+@router.get("/statements/{statement_id}/adjustment-candidates")
+def statement_adjustment_candidates(
+    statement_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    statement = _statement_for_user(db, statement_id, user)
+    allowed_customer_ids = _statement_scope_customer_ids(db, statement)
+    cycle_start_day = _statement_cycle_day(db, statement)
+    customer_names = dict(
+        db.execute(
+            select(Customer.id, Customer.name).where(
+                Customer.id.in_(allowed_customer_ids)
+            )
+        ).all()
+    )
+    groups: list[dict] = []
+    for source_customer_id in sorted(allowed_customer_ids):
+        source_groups = _pending_statement_groups(
+            db,
+            source_customer_id,
+            cycle_start_day=cycle_start_day,
+        )
+        for group in source_groups:
+            for item in group["items"]:
+                item["source_customer_id"] = source_customer_id
+                item["source_customer_name"] = customer_names.get(
+                    source_customer_id, ""
+                )
+        groups.extend(source_groups)
+    items = [
+        item
+        for group in groups
+        for item in group["items"]
+        if not item["is_reconciled"]
+        and item["effective_reconciliation_month"] <= statement.statement_month
+    ]
+    return {"items": items}
+
+
+def _new_statement_item_from_receipt(
+    db: Session,
+    *,
+    statement: Statement,
+    receipt_item: ReturnReceiptItem,
+    source_customer_id: int,
+    delivery_item: DeliveryItem,
+    order_item: OrderItem | None,
+    product: Product,
+) -> StatementItem:
+    if delivery_item.source_type == "unordered_finished":
+        if delivery_item.unit_price_snapshot is None:
+            raise HTTPException(status_code=409, detail="无订单库存送货缺少冻结单价")
+        unit_price = Decimal(str(delivery_item.unit_price_snapshot))
+    else:
+        if order_item is None:
+            raise HTTPException(status_code=409, detail="订单送货明细缺少订单关联")
+        unit_price = Decimal(str(order_item.unit_price))
+    terms = resolve_customer_price_tax_terms(db, source_customer_id)
+    price_tax_mode = (
+        order_item.price_tax_mode_snapshot
+        if order_item is not None
+        and order_item.price_tax_mode_snapshot in VALID_PRICE_TAX_MODES
+        else terms.price_tax_mode
+    )
+    tax_rate = Decimal(
+        str(
+            order_item.tax_rate_snapshot
+            if order_item is not None and order_item.tax_rate_snapshot is not None
+            else terms.tax_rate
+        )
+    )
+    quantity = Decimal(receipt_item.actual_received_quantity)
+    line_price = (quantity * unit_price).quantize(MONEY, rounding=ROUND_HALF_UP)
+    receivable = (
+        line_price
+        + (line_price * tax_rate).quantize(MONEY, rounding=ROUND_HALF_UP)
+        if price_tax_mode == "tax_exclusive"
+        else line_price
+    )
+    unit_cost = Decimal(str(product.cost_unit_price or 0))
+    profit = (quantity * (unit_price - unit_cost)).quantize(
+        MONEY, rounding=ROUND_HALF_UP
+    )
+    return StatementItem(
+        statement_id=statement.id,
+        source_customer_id=source_customer_id,
+        return_receipt_item_id=receipt_item.id,
+        actual_received_quantity=receipt_item.actual_received_quantity,
+        unit_price_snapshot=unit_price,
+        unit_cost_snapshot=unit_cost,
+        receivable_amount=receivable,
+        gross_profit_amount=profit,
+        price_tax_mode_snapshot=price_tax_mode,
+        tax_rate_snapshot=tax_rate,
+    )
+
+
+@router.post("/statements/{statement_id}/adjust-dispute")
+def adjust_statement_dispute(
+    statement_id: int,
+    payload: StatementDisputeAdjustment,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    try:
+        statement = _statement_for_user(db, statement_id, user)
+        if statement.version != payload.expected_version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "对账单版本已变化，请刷新后重试",
+                    "current_version": statement.version,
+                },
+            )
+        if statement.confirmation_status not in {"draft", "confirmed"}:
+            raise HTTPException(status_code=409, detail="当前对账状态不能调整异议明细")
+        tasks = db.scalars(
+            select(FinanceInvoiceTask).where(
+                FinanceInvoiceTask.statement_id == statement.id,
+                FinanceInvoiceTask.status != "voided",
+            )
+        ).all()
+        issued_invoice = db.scalar(
+            select(Invoice.id).where(
+                Invoice.statement_id == statement.id,
+                Invoice.invoice_status == "issued",
+            ).limit(1)
+        )
+        if issued_invoice is not None or any(task.status == "issued" for task in tasks):
+            raise HTTPException(
+                status_code=409,
+                detail="该对账单已登记开票，不能直接修改；请按红冲/重开流程处理。",
+            )
+        if statement.confirmation_status == "draft" and tasks:
+            raise HTTPException(status_code=409, detail="仍有有效开票任务，不能调整对账明细")
+        voided_tasks: list[int] = []
+        reopened_confirmation = statement.confirmation_status == "confirmed"
+        if reopened_confirmation:
+            for task in tasks:
+                task.status = "voided"
+                task.voided_by = user.id
+                task.voided_at = datetime.now()
+                task.version += 1
+                voided_tasks.append(task.id)
+            statement.confirmation_status = "draft"
+            statement.confirmed_by = None
+            statement.confirmed_at = None
+        allowed_customer_ids = _statement_scope_customer_ids(db, statement)
+        cycle_start_day = _statement_cycle_day(db, statement)
+        before_version = statement.version
+        removed: list[dict] = []
+        removal_map = {
+            item.statement_item_id: item.target_month for item in payload.remove_lines
+        }
+        if removal_map:
+            remove_rows = db.execute(
+                select(StatementItem, ReturnReceiptItem)
+                .join(
+                    ReturnReceiptItem,
+                    ReturnReceiptItem.id == StatementItem.return_receipt_item_id,
+                )
+                .where(
+                    StatementItem.statement_id == statement.id,
+                    StatementItem.id.in_(removal_map),
+                )
+            ).all()
+            if {row[0].id for row in remove_rows} != set(removal_map):
+                raise HTTPException(status_code=400, detail="所选移出明细不属于当前对账单")
+            for statement_item, receipt_item in remove_rows:
+                target_month = removal_map[statement_item.id]
+                if target_month <= statement.statement_month:
+                    raise HTTPException(status_code=400, detail="异议移出月份必须晚于当前对账月份")
+                receipt_item.reconciliation_month_override = target_month
+                receipt_item.reconciliation_override_reason = payload.reason
+                receipt_item.reconciliation_overridden_by = user.id
+                receipt_item.reconciliation_overridden_at = datetime.now()
+                removed.append(
+                    {
+                        "statement_item_id": statement_item.id,
+                        "return_receipt_item_id": receipt_item.id,
+                        "target_month": target_month,
+                    }
+                )
+                db.delete(statement_item)
+            db.flush()
+
+        added: list[int] = []
+        if payload.add_return_receipt_item_ids:
+            add_rows = db.execute(
+                select(
+                    ReturnReceiptItem,
+                    ReturnReceipt,
+                    Delivery,
+                    DeliveryItem,
+                    OrderItem,
+                    Product,
+                    StatementItem.id.label("existing_statement_item_id"),
+                )
+                .join(ReturnReceipt, ReturnReceipt.id == ReturnReceiptItem.return_receipt_id)
+                .join(DeliveryItem, DeliveryItem.id == ReturnReceiptItem.delivery_item_id)
+                .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+                .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+                .outerjoin(
+                    Product,
+                    Product.id == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
+                )
+                .outerjoin(
+                    StatementItem,
+                    StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
+                )
+                .where(ReturnReceiptItem.id.in_(payload.add_return_receipt_item_ids))
+            ).all()
+            if {row[0].id for row in add_rows} != set(payload.add_return_receipt_item_ids):
+                raise HTTPException(status_code=400, detail="所选补入明细不存在")
+            for receipt_item, receipt, delivery, delivery_item, order_item, product, existing_id in add_rows:
+                if delivery.customer_id not in allowed_customer_ids:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="不能补入当前对账归集范围以外的回单明细",
+                    )
+                if receipt.status != "confirmed" or existing_id is not None:
+                    raise HTTPException(status_code=409, detail="只能补入已回单且未被其他对账单使用的明细")
+                if product is None:
+                    raise HTTPException(status_code=409, detail="补入明细缺少产品资料")
+                source_month = receipt_item.reconciliation_month_override
+                if not source_month:
+                    source_month, _ = _effective_reconciliation_month(
+                        receipt,
+                        delivery_date=delivery.delivery_date,
+                        cycle_start_day=cycle_start_day,
+                    )
+                if source_month > statement.statement_month:
+                    raise HTTPException(status_code=409, detail="不能提前补入未来月份明细")
+                receipt_item.reconciliation_month_override = statement.statement_month
+                receipt_item.reconciliation_override_reason = payload.reason
+                receipt_item.reconciliation_overridden_by = user.id
+                receipt_item.reconciliation_overridden_at = datetime.now()
+                db.add(
+                    _new_statement_item_from_receipt(
+                        db,
+                        statement=statement,
+                        receipt_item=receipt_item,
+                        source_customer_id=delivery.customer_id,
+                        delivery_item=delivery_item,
+                        order_item=order_item,
+                        product=product,
+                    )
+                )
+                added.append(receipt_item.id)
+            db.flush()
+        remaining_count = db.scalar(
+            select(func.count(StatementItem.id)).where(
+                StatementItem.statement_id == statement.id
+            )
+        )
+        if not remaining_count:
+            raise HTTPException(status_code=409, detail="对账单至少保留一条有效明细")
+        _recalculate_statement_totals(db, statement)
+        statement.version += 1
+        _statement_adjustment_log(
+            db,
+            statement=statement,
+            action=(
+                "resolve_dispute"
+                if reopened_confirmation
+                else "adjust_dispute_lines"
+            ),
+            reason=payload.reason,
+            before_version=before_version,
+            details={
+                "removed": removed,
+                "added_return_receipt_item_ids": added,
+                "voided_invoice_task_ids": voided_tasks,
+            },
+            user=user,
+        )
+        _audit(
+            db,
+            user=user,
+            action="ADJUST_STATEMENT_DISPUTE_LINES",
+            resource="Statement",
+            entity_id=statement.id,
+            details={
+                "reason": payload.reason,
+                "removed": removed,
+                "added_return_receipt_item_ids": added,
+                "voided_invoice_task_ids": voided_tasks,
+                "before_version": before_version,
+                "after_version": statement.version,
+            },
+            description="客户异议调整对账明细",
+        )
+        db.commit()
+        return _statement_detail_response(db, statement.id, user)
+    except HTTPException:
+        db.rollback()
+        raise
+
+
 @router.put("/statements/{statement_id}")
 def update_statement(
     statement_id: int,
@@ -5352,3 +6531,361 @@ def cancel_statement(
     except Exception:
         db.rollback()
         raise
+
+
+def _payable_response(row: FinancePayable) -> dict:
+    return {
+        "id": row.id,
+        "supplier_id": row.supplier_id,
+        "counterparty_name": row.counterparty_name,
+        "category": row.category,
+        "document_number": row.document_number,
+        "document_date": row.document_date,
+        "due_date": row.due_date,
+        "amount": row.amount,
+        "status": row.status,
+        "note": row.note,
+        "version": row.version,
+        "confirmed_at": row.confirmed_at,
+        "paid_at": row.paid_at,
+        "created_at": row.created_at,
+    }
+
+
+@router.get("/payables")
+def list_payables(
+    status_filter: str | None = Query(default=None, alias="status"),
+    month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    query = select(FinancePayable).order_by(
+        FinancePayable.document_date.desc(), FinancePayable.id.desc()
+    )
+    if status_filter:
+        if status_filter not in {"draft", "confirmed", "paid", "voided"}:
+            raise HTTPException(status_code=400, detail="应付状态无效")
+        query = query.where(FinancePayable.status == status_filter)
+    if month:
+        start = date.fromisoformat(f"{month}-01")
+        end = date.fromisoformat(f"{_shift_month(month, 1)}-01")
+        query = query.where(
+            FinancePayable.document_date >= start,
+            FinancePayable.document_date < end,
+        )
+    rows = db.scalars(query.limit(500)).all()
+    return {"items": [_payable_response(row) for row in rows]}
+
+
+@router.get("/payable-suppliers")
+def list_payable_suppliers(
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    rows = db.scalars(
+        select(Supplier)
+        .where(Supplier.is_active.is_(True))
+        .order_by(Supplier.sort_order, Supplier.id)
+    ).all()
+    return {
+        "items": [
+            {
+                "id": row.id,
+                "name": row.display_name or row.standard_name,
+                "standard_name": row.standard_name,
+            }
+            for row in rows
+        ]
+    }
+
+
+@router.post("/payables", status_code=status.HTTP_201_CREATED)
+def create_payable(
+    payload: PayableCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    existing = db.scalar(
+        select(FinancePayable).where(
+            FinancePayable.idempotency_key == payload.idempotency_key
+        )
+    )
+    if existing is not None:
+        same = (
+            existing.supplier_id == payload.supplier_id
+            and existing.counterparty_name == payload.counterparty_name
+            and existing.category == payload.category
+            and existing.document_date == payload.document_date
+            and Decimal(str(existing.amount)) == payload.amount
+        )
+        if not same:
+            raise HTTPException(status_code=409, detail="幂等键已用于另一笔应付/支出")
+        return _payable_response(existing)
+    if payload.supplier_id is not None:
+        supplier = db.get(Supplier, payload.supplier_id)
+        if supplier is None or not supplier.is_active:
+            raise HTTPException(status_code=409, detail="供应商不存在或已停用")
+    row = FinancePayable(
+        **payload.model_dump(),
+        status="draft",
+        created_by=user.id,
+    )
+    db.add(row)
+    db.flush()
+    _audit(
+        db,
+        user=user,
+        action="CREATE_FINANCE_PAYABLE",
+        resource="FinancePayable",
+        entity_id=row.id,
+        details={"amount": row.amount, "category": row.category},
+        description="登记供应商应付或经营支出草稿",
+    )
+    db.commit()
+    return _payable_response(row)
+
+
+def _transition_payable(
+    db: Session,
+    *,
+    payable_id: int,
+    payload: PayableTransition,
+    action: str,
+    user: User,
+) -> dict:
+    row = db.get(FinancePayable, payable_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="应付/支出记录不存在")
+    if row.version != payload.expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "记录版本已变化", "current_version": row.version},
+        )
+    if action == "confirm":
+        if row.status == "draft":
+            row.status = "confirmed"
+            row.confirmed_by = user.id
+            row.confirmed_at = datetime.now()
+        elif row.status != "confirmed":
+            raise HTTPException(status_code=409, detail="只有草稿可以确认")
+    elif action == "paid":
+        if row.status == "confirmed":
+            row.status = "paid"
+            row.paid_by = user.id
+            row.paid_at = datetime.now()
+        elif row.status != "paid":
+            raise HTTPException(status_code=409, detail="只有已确认应付可以标记已付")
+    elif action == "void":
+        if row.status == "paid":
+            raise HTTPException(status_code=409, detail="已付记录不能直接作废")
+        if row.status != "voided":
+            if not (payload.reason or "").strip():
+                raise HTTPException(status_code=422, detail="作废必须填写原因")
+            row.status = "voided"
+            row.voided_by = user.id
+            row.voided_at = datetime.now()
+            row.note = "；".join(
+                part for part in (row.note, f"作废原因：{payload.reason.strip()}") if part
+            )
+    row.version += 1
+    _audit(
+        db,
+        user=user,
+        action=f"{action.upper()}_FINANCE_PAYABLE",
+        resource="FinancePayable",
+        entity_id=row.id,
+        details={"status": row.status, "reason": payload.reason},
+        description="更新应付/支出状态",
+    )
+    db.commit()
+    return _payable_response(row)
+
+
+@router.post("/payables/{payable_id}/confirm")
+def confirm_payable(
+    payable_id: int,
+    payload: PayableTransition,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    return _transition_payable(
+        db, payable_id=payable_id, payload=payload, action="confirm", user=user
+    )
+
+
+@router.post("/payables/{payable_id}/paid")
+def mark_payable_paid(
+    payable_id: int,
+    payload: PayableTransition,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    return _transition_payable(
+        db, payable_id=payable_id, payload=payload, action="paid", user=user
+    )
+
+
+@router.post("/payables/{payable_id}/void")
+def void_payable(
+    payable_id: int,
+    payload: PayableTransition,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    return _transition_payable(
+        db, payable_id=payable_id, payload=payload, action="void", user=user
+    )
+
+
+@router.get("/overview")
+def finance_overview(
+    through_month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    through = through_month or beijing_today().strftime("%Y-%m")
+    months = [_shift_month(through, offset) for offset in range(-5, 1)]
+    visible_customer_ids = _visible_customer_ids(user, db)
+    unauthorized_statement_source = None
+    if visible_customer_ids is not None:
+        unauthorized_statement_source = (
+            select(StatementItem.id)
+            .where(
+                StatementItem.statement_id == Statement.id,
+                StatementItem.source_customer_id.is_not(None),
+                StatementItem.source_customer_id.not_in(visible_customer_ids),
+            )
+            .exists()
+        )
+    trend = {
+        month: {
+            "month": month,
+            "confirmed_statement_amount": Decimal("0"),
+            "issued_invoice_amount": Decimal("0"),
+            "payable_amount": Decimal("0"),
+            "other_expense_amount": Decimal("0"),
+        }
+        for month in months
+    }
+    statement_query = select(
+        Statement.statement_month, Statement.total_receivable
+    ).where(
+            Statement.confirmation_status == "confirmed",
+            Statement.statement_month.in_(months),
+        )
+    if visible_customer_ids is not None:
+        statement_query = statement_query.where(
+            Statement.customer_id.in_(visible_customer_ids),
+            ~unauthorized_statement_source,
+        )
+    statement_rows = db.execute(statement_query).all()
+    for row_month, amount in statement_rows:
+        trend[row_month]["confirmed_statement_amount"] += Decimal(str(amount))
+    invoice_query = (
+        select(Invoice.invoice_date, Invoice.invoice_amount)
+        .join(Statement, Statement.id == Invoice.statement_id)
+        .where(
+            Invoice.invoice_status == "issued",
+            Invoice.invoice_date >= date.fromisoformat(f"{months[0]}-01"),
+            Invoice.invoice_date < date.fromisoformat(f"{_shift_month(through, 1)}-01"),
+        )
+    )
+    if visible_customer_ids is not None:
+        invoice_query = invoice_query.where(
+            Statement.customer_id.in_(visible_customer_ids),
+            ~unauthorized_statement_source,
+        )
+    invoice_rows = db.execute(invoice_query).all()
+    for invoice_date, amount in invoice_rows:
+        trend[invoice_date.strftime("%Y-%m")]["issued_invoice_amount"] += Decimal(
+            str(amount)
+        )
+    payable_rows = db.scalars(
+        select(FinancePayable).where(
+            FinancePayable.status.in_(("confirmed", "paid")),
+            FinancePayable.document_date >= date.fromisoformat(f"{months[0]}-01"),
+            FinancePayable.document_date < date.fromisoformat(
+                f"{_shift_month(through, 1)}-01"
+            ),
+        )
+    ).all()
+    category_totals: dict[str, Decimal] = {}
+    for row in payable_rows:
+        row_month = row.document_date.strftime("%Y-%m")
+        amount = Decimal(str(row.amount))
+        trend[row_month]["payable_amount"] += amount
+        if row.category not in {"material", "outsourcing"}:
+            trend[row_month]["other_expense_amount"] += amount
+        category_totals[row.category] = category_totals.get(
+            row.category, Decimal("0")
+        ) + amount
+
+    today = beijing_today()
+    aging = {"not_due": Decimal("0"), "overdue_1_30": Decimal("0"), "overdue_31_60": Decimal("0"), "overdue_61_plus": Decimal("0")}
+    open_payables = db.scalars(
+        select(FinancePayable).where(FinancePayable.status == "confirmed")
+    ).all()
+    for row in open_payables:
+        amount = Decimal(str(row.amount))
+        if row.due_date is None or row.due_date >= today:
+            aging["not_due"] += amount
+            continue
+        days = (today - row.due_date).days
+        if days <= 30:
+            aging["overdue_1_30"] += amount
+        elif days <= 60:
+            aging["overdue_31_60"] += amount
+        else:
+            aging["overdue_61_plus"] += amount
+
+    cost_query = (
+        select(
+            StatementItem.receivable_amount,
+            StatementItem.gross_profit_amount,
+            StatementItem.unit_cost_snapshot,
+        )
+        .join(Statement, Statement.id == StatementItem.statement_id)
+        .where(
+            Statement.confirmation_status == "confirmed",
+            Statement.statement_month.in_(months),
+            StatementItem.return_receipt_item_id.is_not(None),
+        )
+    )
+    if visible_customer_ids is not None:
+        cost_query = cost_query.where(
+            Statement.customer_id.in_(visible_customer_ids),
+            ~unauthorized_statement_source,
+        )
+    cost_rows = db.execute(cost_query).all()
+    covered = [row for row in cost_rows if Decimal(str(row.unit_cost_snapshot)) > 0]
+    can_view_costs = has_permission(user, "cost.view")
+    return {
+        "through_month": through,
+        "trend": [
+            {key: (value.quantize(MONEY) if isinstance(value, Decimal) else value) for key, value in trend[month].items()}
+            for month in months
+        ],
+        "payable_aging": {key: value.quantize(MONEY) for key, value in aging.items()},
+        "expense_structure": [
+            {"category": key, "amount": value.quantize(MONEY)}
+            for key, value in sorted(category_totals.items(), key=lambda item: item[1], reverse=True)
+        ],
+        "cost_coverage": {
+            "covered_lines": len(covered),
+            "total_lines": len(cost_rows),
+            "coverage_rate": round(len(covered) / len(cost_rows), 4) if cost_rows else 0,
+            "covered_revenue": (
+                sum((Decimal(str(row.receivable_amount)) for row in covered), Decimal("0")).quantize(MONEY)
+                if can_view_costs else None
+            ),
+            "material_gross_profit_reference": (
+                sum((Decimal(str(row.gross_profit_amount)) for row in covered), Decimal("0")).quantize(MONEY)
+                if can_view_costs else None
+            ),
+            "label": (
+                "材料毛利参考（不含人工、能耗等）"
+                if can_view_costs else "材料毛利参考（无成本查看权限）"
+            ),
+        },
+        "collection_note": "客户收款不在 ERP 内核销；已开票金额仅代表开票事实。",
+    }

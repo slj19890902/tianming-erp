@@ -166,6 +166,20 @@ class ReturnReceiptItem(Base):
     actual_received_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     resolution_action: Mapped[str | None] = mapped_column(String(30), nullable=True)
     difference_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Customer-dispute adjustments may move one confirmed receipt line to a
+    # different reconciliation month without changing delivery/receipt facts.
+    reconciliation_month_override: Mapped[str | None] = mapped_column(
+        String(7), nullable=True
+    )
+    reconciliation_override_reason: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    reconciliation_overridden_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reconciliation_overridden_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.current_timestamp(),
@@ -204,6 +218,16 @@ class Statement(Base):
     customer_id: Mapped[int] = mapped_column(
         ForeignKey("customers.id", ondelete="RESTRICT"),
         nullable=False,
+    )
+    settlement_entity_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_settlement_entities.id", ondelete="RESTRICT"), nullable=True
+    )
+    settlement_name_snapshot: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    settlement_customer_ids_snapshot_json: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    statement_cycle_start_day_snapshot: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
     )
     statement_month: Mapped[str] = mapped_column(String(7), nullable=False)
     total_receivable: Mapped[Decimal] = mapped_column(
@@ -318,6 +342,9 @@ class StatementItem(Base):
         ForeignKey("finance_statements.id", ondelete="CASCADE"),
         nullable=False,
     )
+    source_customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=True
+    )
     return_receipt_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("finance_return_receipt_items.id", ondelete="RESTRICT"),
         nullable=True,
@@ -364,6 +391,30 @@ class StatementItem(Base):
 
     statement: Mapped["Statement"] = relationship(back_populates="items")
     return_receipt_item: Mapped["ReturnReceiptItem"] = relationship()
+
+
+class StatementAdjustment(Base):
+    __tablename__ = "finance_statement_adjustments"
+    __table_args__ = (
+        CheckConstraint("before_version >= 1", name="ck_statement_adjustments_before_version"),
+        CheckConstraint("after_version > before_version", name="ck_statement_adjustments_after_version"),
+        Index("ix_statement_adjustments_statement", "statement_id", "id"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    statement_id: Mapped[int] = mapped_column(
+        ForeignKey("finance_statements.id", ondelete="RESTRICT"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    before_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    after_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    details_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
 
 
 class Invoice(Base):

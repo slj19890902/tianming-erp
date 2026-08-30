@@ -152,9 +152,11 @@ from app.models.finance import (  # noqa: E402,F401
     ReturnReceiptItem,
     SettlementRecord,
     Statement,
+    StatementAdjustment,
     StatementItem,
     StatementMonthlySequence,
 )
+from app.models.finance_payable import FinancePayable  # noqa: E402,F401
 from app.models.fulfillment_reminder import (  # noqa: E402,F401
     FulfillmentReminder,
     FulfillmentReminderMutation,
@@ -163,6 +165,7 @@ from app.models.invoice_task import (  # noqa: E402,F401
     CustomerInvoiceItemRule,
     CustomerInvoiceProfile,
     CustomerInvoiceSellerChange,
+    FinanceSettlementEntity,
     FinanceInvoiceAttachment,
     FinanceInvoiceTask,
     FinanceInvoiceTaskItem,

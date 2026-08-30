@@ -1434,6 +1434,56 @@ def test_current_finance_groups_customer_month_and_uses_real_balances(
     assert "total_gross_profit" not in row["statements"][0]
 
 
+def test_current_finance_returns_month_customer_options_without_extra_request(
+    finance_api_app,
+) -> None:
+    from app.models.customer import Customer
+    from app.models.finance import Statement
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        _create_statement(client)
+        with session_factory() as session:
+            second_customer = Customer(
+                customer_number=2,
+                customer_code="SECOND",
+                name="当月第二客户",
+                payment_term_days=30,
+                credit_limit=Decimal("100000"),
+            )
+            session.add(second_customer)
+            session.flush()
+            session.add(
+                Statement(
+                    statement_number="ST-202606-SECOND",
+                    customer_id=second_customer.id,
+                    statement_month="2026-06",
+                    total_receivable=Decimal("50.00"),
+                    total_gross_profit=Decimal("0.00"),
+                    invoiced_amount=Decimal("0.00"),
+                    settled_amount=Decimal("0.00"),
+                    status="unsettled",
+                    created_by=1,
+                )
+            )
+            session.commit()
+            second_customer_id = second_customer.id
+        response = client.get(
+            "/api/finance/current-customer-months",
+            params={"statement_month": "2026-06", "customer_id": 1},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert [row["customer_id"] for row in body["items"]] == [1]
+    assert {row["id"] for row in body["customer_options"]} == {
+        1,
+        second_customer_id,
+    }
+
+
 def test_current_finance_prioritizes_pending_reconciliation(finance_api_app) -> None:
     app, _ = finance_api_app
     with TestClient(app) as client:

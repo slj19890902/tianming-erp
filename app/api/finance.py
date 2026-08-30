@@ -3842,7 +3842,6 @@ def current_customer_months(
     visible_customer_ids = _visible_customer_ids(user, db)
     if customer_id is not None:
         require_customer_access(customer_id, user, db)
-        visible_customer_ids = {customer_id}
     if visible_customer_ids is not None and not visible_customer_ids:
         return {
             "statement_month": selected_month,
@@ -3859,6 +3858,7 @@ def current_customer_months(
                 "pending_payment_amount": Decimal("0.00"),
                 "settled_amount": Decimal("0.00"),
             },
+            "customer_options": [],
             "items": [],
         }
 
@@ -4004,7 +4004,7 @@ def current_customer_months(
             }
         )
 
-    items: list[dict] = []
+    eligible_items: list[dict] = []
     for group in grouped.values():
         has_reconciliation = (
             group["pending_reconciliation_count"]
@@ -4014,12 +4014,6 @@ def current_customer_months(
         has_invoice = group["pending_invoice_amount"] > 0
         has_payment = group["pending_payment_amount"] > 0
         if not (has_reconciliation or has_invoice or has_payment):
-            continue
-        if balance_type == "pending_reconciliation" and not has_reconciliation:
-            continue
-        if balance_type == "pending_invoice" and not has_invoice:
-            continue
-        if balance_type == "pending_payment" and not has_payment:
             continue
         if has_reconciliation:
             primary_action = "reconcile"
@@ -4033,7 +4027,39 @@ def current_customer_months(
             and group["pending_reconciliation_count"] == 0
             and group["blocked_reconciliation_count"] > 0
         )
-        items.append(group)
+        eligible_items.append(group)
+
+    customer_options = [
+        {"id": int(row["customer_id"]), "name": str(row["customer_name"])}
+        for row in sorted(
+            eligible_items,
+            key=lambda row: (str(row["customer_name"]), int(row["customer_id"])),
+        )
+    ]
+    items = [
+        row
+        for row in eligible_items
+        if (customer_id is None or int(row["customer_id"]) == customer_id)
+        and (
+            balance_type is None
+            or (
+                balance_type == "pending_reconciliation"
+                and (
+                    row["pending_reconciliation_count"]
+                    + row["blocked_reconciliation_count"]
+                    > 0
+                )
+            )
+            or (
+                balance_type == "pending_invoice"
+                and row["pending_invoice_amount"] > 0
+            )
+            or (
+                balance_type == "pending_payment"
+                and row["pending_payment_amount"] > 0
+            )
+        )
+    ]
 
     action_rank = {"reconcile": 0, "invoice": 1, "payment": 2}
     items.sort(
@@ -4085,6 +4111,7 @@ def current_customer_months(
         "page": page,
         "page_size": page_size,
         "summary": summary,
+        "customer_options": customer_options,
         "items": items[start : start + page_size],
     }
 

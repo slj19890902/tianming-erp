@@ -110,6 +110,15 @@ vm.loadInvoiceTasks = new AsyncFunction({json.dumps(body, ensure_ascii=False)}).
   if (vm.invoiceTasks.length !== 0) throw new Error("current failure retained stale tasks");
   if (!vm.invoiceTaskState.error.includes("网络断开")) throw new Error("current failure was not shown");
   if (vm.invoiceTaskState.loading) throw new Error("current failure did not finish loading");
+
+  vm.invoiceTaskFilters = {{customer_id:"", statement_month:"", status:""}};
+  const blankFilters = vm.loadInvoiceTasks();
+  const blankParams = pending[5].options.params;
+  if (blankParams.customer_id !== undefined || blankParams.statement_month !== undefined || blankParams.status !== undefined) {{
+    throw new Error("blank invoice task filters were sent as invalid query values");
+  }}
+  pending[5].resolve({{data:{{items:[]}}}});
+  await blankFilters;
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
     target = tmp_path / "invoice-task-race.js"

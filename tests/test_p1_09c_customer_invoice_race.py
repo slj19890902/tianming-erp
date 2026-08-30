@@ -127,6 +127,7 @@ const vm={{
   customerInvoiceProfile:{{invoice_title:"客户11",tax_no:"T11",invoice_address:"地址",invoice_phone:"电话",bank_name:"银行",bank_account:"账号",default_seller_id:1,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"confirmed",version:4,error:""}},
   customerInvoiceRule:{{project_name:"纸箱",tax_classification_code:"1060105010000000000",unit:"PCS",tax_rate:"0.13",spec_source:"product_code_snapshot",fill_unit_price:true,confirmation_status:"confirmed",version:6,error:""}},
   customerInvoiceState:{{profileLoading:false,profileSaving:false,profileLoadedCustomerId:11,ruleLoading:false,ruleSaving:false,ruleLoadedCustomerId:11}},
+  invoiceSellerState:{{loading:false,error:"",saving:false,loaded:true}},
   async loadCustomerInvoiceProfile(){{return true;}},
   async loadCustomerInvoiceRule(){{return true;}},
   showToast(message,error){{notices.push([message,error]);}},

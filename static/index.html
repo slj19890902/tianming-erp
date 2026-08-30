@@ -2576,6 +2576,8 @@
       .erp-enterprise-ui .menu-icon { color: currentColor; opacity: .68; }
       .erp-enterprise-ui .menu-item.active .menu-icon { opacity: 1; }
       .erp-enterprise-ui .menu-count-summary > .status { background: #eef2f6; color: #475467; }
+      .erp-enterprise-ui .menu-item-inner { min-width: 0; flex: 1 1 auto; }
+      .erp-enterprise-ui .menu-count-summary { flex: 0 0 auto; }
 
       .erp-enterprise-ui .main {
         padding: 20px 24px 32px;
@@ -2611,8 +2613,8 @@
         box-shadow: none;
       }
       .erp-enterprise-ui .btn:hover { border-color: #98a2b3; background: #f8fafc; }
-      .erp-enterprise-ui .btn.primary { background: #155eef; border-color: #155eef; box-shadow: none; }
-      .erp-enterprise-ui .btn.primary:hover { background: #004eeb; border-color: #004eeb; }
+      .erp-enterprise-ui .btn.primary { background: #155eef; border-color: #155eef; color: #fff; box-shadow: none; }
+      .erp-enterprise-ui .btn.primary:hover { background: #004eeb; border-color: #004eeb; color: #fff; }
       .erp-enterprise-ui .btn.success { box-shadow: none; }
       .erp-enterprise-ui .btn.danger { background: #fff; border-color: #f0a8a8; color: #b42318; }
       .erp-enterprise-ui .btn.danger:hover { background: #b42318; border-color: #b42318; color: #fff; }
@@ -2712,6 +2714,21 @@
       .erp-enterprise-ui .pager { padding: 8px 11px; border-color: #d8dee8; }
       .erp-enterprise-ui details.panel > summary { padding: 10px 12px; color: #344054; }
 
+      /* Keep high-density production tables compact in standard mode.  The
+         enterprise table defaults must not consume the dedicated × column. */
+      .erp-enterprise-ui.ui-standard .reported-item-table { font-size: 13px; }
+      .erp-enterprise-ui.ui-standard .reported-item-table th,
+      .erp-enterprise-ui.ui-standard .reported-item-table td { height: 34px; min-height: 34px; padding: 4px 6px; }
+      .erp-enterprise-ui.ui-standard .reported-item-table .reported-item-dimension { font-size: 13px; }
+      .erp-enterprise-ui .reported-item-table .reported-item-multiply {
+        width: 30px; min-width: 30px; padding-right: 2px; padding-left: 2px;
+        overflow: visible; text-overflow: clip; text-align: center;
+      }
+      .erp-enterprise-ui.ui-standard .incoming-compact-table th,
+      .erp-enterprise-ui.ui-standard .incoming-compact-table td { padding: 4px 5px; font-size: 12px; }
+      .erp-enterprise-ui.ui-standard .requisition-pending-table th,
+      .erp-enterprise-ui.ui-standard .requisition-pending-table td { padding: 7px 6px; }
+
       .erp-enterprise-ui.ui-large { grid-template-rows: 76px minmax(0, 1fr); }
       .erp-enterprise-ui.ui-large .layout { grid-template-columns: 260px minmax(0, 1fr); }
       .erp-enterprise-ui.ui-large .main { padding: 28px 30px 44px; }
@@ -2796,9 +2813,8 @@
             <div class="menu-title">业务中心</div>
             <button v-for="item in menus" :key="item.key" :class="['menu-item', {active: isMenuActive(item.key)}]" @click="goMenu(item.key)">
               <span class="menu-item-inner"><span class="menu-icon" v-html="navIcon(item.key)"></span><span>{{ item.label }}</span></span>
-              <span v-if="item.count !== undefined" class="menu-count-summary">
+              <span v-if="item.count !== undefined" class="menu-count-summary" :title="item.countDetails || `${item.countLabel || '数量'} ${item.count}`">
                 <span class="status">{{ item.countLabel || '数量' }} {{ item.count }}</span>
-                <span v-if="item.countDetails" class="menu-count-details">{{ item.countDetails }}</span>
               </span>
             </button>
           </aside>
@@ -4134,7 +4150,7 @@
                   <thead><tr>
                     <th class="reported-item-select-column"><input type="checkbox" :checked="reportedCurrentPageAllSelected()" @change="toggleReportedCurrentPage($event.target.checked)" /> 序号</th>
                     <th class="reported-item-dimension"><button :class="['reported-item-sort',{active:reportedSort.by==='report_length_mm'}]" @click="setReportedSort('report_length_mm')">报料长 {{ reportedSortArrow('report_length_mm') }}</button></th>
-                    <th style="width:28px;text-align:center">×</th>
+                    <th class="reported-item-multiply">×</th>
                     <th class="reported-item-dimension"><button :class="['reported-item-sort',{active:reportedSort.by==='report_width_mm'}]" @click="setReportedSort('report_width_mm')">报料宽 {{ reportedSortArrow('report_width_mm') }}</button></th>
                     <th style="width:130px">压线尺寸 / 净毛</th>
                     <th style="width:110px"><button :class="['reported-item-sort',{active:reportedSort.by==='requisition_qty'}]" @click="setReportedSort('requisition_qty')">采购数量 {{ reportedSortArrow('requisition_qty') }}</button></th>
@@ -4163,7 +4179,7 @@
                   <tr :class="{'row-voided':row.status==='voided'}">
                     <td class="reported-item-select-column"><input type="checkbox" :checked="reportedItemSelected(row)" @change="toggleReportedItemSelection(row,$event.target.checked)" /> {{ row.sequence }}</td>
                     <td class="reported-item-dimension" :title="String(row.report_length_mm || '-')">{{ row.report_length_mm || '-' }}</td>
-                    <td style="text-align:center">×</td>
+                    <td class="reported-item-multiply">×</td>
                     <td class="reported-item-dimension" :title="String(row.report_width_mm || '-')">{{ row.report_width_mm || '-' }}</td>
                     <td :title="row.crease_display || '-'">{{ row.crease_display || '-' }}</td>
                     <td><strong>{{ row.requisition_qty || 0 }}</strong> {{ row.unit || '张' }}</td>
@@ -4543,8 +4559,8 @@
               <div class="panel finance-filter-panel" style="margin-bottom:10px">
                 <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
                   <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-                    <div class="field" style="width:150px"><label>对账月份</label><input class="input" type="month" v-model="financeFilters.statement_month" @change="reloadFinanceCurrent" /></div>
-                    <div class="field" style="width:240px"><label>客户（可不选）</label><search-select v-model="financeFilters.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="全部客户" @change="reloadFinanceCurrent"></search-select></div>
+                    <div class="field" style="width:150px"><label>对账月份</label><input class="input" type="month" v-model="financeFilters.statement_month" @change="onFinanceMonthChange" /></div>
+                    <div class="field" style="width:240px"><label>客户</label><search-select v-model="financeFilters.customer_id" :options="financeCurrentCustomerOptions" label-key="name" value-key="id" placeholder="全部" :allow-empty="true" @change="reloadFinanceCurrent"></search-select></div>
                     <div class="field" style="width:145px"><label>只看</label><select class="select" v-model="financeFilters.balance_type" @change="reloadFinanceCurrent"><option value="">全部待办</option><option value="pending_reconciliation">待对账</option><option value="pending_invoice">待开票</option><option value="pending_payment">待结款</option></select></div>
                   </div>
                   <div class="toolbar-group">
@@ -5457,12 +5473,12 @@
                   <div class="field"><label>开票电话</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_phone" /></div>
                   <div class="field"><label>开户行</label><input class="input" v-model.trim="customerInvoiceProfile.bank_name" /></div>
                   <div class="field"><label>银行账号</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div>
-                  <div class="field"><label>默认销方</label><select class="select" v-model.number="customerInvoiceProfile.default_seller_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_enabled!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select></div>
+                  <div class="field"><label>默认销方</label><div class="toolbar-group" style="flex-wrap:nowrap"><select class="select" style="min-width:0;flex:1 1 auto" v-model.number="customerInvoiceProfile.default_seller_id" :disabled="invoiceSellerState.loading || !invoiceSellerState.loaded"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_enabled!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select><button class="btn small" type="button" :disabled="invoiceSellerState.loading" @click="openInvoiceSellersFromCustomer">维护销方</button></div><div v-if="invoiceSellerState.loading" class="muted">正在读取销方…</div><div v-else-if="invoiceSellerState.error" class="danger-text">销方读取失败，请点“维护销方”重试。</div><div v-else-if="invoiceSellerState.loaded && !invoiceSellers.length" class="muted">尚未维护销方主体，请先录入两个公司开票抬头。</div></div>
                   <div class="field"><label>常用箱与订单单价口径</label><select class="select" v-model="customerInvoiceProfile.price_tax_mode"><option value="tax_inclusive">含税价</option><option value="tax_exclusive">未税价</option></select><div class="muted">只改变价格解释和以后生成的订单快照，不换算、不覆盖现有常用箱价格。</div></div>
                   <div class="field"><label>默认税率</label><input class="input" type="number" min="0" max="1" step="0.01" v-model="customerInvoiceProfile.default_tax_rate" /></div>
                   <div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceProfile.confirmation_status"><option value="pending">待确认</option><option value="confirmed">已确认</option></select></div>
                 </fieldset>
-                <div class="toolbar-group" style="margin-top:8px"><button class="btn small primary" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceProfile">{{ customerInvoiceState.profileSaving ? '税务资料保存中…' : '保存税务资料' }}</button></div>
+                <div class="toolbar-group" style="margin-top:8px"><button class="btn small primary" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !invoiceSellerState.loaded || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceProfile">{{ customerInvoiceState.profileSaving ? '税务资料保存中…' : '保存税务资料' }}</button></div>
                 <div class="panel" style="margin-top:10px;padding:8px">
                   <div class="toolbar"><strong>客户默认开票项目规则</strong><span v-if="customerInvoiceState.ruleLoading" class="status blue">默认规则读取中</span><button class="btn small" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving" @click="loadCustomerInvoiceRule(customerForm.id)">{{ customerInvoiceState.ruleLoading ? '读取中…' : '刷新' }}</button></div>
                   <div v-if="customerInvoiceRule.error" class="notice danger">{{ customerInvoiceRule.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceRule(customerForm.id)">重新读取默认规则</button></div>
@@ -9053,7 +9069,7 @@
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
             invoiceTaskUploadState:{uploading:false,taskId:null,taskNumber:"",error:""},
             financeStatementOperationState:{action:"",statementId:null},
-            invoiceSellers: [], invoiceSellerForm:{id:null,seller_code:"",seller_name:"",tax_no:"",address:"",phone:"",bank_name:"",bank_account:"",is_enabled:true,confirmation_status:"pending",version:null}, invoiceSellerState:{loading:false,error:"",saving:false,loaded:false},
+            invoiceSellers: [], invoiceSellerForm:{id:null,seller_code:"",seller_name:"",tax_no:"",address:"",phone:"",bank_name:"",bank_account:"",is_enabled:true,confirmation_status:"pending",version:null}, invoiceSellerState:{loading:false,error:"",saving:false,loaded:false}, invoiceSellerReturnCustomerId:null,
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""},
             customerInvoiceRule:{project_name:"纸箱",tax_classification_code:"1060105010000000000",unit:"PCS",tax_rate:"0.13",spec_source:"product_code_snapshot",fill_unit_price:true,confirmation_status:"pending",version:null,error:""},
             customerInvoiceState:{profileLoading:false,profileSaving:false,profileLoadedCustomerId:null,ruleLoading:false,ruleSaving:false,ruleLoadedCustomerId:null},
@@ -9176,7 +9192,7 @@
             deliveryDashboardMode: "",
             financeView: "current",
             financeFilters: { statement_month:month(), balance_type:"", customer_id:"" },
-            financeCurrentRows: [], financeCurrentTotal: 0, financeCurrentSummary: {},
+            financeCurrentRows: [], financeCurrentTotal: 0, financeCurrentSummary: {}, financeCurrentCustomerOptions: [],
             financeCurrentState: { loading:false, error:"", loaded:false }, financeCurrentExpanded: {},
             financeSettledFilters: { year:month().slice(0,4), statement_month:"", customer_id:"", statement_number:"", invoice_number:"", settlement_date_from:"", settlement_date_to:"" },
             financeSettledRows: [], financeSettledTotal: 0, financeSettledSummary: {},
@@ -20039,12 +20055,14 @@
               this.financeCurrentTotal = Number(data.total || 0);
               this.financeCustomersTotal = this.financeCurrentTotal;
               this.financeCurrentSummary = data.summary || {};
+              this.financeCurrentCustomerOptions = data.customer_options || [];
               this.financeCurrentState.loaded = true;
               return true;
             } catch (error) {
               this.financeCurrentTotal = 0;
               this.financeCustomersTotal = 0;
               this.financeCurrentSummary = {};
+              this.financeCurrentCustomerOptions = [];
               this.financeCurrentState.error = this.errorMessage(error);
               return false;
             } finally {
@@ -20087,13 +20105,22 @@
             this.invalidatePageCache("finance");
             await this.loadFinance();
           },
+          async onFinanceMonthChange() {
+            this.financeFilters.customer_id = "";
+            await this.reloadFinanceCurrent();
+          },
           financeConfirmationText(statement) { return statement?.confirmation_status === "confirmed" ? `已确认 · v${statement.version || 1}` : `待核对 · v${statement?.version || 1}`; },
           invoiceTaskStatusText(status) { return ({draft:"待补资料",ready:"可导出",exported:"已导出待登记",issued:"已开票",failed:"失败",voided:"已作废"})[status] || "待核对"; },
           async loadInvoiceTasks() {
             if (!this.canViewInvoiceTasks) return true;
             const requestKey = "finance:invoice-tasks";
             const controller = this.beginLatestRequest(requestKey);
-            const filters = {...this.invoiceTaskFilters};
+            const rawFilters = {...this.invoiceTaskFilters};
+            const filters = {
+              customer_id:rawFilters.customer_id ? Number(rawFilters.customer_id) : undefined,
+              statement_month:/^\d{4}-\d{2}$/.test(String(rawFilters.statement_month || "")) ? rawFilters.statement_month : undefined,
+              status:rawFilters.status || undefined,
+            };
             this.invoiceTaskState.loading = true;
             this.invoiceTaskState.error = "";
             try {
@@ -20388,9 +20415,18 @@
           },
           async openInvoiceSellers() {
             if (!this.canManageInvoiceProfiles) return;
+            if (this.modal?.type !== "customer") this.invoiceSellerReturnCustomerId = null;
             this.resetInvoiceSellerForm();
             this.modal = {type:"invoiceSellers",title:"维护销方主体"};
             await this.loadInvoiceSellers();
+          },
+          async openInvoiceSellersFromCustomer() {
+            const customerId = Number(this.customerForm?.id || 0);
+            if (!customerId || !this.canManageInvoiceProfiles) return false;
+            if (!confirm("打开销方维护后会重新读取当前客户税务资料，尚未保存的修改将丢失。是否继续？")) return false;
+            this.invoiceSellerReturnCustomerId = customerId;
+            await this.openInvoiceSellers();
+            return true;
           },
           editInvoiceSeller(seller) {
             if (!this.invoiceSellerState.loaded || this.invoiceSellerState.saving) return;
@@ -20505,6 +20541,10 @@
           async saveCustomerInvoiceProfile() {
             if (!this.canManageInvoiceProfiles || this.customerInvoiceState.profileSaving) return false;
             const customerId = Number(this.customerForm?.id || 0);
+            if (!this.invoiceSellerState.loaded) {
+              this.showToast("请先读取或维护销方主体，再保存客户税务资料", true);
+              return false;
+            }
             if (!customerId || Number(this.customerInvoiceState.profileLoadedCustomerId) !== customerId || this.customerInvoiceProfile.error) {
               this.showToast("请先重新读取当前客户税务资料后再保存", true);
               return false;
@@ -31942,6 +31982,9 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+              const invoiceSellerReturnCustomerId = this.modal?.type === "invoiceSellers"
+                ? Number(this.invoiceSellerReturnCustomerId || 0)
+                : 0;
               const productionLabelMaintenanceScrollY = this.modal?.type === "productionLabelMaintenance"
                 ? Number(this.productionLabelMaintenanceScrollY || 0)
                 : null;
@@ -32002,6 +32045,10 @@
               }
               if (this.modal?.type === "invoiceTaskResult" && this.invoiceTaskOperationState.resultSaving) {
                 this.showToast("正在登记开票结果，请稍候", true);
+                return;
+              }
+              if (this.modal?.type === "invoiceSellers" && this.invoiceSellerState.saving) {
+                this.showToast("销方资料正在保存，请稍候", true);
                 return;
               }
               if (this.modal?.type === "orderTrace") {
@@ -32078,6 +32125,11 @@
             this.masterVersionConflict = null;
             this.masterChangeConfirm = blankMasterChangeConfirm();
             this.masterPendingSaveOptions = null;
+            if (invoiceSellerReturnCustomerId) {
+              this.invoiceSellerReturnCustomerId = null;
+              const customer = this.customers.find(row => Number(row.id) === invoiceSellerReturnCustomerId);
+              if (customer) this.openCustomer(customer);
+            }
           },
           handleMasterSaveRefreshFailure(entity, error) {
             const label = entity === "customer" ? "客户" : (entity === "product" ? "常用箱" : (entity === "supplier" ? "供应商" : "材质"));

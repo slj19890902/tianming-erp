@@ -142,6 +142,11 @@ def test_embedded_warehouse_shell_has_a_definite_visible_height() -> None:
         "        display:flex; flex-direction:column; gap:0;\n"
         "      }"
     ) in ERP_INDEX
+    assert ".erp-enterprise-ui .main.warehouse-main," in ERP_INDEX
+    assert ".erp-enterprise-ui.ui-large .main.warehouse-main" in ERP_INDEX
+    assert "padding: 0;" in ERP_INDEX[ERP_INDEX.index(".erp-enterprise-ui .main.warehouse-main,"):]
+    assert ".warehouse-twin-shell.embedded-shell .twin-toolbar" in TWIN_CSS
+    assert "font-family: inherit;" in TWIN_CSS[TWIN_CSS.index(".warehouse-twin-shell.embedded-shell .twin-toolbar"):]
     assert (
         ".warehouse-shell-frame {\n"
         "        display:block; width:100%; height:auto; min-height:0; flex:1 1 auto;"

@@ -2019,6 +2019,47 @@ body.warehouse-twin-page {
 .twin-stocktake-label-results > b { color: #0a7d3c; }
 .warehouse-twin-shell button:disabled { cursor: not-allowed; opacity: .45; box-shadow: none; }
 
+/* P1-128 follow-up: make the embedded warehouse read as one ERP page. */
+.warehouse-twin-shell.embedded-shell {
+  background: var(--erp-bg);
+}
+.warehouse-twin-shell.embedded-shell .twin-toolbar {
+  min-height: 42px;
+  padding: 4px 10px;
+  gap: 6px;
+  border-color: var(--erp-line);
+  background: var(--erp-bg);
+  box-shadow: none;
+  font-family: inherit;
+}
+.twin-toolbar-view-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 6px;
+  border-left: 1px solid var(--erp-line);
+  white-space: nowrap;
+}
+.warehouse-twin-shell .twin-operation-modes,
+.warehouse-twin-shell .twin-segmented {
+  padding: 2px;
+  border-color: var(--erp-line-strong);
+  border-radius: var(--erp-radius-button);
+  background: #fff;
+}
+.warehouse-twin-shell .twin-toolbar-move-actions {
+  gap: 3px;
+  margin-left: 2px;
+  padding-left: 8px;
+  border-left: 1px solid var(--erp-line);
+}
+.warehouse-twin-shell .twin-toolbar-spacer { min-width: 0; }
+
+@media (max-width: 1180px) {
+  .warehouse-twin-shell.embedded-shell .twin-toolbar { flex-wrap: wrap; }
+  .warehouse-twin-shell .twin-toolbar-spacer { display: none; }
+}
+
 @media (max-width: 1180px) {
   .twin-layer-rail,
   .twin-context-rail,

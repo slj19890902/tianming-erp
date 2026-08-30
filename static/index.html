@@ -2732,6 +2732,19 @@
         .erp-enterprise-ui *::before,
         .erp-enterprise-ui *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
       }
+      /* P1-128 follow-up: the warehouse is an embedded workbench, so it must
+         meet the ERP shell edge-to-edge instead of inheriting page padding. */
+      .erp-enterprise-ui .main.warehouse-main,
+      .erp-enterprise-ui.ui-large .main.warehouse-main {
+        padding: 0;
+        background: var(--bg);
+        scrollbar-gutter: auto;
+      }
+      .erp-enterprise-ui .warehouse-shell-frame {
+        border: 0;
+        border-radius: 0;
+        background: var(--bg);
+      }
     </style>
   </head>
   <body>

@@ -89,10 +89,15 @@ def test_warehouse_metrics_move_to_the_erp_topbar_and_leave_the_map_toolbar_comp
 
 def test_move_actions_use_the_toolbar_space_and_inventory_heading_is_removed() -> None:
     toolbar = SOURCE[SOURCE.index('<section className="twin-toolbar">'):SOURCE.index('<section className={`twin-workspace')]
+    operation_modes = toolbar[toolbar.index('<div className="twin-operation-modes"'):toolbar.index('</div>', toolbar.index('<div className="twin-operation-modes"'))]
     inspector = SOURCE[SOURCE.index('<aside className="twin-inspector">'):SOURCE.index('</aside>', SOURCE.index('<aside className="twin-inspector">'))]
     assert 'className="twin-toolbar-move-actions"' in toolbar
+    assert '>自动合并</button>' not in operation_modes
+    assert 'onClick={openAutomaticMerge}>合并栈板</button>' in toolbar
     for label in ("移动位置", "地图存放", "合并栈板", "盘点调整"):
         assert f">{label}</button>" in toolbar
+    assert 'className="twin-toolbar-move-actions"' in toolbar[:toolbar.index('className="twin-toolbar-view-tools"')]
+    assert '!!dashboard?.delayed_dispatch_relocation?.candidate_count' in toolbar
     assert "库存与库位" not in inspector
     assert '<header><h2>' not in inspector
 

@@ -28,11 +28,13 @@ test("published ground positions use the dedicated atomic save contract", () => 
   assert.match(source, /查货、移货、盘点和空货位显示将统一使用这组位置/);
 });
 
-test("map-first toolbar hides delayed dispatch and exposes selective auto merge", () => {
+test("map-first toolbar hides empty delayed dispatch and consolidates selective merge", () => {
   assert.match(source, /const \[delayedDispatchOpen, setDelayedDispatchOpen\] = useState\(false\)/);
+  assert.match(source, /!!dashboard\?\.delayed_dispatch_relocation\?\.candidate_count/);
   assert.match(source, /延期待送 \{dashboard\.delayed_dispatch_relocation\.candidate_count\}/);
   assert.match(source, /delayedDispatchOpen && dashboard\?\.delayed_dispatch_relocation/);
-  assert.match(source, />自动合并</);
+  assert.doesNotMatch(source, />自动合并</);
+  assert.match(source, /onClick=\{openAutomaticMerge\}>合并栈板</);
   assert.match(source, />可合并货位</);
   assert.doesNotMatch(source, /只勾选现场要合并的栈板/);
   assert.match(source, /type="checkbox" checked=\{selected\}/);

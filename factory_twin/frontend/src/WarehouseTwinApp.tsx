@@ -4911,10 +4911,16 @@ export function WarehouseTwinApp() {
       <div className="twin-operation-modes" role="tablist" aria-label="仓库地图操作模式">
         <button type="button" className={mapMode === "lookup" ? "active" : ""} onClick={returnToLookupMode}>查货</button>
         {(canExecuteWarehouse || canStocktake) && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}
-        {P1_49C_ENABLED && canExecuteWarehouse && <button type="button" className={mapMode === "move" && moveAction === "merge" ? "active" : ""} disabled={spatialEditBusy} onClick={openAutomaticMerge}>自动合并</button>}
         {canEditLocations && <button type="button" className={mapMode === 'planning' ? 'active' : ''} disabled={spatialEditBusy} onClick={toggleLayoutEditor}>区域规划</button>}
         {canEditLocations && staleLayoutDraft && <button type="button" className="warning" disabled={spatialEditBusy} onClick={rebuildStaleLayoutDraft}>放弃旧草稿并重新规划</button>}
       </div>
+      {(canExecuteWarehouse || canStocktake) && mapMode === "move" && <div className="twin-toolbar-move-actions" role="tablist" aria-label="仓库地图操作类型">
+        {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "relocate"} className={moveAction === "relocate" ? "active" : ""} onClick={() => { setMoveAction("relocate"); setWarehouseOperationMessage(moveDrafts.length ? `已切回移动位置；保留 ${moveDrafts.length} 条移货草稿。` : "已切回移动位置。"); }}>移动位置</button>}
+        {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "ground"} className={moveAction === "ground" ? "active" : ""} onClick={() => { setMoveAction("ground"); setMoveSource(null); setGroundStorageMessage("先选择楼层和地堆区域，再选择入库产品或转位批次。"); }}>地图存放</button>}
+        {P1_49C_ENABLED && canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "merge"} className={moveAction === "merge" ? "active" : ""} onClick={openAutomaticMerge}>合并栈板</button>}
+        {canStocktake && <button type="button" role="tab" aria-selected={moveAction === "stocktake"} className={moveAction === "stocktake" ? "active" : ""} onClick={() => { setMoveAction("stocktake"); setMoveSource(null); setWarehouseOperationMessage(stocktakeDrafts.length ? `已切到盘点调整；保留 ${stocktakeDrafts.length} 条草稿。` : "请选择正式货位进行盘点调整。"); }}>盘点调整</button>}
+      </div>}
+      <div className="twin-toolbar-view-tools" role="group" aria-label="地图显示工具">
       <button type="button" className={`twin-layer-toggle ${layerPanelOpen ? "active" : ""}`} aria-expanded={layerPanelOpen} onClick={() => setLayerPanelOpen((value) => !value)}>图层</button>
       <div className="twin-segmented" aria-label="视图模式">
         <button type="button" className={viewMode === "2d" ? "active" : ""} onClick={() => setViewMode("2d")}>二维平面</button>
@@ -4927,8 +4933,9 @@ export function WarehouseTwinApp() {
         <button type="button" onClick={() => setCameraPreset("south_west")}>西南</button>
       </div>}
       <button type="button" className="twin-reset" onClick={() => { setCameraPreset("fit"); setViewResetToken((value) => value + 1); }}>全图复位</button>
+      </div>
       <button type="button" className={`twin-warehouse-search-toggle ${searchPanelOpen || searchResponse ? "active" : ""}`} aria-expanded={searchPanelOpen} onClick={() => setSearchPanelOpen((value) => !value)}>全仓查找{searchResponse ? ` ${searchType === "finished" ? searchProductGroups.length : searchResponse.resource_result_count}` : ""}</button>
-      {dashboard?.delayed_dispatch_relocation && <button type="button" className={`twin-delayed-toggle ${delayedDispatchOpen ? "active" : ""}`} aria-expanded={delayedDispatchOpen} onClick={() => setDelayedDispatchOpen((value) => !value)}>延期待送 {dashboard.delayed_dispatch_relocation.candidate_count}</button>}
+      {!!dashboard?.delayed_dispatch_relocation?.candidate_count && <button type="button" className={`twin-delayed-toggle ${delayedDispatchOpen ? "active" : ""}`} aria-expanded={delayedDispatchOpen} onClick={() => setDelayedDispatchOpen((value) => !value)}>延期待送 {dashboard.delayed_dispatch_relocation.candidate_count}</button>}
       {mapMode === "planning" && (viewMode === "2d" ? <button type="button" className={`twin-location-edit-toggle ${locationEditMode ? "active" : ""}`} disabled={!canEditLocations || spatialEditBusy} title={!canEditLocations ? "仅管理员可以规划区域" : "二维编辑先选择地图区域，再一次确认用途、形式和容量"} onClick={toggleLayoutEditor}>{locationEditMode ? "退出规划" : "开始规划"}</button> : <span className="twin-view-note">等距查看 · 详情见右侧</span>)}
       {mapMode === "planning" && floorCode === "1F" && viewMode === "2d" && canEditLocations && !locationEditMode && <button type="button" className={`twin-floor1-candidate-toggle ${floor1CandidatePlan ? "active" : ""}`} disabled={floor1CandidateBusy} onClick={previewFloor1FormalCandidates}>{floor1CandidateBusy ? "正在测算…" : "一楼区域自动生成"}</button>}
       {mapMode === "planning" && locationEditMode && (advancedAreaMaintenanceOpen || locationPointEditAreaCode) && <><button type="button" className="twin-save-location-layout" disabled={locationEditBusy || !activeLocationDraftCount} onClick={saveLocationDrafts}>{locationPointEditAreaCode ? "保存并固定" : "保存库位位置"} {activeLocationDraftCount || ""}</button><button type="button" className="twin-cancel-location-layout" disabled={locationEditBusy || (advancedAreaMaintenanceOpen && !activeLocationDraftCount)} onClick={locationPointEditAreaCode ? cancelLocationPointEditing : () => { setLocationDrafts({}); setSwapSourceLocationId(null); setLocationEditMessage("已取消未保存的库位位置草稿。"); }}>{locationPointEditAreaCode ? "取消点位调整" : "取消位置草稿"}</button></>}
@@ -4939,12 +4946,6 @@ export function WarehouseTwinApp() {
         <button type="button" disabled={spatialEditBusy} onClick={discardLayoutDraft}>{layoutDraftControl?.has_draft ? "放弃草稿" : "取消编辑"}</button>
       </div>}
       <div className="twin-toolbar-spacer" />
-      {(canExecuteWarehouse || canStocktake) && mapMode === "move" && <div className="twin-toolbar-move-actions" role="tablist" aria-label="仓库地图操作类型">
-        {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "relocate"} className={moveAction === "relocate" ? "active" : ""} onClick={() => { setMoveAction("relocate"); setWarehouseOperationMessage(moveDrafts.length ? `已切回移动位置；保留 ${moveDrafts.length} 条移货草稿。` : "已切回移动位置。"); }}>移动位置</button>}
-        {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "ground"} className={moveAction === "ground" ? "active" : ""} onClick={() => { setMoveAction("ground"); setMoveSource(null); setGroundStorageMessage("先选择楼层和地堆区域，再选择入库产品或转位批次。"); }}>地图存放</button>}
-        {P1_49C_ENABLED && canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "merge"} className={moveAction === "merge" ? "active" : ""} onClick={() => { setMoveAction("merge"); setMoveSource(null); setWarehouseOperationMessage(mergeSources.length ? `已切到合并栈板；保留 ${mergeSources.length} 块来源。` : "请选择需要合并的栈板。"); }}>合并栈板</button>}
-        {canStocktake && <button type="button" role="tab" aria-selected={moveAction === "stocktake"} className={moveAction === "stocktake" ? "active" : ""} onClick={() => { setMoveAction("stocktake"); setMoveSource(null); setWarehouseOperationMessage(stocktakeDrafts.length ? `已切到盘点调整；保留 ${stocktakeDrafts.length} 条草稿。` : "请选择正式货位进行盘点调整。"); }}>盘点调整</button>}
-      </div>}
     </section>
 
     <section className={`twin-workspace ${layerPanelOpen ? "layers-open" : "layers-collapsed"} ${searchPanelOpen ? "context-open" : "context-collapsed"} ${locationEditMode ? "location-editing" : ""} ${mapMode === "move" && moveAction === "merge" ? "merge-active" : ""}`}>

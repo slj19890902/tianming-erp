@@ -305,7 +305,7 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert "系统不再强制把栈板紧贴均匀排布" in SOURCE
     assert "主动留出通行、货物外伸和操作间距" in SOURCE
     assert "逻辑货位点（非实尺度）" in SOURCE
-    assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}' in SOURCE
     assert '<b>用途与容量</b>' in SOURCE
     assert "advancedAreaMaintenanceOpen && <div className=\"twin-layout-draft-workflow\"" in SOURCE
     assert "高级维护" in SOURCE
@@ -403,8 +403,8 @@ def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> Non
     assert 'palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}' in SOURCE
     assert "draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : locationPointEditPalletIds}" in SOURCE
     assert 'readOnly={!locationEditMode && !warehouseMoveModeActive}' in SOURCE
-    assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
-    assert 'featureEditingEnabled={locationEditMode && layoutMapTool === "adjust"}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}' in SOURCE
+    assert 'featureEditingEnabled={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"}' in SOURCE
     assert "选择区域或设备" not in SOURCE
 
 
@@ -412,7 +412,7 @@ def test_phase2c13_uses_2d_layout_mode_for_rack_and_area_spatial_modeling() -> N
     assert 'if (locationEditMode)' in SOURCE
     assert 'setRackFocusId(null)' in SOURCE
     assert 'onMoveRack={moveRackDraft}' in SOURCE
-    assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}' in SOURCE
     assert 'className="twin-rack-layout-editor"' in SOURCE
     assert "逐层设置" in SOURCE
     assert "层格数" in SOURCE

@@ -66,11 +66,21 @@ test("area planning keeps short inputs in compact rows", () => {
 });
 
 test("planning dimensions save the latest input and adjustment locks map panning", () => {
+  assert.match(source, /const \[layoutMapToolsOpen, setLayoutMapToolsOpen\] = useState\(false\)/);
   assert.match(source, /const zoneGeometryDraftsRef = useRef<Record<string, number\[\]\[\]>>\(\{\}\)/);
   assert.match(source, /zoneGeometryDraftsRef\.current\[selectedAreaFeature\.id\]/);
-  assert.match(source, /mapPanLocked=\{locationEditMode && layoutMapTool === "adjust"\}/);
+  assert.match(source, /mapPanLocked=\{locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"\}/);
   assert.match(editorSource, /mapPanLocked\?: boolean/);
   assert.match(editorSource, /controls\.enablePan = !mapPanLocked/);
+});
+
+test("planning exits to lookup and map geometry tools open only on demand", () => {
+  assert.match(source, /setMapMode\("lookup"\);[\s\S]*setSearchPanelOpen\(true\)/);
+  assert.match(source, />调整地图<\/button>/);
+  assert.match(source, /setLayoutMapToolsOpen\(\(current\) => !current\)/);
+  assert.match(source, /mapMode === "planning" && locationEditMode && canEditLocations && layoutMapToolsOpen && <section className="twin-layout-map-tools">/);
+  assert.match(source, /featureEditingEnabled=\{locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"\}/);
+  assert.match(source, /layoutDrawKind = locationEditMode && layoutMapToolsOpen && layoutMapTool !== "adjust"/);
 });
 
 test("planning can drag published zones while map panning stays locked", () => {
@@ -79,8 +89,8 @@ test("planning can drag published zones while map panning stays locked", () => {
     editorSource.slice(editorSource.indexOf("const planningFeatureEditable"), editorSource.indexOf("group.userData =", editorSource.indexOf("const planningFeatureEditable"))),
     /feature\.is_locked/
   );
-  assert.match(source, /mapPanLocked=\{locationEditMode && layoutMapTool === "adjust"\}/);
-  assert.match(source, /rackEditingEnabled=\{locationEditMode && advancedAreaMaintenanceOpen\}/);
+  assert.match(source, /mapPanLocked=\{locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"\}/);
+  assert.match(source, /rackEditingEnabled=\{locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen\}/);
   assert.match(editorSource, /preferredPlanningFeature[\s\S]*candidate\.userData\.entityKind === "feature" && candidate\.userData\.draggable/);
 });
 

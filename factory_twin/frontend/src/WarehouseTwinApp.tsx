@@ -1561,6 +1561,7 @@ export function WarehouseTwinApp() {
     zoneGeometryDraftsRef.current = next;
     setZoneGeometryDrafts(next);
   };
+  const [layoutMapToolsOpen, setLayoutMapToolsOpen] = useState(false);
   const [layoutMapTool, setLayoutMapTool] = useState<"adjust" | "zone" | "aisle">("adjust");
   const [layoutDrawPoints, setLayoutDrawPoints] = useState<number[][]>([]);
   const [newAisleWidth, setNewAisleWidth] = useState("");
@@ -1655,11 +1656,12 @@ export function WarehouseTwinApp() {
   const [groundStorageMessage, setGroundStorageMessage] = useState("");
   const [groundStorageIdempotencyKey, setGroundStorageIdempotencyKey] = useState(() => operationKey("ground-storage"));
   const [dispatchIdleDays, setDispatchIdleDays] = useState(3);
-  const layoutDrawKind = locationEditMode && layoutMapTool !== "adjust"
+  const layoutDrawKind = locationEditMode && layoutMapToolsOpen && layoutMapTool !== "adjust"
     ? layoutMapTool
     : null;
 
   useEffect(() => {
+    setLayoutMapToolsOpen(false);
     setLayoutMapTool("adjust");
     setLayoutDrawPoints([]);
     setNewAisleWidth("");
@@ -4091,6 +4093,8 @@ export function WarehouseTwinApp() {
     try {
       if (locationEditMode) {
         await refreshPublishedTwinFloor();
+        setMapMode("lookup");
+        setSearchPanelOpen(true);
         setLocationEditMode(false);
         setAreaPolicyEditMode(false);
         setAdvancedAreaMaintenanceOpen(false);
@@ -4345,6 +4349,8 @@ export function WarehouseTwinApp() {
       );
       if (!result) return;
       await refreshPublishedTwinFloor();
+      setMapMode("lookup");
+      setSearchPanelOpen(true);
       setLocationEditMode(false);
       setAreaPolicyEditMode(false);
       setRackDrafts({});
@@ -4401,6 +4407,8 @@ export function WarehouseTwinApp() {
       );
       if (!result) return;
       await refreshPublishedTwinFloor();
+      setMapMode("lookup");
+      setSearchPanelOpen(true);
       setLocationEditMode(false);
       setAreaPolicyEditMode(false);
       setAdvancedAreaMaintenanceOpen(false);
@@ -4463,6 +4471,8 @@ export function WarehouseTwinApp() {
         { expected_revision: layout.source_sha256 }
       );
       await refreshPublishedTwinFloor();
+      setMapMode("lookup");
+      setSearchPanelOpen(true);
       setLocationEditMode(false);
       setAreaPolicyEditMode(false);
       setRackDrafts({});
@@ -5071,7 +5081,7 @@ export function WarehouseTwinApp() {
         <button type="button" className="planning" onClick={() => setLocationEditMessage("4F 小区域正在等待现场尺寸、用途和安全资料；当前未建立可作业地图。")}><b>4F</b><span>小区规划中</span></button>
         <button type="button" className="planning" onClick={() => setLocationEditMessage("5F 小区域正在等待现场尺寸、用途和安全资料；当前未建立可作业地图。")}><b>5F</b><span>小区规划中</span></button>
       </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorTitle} · 正式仓库作业层</p></div>
-      <div className="twin-command-status"><span className="live">{mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : advancedAreaMaintenanceOpen ? "区域规划 · 整理货位/货架" : "区域规划 · 编辑区域" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
+      <div className="twin-command-status"><span className="live">{mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : layoutMapToolsOpen ? "区域规划 · 调整地图" : advancedAreaMaintenanceOpen ? "区域规划 · 整理货位/货架" : "区域规划 · 核对区域" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
       <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
     </header>
 
@@ -5079,7 +5089,13 @@ export function WarehouseTwinApp() {
       <div className="twin-operation-modes" role="tablist" aria-label="仓库地图操作模式">
         <button type="button" className={mapMode === "lookup" ? "active" : ""} onClick={returnToLookupMode}>查货</button>
         {(canExecuteWarehouse || canStocktake) && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}>移货 / 盘点</button>}
-        {canEditLocations && <button type="button" className={mapMode === 'planning' ? 'active' : ''} disabled={spatialEditBusy} onClick={toggleLayoutEditor}>{mapMode === 'planning' ? '退出规划' : '区域规划'}</button>}
+        {canEditLocations && <button type="button" className={locationEditMode ? 'active' : ''} disabled={spatialEditBusy} onClick={toggleLayoutEditor}>{locationEditMode ? '退出规划' : '区域规划'}</button>}
+        {canEditLocations && mapMode === "planning" && locationEditMode && <button type="button" className={layoutMapToolsOpen ? "active" : ""} disabled={spatialEditBusy || Boolean(locationPointEditAreaCode)} title={locationPointEditAreaCode ? "请先保存或取消货位点位调整" : ""} onClick={() => {
+          setLayoutMapToolsOpen((current) => !current);
+          setLayoutMapTool("adjust");
+          setLayoutDrawPoints([]);
+          setLocationEditMessage(layoutMapToolsOpen ? "已收起地图尺寸调整。" : "已打开地图调整；可拖动区域或通道，或新增区域和通道。");
+        }}>调整地图</button>}
         {canEditLocations && staleLayoutDraft && <button type="button" className="warning" disabled={spatialEditBusy} onClick={rebuildStaleLayoutDraft}>放弃旧草稿并重新规划</button>}
       </div>
       {(canExecuteWarehouse || canStocktake) && mapMode === "move" && <div className="twin-toolbar-move-actions" role="tablist" aria-label="仓库地图操作类型">
@@ -5165,7 +5181,7 @@ export function WarehouseTwinApp() {
 
       <div className={`twin-stage ${focusedRack ? "rack-focused" : ""}`}>
         <div className="twin-map-pane">
-          <div className="twin-stage-heading"><div><small>{floorCode} · 实测布局</small><b>{layout?.name || floorTitle}</b></div><span>{locationEditMode && layoutMapTool === "adjust" ? "拖动区域或通道 · 滚轮缩放" : viewMode === "2d" ? "按住左键平移 · 滚轮缩放" : "左键平移 · 右键旋转 · 滚轮缩放"}</span></div>
+          <div className="twin-stage-heading"><div><small>{floorCode} · 实测布局</small><b>{layout?.name || floorTitle}</b></div><span>{locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust" ? "拖动区域或通道 · 滚轮缩放" : viewMode === "2d" ? "按住左键平移 · 滚轮缩放" : "左键平移 · 右键旋转 · 滚轮缩放"}</span></div>
           {loading && <div className="twin-loading">正在加载实测布局…</div>}
           {error && <div className="twin-error"><b>地图加载失败</b><span>{error}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
           {standardPalletError && <div className="twin-error"><b>栈板尺寸读取失败</b><span>{standardPalletError}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
@@ -5198,9 +5214,9 @@ export function WarehouseTwinApp() {
           highlightedPalletIds={mapHighlightPalletIds}
           focusTarget={cameraFocusTarget}
           palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}
-          rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}
-          featureEditingEnabled={locationEditMode && layoutMapTool === "adjust"}
-          mapPanLocked={locationEditMode && layoutMapTool === "adjust"}
+          rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}
+          featureEditingEnabled={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"}
+          mapPanLocked={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"}
           allowPalletSelection={viewMode === "25d" || locationEditMode || canEditLocations || canExecuteWarehouse || canStocktake}
           draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : locationPointEditPalletIds}
           readOnly={!locationEditMode && !warehouseMoveModeActive}
@@ -5270,7 +5286,7 @@ export function WarehouseTwinApp() {
           </div>}
         </section>}
         {locationEditMessage && <div className={`twin-location-message ${locationEditMessage.includes("失败") || locationEditMessage.includes("缺失") ? "error" : ""}`}><span>{locationEditMessage}</span>{(locationEditMessage.includes("先完成移货") || locationEditMessage.includes("移到其他已启用区域")) && <button type="button" onClick={() => { setLocationEditMode(false); setMapMode("move"); setMoveAction("relocate"); setWarehouseOperationMessage("请点选当前区域内的货物或实体栈板，再切换楼层并选择目标位置；提交前不会改动库存。"); }}>前往移货</button>}</div>}
-        {mapMode === "planning" && locationEditMode && canEditLocations && <section className="twin-layout-map-tools">
+        {mapMode === "planning" && locationEditMode && canEditLocations && layoutMapToolsOpen && <section className="twin-layout-map-tools">
           <div className="twin-layout-map-tools-top">
             <div className="twin-layout-map-tools-title"><div><small>区域规划</small><b>在地图直接调整</b></div><span>只保存草稿</span></div>
             <label><span>地图操作</span><select aria-label="地图操作" value={layoutMapTool} disabled={spatialEditBusy} onChange={(event) => {

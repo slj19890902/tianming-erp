@@ -5473,7 +5473,7 @@ def test_simple_planning_uses_one_contextual_map_operation_workflow() -> None:
     assert '>新增通道</button>' not in TWIN_SOURCE
 
 
-def test_stale_or_locked_geometry_fails_without_a_half_draft(
+def test_stale_geometry_fails_but_locked_zone_can_enter_an_admin_draft(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -5494,17 +5494,20 @@ def test_stale_or_locked_geometry_fails_without_a_half_draft(
 
     published, draft = _isolate_layout_paths(tmp_path, monkeypatch, locked=True)
     published_before = sha256(published.read_bytes()).hexdigest()
-    with pytest.raises(WarehouseTwinLayoutEditConflictError):
-        update_warehouse_twin_zone_geometry(
-            "3F",
-            "zone-f1",
-            expected_revision=_revision(published),
-            expected_version=1,
-            operation_key="p1-47b-zone-locked-0001",
-            points=points,
-        )
+    locked = update_warehouse_twin_zone_geometry(
+        "3F",
+        "zone-f1",
+        expected_revision=_revision(published),
+        expected_version=1,
+        operation_key="p1-128-zone-locked-draft-0001",
+        points=points,
+    )
 
-    assert not draft.exists()
+    assert locked.applied is True
+    assert locked.value["points"] == [[0.0, 0.0], [8_000.0, 0.0], [8_000.0, 8_000.0], [0.0, 8_000.0]]
+    assert locked.value["status"] == "candidate"
+    assert locked.value["is_locked"] is True
+    assert draft.exists()
     assert sha256(published.read_bytes()).hexdigest() == published_before
 
 

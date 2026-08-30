@@ -2181,3 +2181,199 @@ body.warehouse-twin-page {
   .twin-inspector,
   .twin-stage { border-radius: 12px; }
 }
+
+/* P1-128 rack focus: keep the map in context and use the ERP visual language. */
+.twin-workspace.rack-focused {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+.twin-workspace.rack-focused > .twin-layer-rail,
+.twin-workspace.rack-focused > .twin-context-rail,
+.twin-workspace.rack-focused > .twin-inspector {
+  display: none;
+}
+.twin-map-pane {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #f7f8fa;
+}
+.twin-map-pane .editor-canvas { width: 100%; height: 100%; min-height: 0; }
+.twin-stage.rack-focused {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr);
+  background: #fff;
+}
+.twin-rack-map-callout {
+  position: absolute;
+  z-index: 9;
+  top: 50%;
+  right: 8px;
+  max-width: calc(100% - 16px);
+  padding: 7px 9px;
+  display: grid;
+  gap: 1px;
+  transform: translateY(-50%);
+  border: 1px solid #8fc7c1;
+  border-right: 4px solid var(--erp-primary);
+  border-radius: 8px 2px 2px 8px;
+  color: var(--erp-text);
+  background: rgba(255, 255, 255, .96);
+  box-shadow: var(--erp-shadow-card);
+  pointer-events: none;
+}
+.twin-rack-map-callout span { color: var(--erp-muted); font-size: 10px; }
+.twin-rack-map-callout b { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+
+.twin-rack-focus-panel.twin-rack-stage {
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  border-left: 1px solid var(--erp-line);
+  border-radius: 0;
+  color: var(--erp-text);
+  background: #fff;
+  box-shadow: none;
+  animation: none;
+}
+.twin-rack-focus-panel.twin-rack-stage::before { display: none; }
+.twin-rack-focus-panel.twin-rack-stage > header {
+  padding: 10px 14px;
+  align-items: center;
+  border-color: var(--erp-line);
+  background: var(--erp-sidebar);
+}
+.twin-rack-focus-panel.twin-rack-stage header small { color: var(--erp-primary); font-size: 10px; }
+.twin-rack-focus-panel.twin-rack-stage header h2 { margin: 2px 0; color: var(--erp-text); font-size: 17px; }
+.twin-rack-focus-panel.twin-rack-stage header p { color: var(--erp-muted); font: 600 10px/1.35 "Microsoft YaHei", sans-serif; }
+.twin-rack-focus-panel.twin-rack-stage header button {
+  min-height: 32px;
+  padding: 5px 10px;
+  border-color: var(--erp-line-strong);
+  border-radius: var(--erp-radius-button);
+  color: var(--erp-text-secondary);
+  background: #fff;
+}
+.twin-rack-focus-panel .twin-rack-content {
+  padding: 12px 14px 14px;
+  grid-template-columns: minmax(280px, 1fr) minmax(190px, 240px);
+  gap: 12px;
+  overflow: hidden;
+}
+.twin-rack-focus-panel .twin-elevation-shell { grid-template-columns: 42px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 26px; }
+.twin-rack-focus-panel .twin-height-ruler,
+.twin-rack-focus-panel .twin-width-ruler { border-color: #8fc7c1; color: #0f766e; font: 700 10px/1.2 "Microsoft YaHei", sans-serif; }
+.twin-rack-focus-panel .twin-elevation-frame {
+  padding: 7px 9px;
+  border: 5px solid #52798a;
+  border-top-width: 7px;
+  background: #f8fafb;
+  box-shadow: inset 0 0 0 1px #e3e9ec;
+}
+.twin-rack-focus-panel .twin-elevation-level { grid-template-rows: 18px minmax(0, 1fr); border-color: #a87545; border-bottom-width: 5px; }
+.twin-rack-focus-panel .twin-elevation-level > span { color: var(--erp-muted); font-size: 9px; }
+.twin-rack-focus-panel .twin-elevation-level > div > button {
+  min-height: 60%;
+  padding: 6px;
+  border-color: #9fc8c2;
+  color: var(--erp-text);
+  background: #eef8f6;
+  box-shadow: none;
+}
+.twin-rack-focus-panel .twin-elevation-level > div > button:hover,
+.twin-rack-focus-panel .twin-elevation-level > div > button.selected {
+  border-color: var(--erp-primary);
+  color: #073d38;
+  background: #dff3ee;
+  box-shadow: inset 3px 0 var(--erp-primary);
+}
+.twin-rack-focus-panel .twin-elevation-level > div > button.empty {
+  border-color: #b8c7cd;
+  color: var(--erp-text-secondary);
+  background: #fff;
+}
+.twin-rack-focus-panel .twin-elevation-level i,
+.twin-rack-focus-panel .twin-elevation-level .twin-unpartitioned-cell { border-color: #cbd5da; color: #73858f; background: #f7f8fa; }
+.twin-rack-focus-panel .twin-rack-content aside {
+  min-width: 0;
+  padding: 12px;
+  overflow-y: auto;
+  border-color: var(--erp-line);
+  border-radius: 10px;
+  color: var(--erp-text);
+  background: #f7f8fa;
+}
+.twin-rack-focus-panel .twin-rack-content aside h3 { color: var(--erp-text); font-size: 14px; }
+.twin-rack-focus-panel .twin-rack-content aside p { color: var(--erp-muted); font-size: 10px; }
+.twin-rack-focus-panel .twin-rack-content aside > strong { color: var(--erp-primary); font-size: 16px; }
+.twin-rack-focus-panel .twin-rack-product-label > span { color: var(--erp-primary); }
+.twin-rack-focus-panel .twin-rack-product-label > strong,
+.twin-rack-focus-panel .twin-rack-product-label dd { color: var(--erp-text); }
+.twin-rack-focus-panel .twin-rack-product-label dl,
+.twin-rack-focus-panel .twin-rack-product-label dl div { border-color: var(--erp-line); }
+.twin-rack-focus-panel .twin-rack-product-label dt { color: var(--erp-muted); }
+.twin-rack-focus-panel .twin-rack-detail-toggle {
+  border-color: var(--erp-line-strong);
+  color: var(--erp-primary);
+  background: #fff;
+}
+.twin-rack-focus-panel .twin-rack-switch {
+  top: 50%;
+  width: 30px;
+  height: 54px;
+  transform: translateY(-50%);
+  border-color: #8fc7c1;
+  border-radius: 8px;
+  color: #0f766e;
+  background: rgba(255, 255, 255, .94);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, .14);
+  font-size: 30px;
+}
+.twin-rack-focus-panel .twin-rack-switch:hover { color: #fff; background: var(--erp-primary); }
+.twin-rack-focus-panel .twin-mold-rack-legacy-note { border-color: #ead8aa; color: #7a5a14; background: #fff9e8; }
+.twin-rack-focus-panel .mold-rack-cell { border-color: #bdcdd2; color: var(--erp-text-secondary); background: #fff; }
+.twin-rack-focus-panel .mold-rack-cell.occupied { border-color: #8fc7c1; background: #eef8f6; box-shadow: none; }
+.twin-rack-focus-panel .mold-rack-cell-summary { border-color: var(--erp-line); }
+.twin-rack-focus-panel .mold-rack-cell-summary b,
+.twin-rack-focus-panel .mold-rack-cell.occupied strong,
+.twin-rack-focus-panel .mold-rack-cell.occupied span { color: var(--erp-text); }
+.twin-rack-focus-panel .mold-rack-cell-summary strong { color: var(--erp-muted); }
+
+@media (min-width: 881px) {
+  .twin-workspace.location-editing .twin-inspector { font-size: 11px; }
+  .twin-workspace.location-editing .twin-location-message {
+    margin: 3px 5px;
+    padding: 3px 6px;
+    font-size: 9px;
+    line-height: 1.25;
+  }
+  .twin-workspace.location-editing .twin-layout-map-tools { margin: 3px 5px; padding: 6px; gap: 4px; }
+  .twin-workspace.location-editing .twin-layout-map-tools input,
+  .twin-workspace.location-editing .twin-layout-map-tools select { min-height: 28px; padding: 2px 6px; font-size: 10px; }
+  .twin-workspace.location-editing .twin-zone-simple-planner { margin: 3px 0; padding: 6px; gap: 4px; }
+  .twin-workspace.location-editing .twin-zone-simple-planner select,
+  .twin-workspace.location-editing .twin-zone-simple-planner input { min-height: 28px; padding: 2px 6px; font-size: 11px; }
+  .twin-workspace.location-editing .twin-zone-confirm-row > button.confirm,
+  .twin-workspace.location-editing .twin-region-planning-actions button { min-height: 28px; padding: 3px 6px; }
+  .twin-workspace.location-editing .twin-zone-confirm-row > p { font-size: 8px; line-height: 1.25; }
+  .twin-workspace.location-editing .twin-location-readonly-note { margin: 3px 6px; padding: 4px 7px; }
+  .twin-workspace.location-editing .twin-location-card { margin: 3px 6px; padding: 6px; }
+}
+
+@media (max-width: 880px) {
+  .twin-workspace.rack-focused { grid-template-columns: minmax(0, 1fr) !important; }
+  .twin-stage.rack-focused {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(180px, 32vh) minmax(0, 1fr);
+  }
+  .twin-rack-map-callout { top: auto; right: 8px; bottom: 8px; transform: none; }
+  .twin-rack-focus-panel.twin-rack-stage { border-top: 1px solid var(--erp-line); border-left: 0; }
+  .twin-rack-focus-panel .twin-rack-content { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+}

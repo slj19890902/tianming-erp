@@ -73,6 +73,39 @@ test("planning dimensions save the latest input and adjustment locks map panning
   assert.match(editorSource, /controls\.enablePan = !mapPanLocked/);
 });
 
+test("planning can drag published zones while map panning stays locked", () => {
+  assert.match(editorSource, /planningFeatureEditable[\s\S]*\["zone", "aisle"\]\.includes\(feature\.feature_kind\)/);
+  assert.doesNotMatch(
+    editorSource.slice(editorSource.indexOf("const planningFeatureEditable"), editorSource.indexOf("group.userData =", editorSource.indexOf("const planningFeatureEditable"))),
+    /feature\.is_locked/
+  );
+  assert.match(source, /mapPanLocked=\{locationEditMode && layoutMapTool === "adjust"\}/);
+  assert.match(source, /rackEditingEnabled=\{locationEditMode && advancedAreaMaintenanceOpen\}/);
+  assert.match(editorSource, /preferredPlanningFeature[\s\S]*candidate\.userData\.entityKind === "feature" && candidate\.userData\.draggable/);
+});
+
+test("warehouse racks use exact footprint picking and only horizontal or vertical direction", () => {
+  assert.match(editorSource, /function warehouseRackPickProxy\(rack: Rack\)/);
+  assert.match(editorSource, /new THREE\.BoxGeometry\(width, pickHeight, depth\)/);
+  assert.match(editorSource, /warehouseRackPickProxy\(rack\)/);
+  assert.match(sceneSource, /if \(!warehouseTheme\) \{[\s\S]*accessDirectionVectors\(rack\.access_side\)/);
+  const direction = source.slice(source.indexOf('aria-label="货架方向"'), source.indexOf('</select>', source.indexOf('aria-label="货架方向"')));
+  assert.match(direction, /横向 0°/);
+  assert.match(direction, /竖向 90°/);
+  assert.doesNotMatch(direction, /180°|270°/);
+  assert.doesNotMatch(source, /<span>正面方向<\/span>/);
+});
+
+test("rack focus keeps the map visible beside an ERP styled elevation", () => {
+  assert.match(source, /focusedRack \? "rack-focused" : ""/);
+  assert.match(source, /className="twin-map-pane"/);
+  assert.match(source, /className="twin-rack-map-callout"/);
+  assert.match(source, /className="twin-rack-focus-panel twin-rack-stage/);
+  assert.doesNotMatch(source, /className="twin-rack-modal"/);
+  assert.match(cssSource, /\.twin-stage\.rack-focused\s*\{[\s\S]*grid-template-columns:\s*minmax\(260px, 1fr\) minmax\(0, 2fr\)/);
+  assert.match(cssSource, /@media \(max-width: 880px\)[\s\S]*\.twin-stage\.rack-focused\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/);
+});
+
 test("planning uses one contextual delete action for selected zones or aisles", () => {
   assert.match(source, /deleteSelectedLayoutFeature/);
   assert.match(source, /\/features\/\$\{selectedLayoutFeature\.id\}\?expected_revision=/);

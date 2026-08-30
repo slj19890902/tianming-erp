@@ -114,7 +114,7 @@ def test_area_planning_uses_compact_adaptive_fields_and_short_actions() -> None:
     assert '>发布</button>' in planner
     for obsolete in ("确认并启用此区域", "编辑区域", "整理货位/货架", "预览并发布"):
         assert obsolete not in planner
-    assert "grid-template-columns: repeat(auto-fit, minmax(130px, 1fr))" in CSS
+    assert "grid-template-columns: repeat(auto-fit, minmax(100px, 1fr))" in CSS
     assert ".twin-zone-simple-planner > header" in CSS
     assert ".twin-zone-simple-planner > .twin-location-point-planner" in CSS
     assert ".twin-zone-simple-planner > .twin-region-planning-actions" in CSS

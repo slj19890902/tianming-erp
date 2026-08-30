@@ -1302,9 +1302,7 @@ function MoldRackElevation({
     }
   };
 
-  return <div className="twin-rack-modal" role="dialog" aria-modal="true" aria-label={`${rack.rack_code} 模具资产正视图`}>
-    <button className="twin-modal-backdrop" type="button" aria-label="关闭模具货架正视图" disabled={moveAttemptUncertain} onClick={onClose} />
-    <section className="twin-rack-stage twin-mold-rack-stage">
+  return <section className="twin-rack-focus-panel twin-rack-stage twin-mold-rack-stage" role="region" aria-label={`${rack.rack_code} 模具资产正视图`}>
       <header>
         <div><small>实时模具货架 · {response?.rack.mold_rack_code || rack.mold_rack_code || rack.rack_code}</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} 毫米 · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
         <button type="button" disabled={moveAttemptUncertain} onClick={onClose}>{moveAttemptUncertain ? "请先核对移动结果" : "返回孪生地图"}</button>
@@ -1380,8 +1378,7 @@ function MoldRackElevation({
         </aside>
         <button type="button" className="twin-rack-switch next" aria-label="下一个同区域货架" disabled={moveAttemptUncertain} onClick={onNext}>›</button>
       </div>
-    </section>
-  </div>;
+  </section>;
 }
 
 function WarehouseRackElevation({
@@ -1430,9 +1427,7 @@ function WarehouseRackElevation({
     location: items[index] ? null : emptyLocations[index - items.length] || null
   }));
   let slotOffset = 0;
-  return <div className="twin-rack-modal" role="dialog" aria-modal="true" aria-label={`${rack.rack_code} 参数化正视图`}>
-    <button className="twin-modal-backdrop" type="button" aria-label="关闭货架正视图" onClick={onClose} />
-    <section className="twin-rack-stage">
+  return <section className="twin-rack-focus-panel twin-rack-stage" role="region" aria-label={`${rack.rack_code} 参数化正视图`}>
       <header>
       <div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
         <button type="button" onClick={onClose}>返回孪生地图</button>
@@ -1480,8 +1475,7 @@ function WarehouseRackElevation({
         </aside>
         <button type="button" className="twin-rack-switch next" aria-label="下一个同区域货架" onClick={onNext}>›</button>
       </div>
-    </section>
-  </div>;
+  </section>;
 }
 
 export function WarehouseTwinApp() {
@@ -4125,10 +4119,10 @@ export function WarehouseTwinApp() {
       setZonePolicyDrafts({});
       replaceZoneGeometryDrafts({});
       setLocationEditMessage(raw.draft_control.has_draft
-        ? "检测到当前楼层以前保留的高级维护草稿，员工仍只看到已发布地图；系统会保留该草稿。只要当前区域本身没有高级改动，仍可直接一次确认启用。"
+        ? "检测到旧草稿：员工仍看已发布地图；当前区域无改动时可继续确认。"
         : raw.draft_control.has_other_floor_drafts
           ? `区域规划已开启；${(raw.draft_control.dirty_floor_codes || []).filter((code) => code !== floorCode).join("、") || "其他楼层"} 的草稿会独立保留，不影响当前楼层保存、校验和发布。`
-          : "区域规划已开启：选择区域，填写用途、形式和容量后确认。"
+          : "区域规划：选区域，核对后确认。"
       );
     } catch (reason) {
       const message = (reason as Error).message;
@@ -5069,32 +5063,6 @@ export function WarehouseTwinApp() {
   }, [embedded, floorCode, locationPointEditAreaCode, mapMode, moveSource]);
 
   return <main className={`warehouse-twin-shell ${embedded ? "embedded-shell" : ""} ${uiMode === "large" ? "large-text" : ""} ${mapMode === "move" ? "move-mode" : ""}`}>
-    {focusedRack?.mold_rack_code ? <MoldRackElevation
-      rack={focusedRack}
-      response={moldRackResponse}
-      loading={moldRackLoading}
-      error={moldRackError}
-      canMoveMolds={mapMode === "move" && canExecuteWarehouse}
-      rackIndex={focusedRackIndex}
-      rackCount={focusedAreaRacks.length || 1}
-      onPrevious={() => switchFocusedRack(-1)}
-      onNext={() => switchFocusedRack(1)}
-      onMoldMoved={(message) => { setMoldRackRefreshToken((value) => value + 1); setWarehouseOperationMessage(message); }}
-      onClose={() => setRackFocusId(null)}
-    /> : focusedRack && <WarehouseRackElevation
-      rack={focusedRack}
-      areaCode={focusedRackAreaCode}
-      area={focusedRackAreaCode ? areaStats.get(focusedRackAreaCode) : undefined}
-      items={rackInventoryItems}
-      emptyLocations={focusedRackEmptyLocations}
-      canChooseProducts={canStocktake && mapMode === "move" && moveAction === "stocktake"}
-      rackIndex={focusedRackIndex}
-      rackCount={focusedAreaRacks.length || 1}
-      onPrevious={() => switchFocusedRack(-1)}
-      onNext={() => switchFocusedRack(1)}
-      onChooseEmptyLocation={chooseRackEmptyLocation}
-      onClose={() => setRackFocusId(null)}
-    />}
     <header className={`twin-command-bar ${embedded ? "embedded" : ""}`}>
       <div className="twin-brand"><div><h1>仓库地图</h1></div><nav className="twin-floor-switch" aria-label="楼层切换">
         <button type="button" className={floorCode === "1F" ? "active" : ""} onClick={() => switchWarehouseFloor("1F")}><b>1F</b><span>生产车间</span></button>
@@ -5146,7 +5114,7 @@ export function WarehouseTwinApp() {
       <div className="twin-toolbar-spacer" />
     </section>
 
-    <section className={`twin-workspace ${layerPanelOpen ? "layers-open" : "layers-collapsed"} ${searchPanelOpen ? "context-open" : "context-collapsed"} ${locationEditMode ? "location-editing" : ""} ${mapMode === "move" && moveAction === "merge" ? "merge-active" : ""}`}>
+    <section className={`twin-workspace ${layerPanelOpen ? "layers-open" : "layers-collapsed"} ${searchPanelOpen ? "context-open" : "context-collapsed"} ${locationEditMode ? "location-editing" : ""} ${mapMode === "move" && moveAction === "merge" ? "merge-active" : ""} ${focusedRack ? "rack-focused" : ""}`}>
       {layerPanelOpen && <aside className="twin-layer-rail">
         <div className="twin-rail-title"><b>图层</b></div>
         {([
@@ -5195,12 +5163,13 @@ export function WarehouseTwinApp() {
         </section>
       </aside>}
 
-      <div className="twin-stage">
-        <div className="twin-stage-heading"><div><small>{floorCode} · 实测布局</small><b>{layout?.name || floorTitle}</b></div><span>{locationEditMode && layoutMapTool === "adjust" ? "调整：拖动区域、通道或货架 · 滚轮缩放" : viewMode === "2d" ? "平移：按住左键拖动 · 滚轮缩放" : "平移：左键拖动 · 旋转：右键拖动 · 滚轮缩放"}</span></div>
-        {loading && <div className="twin-loading">正在加载实测布局…</div>}
-        {error && <div className="twin-error"><b>地图加载失败</b><span>{error}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
-        {standardPalletError && <div className="twin-error"><b>栈板尺寸读取失败</b><span>{standardPalletError}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
-        {visualLayout && !loading && !standardPalletError && <EditorCanvas
+      <div className={`twin-stage ${focusedRack ? "rack-focused" : ""}`}>
+        <div className="twin-map-pane">
+          <div className="twin-stage-heading"><div><small>{floorCode} · 实测布局</small><b>{layout?.name || floorTitle}</b></div><span>{locationEditMode && layoutMapTool === "adjust" ? "拖动区域或通道 · 滚轮缩放" : viewMode === "2d" ? "按住左键平移 · 滚轮缩放" : "左键平移 · 右键旋转 · 滚轮缩放"}</span></div>
+          {loading && <div className="twin-loading">正在加载实测布局…</div>}
+          {error && <div className="twin-error"><b>地图加载失败</b><span>{error}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
+          {standardPalletError && <div className="twin-error"><b>栈板尺寸读取失败</b><span>{standardPalletError}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
+          {visualLayout && !loading && !standardPalletError && <EditorCanvas
           layout={visualLayout}
           assets={assets}
           viewMode={viewMode}
@@ -5228,8 +5197,8 @@ export function WarehouseTwinApp() {
           highlightFeatureIds={searchHighlightFeatureIds}
           highlightedPalletIds={mapHighlightPalletIds}
           focusTarget={cameraFocusTarget}
-          palletEditingOnly={locationEditMode || warehouseMoveModeActive}
-          rackEditingEnabled={locationEditMode && layoutMapTool === "adjust"}
+          palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}
+          rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}
           featureEditingEnabled={locationEditMode && layoutMapTool === "adjust"}
           mapPanLocked={locationEditMode && layoutMapTool === "adjust"}
           allowPalletSelection={viewMode === "25d" || locationEditMode || canEditLocations || canExecuteWarehouse || canStocktake}
@@ -5237,6 +5206,34 @@ export function WarehouseTwinApp() {
           readOnly={!locationEditMode && !warehouseMoveModeActive}
           visualTheme="warehouse"
           showInternalCodes={mapMode === "planning" && canEditLocations}
+          />}
+          {focusedRack && <div className="twin-rack-map-callout"><span>地图所选</span><b>{moldRackEmployeeName(focusedRack)}</b></div>}
+        </div>
+        {focusedRack?.mold_rack_code ? <MoldRackElevation
+          rack={focusedRack}
+          response={moldRackResponse}
+          loading={moldRackLoading}
+          error={moldRackError}
+          canMoveMolds={mapMode === "move" && canExecuteWarehouse}
+          rackIndex={focusedRackIndex}
+          rackCount={focusedAreaRacks.length || 1}
+          onPrevious={() => switchFocusedRack(-1)}
+          onNext={() => switchFocusedRack(1)}
+          onMoldMoved={(message) => { setMoldRackRefreshToken((value) => value + 1); setWarehouseOperationMessage(message); }}
+          onClose={() => setRackFocusId(null)}
+        /> : focusedRack && <WarehouseRackElevation
+          rack={focusedRack}
+          areaCode={focusedRackAreaCode}
+          area={focusedRackAreaCode ? areaStats.get(focusedRackAreaCode) : undefined}
+          items={rackInventoryItems}
+          emptyLocations={focusedRackEmptyLocations}
+          canChooseProducts={canStocktake && mapMode === "move" && moveAction === "stocktake"}
+          rackIndex={focusedRackIndex}
+          rackCount={focusedAreaRacks.length || 1}
+          onPrevious={() => switchFocusedRack(-1)}
+          onNext={() => switchFocusedRack(1)}
+          onChooseEmptyLocation={chooseRackEmptyLocation}
+          onClose={() => setRackFocusId(null)}
         />}
       </div>
 
@@ -5281,7 +5278,7 @@ export function WarehouseTwinApp() {
               setLayoutMapTool(next);
               setLayoutDrawPoints([]);
               setLocationEditMessage(next === "adjust"
-                ? "可直接拖动区域、通道或货架；右侧修改尺寸和方向，系统自动保存管理员草稿。"
+                ? "拖动区域或通道；尺寸和方向自动保存草稿。"
                 : next === "zone"
                   ? "在地图点两下：第一点和第二点确定新区域的两个对角。"
                   : "先填写现场通道宽度，再在地图点起点和终点。");
@@ -5293,21 +5290,21 @@ export function WarehouseTwinApp() {
           </div>}
           {layoutMapTool !== "adjust" && <p>{layoutDrawPoints.length ? "已确定第一点，请在地图点第二点完成。" : layoutMapTool === "zone" ? "点两下即可形成矩形区域。" : "宽度必须按现场填写；点两下即可形成通道。"}</p>}
           {layoutMapTool === "adjust" && selectedAreaFeature && selectedAreaBoundary && <div className="twin-zone-geometry-editor">
-            <div><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><small>拖动可改位置；输入尺寸后离开输入框自动保存。</small></div>
+            <div><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><small>拖动改位置；输入尺寸自动保存。</small></div>
             <div className="twin-zone-geometry-grid">{([['中心 X', 'centerXmm'], ['中心 Y', 'centerYmm'], ['长', 'widthMm'], ['宽', 'heightMm']] as const).map(([label, key]) => <label key={key}><span>{label} mm</span><input type="number" disabled={spatialEditBusy} value={selectedAreaBoundary[key]} onChange={(event) => {
               const next = { ...selectedAreaBoundary, [key]: Number(event.target.value) };
               replaceZoneGeometryDrafts((current) => ({ ...current, [selectedAreaFeature.id]: resizeAndMovePointsMm(selectedAreaBoundaryPoints, next.centerXmm, next.centerYmm, next.widthMm, next.heightMm) }));
             }} onBlur={saveSelectedZoneGeometry} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>)}</div>
           </div>}
-          {layoutMapTool === "adjust" && selectedAisle && <div className="twin-selected-aisle"><b>{selectedAisle.name || "通道"}</b><span>{selectedAisle.width_mm} mm · {selectedAisle.direction === "one_way" ? "单向" : "双向"}</span><small>直接拖动通道即可重新让出现场通行空间。</small></div>}
+          {layoutMapTool === "adjust" && selectedAisle && <div className="twin-selected-aisle"><b>{selectedAisle.name || "通道"}</b><span>{selectedAisle.width_mm} mm · {selectedAisle.direction === "one_way" ? "单向" : "双向"}</span><small>拖动即可调整位置。</small></div>}
           {layoutMapTool === "adjust" && selectedLayoutFeature && ["zone", "aisle"].includes(selectedLayoutFeature.feature_kind) && <button type="button" className="twin-layout-delete" disabled={spatialEditBusy || selectedLayoutFeature.is_locked} onClick={deleteSelectedLayoutFeature}>{selectedLayoutFeature.feature_kind === "aisle" ? "删除通道" : "删除区域"}</button>}
-          {layoutMapTool === "adjust" && selectedRackEditDraft && <label className="twin-rack-direction"><span>货架方向</span><select aria-label="货架方向" value={selectedRackEditDraft.rotation_deg} disabled={spatialEditBusy} onChange={(event) => {
+          {layoutMapTool === "adjust" && selectedRackEditDraft && <label className="twin-rack-direction"><span>货架方向</span><select aria-label="货架方向" value={selectedRackEditDraft.rotation_deg % 180 === 0 ? 0 : 90} disabled={spatialEditBusy} onChange={(event) => {
             const next = { ...selectedRackEditDraft, rotation_deg: Number(event.target.value) as Rack["rotation_deg"] };
             setRackDrafts((current) => ({ ...current, [selectedRackEditDraft.id]: next }));
             setLocationEditMessage("正在保存货架方向到管理员草稿…");
             void saveRackDraftImmediately(selectedRackEditDraft.id, next);
-          }}><option value={0}>横向 0°</option><option value={90}>竖向 90°</option><option value={180}>横向 180°</option><option value={270}>竖向 270°</option></select><small>货架可直接拖动；方向选择后自动保存草稿。</small></label>}
-          <small className="twin-layout-draft-note">员工地图、库存数量和正式位置要等现有“发布”确认后才改变。</small>
+          }}><option value={0}>横向 0°</option><option value={90}>竖向 90°</option></select><small>按实际长宽投影，选择后自动保存。</small></label>}
+          <small className="twin-layout-draft-note">发布后员工地图才更新；库存数量不变。</small>
         </section>}
         {mapMode === "planning" && locationEditMode && canEditLocations && selectedAreaCode && selectedAreaHasFormalLedger && (selectedZonePolicy?.storage_layout === "pallet_ground" || selectedZonePolicy?.storage_layout === "mixed") && <section className="twin-ground-layout-panel">
           <div className="twin-formal-operation-title"><b>地堆排、位编号</b><span>标准位置 1200×1000mm</span></div>
@@ -5401,7 +5398,6 @@ export function WarehouseTwinApp() {
             <label><span>长度 mm</span><input type="number" min="1" value={selectedRackEditDraft.width_mm} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { width_mm: Number(event.target.value) })} /></label>
             <label><span>宽度 mm</span><input type="number" min="1" value={selectedRackEditDraft.depth_mm} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { depth_mm: Number(event.target.value) })} /></label>
             <label><span>总高度 mm</span><input type="number" min="1" value={selectedRackEditDraft.height_mm} onChange={(event) => changeRackTotalHeight(selectedRackEditDraft, Number(event.target.value))} /></label>
-            <label><span>正面方向</span><select value={selectedRackEditDraft.access_side} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { access_side: event.target.value as Rack["access_side"] })}><option value="north">北</option><option value="south">南</option><option value="east">东</option><option value="west">西</option><option value="both">双面</option></select></label>
             <label><span>最小通道 mm</span><input type="number" min="0" value={selectedRackEditDraft.min_aisle_width_mm} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { min_aisle_width_mm: Number(event.target.value) })} /></label>
           </div>
           <div className="twin-rack-level-editor"><b>逐层设置（修改净高会自动合计总高度）</b>{selectedRackEditDraft.level_clear_heights_mm.map((height, index) => <div className="twin-rack-level-row" key={`${selectedRackEditDraft.id}-level-${index}`}><label><span>第 {index + 1} 层净高 mm</span><input type="number" min="1" value={height} onChange={(event) => changeRackLevelHeight(selectedRackEditDraft, index, Number(event.target.value))} /></label><label><span>第 {index + 1} 层格数</span><input type="number" min="0" max="50" value={selectedRackEditDraft.level_cell_counts[index]} onChange={(event) => changeRackLevelCellCount(selectedRackEditDraft, index, Number(event.target.value))} /></label></div>)}<small>格数填 0 表示本层不生成正式货位；发布后，成品和半成品货架会同步为稳定层格，其他用途仍走原有专项台账。</small></div>
@@ -5642,7 +5638,7 @@ export function WarehouseTwinApp() {
                 <label><span>形式</span><select value={simpleAreaLayout} onChange={(event) => setSimpleAreaLayout(event.target.value as Exclude<StorageLayout, "mixed">)}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
                 <label><span>最大栈板数</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /></label>
               </div>
-              <div className="twin-zone-confirm-row"><button type="button" className="confirm" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || simpleAreaCapacity === ""} onClick={confirmSelectedAreaOnce}>{spatialEditBusy ? "确认中…" : "确认"}</button><p>保存区域设置，不移动库存；模具架、印版架等容量可填 0。</p></div>
+              <div className="twin-zone-confirm-row"><button type="button" className="confirm" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || simpleAreaCapacity === ""} onClick={confirmSelectedAreaOnce}>{spatialEditBusy ? "确认中…" : "确认"}</button><p>保存设置，不改库存；专项货架容量可填 0。</p></div>
               {selectedAreaHasPublishedBinding && selectedAreaCreatesInventoryLocations && <div className="twin-location-point-planner">
                 <div><b>货位点位</b><small>{selectedAreaLocationCount} 个正式货位 · 只调整当前区域</small></div>
                 {locationPointEditAreaCode === selectedAreaCode ? <div className="actions">
@@ -5738,7 +5734,7 @@ export function WarehouseTwinApp() {
               {!moldAreaLoading && moldAreaResponse && moldAreaResponse.total > moldAreaResponse.page_size && <div className="twin-area-mold-pagination"><button type="button" disabled={moldAreaResponse.page <= 1} onClick={() => setMoldAreaPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {moldAreaResponse.page} / {Math.ceil(moldAreaResponse.total / moldAreaResponse.page_size)} 页</span><button type="button" disabled={moldAreaResponse.page * moldAreaResponse.page_size >= moldAreaResponse.total} onClick={() => setMoldAreaPage((value) => value + 1)}>下一页</button></div>}
             </div> : <>
               <div className="twin-area-lot-list">
-                {!selectedInventory.length && <div className="twin-area-empty"><b>{selectedAreaHasPublishedBinding ? "区域已启用，当前没有货物" : selectedAreaActivationLabel === "待启用" ? "区域绑定仍待启用" : "区域尚未启用"}</b><span>{selectedAreaHasPublishedBinding ? `${selectedAreaCapacitySummary}；库存为 0 不代表区域未启用。` : "进入区域规划确认用途、形式和容量后即可启用；系统不会生成模拟货物。"}</span></div>}
+                {!selectedInventory.length && !locationEditMode && <div className="twin-area-empty"><b>{selectedAreaHasPublishedBinding ? "区域已启用，当前没有货物" : selectedAreaActivationLabel === "待启用" ? "区域绑定仍待启用" : "区域尚未启用"}</b><span>{selectedAreaHasPublishedBinding ? `${selectedAreaCapacitySummary}；库存为 0 不代表区域未启用。` : "进入区域规划确认用途、形式和容量后即可启用；系统不会生成模拟货物。"}</span></div>}
                 {selectedInventory.length > 0 && !filteredSelectedInventory.length && <div className="twin-area-empty"><b>本区域没有匹配结果</b><span>请更换存货编码、产品、客户或位置关键词。</span></div>}
                 {visibleSelectedInventory.map((item) => <article className={`twin-area-lot ${focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey ? "search-hit product-search-hit" : focusedSearchItem?.lot_id === item.lot_id ? "search-hit" : ""}`} key={item.lot_id}>
                   <div><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(inventoryPhysicalQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>

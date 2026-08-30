@@ -230,13 +230,15 @@ export function buildRackVisual(
     }
   }
 
-  for (const [dx, dz] of accessDirectionVectors(rack.access_side)) {
-    const arrow = createGroundArrow(Math.min(Math.max(depth * 0.55, 500), 1200), beamColor);
-    const outward = Math.max(depth * 0.68, 500);
-    arrow.position.x = Number(dx) * outward;
-    arrow.position.z = Number(dz) * outward;
-    arrow.rotation.y = Math.atan2(Number(dz), Number(dx));
-    group.add(arrow);
+  if (!warehouseTheme) {
+    for (const [dx, dz] of accessDirectionVectors(rack.access_side)) {
+      const arrow = createGroundArrow(Math.min(Math.max(depth * 0.55, 500), 1200), beamColor);
+      const outward = Math.max(depth * 0.68, 500);
+      arrow.position.x = Number(dx) * outward;
+      arrow.position.z = Number(dz) * outward;
+      arrow.rotation.y = Math.atan2(Number(dz), Number(dx));
+      group.add(arrow);
+    }
   }
   return group;
 }

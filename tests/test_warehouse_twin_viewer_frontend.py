@@ -60,7 +60,7 @@ def test_mold_rack_planning_and_lookup_use_the_live_mold_ledger() -> None:
     assert "发布成功后失效位置统一归入首个可用格并写移动流水" in SOURCE
     assert 'min="1" max="20" value={selectedRackEditDraft.levels}' in SOURCE
     assert "mold_location_reassignment_count" in SOURCE
-    assert "!advancedAreaMaintenanceOpen && !rack?.mold_rack_code" in SOURCE
+    assert "!locationEditMode && selectedAreaMoldRacks.length > 0" in SOURCE
     assert "moldRacksForArea(selectedAreaFeature" in SOURCE
     assert "打开模具货架正视图" in SOURCE
     assert "当前产品书脊" in SOURCE
@@ -293,7 +293,7 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert "<span>形式</span>" in SOURCE
     assert "<span>最大栈板数</span>" in SOURCE
     assert ': "确认"}</button>' in SOURCE
-    assert "保存区域设置，不移动库存" in SOURCE
+    assert "保存设置，不改库存" in SOURCE
     assert "/confirm-area`" in SOURCE
     assert 'primary_inventory_type: simpleAreaUsage' in SOURCE
     assert 'storage_layout: simpleAreaLayout' in SOURCE
@@ -400,10 +400,10 @@ def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> Non
     assert "available_actions" in SOURCE
     assert "系统按区域自动生成内部唯一编码" in SOURCE
     assert "/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable" in SOURCE
-    assert "palletEditingOnly={locationEditMode || warehouseMoveModeActive}" in SOURCE
+    assert 'palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}' in SOURCE
     assert "draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : locationPointEditPalletIds}" in SOURCE
     assert 'readOnly={!locationEditMode && !warehouseMoveModeActive}' in SOURCE
-    assert 'rackEditingEnabled={locationEditMode && layoutMapTool === "adjust"}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
     assert 'featureEditingEnabled={locationEditMode && layoutMapTool === "adjust"}' in SOURCE
     assert "选择区域或设备" not in SOURCE
 
@@ -412,7 +412,7 @@ def test_phase2c13_uses_2d_layout_mode_for_rack_and_area_spatial_modeling() -> N
     assert 'if (locationEditMode)' in SOURCE
     assert 'setRackFocusId(null)' in SOURCE
     assert 'onMoveRack={moveRackDraft}' in SOURCE
-    assert 'rackEditingEnabled={locationEditMode && layoutMapTool === "adjust"}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && advancedAreaMaintenanceOpen}' in SOURCE
     assert 'className="twin-rack-layout-editor"' in SOURCE
     assert "逐层设置" in SOURCE
     assert "层格数" in SOURCE
@@ -439,7 +439,7 @@ def test_p1_34c_layout_edits_use_admin_draft_validation_and_explicit_publish() -
     assert "保存到布局草稿" in SOURCE
     assert "校验草稿" in SOURCE
     assert "发布布局" in SOURCE
-    assert "员工仍只看到已发布地图" in SOURCE
+    assert "员工仍看已发布地图" in SOURCE
     assert "raw.revision || raw.source_sha256" in SOURCE
 
 
@@ -570,7 +570,7 @@ def test_phase2c10_keeps_location_clicks_lightweight_and_focuses_search_hits() -
     assert "selected" not in canvas_effect_dependencies
     assert "onSelect" not in canvas_effect_dependencies
     assert "focusTarget={cameraFocusTarget}" in SOURCE
-    assert "平移：左键拖动 · 旋转：右键拖动 · 滚轮缩放" in SOURCE
+    assert "左键平移 · 右键旋转 · 滚轮缩放" in SOURCE
 
 
 def test_phase2c10_flags_column_conflicts_and_blocks_conflicting_layout_drafts() -> None:

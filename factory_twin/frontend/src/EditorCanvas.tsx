@@ -29,6 +29,7 @@ import type {
   Layout,
   Pallet,
   ProductionTaskProjection,
+  Rack,
   ReferenceOverlayConfig,
   SelectedEntity,
   Structure,
@@ -289,6 +290,19 @@ function warehousePalletPickProxy(pallet: Pallet, viewMode: ViewMode, violated: 
   proxy.position.y = spec.pickHeight / 2;
   proxy.layers.set(WAREHOUSE_PICK_LAYER);
   proxy.userData.pickProxy = true;
+  return proxy;
+}
+
+function warehouseRackPickProxy(rack: Rack) {
+  const width = Math.max(rack.width_mm, 400);
+  const depth = Math.max(rack.depth_mm, 300);
+  const pickHeight = Math.max(180, rack.height_mm);
+  const proxy = new THREE.Mesh(
+    new THREE.BoxGeometry(width, pickHeight, depth),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false })
+  );
+  proxy.position.y = pickHeight / 2;
+  proxy.layers.set(WAREHOUSE_PICK_LAYER);
   return proxy;
 }
 
@@ -693,13 +707,11 @@ export function EditorCanvas({
             ? warehouseAisleColor(layout.floor_code, visualTheme, feature.color)
             : feature.color;
       const group = new THREE.Group();
-      const editorFeatureInteraction = {
-        draggable: feature.subtype !== "dxf_hidden" && !feature.is_locked && !protectedAnchor
-      };
       const planningFeatureEditable = !readOnly
         && featureEditingEnabled
         && ["zone", "aisle"].includes(feature.feature_kind)
-        && editorFeatureInteraction.draggable;
+        && feature.subtype !== "dxf_hidden"
+        && !protectedAnchor;
       group.userData = {
         entityKind: "feature",
         entityId: feature.id,
@@ -897,7 +909,14 @@ export function EditorCanvas({
         group.position.set(position.x, 0, position.z);
         group.rotation.y = THREE.MathUtils.degToRad(-rack.rotation_deg);
         if (operationalEntitySelectable(visualTheme, "rack")) {
-          interactive.push(warehouseTheme ? warehousePickProxy(group) || group : group);
+          if (warehouseTheme) {
+            const proxy = warehouseRackPickProxy(rack);
+            proxy.userData.entityRoot = group;
+            group.add(proxy);
+            interactive.push(proxy);
+          } else {
+            interactive.push(group);
+          }
         }
         scene.add(group);
         if (layers.labels) {
@@ -1150,7 +1169,13 @@ export function EditorCanvas({
         };
         return;
       }
-      const root = entityNode(raycaster.intersectObjects(interactive, !warehouseTheme)[0]?.object || null);
+      const roots = raycaster.intersectObjects(interactive, !warehouseTheme)
+        .map((intersection) => entityNode(intersection.object))
+        .filter((candidate): candidate is THREE.Object3D => Boolean(candidate));
+      const preferredPlanningFeature = featureEditingEnabled && !rackEditingEnabled
+        ? roots.find((candidate) => candidate.userData.entityKind === "feature" && candidate.userData.draggable)
+        : null;
+      const root = preferredPlanningFeature || roots[0] || null;
       if (!root) {
         pendingCanvasAction = {
           kind: "clear-selection",

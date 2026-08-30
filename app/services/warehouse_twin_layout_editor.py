@@ -1332,10 +1332,10 @@ def update_warehouse_twin_feature_geometry(
         if feature_kind == "zone":
             _reject_self_intersection(normalized_points)
         _ensure_version(feature, expected_version, '区域' if feature_kind == 'zone' else '通道')
-        if feature.get('is_locked'):
-            raise WarehouseTwinLayoutEditConflictError(
-                f"{'区域' if feature_kind == 'zone' else '通道'}已确认并锁定，必须先解除锁定"
-            )
+        # Published zones and aisles stay locked against direct deletion, but an
+        # administrator may reposition them through the versioned layout draft.
+        # The published map remains byte-for-byte unchanged until validation and
+        # publish, so planning never mutates the employee map in place.
         _ensure_points_within_floor(
             floor,
             normalized_points,

@@ -36,6 +36,10 @@ from app.services.inventory_onboarding_uploads import (
     PRIVATE_REFERENCE_PREFIX,
     StoredInventoryOnboardingUpload,
 )
+from app.services.location_candidates import (
+    load_warehouse_location_projection_contexts,
+    warehouse_location_projection,
+)
 from app.services.secure_uploads import resolve_stored_reference
 from app.services.warehouse_inventory import (
     SEMI_FINISHED_FLUTES_BY_LAYER,
@@ -840,21 +844,34 @@ def _resolve_location(
         "warehouse_type": location.warehouse_type,
         "placement_status": location.placement_status,
         "is_active": location.is_active,
-        **_location_layout_evidence(location),
+        **_location_layout_evidence(db, location),
     }
     return location
 
 
 def _location_layout_evidence(
+    db: Session,
     location: WarehouseLocation,
 ) -> dict[str, object]:
+    context = load_warehouse_location_projection_contexts(db, [location]).get(
+        int(location.id),
+        {},
+    )
+    projection = warehouse_location_projection(location, **context)
     layout = location.floor3_layout
+    identity = {
+        "address_version": int(location.address_version or 1),
+        "position_status": str(projection["position_status"]),
+        "published_map_revision": projection.get("published_map_revision"),
+    }
     if layout is None:
         return {
+            **identity,
             "layout_version": None,
             "layout_kind": None,
         }
     return {
+        **identity,
         "layout_version": int(layout.version),
         "layout_kind": str(layout.layout_kind),
         "layout_left_pct": str(layout.left_pct),
@@ -1070,7 +1087,7 @@ def _resolve_exported_existing_lot(
                 "target_location_id": target.id,
                 "target_location_code": target.location_code,
                 "move_required": False,
-                **_location_layout_evidence(target),
+                **_location_layout_evidence(db, target),
             }
         elif (
             target is not None
@@ -1102,7 +1119,7 @@ def _resolve_exported_existing_lot(
                     "expected_current_pallet_id": (
                         occupied.id if occupied is not None else None
                     ),
-                    **_location_layout_evidence(target),
+                    **_location_layout_evidence(db, target),
                 }
         else:
             _append_once(warnings, "EXISTING_LOCATION_NEEDS_REVIEW")
@@ -1133,7 +1150,7 @@ def _resolve_exported_existing_lot(
         "warehouse_type": location.warehouse_type,
         "placement_status": location.placement_status,
         "is_active": location.is_active,
-        **_location_layout_evidence(location),
+        **_location_layout_evidence(db, location),
     }
     evidence["existing_lot"] = _lot_evidence(lot)
     evidence["exported_inventory"] = {

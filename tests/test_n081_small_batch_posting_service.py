@@ -717,6 +717,47 @@ def test_post_rejects_mapped_location_changed_after_submitted_snapshot(
     assert get_onboarding_batch(db, batch.id).status == "submitted"
 
 
+def test_existing_stocktake_post_rejects_stale_address_identity(posting_db) -> None:
+    db, data = posting_db
+    lot = _existing_finished_lot(
+        db,
+        data,
+        pallet_code="PLT-N081-STALE-ADDRESS",
+        idempotency_key="n081-stale-address-lot",
+    )
+    db.commit()
+    batch = _submit_exported_existing_batch(
+        db,
+        data,
+        [
+            _exported_existing_field_values(
+                data,
+                lot,
+                quantity=12,
+                position_note="E1-R01",
+                sequence="001",
+            )
+        ],
+        seed="existing-lot-stale-address",
+    )
+    location = data["locations"]["E1-R01"]
+    location.address_version = int(location.address_version or 1) + 1
+    db.commit()
+
+    with pytest.raises(InventoryOnboardingPostingError) as captured:
+        posting_service.post_submitted_batch(
+            db,
+            batch_id=batch.id,
+            operator=data["admin"],
+        )
+    assert (
+        captured.value.code
+        == "INVENTORY_ONBOARDING_POSTING_STOCKTAKE_LOCATION_CHANGED"
+    )
+    db.rollback()
+    assert _count(db, InventoryOnboardingPosting) == 0
+
+
 def test_minimal_unknown_location_posts_to_explicit_pending_location(
     posting_db,
 ) -> None:

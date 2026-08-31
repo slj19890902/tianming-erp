@@ -596,6 +596,26 @@ def employee_location_name(
     return "位置名称待完善"
 
 
+def rack_cell_identity_payload(
+    location: WarehouseLocation,
+) -> dict[str, object | None]:
+    """Return the stable rack-cell identity shared by desktop and mobile.
+
+    Geometry is deliberately excluded: moving or rotating a rack changes its
+    drawing, not the warehouse-location identity or the inventory attached to
+    that location.
+    """
+
+    return {
+        "map_rack_id": str(location.map_rack_id or "").strip() or None,
+        "rack_display_name": str(location.rack_display_name or "").strip() or None,
+        "level_no": int(location.level_no) if location.level_no is not None else None,
+        "slot_no": int(location.slot_no) if location.slot_no is not None else None,
+        "address_kind": location.address_kind,
+        "address_version": int(location.address_version or 1),
+    }
+
+
 def location_address_payload(
     location: WarehouseLocation,
     *,
@@ -641,15 +661,12 @@ def location_address_payload(
             ),
         ),
         "area_master_name": area.area_name if area is not None else None,
-        "address_kind": location.address_kind,
+        **rack_cell_identity_payload(location),
         "address_area_id": location.address_area_id,
         "address_zone_code": area.address_zone_code if area is not None else None,
         "address_subzone_no": area.address_subzone_no if area is not None else None,
         "rack_code": location.rack_code,
         "ground_row_no": location.ground_row_no,
-        "level_no": location.level_no,
-        "slot_no": location.slot_no,
-        "address_version": int(location.address_version or 1),
         "current_address_code": current_code,
         "current_address_name": current_name,
         "area_sequence": area_sequence,

@@ -87,15 +87,29 @@ class StocktakeLineRequest(BaseModel):
 class StocktakeCreateRequest(BaseModel):
     location_id: int = Field(gt=0)
     location_layout_version: int | None = Field(default=None, gt=0)
-    items: list[StocktakeLineRequest] = Field(min_length=1)
+    location_address_version: int = Field(gt=0)
+    location_position_status: str = Field(min_length=1, max_length=30)
+    published_map_revision: str | None = Field(
+        default=None, min_length=1, max_length=64
+    )
+    # An empty list is a real "checked empty" result for an empty formal
+    # location.  The service still requires exact coverage of every live lot,
+    # so it cannot be used to omit inventory from a non-empty location.
+    items: list[StocktakeLineRequest]
     idempotency_key: str = Field(min_length=1, max_length=120)
 
-    @field_validator("idempotency_key")
+    @field_validator(
+        "idempotency_key",
+        "location_position_status",
+        "published_map_revision",
+    )
     @classmethod
-    def strip_idempotency_key(cls, value: str) -> str:
+    def strip_submission_identity(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         stripped = value.strip()
         if not stripped:
-            raise ValueError("幂等键不能为空")
+            raise ValueError("盘点提交身份字段不能为空")
         return stripped
 
 
@@ -219,6 +233,9 @@ def submit_stocktake(
             db,
             location_id=payload.location_id,
             location_layout_version=payload.location_layout_version,
+            location_address_version=payload.location_address_version,
+            location_position_status=payload.location_position_status,
+            published_map_revision=payload.published_map_revision,
             items=items,
             idempotency_key=payload.idempotency_key,
             submitter=user,
@@ -239,6 +256,9 @@ def submit_stocktake(
                 db,
                 location_id=payload.location_id,
                 location_layout_version=payload.location_layout_version,
+                location_address_version=payload.location_address_version,
+                location_position_status=payload.location_position_status,
+                published_map_revision=payload.published_map_revision,
                 items=items,
                 idempotency_key=payload.idempotency_key,
             )

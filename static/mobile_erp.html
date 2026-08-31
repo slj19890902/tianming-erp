@@ -186,6 +186,7 @@
     .warehouse-map-location.unmatched { background: #ffe4e6; border-color: #b91c1c; color: #991b1b; box-shadow: 0 0 0 3px rgba(185, 28, 28, .18); }
     .warehouse-map-location.source { outline: 4px solid var(--orange); }
     .warehouse-map-location.target { outline: 4px solid #b00020; }
+    .warehouse-map-location.deep-link { outline: 4px solid #0f766e; box-shadow: 0 0 0 7px rgba(15, 118, 110, .18); }
     .warehouse-map-location[disabled] { border-style: dashed; opacity: .65; }
     .warehouse-map-actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 9px 0; }
     .warehouse-map-goods .candidate { margin-top: 7px; }
@@ -435,6 +436,8 @@
         warehouseMapZoom: 1,
         warehouseMapSource: null,
         warehouseMapTarget: null,
+        warehouseMapMoveRequestKey: null,
+        warehouseMapFocusLocationId: null,
         warehouseMapCanExecute: false,
         warehouseMapCanCorrect: false,
         allowedPages: new Set(),
@@ -1276,7 +1279,21 @@
             return;
           }
         }
-        const floor = state.warehouseMapFloors.find(item => item.floor_code === preferred.floorCode)
+        let resolvedPreferred = preferred;
+        if (preferred.locationId && (!preferred.floorCode || !preferred.areaCode)) {
+          try {
+            const identity = await apiGet(`/api/mobile/erp/warehouse/map/locations/${encodeURIComponent(preferred.locationId)}`);
+            resolvedPreferred = {
+              ...preferred,
+              floorCode: identity.floor_code,
+              areaCode: identity.area_code,
+            };
+          } catch (error) {
+            showStatus("warehouseMapState", error.message || "目标货位不存在或尚未启用", "error", () => openWarehouseMap(preferred));
+            return;
+          }
+        }
+        const floor = state.warehouseMapFloors.find(item => item.floor_code === resolvedPreferred.floorCode)
           || state.warehouseMapFloors.find(item => item.floor_code === state.warehouseMapFloor)
           || state.warehouseMapFloors[0];
         if (!floor) {
@@ -1285,18 +1302,22 @@
         }
         state.warehouseMapFloor = floor.floor_code;
         const areas = Array.isArray(floor.areas) ? floor.areas : [];
-        const area = areas.find(item => item.area_code === preferred.areaCode)
+        const area = areas.find(item => item.area_code === resolvedPreferred.areaCode)
           || areas.find(item => item.area_code === state.warehouseMapArea)
           || areas.find(item => item.map_status === "ready")
           || areas[0];
         state.warehouseMapArea = area?.area_code || "";
+        state.warehouseMapFocusLocationId = Number(resolvedPreferred.locationId || 0) || null;
         state.warehouseMapSource = null;
         state.warehouseMapTarget = null;
         renderWarehouseMapSelectors();
-        if (state.warehouseMapArea) await loadWarehouseMapArea({ preferredLotId: preferred.lotId });
+        if (state.warehouseMapArea) await loadWarehouseMapArea({
+          preferredLotId: resolvedPreferred.lotId,
+          preferredLocationId: state.warehouseMapFocusLocationId,
+        });
       }
 
-      async function loadWarehouseMapArea({ preferredLotId = null, preserveMove = false } = {}) {
+      async function loadWarehouseMapArea({ preferredLotId = null, preferredLocationId = null, preserveMove = false } = {}) {
         state.warehouseMapController?.abort();
         const controller = new AbortController();
         state.warehouseMapController = controller;
@@ -1310,6 +1331,7 @@
           const data = await apiGet(url, { signal: controller.signal });
           if (generation !== state.warehouseMapGeneration) return;
           state.warehouseMapData = data;
+          if (preferredLocationId) state.warehouseMapFocusLocationId = Number(preferredLocationId);
           if (!preserveMove) state.warehouseMapSource = null;
           state.warehouseMapTarget = null;
           renderWarehouseMap();
@@ -1319,9 +1341,16 @@
             byId("warehouseMapConfirmMove").disabled = true;
             byId("warehouseMapReportMismatch").disabled = true;
           }
-          if (preferredLotId) {
-            const location = (data.locations || []).find(item => (item.goods || []).some(good => Number(good.lot_id) === Number(preferredLotId)));
-            if (location) renderWarehouseLocationGoods(location, preferredLotId);
+          const preferredLocation = (data.locations || []).find(item => Number(item.location_id) === Number(state.warehouseMapFocusLocationId));
+          const lotLocation = preferredLotId
+            ? (data.locations || []).find(item => (item.goods || []).some(good => Number(good.lot_id) === Number(preferredLotId)))
+            : null;
+          const focusedLocation = preferredLocation || lotLocation;
+          if (focusedLocation) {
+            state.warehouseMapFocusLocationId = Number(focusedLocation.location_id);
+            renderWarehouseMap();
+            renderWarehouseLocationGoods(focusedLocation, preferredLotId);
+            document.querySelector(`.warehouse-map-location[data-location-id="${focusedLocation.location_id}"]`)?.scrollIntoView({ block: "center", inline: "center" });
           }
         } catch (error) {
           if (error.name === "AbortError" || generation !== state.warehouseMapGeneration) return;
@@ -1360,7 +1389,8 @@
           if (!location.geometry) return;
           const hasRedIssue = location.has_unmatched_inventory_observation || location.has_location_discrepancy;
           const redIssueCount = Number(location.unmatched_inventory_observation_count || 0) + Number(location.location_discrepancy_count || 0);
-          const button = node("button", `warehouse-map-location${(location.goods || []).length ? " has-goods" : ""}${hasRedIssue ? " unmatched" : ""}`);
+          const deepLinked = Number(location.location_id) === Number(state.warehouseMapFocusLocationId);
+          const button = node("button", `warehouse-map-location${(location.goods || []).length ? " has-goods" : ""}${hasRedIssue ? " unmatched" : ""}${deepLinked ? " deep-link" : ""}`);
           button.type = "button";
           button.dataset.locationId = String(location.location_id);
           button.textContent = `${readableLocation(location)}${hasRedIssue ? ` · 待核对${redIssueCount || ""}` : ""}`;
@@ -1534,8 +1564,14 @@
       }
 
       function selectWarehouseMapSource(good, location, discrepancy = null) {
-        state.warehouseMapSource = { good, location, discrepancy };
+        state.warehouseMapSource = {
+          good,
+          location,
+          ledgerLocation: discrepancy?.registered_location || location,
+          discrepancy,
+        };
         state.warehouseMapTarget = null;
+        state.warehouseMapMoveRequestKey = null;
         document.querySelectorAll(".warehouse-map-location").forEach(button => {
           button.classList.toggle("source", Number(button.dataset.locationId) === Number(location.location_id));
           button.classList.remove("target");
@@ -1551,6 +1587,7 @@
       function selectWarehouseMapTarget(location) {
         if (!state.warehouseMapSource || Number(location.location_id) === Number(state.warehouseMapSource.location.location_id)) return;
         state.warehouseMapTarget = location;
+        state.warehouseMapMoveRequestKey = null;
         document.querySelectorAll(".warehouse-map-location").forEach(button => {
           button.classList.toggle("target", Number(button.dataset.locationId) === Number(location.location_id));
         });
@@ -1560,13 +1597,21 @@
         const targetBlocked = targetGoods.length > 0 && !compatible;
         byId("warehouseMapMoveSummary").textContent = targetBlocked
           ? `${readableLocation(location)} 已有不同货物，不能直接混放；可先上报现场位置并标红。`
-          : `${good.product_code || "当前货物"}：${readableLocation(state.warehouseMapSource.location)} → ${readableLocation(location)}`;
+          : targetGoods.length
+            ? `${readableLocation(location)} 已有同一产品；可以共用货位，系统会保留每个批次。`
+            : `${good.product_code || "当前货物"}：${readableLocation(state.warehouseMapSource.location)} → ${readableLocation(location)}`;
         byId("warehouseMapConfirmMove").disabled = !state.warehouseMapCanExecute || targetBlocked;
         byId("warehouseMapReportMismatch").disabled = false;
       }
 
       function warehouseMapGoodsCompatible(source, target) {
-        return Number(source.customer_id || 0) === Number(target.customer_id || 0)
+        if (String(target.status || "active") !== "active" || Number(target.quantity_damaged || 0) > 0) return false;
+        const productIdentityMatches = source.product_id && target.product_id
+          ? Number(source.product_id) === Number(target.product_id)
+          : String(source.product_code || "").trim() === String(target.product_code || "").trim()
+            && String(source.specification || "").trim() === String(target.specification || "").trim();
+        return productIdentityMatches
+          && Number(source.customer_id || 0) === Number(target.customer_id || 0)
           && String(source.product_code || "").trim() === String(target.product_code || "").trim()
           && String(source.specification || "").trim() === String(target.specification || "").trim()
           && String(source.inventory_type || "") === String(target.inventory_type || "")
@@ -1580,16 +1625,31 @@
         if (!source || !target || quantity < 1 || quantity > Number(source.good.quantity_movable || 0)) return;
         byId("warehouseMapConfirmMove").disabled = true;
         try {
+          const ledgerSource = source.ledgerLocation || source.location;
+          const sourceLayoutVersion = ledgerSource.layout_version || ledgerSource.geometry?.version;
+          const targetLayoutVersion = target.layout_version || target.geometry?.version;
+          if (!ledgerSource.location_id || !ledgerSource.address_version || !sourceLayoutVersion || !ledgerSource.published_map_revision
+            || !target.location_id || !target.address_version || !targetLayoutVersion || !target.published_map_revision) {
+            throw new Error("货位地图身份不完整，请刷新当前区域后重试");
+          }
+          state.warehouseMapMoveRequestKey ||= warehouseRequestKey("mobile-map-move");
           const data = await apiPost(`/api/mobile/erp/warehouse/lots/${source.good.lot_id}/moves`, {
             expected_version: source.good.lot_version,
             quantity,
+            expected_source_location_id: ledgerSource.location_id,
+            expected_source_address_version: ledgerSource.address_version,
+            expected_source_layout_version: sourceLayoutVersion,
+            expected_source_map_revision: ledgerSource.published_map_revision,
             target_location_id: target.location_id,
-            expected_target_layout_version: target.geometry.version,
-            idempotency_key: warehouseRequestKey("mobile-map-move"),
+            expected_target_layout_version: targetLayoutVersion,
+            expected_target_address_version: target.address_version,
+            expected_target_map_revision: target.published_map_revision,
+            idempotency_key: state.warehouseMapMoveRequestKey,
             physical_move_confirmed: true,
             location_discrepancy_id: source.discrepancy?.report_id || null,
             expected_discrepancy_version: source.discrepancy?.report_version || null,
           });
+          state.warehouseMapMoveRequestKey = null;
           window.alert(data.message || "实际搬运已登记");
           await loadWarehouseMapArea();
         } catch (error) {
@@ -1733,6 +1793,7 @@
         openWarehouseMap({
           floorCode: position.floor ? `${position.floor}F` : "",
           areaCode: position.area_code || "",
+          locationId: position.location_id,
           lotId: position.lot_id,
         });
       }
@@ -2190,6 +2251,15 @@
             ? requestedPage
             : (state.allowedPages.has(restoredPage) ? restoredPage : "home");
           setPage(firstPage, {incomingPerformanceStarted: requestedIncoming});
+          const launchParams = new URLSearchParams(window.location.search);
+          if (firstPage === "warehouse" && launchParams.get("warehouse_map") === "1") {
+            await openWarehouseMap({
+              floorCode: launchParams.get("floor_code") || undefined,
+              areaCode: launchParams.get("area_code") || undefined,
+              locationId: Number(launchParams.get("location_id") || 0) || undefined,
+              lotId: Number(launchParams.get("lot_id") || 0) || undefined,
+            });
+          }
           if (firstPage === "lookup" && state.lookupQuery) runUnifiedSearch(state.lookupPage);
           if (firstPage !== "incoming") state.incomingPerformanceActive = false;
         } catch (error) {
@@ -2241,12 +2311,14 @@
       byId("warehouseMapButton").addEventListener("click", () => openWarehouseMap());
       byId("closeWarehouseMap").addEventListener("click", closeWarehouseMap);
       byId("warehouseMapFloor").addEventListener("change", () => {
+        state.warehouseMapFocusLocationId = null;
         state.warehouseMapFloor = byId("warehouseMapFloor").value;
         state.warehouseMapArea = warehouseAreaOptions()[0]?.area_code || "";
         renderWarehouseMapSelectors();
         loadWarehouseMapArea({ preserveMove: Boolean(state.warehouseMapSource) });
       });
       byId("warehouseMapArea").addEventListener("change", () => {
+        state.warehouseMapFocusLocationId = null;
         state.warehouseMapArea = byId("warehouseMapArea").value;
         loadWarehouseMapArea({ preserveMove: Boolean(state.warehouseMapSource) });
       });
@@ -2260,6 +2332,7 @@
         if (state.warehouseMapData) renderWarehouseMap();
       });
       byId("warehouseMapConfirmMove").addEventListener("click", confirmWarehouseMapMove);
+      byId("warehouseMapMoveQuantity").addEventListener("input", () => { state.warehouseMapMoveRequestKey = null; });
       byId("warehouseMapReportMismatch").addEventListener("click", reportWarehouseMapMismatch);
       byId("warehouseDiscrepancyListButton").addEventListener("click", loadWarehouseDiscrepancies);
       byId("closeMap").addEventListener("click", closeMap);

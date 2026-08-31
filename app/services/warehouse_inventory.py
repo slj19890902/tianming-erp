@@ -59,6 +59,7 @@ from app.services.location_candidates import (
     has_space_ledger,
     load_warehouse_location_projection_contexts,
     operational_location_issue,
+    warehouse_location_projection,
 )
 from app.services.audit_log import append_audit_event
 from app.services.warehouse_area_activation import WarehouseAreaActivationError
@@ -98,6 +99,153 @@ def _claim_inventory_destination(
             "目标库位已停用、尚未完成空间放置或地图状态已变化，请刷新后重试",
             409,
         )
+
+
+def _claim_inventory_transfer_locations(
+    db: Session,
+    *,
+    source_location_id: int,
+    target_location_id: int,
+    expected_source_layout_version: int | None,
+    expected_target_layout_version: int | None,
+) -> None:
+    """Serialize both sides of a move in one stable floor/location order.
+
+    Opposite moves (A -> B and B -> A) must claim the same rows in the same
+    order.  The location no-op also shares the floor projection mutex used by
+    map publishing.  Existing pallet and ground-occupancy rows are claimed
+    afterwards because multiple lots may share those physical containers.
+    """
+
+    requested_ids = {int(source_location_id), int(target_location_id)}
+    rows = list(
+        db.execute(
+            select(WarehouseLocation.id, WarehouseLocation.warehouse_floor).where(
+                WarehouseLocation.id.in_(requested_ids)
+            )
+        ).all()
+    )
+    if {int(row.id) for row in rows} != requested_ids:
+        raise WarehouseInventoryError("来源或目标库位不存在，请刷新后重试", 409)
+    layout_versions = {
+        int(source_location_id): expected_source_layout_version,
+        int(target_location_id): expected_target_layout_version,
+    }
+    for row in sorted(
+        rows,
+        key=lambda item: (
+            int(item.warehouse_floor) if item.warehouse_floor is not None else 10_000,
+            int(item.id),
+        ),
+    ):
+        _claim_inventory_destination(
+            db,
+            int(row.id),
+            expected_layout_version=layout_versions[int(row.id)],
+        )
+
+    try:
+        pallet_ids = list(
+            db.scalars(
+                select(InventoryPallet.id)
+                .where(
+                    InventoryPallet.location_id.in_(requested_ids),
+                    InventoryPallet.is_current.is_(True),
+                )
+                .order_by(InventoryPallet.id)
+            ).all()
+        )
+        for pallet_id in pallet_ids:
+            db.execute(
+                update(InventoryPallet)
+                .where(
+                    InventoryPallet.id == int(pallet_id),
+                    InventoryPallet.is_current.is_(True),
+                )
+                .values(
+                    status=InventoryPallet.status,
+                    updated_at=InventoryPallet.updated_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+
+        occupancy_ids = list(
+            db.scalars(
+                select(WarehouseGroundOccupancy.id)
+                .outerjoin(
+                    WarehouseGroundOccupancySlot,
+                    WarehouseGroundOccupancySlot.occupancy_id
+                    == WarehouseGroundOccupancy.id,
+                )
+                .where(
+                    WarehouseGroundOccupancy.status == "active",
+                    or_(
+                        WarehouseGroundOccupancy.primary_location_id.in_(requested_ids),
+                        and_(
+                            WarehouseGroundOccupancySlot.location_id.in_(requested_ids),
+                            WarehouseGroundOccupancySlot.status == "active",
+                        ),
+                    ),
+                )
+                .distinct()
+                .order_by(WarehouseGroundOccupancy.id)
+            ).all()
+        )
+        for occupancy_id in occupancy_ids:
+            db.execute(
+                update(WarehouseGroundOccupancy)
+                .where(
+                    WarehouseGroundOccupancy.id == int(occupancy_id),
+                    WarehouseGroundOccupancy.status == "active",
+                )
+                .values(version=WarehouseGroundOccupancy.version)
+                .execution_options(synchronize_session=False)
+            )
+    except OperationalError as error:
+        raise WarehouseInventoryError(
+            "来源或目标位置正在被其他盘点、移位或布局操作使用，请稍后重试",
+            409,
+        ) from error
+
+
+def _validate_transfer_location_snapshot(
+    db: Session,
+    *,
+    location: WarehouseLocation,
+    role: str,
+    expected_address_version: int | None,
+    expected_layout_version: int | None,
+    expected_map_revision: str | None,
+) -> None:
+    """Reject a stale phone map after the location/floor mutex is held."""
+
+    if (
+        expected_address_version is not None
+        and int(location.address_version or 1) != int(expected_address_version)
+    ):
+        raise WarehouseInventoryError(f"{role}货位地址已调整，请刷新地图后重试", 409)
+    if expected_layout_version is None and expected_map_revision is None:
+        return
+    context = load_warehouse_location_projection_contexts(db, [location]).get(
+        int(location.id), {}
+    )
+    layout = context.get("layout")
+    live_layout_version = (
+        int(layout.version) if isinstance(layout, Floor3LocationLayout) else None
+    )
+    if (
+        expected_layout_version is not None
+        and live_layout_version != int(expected_layout_version)
+    ):
+        raise WarehouseInventoryError(f"{role}货位布局已调整，请刷新地图后重试", 409)
+    projection = warehouse_location_projection(location, **context)
+    live_map_revision = str(projection.get("published_map_revision") or "").strip()
+    expected_revision = str(expected_map_revision or "").strip()
+    if expected_revision and (
+        projection.get("position_status") != "mapped"
+        or live_map_revision != expected_revision
+    ):
+        raise WarehouseInventoryError(f"{role}货位地图版本已更新，请刷新后重试", 409)
 
 
 def _delivery_pallet_release_key(delivery_id: int, pallet_id: int) -> str:
@@ -1467,12 +1615,26 @@ def _lot_location_transfer_hash(
     expected_version: int,
     quantity: int,
     location_id: int,
+    expected_source_location_id: int | None = None,
+    expected_source_address_version: int | None = None,
+    expected_source_layout_version: int | None = None,
+    expected_source_map_revision: str | None = None,
+    expected_target_layout_version: int | None = None,
+    expected_target_address_version: int | None = None,
+    expected_target_map_revision: str | None = None,
     ground_secondary_location_id: int | None = None,
     ground_capacity_quantity: int | None = None,
 ) -> str:
     payload = {
         "expected_version": expected_version,
+        "expected_source_location_id": expected_source_location_id,
+        "expected_source_address_version": expected_source_address_version,
+        "expected_source_layout_version": expected_source_layout_version,
+        "expected_source_map_revision": expected_source_map_revision,
         "location_id": location_id,
+        "expected_target_layout_version": expected_target_layout_version,
+        "expected_target_address_version": expected_target_address_version,
+        "expected_target_map_revision": expected_target_map_revision,
         "lot_id": lot_id,
         "quantity": quantity,
         "ground_secondary_location_id": ground_secondary_location_id,
@@ -1483,6 +1645,79 @@ def _lot_location_transfer_hash(
             "utf-8"
         )
     ).hexdigest()
+
+
+def _legacy_lot_location_transfer_hashes(
+    *,
+    lot_id: int,
+    expected_version: int,
+    quantity: int,
+    location_id: int,
+    expected_target_layout_version: int | None,
+    ground_secondary_location_id: int | None,
+    ground_capacity_quantity: int | None,
+) -> set[str]:
+    """Recognize immutable transfers written before the full mobile snapshot token.
+
+    Old rows cannot prove address/map versions that were never stored.  Their
+    stable source/target/quantity/version facts still make an already-completed
+    retry safe; every new row is written with the full request hash above.
+    """
+
+    base = {
+        "expected_version": expected_version,
+        "location_id": location_id,
+        "lot_id": lot_id,
+        "quantity": quantity,
+        "ground_secondary_location_id": ground_secondary_location_id,
+        "ground_capacity_quantity": ground_capacity_quantity,
+    }
+    variants = [base, {**base, "expected_target_layout_version": expected_target_layout_version}]
+    return {
+        sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        for payload in variants
+    }
+
+
+def _replayed_finished_location_transfer(
+    db: Session,
+    *,
+    repeated: InventoryLotTransfer,
+    lot_id: int,
+    location_id: int,
+    quantity: int,
+    expected_version: int,
+    request_hash: str,
+    compatible_legacy_hashes: set[str],
+    expected_source_location_id: int | None,
+) -> FinishedLotLocationTransferResult:
+    same_stored_facts = bool(
+        int(repeated.source_lot_id) == int(lot_id)
+        and int(repeated.target_location_id) == int(location_id)
+        and int(repeated.quantity) == int(quantity)
+        and int(repeated.source_version_before) == int(expected_version)
+        and (
+            expected_source_location_id is None
+            or int(repeated.source_location_id) == int(expected_source_location_id)
+        )
+    )
+    if not same_stored_facts or repeated.request_hash not in {
+        request_hash,
+        *compatible_legacy_hashes,
+    }:
+        raise WarehouseInventoryError("同一请求标识已用于其他库位转移", 409)
+    source = db.get(InventoryLot, repeated.source_lot_id)
+    target = db.get(InventoryLot, repeated.target_lot_id)
+    if source is None or target is None:
+        raise WarehouseInventoryError("已完成的库位转移记录不完整", 409)
+    return FinishedLotLocationTransferResult(repeated, source, target, True)
 
 
 def _transfer_finished_lot_location(
@@ -1496,7 +1731,13 @@ def _transfer_finished_lot_location(
     idempotency_key: str,
     require_staging_source: bool,
     require_empty_target: bool = False,
+    expected_source_location_id: int | None = None,
+    expected_source_address_version: int | None = None,
+    expected_source_layout_version: int | None = None,
+    expected_source_map_revision: str | None = None,
     expected_target_layout_version: int | None = None,
+    expected_target_address_version: int | None = None,
+    expected_target_map_revision: str | None = None,
     ground_secondary_location_id: int | None = None,
     ground_capacity_quantity: int | None = None,
 ) -> FinishedLotLocationTransferResult:
@@ -1517,6 +1758,22 @@ def _transfer_finished_lot_location(
         expected_version=expected_version,
         quantity=quantity,
         location_id=location_id,
+        expected_source_location_id=expected_source_location_id,
+        expected_source_address_version=expected_source_address_version,
+        expected_source_layout_version=expected_source_layout_version,
+        expected_source_map_revision=expected_source_map_revision,
+        expected_target_layout_version=expected_target_layout_version,
+        expected_target_address_version=expected_target_address_version,
+        expected_target_map_revision=expected_target_map_revision,
+        ground_secondary_location_id=ground_secondary_location_id,
+        ground_capacity_quantity=ground_capacity_quantity,
+    )
+    compatible_legacy_hashes = _legacy_lot_location_transfer_hashes(
+        lot_id=lot_id,
+        expected_version=expected_version,
+        quantity=quantity,
+        location_id=location_id,
+        expected_target_layout_version=expected_target_layout_version,
         ground_secondary_location_id=ground_secondary_location_id,
         ground_capacity_quantity=ground_capacity_quantity,
     )
@@ -1526,24 +1783,70 @@ def _transfer_finished_lot_location(
         )
     )
     if repeated is not None:
-        if repeated.source_lot_id != lot_id or repeated.request_hash != request_hash:
-            raise WarehouseInventoryError("同一请求标识已用于其他库位转移", 409)
-        source = db.get(InventoryLot, repeated.source_lot_id)
-        target = db.get(InventoryLot, repeated.target_lot_id)
-        if source is None or target is None:
-            raise WarehouseInventoryError("已完成的库位转移记录不完整", 409)
-        return FinishedLotLocationTransferResult(repeated, source, target, True)
+        return _replayed_finished_location_transfer(
+            db,
+            repeated=repeated,
+            lot_id=lot_id,
+            location_id=location_id,
+            quantity=quantity,
+            expected_version=expected_version,
+            request_hash=request_hash,
+            compatible_legacy_hashes=compatible_legacy_hashes,
+            expected_source_location_id=expected_source_location_id,
+        )
 
-    _claim_inventory_destination(
+    candidate_lot = db.get(InventoryLot, lot_id)
+    if candidate_lot is None:
+        raise WarehouseInventoryError("成品库存批次不存在", 404)
+    claimed_source_location_id = (
+        int(expected_source_location_id)
+        if expected_source_location_id is not None
+        else (
+            int(candidate_lot.warehouse_location_id)
+            if candidate_lot.warehouse_location_id is not None
+            else 0
+        )
+    )
+    if claimed_source_location_id <= 0:
+        raise WarehouseInventoryError("成品库存缺少来源库位，请刷新后重试", 409)
+    _claim_inventory_transfer_locations(
         db,
-        location_id,
-        expected_layout_version=expected_target_layout_version,
+        source_location_id=claimed_source_location_id,
+        target_location_id=location_id,
+        expected_source_layout_version=expected_source_layout_version,
+        expected_target_layout_version=expected_target_layout_version,
     )
 
-    lot = db.get(InventoryLot, lot_id)
+    # A contender may have completed this key while this transaction waited on
+    # the shared floor/location mutex. Recheck before reading or changing stock.
+    repeated = db.scalar(
+        select(InventoryLotTransfer)
+        .where(InventoryLotTransfer.idempotency_key == key)
+        .execution_options(populate_existing=True)
+    )
+    if repeated is not None:
+        return _replayed_finished_location_transfer(
+            db,
+            repeated=repeated,
+            lot_id=lot_id,
+            location_id=location_id,
+            quantity=quantity,
+            expected_version=expected_version,
+            request_hash=request_hash,
+            compatible_legacy_hashes=compatible_legacy_hashes,
+            expected_source_location_id=expected_source_location_id,
+        )
+
+    lot = db.get(InventoryLot, lot_id, populate_existing=True)
     if lot is None or lot.finished_detail is None:
         raise WarehouseInventoryError("成品库存批次不存在", 404)
-    source_location = db.get(WarehouseLocation, lot.warehouse_location_id)
+    if int(lot.warehouse_location_id or 0) != claimed_source_location_id:
+        raise WarehouseInventoryError("库存登记位置已变化，请刷新后重试", 409)
+    source_location = db.get(
+        WarehouseLocation,
+        claimed_source_location_id,
+        populate_existing=True,
+    )
     staging_source = not bool(
         lot.inventory_type != "finished"
         or lot.status != "active"
@@ -1576,10 +1879,85 @@ def _transfer_finished_lot_location(
         raise WarehouseInventoryError("该批次仍有报损或报废数量，不能直接移位", 409)
 
     target_location = _location(db, location_id, "finished")
+    _validate_transfer_location_snapshot(
+        db,
+        location=source_location,
+        role="来源",
+        expected_address_version=expected_source_address_version,
+        expected_layout_version=expected_source_layout_version,
+        expected_map_revision=expected_source_map_revision,
+    )
+    _validate_transfer_location_snapshot(
+        db,
+        location=target_location,
+        role="目标",
+        expected_address_version=expected_target_address_version,
+        expected_layout_version=expected_target_layout_version,
+        expected_map_revision=expected_target_map_revision,
+    )
     if target_location.id == source_location.id:
         raise WarehouseInventoryError("目标位置不能与来源位置相同", 409)
     if require_staging_source and target_location.location_code == "F1-DISPATCH-01":
         raise WarehouseInventoryError("目标库位不能仍是一楼待送区", 409)
+    if not require_staging_source:
+        source_detail = lot.finished_detail
+        assert source_detail is not None
+        source_signature = (
+            source_detail.owner_customer_id,
+            source_detail.product_id,
+            str(source_detail.inventory_code_snapshot or "").strip(),
+            int(source_detail.length_mm or 0),
+            int(source_detail.width_mm or 0),
+            int(source_detail.height_mm or 0),
+            str(lot.inventory_type or ""),
+            str(lot.unit or ""),
+        )
+        target_lots = list(
+            db.scalars(
+                select(InventoryLot)
+                .options(selectinload(InventoryLot.finished_detail))
+                .where(
+                    InventoryLot.warehouse_location_id == target_location.id,
+                    InventoryLot.id != lot.id,
+                    InventoryLot.status.in_(("active", "frozen")),
+                    (
+                        InventoryLot.quantity_available
+                        + InventoryLot.quantity_reserved
+                        + InventoryLot.quantity_damaged
+                    )
+                    > 0,
+                )
+                .order_by(InventoryLot.id)
+            ).all()
+        )
+        if require_empty_target and target_lots:
+            raise WarehouseInventoryError("目标货位已有货物，请选择空位", 409)
+        for target_lot in target_lots:
+            target_detail = target_lot.finished_detail
+            if (
+                target_lot.status != "active"
+                or int(target_lot.quantity_damaged or 0) > 0
+                or target_detail is None
+            ):
+                raise WarehouseInventoryError(
+                    "目标货位已有冻结、损坏或待核对货物，不能直接混放；请先换空位或完成异常处理",
+                    409,
+                )
+            target_signature = (
+                target_detail.owner_customer_id,
+                target_detail.product_id,
+                str(target_detail.inventory_code_snapshot or "").strip(),
+                int(target_detail.length_mm or 0),
+                int(target_detail.width_mm or 0),
+                int(target_detail.height_mm or 0),
+                str(target_lot.inventory_type or ""),
+                str(target_lot.unit or ""),
+            )
+            if target_signature != source_signature:
+                raise WarehouseInventoryError(
+                    "目标货位已有不同客户、存货编码或规格的货物，不能直接混放；同品可共位保留批次，异品请换空位",
+                    409,
+                )
 
     source_location_id = int(lot.warehouse_location_id)
     available_take = min(quantity, int(lot.quantity_available or 0))
@@ -1901,7 +2279,13 @@ def transfer_finished_lot_between_locations(
     operator_id: int | None,
     idempotency_key: str,
     require_empty_target: bool = False,
+    expected_source_location_id: int | None = None,
+    expected_source_address_version: int | None = None,
+    expected_source_layout_version: int | None = None,
+    expected_source_map_revision: str | None = None,
     expected_target_layout_version: int | None = None,
+    expected_target_address_version: int | None = None,
+    expected_target_map_revision: str | None = None,
     ground_secondary_location_id: int | None = None,
     ground_capacity_quantity: int | None = None,
 ) -> FinishedLotLocationTransferResult:
@@ -1915,7 +2299,13 @@ def transfer_finished_lot_between_locations(
         idempotency_key=idempotency_key,
         require_staging_source=False,
         require_empty_target=require_empty_target,
+        expected_source_location_id=expected_source_location_id,
+        expected_source_address_version=expected_source_address_version,
+        expected_source_layout_version=expected_source_layout_version,
+        expected_source_map_revision=expected_source_map_revision,
         expected_target_layout_version=expected_target_layout_version,
+        expected_target_address_version=expected_target_address_version,
+        expected_target_map_revision=expected_target_map_revision,
         ground_secondary_location_id=ground_secondary_location_id,
         ground_capacity_quantity=ground_capacity_quantity,
     )

@@ -27,6 +27,7 @@ from app.services.warehouse_location_address import (
     format_location_address,
     location_address_payload,
     published_measured_map_readiness,
+    rack_cell_identity_payload,
 )
 from app.services.warehouse_twin_layout import (
     WarehouseTwinLayoutNotFoundError,
@@ -931,10 +932,8 @@ def operational_location_payload(row: OperationalLocationRow) -> dict:
             address_area.address_subzone_no if address_area is not None else None
         ),
         "rack_code": location.rack_code,
+        **rack_cell_identity_payload(location),
         "ground_row_no": location.ground_row_no,
-        "level_no": location.level_no,
-        "slot_no": location.slot_no,
-        "address_version": int(location.address_version or 1),
         "current_address_code": current_address_code,
         "current_address_name": current_address_name,
         "employee_location_name": employee_name,

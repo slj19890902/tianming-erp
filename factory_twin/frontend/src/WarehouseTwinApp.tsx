@@ -231,6 +231,12 @@ interface DashboardLocation {
   location_name: string;
   employee_location_name?: string | null;
   current_address_name?: string | null;
+  map_rack_id?: string | null;
+  rack_display_name?: string | null;
+  level_no?: number | null;
+  slot_no?: number | null;
+  address_kind?: "legacy" | "rack_slot" | "ground_slot" | "functional" | string;
+  address_version?: number | null;
   floor_name?: string | null;
   area_name?: string | null;
   floor_code: string;
@@ -781,7 +787,30 @@ interface LayoutDraftPublishResponse {
   inventory_changed: false;
   mold_location_reassignment_count?: number;
   mold_location_changed?: boolean;
+  bound_legacy_location_ids?: number[];
   applied: boolean;
+}
+
+interface LegacyRackBindingPreview {
+  floor_code: string;
+  revision: string;
+  fingerprint: string;
+  requires_confirmation: boolean;
+  unresolved_count: number;
+  groups: Array<{
+    binding_key: string;
+    area_id: number;
+    area_code: string;
+    area_name: string;
+    legacy_rack_code: string;
+    location_ids: number[];
+    location_codes: string[];
+    location_count: number;
+    occupied_location_count: number;
+    candidates: Array<{ map_rack_id: string; rack_name: string }>;
+    suggested_map_rack_id?: string | null;
+    blocking_reason?: string | null;
+  }>;
 }
 
 interface RackLevelLabelPrintResponse {
@@ -1031,6 +1060,32 @@ function rackLevelCellCounts(rack: Pick<Rack, "levels" | "cargo_rows" | "bays" |
     ? Math.max(1, Math.min(50, Math.round(Number(rack.bays) || 1)))
     : Math.max(3, Math.min(5, Math.round(Number(rack.cargo_rows) || 3)));
   return Array.from({ length: levels }, () => legacyCount);
+}
+
+function rackCellIdentityKey(
+  mapRackId: string | null | undefined,
+  levelNo: number | null | undefined,
+  slotNo: number | null | undefined
+) {
+  if (!mapRackId || !Number.isInteger(levelNo) || !Number.isInteger(slotNo)) return null;
+  return `${mapRackId}:L${levelNo}:S${slotNo}`;
+}
+
+function rackLocationInventoryItems(location: DashboardLocation): RackInventoryItem[] {
+  return [
+    ...inventoryLocationPallets(location).flatMap((pallet) => (pallet.items || []).map((item) => ({
+      ...item,
+      location_code: location.location_code,
+      location_name: location.location_name,
+      pallet_code: pallet.pallet_code || null
+    }))),
+    ...(location.loose_items || []).map((item) => ({
+      ...item,
+      location_code: location.location_code,
+      location_name: location.location_name,
+      pallet_code: null
+    }))
+  ];
 }
 
 function rackDraft(rack: Rack): RackDraft {
@@ -1384,10 +1439,9 @@ function MoldRackElevation({
 
 function WarehouseRackElevation({
   rack,
-  areaCode,
   area,
-  items,
-  emptyLocations,
+  locations,
+  unboundLocationCount,
   canChooseProducts,
   rackIndex,
   rackCount,
@@ -1397,10 +1451,9 @@ function WarehouseRackElevation({
   onClose
 }: {
   rack: Rack;
-  areaCode?: string | null;
   area?: AreaDistribution;
-  items: RackInventoryItem[];
-  emptyLocations: DashboardLocation[];
+  locations: DashboardLocation[];
+  unboundLocationCount: number;
   canChooseProducts: boolean;
   rackIndex: number;
   rackCount: number;
@@ -1413,6 +1466,24 @@ function WarehouseRackElevation({
   const levelCellCounts = rackLevelCellCounts(rack);
   const [selectedItem, setSelectedItem] = useState<RackInventoryItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const rackCells = useMemo(() => {
+    const grouped = new Map<string, DashboardLocation[]>();
+    for (const location of locations) {
+      if (location.map_rack_id !== rack.id) continue;
+      const key = rackCellIdentityKey(location.map_rack_id, location.level_no, location.slot_no);
+      if (!key) continue;
+      grouped.set(key, [...(grouped.get(key) || []), location]);
+    }
+    return grouped;
+  }, [locations, rack.id]);
+  const items = useMemo(
+    () => locations.flatMap((location) => rackLocationInventoryItems(location)),
+    [locations]
+  );
+  const emptyLocationCount = useMemo(
+    () => locations.filter((location) => rackLocationInventoryItems(location).length === 0).length,
+    [locations]
+  );
   useEffect(() => { setSelectedItem(null); setDetailOpen(false); }, [rack.id]);
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -1423,11 +1494,6 @@ function WarehouseRackElevation({
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose, onPrevious, onNext]);
-  const slots = Array.from({ length: levelCellCounts.reduce((sum, value) => sum + value, 0) }, (_, index) => ({
-    item: items[index] || null,
-    location: items[index] ? null : emptyLocations[index - items.length] || null
-  }));
-  let slotOffset = 0;
   return <section className="twin-rack-focus-panel twin-rack-stage" role="region" aria-label={`${rack.rack_code} 参数化正视图`}>
       <header>
       <div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
@@ -1440,24 +1506,51 @@ function WarehouseRackElevation({
           <div className="twin-elevation-frame">
             {levels.map((level) => {
               const cellCount = levelCellCounts[level - 1] || 0;
-              const levelSlots = slots.slice(slotOffset, slotOffset + cellCount);
-              slotOffset += cellCount;
               return <div className="twin-elevation-level" key={level}>
               <span>第 {level} 层 · {cellCount ? `${cellCount} 格` : "尚未分格"}</span>
-              <div className={cellCount ? "" : "unpartitioned"}>{cellCount === 0 ? <i className="twin-unpartitioned-cell">本层尚未分格</i> : levelSlots.map((slot, bay) => {
-                const item = slot.item;
-                if (item) return <button type="button" className={selectedItem?.lot_id === item.lot_id ? "selected" : ""} key={`${item.lot_id}-${bay}`} onClick={() => { setSelectedItem(item); setDetailOpen(false); }}><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><span>{item.customer_name || "客户待确认"}</span><strong>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></button>;
-                if (slot.location) {
-                  const finishedBlock = stocktakeAddBlockReason(slot.location, "finished");
-                  const semiFinishedBlock = stocktakeAddBlockReason(slot.location, "semi_finished");
-                  const blockReason = !canChooseProducts
+              <div className={cellCount ? "" : "unpartitioned"}>{cellCount === 0 ? <i className="twin-unpartitioned-cell">本层尚未分格</i> : Array.from({ length: cellCount }, (_, bay) => {
+                const cellKey = rackCellIdentityKey(rack.id, level, bay + 1);
+                const cellLocations = cellKey ? rackCells.get(cellKey) || [] : [];
+                const cellItems = cellLocations.flatMap((location) => rackLocationInventoryItems(location));
+                const location = cellLocations.length === 1 ? cellLocations[0] : null;
+                const identityConflict = cellLocations.length > 1;
+                let blockReason: string | null = null;
+                if (location && cellItems.length === 0) {
+                  const finishedBlock = stocktakeAddBlockReason(location, "finished");
+                  const semiFinishedBlock = stocktakeAddBlockReason(location, "semi_finished");
+                  const nextBlockReason = !canChooseProducts
                     ? "进入盘点调整后才可选择产品。"
                     : finishedBlock && semiFinishedBlock
                       ? finishedBlock
                       : null;
-                  return <button type="button" className="empty" key={`empty-${slot.location.location_id}`} disabled={Boolean(blockReason)} title={blockReason || ""} onClick={() => onChooseEmptyLocation(slot.location!.location_id)}><b>＋ 为此货位选产品</b><span>{slot.location.location_name}</span><strong>{blockReason || "当前空位"}</strong></button>;
+                  blockReason = nextBlockReason;
                 }
-                return <i key={bay}>暂无已建空货位</i>;
+                const cellSelected = cellItems.some((item) => item.lot_id === selectedItem?.lot_id);
+                const cellTitle = identityConflict
+                  ? `该层格关联 ${cellLocations.length} 个正式货位，请管理员处理身份冲突。`
+                  : location?.location_name || "暂无已建空货位";
+                return <section className={`mold-rack-cell ${cellItems.length ? "occupied" : "empty"} ${cellSelected ? "selected" : ""}`} key={cellKey || `${rack.id}-${level}-${bay + 1}`} title={cellTitle}>
+                  <button
+                    type="button"
+                    className="mold-rack-cell-summary"
+                    disabled={!cellItems.length && (identityConflict || !location || Boolean(blockReason))}
+                    onClick={() => {
+                      if (cellItems.length) {
+                        setSelectedItem(cellItems[0]);
+                        setDetailOpen(false);
+                      } else if (location && !blockReason) {
+                        onChooseEmptyLocation(location.location_id);
+                      }
+                    }}
+                  ><b>第 {bay + 1} 格</b><strong>{identityConflict ? "货位身份冲突" : cellItems.length ? `${cellItems.length} 个批次` : location ? "正式空货位" : "未建正式货位"}</strong></button>
+                  {cellItems.length ? <div className="mold-rack-book-spines">{cellItems.map((item, index) => <button
+                    type="button"
+                    className={selectedItem?.lot_id === item.lot_id ? "selected" : ""}
+                    key={`${item.lot_id}-${item.location_code || "unknown"}`}
+                    title={`${item.inventory_code || item.lot_number || `批次 ${item.lot_id}`} · ${item.product_name || "产品名称待补充"} · ${employeeCustomerName(item)} · ${formatNumber(inventoryLabelQuantity(item))} ${inventoryUnitLabel(item.unit)}`}
+                    onClick={() => { setSelectedItem(item); setDetailOpen(false); }}
+                  ><small>{index + 1}</small><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><span>{employeeCustomerName(item)} · {formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</span></button>)}</div> : <span className="mold-rack-empty-spine">{identityConflict ? "请管理员确认唯一正式货位" : location ? blockReason || "＋ 为此货位选产品" : "暂无已建空货位"}</span>}
+                </section>;
               })}</div>
             </div>})}
           </div>
@@ -1465,7 +1558,7 @@ function WarehouseRackElevation({
         </div>
         <aside>
           <small>产品标签</small>
-          {!selectedItem ? <><h3>点击货架上的产品或空货位</h3><p>产品标签显示常用信息；有盘点权限时可从空货位选择已有产品，加入盘点草稿。</p><strong>{items.length} 条产品标签 · {emptyLocations.length} 个空货位</strong>{area?.quantities.map((item) => <div className="twin-quantity-row" key={item.key}><span>{item.label}</span><b>{formatNumber(item.available)} {inventoryUnitLabel(item.unit)}</b></div>)}</> : <article className="twin-rack-product-label">
+          {!selectedItem ? <><h3>点击货架上的产品或空货位</h3><p>每一格严格读取该货架、层号和格号；同格所有批次均保留并可逐个查看。</p><strong>{items.length} 个批次 · {emptyLocationCount} 个正式空货位</strong>{unboundLocationCount > 0 && <p className="twin-mold-rack-warning">本区域还有 {unboundLocationCount} 个旧货位未绑定货架层格，未纳入本货架正视图，请管理员确认。</p>}{area?.quantities.map((item) => <div className="twin-quantity-row" key={item.key}><span>{item.label}</span><b>{formatNumber(item.available)} {inventoryUnitLabel(item.unit)}</b></div>)}</> : <article className="twin-rack-product-label">
             <span>当前产品标签</span>
             <h3>{selectedItem.inventory_code || selectedItem.lot_number || `批次 ${selectedItem.lot_id}`}</h3>
             <strong>{selectedItem.product_name || "产品名称待补充"}</strong>
@@ -1489,6 +1582,8 @@ export function WarehouseTwinApp() {
   const [layout, setLayout] = useState<Layout | null>(null);
   const [layoutStandardPallet, setLayoutStandardPallet] = useState<StandardPalletContract | null>(null);
   const [layoutDraftControl, setLayoutDraftControl] = useState<LayoutDraftControl | null>(null);
+  const [legacyRackBindingPreview, setLegacyRackBindingPreview] = useState<LegacyRackBindingPreview | null>(null);
+  const [legacyRackBindingSelections, setLegacyRackBindingSelections] = useState<Record<string, string>>({});
   const [publishedFloorRevision, setPublishedFloorRevision] = useState("");
   const [planningPublishedRevision, setPlanningPublishedRevision] = useState("");
   const [assets, setAssets] = useState<AssetTemplate[]>([]);
@@ -2770,58 +2865,30 @@ export function WarehouseTwinApp() {
       .finally(() => { if (active) setMoldRackLoading(false); });
     return () => { active = false; };
   }, [moldRackQueryRack?.id, moldRackQueryRack?.mold_rack_code, floorCode, moldRackRefreshToken]);
-  const rackInventoryItems = useMemo<RackInventoryItem[]>(() => {
-    if (!focusedRack || !focusedRackAreaCode || !focusedAreaRacks.length) return [];
-    const rackByLocation = new Map<number, Rack>();
-    for (const location of visualLocations) {
-      if (location.floor_code !== floorCode || location.area_code !== focusedRackAreaCode || location.position_status !== "mapped") continue;
-      const pallet = mappedLocationPallets.find((item) => item.id === `erp-location-${location.location_id}`);
-      if (!pallet) continue;
-      const nearest = focusedAreaRacks.reduce((best, rack) => {
-        const distance = Math.hypot(pallet.x_mm - rack.x_mm, pallet.y_mm - rack.y_mm);
-        return !best || distance < best.distance ? { rack, distance } : best;
-      }, null as { rack: Rack; distance: number } | null);
-      if (nearest) rackByLocation.set(location.location_id, nearest.rack);
-    }
-    return visualLocations
-      .filter((location) => rackByLocation.get(location.location_id)?.id === focusedRack.id)
-      .flatMap((location) => [
-        ...inventoryLocationPallets(location).flatMap((pallet) => (pallet.items || []).map((item) => ({
-          ...item,
-          location_code: location.location_code,
-          location_name: location.location_name,
-          pallet_code: pallet.pallet_code || null
-        }))),
-        ...location.loose_items.map((item) => ({
-          ...item,
-          location_code: location.location_code,
-          location_name: location.location_name,
-          pallet_code: null
-        }))
-      ]);
-  }, [focusedRack, focusedRackAreaCode, focusedAreaRacks, visualLocations, mappedLocationPallets, floorCode]);
-  const focusedRackEmptyLocations = useMemo<DashboardLocation[]>(() => {
-    if (!focusedRack || !focusedRackAreaCode || !focusedAreaRacks.length) return [];
+  const focusedRackLocations = useMemo<DashboardLocation[]>(() => {
+    if (!focusedRack) return [];
     return visualLocations
       .filter((location) => location.floor_code === floorCode
-        && location.area_code === focusedRackAreaCode
+        && location.map_rack_id === focusedRack.id
+        && location.address_kind === "rack_slot"
+        && Number.isInteger(location.level_no)
+        && Number.isInteger(location.slot_no)
         && location.storage_type === "rack"
         && location.is_active
         && location.position_status === "mapped"
-        && location.occupancy_status === "empty"
-        && !locationDrafts[location.location_id]
-        && !palletColumnConflictIds.has(`erp-location-${location.location_id}`))
-      .filter((location) => {
-        const pallet = mappedLocationPallets.find((item) => item.id === `erp-location-${location.location_id}`);
-        if (!pallet) return false;
-        const nearest = focusedAreaRacks.reduce((best, rack) => {
-          const distance = Math.hypot(pallet.x_mm - rack.x_mm, pallet.y_mm - rack.y_mm);
-          return !best || distance < best.distance ? { rack, distance } : best;
-        }, null as { rack: Rack; distance: number } | null);
-        return nearest?.rack.id === focusedRack.id;
-      })
-      .sort((left, right) => left.location_code.localeCompare(right.location_code, "zh-CN", { numeric: true }));
-  }, [focusedRack, focusedRackAreaCode, focusedAreaRacks, visualLocations, mappedLocationPallets, floorCode, locationDrafts, palletColumnConflictIds]);
+        && !locationDrafts[location.location_id])
+      .sort((left, right) => Number(left.level_no) - Number(right.level_no)
+        || Number(left.slot_no) - Number(right.slot_no)
+        || left.location_id - right.location_id);
+  }, [focusedRack, visualLocations, floorCode, locationDrafts]);
+  const unboundRackLocationCount = useMemo(() => {
+    if (!focusedRackAreaCode) return 0;
+    return visualLocations.filter((location) => location.floor_code === floorCode
+      && location.area_code === focusedRackAreaCode
+      && location.storage_type === "rack"
+      && location.is_active
+      && !location.map_rack_id).length;
+  }, [focusedRackAreaCode, visualLocations, floorCode]);
   const selectedStocktakeItem = selectedLocationItems.find((item) => item.lot_id === stocktakeLotId) || null;
   const selectedStocktakeDecreaseBlockReason = selectedStocktakeItem
     ? selectedLocationStocktakeBlockReason || stocktakeDecreaseBlockReason(selectedStocktakeItem)
@@ -4290,6 +4357,8 @@ export function WarehouseTwinApp() {
   }, [pendingAreaPolicyEdit, canEditLocations, layout?.id, floorCode]);
 
   const rememberServerDraft = (revision: string) => {
+    setLegacyRackBindingPreview(null);
+    setLegacyRackBindingSelections({});
     setLayoutDraftControl((current) => ({
       has_draft: true,
       has_other_floor_drafts: current?.has_other_floor_drafts,
@@ -4335,19 +4404,68 @@ export function WarehouseTwinApp() {
     }
   };
 
+  const prepareLegacyRackBindingConfirmation = async (revision: string) => {
+    const preview = await requestJson<LegacyRackBindingPreview>(
+      `/api/warehouse/twin-layout/floors/${floorCode}/draft/rack-cell-bindings/preview?expected_revision=${encodeURIComponent(revision)}`
+    );
+    const priorSelections = legacyRackBindingPreview?.fingerprint === preview.fingerprint
+      ? legacyRackBindingSelections
+      : {};
+    const selections = Object.fromEntries(preview.groups.map((group) => [
+      group.binding_key,
+      priorSelections[group.binding_key] || ""
+    ]));
+    setLegacyRackBindingPreview(preview);
+    setLegacyRackBindingSelections(selections);
+    if (!preview.groups.length) return { request: {}, summary: "" };
+    if (preview.unresolved_count > 0) {
+      setLocationEditMessage(`有 ${preview.unresolved_count} 组旧货位超出当前货架层格或目标已占用；请先修正货架层数、格数或冲突。`);
+      return null;
+    }
+    const missing = preview.groups.filter((group) => !selections[group.binding_key]);
+    if (missing.length) {
+      setLocationEditMessage(`请在当前区域下方核对 ${missing.length} 组旧货位对应的实际货架，再次点击发布即可一次确认。`);
+      return null;
+    }
+    const targets = Object.values(selections);
+    if (new Set(targets).size !== targets.length) {
+      setLocationEditMessage("同一地图货架不能绑定两组旧货位，请重新选择。");
+      return null;
+    }
+    const occupiedCount = preview.groups.reduce((total, group) => total + group.occupied_location_count, 0);
+    const mappingSummary = preview.groups.map((group) => {
+      const target = group.candidates.find((candidate) => candidate.map_rack_id === selections[group.binding_key]);
+      return `${group.area_code} ${group.legacy_rack_code}架 → ${target?.rack_name || selections[group.binding_key]}`;
+    }).join("；");
+    return {
+      request: {
+        legacy_rack_binding_fingerprint: preview.fingerprint,
+        legacy_rack_bindings: preview.groups.map((group) => ({
+          binding_key: group.binding_key,
+          map_rack_id: selections[group.binding_key]
+        })),
+        legacy_rack_bindings_confirmed: true
+      },
+      summary: `${mappingSummary}\n同时保留并绑定 ${preview.groups.reduce((total, group) => total + group.location_count, 0)} 个旧货位${occupiedCount ? `（${occupiedCount} 个货位有货）` : ""}；不移动或合并库存。`
+    };
+  };
+
   const publishLayoutDraft = async () => {
     if (!layout || layoutDraftControl?.status !== "validated") return;
-    const moldMoveWarnings = (layoutDraftControl.warnings || []).filter((warning) => warning.includes("件模具"));
-    if (!window.confirm(`确认发布 ${floorCode} 已校验的仓库地图吗？只发布当前楼层，其他楼层草稿会保留；发布前会自动备份旧地图，库存数量不会改变。${moldMoveWarnings.length ? `\n\n${moldMoveWarnings.slice(0, 3).join("；")}。自动归位会写入模具位置移动流水。` : ""}`)) return;
     setSpatialEditBusy(true);
     try {
+      const bindingConfirmation = await prepareLegacyRackBindingConfirmation(layout.source_sha256);
+      if (bindingConfirmation === null) return;
+      const moldMoveWarnings = (layoutDraftControl.warnings || []).filter((warning) => warning.includes("件模具"));
+      if (!window.confirm(`确认发布 ${floorCode} 已校验的仓库地图吗？只发布当前楼层，其他楼层草稿会保留；发布前会自动备份旧地图，库存数量不会改变。${bindingConfirmation.summary ? `\n\n${bindingConfirmation.summary}` : ""}${moldMoveWarnings.length ? `\n\n${moldMoveWarnings.slice(0, 3).join("；")}。自动归位会写入模具位置移动流水。` : ""}`)) return;
       const result = await mutateJson<LayoutDraftPublishResponse>(
         `/api/warehouse/twin-layout/floors/${floorCode}/draft/publish`,
         "POST",
         {
           expected_published_revision: layoutDraftControl.published_revision,
           expected_draft_revision: layout.source_sha256,
-          operation_key: operationKey("layout-publish")
+          operation_key: operationKey("layout-publish"),
+          ...bindingConfirmation.request
         }
       );
       if (!result) return;
@@ -4359,7 +4477,9 @@ export function WarehouseTwinApp() {
       setRackDrafts({});
       setZonePolicyDrafts({});
       replaceZoneGeometryDrafts({});
-      setLocationEditMessage(`${floorCode} 仓库地图已发布；旧地图备份为 ${result.backup_name}，库存数量未改变。${result.mold_location_reassignment_count ? ` ${result.mold_location_reassignment_count} 件失效模具位置已自动归入首个可用格，并记录移动流水。` : ""}${result.remaining_draft_floor_codes?.length ? ` ${result.remaining_draft_floor_codes.join("、")} 草稿仍独立保留。` : ""}`);
+      setLegacyRackBindingPreview(null);
+      setLegacyRackBindingSelections({});
+      setLocationEditMessage(`${floorCode} 仓库地图已发布；旧地图备份为 ${result.backup_name}，库存数量未改变。${result.bound_legacy_location_ids?.length ? ` 已保留并绑定 ${result.bound_legacy_location_ids.length} 个旧货位。` : ""}${result.mold_location_reassignment_count ? ` ${result.mold_location_reassignment_count} 件失效模具位置已自动归入首个可用格，并记录移动流水。` : ""}${result.remaining_draft_floor_codes?.length ? ` ${result.remaining_draft_floor_codes.join("、")} 草稿仍独立保留。` : ""}`);
     } catch (reason) {
       setLocationEditMessage(`发布布局失败：${(reason as Error).message}`);
     } finally {
@@ -4395,7 +4515,9 @@ export function WarehouseTwinApp() {
       const warningText = validation.warnings.length
         ? `\n\n注意：${validation.warnings.slice(0, 3).join("；")}`
         : "";
-      if (!window.confirm(`预览已通过。确认发布 ${floorCode} 当前区域和货架草稿吗？库存数量不会改变。${warningText}`)) {
+      const bindingConfirmation = await prepareLegacyRackBindingConfirmation(validation.draft_revision);
+      if (bindingConfirmation === null) return;
+      if (!window.confirm(`预览已通过。确认发布 ${floorCode} 当前区域和货架草稿吗？库存数量不会改变。${bindingConfirmation.summary ? `\n\n${bindingConfirmation.summary}` : ""}${warningText}`)) {
         setLocationEditMessage("预览已通过，本次未发布；草稿继续保留。");
         return;
       }
@@ -4405,7 +4527,8 @@ export function WarehouseTwinApp() {
         {
           expected_published_revision: layoutDraftControl.published_revision,
           expected_draft_revision: validation.draft_revision,
-          operation_key: operationKey("layout-preview-publish")
+          operation_key: operationKey("layout-preview-publish"),
+          ...bindingConfirmation.request
         }
       );
       if (!result) return;
@@ -4418,7 +4541,9 @@ export function WarehouseTwinApp() {
       setRackDrafts({});
       setZonePolicyDrafts({});
       replaceZoneGeometryDrafts({});
-      setLocationEditMessage(`${floorCode} 区域和货架已发布；旧地图备份为 ${result.backup_name}，库存数量未改变。`);
+      setLegacyRackBindingPreview(null);
+      setLegacyRackBindingSelections({});
+      setLocationEditMessage(`${floorCode} 区域和货架已发布；旧地图备份为 ${result.backup_name}，库存数量未改变。${result.bound_legacy_location_ids?.length ? ` 已保留并绑定 ${result.bound_legacy_location_ids.length} 个旧货位。` : ""}`);
     } catch (reason) {
       setLocationEditMessage(`预览并发布失败：${(reason as Error).message}`);
     } finally {
@@ -5242,10 +5367,9 @@ export function WarehouseTwinApp() {
           onClose={() => setRackFocusId(null)}
         /> : focusedRack && <WarehouseRackElevation
           rack={focusedRack}
-          areaCode={focusedRackAreaCode}
           area={focusedRackAreaCode ? areaStats.get(focusedRackAreaCode) : undefined}
-          items={rackInventoryItems}
-          emptyLocations={focusedRackEmptyLocations}
+          locations={focusedRackLocations}
+          unboundLocationCount={unboundRackLocationCount}
           canChooseProducts={canStocktake && mapMode === "move" && moveAction === "stocktake"}
           rackIndex={focusedRackIndex}
           rackCount={focusedAreaRacks.length || 1}
@@ -5668,6 +5792,18 @@ export function WarehouseTwinApp() {
                 </div>}
                 <p>{locationPointEditAreaCode === selectedAreaCode ? "请直接在二维地图拖到现场实际位置，可主动留出通行、货物外伸和操作间距；红色冲突必须先拖离。保存会同步权威排位，但不改库存、栈板绑定或数量。" : "点击后直接拖动空货位或有货货位；系统不再强制把栈板紧贴均匀排布。保存后查货、移货、盘点和手机版统一读取现场位置。"}</p>
               </div>}
+              {legacyRackBindingPreview?.groups.length ? <div className="twin-location-readonly-note">
+                <b>旧货位对应当前货架</b>
+                <span>只按同一区域、层号和格号列出可选货架；选择后再次点“发布”，一次确认并保留原货位 ID、编号和库存。</span>
+                {legacyRackBindingPreview.groups.map((group) => <label key={group.binding_key}>
+                  <span>{group.area_code} · {group.legacy_rack_code}架 · {group.location_count} 格{group.occupied_location_count ? `（${group.occupied_location_count} 格有货）` : ""}</span>
+                  <select value={legacyRackBindingSelections[group.binding_key] || ""} onChange={(event) => setLegacyRackBindingSelections((current) => ({ ...current, [group.binding_key]: event.target.value }))}>
+                    <option value="">选择现场对应货架</option>
+                    {group.candidates.map((candidate) => <option key={candidate.map_rack_id} value={candidate.map_rack_id}>{candidate.rack_name}{candidate.map_rack_id === group.suggested_map_rack_id ? "（建议）" : ""}</option>)}
+                  </select>
+                  {group.blocking_reason && <small>{group.blocking_reason}</small>}
+                </label>)}
+              </div> : null}
               <div className="twin-region-planning-actions">
                 <button type="button" className={!advancedAreaMaintenanceOpen ? "active" : ""} disabled={Boolean(locationPointEditAreaCode)} onClick={() => { setAdvancedAreaMaintenanceOpen(false); setAreaPolicyEditMode(true); setLocationEditMessage("请核对当前区域名称、用途、形式和容量。"); }}>编辑</button>
                 <button type="button" className={advancedAreaMaintenanceOpen ? "active" : ""} disabled={Boolean(locationPointEditAreaCode)} title={locationPointEditAreaCode ? "请先保存并固定或取消点位调整" : ""} onClick={() => { setAdvancedAreaMaintenanceOpen(true); setAreaPolicyEditMode(true); setLocationEditMessage("请选择货架或货位，按现场尺寸整理并保存草稿。"); }}>货位/货架</button>

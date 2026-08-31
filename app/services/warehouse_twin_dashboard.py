@@ -916,6 +916,16 @@ def _location_payload(
         "location_name": address_payload["employee_location_name"],
         "location_master_name": row.location_name,
         **address_payload,
+        # Rack elevation, desktop map and mobile warehouse views must bind to
+        # the same formal rack cell.  Keep these fields explicit in the twin
+        # dashboard contract instead of making consumers infer a rack from
+        # geometry, display names or array order.
+        "map_rack_id": row.map_rack_id,
+        "rack_display_name": row.rack_display_name,
+        "level_no": row.level_no,
+        "slot_no": row.slot_no,
+        "address_kind": row.address_kind,
+        "address_version": row.address_version,
         "floor_code": _floor_key(row.warehouse_floor),
         "floor_number": row.warehouse_floor,
         "floor_name": floor.floor_name if floor is not None else None,

@@ -309,6 +309,15 @@ class WarehouseLocation(Base):
         Index("ix_warehouse_locations_address_area", "address_area_id"),
         Index("ix_warehouse_locations_map_rack", "map_rack_id", "is_active"),
         Index(
+            "uq_warehouse_locations_map_rack_cell",
+            "map_rack_id",
+            "level_no",
+            "slot_no",
+            unique=True,
+            sqlite_where=text("map_rack_id IS NOT NULL"),
+            postgresql_where=text("map_rack_id IS NOT NULL"),
+        ),
+        Index(
             "uq_warehouse_locations_rack_path",
             "address_area_id",
             "rack_code",

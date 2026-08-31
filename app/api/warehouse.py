@@ -331,6 +331,7 @@ from app.services.warehouse_location_address import (
 )
 from app.services.warehouse_rack_cells import (
     WarehouseRackCellSyncError,
+    preview_legacy_rack_cell_bindings,
     sync_published_rack_cells,
 )
 from app.services.requisition_quantities import cutting_factor, normalize_cutting_mode
@@ -2173,13 +2174,17 @@ def _location_dict(
         "placement_status": getattr(row, "placement_status", None) or "unplaced",
         "is_active": row.is_active,
         **projection,
+        "remarks": row.remarks,
+        **address_payload,
+        # The generic address payload cannot know the live map/layout tokens.
+        # Keep the canonical projection values last so a response never turns
+        # a valid concurrency token into ``None``.
         "layout_version": (
             int(layout.version)
             if isinstance(layout, Floor3LocationLayout)
             else None
         ),
-        "remarks": row.remarks,
-        **address_payload,
+        "published_map_revision": projection.get("published_map_revision"),
     }
 
 
@@ -9581,10 +9586,38 @@ class TwinLayoutDraftValidatePayload(BaseModel):
     expected_revision: str = Field(min_length=1, max_length=64)
 
 
+class LegacyRackBindingSelection(BaseModel):
+    binding_key: str = Field(min_length=3, max_length=120)
+    map_rack_id: str = Field(min_length=1, max_length=80)
+
+    @field_validator("binding_key", "map_rack_id")
+    @classmethod
+    def normalize_binding_identity(cls, value: str) -> str:
+        return value.strip()
+
+
 class TwinLayoutDraftPublishPayload(BaseModel):
     expected_published_revision: str = Field(min_length=1, max_length=64)
     expected_draft_revision: str = Field(min_length=1, max_length=64)
     operation_key: str = Field(min_length=8, max_length=120)
+    legacy_rack_binding_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    legacy_rack_bindings: list[LegacyRackBindingSelection] = Field(
+        default_factory=list, max_length=100
+    )
+    legacy_rack_bindings_confirmed: bool = False
+
+    @model_validator(mode="after")
+    def validate_legacy_rack_binding_confirmation(self):
+        has_binding_facts = bool(
+            self.legacy_rack_binding_fingerprint or self.legacy_rack_bindings
+        )
+        if has_binding_facts and not self.legacy_rack_bindings_confirmed:
+            raise ValueError("旧货位绑定必须由管理员明确确认")
+        if self.legacy_rack_bindings_confirmed and not self.legacy_rack_binding_fingerprint:
+            raise ValueError("旧货位绑定缺少预览指纹")
+        return self
 
 
 class RackLevelLabelPrintPayload(BaseModel):
@@ -10237,6 +10270,28 @@ def _claim_floor_projection_for_layout_write(
     # never expire unrelated dirty business rows in this shared transaction.
 
 
+@router.get("/twin-layout/floors/{floor_code}/draft/rack-cell-bindings/preview")
+def preview_twin_layout_legacy_rack_bindings(
+    floor_code: str,
+    expected_revision: str = Query(min_length=1, max_length=64),
+    db: Session = Depends(get_db),
+    _user: User = Depends(admin_only),
+) -> dict:
+    """Preview exact old-location bindings; this endpoint is strictly read-only."""
+
+    try:
+        floor_layout = load_warehouse_twin_layout_draft(floor_code)
+    except WarehouseTwinLayoutEditError as error:
+        _handle_twin_layout_edit_error(error)
+    revision = str(floor_layout.get("revision") or "").strip()
+    if revision != expected_revision:
+        raise HTTPException(
+            status_code=409,
+            detail="仓库布局草稿已变化，请刷新后重新预览旧货位绑定。",
+        )
+    return preview_legacy_rack_cell_bindings(db, floor_layout=floor_layout)
+
+
 @router.post("/twin-layout/floors/{floor_code}/draft/publish")
 def publish_twin_layout_draft(
     floor_code: str,
@@ -10336,6 +10391,16 @@ def _publish_twin_layout_draft_locked(
             db,
             floor_layout=load_warehouse_twin_floor(floor_code),
             operator_id=user.id,
+            expected_legacy_binding_fingerprint=(
+                payload.legacy_rack_binding_fingerprint
+                if payload.legacy_rack_bindings_confirmed
+                else None
+            ),
+            confirmed_legacy_bindings=(
+                [item.model_dump() for item in payload.legacy_rack_bindings]
+                if payload.legacy_rack_bindings_confirmed
+                else None
+            ),
         )
         rack_master_changed = any(
             (
@@ -10343,6 +10408,7 @@ def _publish_twin_layout_draft_locked(
                 rack_cell_sync.enabled_location_ids,
                 rack_cell_sync.disabled_location_ids,
                 rack_cell_sync.updated_location_ids,
+                rack_cell_sync.bound_legacy_location_ids,
             )
         )
         _validate_published_area_layouts_for_floor(
@@ -10397,6 +10463,9 @@ def _publish_twin_layout_draft_locked(
                 "rack_cell_updated_location_ids": list(
                     rack_cell_sync.updated_location_ids
                 ),
+                "rack_cell_bound_legacy_location_ids": list(
+                    rack_cell_sync.bound_legacy_location_ids
+                ),
                 "inventory_changed": False,
             },
             )
@@ -10444,6 +10513,9 @@ def _publish_twin_layout_draft_locked(
         "formal_area_count": len(published_policies),
         "legacy_area_name_update_count": int(
             getattr(published_policies, "legacy_name_update_count", 0)
+        ),
+        "bound_legacy_location_ids": list(
+            rack_cell_sync.bound_legacy_location_ids
         ),
     }
 

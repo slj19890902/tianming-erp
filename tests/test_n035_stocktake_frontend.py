@@ -61,6 +61,9 @@ def test_mobile_stocktake_uses_stocktake_api_and_never_direct_adjust() -> None:
     assert "expected_version" in MOBILE
     assert "expected_available" in MOBILE
     assert "expected_reserved" in MOBILE
+    assert "location_address_version" in MOBILE
+    assert "location_position_status" in MOBILE
+    assert "published_map_revision" in MOBILE
 
 
 def test_mobile_stocktake_renders_all_lots_and_requires_every_count() -> None:
@@ -162,7 +165,7 @@ def test_mobile_snapshot_submit_and_retry_idempotency_behavior(tmp_path: Path) -
         )
     )
     harness = f"""
-const state={{selectedLocation:{{id:3}},locked:false,submitting:false,clientLineIds:{{7:"line-7"}},lotSnapshots:{{}},submitIdempotencyKey:null}};
+const state={{selectedLocation:{{id:3,layout_version:1,address_version:2,position_status:"mapped",published_map_revision:"map-rev-1"}},locked:false,submitting:false,clientLineIds:{{7:"line-7"}},lotSnapshots:{{}},submitIdempotencyKey:null}};
 const pick=(row,keys,fallback=null)=>{{for(const key of keys){{if(row&&row[key]!==undefined&&row[key]!==null)return row[key]}}return fallback}};
 let keyCounter=0;
 function idempotencyKey(){{keyCounter+=1;return `key-${{keyCounter}}`}}
@@ -190,6 +193,9 @@ async function api(url,options){{requests.push(JSON.parse(options.body));if(!suc
   expect(firstItem.expected_version===4,"version snapshot must be submitted");
   expect(firstItem.expected_available===10,"available snapshot must be submitted");
   expect(firstItem.expected_reserved===2,"reserved snapshot must be submitted");
+  expect(requests[0].location_address_version===2,"address version must be submitted");
+  expect(requests[0].location_position_status==="mapped","position status must be submitted");
+  expect(requests[0].published_map_revision==="map-rev-1","map revision must be submitted");
   resetMobileSubmitAttempt();
   await submitStocktake();
   expect(requests[2].idempotency_key!==requests[1].idempotency_key,"content change reset must create a new key");

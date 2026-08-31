@@ -81,6 +81,7 @@ from app.models.warehouse_inventory import (
 from app.services.warehouse_location_address import (
     employee_area_name,
     location_address_payload,
+    rack_cell_identity_payload,
 )
 from app.services.audit_log import append_audit_event
 from app.services.location_candidates import (
@@ -1074,6 +1075,13 @@ def _position_payload(
             "employee_location_name": "尚未绑定正式位置",
             "floor": None,
             "area_code": None,
+            "map_rack_id": None,
+            "rack_display_name": None,
+            "level_no": None,
+            "slot_no": None,
+            "address_version": None,
+            "layout_version": None,
+            "published_map_revision": None,
             "pallet_code": None,
             "pallet_projection_status": "missing_current_pallet",
             "quantity_available": lot.quantity_available,
@@ -1119,6 +1127,14 @@ def _position_payload(
         position_status=position_status,
         area_sequence=(int(context["area_sequence"]) if context.get("area_sequence") else None),
     )
+    layout = context.get("layout")
+    rack_identity = {
+        **rack_cell_identity_payload(location),
+        "layout_version": (
+            int(layout.version) if isinstance(layout, Floor3LocationLayout) else None
+        ),
+        "published_map_revision": projection.get("published_map_revision"),
+    }
     return {
         "lot_id": lot.id,
         "lot_version": lot.version,
@@ -1131,6 +1147,7 @@ def _position_payload(
         "employee_location_name": address["employee_location_name"],
         "floor": location.warehouse_floor,
         "area_code": location.area_code,
+        **rack_identity,
         "pallet_code": (
             pallet.pallet_code if pallet is not None else None
         ),
@@ -2730,19 +2747,29 @@ def product_inventory(
 class MobileWarehouseMovePayload(BaseModel):
     expected_version: int = Field(gt=0)
     quantity: int = Field(gt=0)
+    expected_source_location_id: int = Field(gt=0)
+    expected_source_address_version: int = Field(gt=0)
+    expected_source_layout_version: int = Field(gt=0)
+    expected_source_map_revision: str = Field(min_length=1, max_length=64)
     target_location_id: int = Field(gt=0)
     expected_target_layout_version: int = Field(gt=0)
+    expected_target_address_version: int = Field(gt=0)
+    expected_target_map_revision: str = Field(min_length=1, max_length=64)
     idempotency_key: str = Field(min_length=1, max_length=100)
     physical_move_confirmed: bool
     location_discrepancy_id: int | None = Field(default=None, gt=0)
     expected_discrepancy_version: int | None = Field(default=None, gt=0)
 
-    @field_validator("idempotency_key")
+    @field_validator(
+        "idempotency_key",
+        "expected_source_map_revision",
+        "expected_target_map_revision",
+    )
     @classmethod
     def strip_move_key(cls, value: str) -> str:
         text = value.strip()
         if not text:
-            raise ValueError("请求标识不能为空")
+            raise ValueError("请求标识和地图版本不能为空")
         return text
 
 
@@ -2892,6 +2919,7 @@ def _mobile_location_is_published(db: Session, location: WarehouseLocation) -> b
 def _mobile_goods_payload(lot: InventoryLot) -> dict:
     if lot.finished_detail is not None:
         detail = lot.finished_detail
+        product_id = detail.product_id
         specification = dimension_specification(
             detail.length_mm,
             detail.width_mm,
@@ -2902,6 +2930,7 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
         product_name = detail.product_name_snapshot
     else:
         detail = lot.semi_finished_detail
+        product_id = None
         specification = (
             f"{detail.board_length_mm}×{detail.board_width_mm}mm"
             if detail is not None
@@ -2919,6 +2948,7 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
         "lot_version": int(lot.version),
         "inventory_type": lot.inventory_type,
         "customer_id": _mobile_lot_customer_id(lot),
+        "product_id": int(product_id) if product_id is not None else None,
         "customer_name": customer_name,
         "product_code": product_code,
         "product_name": product_name,
@@ -2928,6 +2958,7 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
         "quantity_damaged": damaged_quantity,
         "quantity_movable": movable_quantity,
         "quantity_total": movable_quantity + damaged_quantity,
+        "status": lot.status,
         "unit": "只" if lot.inventory_type == "finished" else "张",
         "stock_date": lot.stock_date,
         "last_movement_at": utc_naive_to_api(lot.last_movement_at),
@@ -2938,21 +2969,6 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
             and movable_quantity > 0
         ),
     }
-
-
-def _mobile_finished_signature(lot: InventoryLot) -> tuple[object, ...] | None:
-    detail = lot.finished_detail
-    if detail is None or lot.inventory_type != "finished":
-        return None
-    return (
-        int(detail.owner_customer_id) if detail.owner_customer_id is not None else None,
-        int(detail.product_id) if detail.product_id is not None else None,
-        str(detail.inventory_code_snapshot or "").strip(),
-        int(detail.length_mm or 0),
-        int(detail.width_mm or 0),
-        int(detail.height_mm or 0),
-        str(lot.unit or ""),
-    )
 
 
 def _mobile_location_summary(
@@ -2971,12 +2987,20 @@ def _mobile_location_summary(
             else None
         ),
     )
+    layout = context.get("layout")
     return {
         "location_id": int(location.id),
         "location_code": location.location_code,
         "employee_location_name": address["employee_location_name"],
         "floor": location.warehouse_floor,
         "area_code": location.area_code,
+        **rack_cell_identity_payload(location),
+        "layout_version": (
+            int(layout.version)
+            if isinstance(layout, Floor3LocationLayout)
+            else None
+        ),
+        "published_map_revision": projection.get("published_map_revision"),
         "position_status": projection["position_status"],
         "map_issue": projection["map_issue"],
     }
@@ -3055,6 +3079,35 @@ def mobile_warehouse_map_floors(
         "can_execute": has_permission(user, "warehouse.execute"),
         "can_correct": has_permission(user, "warehouse.correct"),
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
+    }
+
+
+@router.get("/warehouse/map/locations/{location_id}")
+def mobile_warehouse_map_location_identity(
+    location_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read_inventory),
+) -> dict:
+    """Resolve a stable location deep link before choosing floor and area."""
+
+    _no_store(response)
+    row = next(
+        (
+            item
+            for item in list_operational_locations(db)
+            if int(item.location.id) == int(location_id)
+        ),
+        None,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="仓库货位不存在或尚未启用")
+    payload = operational_location_payload(row)
+    return {
+        **payload,
+        "location_id": int(row.location.id),
+        "floor_code": _mobile_floor_code(row),
+        "area_code": str(row.location.area_code or "").strip().upper(),
     }
 
 
@@ -3233,6 +3286,12 @@ def mobile_warehouse_map_area(
                 "current_address_name": canonical["current_address_name"],
                 "employee_location_name": canonical["employee_location_name"],
                 "area_code": normalized_area,
+                "map_rack_id": canonical["map_rack_id"],
+                "rack_display_name": canonical["rack_display_name"],
+                "level_no": canonical["level_no"],
+                "slot_no": canonical["slot_no"],
+                "address_version": canonical["address_version"],
+                "layout_version": canonical["layout_version"],
                 "position_status": canonical["position_status"],
                 "map_issue": canonical["map_issue"],
                 "published_map_revision": canonical["published_map_revision"],
@@ -3411,6 +3470,17 @@ def search_mobile_warehouse_physical_inventory(
                     "employee_location_name": address["employee_location_name"],
                     "floor": location.warehouse_floor,
                     "area_code": location.area_code,
+                    **rack_cell_identity_payload(location),
+                    "layout_version": (
+                        int(context["layout"].version)
+                        if isinstance(
+                            context.get("layout"), Floor3LocationLayout
+                        )
+                        else None
+                    ),
+                    "published_map_revision": projection.get(
+                        "published_map_revision"
+                    ),
                     "position_status": projection["position_status"],
                 },
             }
@@ -3450,6 +3520,7 @@ def mobile_move_warehouse_lot(
     )
     customer_id = _mobile_lot_customer_id(source_lot)
     discrepancy: WarehouseLocationDiscrepancy | None = None
+    discrepancy_already_resolved = False
     if payload.location_discrepancy_id is not None:
         if not has_permission(user, "warehouse.correct"):
             raise HTTPException(status_code=403, detail="当前账号没有仓库位置纠正权限")
@@ -3467,67 +3538,17 @@ def mobile_move_warehouse_lot(
             )
             if transfer is None or transfer.idempotency_key != payload.idempotency_key:
                 raise HTTPException(status_code=409, detail="该位置不符报告已经处理")
-            replay_source = _require_mobile_lot(
-                db,
-                lot_id=int(transfer.source_lot_id),
-                visible_customer_ids=visible_customer_ids,
-            )
-            replay_target = _require_mobile_lot(
-                db,
-                lot_id=int(transfer.target_lot_id),
-                visible_customer_ids=visible_customer_ids,
-            )
-            return {
-                "message": "现场错位货物已搬到正确货位，红色标记已关闭",
-                "idempotent_replay": True,
-                "transfer_id": int(transfer.id),
-                "resolved_location_discrepancy_id": int(discrepancy.id),
-                "source_lot": _mobile_goods_payload(replay_source),
-                "target_lot": _mobile_goods_payload(replay_target),
-            }
-        if (
+            discrepancy_already_resolved = True
+        elif (
             discrepancy.status != "open"
             or int(discrepancy.version)
             != int(payload.expected_discrepancy_version or 0)
         ):
             raise HTTPException(status_code=409, detail="位置不符报告状态已变化，请刷新后重试")
-        if source_lot.warehouse_location_id != discrepancy.registered_location_id:
+        elif source_lot.warehouse_location_id != discrepancy.registered_location_id:
             raise HTTPException(status_code=409, detail="库存登记位置已变化，请刷新后重新核对")
-        if int(discrepancy.reported_quantity) != int(payload.quantity):
+        elif int(discrepancy.reported_quantity) != int(payload.quantity):
             raise HTTPException(status_code=409, detail="请一次搬完该红色标记记录的现场数量")
-    target = db.scalar(
-        select(WarehouseLocation)
-        .options(selectinload(WarehouseLocation.floor3_layout))
-        .where(WarehouseLocation.id == payload.target_location_id)
-    )
-    if target is None or not _mobile_location_is_published(db, target):
-        raise HTTPException(status_code=409, detail="目标位置尚未正式发布，不能执行搬运")
-    target_positive_lots = list(
-        db.scalars(
-            select(InventoryLot)
-            .options(*_mobile_lot_options())
-            .where(
-                InventoryLot.warehouse_location_id == target.id,
-                InventoryLot.id != source_lot.id,
-                InventoryLot.status.in_(("active", "frozen")),
-                (
-                    InventoryLot.quantity_available
-                    + InventoryLot.quantity_reserved
-                    + InventoryLot.quantity_damaged
-                )
-                > 0,
-            )
-        ).all()
-    )
-    source_signature = _mobile_finished_signature(source_lot)
-    if any(
-        _mobile_finished_signature(target_lot) != source_signature
-        for target_lot in target_positive_lots
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="目标货位已有不同客户、存货编码或规格的货物；请先标红核对，不能直接混放",
-        )
     try:
         result = transfer_finished_lot_between_locations(
             db,
@@ -3535,11 +3556,24 @@ def mobile_move_warehouse_lot(
             expected_version=payload.expected_version,
             quantity=payload.quantity,
             location_id=payload.target_location_id,
+            expected_source_location_id=payload.expected_source_location_id,
+            expected_source_address_version=payload.expected_source_address_version,
+            expected_source_layout_version=payload.expected_source_layout_version,
+            expected_source_map_revision=payload.expected_source_map_revision,
             expected_target_layout_version=payload.expected_target_layout_version,
+            expected_target_address_version=payload.expected_target_address_version,
+            expected_target_map_revision=payload.expected_target_map_revision,
             operator_id=user.id,
             idempotency_key=payload.idempotency_key,
         )
-        if discrepancy is not None:
+        if discrepancy_already_resolved:
+            if (
+                discrepancy is None
+                or discrepancy.resolution_transfer_id != result.transfer.id
+                or not result.replayed
+            ):
+                raise WarehouseInventoryError("该位置不符报告已经由其他请求处理", 409)
+        elif discrepancy is not None:
             discrepancy.status = "resolved"
             discrepancy.version = int(discrepancy.version) + 1
             discrepancy.resolved_by = user.id
@@ -3567,8 +3601,23 @@ def mobile_move_warehouse_lot(
                     "target_lot_id": result.target_lot.id,
                     "source_location_id": result.transfer.source_location_id,
                     "target_location_id": result.transfer.target_location_id,
+                    "expected_source_address_version": (
+                        payload.expected_source_address_version
+                    ),
+                    "expected_source_layout_version": (
+                        payload.expected_source_layout_version
+                    ),
+                    "expected_source_map_revision": (
+                        payload.expected_source_map_revision
+                    ),
                     "expected_target_layout_version": (
                         payload.expected_target_layout_version
+                    ),
+                    "expected_target_address_version": (
+                        payload.expected_target_address_version
+                    ),
+                    "expected_target_map_revision": (
+                        payload.expected_target_map_revision
                     ),
                     "quantity": payload.quantity,
                     "idempotency_key": payload.idempotency_key,

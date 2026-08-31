@@ -858,6 +858,7 @@ def _apply_existing_stocktakes(
     results: list[dict[str, object]] = []
     for location_id, location_lines in sorted(grouped.items()):
         location_layout_versions: set[int | None] = set()
+        location_identity_snapshots: set[tuple[int, str, str | None]] = set()
         for line in location_lines:
             evidence = (
                 line.match_evidence_json
@@ -865,20 +866,68 @@ def _apply_existing_stocktakes(
                 else {}
             )
             location_evidence = evidence.get("location")
+            requested_location = evidence.get("requested_location")
+            if (
+                isinstance(requested_location, dict)
+                and int(requested_location.get("target_location_id") or 0)
+                == location_id
+            ):
+                # A confirmed pallet move happens before the stocktake.  The
+                # target snapshot exported with that move is therefore the
+                # only valid location identity for the following count.
+                location_evidence = requested_location
+            evidence_location_id = (
+                int(
+                    location_evidence.get("id")
+                    or location_evidence.get("target_location_id")
+                    or 0
+                )
+                if isinstance(location_evidence, dict)
+                else 0
+            )
             snapshot_version: int | None = None
             if (
                 isinstance(location_evidence, dict)
-                and int(location_evidence.get("id") or 0) == location_id
+                and evidence_location_id == location_id
                 and location_evidence.get("layout_version") is not None
             ):
                 snapshot_version = int(location_evidence["layout_version"])
             location_layout_versions.add(snapshot_version)
+            if (
+                not isinstance(location_evidence, dict)
+                or evidence_location_id != location_id
+                or location_evidence.get("address_version") is None
+                or not str(location_evidence.get("position_status") or "").strip()
+                or "published_map_revision" not in location_evidence
+            ):
+                raise _error(
+                    "盘点表缺少货位地址或正式地图快照，请重新导出盘点表",
+                    code="INVENTORY_ONBOARDING_POSTING_LOCATION_IDENTITY_STALE",
+                )
+            location_identity_snapshots.add(
+                (
+                    int(location_evidence["address_version"]),
+                    str(location_evidence["position_status"]).strip(),
+                    str(location_evidence.get("published_map_revision") or "").strip()
+                    or None,
+                )
+            )
         if len(location_layout_versions) != 1:
             raise _error(
                 "同一盘点位置的地图版本快照不一致，请重新导出盘点表",
                 code="INVENTORY_ONBOARDING_POSTING_LOCATION_LAYOUT_STALE",
             )
         location_layout_version = next(iter(location_layout_versions))
+        if len(location_identity_snapshots) != 1:
+            raise _error(
+                "同一盘点位置的地址或正式地图快照不一致，请重新导出盘点表",
+                code="INVENTORY_ONBOARDING_POSTING_LOCATION_IDENTITY_STALE",
+            )
+        (
+            location_address_version,
+            location_position_status,
+            published_map_revision,
+        ) = next(iter(location_identity_snapshots))
         by_lot = {
             int(line.existing_lot_id): line for line in location_lines
         }
@@ -922,6 +971,9 @@ def _apply_existing_stocktakes(
                 ),
                 submitter=operator,
                 location_layout_version=location_layout_version,
+                location_address_version=location_address_version,
+                location_position_status=location_position_status,
+                published_map_revision=published_map_revision,
             )
             order = stocktake_service.approve_stocktake(
                 db,

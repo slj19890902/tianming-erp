@@ -59,6 +59,18 @@ class StocktakeOrder(Base):
     location_layout_version: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
+    # Stable physical-address snapshots.  They prevent a phone submission or
+    # later approval from applying after a rack is rebound or a published map
+    # has changed while the operator still has an older page open.
+    location_address_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    location_position_status: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    published_map_revision: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     status: Mapped[str] = mapped_column(
         String(20), default="draft", server_default="draft", nullable=False
     )

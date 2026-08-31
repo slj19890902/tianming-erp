@@ -260,6 +260,9 @@ def _submission_payload(
     return {
         "location_id": location_id,
         "location_layout_version": response.json()["layout_version"],
+        "location_address_version": response.json()["address_version"],
+        "location_position_status": response.json()["position_status"],
+        "published_map_revision": response.json()["published_map_revision"],
         "items": [
             {
                 "inventory_lot_id": row["inventory_lot_id"],
@@ -416,6 +419,10 @@ def test_unplaced_location_is_hidden_and_cannot_start_stocktake(
             "/api/warehouse/stocktakes",
             json={
                 "location_id": ids["unplaced_location"],
+                "location_layout_version": None,
+                "location_address_version": 1,
+                "location_position_status": "unplaced",
+                "published_map_revision": None,
                 "items": [
                     {
                         "inventory_lot_id": ids["lot1"],
@@ -1098,6 +1105,10 @@ def test_permissions_workshop_can_count_admin_can_review_and_scope_is_blocked(
         ).status_code == 403
         restricted_payload = {
             "location_id": ids["location"],
+            "location_layout_version": None,
+            "location_address_version": 1,
+            "location_position_status": "area_only",
+            "published_map_revision": None,
             "items": [
                 {
                     "inventory_lot_id": ids["lot1"],

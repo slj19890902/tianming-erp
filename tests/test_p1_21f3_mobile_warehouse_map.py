@@ -133,6 +133,42 @@ def _add_map_target(
         return int(source_lot.id), int(target.id)
 
 
+def _mobile_move_identity(
+    client: TestClient,
+    *,
+    source_lot_id: int,
+    target_location_id: int,
+) -> dict[str, object]:
+    response = client.get(
+        "/api/mobile/erp/warehouse/map/floors/3F",
+        params={"area_code": "C1"},
+    )
+    assert response.status_code == 200, response.text
+    locations = response.json()["locations"]
+    source = next(
+        location
+        for location in locations
+        if any(
+            int(good["lot_id"]) == int(source_lot_id)
+            for good in location["goods"]
+        )
+    )
+    target = next(
+        location
+        for location in locations
+        if int(location["location_id"]) == int(target_location_id)
+    )
+    return {
+        "expected_source_location_id": source["location_id"],
+        "expected_source_address_version": source["address_version"],
+        "expected_source_layout_version": source["layout_version"],
+        "expected_source_map_revision": source["published_map_revision"],
+        "expected_target_address_version": target["address_version"],
+        "expected_target_layout_version": target["layout_version"],
+        "expected_target_map_revision": target["published_map_revision"],
+    }
+
+
 def test_mobile_map_uses_published_geometry_without_pallet_identifiers(
     mobile_erp_app,
 ) -> None:
@@ -196,6 +232,22 @@ def test_mobile_map_uses_published_geometry_without_pallet_identifiers(
             "z_index": 0,
             "version": 1,
         }
+        assert target["address_version"] == 1
+        assert target["layout_version"] == 1
+        assert target["published_map_revision"]
+        assert {"map_rack_id", "rack_display_name", "level_no", "slot_no"} <= set(
+            target
+        )
+        identity = client.get(
+            f"/api/mobile/erp/warehouse/map/locations/{target_location_id}"
+        )
+        assert identity.status_code == 200, identity.text
+        assert identity.json()["location_id"] == target_location_id
+        assert identity.json()["floor_code"] == "3F"
+        assert identity.json()["area_code"] == "C1"
+        assert identity.json()["published_map_revision"] == target[
+            "published_map_revision"
+        ]
         assert any(
             good["lot_id"] == source_lot_id
             for row in payload["locations"]
@@ -314,25 +366,44 @@ def test_confirmed_partial_move_preserves_total_age_reservations_and_idempotency
     source_lot_id, target_location_id = _add_map_target(factory)
     with TestClient(app) as client:
         _login(client, "mobile-admin")
+        move_identity = _mobile_move_identity(
+            client,
+            source_lot_id=source_lot_id,
+            target_location_id=target_location_id,
+        )
         not_confirmed = client.post(
             f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
             json={
+                **move_identity,
                 "expected_version": 1,
                 "quantity": 50,
                 "target_location_id": target_location_id,
-                "expected_target_layout_version": 1,
                 "idempotency_key": "f3-move-not-confirmed",
                 "physical_move_confirmed": False,
             },
         )
         assert not_confirmed.status_code == 409
-        moved = client.post(
+        stale_map = client.post(
             f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
             json={
+                **move_identity,
+                "expected_source_map_revision": "stale-map-revision",
                 "expected_version": 1,
                 "quantity": 50,
                 "target_location_id": target_location_id,
-                "expected_target_layout_version": 1,
+                "idempotency_key": "f3-move-stale-map",
+                "physical_move_confirmed": True,
+            },
+        )
+        assert stale_map.status_code == 409, stale_map.text
+        assert "地图版本" in stale_map.text
+        moved = client.post(
+            f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
+            json={
+                **move_identity,
+                "expected_version": 1,
+                "quantity": 50,
+                "target_location_id": target_location_id,
                 "idempotency_key": "f3-move-001",
                 "physical_move_confirmed": True,
             },
@@ -342,10 +413,10 @@ def test_confirmed_partial_move_preserves_total_age_reservations_and_idempotency
         replay = client.post(
             f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
             json={
+                **move_identity,
                 "expected_version": 1,
                 "quantity": 50,
                 "target_location_id": target_location_id,
-                "expected_target_layout_version": 1,
                 "idempotency_key": "f3-move-001",
                 "physical_move_confirmed": True,
             },
@@ -355,10 +426,10 @@ def test_confirmed_partial_move_preserves_total_age_reservations_and_idempotency
         stale = client.post(
             f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
             json={
+                **move_identity,
                 "expected_version": 1,
                 "quantity": 1,
                 "target_location_id": target_location_id,
-                "expected_target_layout_version": 1,
                 "idempotency_key": "f3-move-stale-version",
                 "physical_move_confirmed": True,
             },
@@ -398,6 +469,59 @@ def test_confirmed_partial_move_preserves_total_age_reservations_and_idempotency
             )
         )
         assert source_item is not None and source_item.quantity == Decimal("30")
+
+
+def test_mobile_move_claims_both_locations_in_stable_order(
+    mobile_erp_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.services.warehouse_inventory as inventory_service
+
+    app, _ids, factory = mobile_erp_app
+    source_lot_id, target_location_id = _add_map_target(
+        factory,
+        code="C1-L02-ORDERED",
+    )
+    claims: list[int] = []
+    real_claim = inventory_service.claim_active_placed_location
+
+    def tracking_claim(db, location_id: int, *, expected_layout_version=None):
+        claims.append(int(location_id))
+        return real_claim(
+            db,
+            location_id,
+            expected_layout_version=expected_layout_version,
+        )
+
+    monkeypatch.setattr(
+        inventory_service,
+        "claim_active_placed_location",
+        tracking_claim,
+    )
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        identity = _mobile_move_identity(
+            client,
+            source_lot_id=source_lot_id,
+            target_location_id=target_location_id,
+        )
+        moved = client.post(
+            f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
+            json={
+                **identity,
+                "expected_version": 1,
+                "quantity": 1,
+                "target_location_id": target_location_id,
+                "idempotency_key": "f3-move-ordered-claims",
+                "physical_move_confirmed": True,
+            },
+        )
+        assert moved.status_code == 200, moved.text
+
+    expected = sorted(
+        [int(identity["expected_source_location_id"]), int(target_location_id)]
+    )
+    assert claims[:2] == expected
 
 
 def test_employee_report_is_read_only_until_authorized_correction(
@@ -681,11 +805,16 @@ def test_discrepant_goods_can_move_to_another_position_and_close_report_atomical
         report = reported.json()["report"]
 
         _login(client, "mobile-admin")
+        move_identity = _mobile_move_identity(
+            client,
+            source_lot_id=source_lot_id,
+            target_location_id=target_location_id,
+        )
         move_payload = {
+            **move_identity,
             "expected_version": 1,
             "quantity": 80,
             "target_location_id": target_location_id,
-            "expected_target_layout_version": 1,
             "location_discrepancy_id": report["id"],
             "expected_discrepancy_version": 1,
             "idempotency_key": "f3-red-move-to-correct",
@@ -703,6 +832,12 @@ def test_discrepant_goods_can_move_to_another_position_and_close_report_atomical
         )
         assert replay.status_code == 200, replay.text
         assert replay.json()["idempotent_replay"] is True
+        changed_replay = client.post(
+            f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
+            json={**move_payload, "expected_source_map_revision": "different-map"},
+        )
+        assert changed_replay.status_code == 409, changed_replay.text
+        assert "同一请求标识" in changed_replay.text
 
     with factory() as db:
         row = db.get(WarehouseLocationDiscrepancy, report["id"])
@@ -763,13 +898,18 @@ def test_mobile_move_rejects_incompatible_occupied_target_but_allows_red_report(
 
     with TestClient(app) as client:
         _login(client, "mobile-admin")
+        move_identity = _mobile_move_identity(
+            client,
+            source_lot_id=source_lot_id,
+            target_location_id=target_location_id,
+        )
         blocked = client.post(
             f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
             json={
+                **move_identity,
                 "expected_version": 1,
                 "quantity": 80,
                 "target_location_id": target_location_id,
-                "expected_target_layout_version": 1,
                 "idempotency_key": "f3-incompatible-target",
                 "physical_move_confirmed": True,
             },
@@ -856,13 +996,18 @@ def test_whole_move_releases_source_projection_and_binds_target(
     source_lot_id, target_location_id = _add_map_target(factory, code="C1-L04")
     with TestClient(app) as client:
         _login(client, "mobile-admin")
+        move_identity = _mobile_move_identity(
+            client,
+            source_lot_id=source_lot_id,
+            target_location_id=target_location_id,
+        )
         moved = client.post(
             f"/api/mobile/erp/warehouse/lots/{source_lot_id}/moves",
             json={
+                **move_identity,
                 "expected_version": 1,
                 "quantity": 80,
                 "target_location_id": target_location_id,
-                "expected_target_layout_version": 1,
                 "idempotency_key": "f3-whole-move-001",
                 "physical_move_confirmed": True,
             },
@@ -1130,13 +1275,18 @@ def test_mobile_map_frontend_defers_reads_and_writes_only_after_final_confirm(
     for marker in (
         "浏览实测仓库地图（可选）",
         "/api/mobile/erp/warehouse/map/floors",
+        "/api/mobile/erp/warehouse/map/locations/",
         "warehouseMapGeneration",
         "generation !== state.warehouseMapGeneration",
         "createElementNS",
         "现场搬运完成，最终确认",
         "只上报位置不符，不改库存",
         "physical_move_confirmed: true",
-        "expected_target_layout_version: target.geometry.version",
+        "expected_source_location_id: ledgerSource.location_id",
+        "expected_source_layout_version: sourceLayoutVersion",
+        "expected_source_map_revision: ledgerSource.published_map_revision",
+        "expected_target_layout_version: targetLayoutVersion",
+        "expected_target_map_revision: target.published_map_revision",
         "observed_location_layout_version: target.geometry.version",
         "warehouse/location-discrepancies",
         "待纠正位置报告",

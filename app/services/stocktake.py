@@ -24,6 +24,7 @@ from app.services.location_candidates import (
     load_warehouse_location_projection_contexts,
     list_operational_locations,
     operational_location_issue,
+    warehouse_location_projection,
 )
 from app.services.product_specification import dimension_specification
 from app.services.warehouse_location_address import (
@@ -34,6 +35,22 @@ from app.services.warehouse_location_address import (
 
 
 COUNTABLE_LOT_STATUSES = frozenset({"active", "frozen"})
+
+
+def _location_identity_snapshot(
+    db: Session,
+    location: WarehouseLocation,
+) -> tuple[int, str, str | None]:
+    context = load_warehouse_location_projection_contexts(db, [location]).get(
+        int(location.id),
+        {},
+    )
+    projection = warehouse_location_projection(location, **context)
+    return (
+        int(location.address_version or 1),
+        str(projection["position_status"]),
+        str(projection.get("published_map_revision") or "").strip() or None,
+    )
 
 
 class StocktakeError(ValueError):
@@ -151,6 +168,12 @@ def _stocktake_address_payload(location: WarehouseLocation, candidate) -> dict:
         "current_address_code": payload["current_address_code"],
         "current_address_name": payload["current_address_name"],
         "employee_location_name": payload["employee_location_name"],
+        "map_rack_id": payload["map_rack_id"],
+        "rack_display_name": payload["rack_display_name"],
+        "level_no": payload["level_no"],
+        "slot_no": payload["slot_no"],
+        "address_kind": payload["address_kind"],
+        "address_version": payload["address_version"],
     }
 
 
@@ -210,6 +233,10 @@ def list_locations(db: Session) -> list[dict[str, object]]:
     for location, active_lot_count, frozen_lot_count, current_on_hand in rows:
         candidate = candidate_by_id[location.id]
         address_payload = _stocktake_address_payload(location, candidate)
+        projection = warehouse_location_projection(
+            location,
+            **dict(candidate.projection_context or {}),
+        )
         result.append({
             "id": location.id,
             "location_code": location.location_code,
@@ -254,7 +281,9 @@ def list_locations(db: Session) -> list[dict[str, object]]:
             ),
             **address_payload,
             "placement_status": location.placement_status or "placed",
+            "position_status": projection["position_status"],
             "layout_version": layout_versions.get(int(location.id)),
+            "published_map_revision": projection.get("published_map_revision"),
             "is_temporary": location.is_temporary,
             "active_lot_count": int(active_lot_count),
             "frozen_lot_count": int(frozen_lot_count),
@@ -336,6 +365,7 @@ def get_location_detail(db: Session, location_id: int) -> dict[str, object]:
             Floor3LocationLayout.location_id == location_id
         )
     )
+    projection = warehouse_location_projection(location, **projection_context)
     lots = db.scalars(_countable_lots_statement(location_id)).all()
     lot_rows = [lot_payload(lot) for lot in lots]
     pending_order = db.scalar(
@@ -355,9 +385,11 @@ def get_location_detail(db: Session, location_id: int) -> dict[str, object]:
         **current_address,
         "warehouse_type": location.warehouse_type,
         "area_code": location.area_code,
+        "position_status": projection["position_status"],
         "layout_version": (
             int(layout_version) if layout_version is not None else None
         ),
+        "published_map_revision": projection.get("published_map_revision"),
         "is_temporary": location.is_temporary,
         "active_lot_count": sum(lot.status == "active" for lot in lots),
         "frozen_lot_count": sum(lot.status == "frozen" for lot in lots),
@@ -409,6 +441,9 @@ def resolve_submission_replay(
     *,
     location_id: int,
     location_layout_version: int | None = None,
+    location_address_version: int,
+    location_position_status: str,
+    published_map_revision: str | None,
     items: list[dict[str, object]],
     idempotency_key: str,
 ) -> StocktakeOrder | None:
@@ -427,6 +462,9 @@ def resolve_submission_replay(
     if (
         existing.location_id != location_id
         or existing.location_layout_version != location_layout_version
+        or existing.location_address_version != location_address_version
+        or existing.location_position_status != location_position_status
+        or existing.published_map_revision != published_map_revision
         or existing_snapshots != _submitted_snapshots(items)
     ):
         raise StocktakeError(
@@ -445,16 +483,32 @@ def create_stocktake(
     idempotency_key: str,
     submitter: User,
     location_layout_version: int | None = None,
+    location_address_version: int,
+    location_position_status: str,
+    published_map_revision: str | None,
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> StocktakeOrder:
     key = idempotency_key.strip()
     if not key:
         raise StocktakeError("幂等键不能为空", code="STOCKTAKE_INVALID")
+    normalized_position_status = str(location_position_status or "").strip()
+    normalized_map_revision = (
+        str(published_map_revision or "").strip() or None
+    )
+    if location_address_version < 1 or not normalized_position_status:
+        raise StocktakeError(
+            "盘点库位身份令牌无效，请重新打开该库位",
+            409,
+            "STOCKTAKE_LOCATION_CHANGED",
+        )
     replay = resolve_submission_replay(
         db,
         location_id=location_id,
         location_layout_version=location_layout_version,
+        location_address_version=location_address_version,
+        location_position_status=normalized_position_status,
+        published_map_revision=normalized_map_revision,
         items=items,
         idempotency_key=key,
     )
@@ -485,6 +539,41 @@ def create_stocktake(
     if not claimed or normalized_current_layout_version != location_layout_version:
         raise StocktakeError(
             "盘点库位布局或状态已变化，请重新打开该库位后发起盘点",
+            409,
+            "STOCKTAKE_LOCATION_CHANGED",
+        )
+    # A concurrent request with the same key may have committed while this
+    # request waited for the floor/location claim.  Recheck before treating
+    # the existing submitted order as a different operation.
+    replay = resolve_submission_replay(
+        db,
+        location_id=location_id,
+        location_layout_version=location_layout_version,
+        location_address_version=location_address_version,
+        location_position_status=normalized_position_status,
+        published_map_revision=normalized_map_revision,
+        items=items,
+        idempotency_key=key,
+    )
+    if replay is not None:
+        return replay
+    location = db.get(WarehouseLocation, int(location_id), populate_existing=True)
+    if location is None:
+        raise StocktakeError(
+            "盘点库位已变化，请重新打开该库位",
+            409,
+            "STOCKTAKE_LOCATION_CHANGED",
+        )
+    current_address_version, current_position_status, current_map_revision = (
+        _location_identity_snapshot(db, location)
+    )
+    if (
+        current_address_version != location_address_version
+        or current_position_status != normalized_position_status
+        or current_map_revision != normalized_map_revision
+    ):
+        raise StocktakeError(
+            "盘点库位地址或正式地图已变化，请重新打开该库位后发起盘点",
             409,
             "STOCKTAKE_LOCATION_CHANGED",
         )
@@ -559,6 +648,9 @@ def create_stocktake(
         order_number=_order_number(),
         location_id=location.id,
         location_layout_version=location_layout_version,
+        location_address_version=current_address_version,
+        location_position_status=current_position_status,
+        published_map_revision=current_map_revision,
         status="draft",
         version=1,
         submitted_by=submitter.id,
@@ -606,6 +698,9 @@ def create_stocktake(
                 "location_id": location.id,
                 "location_code": location.location_code,
                 "location_layout_version": location_layout_version,
+                "location_address_version": current_address_version,
+                "location_position_status": current_position_status,
+                "published_map_revision": current_map_revision,
                 "idempotency_key": key,
                 "items": [
                     {
@@ -751,6 +846,9 @@ def approve_stocktake(
         select(
             StocktakeOrder.location_id,
             StocktakeOrder.location_layout_version,
+            StocktakeOrder.location_address_version,
+            StocktakeOrder.location_position_status,
+            StocktakeOrder.published_map_revision,
         ).where(StocktakeOrder.id == order_id)
     ).one_or_none()
     if order_location_snapshot is None:
@@ -759,7 +857,13 @@ def approve_stocktake(
             404,
             "STOCKTAKE_LOCATION_NOT_FOUND",
         )
-    location_id, location_layout_version = order_location_snapshot
+    (
+        location_id,
+        location_layout_version,
+        location_address_version,
+        location_position_status,
+        published_map_revision,
+    ) = order_location_snapshot
     try:
         claimed = claim_active_placed_location(
             db,
@@ -779,6 +883,29 @@ def approve_stocktake(
     if not claimed:
         raise StocktakeError(
             "盘点提交后库位已停用、尚未落位或状态已变化，请重新盘点",
+            409,
+            "STOCKTAKE_LOCATION_CHANGED",
+        )
+    location = db.get(WarehouseLocation, int(location_id), populate_existing=True)
+    if (
+        location is None
+        or location_address_version is None
+        or not str(location_position_status or "").strip()
+    ):
+        raise StocktakeError(
+            "盘点单缺少当前货位身份快照，请驳回后重新盘点",
+            409,
+            "STOCKTAKE_LOCATION_CHANGED",
+        )
+    current_identity = _location_identity_snapshot(db, location)
+    expected_identity = (
+        int(location_address_version),
+        str(location_position_status).strip(),
+        str(published_map_revision or "").strip() or None,
+    )
+    if current_identity != expected_identity:
+        raise StocktakeError(
+            "盘点提交后货位地址或正式地图已变化，请驳回后重新盘点",
             409,
             "STOCKTAKE_LOCATION_CHANGED",
         )
@@ -1038,6 +1165,9 @@ def order_payload(
         "number": order.order_number,
         "location_id": order.location_id,
         "location_layout_version": order.location_layout_version,
+        "location_address_version": order.location_address_version,
+        "location_position_status": order.location_position_status,
+        "published_map_revision": order.published_map_revision,
         "location_code": order.location.location_code,
         "location_name": current_address["employee_location_name"],
         "location_master_name": order.location.location_name,

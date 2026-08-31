@@ -267,6 +267,8 @@ def test_finance_monthly_workbench_has_four_actions_and_mobile_two_columns() -> 
         assert label in workbench
     assert 'v-if="canExportFinanceCosts"' in workbench
     assert 'v-else-if="!financeOverviewState.error"' in INDEX
+    assert "该月对账已开票" in INDEX
+    assert "该月确认对账对应开票" in INDEX
 
     action_start = INDEX.index("openFinanceMonthlyAction(action) {")
     action_end = INDEX.index("async exportFinanceManagementReport()", action_start)

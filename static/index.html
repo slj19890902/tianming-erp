@@ -4720,8 +4720,8 @@
                   </div>
                   <div class="finance-overview-grid">
                     <div class="panel finance-chart">
-                      <div class="toolbar"><div><div class="section-title">近六个月对比</div><div class="finance-legend"><span><i style="background:#167d74"></i>已确认对账</span><span><i style="background:#3b82f6"></i>已开票</span><span><i style="background:#d97706"></i>应付与支出</span></div></div></div>
-                      <div class="finance-trend-bars"><div v-for="row in financeOverview.trend" :key="row.month" class="finance-trend-month"><span class="income" :style="{height:financeTrendHeight(row.confirmed_statement_amount)}" :title="`已确认对账 ¥${money(row.confirmed_statement_amount)}`"></span><span class="invoice" :style="{height:financeTrendHeight(row.issued_invoice_amount)}" :title="`已开票 ¥${money(row.issued_invoice_amount)}`"></span><span class="expense" :style="{height:financeTrendHeight(row.payable_amount)}" :title="`应付支出 ¥${money(row.payable_amount)}`"></span></div></div>
+                      <div class="toolbar"><div><div class="section-title">近六个月对比</div><div class="finance-legend"><span><i style="background:#167d74"></i>已确认对账</span><span><i style="background:#3b82f6"></i>该月对账已开票</span><span><i style="background:#d97706"></i>应付与支出</span></div></div></div>
+                      <div class="finance-trend-bars"><div v-for="row in financeOverview.trend" :key="row.month" class="finance-trend-month"><span class="income" :style="{height:financeTrendHeight(row.confirmed_statement_amount)}" :title="`已确认对账 ¥${money(row.confirmed_statement_amount)}`"></span><span class="invoice" :style="{height:financeTrendHeight(row.issued_invoice_amount)}" :title="`该月确认对账对应开票 ¥${money(row.issued_invoice_amount)}`"></span><span class="expense" :style="{height:financeTrendHeight(row.payable_amount)}" :title="`应付支出 ¥${money(row.payable_amount)}`"></span></div></div>
                       <div class="finance-trend-labels"><span v-for="row in financeOverview.trend" :key="`label-${row.month}`">{{ row.month.slice(5) }}月</span></div>
                     </div>
                     <div class="panel">

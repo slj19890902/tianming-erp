@@ -17,6 +17,47 @@ branch_labels = None
 depends_on = None
 
 
+_RECEIPT_RESOLUTION_INSERT_TRIGGER = (
+    "trg_finance_receipt_resolution_action_insert"
+)
+_RECEIPT_RESOLUTION_UPDATE_TRIGGER = (
+    "trg_finance_receipt_resolution_action_update"
+)
+
+
+def _restore_receipt_resolution_guards() -> None:
+    if op.get_bind().dialect.name != "sqlite":
+        return
+    op.execute(f"DROP TRIGGER IF EXISTS {_RECEIPT_RESOLUTION_UPDATE_TRIGGER}")
+    op.execute(f"DROP TRIGGER IF EXISTS {_RECEIPT_RESOLUTION_INSERT_TRIGGER}")
+    op.execute(
+        f"""
+        CREATE TRIGGER {_RECEIPT_RESOLUTION_INSERT_TRIGGER}
+        BEFORE INSERT ON finance_return_receipt_items
+        FOR EACH ROW
+        WHEN NEW.resolution_action IS NOT NULL
+         AND NEW.resolution_action NOT IN
+             ('continue_delivery','accept_short','accept_over')
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid finance receipt resolution_action');
+        END
+        """
+    )
+    op.execute(
+        f"""
+        CREATE TRIGGER {_RECEIPT_RESOLUTION_UPDATE_TRIGGER}
+        BEFORE UPDATE OF resolution_action ON finance_return_receipt_items
+        FOR EACH ROW
+        WHEN NEW.resolution_action IS NOT NULL
+         AND NEW.resolution_action NOT IN
+             ('continue_delivery','accept_short','accept_over')
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid finance receipt resolution_action');
+        END
+        """
+    )
+
+
 def _assert_safe_downgrade() -> None:
     bind = op.get_bind()
     fact_checks = (
@@ -259,3 +300,7 @@ def downgrade() -> None:
         )
         batch.drop_column("settlement_entity_id")
     op.drop_table("finance_settlement_entities")
+    # The SQLite batch downgrade above recreates finance_return_receipt_items
+    # and therefore removes its N005 table-bound triggers.  gs54 still owns
+    # those guards, so a true round-trip must put them back before returning.
+    _restore_receipt_resolution_guards()

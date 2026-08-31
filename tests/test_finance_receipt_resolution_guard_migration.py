@@ -10,6 +10,7 @@ from alembic.config import Config
 
 REVISION = "iv57v8x9z46"
 DOWN_REVISION = "hu56v8x9z45"
+FORMAL_BASE_REVISION = "gs54v8x9z43"
 TRIGGERS = {
     "trg_finance_receipt_resolution_action_insert",
     "trg_finance_receipt_resolution_action_update",
@@ -58,5 +59,10 @@ def test_resolution_action_guards_restore_after_ht55_batch_rebuild(
 
     command.downgrade(config, DOWN_REVISION)
     assert not (TRIGGERS & _trigger_names(database_path))
+    command.upgrade(config, REVISION)
+    assert TRIGGERS <= _trigger_names(database_path)
+
+    command.downgrade(config, FORMAL_BASE_REVISION)
+    assert TRIGGERS <= _trigger_names(database_path)
     command.upgrade(config, REVISION)
     assert TRIGGERS <= _trigger_names(database_path)

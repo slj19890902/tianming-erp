@@ -35,7 +35,7 @@ def test_cancel_register_and_settle_are_single_flight_and_freeze_payload(tmp_pat
     cancel_body = _method_body("async cancelStatement(row) {", "closeModal() {")
     helper_source = INDEX[
         INDEX.index("financeManualMutationStorageKey(actorId) {") :
-        INDEX.index('exportStatement(row, format="xlsx") {')
+        INDEX.index("async registerInvoice(row) {")
     ].strip().rstrip(",")
     register_body = _method_body("async registerInvoice(row) {", "async settle(row) {")
     settle_body = _method_body("async settle(row) {", "beginBackupAction(action) {")
@@ -162,7 +162,7 @@ def test_uncertain_finance_attempt_restores_only_for_same_actor(tmp_path: Path) 
     assert node is not None, "Node.js is required for finance session regression"
     helper_source = INDEX[
         INDEX.index("financeManualMutationStorageKey(actorId) {") :
-        INDEX.index("exportStatement(row) {")
+        INDEX.index("async registerInvoice(row) {")
     ].strip().rstrip(",")
     script = f"""
 const stored = new Map();
@@ -232,7 +232,7 @@ def test_finance_attempt_ignores_stale_actor_callback_and_classifies_ambiguous_s
     assert node is not None, "Node.js is required for finance session regression"
     helper_source = INDEX[
         INDEX.index("financeManualMutationStorageKey(actorId) {") :
-        INDEX.index("exportStatement(row) {")
+        INDEX.index("async registerInvoice(row) {")
     ].strip().rstrip(",")
     settle_body = _method_body("async settle(row) {", "beginBackupAction(action) {")
     script = f"""
@@ -343,7 +343,7 @@ def test_finance_logout_and_auth_expiry_clear_only_in_memory_state() -> None:
 def test_finance_refresh_responses_cannot_cross_auth_generation(tmp_path: Path) -> None:
     node = shutil.which("node")
     assert node is not None, "Node.js is required for finance session isolation"
-    load_finance_body = _method_body("async loadFinance() {", "financeGroupKey(row) {")
+    load_finance_body = _method_body("async loadFinance() {", "async loadFinanceOverview() {")
     load_kpi_body = _method_body("async loadKpi() {", "async loadCustomers() {")
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;

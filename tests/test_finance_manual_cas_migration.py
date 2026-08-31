@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "gt55v8x9z44"
-DOWN_REVISION = "gs54v8x9z43"
+REVISION = "hu56v8x9z45"
+DOWN_REVISION = "ht55v8x9z44"
 CONFIRMATION_TRIGGERS = {
     "trg_finance_statements_confirmation_insert",
     "trg_finance_statements_confirmation_update",
@@ -49,20 +49,23 @@ def test_manual_finance_mutation_migration_roundtrip_and_fact_guard(
     monkeypatch.setenv("ERP_SECRET_KEY", "finance-manual-cas-migration-test")
     config = _config()
 
-    # Exercise this revision from its declared predecessor without replaying
-    # unrelated historical migrations.  In particular, fj45 must keep its
-    # RAW-001 fail-closed preflight; this test must not forge that evidence.
+    # Exercise this revision from its declared predecessor while constructing
+    # only the predecessor objects that this migration reads or changes.
     engine = create_sqlite_engine(database_path)
     User.__table__.create(engine)
     Customer.__table__.create(engine)
     with engine.begin() as connection:
         connection.exec_driver_sql(
             """
-            CREATE TABLE finance_statements (
-                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                statement_number VARCHAR(40) NOT NULL,
-                customer_id INTEGER NOT NULL,
-                statement_month VARCHAR(7) NOT NULL,
+                CREATE TABLE finance_statements (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    statement_number VARCHAR(40) NOT NULL,
+                    customer_id INTEGER NOT NULL,
+                    settlement_entity_id INTEGER,
+                    settlement_name_snapshot VARCHAR(200),
+                    settlement_customer_ids_snapshot_json TEXT,
+                    statement_cycle_start_day_snapshot INTEGER,
+                    statement_month VARCHAR(7) NOT NULL,
                 total_receivable NUMERIC(14, 2) NOT NULL,
                 total_gross_profit NUMERIC(14, 2) NOT NULL,
                 invoiced_amount NUMERIC(14, 2) NOT NULL,

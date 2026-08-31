@@ -4956,6 +4956,6 @@ legacy_ruida_* 原始层
 
 ## 2026-08-28 工业化目标模式候选交付（未正式发布）
 
-- 候选分支 `codex/factory-release-industrial-warehouse-20260828-r2` 已重整到实时正式基线 `fe93bb98`（v0.22.217）；最终候选 SHA 以 NAS 独立交付回执为准。
-- 候选新增唯一线性 migration `gt55v8x9z44`（父 revision `gs54v8x9z43`），用于人工开票/收款数据库幂等事实与账务 CAS；隔离副本必须完成 `gs54 → gt55 → gs54 → gt55` 后才可进入正式发布。
+- 候选分支 `codex/factory-release-industrial-warehouse-20260828-r2` 已重整到实时正式基线 `07cceb7a`（v0.22.219）；最终候选 SHA 以 NAS 独立交付回执为准。
+- 候选新增唯一线性 migration `hu56v8x9z45`（父 revision `ht55v8x9z44`），用于人工开票/收款数据库幂等事实与账务 CAS；隔离副本必须完成 `ht55 → hu56 → ht55 → hu56` 后才可进入正式发布。
 - 详细范围、自动验证、数据库边界和工厂执行顺序见 `docs/migration_reports/2026-08-28_INDUSTRIAL_TARGET_FULL_CHAIN_UAT.md` 与 `docs/migration_reports/2026-08-28_INDUSTRIAL_TARGET_FACTORY_HANDOFF.md`。当前状态为开发验证通过、候选已推送、正式 ERP 人工验收待完成；不得据此自动合并、迁移、重启或发布。

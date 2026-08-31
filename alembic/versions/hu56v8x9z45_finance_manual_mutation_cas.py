@@ -1,8 +1,8 @@
 """add database idempotency facts for manual finance mutations
 
-Revision ID: gt55v8x9z44
-Revises: gs54v8x9z43
-Create Date: 2026-08-27
+Revision ID: hu56v8x9z45
+Revises: ht55v8x9z44
+Create Date: 2026-08-31
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "gt55v8x9z44"
-down_revision = "gs54v8x9z43"
+revision = "hu56v8x9z45"
+down_revision = "ht55v8x9z44"
 branch_labels = None
 depends_on = None
 

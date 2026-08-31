@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PARENT = "aaa35v8x9z24"
 TARGET = "bbb36v8x9z25"
-INTEGRATION_HEAD = "gt55v8x9z44"
+INTEGRATION_HEAD = "hu56v8x9z45"
 MIGRATION = (
     ROOT
     / "alembic"

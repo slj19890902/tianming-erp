@@ -553,6 +553,67 @@ def test_payables_feed_aging_structure_and_six_month_trend(p1_130_app) -> None:
         assert overview.json()["collection_note"].startswith("客户收款不在 ERP")
 
 
+def test_finance_trend_groups_invoices_by_confirmed_statement_month(
+    p1_130_app,
+) -> None:
+    from app.models.finance import Invoice, Statement
+
+    app, factory = p1_130_app
+    with factory() as db:
+        confirmed_statement = db.get(Statement, 1)
+        confirmed_statement.confirmation_status = "confirmed"
+        draft_statement = Statement(
+            statement_number="ST-P1-130-DRAFT-INVOICE",
+            customer_id=confirmed_statement.customer_id,
+            statement_month="2026-08",
+            total_receivable=Decimal("999.00"),
+            total_gross_profit=Decimal("0.00"),
+            status="unsettled",
+            confirmation_status="draft",
+        )
+        db.add(draft_statement)
+        db.flush()
+        db.add_all(
+            [
+                Invoice(
+                    statement_id=confirmed_statement.id,
+                    invoice_number="FP-P1-130-CROSS-MONTH",
+                    invoice_date=date(2026, 9, 1),
+                    invoice_amount=Decimal("200.00"),
+                    invoice_status="issued",
+                    source="legacy_manual",
+                ),
+                Invoice(
+                    statement_id=draft_statement.id,
+                    invoice_number="FP-P1-130-DRAFT",
+                    invoice_date=date(2026, 8, 31),
+                    invoice_amount=Decimal("999.00"),
+                    invoice_status="issued",
+                    source="legacy_manual",
+                ),
+            ]
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        overview = client.get(
+            "/api/finance/overview", params={"through_month": "2026-09"}
+        )
+
+    assert overview.status_code == 200, overview.text
+    trend = {row["month"]: row for row in overview.json()["trend"]}
+    assert Decimal(str(trend["2026-08"]["confirmed_statement_amount"])) == Decimal(
+        "200.00"
+    )
+    assert Decimal(str(trend["2026-08"]["issued_invoice_amount"])) == Decimal(
+        "200.00"
+    )
+    assert Decimal(str(trend["2026-09"]["issued_invoice_amount"])) == Decimal(
+        "0.00"
+    )
+
+
 def test_p1_130_frontend_has_four_simple_finance_workbenches_and_no_receipt_action() -> None:
     index = Path("static/index.html").read_text(encoding="utf-8")
     finance_start = index.index('<template v-else-if="activePage === \'finance\'">')

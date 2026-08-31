@@ -7100,12 +7100,12 @@ def finance_overview(
     for row_month, amount in statement_rows:
         trend[row_month]["confirmed_statement_amount"] += Decimal(str(amount))
     invoice_query = (
-        select(Invoice.invoice_date, Invoice.invoice_amount)
+        select(Statement.statement_month, Invoice.invoice_amount)
         .join(Statement, Statement.id == Invoice.statement_id)
         .where(
             Invoice.invoice_status == "issued",
-            Invoice.invoice_date >= date.fromisoformat(f"{months[0]}-01"),
-            Invoice.invoice_date < date.fromisoformat(f"{_shift_month(through, 1)}-01"),
+            Statement.confirmation_status == "confirmed",
+            Statement.statement_month.in_(months),
         )
     )
     if visible_customer_ids is not None:
@@ -7114,10 +7114,8 @@ def finance_overview(
             ~unauthorized_statement_source,
         )
     invoice_rows = db.execute(invoice_query).all()
-    for invoice_date, amount in invoice_rows:
-        trend[invoice_date.strftime("%Y-%m")]["issued_invoice_amount"] += Decimal(
-            str(amount)
-        )
+    for statement_month, amount in invoice_rows:
+        trend[statement_month]["issued_invoice_amount"] += Decimal(str(amount))
     payable_rows = db.scalars(
         select(FinancePayable).where(
             FinancePayable.status.in_(("confirmed", "paid")),

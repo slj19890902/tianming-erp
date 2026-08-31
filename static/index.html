@@ -679,11 +679,18 @@
       .finance-cost-grid .wide { grid-column:span 2; }
       .finance-cost-summary { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px; }
       .finance-cost-summary .finance-report-card { min-height:72px; }
+      .finance-month-workbench { margin-bottom:10px; }
+      .finance-month-actions { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px; }
+      .finance-month-action { min-width:0;min-height:96px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff;text-align:left;cursor:pointer;color:var(--text); }
+      .finance-month-action:hover { border-color:var(--primary);box-shadow:0 4px 12px rgba(22,125,116,.10); }
+      .finance-month-action:disabled { cursor:not-allowed;opacity:.58;box-shadow:none; }
+      .finance-month-action strong { display:block;margin:5px 0 3px;font-size:20px;color:var(--primary); }
+      .finance-month-action .muted { display:block;white-space:normal; }
       .finance-cost-legacy { margin-top:10px; }
       .finance-cost-legacy > summary { cursor:pointer;padding:12px 14px;font-weight:700;color:var(--text-secondary); }
       .finance-cost-legacy > .finance-cost-legacy-body { border-top:1px solid var(--line); }
       @media (max-width: 1180px) { .finance-cost-grid{grid-template-columns:repeat(3,minmax(0,1fr))} }
-      @media (max-width: 980px) { .finance-overview-grid{grid-template-columns:1fr}.payable-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-cost-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-cost-summary{grid-template-columns:1fr} }
+      @media (max-width: 980px) { .finance-overview-grid{grid-template-columns:1fr}.payable-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-cost-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-cost-summary{grid-template-columns:1fr}.finance-month-actions{grid-template-columns:repeat(2,minmax(0,1fr))} }
       .table-wrap { overflow: auto; max-height: calc(100vh - 220px); }
       table { width: 100%; border-collapse: collapse; white-space: nowrap; }
       th, td { padding: 10px 16px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; }
@@ -2888,6 +2895,9 @@
         .erp-enterprise-ui .finance-cost-grid { grid-template-columns: 1fr; }
         .erp-enterprise-ui .finance-cost-grid .wide { grid-column: auto; }
         .erp-enterprise-ui .finance-cost-summary { grid-template-columns: 1fr; }
+        .erp-enterprise-ui .finance-month-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .erp-enterprise-ui .finance-month-action { min-height: 88px; padding: 10px; }
+        .erp-enterprise-ui .finance-month-action strong { font-size: 17px; }
         .erp-enterprise-ui .finance-filter-panel .toolbar { align-items: stretch !important; }
         .erp-enterprise-ui .finance-filter-panel .toolbar > .toolbar-group { width: 100%; }
         .erp-enterprise-ui .finance-filter-panel .toolbar > .toolbar-group > .btn { flex: 1 1 auto; }
@@ -4693,9 +4703,24 @@
                 <div v-if="financeOverviewState.error" class="notice warning" style="margin-bottom:10px">经营概览读取失败：{{ financeOverviewState.error }}</div>
                 <div v-if="financeOverviewState.loading" class="empty">正在读取近六个月经营趋势…</div>
                 <template v-else>
+                  <div class="panel finance-month-workbench">
+                    <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
+                      <div><div class="section-title">本月先做这几件事</div><div class="muted">系统把待办自动归好；点击卡片直接进入对应工作台，最终确认仍由财务完成。</div></div>
+                      <div class="toolbar-group">
+                        <input class="input" style="width:150px" type="month" v-model="financeOverviewMonth" @change="loadFinanceOverview" />
+                        <button v-if="canExportFinanceCosts" class="btn primary" :disabled="financeOverviewState.exporting" @click="exportFinanceManagementReport">{{ financeOverviewState.exporting ? '生成中…' : '导出老板月报' }}</button>
+                      </div>
+                    </div>
+                    <div class="finance-month-actions">
+                      <button class="finance-month-action" @click="openFinanceMonthlyAction('pending_reconciliation')"><span>1 · 客户对账</span><strong>¥ {{ money(financeOverview.workbench_summary.pending_reconciliation_amount) }}</strong><span class="muted">待生成或确认的对账明细</span></button>
+                      <button class="finance-month-action" @click="openFinanceMonthlyAction('pending_invoice')"><span>2 · 开票准备</span><strong>¥ {{ money(financeOverview.workbench_summary.pending_invoice_amount) }}</strong><span class="muted">已对账、尚未登记开票</span></button>
+                      <button class="finance-month-action" :disabled="!canViewFinanceCosts" @click="openFinanceMonthlyAction('cost_drafts')"><span>3 · 费用复核</span><strong>¥ {{ money(financeOverview.cost_pool.status_totals?.draft?.amount || 0) }}</strong><span class="muted">工资、费用等草稿待确认</span></button>
+                      <button class="finance-month-action" :disabled="!canViewFinanceCosts" @click="openFinanceMonthlyAction('close_readiness')"><span>4 · 月报检查</span><strong>{{ financeOverview.cost_pool.close_ready ? '可结转' : '资料待补' }}</strong><span class="muted">{{ financeOverview.cost_pool.blockers?.[0]?.message || '核对成本资料与来源' }}</span></button>
+                    </div>
+                  </div>
                   <div class="finance-overview-grid">
                     <div class="panel finance-chart">
-                      <div class="toolbar"><div><div class="section-title">近六个月对比</div><div class="finance-legend"><span><i style="background:#167d74"></i>已确认对账</span><span><i style="background:#3b82f6"></i>已开票</span><span><i style="background:#d97706"></i>应付与支出</span></div></div><input class="input" style="width:150px" type="month" v-model="financeOverviewMonth" @change="loadFinanceOverview" /></div>
+                      <div class="toolbar"><div><div class="section-title">近六个月对比</div><div class="finance-legend"><span><i style="background:#167d74"></i>已确认对账</span><span><i style="background:#3b82f6"></i>已开票</span><span><i style="background:#d97706"></i>应付与支出</span></div></div></div>
                       <div class="finance-trend-bars"><div v-for="row in financeOverview.trend" :key="row.month" class="finance-trend-month"><span class="income" :style="{height:financeTrendHeight(row.confirmed_statement_amount)}" :title="`已确认对账 ¥${money(row.confirmed_statement_amount)}`"></span><span class="invoice" :style="{height:financeTrendHeight(row.issued_invoice_amount)}" :title="`已开票 ¥${money(row.issued_invoice_amount)}`"></span><span class="expense" :style="{height:financeTrendHeight(row.payable_amount)}" :title="`应付支出 ¥${money(row.payable_amount)}`"></span></div></div>
                       <div class="finance-trend-labels"><span v-for="row in financeOverview.trend" :key="`label-${row.month}`">{{ row.month.slice(5) }}月</span></div>
                     </div>
@@ -9450,8 +9475,8 @@
             deliveryDashboardMode: "",
             financeView: "overview",
             financeOverviewMonth: month(),
-            financeOverview: { trend:[], payable_aging:{}, expense_structure:[], cost_coverage:{covered_lines:0,total_lines:0,coverage_rate:0,covered_revenue:0,material_gross_profit_reference:0,label:"材料毛利参考"}, collection_note:"" },
-            financeOverviewState: { loading:false, error:"" },
+            financeOverview: { trend:[], payable_aging:{}, expense_structure:[], cost_coverage:{covered_lines:0,total_lines:0,coverage_rate:0,covered_revenue:0,material_gross_profit_reference:0,label:"材料毛利参考"}, workbench_summary:{}, cost_pool:{status_totals:{},close_ready:false,blockers:[]}, collection_note:"" },
+            financeOverviewState: { loading:false, exporting:false, error:"" },
             financeStatementSort: "business",
             financeFilters: { statement_month:month(), balance_type:"", customer_id:"" },
             financeCurrentRows: [], financeCurrentTotal: 0, financeCurrentSummary: {}, financeCurrentCustomerOptions: [],
@@ -13851,6 +13876,8 @@
             for (const controller of latestRequestControllers.values()) controller.abort();
             latestRequestControllers.clear();
             requisitionAutoReleaseFlight = null;
+            this.financeOverview = {trend:[],payable_aging:{},expense_structure:[],cost_coverage:{covered_lines:0,total_lines:0,coverage_rate:0},workbench_summary:{},cost_pool:{status_totals:{},close_ready:false,blockers:[]},collection_note:""};
+            this.financeOverviewState = {loading:false,exporting:false,error:""};
             this.financeCostItems = [];
             this.financeCostTotal = 0;
             this.financeCostSummary = {status_totals:{},confirmed_total:"0.00",by_accounting_class:[],by_category:[],by_center:[],close_ready:false,blockers:[],note:""};
@@ -20432,15 +20459,22 @@
             this.financeOverviewState.loading = true;
             this.financeOverviewState.error = "";
             try {
-              const {data} = await axios.get("/api/finance/overview", {
-                params:{through_month:throughMonth},
-                signal:controller.signal,
-              });
+              const costSummaryRequest = this.canViewFinanceCosts
+                ? axios.get("/api/finance/cost-pool/summary",{params:{month:throughMonth},signal:controller.signal}).catch(()=>({data:null}))
+                : Promise.resolve({data:null});
+              const [overviewResponse,workbenchResponse,costSummaryResponse] = await Promise.all([
+                axios.get("/api/finance/overview",{params:{through_month:throughMonth},signal:controller.signal}),
+                axios.get("/api/finance/current-customer-months",{params:{statement_month:throughMonth,page:1,page_size:1},signal:controller.signal}),
+                costSummaryRequest,
+              ]);
               if (!requestIsCurrent()) return false;
+              const data = overviewResponse.data || {};
               this.financeOverview = {
                 trend:data.trend || [], payable_aging:data.payable_aging || {},
                 expense_structure:data.expense_structure || [],
                 cost_coverage:data.cost_coverage || {covered_lines:0,total_lines:0,coverage_rate:0},
+                workbench_summary:workbenchResponse.data?.summary || {},
+                cost_pool:costSummaryResponse.data || {status_totals:{},close_ready:false,blockers:[]},
                 collection_note:data.collection_note || "",
               };
               return true;
@@ -20468,6 +20502,46 @@
           financeExpenseWidth(value) {
             const maxValue = Math.max(1,...(this.financeOverview.expense_structure||[]).map(row=>Number(row.amount||0)));
             return `${Math.max(Number(value||0)>0?4:0,Math.round(Number(value||0)/maxValue*100))}%`;
+          },
+          openFinanceMonthlyAction(action) {
+            const selectedMonth = this.financeOverviewMonth || month();
+            if (action === "pending_reconciliation" || action === "pending_invoice") {
+              this.financeFilters.statement_month = selectedMonth;
+              this.financeFilters.customer_id = "";
+              this.financeFilters.balance_type = action;
+              return this.setFinanceView("current");
+            }
+            this.financeCostMonth = selectedMonth;
+            this.financeCostFilters.status = action === "cost_drafts" ? "draft" : "";
+            this.pages.financeCosts = 1;
+            return this.setFinanceView("payables");
+          },
+          async exportFinanceManagementReport() {
+            if (!this.canExportFinanceCosts || this.financeOverviewState.exporting) return false;
+            const requestKey = "finance:management-report:export";
+            const controller = this.beginLatestRequest(requestKey);
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.financeOverviewState.exporting = true;
+            try {
+              const selectedMonth = this.financeOverviewMonth || month();
+              const response = await axios.get("/api/finance/management-report/export", {
+                params:{month:selectedMonth}, responseType:"blob", signal:controller.signal,
+              });
+              if (!this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId) || !this.canExportFinanceCosts) return false;
+              this.saveFinanceCostWorkbook(response,`${selectedMonth}_老板经营月报.xlsx`);
+              this.showToast("老板经营月报已导出");
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || !this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
+              this.showToast(this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey) === controller) {
+                if (authGeneration === this.authGeneration && userId === (this.user?.id ?? null)) this.financeOverviewState.exporting = false;
+                this.finishLatestRequest(requestKey,controller);
+              }
+            }
           },
           financeCostStatusAmount(status) {
             return this.financeCostSummary?.status_totals?.[status]?.amount || 0;

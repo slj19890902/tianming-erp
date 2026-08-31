@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "hu56v8x9z45"
 DOWN_REVISION = "ht55v8x9z44"
-INTEGRATION_HEAD = "iv57v8x9z46"
+INTEGRATION_HEAD = "iw58v8x9z47"
 CONFIRMATION_TRIGGERS = {
     "trg_finance_statements_confirmation_insert",
     "trg_finance_statements_confirmation_update",

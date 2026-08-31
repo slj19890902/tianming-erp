@@ -675,7 +675,15 @@
       .finance-aging-track > span { display:block;height:100%;background:#167d74;border-radius:inherit; }
       .finance-aging-row.overdue .finance-aging-track > span { background:#d97706; }
       .payable-form-grid { display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;align-items:end; }
-      @media (max-width: 980px) { .finance-overview-grid{grid-template-columns:1fr}.payable-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))} }
+      .finance-cost-grid { display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:8px;align-items:end; }
+      .finance-cost-grid .wide { grid-column:span 2; }
+      .finance-cost-summary { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px; }
+      .finance-cost-summary .finance-report-card { min-height:72px; }
+      .finance-cost-legacy { margin-top:10px; }
+      .finance-cost-legacy > summary { cursor:pointer;padding:12px 14px;font-weight:700;color:var(--text-secondary); }
+      .finance-cost-legacy > .finance-cost-legacy-body { border-top:1px solid var(--line); }
+      @media (max-width: 1180px) { .finance-cost-grid{grid-template-columns:repeat(3,minmax(0,1fr))} }
+      @media (max-width: 980px) { .finance-overview-grid{grid-template-columns:1fr}.payable-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-cost-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-cost-summary{grid-template-columns:1fr} }
       .table-wrap { overflow: auto; max-height: calc(100vh - 220px); }
       table { width: 100%; border-collapse: collapse; white-space: nowrap; }
       th, td { padding: 10px 16px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; }
@@ -2779,6 +2787,113 @@
         border-radius: 0;
         background: var(--bg);
       }
+      /* P1-131: the desktop shell must remain usable when an office user opens
+         the same lightweight finance flow on a phone.  Keep navigation in two
+         compact horizontal rails and let only dense tables scroll sideways. */
+      @media (max-width: 760px) {
+        body,
+        body:has(.erp-enterprise-ui) {
+          width: 100%;
+          min-width: 0;
+          max-width: 100vw;
+          overflow: hidden;
+        }
+        .login-card { width: min(420px, calc(100vw - 24px)); padding: 28px 20px; }
+        .erp-enterprise-ui.app-shell {
+          width: 100%;
+          min-width: 0;
+          height: 100dvh;
+          grid-template-rows: auto minmax(0, 1fr);
+        }
+        .erp-enterprise-ui .topbar {
+          min-height: 0;
+          padding: 7px 8px;
+          align-items: flex-start;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .erp-enterprise-ui .brand { min-height: 34px; }
+        .erp-enterprise-ui .brand-logo { width: 28px; height: 28px; }
+        .erp-enterprise-ui .top-actions {
+          flex: 1 1 100%;
+          width: 100%;
+          max-width: 100%;
+          padding-bottom: 2px;
+          justify-content: flex-start;
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          scrollbar-width: thin;
+        }
+        .erp-enterprise-ui .top-user-name { display: none; }
+        .erp-enterprise-ui .layout {
+          display: flex;
+          flex-direction: column;
+          width: 100%;
+          min-width: 0;
+          overflow: hidden;
+        }
+        .erp-enterprise-ui .sidebar,
+        .erp-enterprise-ui.ui-large .sidebar {
+          display: flex;
+          flex: 0 0 auto;
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+          padding: 6px 8px;
+          gap: 6px;
+          border-right: 0;
+          border-bottom: 1px solid #d8dee8;
+          overflow-x: auto;
+          overflow-y: hidden;
+          scrollbar-width: thin;
+        }
+        .erp-enterprise-ui .menu-title { display: none; }
+        .erp-enterprise-ui .menu-item,
+        .erp-enterprise-ui.ui-large .menu-item {
+          flex: 0 0 auto;
+          width: auto;
+          min-width: max-content;
+          min-height: 36px;
+          padding: 6px 10px;
+          font-size: 13px;
+        }
+        .erp-enterprise-ui .menu-count-summary .status { min-height: 20px; padding: 1px 6px; font-size: 11px; }
+        .erp-enterprise-ui .main,
+        .erp-enterprise-ui.ui-large .main {
+          flex: 1 1 auto;
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+          padding: 10px 8px 20px;
+          overflow: auto;
+        }
+        .erp-enterprise-ui .main.warehouse-main,
+        .erp-enterprise-ui.ui-large .main.warehouse-main { padding: 0; }
+        .erp-enterprise-ui .business-flow-guide { padding: 6px 8px; }
+        .erp-enterprise-ui .page-head,
+        .erp-enterprise-ui .finance-page-head {
+          min-height: 0;
+          margin-bottom: 10px;
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .erp-enterprise-ui .finance-page-head > .toolbar-group {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          width: 100%;
+          gap: 6px;
+        }
+        .erp-enterprise-ui .finance-page-head > .toolbar-group > .btn { width: 100%; }
+        .erp-enterprise-ui .finance-cost-grid { grid-template-columns: 1fr; }
+        .erp-enterprise-ui .finance-cost-grid .wide { grid-column: auto; }
+        .erp-enterprise-ui .finance-cost-summary { grid-template-columns: 1fr; }
+        .erp-enterprise-ui .finance-filter-panel .toolbar { align-items: stretch !important; }
+        .erp-enterprise-ui .finance-filter-panel .toolbar > .toolbar-group { width: 100%; }
+        .erp-enterprise-ui .finance-filter-panel .toolbar > .toolbar-group > .btn { flex: 1 1 auto; }
+        .erp-enterprise-ui .panel { max-width: 100%; }
+        .erp-enterprise-ui .table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }
+      }
     </style>
   </head>
   <body>
@@ -4566,7 +4681,7 @@
             </template>
 
             <template v-else-if="activePage === 'finance'">
-              <div class="page-head finance-page-head"><div><h2>对账与开票</h2><div class="muted">客户对账、开票任务和应付支出集中处理；收款仍以银行和承兑记录为准。</div></div>
+              <div class="page-head finance-page-head"><div><h2>对账与开票</h2><div class="muted">客户对账、开票、应付和费用记账集中处理；收款仍以银行和承兑记录为准。</div></div>
                 <div class="toolbar-group">
                   <button :class="['btn',{primary:financeView==='overview'}]" @click="setFinanceView('overview')">经营概览</button>
                   <button :class="['btn',{primary:financeView==='current'}]" @click="setFinanceView('current')">客户对账</button>
@@ -4773,21 +4888,77 @@
                 </template>
               </template>
               <template v-else-if="financeView==='payables'">
-                <div class="panel finance-filter-panel" style="margin-bottom:10px">
-                  <div class="toolbar"><div><div class="section-title">新增应付 / 支出</div><div class="muted">只做应付与支出登记，不生成会计凭证。</div></div><button class="btn" :disabled="financePayableState.loading" @click="loadFinancePayables">刷新</button></div>
-                  <div class="payable-form-grid" style="margin-top:8px">
-                    <div class="field"><label>类别</label><select class="select" v-model="financePayableForm.category"><option v-for="item in payableCategoryOptions" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
-                    <div class="field"><label>供应商（可不选）</label><select class="select" v-model.number="financePayableForm.supplier_id" @change="applyPayableSupplier"><option :value="null">其他单位 / 支出</option><option v-for="item in financePayableSuppliers" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
-                    <div class="field"><label>收款单位</label><input class="input" v-model.trim="financePayableForm.counterparty_name" /></div>
-                    <div class="field"><label>金额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financePayableForm.amount" /></div>
-                    <div class="field"><label>单据日期</label><input class="input" type="date" v-model="financePayableForm.document_date" /></div>
-                    <div class="field"><label>到期日（可不填）</label><input class="input" type="date" v-model="financePayableForm.due_date" /></div>
-                    <div class="field"><label>单据号（可不填）</label><input class="input" v-model.trim="financePayableForm.document_number" /></div>
-                    <div class="field"><label>备注</label><input class="input" v-model.trim="financePayableForm.note" /></div>
+                <input v-if="canViewFinanceCosts" ref="financeCostFileInput" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" @change="onFinanceCostFileSelected" />
+                <div v-if="canViewFinanceCosts" class="panel finance-filter-panel" style="margin-bottom:10px">
+                  <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
+                    <div><div class="section-title">月度成本费用</div><div class="muted">代替日常 Excel 汇总；先录入草稿，复核后再确认。</div></div>
+                    <div class="toolbar-group">
+                      <button class="btn" :disabled="financeCostState.loading" @click="loadFinanceCosts">刷新</button>
+                      <button v-if="canExportFinanceCosts" class="btn" :disabled="financeCostState.exporting" @click="downloadFinanceCostTemplate">下载模板</button>
+                      <button v-if="canManageFinanceCosts" class="btn" :disabled="financeCostState.importing" @click="$refs.financeCostFileInput.click()">导入 Excel</button>
+                      <button v-if="canExportFinanceCosts" class="btn primary" :disabled="financeCostState.exporting" @click="exportFinanceCosts">导出月表</button>
+                    </div>
                   </div>
-                  <div class="toolbar-group" style="justify-content:flex-end;margin-top:8px"><button v-if="canFinance" class="btn primary" :disabled="financePayableState.saving" @click="createFinancePayable">{{ financePayableState.saving ? '保存中…' : '保存草稿' }}</button></div>
+                  <div class="finance-cost-grid">
+                    <div class="field"><label>月份</label><input class="input" type="month" v-model="financeCostMonth" @change="onFinanceCostMonthChange" /></div>
+                    <div class="field"><label>状态</label><select class="select" v-model="financeCostFilters.status" @change="reloadFinanceCosts"><option value="">全部</option><option value="draft">草稿</option><option value="confirmed">已确认</option><option value="voided">已作废</option></select></div>
+                    <div class="field"><label>类别</label><select class="select" v-model="financeCostFilters.category" @change="reloadFinanceCosts"><option value="">全部</option><option v-for="item in financeCostMeta.categories" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
+                    <div class="field"><label>成本中心</label><select class="select" v-model.number="financeCostFilters.center_id" @change="reloadFinanceCosts"><option value="">全部</option><option v-for="item in financeCostMeta.centers" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
+                  </div>
+                  <div class="finance-cost-summary">
+                    <div class="finance-report-card"><span class="muted">已确认</span><strong class="cost-sensitive">¥ {{ money(financeCostStatusAmount('confirmed')) }}</strong></div>
+                    <div class="finance-report-card"><span class="muted">待复核草稿</span><strong class="cost-sensitive">¥ {{ money(financeCostStatusAmount('draft')) }}</strong></div>
+                    <div class="finance-report-card"><span class="muted">月度状态</span><strong>{{ financeCostSummary.close_ready ? '可结转' : '暂不可结转' }}</strong><span class="muted">当前只形成管理费用汇总</span></div>
+                  </div>
+                  <div v-if="financeCostState.error" class="notice danger" style="margin-top:10px">成本费用读取失败：{{ financeCostState.error }}</div>
+                  <div v-else-if="financeCostPrimaryBlocker" class="notice warning" style="margin-top:10px">{{ financeCostPrimaryBlocker }}</div>
+                  <div v-if="financeCostMeta.warning" class="muted" style="margin-top:8px">{{ financeCostMeta.warning }}</div>
                 </div>
-                <div class="panel"><div class="section-title">应付与支出记录</div><div v-if="financePayableState.error" class="notice warning">{{ financePayableState.error }}</div><div v-if="financePayableState.loading" class="empty">正在读取…</div><div v-else class="table-wrap"><table><thead><tr><th>日期</th><th>单位 / 单据</th><th>类别</th><th class="sensitive-price">金额</th><th>到期日</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in financePayables" :key="row.id"><td>{{ row.document_date }}</td><td><strong>{{ row.counterparty_name }}</strong><div class="muted">{{ row.document_number || row.note || '-' }}</div></td><td>{{ payableCategoryText(row.category) }}</td><td class="sensitive-price">¥ {{ money(row.amount) }}</td><td>{{ row.due_date || '-' }}</td><td><span :class="['status',row.status==='paid'?'green':row.status==='voided'?'gray':row.status==='confirmed'?'blue':'orange']">{{ payableStatusText(row.status) }}</span></td><td class="toolbar-group"><button v-if="canFinance && row.status==='draft'" class="btn small success" @click="transitionFinancePayable(row,'confirm')">确认</button><button v-if="canFinance && row.status==='confirmed'" class="btn small" @click="transitionFinancePayable(row,'paid')">标记已付</button><button v-if="canFinance && ['draft','confirmed'].includes(row.status)" class="btn small danger" @click="transitionFinancePayable(row,'void')">作废</button></td></tr><tr v-if="!financePayables.length"><td colspan="7" class="empty">尚无应付或支出记录。</td></tr></tbody></table></div></div>
+
+                <div v-if="canViewFinanceCosts && canManageFinanceCosts" class="panel" style="margin-bottom:10px">
+                  <div class="toolbar"><div><div class="section-title">{{ financeCostForm.id ? '编辑费用草稿' : '记一笔费用' }}</div><div class="muted">金额按 Excel 原数保存，不自动转换为正式会计凭证。</div></div><button v-if="financeCostForm.id" class="btn small" @click="resetFinanceCostForm">取消编辑</button></div>
+                  <div v-if="financeCostSaveAttempt.outcomeUncertain" class="notice warning">上次保存结果暂不确定。请保持内容不变并点击“按原编号重试”，系统会安全核对，不会重复记账。</div>
+                  <div class="finance-cost-grid">
+                    <div class="field"><label>类别</label><select class="select" v-model="financeCostForm.cost_category" @change="applyFinanceCostCategoryDefault"><option v-for="item in financeCostMeta.categories" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
+                    <div class="field"><label>成本中心</label><select class="select" v-model.number="financeCostForm.cost_center_id"><option v-for="item in financeCostActiveCenters" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
+                    <div class="field"><label>日期</label><input class="input" type="date" v-model="financeCostForm.document_date" /></div>
+                    <div class="field"><label>金额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeCostForm.amount" /></div>
+                    <div class="field wide"><label>费用事项</label><input class="input" v-model.trim="financeCostForm.description" placeholder="例如：8 月生产员工工资" /></div>
+                    <div class="field wide"><label>来源依据</label><input class="input" v-model.trim="financeCostForm.source_reference" placeholder="工资表、发票号或 Excel 行号" /></div>
+                  </div>
+                  <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">选填：单位、单据号、税额、分摊依据和备注</summary><div class="finance-cost-grid" style="margin-top:8px"><div class="field"><label>对方单位</label><input class="input" v-model.trim="financeCostForm.counterparty_name" /></div><div class="field"><label>单据号</label><input class="input" v-model.trim="financeCostForm.document_number" /></div><div class="field"><label>其中税额</label><input class="input" type="number" min="0" step="0.01" v-model="financeCostForm.tax_amount" /></div><div class="field"><label>分摊依据</label><select class="select" v-model="financeCostForm.allocation_basis"><option v-for="item in financeCostMeta.allocation_bases" :key="item.value" :value="item.value">{{ item.label }}</option></select></div><div class="field wide"><label>备注</label><input class="input" v-model.trim="financeCostForm.note" /></div></div></details>
+                  <div class="toolbar-group" style="justify-content:flex-end;margin-top:8px"><button class="btn" @click="resetFinanceCostForm">清空</button><button class="btn primary" :disabled="financeCostState.saving" @click="saveFinanceCost">{{ financeCostState.saving ? '保存中…' : (financeCostSaveAttempt.outcomeUncertain ? '按原编号重试' : (financeCostForm.id ? '保存修改' : '保存草稿')) }}</button></div>
+                </div>
+
+                <div v-if="canViewFinanceCosts" class="panel">
+                  <div class="toolbar"><div><div class="section-title">费用明细</div><div class="muted">{{ financeCostTotal }} 条；已确认后不可直接改写，只能作废留痕。</div></div></div>
+                  <div v-if="financeCostState.loading" class="empty">正在读取费用明细…</div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>日期</th><th>费用事项 / 来源</th><th>类别 / 中心</th><th class="cost-sensitive">金额</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                    <tr v-for="row in financeCostItems" :key="row.id"><td>{{ row.document_date }}</td><td><strong>{{ row.description }}</strong><div class="muted">{{ row.source_reference }}</div></td><td>{{ row.cost_category_label }}<div class="muted">{{ row.cost_center_name }}</div></td><td class="cost-sensitive">¥ {{ money(row.amount) }}</td><td><span :class="['status',financeCostStatusClass(row.status)]">{{ row.status_label }}</span></td><td class="toolbar-group"><button v-if="canManageFinanceCosts && row.status==='draft'" class="btn small" @click="editFinanceCost(row)">编辑</button><button v-if="canConfirmFinanceCosts && row.status==='draft'" class="btn small success" @click="transitionFinanceCost(row,'confirm')">确认</button><button v-if="canConfirmFinanceCosts && ['draft','confirmed'].includes(row.status)" class="btn small danger" @click="transitionFinanceCost(row,'void')">作废</button></td></tr>
+                    <tr v-if="!financeCostItems.length"><td colspan="6" class="empty">这个月份还没有成本费用记录。</td></tr>
+                  </tbody></table></div>
+                  <pager :page="pages.financeCosts" :total="financeCostTotal" :page-size="pageSize" @change="pages.financeCosts=$event; loadFinanceCosts()"></pager>
+                </div>
+
+                <div v-if="!canViewFinanceCosts" class="notice warning" style="margin-bottom:10px">成本费用属于公司级敏感数据，仅对拥有成本权限且可查看全部客户的账号开放。</div>
+                <details class="panel finance-cost-legacy">
+                  <summary>供应商应付登记（原应付流程）</summary>
+                  <div class="finance-cost-legacy-body">
+                    <div class="toolbar"><div><div class="section-title">新增应付 / 支出</div><div class="muted">用于供应商到期付款跟踪，不会自动重复计入上方成本费用。</div></div><button class="btn" :disabled="financePayableState.loading" @click="loadFinancePayables">刷新</button></div>
+                    <div class="payable-form-grid" style="padding:0 14px 10px">
+                      <div class="field"><label>类别</label><select class="select" v-model="financePayableForm.category"><option v-for="item in payableCategoryOptions" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
+                      <div class="field"><label>供应商（可不选）</label><select class="select" v-model.number="financePayableForm.supplier_id" @change="applyPayableSupplier"><option :value="null">其他单位 / 支出</option><option v-for="item in financePayableSuppliers" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
+                      <div class="field"><label>收款单位</label><input class="input" v-model.trim="financePayableForm.counterparty_name" /></div>
+                      <div class="field"><label>金额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financePayableForm.amount" /></div>
+                      <div class="field"><label>单据日期</label><input class="input" type="date" v-model="financePayableForm.document_date" /></div>
+                      <div class="field"><label>到期日（可不填）</label><input class="input" type="date" v-model="financePayableForm.due_date" /></div>
+                      <div class="field"><label>单据号（可不填）</label><input class="input" v-model.trim="financePayableForm.document_number" /></div>
+                      <div class="field"><label>备注</label><input class="input" v-model.trim="financePayableForm.note" /></div>
+                    </div>
+                    <div class="toolbar-group" style="justify-content:flex-end;padding:0 14px 10px"><button v-if="canFinance" class="btn primary" :disabled="financePayableState.saving" @click="createFinancePayable">{{ financePayableState.saving ? '保存中…' : '保存草稿' }}</button></div>
+                    <div v-if="financePayableState.error" class="notice warning">{{ financePayableState.error }}</div><div v-if="financePayableState.loading" class="empty">正在读取…</div><div v-else class="table-wrap"><table><thead><tr><th>日期</th><th>单位 / 单据</th><th>类别</th><th class="sensitive-price">金额</th><th>到期日</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in financePayables" :key="row.id"><td>{{ row.document_date }}</td><td><strong>{{ row.counterparty_name }}</strong><div class="muted">{{ row.document_number || row.note || '-' }}</div></td><td>{{ payableCategoryText(row.category) }}</td><td class="sensitive-price">¥ {{ money(row.amount) }}</td><td>{{ row.due_date || '-' }}</td><td><span :class="['status',row.status==='paid'?'green':row.status==='voided'?'gray':row.status==='confirmed'?'blue':'orange']">{{ payableStatusText(row.status) }}</span></td><td class="toolbar-group"><button v-if="canFinance && row.status==='draft'" class="btn small success" @click="transitionFinancePayable(row,'confirm')">确认</button><button v-if="canFinance && row.status==='confirmed'" class="btn small" @click="transitionFinancePayable(row,'paid')">标记已付</button><button v-if="canFinance && ['draft','confirmed'].includes(row.status)" class="btn small danger" @click="transitionFinancePayable(row,'void')">作废</button></td></tr><tr v-if="!financePayables.length"><td colspan="7" class="empty">尚无应付或支出记录。</td></tr></tbody></table></div>
+                  </div>
+                </details>
               </template>
               <template v-else-if="financeView==='invoice_tasks'">
                 <input ref="invoiceTaskPdfInput" type="file" accept="application/pdf,.pdf" style="display:none" @change="onInvoiceTaskPdfSelected" />
@@ -9291,11 +9462,20 @@
             financeReportFilters: { year:month().slice(0,4), statement_month:month(), customer_id:"" },
             financeReportData: { monthly:[], yearly_summary:{}, selected_month_summary:{}, selected_month_customers:[], customer_balances:[], aging:[], as_of:"", included_through_statement_month:"" },
             financeReportState: { loading:false, error:"", loaded:false },
+            financeCostMonth: month(),
+            financeCostFilters: { status:"", category:"", center_id:"" },
+            financeCostMeta: { categories:[], accounting_classes:[], allocation_bases:[], centers:[], warning:"" },
+            financeCostSummary: { status_totals:{}, confirmed_total:"0.00", by_accounting_class:[], by_category:[], by_center:[], close_ready:false, blockers:[], note:"" },
+            financeCostItems: [], financeCostTotal: 0,
+            financeCostState: { loading:false, saving:false, importing:false, exporting:false, error:"" },
+            financeCostSaveAttempt: { signature:"", idempotencyKey:"", outcomeUncertain:false },
+            financeCostTransitionAttempts: {},
+            financeCostForm: { id:null, version:null, cost_month:month(), document_date:today(), cost_center_id:null, cost_category:"production_wages", allocation_basis:"unallocated", description:"", counterparty_name:"", document_number:"", source_reference:"", amount:"", tax_amount:"0.00", note:"" },
             financePayables: [], financePayableSuppliers: [], financePayableState:{loading:false,saving:false,error:""},
             financePayableForm:{supplier_id:null,counterparty_name:"",category:"material",document_number:"",document_date:today(),due_date:"",amount:"",note:""},
             statementDisputeForm:{reason:"",target_month:"",remove:{},add:{}}, statementDisputeCandidates:[], statementDisputeState:{loading:false,saving:false,error:""},
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
-            pages: { customers: 1, products: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, externalPurchaseHistory: 1, incomingPending: 1, incomingReceived: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, productionPlacement: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1 },
+            pages: { customers: 1, products: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, externalPurchaseHistory: 1, incomingPending: 1, incomingReceived: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, productionPlacement: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1, financeCosts: 1 },
             productTab: "products", modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
             materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
@@ -10005,6 +10185,12 @@
             );
           },
           canFinance() { return this.hasPermission("finance.execute"); },
+          canViewFinanceCosts() { return this.hasPermission("finance.view") && this.hasPermission("cost.view") && (this.user?.role === "admin" || this.user?.unrestricted_customer_access === true); },
+          canManageFinanceCosts() { return this.canViewFinanceCosts && this.hasPermission("finance.cost.manage"); },
+          canConfirmFinanceCosts() { return this.canViewFinanceCosts && this.hasPermission("finance.cost.confirm"); },
+          canExportFinanceCosts() { return this.canViewFinanceCosts && this.hasPermission("finance.cost.export"); },
+          financeCostActiveCenters() { return (this.financeCostMeta.centers || []).filter(row=>row.is_active); },
+          financeCostPrimaryBlocker() { return (this.financeCostSummary.blockers || [])[0]?.message || ""; },
           canAdjustReconciliationPeriod() { return this.hasPermission("finance.return_receipt.period.adjust"); },
           canManageCustomerCharges() { return this.hasPermission("finance.customer_charge.manage"); },
           canConfirmCustomerCharges() { return this.hasPermission("finance.customer_charge.confirm"); },
@@ -10763,10 +10949,10 @@
             const permissions = this.user?.permissions;
             if (Array.isArray(permissions)) return permissions.includes(code);
             const legacy = {
-              finance: ["customers.view","products.view","orders.view","cost.view"],
+              finance: ["customers.view","products.view","orders.view","finance.view","finance.execute","cost.view","finance.cost.manage","finance.cost.confirm","finance.cost.export"],
               sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"].concat(["contracts.view","contracts.edit","contracts.convert"]),
               workshop: ["customers.view","products.view","orders.view"],
-              boss: ["customers.view","customers.create","customers.edit","products.view","products.create","products.edit","orders.view","orders.create","orders.edit","orders.status","orders.rollback","requisition.view","requisition.execute","cost.view"],
+              boss: ["customers.view","customers.create","customers.edit","products.view","products.create","products.edit","orders.view","orders.create","orders.edit","orders.status","orders.rollback","requisition.view","requisition.execute","finance.view","cost.view","finance.cost.export"],
             };
             return (legacy[this.user?.role] || []).includes(code);
           },
@@ -13665,6 +13851,15 @@
             for (const controller of latestRequestControllers.values()) controller.abort();
             latestRequestControllers.clear();
             requisitionAutoReleaseFlight = null;
+            this.financeCostItems = [];
+            this.financeCostTotal = 0;
+            this.financeCostSummary = {status_totals:{},confirmed_total:"0.00",by_accounting_class:[],by_category:[],by_center:[],close_ready:false,blockers:[],note:""};
+            this.financeCostMeta = {categories:[],accounting_classes:[],allocation_bases:[],centers:[],warning:""};
+            this.financeCostState = {loading:false,saving:false,importing:false,exporting:false,error:""};
+            this.financeCostSaveAttempt = {signature:"",idempotencyKey:"",outcomeUncertain:false};
+            this.financeCostTransitionAttempts = {};
+            this.pages.financeCosts = 1;
+            this.resetFinanceCostForm();
             this.cancelOrderGroupDetailRequests?.();
             this.orders = [];
             this.ordersTotal = 0;
@@ -20100,7 +20295,9 @@
               return this.loadFinanceOverview({authGeneration:requestAuthGeneration,userId:requestUserId});
             }
             if (this.financeView === "payables") {
-              return this.loadFinancePayables({authGeneration:requestAuthGeneration,userId:requestUserId});
+              const payableRequest = this.loadFinancePayables({authGeneration:requestAuthGeneration,userId:requestUserId});
+              if (!this.canViewFinanceCosts) return payableRequest;
+              return Promise.all([this.loadFinanceCosts(),payableRequest]);
             }
             if (this.financeView === "invoice_tasks") {
               return this.loadInvoiceTasks({authGeneration:requestAuthGeneration,userId:requestUserId});
@@ -20271,6 +20468,249 @@
           financeExpenseWidth(value) {
             const maxValue = Math.max(1,...(this.financeOverview.expense_structure||[]).map(row=>Number(row.amount||0)));
             return `${Math.max(Number(value||0)>0?4:0,Math.round(Number(value||0)/maxValue*100))}%`;
+          },
+          financeCostStatusAmount(status) {
+            return this.financeCostSummary?.status_totals?.[status]?.amount || 0;
+          },
+          financeCostStatusClass(status) {
+            return status === "confirmed" ? "green" : status === "voided" ? "gray" : "orange";
+          },
+          async onFinanceCostMonthChange() {
+            if (!this.financeCostForm.id) this.financeCostForm.cost_month = this.financeCostMonth || month();
+            this.pages.financeCosts = 1;
+            return this.loadFinanceCosts();
+          },
+          async reloadFinanceCosts() {
+            this.pages.financeCosts = 1;
+            return this.loadFinanceCosts();
+          },
+          applyFinanceCostCategoryDefault() {
+            const category = (this.financeCostMeta.categories || []).find(row=>row.value===this.financeCostForm.cost_category);
+            const center = (this.financeCostMeta.centers || []).find(row=>row.is_active && row.code===category?.default_center);
+            if (center) this.financeCostForm.cost_center_id = center.id;
+          },
+          resetFinanceCostForm() {
+            this.financeCostForm = {id:null,version:null,cost_month:this.financeCostMonth || month(),document_date:today(),cost_center_id:null,cost_category:"production_wages",allocation_basis:"unallocated",description:"",counterparty_name:"",document_number:"",source_reference:"",amount:"",tax_amount:"0.00",note:""};
+            this.financeCostSaveAttempt = {signature:"",idempotencyKey:"",outcomeUncertain:false};
+            this.applyFinanceCostCategoryDefault();
+          },
+          financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId) {
+            return latestRequestControllers.get(requestKey) === controller && authGeneration === this.authGeneration && userId === (this.user?.id ?? null) && this.canViewFinanceCosts;
+          },
+          async loadFinanceCosts() {
+            if (!this.canViewFinanceCosts) return false;
+            const requestKey = "finance:costs:list";
+            const controller = this.beginLatestRequest(requestKey);
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.financeCostState.loading = true;
+            this.financeCostState.error = "";
+            try {
+              const params = {
+                month:this.financeCostMonth || month(), page:Math.max(1,Number(this.pages.financeCosts || 1)), page_size:this.pageSize,
+                status:this.financeCostFilters.status || undefined,
+                category:this.financeCostFilters.category || undefined,
+                center_id:this.financeCostFilters.center_id || undefined,
+              };
+              const [metadata,items,summary] = await Promise.all([
+                axios.get("/api/finance/cost-pool/metadata",{signal:controller.signal}),
+                axios.get("/api/finance/cost-pool",{params,signal:controller.signal}),
+                axios.get("/api/finance/cost-pool/summary",{params:{month:params.month},signal:controller.signal}),
+              ]);
+              if (!this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
+              this.financeCostMeta = {
+                categories:metadata.data.categories || [], accounting_classes:metadata.data.accounting_classes || [],
+                allocation_bases:metadata.data.allocation_bases || [], centers:metadata.data.centers || [],
+                warning:metadata.data.warning || "",
+              };
+              this.financeCostItems = items.data.items || [];
+              this.financeCostTotal = Number(items.data.total || 0);
+              this.financeCostSummary = summary.data || {status_totals:{},blockers:[],close_ready:false};
+              if (!this.financeCostForm.id && !(this.financeCostMeta.centers || []).some(row=>row.is_active && Number(row.id)===Number(this.financeCostForm.cost_center_id))) this.applyFinanceCostCategoryDefault();
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || !this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
+              this.financeCostItems = [];
+              this.financeCostTotal = 0;
+              this.financeCostSummary = {status_totals:{},confirmed_total:"0.00",by_accounting_class:[],by_category:[],by_center:[],close_ready:false,blockers:[],note:""};
+              this.financeCostState.error = this.errorMessage(error);
+              return false;
+            } finally {
+              if (this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) this.financeCostState.loading = false;
+              this.finishLatestRequest(requestKey,controller);
+            }
+          },
+          editFinanceCost(row) {
+            if (!row || row.status !== "draft") return;
+            this.financeCostSaveAttempt = {signature:"",idempotencyKey:"",outcomeUncertain:false};
+            this.financeCostForm = {
+              id:row.id, version:row.version, cost_month:row.cost_month, document_date:row.document_date,
+              cost_center_id:row.cost_center_id, cost_category:row.cost_category, allocation_basis:row.allocation_basis || "unallocated",
+              description:row.description || "", counterparty_name:row.counterparty_name || "", document_number:row.document_number || "",
+              source_reference:row.source_reference || "", amount:String(row.amount ?? ""), tax_amount:String(row.tax_amount ?? "0.00"), note:row.note || "",
+            };
+          },
+          async saveFinanceCost() {
+            const form = this.financeCostForm;
+            if (!form.cost_month || !form.document_date || !form.cost_center_id || !form.cost_category || !String(form.description||"").trim() || !String(form.source_reference||"").trim() || Number(form.amount||0)<=0) {
+              this.showToast("请填写类别、成本中心、日期、金额、费用事项和来源依据",true); return false;
+            }
+            const payload = {
+              cost_month:form.cost_month, document_date:form.document_date, cost_center_id:Number(form.cost_center_id),
+              cost_category:form.cost_category, allocation_basis:form.allocation_basis || "unallocated",
+              description:String(form.description).trim(), counterparty_name:String(form.counterparty_name||"").trim() || null,
+              document_number:String(form.document_number||"").trim() || null, source_reference:String(form.source_reference).trim(),
+              amount:String(form.amount), tax_amount:String(form.tax_amount || "0.00"), note:String(form.note||"").trim() || null,
+            };
+            const signature = JSON.stringify({entry_id:form.id || null,expected_version:form.version || null,payload});
+            if (this.financeCostSaveAttempt.signature !== signature || !this.financeCostSaveAttempt.idempotencyKey) {
+              this.financeCostSaveAttempt = {signature,idempotencyKey:createIdempotencyKey(),outcomeUncertain:false};
+            }
+            payload.idempotency_key = this.financeCostSaveAttempt.idempotencyKey;
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            const wasEdit = !!form.id;
+            this.financeCostState.saving = true;
+            try {
+              if (form.id) {
+                payload.expected_version = Number(form.version);
+                await axios.put(`/api/finance/cost-pool/${form.id}`,payload);
+              } else {
+                await axios.post("/api/finance/cost-pool",payload);
+              }
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              this.financeCostMonth = form.cost_month;
+              this.pages.financeCosts = 1;
+              this.resetFinanceCostForm();
+              await this.loadFinanceCosts();
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              this.showToast(wasEdit ? "费用草稿已更新" : "费用草稿已保存");
+              return true;
+            } catch (error) {
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              const outcomeUncertain = !error?.response || Number(error?.response?.status || 0) >= 500;
+              this.financeCostSaveAttempt = {...this.financeCostSaveAttempt,outcomeUncertain};
+              this.showToast(outcomeUncertain ? "保存结果暂不确定；请保持内容不变并按原编号重试" : this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (authGeneration === this.authGeneration && userId === (this.user?.id ?? null)) this.financeCostState.saving = false;
+            }
+          },
+          async transitionFinanceCost(row, action) {
+            let reason = null;
+            if (action === "void") {
+              reason = prompt("请输入作废原因");
+              if (!String(reason||"").trim()) return false;
+            } else if (!confirm("确认后这笔费用将锁定，不能直接修改。是否继续？")) return false;
+            const attemptKey = `${row.id}:${action}:${row.version}:${String(reason||"").trim()}`;
+            const attempt = this.financeCostTransitionAttempts[attemptKey] || {idempotencyKey:createIdempotencyKey(),outcomeUncertain:false};
+            this.financeCostTransitionAttempts = {...this.financeCostTransitionAttempts,[attemptKey]:attempt};
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            try {
+              await axios.post(`/api/finance/cost-pool/${row.id}/${action}`,{
+                expected_version:Number(row.version), idempotency_key:attempt.idempotencyKey, reason,
+              });
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              const remainingAttempts = {...this.financeCostTransitionAttempts}; delete remainingAttempts[attemptKey]; this.financeCostTransitionAttempts = remainingAttempts;
+              if (Number(this.financeCostForm.id)===Number(row.id)) this.resetFinanceCostForm();
+              await this.loadFinanceCosts();
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              this.showToast(action === "confirm" ? "费用已确认" : "费用已作废并保留记录");
+              return true;
+            } catch (error) {
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              const outcomeUncertain = !error?.response || Number(error?.response?.status || 0) >= 500;
+              if (outcomeUncertain) this.financeCostTransitionAttempts = {...this.financeCostTransitionAttempts,[attemptKey]:{...attempt,outcomeUncertain:true}};
+              else { const remainingAttempts = {...this.financeCostTransitionAttempts}; delete remainingAttempts[attemptKey]; this.financeCostTransitionAttempts = remainingAttempts; }
+              this.showToast(outcomeUncertain ? "状态更新结果暂不确定；请刷新核对，重试会沿用原操作编号" : this.errorMessage(error),true);
+              return false;
+            }
+          },
+          saveFinanceCostWorkbook(response,filename) {
+            const blob = response.data instanceof Blob ? response.data : new Blob([response.data],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = url; anchor.download = filename; document.body.appendChild(anchor); anchor.click(); anchor.remove();
+            setTimeout(()=>URL.revokeObjectURL(url),1000);
+          },
+          async downloadFinanceCostTemplate() {
+            if (!this.canExportFinanceCosts) return false;
+            const requestKey = "finance:costs:template";
+            const controller = this.beginLatestRequest(requestKey);
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.financeCostState.exporting = true;
+            try {
+              const response = await axios.get("/api/finance/cost-pool/template",{responseType:"blob",signal:controller.signal});
+              if (!this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId) || !this.canExportFinanceCosts) return false;
+              this.saveFinanceCostWorkbook(response,"成本费用导入模板.xlsx");
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || !this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
+              this.showToast(this.errorMessage(error),true); return false;
+            } finally {
+              if (this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) this.financeCostState.exporting = false;
+              this.finishLatestRequest(requestKey,controller);
+            }
+          },
+          async exportFinanceCosts() {
+            if (!this.canExportFinanceCosts) return false;
+            const requestKey = "finance:costs:export";
+            const controller = this.beginLatestRequest(requestKey);
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.financeCostState.exporting = true;
+            try {
+              const response = await axios.get("/api/finance/cost-pool/export",{params:{month:this.financeCostMonth || month(),status:this.financeCostFilters.status || "confirmed"},responseType:"blob",signal:controller.signal});
+              if (!this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId) || !this.canExportFinanceCosts) return false;
+              this.saveFinanceCostWorkbook(response,`成本费用月表_${this.financeCostMonth || month()}.xlsx`);
+              this.showToast("成本费用月表已导出");
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || !this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
+              this.showToast(this.errorMessage(error),true); return false;
+            } finally {
+              if (this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) this.financeCostState.exporting = false;
+              this.finishLatestRequest(requestKey,controller);
+            }
+          },
+          async onFinanceCostFileSelected(event) {
+            const input = event?.target;
+            const file = input?.files?.[0];
+            if (input) input.value = "";
+            if (!file || this.financeCostState.importing || !this.canManageFinanceCosts) return false;
+            const requestKey = "finance:costs:import";
+            const controller = this.beginLatestRequest(requestKey);
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.financeCostState.importing = true;
+            try {
+              const previewForm = new FormData(); previewForm.append("file",file); previewForm.append("apply","false");
+              const {data:preview} = await axios.post("/api/finance/cost-pool/import",previewForm,{signal:controller.signal});
+              if (!this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId) || !this.canManageFinanceCosts) return false;
+              if (Number(preview.error_count||0)>0) {
+                const messages = (preview.errors || []).slice(0,3).map(row=>`第 ${row.row} 行：${row.message}`).join("；");
+                this.showToast(`导入检查未通过：${messages || '请检查模板内容'}`,true); return false;
+              }
+              if (!Number(preview.row_count||0)) { this.showToast("Excel 中没有可导入的费用明细",true); return false; }
+              if (!confirm(`检查通过：${preview.row_count} 条，合计 ¥${this.money(preview.total_amount)}。确认导入为草稿吗？`)) return false;
+              if (!this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId) || !this.canManageFinanceCosts) return false;
+              const applyForm = new FormData(); applyForm.append("file",file); applyForm.append("apply","true"); applyForm.append("idempotency_key",createIdempotencyKey());
+              const {data:result} = await axios.post("/api/finance/cost-pool/import",applyForm,{signal:controller.signal});
+              if (!this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId) || !this.canManageFinanceCosts) return false;
+              this.pages.financeCosts = 1;
+              await this.loadFinanceCosts();
+              if (!this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId) || !this.canManageFinanceCosts) return false;
+              this.showToast(`已导入 ${result.row_count || preview.row_count} 条费用草稿`);
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || !this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
+              this.showToast(this.errorMessage(error),true); return false;
+            } finally {
+              if (this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) this.financeCostState.importing = false;
+              this.finishLatestRequest(requestKey,controller);
+            }
           },
           payableCategoryText(value) {
             return this.payableCategoryOptions.find(row=>row.value===value)?.label || value || "其他";
@@ -21269,7 +21709,7 @@
               ["production", "手机印刷工位查看", "production.printing.view"], ["production", "手机模切工位查看", "production.die_cut.view"],
               ["dashboard", "首页仪表盘查看", "dashboard.view"], ["audit", "操作记录查看", "audit.view"], ["incoming", "来料入库查看", "incoming.view"], ["incoming", "来料入库操作", "incoming.execute"],
               ["warehouse", "仓库库存查看", "warehouse.view"], ["warehouse", "仓库库存操作", "warehouse.execute"], ["warehouse", "模具封存与恢复", "warehouse.archive"], ["warehouse", "订单库存预占", "warehouse.reserve"], ["warehouse", "库存盘点查看", "warehouse.stocktake.view"], ["warehouse", "库存盘点提交", "warehouse.stocktake.submit"], ["warehouse", "库存盘点审核", "warehouse.stocktake.review"],
-              ["deliveries", "送货查看", "deliveries.view"], ["deliveries", "送货操作", "deliveries.execute"], ["deliveries", "超量送货确认", "deliveries.over_delivery"], ["deliveries", "手机拿货", "deliveries.pick"], ["finance", "财务查看", "finance.view"], ["finance", "财务操作", "finance.execute"],
+              ["deliveries", "送货查看", "deliveries.view"], ["deliveries", "送货操作", "deliveries.execute"], ["deliveries", "超量送货确认", "deliveries.over_delivery"], ["deliveries", "手机拿货", "deliveries.pick"], ["finance", "财务查看", "finance.view"], ["finance", "财务操作", "finance.execute"], ["finance", "成本费用录入", "finance.cost.manage"], ["finance", "成本费用确认", "finance.cost.confirm"], ["finance", "成本费用导出", "finance.cost.export"],
             ];
             return rows.map(([module, name, code]) => ({ module, name, code }));
           },
@@ -21278,9 +21718,9 @@
             const role = roleOverride || this.permissionProfile?.role || this.permissionUsers.find(row => row.id === this.selectedPermissionUserId)?.role;
             if (role === "admin") return true;
             const defaults = {
-              boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage","audit.view","warehouse.stocktake.review","deliveries.over_delivery"].includes(code)),
+              boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage","audit.view","warehouse.stocktake.review","deliveries.over_delivery","finance.cost.manage","finance.cost.confirm"].includes(code)),
               sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"].concat(["contracts.view","contracts.edit","contracts.convert"]),
-              finance: ["customers.view","quotations.view","contracts.view","orders.view","dashboard.view","deliveries.view","finance.view","finance.execute","cost.view"],
+              finance: ["customers.view","quotations.view","contracts.view","orders.view","dashboard.view","deliveries.view","finance.view","finance.execute","cost.view","finance.cost.manage","finance.cost.confirm","finance.cost.export"],
               workshop: ["customers.view","products.view","orders.view","production.printing.view","production.die_cut.view","dashboard.view","incoming.view","incoming.execute","warehouse.view","warehouse.execute","warehouse.stocktake.view","warehouse.stocktake.submit","deliveries.view"],
               delivery_picker: ["deliveries.pick"],
             };

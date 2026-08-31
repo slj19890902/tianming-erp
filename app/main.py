@@ -29,6 +29,7 @@ from app.api.deliveries import (
 )
 from app.api.dashboard import router as dashboard_router
 from app.api.finance import router as finance_router
+from app.api.cost_accounting import router as cost_accounting_router
 from app.api.invoice_tasks import (
     customer_router as invoice_customer_router,
     router as invoice_tasks_router,
@@ -712,6 +713,12 @@ def create_app() -> FastAPI:
             finance_router,
             prefix="/api/finance",
             tags=["finance"],
+        )
+    if not any(route.path == "/api/finance/cost-pool" for route in application.routes):
+        application.include_router(
+            cost_accounting_router,
+            prefix="/api/finance",
+            tags=["finance-cost-accounting"],
         )
     if not any(
         route.path == "/api/finance/invoice-tasks"

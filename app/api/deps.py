@@ -71,6 +71,9 @@ PERMISSION_CATALOG = frozenset(
         "finance.invoice_profile.manage",
         "finance.invoice_attachment.view",
         "finance.invoice_attachment.manage",
+        "finance.cost.manage",
+        "finance.cost.confirm",
+        "finance.cost.export",
         "cost.view",
         "pdf_training.view",
         "pdf_training.manage",
@@ -122,6 +125,8 @@ BOSS_DEFAULT_PERMISSIONS = frozenset(
         "finance.invoice_attachment.manage",
         "finance.customer_charge.manage",
         "finance.customer_charge.confirm",
+        "finance.cost.manage",
+        "finance.cost.confirm",
     }
     and permission not in ADMIN_ONLY_PERMISSIONS
 )
@@ -148,6 +153,9 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
             "finance.invoice_profile.manage",
             "finance.invoice_attachment.view",
             "finance.invoice_attachment.manage",
+            "finance.cost.manage",
+            "finance.cost.confirm",
+            "finance.cost.export",
             "cost.view",
         }
     ),

@@ -158,6 +158,10 @@ from app.models.finance import (  # noqa: E402,F401
     StatementMonthlySequence,
 )
 from app.models.finance_payable import FinancePayable  # noqa: E402,F401
+from app.models.finance_cost import (  # noqa: E402,F401
+    FinanceCostCenter,
+    FinanceCostPoolEntry,
+)
 from app.models.fulfillment_reminder import (  # noqa: E402,F401
     FulfillmentReminder,
     FulfillmentReminderMutation,

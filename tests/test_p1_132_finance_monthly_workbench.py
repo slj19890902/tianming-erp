@@ -5,6 +5,8 @@ from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
@@ -110,8 +112,30 @@ def test_management_report_has_four_sheets_and_keeps_ledgers_separate(
 ) -> None:
     app, factory = p1_131_cost_app
     from app.models.audit import OperationLog
+    from app.api.finance import current_customer_months
+    from app.models.user import User
 
     _seed_monthly_report_facts(factory)
+    with factory() as db:
+        admin = db.query(User).filter(User.username == "p1131-admin").one()
+        workbench = current_customer_months(
+            statement_month="2026-08",
+            balance_type="pending_invoice",
+            customer_id=None,
+            page=1,
+            page_size=50,
+            db=db,
+            user=admin,
+        )
+    assert Decimal(str(workbench["summary"]["pending_invoice_amount"])) == Decimal(
+        "60.00"
+    )
+    statement_rows = workbench["items"][0]["statements"]
+    draft_statement = next(
+        row for row in statement_rows if row["statement_number"] == "ST-P1-132-DRAFT"
+    )
+    assert Decimal(str(draft_statement["pending_invoice_amount"])) == Decimal("0.00")
+    assert draft_statement["invoice_status"] == "not_ready"
 
     with TestClient(app) as client:
         _login(client)
@@ -134,6 +158,14 @@ def test_management_report_has_four_sheets_and_keeps_ledgers_separate(
         assert confirmed.status_code == 200, confirmed.text
         with factory() as db:
             operation_log_count_before_export = db.query(OperationLog).count()
+
+        cost_workpaper = client.get(
+            "/api/finance/cost-pool/export",
+            params={"month": "2026-08", "status": "confirmed"},
+        )
+        assert cost_workpaper.status_code == 200, cost_workpaper.text
+        with factory() as db:
+            assert db.query(OperationLog).count() == operation_log_count_before_export
 
         response = client.get(
             "/api/finance/management-report/export",
@@ -176,6 +208,7 @@ def test_management_report_has_four_sheets_and_keeps_ledgers_separate(
 def test_management_report_export_rejects_missing_or_insufficient_permission(
     p1_131_cost_app,
 ) -> None:
+    from app.api.finance import require_company_finance_read
     from app.core.security import hash_password
     from app.models.user import User
 
@@ -191,6 +224,11 @@ def test_management_report_export_rejects_missing_or_insufficient_permission(
             )
         )
         db.commit()
+    with factory() as db:
+        restricted = db.query(User).filter(User.username == "p1131-restricted").one()
+        with pytest.raises(HTTPException) as denied_overview:
+            require_company_finance_read(user=restricted, db=db)
+        assert denied_overview.value.status_code == 403
 
     with TestClient(app) as client:
         anonymous = client.get(
@@ -228,6 +266,7 @@ def test_finance_monthly_workbench_has_four_actions_and_mobile_two_columns() -> 
         assert f"openFinanceMonthlyAction('{action}')" in workbench
         assert label in workbench
     assert 'v-if="canExportFinanceCosts"' in workbench
+    assert 'v-else-if="!financeOverviewState.error"' in INDEX
 
     action_start = INDEX.index("openFinanceMonthlyAction(action) {")
     action_end = INDEX.index("async exportFinanceManagementReport()", action_start)
@@ -243,6 +282,12 @@ def test_finance_monthly_workbench_has_four_actions_and_mobile_two_columns() -> 
     assert "if (!this.canExportFinanceCosts" in export_body
     assert 'axios.get("/api/finance/management-report/export"' in export_body
     assert 'responseType:"blob"' in export_body
+
+    overview_start = INDEX.index("async loadFinanceOverview(sessionContext = null) {")
+    overview_end = INDEX.index("financeTrendHeight(value)", overview_start)
+    overview_body = INDEX[overview_start:overview_end]
+    assert 'axios.get("/api/finance/cost-pool/summary"' in overview_body
+    assert ".catch(()=>({data:null}))" not in overview_body
 
     breakpoint = INDEX.index("@media (max-width: 980px)")
     mobile_css = INDEX[breakpoint : INDEX.index(".table-wrap", breakpoint)]

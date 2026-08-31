@@ -4702,7 +4702,7 @@
               <template v-if="financeView==='overview'">
                 <div v-if="financeOverviewState.error" class="notice warning" style="margin-bottom:10px">经营概览读取失败：{{ financeOverviewState.error }}</div>
                 <div v-if="financeOverviewState.loading" class="empty">正在读取近六个月经营趋势…</div>
-                <template v-else>
+                <template v-else-if="!financeOverviewState.error">
                   <div class="panel finance-month-workbench">
                     <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
                       <div><div class="section-title">本月先做这几件事</div><div class="muted">系统把待办自动归好；点击卡片直接进入对应工作台，最终确认仍由财务完成。</div></div>
@@ -20460,7 +20460,7 @@
             this.financeOverviewState.error = "";
             try {
               const costSummaryRequest = this.canViewFinanceCosts
-                ? axios.get("/api/finance/cost-pool/summary",{params:{month:throughMonth},signal:controller.signal}).catch(()=>({data:null}))
+                ? axios.get("/api/finance/cost-pool/summary",{params:{month:throughMonth},signal:controller.signal})
                 : Promise.resolve({data:null});
               const [overviewResponse,workbenchResponse,costSummaryResponse] = await Promise.all([
                 axios.get("/api/finance/overview",{params:{through_month:throughMonth},signal:controller.signal}),

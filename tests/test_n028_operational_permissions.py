@@ -31,7 +31,7 @@ def test_operational_permission_defaults_preserve_role_access() -> None:
 
     expected = {
         "admin": OPERATIONAL_PERMISSIONS,
-        "boss": OPERATIONAL_PERMISSIONS,
+        "boss": OPERATIONAL_PERMISSIONS - {"finance.execute"},
         "sales": {"dashboard.view"},
         "finance": {
             "dashboard.view",

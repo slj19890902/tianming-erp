@@ -120,6 +120,20 @@ def _visible_customer_ids(user: User, db: Session) -> set[int] | None:
     return customer_scope_ids(user, db)
 
 
+def require_company_finance_read(
+    user: User = Depends(can_read),
+    db: Session = Depends(get_db),
+) -> User:
+    """Protect company-wide payables and expense facts from scoped accounts."""
+
+    if not has_unrestricted_customer_access(user, db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="经营概览仅限可查看全公司数据的账号",
+        )
+    return user
+
+
 def _settlement_context_for_customer(
     db: Session, customer_id: int
 ) -> tuple[FinanceSettlementEntity | None, set[int]]:
@@ -4804,18 +4818,23 @@ def current_customer_months(
                 "statements": [],
             },
         )
+        is_confirmed = statement["confirmation_status"] == "confirmed"
         receivable = _money_value(statement["total_receivable"])
-        invoiced = _money_value(statement["invoiced_amount"])
-        settled = _money_value(statement["settled_amount"])
+        invoiced = _money_value(statement["invoiced_amount"]) if is_confirmed else Decimal("0.00")
+        settled = _money_value(statement["settled_amount"]) if is_confirmed else Decimal("0.00")
+        confirmed_receivable = receivable if is_confirmed else Decimal("0.00")
         invoice_balance = max(receivable - invoiced, Decimal("0.00"))
         payment_balance = max(receivable - settled, Decimal("0.00"))
+        if not is_confirmed:
+            invoice_balance = Decimal("0.00")
+            payment_balance = Decimal("0.00")
         status_is_settled = statement["status"] == "settled"
         balance_is_settled = payment_balance == Decimal("0.00")
-        if status_is_settled != balance_is_settled:
+        if is_confirmed and status_is_settled != balance_is_settled:
             group["status_anomaly_count"] += 1
         group["statement_count"] += 1
         group["reconciled_receivable_amount"] = _money_value(
-            group["reconciled_receivable_amount"] + receivable
+            group["reconciled_receivable_amount"] + confirmed_receivable
         )
         group["invoiced_amount"] = _money_value(
             group["invoiced_amount"] + invoiced
@@ -4846,7 +4865,9 @@ def current_customer_months(
                 "version": int(statement["version"]),
                 "ledger_version": int(statement["ledger_version"]),
                 "invoice_status": (
-                    "invoiced"
+                    "not_ready"
+                    if not is_confirmed
+                    else "invoiced"
                     if receivable > Decimal("0.00")
                     and invoice_balance == Decimal("0.00")
                     else "partial"
@@ -7038,7 +7059,7 @@ def void_payable(
 def finance_overview(
     through_month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
     db: Session = Depends(get_db),
-    user: User = Depends(can_read),
+    user: User = Depends(require_company_finance_read),
 ) -> dict:
     through = through_month or beijing_today().strftime("%Y-%m")
     months = [_shift_month(through, offset) for offset in range(-5, 1)]

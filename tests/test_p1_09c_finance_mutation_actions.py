@@ -438,6 +438,7 @@ globalThis.axios = {{
 }};
 const vm = {{
   user:{{id:101}}, authGeneration:7, financeView:"overview", financeOverviewMonth:"2026-07",
+  canViewFinanceCosts:true,
   financeOverviewState:{{loading:false,error:"",loaded:false}},
   financeOverview:{{trend:[{{owner:"A-before"}}]}},
   financePayableState:{{loading:false,error:""}},
@@ -463,14 +464,21 @@ vm.loadFinancePayables = new AsyncFunction("sessionContext", {json.dumps(payable
 (async () => {{
   const actorAOverview = vm.loadFinance();
   await Promise.resolve();
-  const actorARequest = pending.shift();
+  const actorARequests = pending.splice(0, 3);
+  const actorARequest = actorARequests.find(item => item.url === "/api/finance/overview");
+  const actorAWorkbench = actorARequests.find(item => item.url.includes("current-customer-months"));
+  const actorACost = actorARequests.find(item => item.url.includes("cost-pool/summary"));
   if (!actorARequest || actorARequest.config.params.through_month !== "2026-07") throw new Error("overview did not freeze its month");
+  if (!actorAWorkbench || actorAWorkbench.config.params.statement_month !== "2026-07") throw new Error("workbench did not freeze its month");
+  if (!actorACost || actorACost.config.params.month !== "2026-07") throw new Error("cost summary did not freeze its month");
 
   vm.authGeneration = 8;
   vm.user = {{id:202}};
   vm.financeOverview = {{trend:[{{owner:"B"}}]}};
   vm.financeOverviewState = {{loading:true,error:"B-loading",loaded:true}};
   actorARequest.resolve({{data:{{trend:[{{owner:"A-late"}}]}}}});
+  actorAWorkbench.resolve({{data:{{summary:{{pending_reconciliation_amount:999}}}}}});
+  actorACost.resolve({{data:{{status_totals:{{draft:{{amount:999}}}}}}}});
   if (await actorAOverview !== false) throw new Error("old actor overview reported success");
   if (vm.financeOverview.trend[0].owner !== "B") throw new Error("old actor overview replaced new actor data");
   if (!vm.financeOverviewState.loading || vm.financeOverviewState.error !== "B-loading") throw new Error("old actor overview finally replaced new actor state");
@@ -479,18 +487,37 @@ vm.loadFinancePayables = new AsyncFunction("sessionContext", {json.dumps(payable
   vm.financeOverviewState = {{loading:false,error:"",loaded:false}};
   const olderOverview = vm.loadFinanceOverview();
   await Promise.resolve();
-  const olderOverviewRequest = pending.shift();
+  const olderOverviewRequests = pending.splice(0, 3);
+  const olderOverviewRequest = olderOverviewRequests.find(item => item.url === "/api/finance/overview");
   vm.financeOverviewMonth = "2026-09";
   const newerOverview = vm.loadFinanceOverview();
   await Promise.resolve();
-  const newerOverviewRequest = pending.shift();
+  const newerOverviewRequests = pending.splice(0, 3);
+  const newerOverviewRequest = newerOverviewRequests.find(item => item.url === "/api/finance/overview");
   if (olderOverviewRequest.config.params.through_month !== "2026-08" || newerOverviewRequest.config.params.through_month !== "2026-09") throw new Error("overview request months were not isolated");
   olderOverviewRequest.resolve({{data:{{trend:[{{owner:"older"}}]}}}});
+  olderOverviewRequests.find(item => item.url.includes("current-customer-months")).resolve({{data:{{summary:{{pending_reconciliation_amount:888}}}}}});
+  olderOverviewRequests.find(item => item.url.includes("cost-pool/summary")).resolve({{data:{{status_totals:{{draft:{{amount:888}}}}}}}});
   if (await olderOverview !== false) throw new Error("older overview reported success");
   if (!vm.financeOverviewState.loading || vm.financeOverview.trend[0].owner !== "B") throw new Error("older overview response or finally replaced the active request state");
   newerOverviewRequest.resolve({{data:{{trend:[{{owner:"newer"}}]}}}});
+  newerOverviewRequests.find(item => item.url.includes("current-customer-months")).resolve({{data:{{summary:{{pending_reconciliation_amount:2544}}}}}});
+  newerOverviewRequests.find(item => item.url.includes("cost-pool/summary")).resolve({{data:{{status_totals:{{draft:{{amount:0}}}}}}}});
   if (await newerOverview !== true || vm.financeOverviewState.loading || vm.financeOverview.trend[0].owner !== "newer") throw new Error("newer overview was not committed and unlocked");
+  if (Number(vm.financeOverview.workbench_summary.pending_reconciliation_amount) !== 2544) throw new Error("newer workbench summary was not committed");
 
+  vm.financeOverviewMonth = "2026-10";
+  const failedOverview = vm.loadFinanceOverview();
+  await Promise.resolve();
+  const failedOverviewRequests = pending.splice(0, 3);
+  failedOverviewRequests.find(item => item.url === "/api/finance/overview").resolve({{data:{{trend:[{{owner:"must-not-commit"}}]}}}});
+  failedOverviewRequests.find(item => item.url.includes("current-customer-months")).resolve({{data:{{summary:{{pending_reconciliation_amount:777}}}}}});
+  failedOverviewRequests.find(item => item.url.includes("cost-pool/summary")).reject(new Error("成本摘要读取失败"));
+  if (await failedOverview !== false || vm.financeOverviewState.loading) throw new Error("failed cost summary did not fail closed");
+  if (!vm.financeOverviewState.error.includes("成本摘要读取失败")) throw new Error("failed cost summary was hidden");
+  if (vm.financeOverview.trend[0].owner !== "newer" || Number(vm.financeOverview.workbench_summary.pending_reconciliation_amount) !== 2544) throw new Error("partial overview data was committed after cost failure");
+
+  vm.canViewFinanceCosts = false;
   vm.financeView = "payables";
   const olderPayables = vm.loadFinance();
   await Promise.resolve();

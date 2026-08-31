@@ -1505,11 +1505,10 @@ def _cost_pool_export_rows(
 
 @router.get("/cost-pool/export")
 def export_cost_pool_workpaper(
-    request: Request,
     month: str = Query(pattern=r"^\d{4}-\d{2}$"),
     status_filter: str | None = Query(default="confirmed", alias="status"),
     db: Session = Depends(get_db),
-    user: User = Depends(require_cost_export),
+    _user: User = Depends(require_cost_export),
 ) -> StreamingResponse:
     try:
         normalized_month = _month(month)
@@ -1597,28 +1596,6 @@ def export_cost_pool_workpaper(
             cell.number_format = "#,##0.00"
 
     content = _workbook_bytes(workbook)
-    file_hash = hashlib.sha256(content).hexdigest()
-    try:
-        _audit(
-            db,
-            request=request,
-            user=user,
-            action="finance.cost_pool.export",
-            resource="FinanceCostPoolEntry",
-            entity_id=None,
-            description="导出成本费用月度底稿",
-            details={
-                "month": normalized_month,
-                "status": status_filter,
-                "row_count": len(rows),
-                "file_size": len(content),
-                "file_sha256": file_hash,
-            },
-        )
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
     return _workbook_response(content, f"{normalized_month}_成本费用底稿.xlsx")
 
 

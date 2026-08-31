@@ -1,5 +1,7 @@
 # 2026-08-28 工业化目标模式工厂交付说明
 
+> 历史记录，禁止按本文执行发布。本文只记录旧的 `v0.22.209 / gn49 → go50` 候选；该候选已在 2026-08-31 重定位到 `v0.22.219 / ht55 → hu56`。当前执行边界见 `docs/migration_reports/2026-08-31_INDUSTRIAL_TARGET_V022219_REBASE_PREAUTH.md`。
+
 ## 1. 候选身份
 
 - 分支：`codex/industrial-target-hardening-v022207-20260828`

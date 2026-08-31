@@ -21,6 +21,8 @@ depends_on = None
 
 
 INDEX_NAME = "uq_warehouse_locations_map_rack_cell"
+IDENTITY_GUARD_TRIGGER = "trg_stocktake_orders_location_identity_guard"
+IDENTITY_GUARD_FUNCTION = "stocktake_orders_location_identity_guard"
 INVALID_BINDING_MESSAGE = (
     "P1-133 rack-cell identity upgrade blocked: invalid existing rack binding"
 )
@@ -105,6 +107,106 @@ def _assert_no_pending_stocktakes() -> None:
         raise RuntimeError(f"{PENDING_STOCKTAKE_MESSAGE}: {rendered}")
 
 
+def _create_stocktake_identity_guard() -> None:
+    connection = op.get_bind()
+    if connection.dialect.name == "sqlite":
+        connection.execute(
+            sa.text(
+                f"""
+                CREATE TRIGGER {IDENTITY_GUARD_TRIGGER}
+                BEFORE UPDATE ON stocktake_orders
+                WHEN OLD.status <> 'draft' AND NOT (
+                    NEW.location_address_version IS OLD.location_address_version
+                    AND NEW.location_position_status IS OLD.location_position_status
+                    AND NEW.published_map_revision IS OLD.published_map_revision
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'submitted stocktake location identity is immutable'
+                    );
+                END
+                """
+            )
+        )
+    elif connection.dialect.name == "postgresql":
+        connection.execute(
+            sa.text(
+                f"""
+                CREATE FUNCTION {IDENTITY_GUARD_FUNCTION}() RETURNS trigger AS $$
+                BEGIN
+                    IF OLD.status <> 'draft' AND NOT (
+                        NEW.location_address_version IS NOT DISTINCT FROM
+                            OLD.location_address_version
+                        AND NEW.location_position_status IS NOT DISTINCT FROM
+                            OLD.location_position_status
+                        AND NEW.published_map_revision IS NOT DISTINCT FROM
+                            OLD.published_map_revision
+                    ) THEN
+                        RAISE EXCEPTION
+                            'submitted stocktake location identity is immutable';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+
+                CREATE TRIGGER {IDENTITY_GUARD_TRIGGER}
+                BEFORE UPDATE ON stocktake_orders
+                FOR EACH ROW EXECUTE FUNCTION {IDENTITY_GUARD_FUNCTION}();
+                """
+            )
+        )
+
+
+def _drop_stocktake_identity_guard() -> None:
+    connection = op.get_bind()
+    if connection.dialect.name == "sqlite":
+        connection.execute(
+            sa.text(f"DROP TRIGGER IF EXISTS {IDENTITY_GUARD_TRIGGER}")
+        )
+    elif connection.dialect.name == "postgresql":
+        connection.execute(
+            sa.text(
+                f"DROP TRIGGER IF EXISTS {IDENTITY_GUARD_TRIGGER} "
+                "ON stocktake_orders"
+            )
+        )
+        connection.execute(
+            sa.text(f"DROP FUNCTION IF EXISTS {IDENTITY_GUARD_FUNCTION}()")
+        )
+
+
+def _drop_sqlite_triggers_depending_on_stocktake_orders() -> list[str]:
+    connection = op.get_bind()
+    if connection.dialect.name != "sqlite":
+        return []
+    rows = list(
+        connection.execute(
+            sa.text(
+                "SELECT name, sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND sql IS NOT NULL "
+                "AND (tbl_name = 'stocktake_orders' "
+                "OR instr(lower(sql), 'stocktake_orders') > 0) "
+                "ORDER BY name"
+            )
+        ).mappings()
+    )
+    trigger_sql: list[str] = []
+    for row in rows:
+        name = str(row["name"])
+        sql = str(row["sql"])
+        quoted_name = connection.dialect.identifier_preparer.quote(name)
+        connection.execute(sa.text(f"DROP TRIGGER IF EXISTS {quoted_name}"))
+        trigger_sql.append(sql)
+    return trigger_sql
+
+
+def _restore_sqlite_triggers(trigger_sql: list[str]) -> None:
+    connection = op.get_bind()
+    for statement in trigger_sql:
+        connection.execute(sa.text(statement))
+
+
 def upgrade() -> None:
     _assert_existing_rack_bindings_are_safe()
     _assert_no_pending_stocktakes()
@@ -128,11 +230,17 @@ def upgrade() -> None:
         sqlite_where=sa.text("map_rack_id IS NOT NULL"),
         postgresql_where=sa.text("map_rack_id IS NOT NULL"),
     )
+    _create_stocktake_identity_guard()
 
 
 def downgrade() -> None:
+    _drop_stocktake_identity_guard()
     op.drop_index(INDEX_NAME, table_name="warehouse_locations")
-    with op.batch_alter_table("stocktake_orders") as batch_op:
-        batch_op.drop_column("published_map_revision")
-        batch_op.drop_column("location_position_status")
-        batch_op.drop_column("location_address_version")
+    dependent_triggers = _drop_sqlite_triggers_depending_on_stocktake_orders()
+    try:
+        with op.batch_alter_table("stocktake_orders") as batch_op:
+            batch_op.drop_column("published_map_revision")
+            batch_op.drop_column("location_position_status")
+            batch_op.drop_column("location_address_version")
+    finally:
+        _restore_sqlite_triggers(dependent_triggers)

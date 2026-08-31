@@ -58,6 +58,24 @@ def _prepare_parent_schema(
                 order_number TEXT NOT NULL UNIQUE,
                 status TEXT NOT NULL
             );
+            CREATE TABLE stocktake_items (
+                id INTEGER PRIMARY KEY,
+                order_id INTEGER NOT NULL,
+                FOREIGN KEY(order_id) REFERENCES stocktake_orders(id)
+                    ON DELETE RESTRICT
+            );
+            CREATE TRIGGER trg_stocktake_items_insert_guard
+            BEFORE INSERT ON stocktake_items
+            WHEN NOT EXISTS (
+                SELECT 1 FROM stocktake_orders
+                WHERE id = NEW.order_id AND status = 'draft'
+            )
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'stocktake items may only be inserted into a draft order'
+                );
+            END;
             """
         )
         connection.executemany(
@@ -182,6 +200,28 @@ def test_rack_cell_identity_upgrade_downgrade_upgrade_is_zero_backfill(
             "location_position_status",
             "published_map_revision",
         }
+        assert connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type='trigger' "
+            "AND name='trg_stocktake_orders_location_identity_guard'"
+        ).fetchone() == (1,)
+        connection.execute(
+            "INSERT INTO stocktake_orders "
+            "(id, order_number, status, location_address_version, "
+            "location_position_status, published_map_revision) "
+            "VALUES (1, 'ST-IDENTITY', 'submitted', 1, 'published', 'map-v1')"
+        )
+        connection.commit()
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="submitted stocktake location identity is immutable",
+        ):
+            connection.execute(
+                "UPDATE stocktake_orders SET location_address_version = 2 WHERE id = 1"
+            )
+        connection.rollback()
+        connection.execute("DELETE FROM stocktake_orders WHERE id = 1")
+        connection.commit()
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 "INSERT INTO warehouse_locations "
@@ -197,6 +237,18 @@ def test_rack_cell_identity_upgrade_downgrade_upgrade_is_zero_backfill(
         assert {
             row[1] for row in connection.execute("PRAGMA table_info('stocktake_orders')")
         } == {"id", "order_number", "status"}
+        assert connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type='trigger' AND name='trg_stocktake_items_insert_guard'"
+        ).fetchone() == (1,)
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="stocktake items may only be inserted into a draft order",
+        ):
+            connection.execute(
+                "INSERT INTO stocktake_items (id, order_id) VALUES (1, 999)"
+            )
+        connection.rollback()
         assert connection.execute(
             "SELECT sql FROM sqlite_master "
             "WHERE type='table' AND name='warehouse_locations'"

@@ -3752,7 +3752,7 @@ def transfer_direct_completion_to_stock(
                 pallet_id=int(direct_pallet.id),
                 operator_id=operator_id,
             )
-        _ensure_finished_projection_postcondition(
+        target_projection_pallet = _ensure_finished_projection_postcondition(
             db,
             lot=lot,
             operator_id=operator_id,
@@ -3761,18 +3761,29 @@ def transfer_direct_completion_to_stock(
             pallet_code=_normalized_text(command.pallet_code),
             require_empty_pallet=True,
         )
-        target_pallet = (
-            lot.pallet_item.pallet if lot.pallet_item is not None else None
-        )
-        if (
-            target_pallet is None
-            or not target_pallet.is_current
-            or target_pallet.location_id != target_location.id
-        ):
-            raise ProductionWorkflowError("成品转库存后未能建立当前真实栈板，事务已停止", 409)
-        target_pallet.location_occupancy_key = source_pallet_occupancy_key
-        target_pallet.updated_by = operator_id
-        db.flush()
+        rack_uses_loose_lot = has_space_ledger(db) and str(
+            target_location.storage_type or ""
+        ).strip().lower() == "rack"
+        if rack_uses_loose_lot:
+            if target_projection_pallet is not None or lot.pallet_item is not None:
+                raise ProductionWorkflowError(
+                    "货架成品转库存后仍绑定实体栈板，事务已停止", 409
+                )
+        else:
+            target_pallet = target_projection_pallet or (
+                lot.pallet_item.pallet if lot.pallet_item is not None else None
+            )
+            if (
+                target_pallet is None
+                or not target_pallet.is_current
+                or target_pallet.location_id != target_location.id
+            ):
+                raise ProductionWorkflowError(
+                    "成品转库存后未能建立当前真实栈板，事务已停止", 409
+                )
+            target_pallet.location_occupancy_key = source_pallet_occupancy_key
+            target_pallet.updated_by = operator_id
+            db.flush()
         _movement(
             db,
             lot=lot,

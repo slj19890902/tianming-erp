@@ -141,11 +141,15 @@ def test_p5_incoming_table_wraps_controls_inside_fixed_columns() -> None:
         '<th>报料长(mm)</th><th class="incoming-times-cell">×</th><th>报料宽(mm)</th>',
         '<td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row.cardboard_len) }}</strong></td><td class="incoming-times-cell">×</td><td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row.cardboard_width) }}</strong></td>',
         '<td class="incoming-quantity-summary">{{ row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0 }} / {{ row.cumulative_received_quantity || 0 }} / {{ row.remaining_quantity ?? 0 }}</td>',
-        'class="incoming-action-cell"><template v-if="incomingTab===\'pending\'">',
         '<button v-if="hasPermission(\'incoming.execute\')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">',
         '<button v-if="hasPermission(\'incoming.execute\') && row.purpose_status===\'legacy_unset\' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button>',
     ):
         assert marker in INDEX
+    assert re.search(
+        r'class="incoming-action-cell">\s*'
+        r'<template v-if="incomingTab===\'pending\'">',
+        INDEX,
+    )
 
 
 def test_p5_customer_list_has_page_scoped_narrow_desktop_layout() -> None:

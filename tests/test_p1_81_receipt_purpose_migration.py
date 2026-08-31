@@ -19,7 +19,7 @@ VERSIONS = ROOT / "alembic" / "versions"
 BASE_REVISION = "ww31v8x9z20"
 P1_81_REVISION = "xx32v8x9z21"
 P1_81_INTEGRATION_ANCESTOR = "de39v8x9z28"
-CURRENT_INTEGRATION_HEAD = "hu56v8x9z45"
+CURRENT_INTEGRATION_HEAD = "iv57v8x9z46"
 P1_81_TABLES = {
     "purchase_receipt_facts",
     "incoming_receipt_purpose_allocations",

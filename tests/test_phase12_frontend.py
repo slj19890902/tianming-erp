@@ -52,7 +52,7 @@ def test_phase12_bulk_selection_and_exports_are_present() -> None:
     assert "toggleAllDelivery" in INDEX
     assert "toggleAllStatement" in INDEX
     assert "导出 Excel" in INDEX
-    assert "/export" in INDEX
+    assert "customer-export.${suffix}" in INDEX
 
 
 def test_supplier_schedule_ui_is_removed_and_wms_is_direct() -> None:

@@ -221,7 +221,6 @@ def _login(client: TestClient, role: str) -> None:
 def _create_payload() -> dict:
     return {
         "customer_id": 1,
-        "delivery_date": "2026-06-13",
         "vehicle_number": "苏E·12345",
         "items": [
             {"order_item_id": 1, "delivered_quantity": 30, "remarks": "第一批"},
@@ -396,7 +395,9 @@ def test_create_combined_delivery_then_partial_dispatch_once(
         repeated = client.put(f"/api/deliveries/{delivery_id}/dispatch")
 
     assert created.status_code == 201, created.text
-    assert created.json()["delivery_number"] == "SME-20260613-001"
+    assert created.json()["delivery_number"] == (
+        f"SME-{created.json()['delivery_date'].replace('-', '')}-001"
+    )
     assert created.json()["total_quantity"] == 70
     assert dispatched.status_code == 200
     assert dispatched.json()["status"] == "dispatched"
@@ -419,7 +420,6 @@ def test_new_delivery_stays_first_even_when_older_delivery_was_operated_later(
             "/api/deliveries",
             json={
                 "customer_id": 1,
-                "delivery_date": "2026-06-13",
                 "items": [{"order_item_id": 1, "delivered_quantity": 1}],
             },
         )
@@ -427,7 +427,6 @@ def test_new_delivery_stays_first_even_when_older_delivery_was_operated_later(
             "/api/deliveries",
             json={
                 "customer_id": 1,
-                "delivery_date": "2026-06-14",
                 "items": [{"order_item_id": 2, "delivered_quantity": 1}],
             },
         )
@@ -455,7 +454,6 @@ def test_over_delivery_without_physical_surplus_is_rejected_before_dispatch(
     app, session_factory = delivery_api_app
     payload = {
         "customer_id": 1,
-        "delivery_date": "2026-06-14",
         "items": [
             {"order_item_id": 1, "delivered_quantity": 90}
         ],
@@ -526,7 +524,6 @@ def test_telescoping_lid_delivery_capacity_uses_min_received_components(
             "/api/deliveries",
             json={
                 "customer_id": 1,
-                "delivery_date": "2026-06-13",
                 "items": [
                     {
                         "order_item_id": 2,
@@ -540,7 +537,6 @@ def test_telescoping_lid_delivery_capacity_uses_min_received_components(
             "/api/deliveries",
             json={
                 "customer_id": 1,
-                "delivery_date": "2026-06-13",
                 "items": [{"order_item_id": 2, "delivered_quantity": 99}],
             },
         )
@@ -594,7 +590,6 @@ def test_telescoping_lid_missing_component_rejects_even_with_reason(
             "/api/deliveries",
             json={
                 "customer_id": 1,
-                "delivery_date": "2026-06-13",
                 "items": [
                     {
                         "order_item_id": 2,
@@ -860,7 +855,9 @@ def test_new_delivery_uses_customer_prefix_without_changing_historical_dh(
         created = client.post("/api/deliveries", json=_create_payload())
 
     assert created.status_code == 201, created.text
-    assert created.json()["delivery_number"] == "SME-20260613-001"
+    assert created.json()["delivery_number"] == (
+        f"SME-{created.json()['delivery_date'].replace('-', '')}-001"
+    )
     with session_factory() as session:
         assert session.get(Delivery, historical_id).delivery_number == "DH-20260612-001"
 
@@ -1036,7 +1033,6 @@ def test_clearing_customer_remark_hides_it_from_detail_and_print(
         delivery_id = created.json()["id"]
         cleared_payload = {
             "customer_id": payload["customer_id"],
-            "delivery_date": payload["delivery_date"],
             "vehicle_number": payload.get("vehicle_number"),
             "items": [
                 {
@@ -1180,12 +1176,10 @@ def test_delivery_list_keeps_newest_created_delivery_first(delivery_api_app) -> 
     _seed_historical_finished_delivery_inventory(session_factory, 1)
     first_payload = {
         "customer_id": 1,
-        "delivery_date": "2026-06-13",
         "items": [{"order_item_id": 1, "delivered_quantity": 10}],
     }
     second_payload = {
         "customer_id": 1,
-        "delivery_date": "2026-06-13",
         "items": [{"order_item_id": 2, "delivered_quantity": 10}],
     }
     with TestClient(app) as client:

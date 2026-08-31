@@ -94,8 +94,10 @@ def test_n028_view_only_operational_pages_hide_write_controls() -> None:
     assert "v-if=\"canAdmin && row.receipt_status==='posted'\"" in INDEX
     assert 'canFinance() { return this.hasPermission("finance.execute"); }' in INDEX
     assert '<button v-if="canFinance" class="btn primary" @click="openStatement(financeFilters.statement_month)">' in INDEX
-    assert '<button v-if="canFinance" class="btn small" :disabled="statement.confirmation_status!==\'confirmed\' || Number(statement.pending_invoice_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(statement)">' in INDEX
-    assert '<button v-if="canFinance" class="btn small success"' in INDEX
+    assert 'v-if="canConfirmStatement && statement.confirmation_status!==\'confirmed\'"' in INDEX
+    assert 'v-else-if="canGenerateInvoiceTask && statement.confirmation_status===\'confirmed\'"' in INDEX
+    assert '@click="generateInvoiceTask(statement)"' in INDEX
+    assert 'v-if="canFinance && row.status===\'draft\'" class="btn small success"' in INDEX
     assert 'quotations:"quotations.view"' in INDEX
     assert 'if (!this.pageAllowed(page))' in INDEX
     assert "当前账号没有访问该功能的权限" in INDEX

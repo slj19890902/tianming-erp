@@ -11,7 +11,7 @@ from alembic.config import Config
 ROOT = Path(__file__).resolve().parents[1]
 PARENT_REVISION = "fj45v8x9z34"
 TARGET_REVISION = "fk46v8x9z35"
-CURRENT_HEAD_REVISION = "hu56v8x9z45"
+CURRENT_HEAD_REVISION = "iv57v8x9z46"
 
 
 def _config(monkeypatch: pytest.MonkeyPatch, database: Path) -> Config:

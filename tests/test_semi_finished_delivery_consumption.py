@@ -349,7 +349,6 @@ def create_delivery(client: TestClient, order_item_id: int, quantity: int) -> di
         "/api/deliveries",
         json={
             "customer_id": 1,
-            "delivery_date": "2026-07-10",
             "items": [
                 {
                     "order_item_id": order_item_id,

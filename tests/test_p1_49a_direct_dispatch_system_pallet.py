@@ -566,12 +566,22 @@ def test_direct_fin_transfer_to_current_twin_position_closes_spatial_loop_once(
 
     with factory() as db:
         lot = db.get(InventoryLot, lot_id)
-        assert lot is not None and lot.pallet_item is not None
-        target_pallet = lot.pallet_item.pallet
+        assert lot is not None
+        target_pallet = lot.pallet_item.pallet if lot.pallet_item is not None else None
         assert lot.warehouse_location_id == target_location_id
-        assert target_pallet.is_current is True
-        assert target_pallet.status == "active"
-        assert target_pallet.location_id == target_location_id
+        if storage_type == "ground":
+            assert target_pallet is not None
+            assert target_pallet.is_current is True
+            assert target_pallet.status == "active"
+            assert target_pallet.location_id == target_location_id
+        else:
+            assert target_pallet is None
+            assert db.scalar(
+                select(func.count()).select_from(InventoryPallet).where(
+                    InventoryPallet.location_id == target_location_id,
+                    InventoryPallet.is_current.is_(True),
+                )
+            ) == 0
         assert db.scalar(
             select(func.count()).select_from(InventoryPallet).where(
                 InventoryPallet.location_id == source_location_id,
@@ -589,14 +599,16 @@ def test_direct_fin_transfer_to_current_twin_position_closes_spatial_loop_once(
                 WarehouseGroundOccupancySlot.status == "active",
             )
         ) == 0
-        target_occupancy = db.scalar(
-            select(WarehouseGroundOccupancy).where(
-                WarehouseGroundOccupancy.pallet_id == target_pallet.id,
-                WarehouseGroundOccupancy.primary_location_id == target_location_id,
-                WarehouseGroundOccupancy.status == "active",
-            )
-        )
         if storage_type == "ground":
+            assert target_pallet is not None
+            target_occupancy = db.scalar(
+                select(WarehouseGroundOccupancy).where(
+                    WarehouseGroundOccupancy.pallet_id == target_pallet.id,
+                    WarehouseGroundOccupancy.primary_location_id
+                    == target_location_id,
+                    WarehouseGroundOccupancy.status == "active",
+                )
+            )
             assert target_occupancy is not None
             assert db.scalar(
                 select(func.count())
@@ -609,7 +621,15 @@ def test_direct_fin_transfer_to_current_twin_position_closes_spatial_loop_once(
                 )
             ) == 1
         else:
-            assert target_occupancy is None
+            assert db.scalar(
+                select(func.count())
+                .select_from(WarehouseGroundOccupancy)
+                .where(
+                    WarehouseGroundOccupancy.primary_location_id
+                    == target_location_id,
+                    WarehouseGroundOccupancy.status == "active",
+                )
+            ) == 0
         before_replay = fact_counts(db)
 
     with factory() as db:

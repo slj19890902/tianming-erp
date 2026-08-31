@@ -60,19 +60,28 @@ def test_delivery_picker_is_one_compact_two_line_location_aware_table() -> None:
     assert "delivery-batch-select-cell" in INDEX
 
 
-def test_delivery_finance_headers_dropdown_and_manual_invoice_rule_are_visible() -> None:
+def test_delivery_finance_headers_and_controlled_invoice_task_rule_are_visible() -> None:
     assert 'class="page-head delivery-page-head"' in INDEX
     assert 'class="page-head finance-page-head"' in INDEX
     assert "finance-filter-panel" in INDEX
     assert ".finance-filter-panel { overflow:visible" in INDEX
     assert "canFinance && statement.confirmation_status!=='confirmed'" not in INDEX
+    finance_current = INDEX.split(
+        '<template v-if="financeView===\'current\'">', 1
+    )[1].split('<template v-else-if="financeView===\'settled_history\'">', 1)[0]
     assert (
-        'v-if="canFinance" class="btn small" '
-        ':disabled="statement.confirmation_status!==\'confirmed\' || '
-        'Number(statement.pending_invoice_amount)<=0'
-        in INDEX
+        'v-if="canConfirmStatement && '
+        'statement.confirmation_status!==\'confirmed\'"'
+        in finance_current
     )
-    assert "statement.invoice_status==='invoiced'" in INDEX
+    assert (
+        'v-else-if="canGenerateInvoiceTask && '
+        'statement.confirmation_status===\'confirmed\'"'
+        in finance_current
+    )
+    assert '@click="generateInvoiceTask(statement)"' in finance_current
+    assert '@click="registerInvoice(statement)"' not in finance_current
+    assert "statement.invoice_status==='invoiced'" in finance_current
 
 
 def test_production_defaults_to_history_adjustment_and_staging_placement() -> None:

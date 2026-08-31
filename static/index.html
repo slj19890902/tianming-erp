@@ -677,7 +677,7 @@
       .payable-form-grid { display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;align-items:end; }
       .finance-cost-grid { display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:8px;align-items:end; }
       .finance-cost-grid .wide { grid-column:span 2; }
-      .finance-cost-summary { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px; }
+      .finance-cost-summary { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px; }
       .finance-cost-summary .finance-report-card { min-height:72px; }
       .finance-month-workbench { margin-bottom:10px; }
       .finance-month-actions { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px; }
@@ -4933,10 +4933,15 @@
                   <div class="finance-cost-summary">
                     <div class="finance-report-card"><span class="muted">已确认</span><strong class="cost-sensitive">¥ {{ money(financeCostStatusAmount('confirmed')) }}</strong></div>
                     <div class="finance-report-card"><span class="muted">待复核草稿</span><strong class="cost-sensitive">¥ {{ money(financeCostStatusAmount('draft')) }}</strong></div>
+                    <div class="finance-report-card"><span class="muted">已冻结实际材料（含税）</span><strong class="cost-sensitive">¥ {{ money(financeCostSummary.material_cost?.actual_material_cost || 0) }}</strong><span class="muted">送货明细 {{ financeCostSummary.material_cost?.covered_delivery_lines || 0 }}/{{ financeCostSummary.material_cost?.total_delivery_lines || 0 }}</span></div>
                     <div class="finance-report-card"><span class="muted">月度状态</span><strong>{{ financeCostSummary.close_ready ? '可结转' : '暂不可结转' }}</strong><span class="muted">当前只形成管理费用汇总</span></div>
                   </div>
                   <div v-if="financeCostState.error" class="notice danger" style="margin-top:10px">成本费用读取失败：{{ financeCostState.error }}</div>
                   <div v-else-if="financeCostPrimaryBlocker" class="notice warning" style="margin-top:10px">{{ financeCostPrimaryBlocker }}</div>
+                  <details v-if="financeCostSummary.material_cost?.missing_details?.length" style="margin-top:8px">
+                    <summary class="muted" style="cursor:pointer">查看材料成本缺口（先显示 {{ financeCostSummary.material_cost.missing_details.length }} 条）</summary>
+                    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>送货日期</th><th>送货单</th><th>客户</th><th>数量</th><th>缺口</th></tr></thead><tbody><tr v-for="row in financeCostSummary.material_cost.missing_details" :key="row.delivery_item_id"><td>{{ row.delivery_date }}</td><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivered_quantity }}</td><td>{{ row.reason }}</td></tr></tbody></table></div>
+                  </details>
                   <div v-if="financeCostMeta.warning" class="muted" style="margin-top:8px">{{ financeCostMeta.warning }}</div>
                 </div>
 
@@ -9490,7 +9495,7 @@
             financeCostMonth: month(),
             financeCostFilters: { status:"", category:"", center_id:"" },
             financeCostMeta: { categories:[], accounting_classes:[], allocation_bases:[], centers:[], warning:"" },
-            financeCostSummary: { status_totals:{}, confirmed_total:"0.00", by_accounting_class:[], by_category:[], by_center:[], close_ready:false, blockers:[], note:"" },
+            financeCostSummary: { status_totals:{}, confirmed_total:"0.00", by_accounting_class:[], by_category:[], by_center:[], material_cost:{actual_material_cost:"0.00",covered_delivery_lines:0,total_delivery_lines:0,missing_details:[]}, close_ready:false, blockers:[], note:"" },
             financeCostItems: [], financeCostTotal: 0,
             financeCostState: { loading:false, saving:false, importing:false, exporting:false, error:"" },
             financeCostSaveAttempt: { signature:"", idempotencyKey:"", outcomeUncertain:false },
@@ -13880,7 +13885,7 @@
             this.financeOverviewState = {loading:false,exporting:false,error:""};
             this.financeCostItems = [];
             this.financeCostTotal = 0;
-            this.financeCostSummary = {status_totals:{},confirmed_total:"0.00",by_accounting_class:[],by_category:[],by_center:[],close_ready:false,blockers:[],note:""};
+            this.financeCostSummary = {status_totals:{},confirmed_total:"0.00",by_accounting_class:[],by_category:[],by_center:[],material_cost:{actual_material_cost:"0.00",covered_delivery_lines:0,total_delivery_lines:0,missing_details:[]},close_ready:false,blockers:[],note:""};
             this.financeCostMeta = {categories:[],accounting_classes:[],allocation_bases:[],centers:[],warning:""};
             this.financeCostState = {loading:false,saving:false,importing:false,exporting:false,error:""};
             this.financeCostSaveAttempt = {signature:"",idempotencyKey:"",outcomeUncertain:false};
@@ -20606,7 +20611,7 @@
               if (this.isCancelledRequest(error) || !this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
               this.financeCostItems = [];
               this.financeCostTotal = 0;
-              this.financeCostSummary = {status_totals:{},confirmed_total:"0.00",by_accounting_class:[],by_category:[],by_center:[],close_ready:false,blockers:[],note:""};
+              this.financeCostSummary = {status_totals:{},confirmed_total:"0.00",by_accounting_class:[],by_category:[],by_center:[],material_cost:{actual_material_cost:"0.00",covered_delivery_lines:0,total_delivery_lines:0,missing_details:[]},close_ready:false,blockers:[],note:""};
               this.financeCostState.error = this.errorMessage(error);
               return false;
             } finally {

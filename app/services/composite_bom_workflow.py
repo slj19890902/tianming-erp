@@ -1133,6 +1133,11 @@ def execute_delivery_component_consumption(
         return []  # delivery dispatch is already allocated; caller stays idempotent.
 
     with db.begin_nested():
+        from app.services.material_cost_lineage import (
+            freeze_bom_direct_delivery_material_cost,
+            freeze_delivery_inventory_material_cost,
+        )
+
         plan = build_delivery_component_consumption_plan(
             db, delivery_item_id=delivery_item_id, delivery_sets=delivery_sets
         )
@@ -1148,17 +1153,16 @@ def execute_delivery_component_consumption(
                         )
                     )
                     if existing is None:
-                        db.add(
-                            BomComponentDirectDeliveryAllocation(
-                                delivery_item_id=delivery_item_id,
-                                production_completion_id=part.source_id,
-                                sales_order_item_bom_component_id=part.snapshot_id,
-                                consumed_quantity=part.quantity,
-                                reversed_quantity=0,
-                                status="active",
-                                created_by=operator_id,
-                            )
+                        direct_allocation = BomComponentDirectDeliveryAllocation(
+                            delivery_item_id=delivery_item_id,
+                            production_completion_id=part.source_id,
+                            sales_order_item_bom_component_id=part.snapshot_id,
+                            consumed_quantity=part.quantity,
+                            reversed_quantity=0,
+                            status="active",
+                            created_by=operator_id,
                         )
+                        db.add(direct_allocation)
                     else:
                         if (
                             existing.sales_order_item_bom_component_id
@@ -1176,6 +1180,16 @@ def execute_delivery_component_consumption(
                         existing.created_by = operator_id
                         existing.reversed_by = None
                         existing.reversed_at = None
+                        direct_allocation = existing
+                    db.flush()
+                    completion = db.get(ProductionCompletion, part.source_id)
+                    if completion is not None:
+                        freeze_bom_direct_delivery_material_cost(
+                            db,
+                            allocation=direct_allocation,
+                            completion=completion,
+                            operator_id=operator_id,
+                        )
                     continue
 
                 reservation = db.get(InventoryReservation, part.source_id)
@@ -1210,18 +1224,24 @@ def execute_delivery_component_consumption(
                     related_delivery_id=delivery_item.delivery_id,
                 )
                 db.flush()
-                db.add(
-                    DeliveryInventoryAllocation(
-                        delivery_item_id=delivery_item_id,
-                        reservation_id=reservation.id,
-                        consume_movement_id=movement.id,
-                        consumed_stock_quantity=part.quantity,
-                        credited_requirement_quantity=part.quantity,
-                        reversed_stock_quantity=0,
-                        reversed_requirement_quantity=0,
-                        status="active",
-                        created_by=operator_id,
-                    )
+                stock_allocation = DeliveryInventoryAllocation(
+                    delivery_item_id=delivery_item_id,
+                    reservation_id=reservation.id,
+                    consume_movement_id=movement.id,
+                    consumed_stock_quantity=part.quantity,
+                    credited_requirement_quantity=part.quantity,
+                    reversed_stock_quantity=0,
+                    reversed_requirement_quantity=0,
+                    status="active",
+                    created_by=operator_id,
+                )
+                db.add(stock_allocation)
+                db.flush()
+                freeze_delivery_inventory_material_cost(
+                    db,
+                    allocation=stock_allocation,
+                    lot=lot,
+                    operator_id=operator_id,
                 )
         db.flush()
     return plan

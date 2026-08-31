@@ -162,6 +162,9 @@ from app.models.finance_cost import (  # noqa: E402,F401
     FinanceCostCenter,
     FinanceCostPoolEntry,
 )
+from app.models.material_cost import (  # noqa: E402,F401
+    FinanceDeliveryMaterialCostFact,
+)
 from app.models.fulfillment_reminder import (  # noqa: E402,F401
     FulfillmentReminder,
     FulfillmentReminderMutation,

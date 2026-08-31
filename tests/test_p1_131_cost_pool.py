@@ -177,9 +177,11 @@ def test_cost_pool_decimal_idempotency_version_and_missing_cost_blocker(
         assert {
             blocker["code"] for blocker in body["blockers"]
         } >= {
-            "actual_material_cost_lineage_pending",
             "manufacturing_cost_unallocated",
+            "month_close_workflow_pending",
         }
+        assert body["material_cost"]["lineage_ready"] is True
+        assert body["material_cost"]["total_delivery_lines"] == 0
 
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(FinanceCostPoolEntry)) == 1
@@ -194,6 +196,9 @@ def test_cost_pool_company_scope_is_fail_closed(p1_131_cost_app) -> None:
         ).status_code == 403
         assert client.get(
             "/api/finance/cost-pool/summary", params={"month": "2026-08"}
+        ).status_code == 403
+        assert client.get(
+            "/api/finance/material-cost/coverage", params={"month": "2026-08"}
         ).status_code == 403
         assert client.get(
             "/api/finance/cost-pool/export", params={"month": "2026-08"}

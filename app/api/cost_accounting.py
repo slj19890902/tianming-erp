@@ -40,6 +40,7 @@ from app.models.finance_cost import FinanceCostCenter, FinanceCostPoolEntry
 from app.models.finance_payable import FinancePayable
 from app.models.user import User
 from app.services.audit_log import append_audit_event
+from app.services.material_cost_lineage import material_cost_coverage_report
 
 
 router = APIRouter()
@@ -1286,12 +1287,20 @@ def _summary_for_month(db: Session, month: str) -> dict:
         ):
             unallocated_manufacturing += amount
 
-    blockers = [
-        {
-            "code": "actual_material_cost_lineage_pending",
-            "message": "实际材料销货成本来源链尚未完成，禁止把缺失成本按零结转。",
-        }
-    ]
+    material_cost = material_cost_coverage_report(db, month=month)
+    blockers = []
+    if not material_cost["lineage_ready"]:
+        blockers.append(
+            {
+                "code": "actual_material_cost_lineage_incomplete",
+                "message": (
+                    "实际材料成本仍有 "
+                    f"{material_cost['uncovered_delivery_lines']} 条送货明细未完整冻结，"
+                    "禁止把缺失成本按零结转。"
+                ),
+                "count": material_cost["uncovered_delivery_lines"],
+            }
+        )
     if unallocated_manufacturing > 0:
         blockers.append(
             {
@@ -1300,6 +1309,12 @@ def _summary_for_month(db: Session, month: str) -> dict:
                 "amount": unallocated_manufacturing.quantize(MONEY),
             }
         )
+    blockers.append(
+        {
+            "code": "month_close_workflow_pending",
+            "message": "本轮先完成材料成本来源链；试算、复核、锁月和反结转将在下一闭环启用。",
+        }
+    )
     return {
         "month": month,
         "status_totals": {
@@ -1338,6 +1353,7 @@ def _summary_for_month(db: Session, month: str) -> dict:
             key=lambda item: item["amount"],
             reverse=True,
         ),
+        "material_cost": material_cost,
         "close_ready": False,
         "blockers": blockers,
         "note": "当前为管理成本费用池汇总，不是正式利润结转结果。",
@@ -1355,6 +1371,19 @@ def cost_pool_summary(
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return _summary_for_month(db, normalized_month)
+
+
+@router.get("/material-cost/coverage")
+def material_cost_coverage(
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_cost_read),
+) -> dict:
+    try:
+        normalized_month = _month(month)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return material_cost_coverage_report(db, month=normalized_month)
 
 
 def _safe_excel_text(value: object | None) -> str:
@@ -1580,6 +1609,18 @@ def export_cost_pool_workpaper(
     summary.append([f"{normalized_month} 成本费用汇总", "金额"])
     _style_header(summary)
     summary.append(["已确认成本费用", summary_data["confirmed_total"]])
+    summary.append(
+        [
+            "已冻结实际材料成本（人民币含税采购口径）",
+            summary_data["material_cost"]["actual_material_cost"],
+        ]
+    )
+    summary.append(
+        [
+            "实际材料成本送货明细覆盖率",
+            summary_data["material_cost"]["line_coverage_rate"],
+        ]
+    )
     summary.append([])
     summary.append(["按归属", "金额"])
     for item in summary_data["by_accounting_class"]:
@@ -1699,19 +1740,21 @@ def export_management_report(
             )
         ).all()
     )
-    covered_rows = [
+    catalog_covered_rows = [
         row
         for row in coverage_rows
         if Decimal(str(row.unit_cost_snapshot or 0)) > Decimal("0.00")
     ]
-    coverage_rate = (
-        Decimal(len(covered_rows)) / Decimal(len(coverage_rows))
+    catalog_coverage_rate = (
+        Decimal(len(catalog_covered_rows)) / Decimal(len(coverage_rows))
         if coverage_rows
         else Decimal("0.00")
     )
-    material_gross_profit_reference = sum(
-        (_money(row.gross_profit_amount) for row in covered_rows), Decimal("0.00")
+    catalog_material_margin_reference = sum(
+        (_money(row.gross_profit_amount) for row in catalog_covered_rows),
+        Decimal("0.00"),
     )
+    actual_material_cost = cost_summary["material_cost"]
 
     workbook = Workbook()
     summary = workbook.active
@@ -1735,9 +1778,27 @@ def export_management_report(
             cost_summary["status_totals"]["draft"]["amount"],
             "尚未进入已确认成本费用",
         ),
-        ("材料成本覆盖率", coverage_rate.quantize(Decimal("0.0001")), "有真实材料成本的对账明细占比"),
-        ("材料毛利参考", material_gross_profit_reference.quantize(MONEY), "只统计已有材料成本的明细，不含工资能耗"),
-        ("月末结转", "暂不可结转", "实际材料销货成本来源链尚未完成"),
+        (
+            "实际材料成本覆盖率",
+            actual_material_cost["line_coverage_rate"],
+            "按送货日期；仅统计已冻结采购收料来源的送货明细",
+        ),
+        (
+            "已冻结实际材料成本（人民币含税采购口径）",
+            actual_material_cost["actual_material_cost"],
+            "外币缺汇率时不并入；不含工资、能耗、外协和期间费用",
+        ),
+        (
+            "产品资料成本覆盖率",
+            catalog_coverage_rate.quantize(Decimal("0.0001")),
+            "旧产品成本资料参考，不作为正式结转成本",
+        ),
+        (
+            "产品资料毛利参考",
+            catalog_material_margin_reference.quantize(MONEY),
+            "仅供经营比较，不参与正式材料成本结转",
+        ),
+        ("月末结转", "暂不可结转", "先补齐材料来源，再进入试算、复核与锁月"),
     ]
     for label, value, note in summary_rows:
         summary.append([label, value, note])

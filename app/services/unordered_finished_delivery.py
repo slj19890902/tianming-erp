@@ -332,6 +332,16 @@ def dispatch_unordered_finished_inventory(
             allocation.consume_movement_id = movement.id
             allocation.dispatched_by = operator_id
             allocation.dispatched_at = dispatched_at
+            from app.services.material_cost_lineage import (
+                freeze_unordered_delivery_material_cost,
+            )
+
+            freeze_unordered_delivery_material_cost(
+                db,
+                allocation=allocation,
+                lot=lot,
+                operator_id=operator_id,
+            )
 
 
 def _restore_allocation_quantity(

@@ -28,6 +28,9 @@ def test_finance_keeps_four_primary_views_and_embeds_cost_pool_in_payables() -> 
     assert payables.count("下载模板") == 1
     assert payables.count("导入 Excel") == 1
     assert payables.count("导出月表") == 1
+    assert "已冻结实际材料（含税）" in payables
+    assert "查看材料成本缺口" in payables
+    assert "financeCostSummary.material_cost?.missing_details?.length" in payables
 
 
 def test_cost_pool_ui_keeps_decimal_strings_and_manual_confirmation() -> None:

@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.220"
-    assert APP_VERSION_NAME == "三人财务工作台与手机按货位盘点"
+    assert APP_VERSION == "v0.22.221"
+    assert APP_VERSION_NAME == "实际材料成本送货冻结与缺口报告"
     assert APP_BUILD_DATE == "2026-09-01"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,12 +49,19 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "四个工作区" in item and "不增加收款录入" in item for item in current_release)
-    assert any("本次更新｜" in item and "三个现场动作" in item and "同一张实测地图" in item for item in current_release)
-    assert any("本次更新｜" in item and "稳定的地图货架" in item and "不自动猜测" in item for item in current_release)
-    assert any("本次更新｜" in item and "地址版本" in item and "已发布地图版本" in item for item in current_release)
-    assert any("本次更新｜" in item and "iw58v8x9z47" in item and "ix59v8x9z48" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.220" in item and "ix59v8x9z48" in item for item in current_release)
+    assert any("本次更新｜" in item and "实际采购价" in item and "送货消耗" in item for item in current_release)
+    assert any("本次更新｜" in item and "不可改成本事实" in item and "不重复记账" in item for item in current_release)
+    assert any("本次更新｜" in item and "可展开缺口" in item and "不按零成本" in item for item in current_release)
+    assert any("本次更新｜" in item and "产品资料毛利参考" in item and "不开放正式月结" in item for item in current_release)
+    assert any("本次更新｜" in item and "iy60v8x9z49" in item and "不自动回填旧送货" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.221" in item and "iy60v8x9z49" in item for item in current_release)
+    prior_release_220 = [item for item in APP_CHANGELOG if item.startswith("v0.22.220：")]
+    assert any("本次更新｜" in item and "四个工作区" in item and "不增加收款录入" in item for item in prior_release_220)
+    assert any("本次更新｜" in item and "三个现场动作" in item and "同一张实测地图" in item for item in prior_release_220)
+    assert any("本次更新｜" in item and "稳定的地图货架" in item and "不自动猜测" in item for item in prior_release_220)
+    assert any("本次更新｜" in item and "地址版本" in item and "已发布地图版本" in item for item in prior_release_220)
+    assert any("本次更新｜" in item and "iw58v8x9z47" in item and "ix59v8x9z48" in item for item in prior_release_220)
+    assert any("如何验证｜" in item and "v0.22.220" in item and "ix59v8x9z48" in item for item in prior_release_220)
     prior_release_219 = [item for item in APP_CHANGELOG if item.startswith("v0.22.219：")]
     assert any("本次更新｜" in item and "四个工作台" in item and "不新增收款" in item for item in prior_release_219)
     assert any("本次更新｜" in item and "一步撤销确认" in item and "红冲重开" in item for item in prior_release_219)

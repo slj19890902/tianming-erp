@@ -2477,6 +2477,16 @@ def consume_semi_finished_reservation(
             )
             db.add(allocation)
             db.flush()
+            from app.services.material_cost_lineage import (
+                freeze_delivery_inventory_material_cost,
+            )
+
+            freeze_delivery_inventory_material_cost(
+                db,
+                allocation=allocation,
+                lot=refreshed_lot,
+                operator_id=operator_id,
+            )
     return SemiFinishedReservationMutation(reservation, movement, allocation)
 
 

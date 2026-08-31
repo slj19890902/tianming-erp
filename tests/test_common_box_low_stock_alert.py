@@ -1098,6 +1098,16 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
         assert repeated_stock.json()["received_inventory_lot_id"] == (
             stocked_item["inventory_lot"]["id"]
         )
+        conflicting_stock_replay = client.put(
+            f"/api/incoming/receive/sr{replenishment_item_id}",
+            json={
+                "received_quantity": 45,
+                "surplus_disposition": "finished",
+                "idempotency_key": "uat-warning-board-preparation-incoming",
+            },
+        )
+        assert conflicting_stock_replay.status_code == 409
+        assert "幂等键" in conflicting_stock_replay.text
         with factory() as db:
             assert int(db.scalar(select(func.count(InventoryLot.id))) or 0) == (
                 lot_count_before_repeat

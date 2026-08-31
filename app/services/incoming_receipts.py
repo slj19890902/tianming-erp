@@ -1490,10 +1490,10 @@ def _idempotent_receipt_item(
         )
     normalized_action = (resolution_action or "").strip() or None
     normalized_reason = (resolution_reason or "").strip() or None
+    normalized_disposition = (surplus_disposition or "").strip() or None
     if allocation is not None:
         # Frozen-purpose clients do not submit the server-derived pending
         # marker.  Compare only client-controlled fields on replay.
-        submitted_disposition = (surplus_disposition or "").strip() or None
         stored_disposition = str(allocation.surplus_disposition or "not_applicable")
         expected_disposition = (
             None if stored_disposition == "not_applicable" else stored_disposition
@@ -1507,8 +1507,15 @@ def _idempotent_receipt_item(
             normalized_action is None
             and normalized_reason is None
             and surplus_location_id is None
-            and submitted_disposition == expected_disposition
+            and normalized_disposition == expected_disposition
             and row.resolution_action == expected_action
+        )
+    elif requested_stock_item_id is not None:
+        same_resolution = (
+            row.resolution_action == normalized_action
+            and row.resolution_reason == normalized_reason
+            and normalized_disposition is None
+            and surplus_location_id is None
         )
     else:
         same_resolution = (
@@ -1563,6 +1570,7 @@ def _receive_stock_replenishment_one(
     received_quantity: int | None,
     resolution_action: str | None,
     resolution_reason: str | None,
+    surplus_disposition: str | None,
     surplus_location_id: int | None,
     idempotency_key: str,
     audit_context: dict[str, object] | None = None,
@@ -1603,7 +1611,7 @@ def _receive_stock_replenishment_one(
             raise IncomingReceiptError("补库来料等量收货不需要选择差异处理方式")
         resolution_status = "not_required"
         variance_type = "matched"
-    if surplus_location_id is not None:
+    if (surplus_disposition or "").strip() or surplus_location_id is not None:
         raise IncomingReceiptError("补库片料由系统自动进入原料暂存区，无需另选余量库位")
 
     now = utc_now_naive()

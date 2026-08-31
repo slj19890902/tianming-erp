@@ -66,6 +66,7 @@ def test_old_direct_dispatch_pallet_is_recommended_without_writing_location(
     assert delayed["available_target_count"] == 1
     assert delayed["targets"][0]["location_id"] == ids["delayed_dispatch_target"]
     assert delayed["items"][0]["pallet_id"] == ids["first_pallet"]
+    assert delayed["items"][0]["source_floor_code"] == "1F"
     assert delayed["items"][0]["idle_days"] >= 5
     assert delayed["items"][0]["can_plan_move"] is True
 
@@ -141,6 +142,7 @@ def test_current_map_direct_completion_pallet_is_recommended_not_only_legacy_sta
     assert delayed["candidate_count"] == 1
     assert delayed["items"][0]["pallet_id"] == ids["first_pallet"]
     assert delayed["items"][0]["source_location_id"] == ids["floor3_target"]
+    assert delayed["items"][0]["source_floor_code"] == "3F"
 
 
 def test_unmapped_direct_completion_pallet_is_not_offered_as_a_move_candidate(

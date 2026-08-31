@@ -525,6 +525,11 @@ def add_frozen_purpose_chain(
     allocation = IncomingReceiptPurposeAllocation(
         incoming_receipt_item_id=receipt_item.id,
         purpose_contract_status_snapshot="frozen",
+        surplus_disposition=(
+            "semi_finished_reserve"
+            if reserve_sheet_qty > 0
+            else "not_applicable"
+        ),
         purchase_purpose_source_snapshot_id=snapshot.id,
         purchase_receipt_fact_id=receipt_fact.id,
         supplier_requisition_order_item_id=supplier_item.id,

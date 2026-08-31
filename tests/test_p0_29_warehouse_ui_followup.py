@@ -52,6 +52,8 @@ def test_delayed_dispatch_rows_focus_the_real_map_location_before_optional_move(
     assert "focusDelayedDispatchCandidate" in SOURCE
     assert "延期待送地图定位" in SOURCE
     assert "整理移货" in SOURCE
+    assert 'setFloorCode(candidate.source_floor_code)' in SOURCE
+    assert 'visualLocations.find((item) => item.location_id === candidate.source_location_id)' in SOURCE
     assert 'disabled={!canExecuteWarehouse || !candidate.can_plan_move} onClick={() => prepareDelayedDispatchMove(candidate)}' not in SOURCE
 
 

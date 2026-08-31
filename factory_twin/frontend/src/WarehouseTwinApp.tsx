@@ -297,6 +297,7 @@ interface DelayedDispatchCandidate {
   pallet_code: string;
   version: number;
   source_location_id: number;
+  source_floor_code: "1F" | "3F";
   source_location_code: string;
   source_location_name: string;
   completion_id: number;
@@ -3301,12 +3302,14 @@ export function WarehouseTwinApp() {
   };
 
   const prepareDelayedDispatchMove = async (candidate: DelayedDispatchCandidate) => {
-    if (!canExecuteWarehouse || !dispatchStagingLocation) {
+    const sourceLocation = visualLocations.find((item) => item.location_id === candidate.source_location_id);
+    if (!canExecuteWarehouse || !sourceLocation) {
       setWarehouseOperationMessage("当前账号不能执行仓库移货，或待送位置尚未加载；请刷新后重试。");
       return;
     }
-    const pallet = dispatchStagingPallets.find((item) => item.pallet_id === candidate.pallet_id);
-    const source = pallet ? palletMoveSource(dispatchStagingLocation, pallet) : null;
+    const pallet = (inventoryLocationPallets(sourceLocation) as DashboardPallet[])
+      .find((item) => item.pallet_id === candidate.pallet_id);
+    const source = pallet ? palletMoveSource(sourceLocation, pallet) : null;
     if (!source) {
       setWarehouseOperationMessage("这块待送栈板已变化，请刷新后按最新库存重新选择。");
       return;
@@ -3327,9 +3330,9 @@ export function WarehouseTwinApp() {
     setSearchPanelOpen(false);
     setPendingAreaCode(null);
     setPendingLocationId(candidate.source_location_id);
-    setFloorCode("1F");
+    setFloorCode(candidate.source_floor_code);
     setWarehouseOperationMessage(
-      `${candidate.source_location_name || "一楼待送区"} 已定位；紫色货位是这批货物的当前地图位置。`
+      `${candidate.source_location_name || "当前待送位置"} 已定位；紫色货位是这批货物的当前地图位置。`
     );
   };
 

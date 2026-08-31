@@ -44,7 +44,10 @@ def test_reprint_button_shows_busy_state_and_shares_delivery_lock() -> None:
 
 
 def test_reprint_is_single_flight_freezes_target_and_recovers(tmp_path: Path) -> None:
-    body = _method_body("async printDelivery(row) {", "async editDelivery(row) {")
+    body = _method_body(
+        "async printDelivery(row) {",
+        "async correctDeliveryActualDate(row) {",
+    )
     assert "/dispatch" not in body
     assert "/printed" not in body
     source = f"""

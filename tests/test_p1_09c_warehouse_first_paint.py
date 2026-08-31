@@ -154,6 +154,6 @@ def test_location_ledger_eager_loads_current_map_status_without_n_plus_one(tmp_p
 
     assert len(payload["items"]) == 30
     assert {row["map_status"] for row in payload["items"]} == {"current_map_mapped"}
-    # One ledger query plus five fixed-size projection preload queries.  The
+    # One ledger query plus four fixed-size projection preload queries.  The
     # count must not grow with the 30 locations.
-    assert selects == 6
+    assert selects == 5

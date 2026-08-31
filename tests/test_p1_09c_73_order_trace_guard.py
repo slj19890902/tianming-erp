@@ -68,7 +68,7 @@ def test_top_level_order_read_modals_share_latest_request_guard() -> None:
         "async ensureOrderGroupDetail(group, {force=false}={}) {",
         "async toggleOrderGroup(group) {",
     )
-    group = _method_body("async openOrderGroupDetail(group) {", "async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {")
+    group = _method_body("async openOrderGroupDetail(group) {", "async openCostGaps() {")
     detail = _method_body("async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {", "openEstimatedCost(order, item) {")
     trace = _method_body("async openOrderTrace(order, item) {", "traceCurrentEvent() {")
 
@@ -166,7 +166,7 @@ def test_order_detail_and_trace_reads_remain_read_only() -> None:
                 "async ensureOrderGroupDetail(group, {force=false}={}) {",
                 "async toggleOrderGroup(group) {",
             ),
-            _method_body("async openOrderGroupDetail(group) {", "async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {"),
+            _method_body("async openOrderGroupDetail(group) {", "async openCostGaps() {"),
             _method_body("async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {", "openEstimatedCost(order, item) {"),
             _method_body("async openOrderTrace(order, item) {", "traceCurrentEvent() {"),
             _method_body("async reloadOrderTrace() {", "async rollbackTraceEvent(event) {"),

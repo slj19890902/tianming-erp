@@ -589,6 +589,7 @@ def _delayed_direct_dispatch_projection(
                 "pallet_code": pallet.pallet_code,
                 "version": int(pallet.version),
                 "source_location_id": int(pallet.location_id),
+                "source_floor_code": f"{int(pallet.location.warehouse_floor)}F",
                 "source_location_code": pallet.location.location_code,
                 "source_location_name": employee_location_name(pallet.location),
                 "completion_id": int(completion.id),

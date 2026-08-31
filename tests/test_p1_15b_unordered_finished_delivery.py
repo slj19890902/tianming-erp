@@ -80,15 +80,21 @@ class UnorderedFinishedSeed:
 
 
 @pytest.fixture()
-def unordered_finished_delivery_app(tmp_path: Path):
+def unordered_finished_delivery_app(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
     """Small, isolated application containing delivery, order and inventory facts."""
 
+    from app.api import deliveries as deliveries_api
     from app.api.auth import router as auth_router
     from app.api.deliveries import pick_router, router as deliveries_router
     from app.api.deps import get_db
     from app.api.finance import router as finance_router
     from app.api.orders import router as orders_router
     from app.api.warehouse import router as warehouse_router
+
+    monkeypatch.setattr(deliveries_api, "beijing_today", lambda: date(2026, 7, 29))
 
     engine = create_sqlite_engine(tmp_path / "p1-15b-unordered-finished.sqlite3")
     Base.metadata.create_all(engine)
@@ -435,7 +441,7 @@ def _mixed_payload(
 ) -> dict:
     return {
         "customer_id": seed.customer_a_id,
-        "delivery_date": "2026-08-02",
+        "delivery_date": "2026-07-29",
         "source_mode": "mixed",
         "items": [
             {
@@ -704,7 +710,7 @@ def test_unordered_finished_draft_can_keep_price_pending_without_stock_write(
     )
     payload = {
         "customer_id": seed.customer_a_id,
-        "delivery_date": "2026-08-04",
+        "delivery_date": "2026-07-29",
         "source_mode": "unordered_finished",
         "items": [
             {

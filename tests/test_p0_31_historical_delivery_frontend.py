@@ -6,8 +6,8 @@ VERSION = Path("app/version.py").read_text(encoding="utf-8")
 
 
 def test_release_metadata_describes_p0_31_without_claiming_data_backfill() -> None:
-    assert 'APP_VERSION = "v0.22.213"' in VERSION
-    assert 'APP_VERSION_NAME = "历史送货补录与对账归属月份闭环"' in VERSION
+    assert "_V022213_CHANGES = [" in VERSION
+    assert "新增受控的历史送货补录模式" in VERSION
     assert "不自动修改既有送货、回单、对账、开票或收款数据" in VERSION
     assert "gp51v8x9z40" in VERSION
 

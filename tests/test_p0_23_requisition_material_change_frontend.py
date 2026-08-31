@@ -137,6 +137,21 @@ def test_order_quantity_can_be_received_before_optional_reserve_has_a_location(
         "incomingReceiptExecutionIssue(row) {",
         "toggleAllIncoming(checked) {",
     )
+    desktop_surplus_body = _function_body(
+        INDEX,
+        "incomingFrozenSurplusQuantity(row) {",
+        "incomingSurplusDispositionRequired(row) {",
+    )
+    desktop_surplus_required_body = _function_body(
+        INDEX,
+        "incomingSurplusDispositionRequired(row) {",
+        "incomingPurposeProjection(row) {",
+    )
+    desktop_projection_body = _function_body(
+        INDEX,
+        "incomingPurposeProjection(row) {",
+        "onIncomingQuantityChanged(row) {",
+    )
     mobile = (ROOT / "static" / "incoming.html").read_text(encoding="utf-8")
     mobile_body = _function_body(
         mobile,
@@ -148,8 +163,18 @@ def test_order_quantity_can_be_received_before_optional_reserve_has_a_location(
     script = f"""
 const FunctionCtor=Function;
 const desktop=new FunctionCtor("row",{json.dumps(desktop_body, ensure_ascii=False)});
+const desktopSurplus=new FunctionCtor("row",{json.dumps(desktop_surplus_body, ensure_ascii=False)});
+const desktopSurplusRequired=new FunctionCtor("row",{json.dumps(desktop_surplus_required_body, ensure_ascii=False)});
+const desktopProjection=new FunctionCtor("row",{json.dumps(desktop_projection_body, ensure_ascii=False)});
+const vm={{
+  incomingFrozenSurplusQuantity(row){{return desktopSurplus.call(vm,row);}},
+  incomingSurplusDispositionRequired(row){{return desktopSurplusRequired.call(vm,row);}},
+  incomingPurposeProjection(row){{return desktopProjection.call(vm,row);}},
+}};
 const mobile=new FunctionCtor("item",{json.dumps(mobile_body, ensure_ascii=False)});
 const row={{
+  purpose_status:"frozen",
+  surplus_disposition:"semi_finished_reserve",
   incoming_quantity:602,
   expected_order_purpose_sheet_qty:600,
   expected_reserve_purpose_sheet_qty:2,
@@ -161,10 +186,10 @@ const row={{
   purpose_issue:"一楼原料区域尚无已发布真实排位",
 }};
 function expect(value,message){{if(!value)throw new Error(message);}}
-expect(desktop(row).includes("一楼原料"),"desktop allowed reserve sheets without a location");
+expect(desktop.call(vm,row).includes("一楼原料"),"desktop allowed reserve sheets without a location");
 expect(mobile(row).includes("一楼原料"),"mobile allowed reserve sheets without a location");
 row.incoming_quantity=600;
-expect(desktop(row)==="","desktop blocked the order-purpose quantity");
+expect(desktop.call(vm,row)==="","desktop blocked the order-purpose quantity");
 expect(mobile(row)==="","mobile blocked the order-purpose quantity");
 """
     target = tmp_path / "p0-23-order-purpose-receipt.js"

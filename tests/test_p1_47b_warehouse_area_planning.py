@@ -2287,7 +2287,7 @@ def test_legacy_v11_area_name_draft_survives_overlay_and_publish_keeps_identity(
             )
             assert changed["applied"] is True
             assert changed["item"]["formal_area_name"] == "三楼右侧成品整箱区"
-            assert changed["item"]["employee_area_name"] == "右区F1·右侧成品整箱区"
+            assert changed["item"]["employee_area_name"] == "三楼右侧成品整箱区"
             assert changed["item"]["legacy_v11_name_only"] is True
             assert db.get(WarehouseArea, area_id).area_name == "F1 区"
 
@@ -2300,7 +2300,7 @@ def test_legacy_v11_area_name_draft_survives_overlay_and_publish_keeps_identity(
                 if item["id"] == "zone-f1"
             )
             assert draft_feature["formal_area_name"] == "三楼右侧成品整箱区"
-            assert draft_feature["employee_area_name"] == "右区F1·右侧成品整箱区"
+            assert draft_feature["employee_area_name"] == "三楼右侧成品整箱区"
 
             validated = warehouse_api.validate_twin_layout_draft(
                 "3F",
@@ -2433,12 +2433,12 @@ def test_legacy_v11_area_name_draft_survives_overlay_and_publish_keeps_identity(
                 position_status="mapped",
                 area_sequence=1,
             )
-            assert area_payload["employee_area_name"] == "右区F1·右侧成品整箱区"
-            assert candidate["area_name"] == "右区F1·右侧成品整箱区"
-            assert twin_payload["area_name"] == "右区F1·右侧成品整箱区"
-            assert address_payload["area_name"] == "右区F1·右侧成品整箱区"
+            assert area_payload["employee_area_name"] == "三楼右侧成品整箱区"
+            assert candidate["area_name"] == "三楼右侧成品整箱区"
+            assert twin_payload["area_name"] == "三楼右侧成品整箱区"
+            assert address_payload["area_name"] == "三楼右侧成品整箱区"
             assert candidate["employee_location_name"].startswith(
-                "三楼 右区F1·右侧成品整箱区·"
+                "三楼右侧成品整箱区·F1-"
             )
             assert twin_payload["employee_location_name"] == candidate[
                 "employee_location_name"

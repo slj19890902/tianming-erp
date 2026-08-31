@@ -110,24 +110,28 @@ ADMIN_ONLY_PERMISSIONS = frozenset(
         "audit.view",
     }
 )
+BOSS_FINANCE_MUTATION_PERMISSIONS = frozenset(
+    {
+        "finance.execute",
+        "finance.return_receipt.period.adjust",
+        "finance.customer_charge.manage",
+        "finance.customer_charge.confirm",
+        "finance.statement.confirm",
+        "finance.invoice_task.generate",
+        "finance.invoice_result.register",
+        "finance.invoice_profile.manage",
+        "finance.invoice_attachment.manage",
+        "finance.cost.manage",
+        "finance.cost.confirm",
+    }
+)
 BOSS_DEFAULT_PERMISSIONS = frozenset(
     permission
     for permission in ALL_PERMISSIONS
     if not permission.startswith(("system.", "pdf_training."))
     and permission != "users.manage"
     and permission != "deliveries.over_delivery"
-    and permission
-    not in {
-        "finance.statement.confirm",
-        "finance.invoice_task.generate",
-        "finance.invoice_result.register",
-        "finance.invoice_profile.manage",
-        "finance.invoice_attachment.manage",
-        "finance.customer_charge.manage",
-        "finance.customer_charge.confirm",
-        "finance.cost.manage",
-        "finance.cost.confirm",
-    }
+    and permission not in BOSS_FINANCE_MUTATION_PERMISSIONS
     and permission not in ADMIN_ONLY_PERMISSIONS
 )
 ROLE_DEFAULT_PERMISSIONS: dict[str, frozenset[str]] = {
@@ -192,6 +196,8 @@ def effective_permissions(user: User) -> frozenset[str]:
             permissions.add(override.permission_code)
         else:
             permissions.discard(override.permission_code)
+    if user.role == "boss":
+        permissions.difference_update(BOSS_FINANCE_MUTATION_PERMISSIONS)
     permissions.difference_update(ADMIN_ONLY_PERMISSIONS)
     return frozenset(permissions)
 

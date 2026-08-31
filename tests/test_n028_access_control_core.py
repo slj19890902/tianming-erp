@@ -103,12 +103,23 @@ def test_sales_defaults_are_business_limited_and_boss_excludes_backup(
     access_control_app,
 ) -> None:
     from app.api.deps import SALES_DEFAULT_PERMISSIONS, has_permission
+    from app.models.access_control import UserPermissionOverride
     from app.models.user import User
 
     app, factory, ids, _customer_ids, _engine = access_control_app
     with factory() as db:
         sales = db.get(User, ids["sales"])
         boss = db.get(User, ids["boss"])
+        db.add(
+            UserPermissionOverride(
+                user_id=boss.id,
+                permission_code="finance.execute",
+                is_allowed=True,
+                granted_by=ids["admin"],
+            )
+        )
+        db.flush()
+        db.expire(boss, ["permission_overrides"])
         assert SALES_DEFAULT_PERMISSIONS == frozenset(
             {
                 "customers.view",
@@ -159,12 +170,17 @@ def test_sales_defaults_are_business_limited_and_boss_excludes_backup(
         ):
             assert not has_permission(sales, permission)
         assert has_permission(boss, "orders.rollback")
+        assert has_permission(boss, "finance.view")
+        assert not has_permission(boss, "finance.execute")
+        assert not has_permission(boss, "finance.return_receipt.period.adjust")
         assert not has_permission(boss, "users.manage")
         assert not has_permission(boss, "system.backup")
 
     with TestClient(app) as client:
         boss_payload = _login(client, "boss", "BossPass123!")
         assert "orders.rollback" in boss_payload["permissions"]
+        assert "finance.view" in boss_payload["permissions"]
+        assert "finance.execute" not in boss_payload["permissions"]
         assert "system.backup" not in boss_payload["permissions"]
         assert client.get("/api/auth/users").status_code == 403
 

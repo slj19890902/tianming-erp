@@ -1428,6 +1428,7 @@ def test_current_finance_groups_customer_month_and_uses_real_balances(
             first_statement.invoiced_amount = Decimal("100.00")
             first_statement.settled_amount = Decimal("80.00")
             first_statement.status = "unsettled"
+            first_statement.confirmation_status = "confirmed"
             session.add(
                 Statement(
                     statement_number="ST-202606-0002",
@@ -1438,6 +1439,7 @@ def test_current_finance_groups_customer_month_and_uses_real_balances(
                     invoiced_amount=Decimal("40.00"),
                     settled_amount=Decimal("20.00"),
                     status="settled",
+                    confirmation_status="confirmed",
                     created_by=1,
                 )
             )
@@ -1460,6 +1462,7 @@ def test_current_finance_groups_customer_month_and_uses_real_balances(
                     invoiced_amount=Decimal("50.00"),
                     settled_amount=Decimal("50.00"),
                     status="unsettled",
+                    confirmation_status="confirmed",
                     created_by=1,
                 )
             )
@@ -1495,8 +1498,10 @@ def test_current_finance_returns_month_customer_options_without_extra_request(
     app, session_factory = finance_api_app
     with TestClient(app) as client:
         _login(client, "finance")
-        _create_statement(client)
+        first = _create_statement(client)
         with session_factory() as session:
+            first_statement = session.get(Statement, first["id"])
+            first_statement.confirmation_status = "confirmed"
             second_customer = Customer(
                 customer_number=2,
                 customer_code="SECOND",
@@ -1516,6 +1521,7 @@ def test_current_finance_returns_month_customer_options_without_extra_request(
                     invoiced_amount=Decimal("0.00"),
                     settled_amount=Decimal("0.00"),
                     status="unsettled",
+                    confirmation_status="confirmed",
                     created_by=1,
                 )
             )
@@ -1631,6 +1637,7 @@ def test_settled_history_groups_full_customer_month_and_supports_search(
                 invoiced_amount=Decimal("100.00"),
                 settled_amount=Decimal("100.00"),
                 status="unsettled",
+                confirmation_status="confirmed",
                 created_by=1,
             )
             session.add(second)
@@ -1735,6 +1742,7 @@ def test_settled_history_excludes_customer_month_with_any_balance(
                 invoiced_amount=Decimal("90.00"),
                 settled_amount=Decimal("100.00"),
                 status="settled",
+                confirmation_status="confirmed",
                 created_by=1,
             )
             session.add(second)

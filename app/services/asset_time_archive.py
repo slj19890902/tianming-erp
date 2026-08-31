@@ -1033,7 +1033,10 @@ def build_mold_detail_timeline(
     movements = db.scalars(
         select(MoldLocationMovement)
         .where(MoldLocationMovement.mold_tool_id == mold.id)
-        .order_by(MoldLocationMovement.moved_at, MoldLocationMovement.id)
+        .order_by(
+            MoldLocationMovement.moved_at.desc(),
+            MoldLocationMovement.id.desc(),
+        )
     ).all()
     movement_labels = {
         "archive": "封存移位",
@@ -1063,7 +1066,10 @@ def build_mold_detail_timeline(
     repair_events = db.scalars(
         select(MoldRepairEvent)
         .where(MoldRepairEvent.mold_tool_id == mold.id)
-        .order_by(MoldRepairEvent.occurred_at, MoldRepairEvent.id)
+        .order_by(
+            MoldRepairEvent.occurred_at.desc(),
+            MoldRepairEvent.id.desc(),
+        )
     ).all()
     for repair_event in repair_events:
         events.append(
@@ -1103,7 +1109,7 @@ def build_mold_detail_timeline(
             OperationLog.entity_id == mold.id,
             OperationLog.action_code == "mold.legacy_disabled.restore",
         )
-        .order_by(OperationLog.created_at, OperationLog.id)
+        .order_by(OperationLog.created_at.desc(), OperationLog.id.desc())
     ).all()
     for log in legacy_restore_logs:
         events.append(

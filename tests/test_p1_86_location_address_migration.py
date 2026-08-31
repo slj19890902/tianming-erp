@@ -16,7 +16,7 @@ BASE_REVISION = "xx32v8x9z21"
 P1_86_REVISION = "bb36v8x9z25"
 P1_87_REVISION = "cc37v8x9z26"
 P1_86_INTEGRATION_ANCESTOR = "dd38v8x9z27"
-CURRENT_INTEGRATION_HEAD = "go50v8x9z39"
+CURRENT_INTEGRATION_HEAD = "hu56v8x9z45"
 P1_86_TABLES = {
     "warehouse_location_aliases",
     "warehouse_location_address_mutations",

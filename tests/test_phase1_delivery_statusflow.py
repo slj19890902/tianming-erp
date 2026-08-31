@@ -198,7 +198,6 @@ def _login(client: TestClient, role: str) -> None:
 def _create_payload() -> dict:
     return {
         "customer_id": 1,
-        "delivery_date": "2026-06-13",
         "vehicle_number": "苏E·12345",
         "items": [
             {"order_item_id": 1, "delivered_quantity": 30, "remarks": "第一批"},
@@ -308,7 +307,6 @@ def test_edit_pending_updates_fields_and_keeps_number(delivery_api_app) -> None:
         edited = client.put(
             f"/api/deliveries/{delivery_id}",
             json={
-                "delivery_date": "2026-06-14",
                 "vehicle_number": "苏E·99999",
                 "items": [
                     {"order_item_id": 1, "delivered_quantity": 10},
@@ -377,7 +375,6 @@ def test_edit_and_dispatch_keep_lines_and_quantities_consistent(
         delivery_id = _create_pending(setup_client)
 
     edit_payload = {
-        "delivery_date": "2026-06-14",
         "vehicle_number": "苏E·并发",
         "items": [
             {"order_item_id": 1, "delivered_quantity": 10},

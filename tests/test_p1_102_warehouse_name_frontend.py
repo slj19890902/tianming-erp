@@ -31,7 +31,7 @@ def test_map_and_formal_area_options_use_the_employee_area_projection() -> None:
 
 def test_bound_area_name_remains_editable_but_area_code_identity_stays_locked() -> None:
     assert (
-        '<span>正式区域编号</span><input maxLength={30} '
+        '<span>区域编号</span><input maxLength={30} '
         'disabled={Boolean(selectedExistingAreaId)}'
         in TWIN_APP
     )

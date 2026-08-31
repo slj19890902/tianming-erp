@@ -786,6 +786,7 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             area_code="E1",
             warehouse_type="finished",
             warehouse_floor=3,
+            storage_type="ground",
             source_version="V11",
             placement_status="placed",
             is_active=True,

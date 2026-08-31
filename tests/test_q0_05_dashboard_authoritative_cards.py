@@ -249,7 +249,10 @@ def test_pending_delivery_customer_summary_matches_page_without_item_n_plus_one(
     finally:
         event.remove(engine, "before_cursor_execute", count_query)
 
-    assert summary_query_count <= 12
+    # Current delivery readiness includes one fixed, batched lookup for
+    # customer/product surplus finished goods.  The budget remains independent
+    # of the 30 order-item rows and therefore still guards against N+1 queries.
+    assert summary_query_count <= 13
     assert len(summaries) == 2
     assert {row["customer_id"] for row in summaries} == {
         row["customer_id"] for row in page_rows

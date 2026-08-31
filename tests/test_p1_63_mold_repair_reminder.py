@@ -93,7 +93,19 @@ def test_repair_lifecycle_is_independent_idempotent_and_audited(mold_app) -> Non
         detail = client.get(f"/api/warehouse/molds/{mold_id}/detail")
         assert detail.status_code == 200, detail.text
         repair_timeline = [row for row in detail.json()["timeline"] if row["event_type"] == "mold_repair_status"]
-        assert [row["label"] for row in repair_timeline] == ["标记待维修", "维修完毕"]
+        assert [
+            (
+                row["label"],
+                row["before_status"],
+                row["after_status"],
+                row["expected_version"],
+                row["resulting_version"],
+            )
+            for row in repair_timeline
+        ] == [
+            ("维修完毕", "needs_repair", "normal", 2, 3),
+            ("标记待维修", "normal", "needs_repair", 1, 2),
+        ]
         client.post("/api/auth/logout")
         _login(client, "sales")
         denied = client.post(

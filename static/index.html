@@ -20096,8 +20096,12 @@
               requestAuthGeneration === this.authGeneration
               && requestUserId === (this.user?.id ?? null)
             );
-            if (this.financeView === "overview") return this.loadFinanceOverview();
-            if (this.financeView === "payables") return this.loadFinancePayables();
+            if (this.financeView === "overview") {
+              return this.loadFinanceOverview({authGeneration:requestAuthGeneration,userId:requestUserId});
+            }
+            if (this.financeView === "payables") {
+              return this.loadFinancePayables({authGeneration:requestAuthGeneration,userId:requestUserId});
+            }
             if (this.financeView === "invoice_tasks") {
               return this.loadInvoiceTasks({authGeneration:requestAuthGeneration,userId:requestUserId});
             }
@@ -20214,11 +20218,28 @@
               if (sessionIsCurrent()) this.financeCurrentState.loading = false;
             }
           },
-          async loadFinanceOverview() {
+          async loadFinanceOverview(sessionContext = null) {
+            const requestAuthGeneration = sessionContext?.authGeneration ?? this.authGeneration;
+            const requestUserId = sessionContext?.userId ?? (this.user?.id ?? null);
+            const sessionIsCurrent = () => (
+              requestAuthGeneration === this.authGeneration
+              && requestUserId === (this.user?.id ?? null)
+            );
+            const requestKey = "finance:overview";
+            const controller = this.beginLatestRequest(requestKey);
+            const requestIsCurrent = () => (
+              latestRequestControllers.get(requestKey) === controller
+              && sessionIsCurrent()
+            );
+            const throughMonth = this.financeOverviewMonth || month();
             this.financeOverviewState.loading = true;
             this.financeOverviewState.error = "";
             try {
-              const {data} = await axios.get("/api/finance/overview", {params:{through_month:this.financeOverviewMonth || month()}});
+              const {data} = await axios.get("/api/finance/overview", {
+                params:{through_month:throughMonth},
+                signal:controller.signal,
+              });
+              if (!requestIsCurrent()) return false;
               this.financeOverview = {
                 trend:data.trend || [], payable_aging:data.payable_aging || {},
                 expense_structure:data.expense_structure || [],
@@ -20227,10 +20248,15 @@
               };
               return true;
             } catch (error) {
-              this.financeOverviewState.error = this.errorMessage(error);
+              if (!this.isCancelledRequest(error) && requestIsCurrent()) {
+                this.financeOverviewState.error = this.errorMessage(error);
+              }
               return false;
             } finally {
-              this.financeOverviewState.loading = false;
+              if (latestRequestControllers.get(requestKey) === controller) {
+                if (sessionIsCurrent()) this.financeOverviewState.loading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           financeTrendHeight(value) {
@@ -20252,21 +20278,40 @@
           payableStatusText(value) {
             return ({draft:"草稿",confirmed:"待付款",paid:"已付",voided:"已作废"})[value] || value;
           },
-          async loadFinancePayables() {
+          async loadFinancePayables(sessionContext = null) {
+            const requestAuthGeneration = sessionContext?.authGeneration ?? this.authGeneration;
+            const requestUserId = sessionContext?.userId ?? (this.user?.id ?? null);
+            const sessionIsCurrent = () => (
+              requestAuthGeneration === this.authGeneration
+              && requestUserId === (this.user?.id ?? null)
+            );
+            const requestKey = "finance:payables";
+            const controller = this.beginLatestRequest(requestKey);
+            const requestIsCurrent = () => (
+              latestRequestControllers.get(requestKey) === controller
+              && sessionIsCurrent()
+            );
             this.financePayableState.loading = true;
             this.financePayableState.error = "";
             try {
               const [payables,suppliers] = await Promise.all([
-                axios.get("/api/finance/payables"), axios.get("/api/finance/payable-suppliers")
+                axios.get("/api/finance/payables", {signal:controller.signal}),
+                axios.get("/api/finance/payable-suppliers", {signal:controller.signal}),
               ]);
+              if (!requestIsCurrent()) return false;
               this.financePayables = payables.data.items || [];
               this.financePayableSuppliers = suppliers.data.items || [];
               return true;
             } catch (error) {
-              this.financePayableState.error = this.errorMessage(error);
+              if (!this.isCancelledRequest(error) && requestIsCurrent()) {
+                this.financePayableState.error = this.errorMessage(error);
+              }
               return false;
             } finally {
-              this.financePayableState.loading = false;
+              if (latestRequestControllers.get(requestKey) === controller) {
+                if (sessionIsCurrent()) this.financePayableState.loading = false;
+                this.finishLatestRequest(requestKey, controller);
+              }
             }
           },
           applyPayableSupplier() {

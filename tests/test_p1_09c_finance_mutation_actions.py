@@ -343,7 +343,9 @@ def test_finance_logout_and_auth_expiry_clear_only_in_memory_state() -> None:
 def test_finance_refresh_responses_cannot_cross_auth_generation(tmp_path: Path) -> None:
     node = shutil.which("node")
     assert node is not None, "Node.js is required for finance session isolation"
-    load_finance_body = _method_body("async loadFinance() {", "async loadFinanceOverview() {")
+    load_finance_body = _method_body(
+        "async loadFinance() {", "async loadFinanceOverview(sessionContext = null) {"
+    )
     load_kpi_body = _method_body("async loadKpi() {", "async loadCustomers() {")
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
@@ -389,6 +391,126 @@ vm.loadKpi = new AsyncFunction({json.dumps(load_kpi_body, ensure_ascii=False)}).
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
     target = tmp_path / "finance-refresh-auth-generation.js"
+    target.write_text(script, encoding="utf-8")
+    result = subprocess.run(
+        [node, str(target)], capture_output=True, text=True, encoding="utf-8"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_finance_overview_and_payables_keep_only_latest_session_request(
+    tmp_path: Path,
+) -> None:
+    node = shutil.which("node")
+    assert node is not None, "Node.js is required for finance latest-request isolation"
+    load_finance_body = _method_body(
+        "async loadFinance() {", "async loadFinanceOverview(sessionContext = null) {"
+    )
+    overview_body = _method_body(
+        "async loadFinanceOverview(sessionContext = null) {", "financeTrendHeight(value) {"
+    )
+    payables_body = _method_body(
+        "async loadFinancePayables(sessionContext = null) {", "applyPayableSupplier() {"
+    )
+    load_finance_source = INDEX[
+        INDEX.index("async loadFinance() {") : INDEX.index(
+            "async loadFinanceOverview(sessionContext = null) {"
+        )
+    ]
+    assert (
+        "this.loadFinanceOverview({authGeneration:requestAuthGeneration,userId:requestUserId})"
+        in load_finance_source
+    )
+    assert (
+        "this.loadFinancePayables({authGeneration:requestAuthGeneration,userId:requestUserId})"
+        in load_finance_source
+    )
+
+    script = f"""
+const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
+globalThis.month = () => "2026-08";
+globalThis.latestRequestControllers = new Map();
+const pending = [];
+globalThis.axios = {{
+  get(url, config={{}}) {{
+    return new Promise((resolve, reject) => pending.push({{url,config,resolve,reject}}));
+  }},
+}};
+const vm = {{
+  user:{{id:101}}, authGeneration:7, financeView:"overview", financeOverviewMonth:"2026-07",
+  financeOverviewState:{{loading:false,error:"",loaded:false}},
+  financeOverview:{{trend:[{{owner:"A-before"}}]}},
+  financePayableState:{{loading:false,error:""}},
+  financePayables:[{{owner:"A-before"}}], financePayableSuppliers:[{{owner:"A-before"}}],
+  beginLatestRequest(key) {{
+    latestRequestControllers.get(key)?.abort();
+    const controller = new AbortController();
+    latestRequestControllers.set(key, controller);
+    return controller;
+  }},
+  finishLatestRequest(key, controller) {{
+    if (latestRequestControllers.get(key) === controller) latestRequestControllers.delete(key);
+  }},
+  isCancelledRequest(error) {{
+    return error?.code === "ERR_CANCELED" || error?.name === "CanceledError" || error?.name === "AbortError";
+  }},
+  errorMessage(error) {{ return error?.message || String(error); }},
+}};
+vm.loadFinance = new AsyncFunction({json.dumps(load_finance_body, ensure_ascii=False)}).bind(vm);
+vm.loadFinanceOverview = new AsyncFunction("sessionContext", {json.dumps(overview_body, ensure_ascii=False)}).bind(vm);
+vm.loadFinancePayables = new AsyncFunction("sessionContext", {json.dumps(payables_body, ensure_ascii=False)}).bind(vm);
+
+(async () => {{
+  const actorAOverview = vm.loadFinance();
+  await Promise.resolve();
+  const actorARequest = pending.shift();
+  if (!actorARequest || actorARequest.config.params.through_month !== "2026-07") throw new Error("overview did not freeze its month");
+
+  vm.authGeneration = 8;
+  vm.user = {{id:202}};
+  vm.financeOverview = {{trend:[{{owner:"B"}}]}};
+  vm.financeOverviewState = {{loading:true,error:"B-loading",loaded:true}};
+  actorARequest.resolve({{data:{{trend:[{{owner:"A-late"}}]}}}});
+  if (await actorAOverview !== false) throw new Error("old actor overview reported success");
+  if (vm.financeOverview.trend[0].owner !== "B") throw new Error("old actor overview replaced new actor data");
+  if (!vm.financeOverviewState.loading || vm.financeOverviewState.error !== "B-loading") throw new Error("old actor overview finally replaced new actor state");
+
+  vm.financeOverviewMonth = "2026-08";
+  vm.financeOverviewState = {{loading:false,error:"",loaded:false}};
+  const olderOverview = vm.loadFinanceOverview();
+  await Promise.resolve();
+  const olderOverviewRequest = pending.shift();
+  vm.financeOverviewMonth = "2026-09";
+  const newerOverview = vm.loadFinanceOverview();
+  await Promise.resolve();
+  const newerOverviewRequest = pending.shift();
+  if (olderOverviewRequest.config.params.through_month !== "2026-08" || newerOverviewRequest.config.params.through_month !== "2026-09") throw new Error("overview request months were not isolated");
+  olderOverviewRequest.resolve({{data:{{trend:[{{owner:"older"}}]}}}});
+  if (await olderOverview !== false) throw new Error("older overview reported success");
+  if (!vm.financeOverviewState.loading || vm.financeOverview.trend[0].owner !== "B") throw new Error("older overview response or finally replaced the active request state");
+  newerOverviewRequest.resolve({{data:{{trend:[{{owner:"newer"}}]}}}});
+  if (await newerOverview !== true || vm.financeOverviewState.loading || vm.financeOverview.trend[0].owner !== "newer") throw new Error("newer overview was not committed and unlocked");
+
+  vm.financeView = "payables";
+  const olderPayables = vm.loadFinance();
+  await Promise.resolve();
+  const olderPayablesRows = pending.shift();
+  const olderPayablesSuppliers = pending.shift();
+  const newerPayables = vm.loadFinancePayables();
+  await Promise.resolve();
+  const newerPayablesRows = pending.shift();
+  const newerPayablesSuppliers = pending.shift();
+  olderPayablesRows.reject(new Error("older payables failed"));
+  olderPayablesSuppliers.resolve({{data:{{items:[{{owner:"older"}}]}}}});
+  if (await olderPayables !== false) throw new Error("older payables reported success");
+  if (!vm.financePayableState.loading || vm.financePayableState.error) throw new Error("stale payables catch or finally replaced active request state");
+  newerPayablesRows.resolve({{data:{{items:[{{owner:"newer"}}]}}}});
+  newerPayablesSuppliers.resolve({{data:{{items:[{{owner:"newer-supplier"}}]}}}});
+  if (await newerPayables !== true || vm.financePayableState.loading || vm.financePayableState.error) throw new Error("newer payables did not finish cleanly");
+  if (vm.financePayables[0].owner !== "newer" || vm.financePayableSuppliers[0].owner !== "newer-supplier") throw new Error("newer payables data was not committed");
+}})().catch(error => {{ console.error(error); process.exit(1); }});
+"""
+    target = tmp_path / "finance-overview-payables-latest-request.js"
     target.write_text(script, encoding="utf-8")
     result = subprocess.run(
         [node, str(target)], capture_output=True, text=True, encoding="utf-8"

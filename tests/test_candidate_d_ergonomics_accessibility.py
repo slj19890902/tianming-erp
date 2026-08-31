@@ -225,7 +225,11 @@ if(calls.map(row=>row[0]).join(",")!=="pick,dispatch,receipt")throw new Error("u
 def test_destructive_delivery_confirmations_name_customer_and_document() -> None:
     delete_body = _between(INDEX, "async deleteDelivery(row) {", "async cancelDelivery(row) {")
     cancel_body = _between(INDEX, "async cancelDelivery(row) {", "async cancelReceipt(row) {")
-    receipt_body = _between(INDEX, "async cancelReceipt(row) {", "exportStatement(row)")
+    receipt_body = _between(
+        INDEX,
+        "async cancelReceipt(row) {",
+        'exportStatement(row, format="xlsx")',
+    )
     for body in (delete_body, cancel_body, receipt_body):
         assert "customerName" in body
         assert "deliveryNumber" in body

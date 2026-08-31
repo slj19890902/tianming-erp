@@ -389,7 +389,12 @@ def test_phase2a_frontend_contract() -> None:
     assert "cameraStateRef" in canvas_source
     assert "pendingSelection" in canvas_source
     assert 'kind === "equipment" || kind === "rack" || kind === "feature"' in canvas_source
-    assert 'draggable: feature.subtype !== "dxf_hidden" && !feature.is_locked' in canvas_source
+    assert "const planningFeatureEditable = !readOnly" in canvas_source
+    assert "&& featureEditingEnabled" in canvas_source
+    assert '["zone", "aisle"].includes(feature.feature_kind)' in canvas_source
+    assert '&& feature.subtype !== "dxf_hidden"' in canvas_source
+    assert "&& !protectedAnchor" in canvas_source
+    assert "draggable: planningFeatureEditable" in canvas_source
     pointer_down = canvas_source.split("const onPointerDown", 1)[1].split("const onPointerMove", 1)[0]
     assert "pendingSelection =" in pointer_down
     assert "onSelect({ kind, id });" not in pointer_down

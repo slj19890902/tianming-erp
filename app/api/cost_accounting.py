@@ -34,8 +34,10 @@ from app.api.deps import (
     has_unrestricted_customer_access,
 )
 from app.core.time_contract import beijing_now_naive, beijing_today
-from app.models.finance import FinanceIdempotencyRecord
+from app.models.customer import Customer
+from app.models.finance import FinanceIdempotencyRecord, Statement, StatementItem
 from app.models.finance_cost import FinanceCostCenter, FinanceCostPoolEntry
+from app.models.finance_payable import FinancePayable
 from app.models.user import User
 from app.services.audit_log import append_audit_event
 
@@ -143,6 +145,25 @@ ALLOCATION_BASIS_LABELS = {
 }
 
 STATUS_LABELS = {"draft": "草稿", "confirmed": "已确认", "voided": "已作废"}
+
+PAYABLE_CATEGORY_LABELS = {
+    "material": "纸板材料",
+    "outsourcing": "外协加工",
+    "freight": "运费",
+    "utilities": "水电",
+    "rent": "租金",
+    "wages": "工资",
+    "maintenance": "维修",
+    "tax_fee": "税费",
+    "other": "其他",
+}
+
+PAYABLE_STATUS_LABELS = {
+    "draft": "草稿",
+    "confirmed": "待支付",
+    "paid": "已支付",
+    "voided": "已作废",
+}
 
 can_finance_view = PermissionChecker("finance.view")
 can_cost_view = PermissionChecker("cost.view")
@@ -1359,6 +1380,14 @@ def _workbook_response(content: bytes, filename: str) -> StreamingResponse:
     )
 
 
+def _month_bounds(month: str) -> tuple[date, date]:
+    year, month_number = (int(part) for part in month.split("-", maxsplit=1))
+    start = date(year, month_number, 1)
+    if month_number == 12:
+        return start, date(year + 1, 1, 1)
+    return start, date(year, month_number + 1, 1)
+
+
 def _style_header(sheet, row_number: int = 1) -> None:
     fill = PatternFill("solid", fgColor="167D74")
     for cell in sheet[row_number]:
@@ -1591,6 +1620,236 @@ def export_cost_pool_workpaper(
         db.rollback()
         raise
     return _workbook_response(content, f"{normalized_month}_成本费用底稿.xlsx")
+
+
+@router.get("/management-report/export")
+def export_management_report(
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_cost_export),
+) -> StreamingResponse:
+    """Export one small-company management workbook without pretending to be a GL.
+
+    Receivables, payables and the management cost pool stay separate in both the
+    calculations and the workbook.  This prevents an expense that was entered
+    in both AP and the cost pool from being silently counted twice.
+    """
+
+    try:
+        normalized_month = _month(month)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    month_start, next_month_start = _month_bounds(normalized_month)
+
+    statement_rows = list(
+        db.execute(
+            select(Statement, Customer.name)
+            .join(Customer, Customer.id == Statement.customer_id)
+            .where(
+                Statement.statement_month == normalized_month,
+                Statement.confirmation_status == "confirmed",
+            )
+            .order_by(Customer.name, Statement.id)
+        ).all()
+    )
+    customer_rows: dict[str, dict[str, Decimal | int | str]] = {}
+    confirmed_receivable = Decimal("0.00")
+    invoiced_against_statements = Decimal("0.00")
+    for statement, customer_name in statement_rows:
+        receivable = _money(statement.total_receivable)
+        invoiced = min(max(_money(statement.invoiced_amount), Decimal("0.00")), receivable)
+        pending_invoice = max(receivable - invoiced, Decimal("0.00"))
+        billing_name = str(statement.settlement_name_snapshot or customer_name)
+        row = customer_rows.setdefault(
+            billing_name,
+            {
+                "customer_name": billing_name,
+                "statement_count": 0,
+                "confirmed_receivable": Decimal("0.00"),
+                "invoiced_amount": Decimal("0.00"),
+                "pending_invoice_amount": Decimal("0.00"),
+            },
+        )
+        row["statement_count"] = int(row["statement_count"]) + 1
+        row["confirmed_receivable"] = _money(row["confirmed_receivable"] + receivable)
+        row["invoiced_amount"] = _money(row["invoiced_amount"] + invoiced)
+        row["pending_invoice_amount"] = _money(
+            row["pending_invoice_amount"] + pending_invoice
+        )
+        confirmed_receivable += receivable
+        invoiced_against_statements += invoiced
+
+    payable_rows = list(
+        db.scalars(
+            select(FinancePayable)
+            .where(
+                FinancePayable.document_date >= month_start,
+                FinancePayable.document_date < next_month_start,
+                FinancePayable.status != "voided",
+            )
+            .order_by(FinancePayable.document_date, FinancePayable.id)
+        ).all()
+    )
+    confirmed_payable = sum(
+        (_money(row.amount) for row in payable_rows if row.status in {"confirmed", "paid"}),
+        Decimal("0.00"),
+    )
+    open_payable = sum(
+        (_money(row.amount) for row in payable_rows if row.status == "confirmed"),
+        Decimal("0.00"),
+    )
+    draft_payable = sum(
+        (_money(row.amount) for row in payable_rows if row.status == "draft"),
+        Decimal("0.00"),
+    )
+
+    cost_summary = _summary_for_month(db, normalized_month)
+    cost_rows = _cost_pool_export_rows(
+        db, month=normalized_month, status_filter=None
+    )
+    coverage_rows = list(
+        db.execute(
+            select(
+                StatementItem.receivable_amount,
+                StatementItem.gross_profit_amount,
+                StatementItem.unit_cost_snapshot,
+            )
+            .join(Statement, Statement.id == StatementItem.statement_id)
+            .where(
+                Statement.statement_month == normalized_month,
+                Statement.confirmation_status == "confirmed",
+                StatementItem.return_receipt_item_id.is_not(None),
+            )
+        ).all()
+    )
+    covered_rows = [
+        row
+        for row in coverage_rows
+        if Decimal(str(row.unit_cost_snapshot or 0)) > Decimal("0.00")
+    ]
+    coverage_rate = (
+        Decimal(len(covered_rows)) / Decimal(len(coverage_rows))
+        if coverage_rows
+        else Decimal("0.00")
+    )
+    material_gross_profit_reference = sum(
+        (_money(row.gross_profit_amount) for row in covered_rows), Decimal("0.00")
+    )
+
+    workbook = Workbook()
+    summary = workbook.active
+    summary.title = "老板月报"
+    summary.append([f"{normalized_month} 经营月报", "金额 / 结果", "口径说明"])
+    _style_header(summary)
+    summary_rows = [
+        ("已确认对账收入", confirmed_receivable.quantize(MONEY), "按已确认对账单月份"),
+        ("已登记开票", invoiced_against_statements.quantize(MONEY), "对应本月对账单的开票事实"),
+        (
+            "待开票",
+            max(confirmed_receivable - invoiced_against_statements, Decimal("0.00")).quantize(MONEY),
+            "不代表客户欠款或银行未到账",
+        ),
+        ("已确认应付 / 支出", confirmed_payable.quantize(MONEY), "独立应付台账，不与成本池相加"),
+        ("其中待支付", open_payable.quantize(MONEY), "仅状态为待支付的记录"),
+        ("应付草稿待复核", draft_payable.quantize(MONEY), "尚未进入已确认应付"),
+        ("已确认成本费用", cost_summary["confirmed_total"], "独立管理成本池"),
+        (
+            "成本费用草稿待复核",
+            cost_summary["status_totals"]["draft"]["amount"],
+            "尚未进入已确认成本费用",
+        ),
+        ("材料成本覆盖率", coverage_rate.quantize(Decimal("0.0001")), "有真实材料成本的对账明细占比"),
+        ("材料毛利参考", material_gross_profit_reference.quantize(MONEY), "只统计已有材料成本的明细，不含工资能耗"),
+        ("月末结转", "暂不可结转", "实际材料销货成本来源链尚未完成"),
+    ]
+    for label, value, note in summary_rows:
+        summary.append([label, value, note])
+    summary.append([])
+    summary.append(["当前阻断", "", ""])
+    for blocker in cost_summary["blockers"]:
+        summary.append([blocker["message"], blocker.get("amount", ""), "先补资料，再由财务确认"])
+    summary.append([])
+    summary.append(["重要说明", "客户收款不在 ERP 内核销", "已开票不等于已收款；收款仍按银行和承兑记录核对"])
+    summary.column_dimensions["A"].width = 28
+    summary.column_dimensions["B"].width = 22
+    summary.column_dimensions["C"].width = 58
+    for row in summary.iter_rows(min_row=2, min_col=2, max_col=2):
+        if isinstance(row[0].value, (int, float, Decimal)):
+            row[0].number_format = "#,##0.00"
+
+    receivables = workbook.create_sheet("客户应收")
+    receivables.append(["结算客户 / 购方", "对账单数", "已确认对账", "已登记开票", "待开票"])
+    _style_header(receivables)
+    for row in sorted(
+        customer_rows.values(),
+        key=lambda item: (-Decimal(str(item["pending_invoice_amount"])), str(item["customer_name"])),
+    ):
+        receivables.append(
+            [
+                _safe_excel_text(row["customer_name"]),
+                row["statement_count"],
+                row["confirmed_receivable"],
+                row["invoiced_amount"],
+                row["pending_invoice_amount"],
+            ]
+        )
+    receivables.freeze_panes = "A2"
+    receivables.auto_filter.ref = receivables.dimensions
+    for column in ("C", "D", "E"):
+        for cell in receivables[column][1:]:
+            cell.number_format = "#,##0.00"
+    for column, width in {"A": 30, "B": 12, "C": 18, "D": 18, "E": 18}.items():
+        receivables.column_dimensions[column].width = width
+
+    payables = workbook.create_sheet("应付支出")
+    payables.append(["日期", "收款单位", "类别", "单据号", "金额", "到期日", "状态", "备注"])
+    _style_header(payables)
+    for row in payable_rows:
+        payables.append(
+            [
+                row.document_date,
+                _safe_excel_text(row.counterparty_name),
+                PAYABLE_CATEGORY_LABELS.get(row.category, row.category),
+                _safe_excel_text(row.document_number),
+                row.amount,
+                row.due_date,
+                PAYABLE_STATUS_LABELS.get(row.status, row.status),
+                _safe_excel_text(row.note),
+            ]
+        )
+    payables.freeze_panes = "A2"
+    payables.auto_filter.ref = payables.dimensions
+    for cell in payables["E"][1:]:
+        cell.number_format = "#,##0.00"
+    for column, width in {"A": 12, "B": 28, "C": 16, "D": 18, "E": 16, "F": 12, "G": 12, "H": 36}.items():
+        payables.column_dimensions[column].width = width
+
+    costs = workbook.create_sheet("成本费用")
+    costs.append(["日期", "状态", "归属", "类别", "成本中心", "事项", "金额", "来源依据", "版本"])
+    _style_header(costs)
+    for entry, _center in cost_rows:
+        costs.append(
+            [
+                entry.document_date,
+                STATUS_LABELS[entry.status],
+                ACCOUNTING_CLASS_LABELS[entry.accounting_class],
+                COST_CATEGORIES[entry.cost_category]["label"],
+                _safe_excel_text(entry.cost_center_name_snapshot),
+                _safe_excel_text(entry.description),
+                entry.amount,
+                _safe_excel_text(entry.source_reference),
+                entry.version,
+            ]
+        )
+    costs.freeze_panes = "A2"
+    costs.auto_filter.ref = costs.dimensions
+    for cell in costs["G"][1:]:
+        cell.number_format = "#,##0.00"
+    for column, width in {"A": 12, "B": 12, "C": 18, "D": 18, "E": 18, "F": 32, "G": 16, "H": 28, "I": 10}.items():
+        costs.column_dimensions[column].width = width
+
+    content = _workbook_bytes(workbook)
+    return _workbook_response(content, f"{normalized_month}_老板经营月报.xlsx")
 
 
 IMPORT_HEADERS = [

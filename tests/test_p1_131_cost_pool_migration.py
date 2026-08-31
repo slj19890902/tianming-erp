@@ -42,7 +42,7 @@ def _prepare_previous_schema(
     cannot be satisfied by an empty database.  Current ORM metadata matches the
     immediate parent schema apart from the two P1-131 tables, so create the
     isolated schema, remove those target tables, and stamp the exact parent
-    before exercising the real hu56 upgrade/downgrade functions.
+    before exercising the real iw58 upgrade/downgrade functions.
     """
 
     from app.core.database import create_sqlite_engine

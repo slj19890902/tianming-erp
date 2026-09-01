@@ -3175,13 +3175,21 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
                 func.coalesce(
                     func.nullif(DeliveryItem.product_code_snapshot, ""),
                     func.nullif(OrderItem.snapshot_product_code, ""),
-                    Product.product_code,
                 ).label("product_code"),
                 func.coalesce(
                     func.nullif(DeliveryItem.product_name_snapshot, ""),
                     func.nullif(OrderItem.snapshot_product_name, ""),
-                    Product.product_name,
                 ).label("product_name"),
+                func.coalesce(
+                    func.nullif(DeliveryItem.product_code_snapshot, ""),
+                    func.nullif(OrderItem.snapshot_product_code, ""),
+                    Product.product_code,
+                ).label("search_product_code"),
+                func.coalesce(
+                    func.nullif(DeliveryItem.product_name_snapshot, ""),
+                    func.nullif(OrderItem.snapshot_product_name, ""),
+                    Product.product_name,
+                ).label("search_product_name"),
                 DeliveryItem.specification_snapshot.label(
                     "delivery_specification_snapshot"
                 ),
@@ -3269,7 +3277,12 @@ def _delivery_search_matches(
             continue
         item_matches: list[str] = []
         for field in active_fields:
-            value = str(item.get(field) or "").strip()
+            value_key = (
+                f"search_{field}"
+                if field in {"product_code", "product_name"}
+                else field
+            )
+            value = str(item.get(value_key) or "").strip()
             if not value or filters[field].casefold() not in value.casefold():
                 continue
             item_matches.append(field)
@@ -5244,6 +5257,8 @@ def _delivery_response(
     display_quantity = 0
     for row in items:
         mapping = dict(row)
+        mapping.pop("search_product_code", None)
+        mapping.pop("search_product_name", None)
         current_product_fulfillment_mode = mapping.pop(
             "current_product_fulfillment_mode",
             None,

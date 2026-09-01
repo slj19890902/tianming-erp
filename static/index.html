@@ -2812,6 +2812,30 @@
       .erp-enterprise-ui.ui-large .status { min-height: 30px; padding: 4px 11px; font-size: 16px; }
       .erp-enterprise-ui.ui-large .ui-mode-button { min-height: 46px; min-width: 74px; font-size: 17px; }
 
+      /* P1-138B: ordinary desktop pages use the main viewport as their only
+         vertical fallback.  Paged top-level tables must grow with their rows;
+         modal/drawer work areas keep their own explicit overflow contracts. */
+      .erp-enterprise-ui .main.single-screen-main,
+      .erp-enterprise-ui.ui-large .main.single-screen-main { padding-bottom: 0; }
+      .erp-enterprise-ui .main.single-screen-main > .table-wrap,
+      .erp-enterprise-ui .main.single-screen-main > .panel > .table-wrap {
+        max-height: none;
+        overflow-x: auto;
+        overflow-y: visible;
+      }
+      .dashboard-detail-summary {
+        display:flex; align-items:center; justify-content:space-between; gap:10px;
+        min-height:44px; margin-top:10px; padding:6px 10px;
+        border:1px solid #d8dee8; border-radius:9px; background:#fff;
+      }
+      .dashboard-detail-stack { display:grid; gap:0; }
+      .dashboard-detail-stack > .dashboard-block:first-child { margin-top:10px; }
+      .delivery-list-filterbar .delivery-advanced-filters {
+        display:flex; align-items:center; gap:8px; flex-wrap:wrap; width:100%;
+        padding-top:7px; border-top:1px dashed var(--line);
+      }
+      .audit-filter-toggle-summary { display:flex; align-items:center; gap:8px; }
+
       @media (max-width: 1500px) {
         .erp-enterprise-ui .layout { grid-template-columns: 216px minmax(0, 1fr); }
         .erp-enterprise-ui .main { padding: 18px 18px 28px; }
@@ -3003,7 +3027,12 @@
               </span>
             </button>
           </aside>
-          <main :class="['main', {'warehouse-main': activePage === 'warehouse', 'primary-flow-main': ['orders','requisition','incoming','production'].includes(activePage)}]">
+          <main
+            :class="['main', {'warehouse-main': activePage === 'warehouse', 'primary-flow-main': ['orders','requisition','incoming','production'].includes(activePage), 'single-screen-main': activePage !== 'warehouse'}]"
+            :data-single-screen-page="activePage"
+            :data-single-screen-mode="uiMode"
+            :data-single-screen-expanded="singleScreenExpanded ? 'true' : 'false'"
+          >
             <div v-if="loading" class="loading-bar"></div>
 
             <section v-if="businessFlowCurrentStep" class="business-flow-guide" aria-label="订单到对账操作顺序">
@@ -3118,6 +3147,11 @@
                 </div>
               </div>
               <div v-else class="empty" style="margin-top: 8px;">当前没有可显示的总览数据。</div>
+              <div class="dashboard-detail-summary">
+                <span>详细待办：低库存 {{ overview.low_stock_warnings?.length || 0 }} 款 · 今日日常待办 {{ overview.todos?.length || 0 }} 项</span>
+                <button class="btn small" type="button" :aria-expanded="dashboardDetailsVisible" @click="dashboardDetailsVisible=!dashboardDetailsVisible">{{ dashboardDetailsVisible ? '收起首页明细' : '展开首页明细' }}</button>
+              </div>
+              <div v-if="dashboardDetailsVisible" class="dashboard-detail-stack">
               <div v-if="overview.low_stock_warnings && overview.low_stock_warnings.length" class="dashboard-block">
                 <div class="section-title">常用箱低库存（{{ lowStockCustomerGroups.length }} 个客户 / {{ overview.low_stock_warnings.length }} 款）</div>
                 <div class="section-body">
@@ -3202,6 +3236,7 @@
                   <div v-if="canViewCosts">本月毛利：¥ {{ money(kpi.monthly_gross_profit) }}</div>
                   <div v-if="hasPermission('finance.view')">待收账款：¥ {{ money(kpi.outstanding_receivables) }}</div>
                 </div></div>
+              </div>
               </div>
             </template>
             <template v-else-if="activePage === 'customers'">
@@ -3424,13 +3459,14 @@
                   <div v-else class="table-wrap"><table><thead><tr><th>客户</th><th>存货编码</th><th>原产品名称</th><th>删除时间</th><th>保留期限</th><th>操作</th></tr></thead><tbody><tr v-for="row in productTrashItems" :key="row.id"><td>{{ customerName(row.customer_id) }}</td><td>{{ plainProductText(row.customer_material_code || row.product_code) }}</td><td>{{ plainProductText(row.product_name) }}</td><td>{{ formatDateTime(row.deleted_at) }}</td><td>剩余 {{ Math.ceil(row.trash_days_remaining || 0) }} 天</td><td class="toolbar-group"><button class="btn small success" :disabled="productLifecycleBusy()" @click="restoreProduct(row)">{{ productLifecyclePending('restore',row.id) ? '处理中…' : '恢复' }}</button><button class="btn small danger" :disabled="productLifecycleBusy()" @click="purgeProduct(row)">{{ productLifecyclePending('purge',row.id) ? '处理中…' : '彻底清理' }}</button></td></tr></tbody></table></div>
                 </div>
                 <template v-if="!selectedProductCustomer">
-                  <div class="toolbar"><input class="input" style="min-width:360px" placeholder="输入客户名称、编号或缩写" v-model.trim="productCustomerSearch" /><span class="muted">共 {{ filteredProductCustomers.length }} 家客户</span></div>
+                  <div class="toolbar"><input class="input" style="min-width:360px" placeholder="输入客户名称、编号或缩写" v-model.trim="productCustomerSearch" @input="pages.productCustomers=1" /><span class="muted">共 {{ filteredProductCustomers.length }} 家客户</span></div>
                   <div class="customer-product-master-list">
-                    <div v-for="row in filteredProductCustomers" :key="row.id" class="customer-master-row" @click="selectProductCustomer(row)">
+                    <div v-for="row in pagedProductCustomers" :key="row.id" class="customer-master-row" @click="selectProductCustomer(row)">
                       <strong>{{ row.customer_number || "-" }}</strong><span>{{ row.name }}</span><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag><strong>›</strong>
                     </div>
                     <div v-if="!filteredProductCustomers.length" class="empty">没有匹配客户</div>
                   </div>
+                  <pager :page="pages.productCustomers" :total="filteredProductCustomers.length" :page-size="pageSize" @change="pages.productCustomers=$event"></pager>
                 </template>
                 <template v-else>
                   <div class="toolbar">
@@ -3491,10 +3527,10 @@
                 <div class="toolbar" style="margin-bottom:8px">
                   <div class="toolbar-group">
                     <div class="order-status-tabs">
-                      <button :class="['status-tab-btn',{active:supplierGroupFilter==='corrugated'}]" @click="supplierGroupFilter='corrugated'">纸板供应商</button>
-                      <button :class="['status-tab-btn',{active:supplierGroupFilter==='packaging'}]" @click="supplierGroupFilter='packaging'">包材供应商</button>
+                      <button :class="['status-tab-btn',{active:supplierGroupFilter==='corrugated'}]" @click="supplierGroupFilter='corrugated';pages.suppliers=1">纸板供应商</button>
+                      <button :class="['status-tab-btn',{active:supplierGroupFilter==='packaging'}]" @click="supplierGroupFilter='packaging';pages.suppliers=1">包材供应商</button>
                     </div>
-                    <input class="input" style="width:220px" v-model.trim="supplierSearch" placeholder="供应商名称 / 简称 / 业务代码" />
+                    <input class="input" style="width:220px" v-model.trim="supplierSearch" placeholder="供应商名称 / 简称 / 业务代码" @input="pages.suppliers=1" />
                     <button class="btn primary" @click="openSupplier()">新增供应商</button>
                   </div>
                 </div>
@@ -3508,7 +3544,7 @@
                 <div v-else class="table-wrap">
                   <table class="compact-table">
                     <thead><tr><th>供应商全称</th><th>显示简称</th><th>供应商大类</th><th>供货类别</th><th>业务代码</th><th>状态</th><th>联系人 / 电话</th><th>操作</th></tr></thead>
-                    <tbody><tr v-for="row in filteredSuppliers" :key="row.id">
+                    <tbody><tr v-for="row in pagedSuppliers" :key="row.id">
                       <td><strong>{{ row.standard_name }}</strong></td>
                       <td>{{ row.display_name || row.standard_name }}</td>
                       <td><span :class="['status',supplierGroupFilter==='packaging' ? 'orange' : 'blue']">{{ supplierGroupFilter==='packaging' ? '包材供应商' : '纸板供应商' }}</span></td>
@@ -3524,16 +3560,17 @@
                     </tr></tbody>
                   </table>
                 </div>
+                <pager :page="pages.suppliers" :total="filteredSuppliers.length" :page-size="pageSize" @change="pages.suppliers=$event"></pager>
               </data-panel>
               <data-panel v-else-if="productTab === 'materials'" :empty="false">
                 <!-- 供应商筛选（第一级：在层数按钮上方） -->
                 <div class="toolbar" style="margin-bottom:4px">
                   <div class="order-status-tabs">
                     <button :class="['status-tab-btn', {active: !materialSupplierFilter}]"
-                            @click="materialSupplierFilter=''; loadMaterials()">全部供应商</button>
+                            @click="materialSupplierFilter='';pages.materials=1;loadMaterials()">全部供应商</button>
                     <button v-for="sup in materialSuppliers" :key="sup"
                             :class="['status-tab-btn', {active: materialSupplierFilter === sup}]"
-                            @click="materialSupplierFilter=sup; loadMaterials()">{{ supplierDisplayName(sup) }}</button>
+                            @click="materialSupplierFilter=sup;pages.materials=1;loadMaterials()">{{ supplierDisplayName(sup) }}</button>
                   </div>
                 </div>
                 <!-- 层数筛选（第二级） -->
@@ -3547,8 +3584,8 @@
                 <!-- 常用筛选 + 操作按钮 -->
                 <div class="toolbar">
                   <div class="toolbar-group">
-                    <input class="input" style="width:170px" v-model.trim="materialCodeFilter" placeholder="输入材质代码" />
-                    <input class="input" style="width:150px" v-model.trim="materialWeightFilter" placeholder="输入总克重" />
+                    <input class="input" style="width:170px" v-model.trim="materialCodeFilter" placeholder="输入材质代码" @input="pages.materials=1" />
+                    <input class="input" style="width:150px" v-model.trim="materialWeightFilter" placeholder="输入总克重" @input="pages.materials=1" />
                   </div>
                   <div class="toolbar-group">
                     <button v-if="canViewCosts" class="btn" @click="openCompare()">比价</button>
@@ -3617,7 +3654,7 @@
                 <div v-if="!displayedMaterials.length" class="muted" style="padding:20px;text-align:center">{{ materialLayerFilter===7 ? '暂无七层材质' : '暂无数据' }}</div>
                 <!-- 材质列表：已删除"配置"列，已移除历史异常值红色提示；新增"克重结构"列 -->
                 <table v-else><thead><tr><th>供应商</th><th>层数</th><th>材质代码</th><th>克重结构</th><th v-if="canViewCosts" class="cost-sensitive">平方报价</th><th>报价日期</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in displayedMaterials" :key="row.id">
+                <tbody><tr v-for="row in pagedMaterials" :key="row.id">
                   <td>{{ supplierDisplayName(row.supplier_name) }}</td>
                   <td>{{ row.layer_count ? row.layer_count+'层' : "-" }}</td>
                   <td :title="row.code">{{ materialBaseCode(row) }}</td>
@@ -3626,6 +3663,7 @@
                   <td>{{ row.quote_date || "-" }}</td>
                   <td class="toolbar-group"><button v-if="canViewCosts" class="btn small" @click="openPriceHistory(row)">价格历史</button><button class="btn small" @click="openMasterVersionHistory('material',row)">版本 {{ row.version || "-" }}</button><button v-if="canAdmin" class="btn small" @click="openMaterial(row)">编辑</button><button v-if="user.role==='admin'" class="btn small danger" :disabled="materialLifecycleBusy()" @click="deleteMaterial(row)">{{ materialLifecyclePending('deactivate',row.id) ? '处理中…' : '停用' }}</button></td>
                 </tr></tbody></table>
+                <pager :page="pages.materials" :total="displayedMaterials.length" :page-size="pageSize" @change="pages.materials=$event"></pager>
               </data-panel>
               <data-panel v-else-if="productTab === 'materialCandidates'" :empty="false">
                 <div class="toolbar">
@@ -3977,7 +4015,6 @@
                     </div>
                   </article>
                 </div>
-                <pager :page="pages.customerHeat" :total="customerHeatTotal" :page-size="pageSize" @change="pages.customerHeat=$event; runExplicitPageListLoad('orders')"></pager>
                 <div class="muted" style="margin-top:6px">热力口径 {{ customerHeatThresholdVersion || '-' }}｜候选状态 {{ customerHeatThresholdStatus || 'prototype_pending_p1_61c_acceptance' }}，待正式 ERP 人工验收后定稿。</div>
               </template>
               <template v-else>
@@ -4647,26 +4684,20 @@
               </div>
               <div class="list-filterbar delivery-list-filterbar">
                 <input class="input delivery-keyword-input" v-model.trim="deliveryListFilters.keyword" placeholder="搜索送货单" aria-label="搜索送货单" @keyup.enter="pages.deliveries=1; loadDeliveries()" />
+                <button class="btn" @click="pages.deliveries=1; loadDeliveries()">查询</button>
+                <button class="btn" type="button" :aria-expanded="deliveryListFilterVisible" @click="deliveryListFilterVisible=!deliveryListFilterVisible">{{ deliveryListFilterVisible ? '收起详细筛选' : '详细筛选' }}</button>
+                <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="deliveryListPageSize()" :always="true" :compact="true" :filter-count="deliveryListFilterCount" @change="pages.deliveries=$event; loadDeliveries()"></pager>
+              </div>
+              <div v-if="deliveryListFilterVisible" class="delivery-detailed-filterbar delivery-advanced-filters">
                 <input class="input delivery-date-input" type="date" v-model="deliveryListFilters.date_from" aria-label="送货开始日期" @change="pages.deliveries=1; loadDeliveries()" />
                 <input class="input delivery-date-input" type="date" v-model="deliveryListFilters.date_to" aria-label="送货结束日期" @change="pages.deliveries=1; loadDeliveries()" />
                 <select class="select delivery-status-select" v-model="deliveryListFilters.status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部送货状态</option><option value="pending">草稿</option><option value="dispatched">已发货</option><option value="voided">已作废</option></select>
                 <select class="select delivery-status-select" v-model="deliveryListFilters.return_status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部回单状态</option><option value="waiting_receipt">待回单</option><option value="confirmed">回单已确认</option><option value="cancelled">回单已取消</option></select>
-                <button class="btn" @click="pages.deliveries=1; loadDeliveries()">查询</button>
-                <button class="btn" type="button" :aria-expanded="deliveryDetailedSearchVisible" @click="deliveryDetailedSearchVisible=!deliveryDetailedSearchVisible">{{ deliveryDetailedSearchVisible ? '收起详细查找' : '详细查找' }}</button>
-                <span v-if="deliveryDetailedFilterCount">已选 {{ deliveryDetailedFilterCount }} 项</span>
-                <button class="btn" @click="resetDeliveryListFilters()">清空全部</button>
-                <div class="pager top delivery-list-pager">
-                  <button class="btn small" :disabled="pages.deliveries <= 1" @click="pages.deliveries-=1; loadDeliveries()">上一页</button>
-                  <span>第 {{ pages.deliveries }}/{{ deliveryListPages }} 页</span>
-                  <button class="btn small" :disabled="pages.deliveries >= deliveryListPages" @click="pages.deliveries+=1; loadDeliveries()">下一页</button>
-                </div>
-              </div>
-              <div v-if="deliveryDetailedSearchVisible" class="delivery-detailed-filterbar">
                 <div class="field"><label>客户订单号</label><input class="input" v-model.trim="deliveryDetailedFilters.customer_po" placeholder="输入客户订单号" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="deliveryDetailedFilters.product_code" placeholder="输入存货编码" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="deliveryDetailedFilters.product_name" placeholder="输入产品名称" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
                 <button class="btn primary" type="button" @click="applyDeliveryDetailedFilters">查询详细条件</button>
-                <button class="btn" type="button" :disabled="!deliveryDetailedFilterCount" @click="clearDeliveryDetailedFilters">清空详细条件</button>
+                <button class="btn" type="button" @click="resetDeliveryListFilters()">清空全部</button>
               </div>
               <div v-if="deliveryListState.initialLoading" class="panel delivery-list-panel empty">正在加载送货单</div>
               <div v-else-if="deliveryListState.error && !deliveries.length" class="panel delivery-list-panel empty">送货单加载失败：{{ deliveryListState.error }} <button class="btn small" @click="loadDeliveries">重试</button></div>
@@ -4772,6 +4803,11 @@
                       <button class="finance-month-action" :disabled="!canViewFinanceCosts" @click="openFinanceMonthlyAction('close_readiness')"><span>4 · 月报检查</span><strong>{{ financeOverview.cost_pool.close_ready ? '可结转' : '资料待补' }}</strong><span class="muted">{{ financeOverview.cost_pool.blockers?.[0]?.message || '核对成本资料与来源' }}</span></button>
                     </div>
                   </div>
+                  <div class="dashboard-detail-summary">
+                    <span>经营图表：近六个月趋势 · 应付账龄 · 支出结构 · 成本覆盖</span>
+                    <button class="btn small" type="button" :aria-expanded="financeOverviewDetailsVisible" @click="financeOverviewDetailsVisible=!financeOverviewDetailsVisible">{{ financeOverviewDetailsVisible ? '收起经营图表' : '展开经营图表' }}</button>
+                  </div>
+                  <div v-if="financeOverviewDetailsVisible">
                   <div class="finance-overview-grid">
                     <div class="panel finance-chart">
                       <div class="toolbar"><div><div class="section-title">近六个月对比</div><div class="finance-legend"><span><i style="background:#167d74"></i>已确认对账</span><span><i style="background:#3b82f6"></i>该月对账已开票</span><span><i style="background:#d97706"></i>应付与支出</span></div></div></div>
@@ -4787,6 +4823,7 @@
                   <div class="finance-overview-grid">
                     <div class="panel"><div class="section-title">支出结构</div><div v-if="!financeOverview.expense_structure.length" class="empty">尚无已确认应付或支出。</div><div v-for="item in financeOverview.expense_structure" :key="item.category" class="finance-aging-row"><span>{{ payableCategoryText(item.category) }}</span><div class="finance-aging-track"><span :style="{width:financeExpenseWidth(item.amount)}"></span></div><strong>¥{{ money(item.amount) }}</strong></div></div>
                     <div class="panel"><div class="section-title">成本覆盖</div><div style="font-size:28px;font-weight:700;color:var(--primary)">{{ percent(financeOverview.cost_coverage.coverage_rate) }}</div><div class="muted">{{ financeOverview.cost_coverage.covered_lines }} / {{ financeOverview.cost_coverage.total_lines }} 条明细已有材料成本</div><div style="margin-top:12px"><strong>{{ financeOverview.cost_coverage.label }}</strong><div class="sensitive-price">¥ {{ money(financeOverview.cost_coverage.material_gross_profit_reference) }}</div></div><div v-if="Number(financeOverview.cost_coverage.coverage_rate)<1" class="status orange" style="margin-top:10px">成本未覆盖完整，不把缺失成本当作 0</div></div>
+                  </div>
                   </div>
                 </template>
               </template>
@@ -5159,9 +5196,13 @@
                   <button type="button" :class="['audit-tab',{active:auditLogState.category==='business'}]" @click="setAuditCategory('business')">业务操作</button>
                   <button type="button" :class="['audit-tab',{active:auditLogState.category==='security'}]" @click="setAuditCategory('security')">安全事件</button>
                 </div>
-                <button class="btn" type="button" :disabled="auditLogState.loading" @click="loadAuditLogs()">{{ auditLogState.loading ? "读取中…" : "刷新" }}</button>
+                <div class="audit-filter-toggle-summary">
+                  <span class="muted">已筛选 {{ auditActiveFilterCount }} 项</span>
+                  <button class="btn" type="button" :aria-expanded="auditFiltersVisible" @click="auditFiltersVisible=!auditFiltersVisible">{{ auditFiltersVisible ? '收起筛选' : '筛选查找' }}</button>
+                  <button class="btn" type="button" :disabled="auditLogState.loading" @click="loadAuditLogs()">{{ auditLogState.loading ? "读取中…" : "刷新" }}</button>
+                </div>
               </div>
-              <div class="panel audit-filter-panel">
+              <div v-if="auditFiltersVisible" class="panel audit-filter-panel">
                 <div class="audit-filter-grid">
                   <div class="field"><label>开始日期</label><input class="input" type="date" v-model="auditLogState.filters.date_from" @keyup.enter="queryAuditLogs" /></div>
                   <div class="field"><label>结束日期</label><input class="input" type="date" v-model="auditLogState.filters.date_to" @keyup.enter="queryAuditLogs" /></div>
@@ -9108,6 +9149,8 @@
 
       const { createApp } = Vue;
       const PAGE_CACHE_TTL_MS = 30_000;
+      const DESKTOP_LIST_PAGE_SIZE_STANDARD = 11;
+      const DESKTOP_LIST_PAGE_SIZE_LARGE = 6;
       const ORDER_LIST_PAGE_SIZE_STANDARD = 12;
       const ORDER_LIST_PAGE_SIZE_LARGE = 7;
       const REPORTED_ITEM_PAGE_SIZE_STANDARD = 12;
@@ -9440,7 +9483,7 @@
             warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F",
             warehouseTwinMetrics: {active_lots:0,occupied_locations:0,mapped_locations:0,unlocated_finished:0,unmatched_observations:0,column_conflicts:0},
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
-            overview: { cards: [], todos: [], summary: {} }, warehouseCapacitySummary:null, overviewError: "", overviewLoading: false,
+            overview: { cards: [], todos: [], summary: {} }, warehouseCapacitySummary:null, overviewError: "", overviewLoading: false, dashboardDetailsVisible:false,
             kpi: {}, customers: [], customerOptions: [], orderCustomerOptions: [], products: [], materials: [], orders: [],
             orderWorkspace: "queue", customerHeatItems:[], customerHeatTotal:0, customerHeatLoading:false, customerHeatError:"", customerHeatAmountVisible:false, customerHeatAsOf:"", customerHeatThresholdContract:null, customerHeatThresholdVersion:"", customerHeatThresholdStatus:"prototype_pending_p1_61c_acceptance", customerHeatSortBy:"heat", customerHeatSortDirection:"desc", customerHeatAppliedSignature:"", customerHeatExpanded:{}, customerHeatOrders:{},
             customerPhoneGovernanceExporting: false,
@@ -9556,10 +9599,10 @@
             permissionUsers: [], permissionProfile: null, permissionDraft: { permissions: {}, customer_access_mode: "all", customer_ids: [] },
             permissionCatalog: [], permissionUsersLoading: false, permissionProfileLoading: false, permissionSaving: false, permissionError: "", permissionSaveError: "", selectedPermissionUserId: null,
             auditLogState: {
-              category:"business", items:[], total:0, page:1, page_size:25, pages:0,
+              category:"business", items:[], total:0, page:1, page_size:DESKTOP_LIST_PAGE_SIZE_STANDARD, pages:0,
               loading:false, error:"", detail:null, detailLoading:false, detailError:"",
               filters:{ date_from:"", date_to:"", operator:"", module:"", action:"", object_ref:"", customer:"", result:"", source:"" },
-            },
+            }, auditFiltersVisible:false,
             createUserForm: { username:"", real_name:"", display_name:"", role:"sales", temporary_password:"", confirm_password:"" },
             showCreateUserModal: false,
             userRoleOptions: [
@@ -9663,12 +9706,12 @@
             finishedReservationActionState:{action:"",committed:false,outcomeUncertain:false,itemId:null,lotId:null,reservationId:null,result:null},
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
             deliveryListFilters: { customer_id:"", keyword:"", date_from:"", date_to:"", status:"", return_status:"" },
-            deliveryDetailedFilters: { customer_po:"", product_code:"", product_name:"" },
+            deliveryDetailedFilters: { customer_po:"", product_code:"", product_name:"" }, deliveryListFilterVisible:false,
             deliveryDashboardMode: "",
             financeView: "overview",
             financeOverviewMonth: month(),
             financeOverview: { trend:[], payable_aging:{}, expense_structure:[], cost_coverage:{covered_lines:0,total_lines:0,coverage_rate:0,covered_revenue:0,material_gross_profit_reference:0,label:"材料毛利参考"}, workbench_summary:{}, cost_pool:{status_totals:{},close_ready:false,blockers:[]}, collection_note:"" },
-            financeOverviewState: { loading:false, exporting:false, error:"" },
+            financeOverviewState: { loading:false, exporting:false, error:"" }, financeOverviewDetailsVisible:false,
             financeStatementSort: "business",
             financeFilters: { statement_month:month(), balance_type:"", customer_id:"" },
             financeCurrentRows: [], financeCurrentTotal: 0, financeCurrentSummary: {}, financeCurrentCustomerOptions: [],
@@ -9701,8 +9744,8 @@
             financePayables: [], financePayableSuppliers: [], financePayableState:{loading:false,saving:false,error:""},
             financePayableForm:{supplier_id:null,counterparty_name:"",category:"material",document_number:"",document_date:today(),due_date:"",amount:"",note:""},
             statementDisputeForm:{reason:"",target_month:"",remove:{},add:{}}, statementDisputeCandidates:[], statementDisputeState:{loading:false,saving:false,error:""},
-            statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: 25,
-            pages: { customers: 1, products: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, externalPurchaseHistory: 1, incomingPending: 1, incomingReceived: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, productionPlacement: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1, financeCosts: 1 },
+            statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: DESKTOP_LIST_PAGE_SIZE_STANDARD,
+            pages: { customers: 1, productCustomers: 1, products: 1, suppliers: 1, materials: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, externalPurchaseHistory: 1, incomingPending: 1, incomingReceived: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, productionPlacement: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1, financeCosts: 1 },
             productTab: "products", modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
             materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
@@ -10015,6 +10058,11 @@
           productExternalPackagingCategoryOptions() {
             return this.supplierCategoryOptions.filter(option => option.value !== "corrugated_board");
           },
+          pagedSuppliers() {
+            const pageSize = Math.max(1, Number(this.pageSize || DESKTOP_LIST_PAGE_SIZE_STANDARD));
+            const page = Math.max(1, Number(this.pages.suppliers || 1));
+            return this.filteredSuppliers.slice((page - 1) * pageSize, page * pageSize);
+          },
           // 新业务只允许选择供应商主数据中启用的标准名称。
           materialSupplierSelectOptions() {
             return ["全部供应商", ...this.activeSupplierNames];
@@ -10061,6 +10109,11 @@
               }
               return true;
             });
+          },
+          pagedMaterials() {
+            const pageSize = Math.max(1, Number(this.pageSize || DESKTOP_LIST_PAGE_SIZE_STANDARD));
+            const page = Math.max(1, Number(this.pages.materials || 1));
+            return this.displayedMaterials.slice((page - 1) * pageSize, page * pageSize);
           },
           // 供应商调价可选供应商（标准名）
           priceAdjustSuppliers() {
@@ -10200,6 +10253,29 @@
             return this.isBoss ? "large" : "standard";
           },
           isLargeUi() { return this.uiMode === "large"; },
+          auditActiveFilterCount() {
+            return Object.values(this.auditLogState?.filters || {}).filter(value => value !== "" && value !== null && value !== undefined).length;
+          },
+          singleScreenExpanded() {
+            if (this.activePage === "dashboard") return this.dashboardDetailsVisible;
+            if (this.activePage === "deliveries") {
+              return this.deliveryListFilterVisible || Object.values(this.expandedDeliveryRows || {}).some(Boolean);
+            }
+            if (this.activePage === "audit") return this.auditFiltersVisible;
+            if (this.activePage === "finance") {
+              return this.financeOverviewDetailsVisible
+                || Object.values(this.financeCurrentExpanded || {}).some(Boolean)
+                || Object.values(this.financeSettledExpanded || {}).some(Boolean);
+            }
+            if (["orders","orders_legacy"].includes(this.activePage)) {
+              return this.showAdvancedFilter || Object.values(this.expandedOrders || {}).some(Boolean);
+            }
+            if (this.activePage === "incoming") return this.incomingHistoryFilterVisible;
+            if (this.activePage === "production") return this.productionHistoryFilterVisible || this.productionPlacementFilterVisible;
+            if (this.activePage === "permissions") return Boolean(this.permissionProfile);
+            if (this.activePage === "system") return this.systemSection !== "basic";
+            return false;
+          },
           dashboardCards() {
             const cards = Array.isArray(this.overview?.cards) ? [...this.overview.cards] : [];
             const capacity = this.warehouseCapacitySummary;
@@ -10672,7 +10748,10 @@
             return [...groups.values()].sort((a,b) => a.customer_name.localeCompare(b.customer_name, "zh-CN"));
           },
           deliveryListFilterCount() {
-            return Object.values(this.deliveryListFilters || {}).filter(value => value !== "" && value !== null && value !== undefined).length;
+            const listCount = Object.entries(this.deliveryListFilters || {}).filter(([key, value]) => (
+              key !== "keyword" && value !== "" && value !== null && value !== undefined
+            )).length;
+            return listCount + Number(this.deliveryDetailedFilterCount || 0);
           },
           deliveryDetailedFilterCount() {
             return Object.values(this.deliveryDetailedFilters || {}).filter(value => String(value ?? "").trim() !== "").length;
@@ -10773,6 +10852,11 @@
             if (!keyword) return rows;
             return rows.filter(row => [row.name,row.customer_code,row.customer_number]
               .some(value => String(value || "").toLowerCase().includes(keyword)));
+          },
+          pagedProductCustomers() {
+            const pageSize = Math.max(1, Number(this.pageSize || DESKTOP_LIST_PAGE_SIZE_STANDARD));
+            const page = Math.max(1, Number(this.pages.productCustomers || 1));
+            return this.filteredProductCustomers.slice((page - 1) * pageSize, page * pageSize);
           },
           productTotalPages() {
             return Math.max(1, Math.ceil(Number(this.productsTotal || 0) / Number(this.pageSize || 25)));
@@ -11110,21 +11194,45 @@
             const requestUserId = this.user?.id;
             this.uiModeSaving = true;
             this.user = {...this.user, ui_mode:mode};
+            this.syncDesktopListPageSize(mode);
             try {
               const { data } = await axios.put("/api/auth/me/ui-mode", { ui_mode:mode });
               if (requestGeneration !== this.authGeneration || this.user?.id !== requestUserId) return;
               if (!data?.ok || !data?.user) throw new Error("显示模式保存失败");
               this.user = {...this.user, ...data.user, ui_mode:data.user.ui_mode || mode};
+              this.syncDesktopListPageSize(this.uiMode);
               await this.loadEffectiveUiLayout();
               await this.reloadOrdersForUiModeChange(previousMode, this.uiMode);
               this.showToast(mode === "large" ? "已切换为大字模式" : "已切换为标准模式");
             } catch (error) {
               if (requestGeneration !== this.authGeneration || this.user?.id !== requestUserId) return;
               this.user = {...this.user, ui_mode:previousMode};
+              this.syncDesktopListPageSize(previousMode);
               this.showToast(this.errorMessage(error), true);
             } finally {
               if (requestGeneration === this.authGeneration) this.uiModeSaving = false;
             }
+          },
+          desktopListPageSize(mode=this.uiMode) {
+            return mode === "large" ? DESKTOP_LIST_PAGE_SIZE_LARGE : DESKTOP_LIST_PAGE_SIZE_STANDARD;
+          },
+          syncDesktopListPageSize(mode=this.uiMode) {
+            const pageSize = this.desktopListPageSize(mode);
+            this.pageSize = pageSize;
+            if (this.auditLogState) this.auditLogState.page_size = pageSize;
+            return pageSize;
+          },
+          resetSingleScreenExpansion() {
+            this.dashboardDetailsVisible = false;
+            this.deliveryListFilterVisible = false;
+            this.auditFiltersVisible = false;
+            this.financeOverviewDetailsVisible = false;
+            this.showAdvancedFilter = false;
+            this.incomingHistoryFilterVisible = false;
+            this.productionHistoryFilterVisible = false;
+            this.productionPlacementFilterVisible = false;
+            this.expandedDeliveryRows = {};
+            this.expandedOrders = {};
           },
           orderListPageSize(mode=this.uiMode) {
             return mode === "large" ? ORDER_LIST_PAGE_SIZE_LARGE : ORDER_LIST_PAGE_SIZE_STANDARD;
@@ -11179,6 +11287,10 @@
               return this.loadRequisitionPendingPage({page:1,clearSelection:false});
             }
             if (this.activePage === "production") {
+              if (this.productionTab === "pending") {
+                this.pages.productionPending = 1;
+                return this.loadProductionPage(1);
+              }
               if (this.productionTab === "placement") {
                 this.pages.productionPlacement = 1;
                 return this.loadProductionPlacement();
@@ -11186,9 +11298,46 @@
               this.pages.productionHistory = 1;
               return this.loadProductionHistory();
             }
+            if (this.activePage === "customers") {
+              this.pages.customers = 1;
+              return this.runExplicitPageListLoad("customers");
+            }
+            if (this.activePage === "products") {
+              if (this.productTab === "products") {
+                if (!this.selectedProductCustomer) {
+                  this.pages.productCustomers = 1;
+                  return true;
+                }
+                this.pages.products = 1;
+                return this.runExplicitPageListLoad("products");
+              }
+              if (this.productTab === "materials") this.pages.materials = 1;
+              if (this.productTab === "suppliers") this.pages.suppliers = 1;
+              return true;
+            }
+            if (this.activePage === "orders" && this.orderWorkspace === "customer-heat") {
+              this.pages.customerHeat = 1;
+              return this.runExplicitPageListLoad("orders");
+            }
+            if (this.activePage === "orders_legacy") {
+              this.pages.orders = 1;
+              return this.runExplicitPageListLoad("orders");
+            }
             if (this.activePage === "deliveries") {
               this.pages.deliveries = 1;
               return this.loadDeliveries();
+            }
+            if (this.activePage === "finance") {
+              this.pages.financeCurrent = 1;
+              this.pages.financeSettled = 1;
+              this.pages.financeCosts = 1;
+              this.pages.statements = 1;
+              this.pages.invoices = 1;
+              return this.loadFinance();
+            }
+            if (this.activePage === "audit") {
+              this.auditLogState.page = 1;
+              return this.loadAuditLogs({resetPage:true});
             }
             return true;
           },
@@ -14013,6 +14162,7 @@
               if (!requestIsCurrent()) return;
               const sessionUser = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
               this.user = sessionUser;
+              this.syncDesktopListPageSize(this.uiMode);
               this.restoreFinanceManualMutationAttemptsForCurrentUser();
               if (!requestIsCurrent() || Number(this.user?.id || 0) !== Number(sessionUser.id || 0)) return;
               if (this.user?.role === "delivery_picker" && this.user?.must_change_password) {
@@ -14052,6 +14202,7 @@
               if (!requestIsCurrent()) return;
               const loginUser = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
               this.user = loginUser;
+              this.syncDesktopListPageSize(this.uiMode);
               this.restoreFinanceManualMutationAttemptsForCurrentUser();
               if (!requestIsCurrent() || Number(this.user?.id || 0) !== Number(loginUser.id || 0)) return;
               const currentPassword = loginPayload.password;
@@ -14106,6 +14257,16 @@
           resetPagePerformanceState() {
             this.loginAttemptSequence += 1;
             this.pageLoadSequence += 1;
+            this.dashboardDetailsVisible = false;
+            this.deliveryListFilterVisible = false;
+            this.auditFiltersVisible = false;
+            this.financeOverviewDetailsVisible = false;
+            this.showAdvancedFilter = false;
+            this.incomingHistoryFilterVisible = false;
+            this.productionHistoryFilterVisible = false;
+            this.productionPlacementFilterVisible = false;
+            this.expandedDeliveryRows = {};
+            this.expandedOrders = {};
             this.loading = false;
             this.customerPhoneGovernanceExporting = false;
             this.pageCacheUpdatedAt = {};
@@ -14441,6 +14602,7 @@
               this.showToast("当前账号没有访问该功能的权限", true);
               return;
             }
+            if (page !== this.activePage) this.resetSingleScreenExpansion();
             if (page === "requisition") {
               this.cancelLatestRequest("requisition:external-packaging");
               this.externalPurchaseRoutingLoading = false;
@@ -15738,6 +15900,7 @@
           },
           onMaterialLayerFilter(value) {
             this.materialLayerFilter = value;
+            this.pages.materials = 1;
             // 切层默认楞型：三层→B，五层→AB，七层→无
             if (value === 5) this.materialFluteFilter = "AB";
             else if (value === 7) this.materialFluteFilter = "";
@@ -21476,6 +21639,7 @@
           },
           async setFinanceView(view) {
             if (!['overview','current','invoice_tasks','payables'].includes(view)) return;
+            this.financeOverviewDetailsVisible = false;
             this.financeView = view;
             this.invalidatePageCache("finance");
             await this.loadFinance();
@@ -25652,6 +25816,9 @@
             if (this.productTab === tab) return;
             this.cancelQueuedPageSearch("products");
             this.productTab = tab;
+            if (tab === "products") this.pages.productCustomers = 1;
+            if (tab === "materials") this.pages.materials = 1;
+            if (tab === "suppliers") this.pages.suppliers = 1;
             if (tab === "materials") await this.loadMaterials();
             if (tab === "suppliers" && this.canAdmin) await this.loadSuppliers(true);
           },
@@ -25667,6 +25834,7 @@
             this.cancelQueuedPageSearch("products");
             this.resetProductWorkbookImport(false);
             this.selectedProductCustomer = null;
+            this.pages.productCustomers = 1;
             this.filters.productCustomer = "";
             this.filters.productKeyword = "";
             this.filters.productCode = "";

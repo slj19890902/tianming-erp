@@ -15,21 +15,21 @@ def _delivery_page() -> str:
 
 def test_delivery_page_has_one_top_pager_and_no_subtitle() -> None:
     page = _delivery_page()
-    assert page.count('class="pager top delivery-list-pager"') == 1
-    assert page.count('<pager :page="pages.deliveries"') == 0
+    assert page.count('class="pager top delivery-list-pager"') == 0
+    assert page.count('<pager :page="pages.deliveries"') == 1
     assert "支持多订单合并、分批发货、打印及客户实收确认" not in page
-    assert "第 {{ pages.deliveries }}/{{ deliveryListPages }} 页" in page
+    assert ':page-size="deliveryListPageSize()"' in page
 
 
 def test_detailed_search_is_collapsed_and_keeps_three_fields() -> None:
     page = _delivery_page()
-    assert "deliveryDetailedSearchVisible" in page
-    assert "详细查找" in page
+    assert "deliveryListFilterVisible" in page
+    assert "详细筛选" in page
     assert 'v-model.trim="deliveryDetailedFilters.customer_po"' in page
     assert 'v-model.trim="deliveryDetailedFilters.product_code"' in page
     assert 'v-model.trim="deliveryDetailedFilters.product_name"' in page
-    assert "清空详细条件" in page
-    assert "deliveryDetailedFilterCount" in page
+    assert "清空全部" in page
+    assert ':filter-count="deliveryListFilterCount"' in page
 
 
 def test_delivery_loader_uses_mode_specific_server_page_size_and_details() -> None:

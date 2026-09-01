@@ -62,6 +62,8 @@ interface Props {
   palletSnapThresholdMm: number;
   drawMode: "zone" | "aisle" | "no_go" | "structure" | null;
   drawPoints: number[][];
+  drawPointLabels?: string[];
+  calibrationMode?: boolean;
   measureMode: boolean;
   measurePoints: number[][];
   onSelect: (entity: SelectedEntity) => void;
@@ -101,6 +103,15 @@ interface CanvasRuntime {
 
 function entityKey(entity: NonNullable<SelectedEntity>) {
   return `${entity.kind}:${entity.id}`;
+}
+
+function usesRealEastCompass(layout: Layout) {
+  const floorCode = layout.floor_code.toUpperCase();
+  if (["1F", "3F"].includes(floorCode)) return true;
+  const calibration = layout.metadata?.calibration || layout.calibration;
+  return floorCode === "4F"
+    && calibration?.status === "aligned"
+    && calibration?.applied === true;
 }
 
 function clearHighlightGroup(group: THREE.Group) {
@@ -384,6 +395,8 @@ export function EditorCanvas({
   palletSnapThresholdMm,
   drawMode,
   drawPoints,
+  drawPointLabels = [],
+  calibrationMode = false,
   measureMode,
   measurePoints,
   onSelect,
@@ -401,6 +414,7 @@ export function EditorCanvas({
   showInternalCodes = true
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const effectiveDrawMode = calibrationMode ? "structure" : drawMode;
   const canvasMountRef = useRef<HTMLDivElement>(null);
   const scaleBarRef = useRef<HTMLSpanElement>(null);
   const scaleLabelRef = useRef<HTMLElement>(null);
@@ -474,6 +488,7 @@ export function EditorCanvas({
     controls.enableDamping = true;
     controls.enableRotate = viewMode === "25d";
     controls.enablePan = !mapPanLocked;
+    if (effectiveDrawMode === "structure") controls.enablePan = false;
     controls.screenSpacePanning = true;
     controls.maxZoom = 12;
     controls.minZoom = 0.25;
@@ -1053,10 +1068,17 @@ export function EditorCanvas({
       );
       preview.computeLineDistances();
       scene.add(preview);
-      for (const point of previewPoints) {
+      for (const [index, point] of previewPoints.entries()) {
         const dot = new THREE.Mesh(new THREE.SphereGeometry(100, 12, 12), new THREE.MeshBasicMaterial({ color: 0x2563eb }));
         dot.position.copy(point);
         scene.add(dot);
+        const pointLabel = drawPointLabels[index];
+        if (pointLabel) {
+          const label = textSprite(pointLabel, "#1d4ed8", 620, 360, warehouseTheme);
+          label.position.copy(point);
+          label.position.y += 280;
+          scene.add(label);
+        }
       }
     }
 
@@ -1159,7 +1181,7 @@ export function EditorCanvas({
     const onPointerDown = (event: PointerEvent) => {
       setPointer(event);
       if (event.button !== 0) return;
-      if (measureMode || drawMode) {
+      if (measureMode || effectiveDrawMode) {
         pendingCanvasAction = {
           kind: measureMode ? "measure" : "draw",
           pointerId: event.pointerId,
@@ -1468,7 +1490,7 @@ export function EditorCanvas({
       });
       renderer.dispose();
     };
-  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, mapPanLocked, allowPalletSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, drawMode, drawPoints, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
+  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, mapPanLocked, allowPalletSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, effectiveDrawMode, drawPoints, drawPointLabels, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -1487,9 +1509,10 @@ export function EditorCanvas({
     syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds);
   }, [highlightFeatureIds, highlightedPalletIds]);
 
-  return <div className={`editor-canvas ${visualTheme === "warehouse" ? "warehouse-theme" : ""} ${drawMode || measureMode ? "drawing" : ""}`} ref={containerRef}>
+  const realEastCompass = usesRealEastCompass(layout);
+  return <div className={`editor-canvas ${visualTheme === "warehouse" ? "warehouse-theme" : ""} ${effectiveDrawMode || measureMode ? "drawing" : ""}`} ref={containerRef}>
     <div className="canvas-mount" ref={canvasMountRef} />
-    <div className="map-compass" aria-label={["1F","3F"].includes(layout.floor_code.toUpperCase()) ? "现实东向" : "图纸北向"}><span ref={northArrowRef}>↑</span><b>{["1F","3F"].includes(layout.floor_code.toUpperCase()) ? "E" : "N"}</b><small>{["1F","3F"].includes(layout.floor_code.toUpperCase()) ? "现实东向" : "图纸北向"}</small></div>
+    <div className="map-compass" aria-label={realEastCompass ? "现实东向" : "图纸北向"}><span ref={northArrowRef}>↑</span><b>{realEastCompass ? "E" : "N"}</b><small>{realEastCompass ? "现实东向" : "图纸北向"}</small></div>
     {referenceLayout && referenceOverlay?.enabled && layout.floor_code.toUpperCase()==="1F" && <div className="reference-overlay-badge">{referenceOverlay.shared_coordinates ? "3F 左半区柱墙 · 同坐标复核" : "3F 左半区柱墙参照 · 草稿"}</div>}
     <div className="map-scale"><span ref={scaleBarRef} /><b ref={scaleLabelRef}>—</b></div>
     <small className="map-coordinate" ref={coordinateRef}>X — · Y — mm</small>

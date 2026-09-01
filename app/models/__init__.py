@@ -15,6 +15,9 @@ from app.models.access_control import (  # noqa: E402,F401
 from app.models.audit import OperationLog  # noqa: E402,F401
 from app.models.ui_layout_revision import UiLayoutRevision  # noqa: E402,F401
 from app.models.customer import Customer  # noqa: E402,F401
+from app.models.customer_finished_storage_preference import (  # noqa: E402,F401
+    CustomerFinishedStoragePreference,
+)
 from app.models.customer_quote_preference import CustomerQuotePreference  # noqa: E402,F401
 from app.models.customer_material import (  # noqa: E402,F401
     CustomerMaterialCandidate,

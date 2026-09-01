@@ -419,7 +419,7 @@ def _occupied_by_floor(db: Session) -> dict[int, int]:
                 InventoryPallet.status == "active",
                 pallet_has_physical_goods_condition(InventoryPallet.id),
                 formal_location,
-                WarehouseLocation.warehouse_floor.in_((1, 3)),
+                WarehouseLocation.warehouse_floor.in_((1, 3, 4)),
             )
             .group_by(WarehouseLocation.warehouse_floor)
         ).all()
@@ -471,7 +471,7 @@ def build_warehouse_capacity_forecast(
         db.scalars(
             select(WarehouseFloor)
             .options(selectinload(WarehouseFloor.areas))
-            .where(WarehouseFloor.floor_number.in_((1, 3)))
+            .where(WarehouseFloor.floor_number.in_((1, 3, 4)))
             .order_by(WarehouseFloor.floor_number)
         ).all()
     )

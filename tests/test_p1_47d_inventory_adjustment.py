@@ -217,6 +217,7 @@ def stocktake_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             1: ("FG", "SEMI", "DISPATCH"),
             2: ("FG",),
             3: ("FG", "DRAFT"),
+            4: ("FG", "DRAFT"),
         }.get(int(floor_number), ())
         zones_by_id = {
             f"zone-{int(floor_number)}f-{area_code.lower()}": area_code
@@ -330,11 +331,18 @@ def stocktake_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             floor_number=3,
             construction_status="enabled",
         )
+        floor4 = WarehouseFloor(
+            floor_code="4F",
+            floor_name="四楼",
+            floor_number=4,
+            construction_status="enabled",
+        )
         areas = [
             _published_area(floor1, code="FG", inventory_types=("finished",)),
             _published_area(floor1, code="SEMI", inventory_types=("semi_finished",)),
             _published_area(floor1, code="DISPATCH", inventory_types=("finished",)),
             _published_area(floor3, code="FG", inventory_types=("finished",)),
+            _published_area(floor4, code="FG", inventory_types=("finished",)),
             _published_area(floor2, code="FG", inventory_types=("finished",)),
             _published_area(
                 floor3,
@@ -342,8 +350,14 @@ def stocktake_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 inventory_types=("finished",),
                 status="draft",
             ),
+            _published_area(
+                floor4,
+                code="DRAFT",
+                inventory_types=("finished",),
+                status="draft",
+            ),
         ]
-        db.add_all([product, other_product, floor1, floor2, floor3, *areas])
+        db.add_all([product, other_product, floor1, floor2, floor3, floor4, *areas])
         db.flush()
 
         locations = {
@@ -373,6 +387,15 @@ def stocktake_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             ),
             "fg3_add": _location(
                 code="3F-FG-02", floor=3, area="FG", warehouse_type="finished", source_version="V11"
+            ),
+            "fg4": _location(
+                code="4F-FG-01", floor=4, area="FG", warehouse_type="finished", source_version="CURRENT_MAP"
+            ),
+            "fg4_add": _location(
+                code="4F-FG-02", floor=4, area="FG", warehouse_type="finished", source_version="CURRENT_MAP"
+            ),
+            "draft4": _location(
+                code="4F-DRAFT-01", floor=4, area="DRAFT", warehouse_type="finished", source_version="CURRENT_MAP"
             ),
             "floor2": _location(
                 code="2F-FG-01", floor=2, area="FG", warehouse_type="finished", source_version="TWIN_V1"
@@ -404,7 +427,7 @@ def stocktake_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             if (
                 key in areas_by_key
                 and location.storage_type in {"ground", "temporary_aisle"}
-                and key[0] in {1, 3}
+                and key[0] in {1, 3, 4}
             ):
                 ground_locations_by_key.setdefault(key, []).append(location)
         for (floor_number, area_code), area_locations in ground_locations_by_key.items():
@@ -844,6 +867,137 @@ def test_multi_item_add_finished_and_semi_plus_decrease_records_formal_facts(
         assert details["result"]["items"] == body["items"]
         assert audit.actor_user_id_snapshot == ids["admin"]
         assert audit.created_at is not None
+
+
+def test_published_floor4_allows_mobile_stocktake_add_and_decrease(
+    stocktake_app,
+) -> None:
+    from app.services.floor3_locations import load_mergeable_pallet
+
+    app, factory, ids, _database = stocktake_app
+    with factory() as db:
+        customer = db.get(Customer, ids["customer"])
+        product = db.get(Product, ids["product"])
+        location = db.get(WarehouseLocation, ids["loc_fg4"])
+        assert customer is not None and product is not None and location is not None
+        floor4_lot = _finished_lot(
+            number="FG-P147D-4F",
+            location=location,
+            customer=customer,
+            product=product,
+            available=9,
+        )
+        db.add(floor4_lot)
+        db.commit()
+        floor4_lot_id = int(floor4_lot.id)
+    payload = _batch(
+        "p147d-floor4-published",
+        _add(
+            client_item_id="floor4-add",
+            location_id=ids["loc_fg4_add"],
+            inventory_type="finished",
+            customer_id=ids["customer"],
+            product_id=ids["product"],
+            quantity=4,
+        ),
+        _decrease(
+            client_item_id="floor4-decrease",
+            location_id=ids["loc_fg4"],
+            lot_id=floor4_lot_id,
+            quantity=3,
+        ),
+    )
+
+    with TestClient(app) as client:
+        _login(client, "p147d-admin")
+        response = client.post(URL, json=payload)
+
+    assert response.status_code == 200, response.text
+    rows = {row["client_item_id"]: row for row in response.json()["items"]}
+    assert rows["floor4-add"]["quantity_after"] == 4
+    assert rows["floor4-decrease"]["quantity_after"] == 6
+    with factory() as db:
+        added = db.get(InventoryLot, rows["floor4-add"]["lot_id"])
+        decreased = db.get(InventoryLot, floor4_lot_id)
+        assert added is not None and decreased is not None
+        assert added.warehouse_location_id == ids["loc_fg4_add"]
+        assert (decreased.quantity_available, decreased.version) == (6, 2)
+        pallet = db.scalar(
+            select(InventoryPallet)
+            .join(
+                InventoryPalletItem,
+                InventoryPalletItem.pallet_id == InventoryPallet.id,
+            )
+            .where(InventoryPalletItem.inventory_lot_id == added.id)
+        )
+        assert pallet is not None
+        mergeable, profile = load_mergeable_pallet(db, int(pallet.id))
+        assert mergeable.id == pallet.id
+        assert profile.inventory_type == "finished"
+
+
+def test_unpublished_floor4_keeps_stocktake_add_and_decrease_fail_closed(
+    stocktake_app,
+) -> None:
+    app, factory, ids, _database = stocktake_app
+    with factory() as db:
+        customer = db.get(Customer, ids["customer"])
+        product = db.get(Product, ids["product"])
+        location = db.get(WarehouseLocation, ids["loc_draft4"])
+        assert customer is not None and product is not None and location is not None
+        floor4_draft_lot = _finished_lot(
+            number="FG-P147D-4F-DRAFT",
+            location=location,
+            customer=customer,
+            product=product,
+            available=7,
+        )
+        db.add(floor4_draft_lot)
+        db.commit()
+        floor4_draft_lot_id = int(floor4_draft_lot.id)
+        before = _counts(db)
+        draft_lot = db.get(InventoryLot, floor4_draft_lot_id)
+        assert draft_lot is not None
+        lot_snapshot = (draft_lot.quantity_available, draft_lot.version)
+
+    with TestClient(app) as client:
+        _login(client, "p147d-admin")
+        add_response = client.post(
+            URL,
+            json=_batch(
+                "p147d-floor4-draft-add",
+                _add(
+                    client_item_id="floor4-draft-add",
+                    location_id=ids["loc_draft4"],
+                    inventory_type="finished",
+                    customer_id=ids["customer"],
+                    product_id=ids["product"],
+                    quantity=4,
+                ),
+            ),
+        )
+        decrease_response = client.post(
+            URL,
+            json=_batch(
+                "p147d-floor4-draft-decrease",
+                _decrease(
+                    client_item_id="floor4-draft-decrease",
+                    location_id=ids["loc_draft4"],
+                    lot_id=floor4_draft_lot_id,
+                    quantity=2,
+                ),
+            ),
+        )
+
+    assert add_response.status_code == 409, add_response.text
+    assert decrease_response.status_code == 409, decrease_response.text
+    assert "尚未发布" in add_response.json()["detail"]
+    assert "尚未发布" in decrease_response.json()["detail"]
+    with factory() as db:
+        draft_lot = db.get(InventoryLot, floor4_draft_lot_id)
+        assert draft_lot is not None
+        assert (draft_lot.quantity_available, draft_lot.version) == lot_snapshot
+        assert _counts(db) == before
 
 
 def test_decrease_to_zero_keeps_lot_history_hides_map_card_and_releases_empty_pallet(
@@ -1812,7 +1966,10 @@ def test_stocktake_only_permission_gets_scoped_overview_candidates_and_projectio
         assert body["scope"]["customer_restricted"] is True
         locations = {row["location_id"]: row for row in body["locations"]}
         assert locations
-        assert all(row["source_version"] in {"TWIN_V1", "V11"} for row in locations.values())
+        assert all(
+            row["source_version"] in {"TWIN_V1", "CURRENT_MAP", "V11"}
+            for row in locations.values()
+        )
         projected = [
             item
             for row in locations.values()

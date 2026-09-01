@@ -144,13 +144,16 @@ def load_movable_pallet(db: Session, pallet_id: int) -> InventoryPallet:
     source = db.get(WarehouseLocation, pallet.location_id)
     if source is None:
         raise WarehouseMovementBatchError("栈板所在库位不存在", 409)
-    if source.warehouse_floor not in {1, 3}:
-        raise WarehouseMovementBatchError("移货模式当前只接入一楼和三楼正式库存", 409)
+    if source.warehouse_floor not in {1, 3, 4}:
+        raise WarehouseMovementBatchError(
+            "移货模式当前只接入一楼、三楼和四楼正式库存",
+            409,
+        )
     supported_source = bool(
         (source.source_version == "V11" and source.warehouse_floor == 3)
         or (
             source.source_version in {"TWIN_V1", "CURRENT_MAP"}
-            and source.warehouse_floor in {1, 3}
+            and source.warehouse_floor in {1, 3, 4}
         )
         or (
             source.source_version == "P1-25C"

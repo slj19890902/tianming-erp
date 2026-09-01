@@ -691,3 +691,70 @@ def test_legacy_completion_requires_all_three_order_item_fields(forecast_app) ->
     assert complete is not None
     assert complete["legacy_completed_quantity"] == 60
     assert complete["remaining_quantity"] == 40
+
+
+def test_published_floor4_is_included_in_capacity_summary_and_forecast(
+    forecast_app,
+) -> None:
+    from app.models.warehouse_inventory import WarehouseArea, WarehouseFloor
+
+    app, ids, today, factory = forecast_app
+    with factory() as db:
+        floor4 = WarehouseFloor(
+            floor_code="4F",
+            floor_name="四楼成品仓",
+            floor_number=4,
+            construction_status="enabled",
+            planning_reference_pallet_capacity=12,
+        )
+        db.add(floor4)
+        db.flush()
+        db.add(
+            WarehouseArea(
+                floor_id=floor4.id,
+                area_code="N1",
+                area_name="四楼成品区",
+                planned_location_count=12,
+                planned_pallet_capacity=12,
+                construction_status="enabled",
+                capacity_review_status="confirmed",
+                capacity_eligible=True,
+                confirmed_pallet_capacity=12,
+                capacity_reviewed_by="forecast-admin",
+                capacity_reviewed_at=datetime(2026, 9, 1, 8, 0, 0),
+            )
+        )
+        db.commit()
+        floor4_id = int(floor4.id)
+
+    with TestClient(app) as client:
+        _login(client, "forecast-admin")
+        summary = client.get("/api/warehouse/capacity/summary").json()
+        forecast = client.get(
+            "/api/warehouse/capacity/forecast?horizon=7"
+        ).json()
+        saved = client.post(
+            "/api/warehouse/capacity/forecast-plans",
+            json={
+                "source_type": "supplier_requisition",
+                "source_id": ids["source"],
+                "effect": "inflow",
+                "floor_id": floor4_id,
+                "planned_date": (today + timedelta(days=1)).isoformat(),
+                "pallet_slots": 2,
+                "operation_key": "forecast-floor4-0001",
+            },
+        )
+
+    assert {row["floor_code"] for row in summary["floors"]} == {
+        "1F",
+        "3F",
+        "4F",
+    }
+    assert {row["floor_code"] for row in forecast["floors"]} == {
+        "1F",
+        "3F",
+        "4F",
+    }
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["plan"]["floor_code"] == "4F"

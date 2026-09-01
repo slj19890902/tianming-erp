@@ -155,6 +155,10 @@ def _operational_pallet_location(
     row = db.get(WarehouseLocation, location_id)
     if row is None:
         raise Floor3LocationError("货位不存在", status_code=404)
+    # Never let a planning-only 4F row act as a pallet destination.  This is a
+    # target-side gate only: existing stock remains readable and can still be
+    # moved out to a valid 1F/3F destination.
+    require_published = require_published or row.warehouse_floor == 4
     is_direct_dispatch = bool(
         row.location_code == "F1-DISPATCH-01"
         and row.source_version == "P1-25C"
@@ -1885,8 +1889,8 @@ def load_mergeable_pallet(
     supported_source = bool(
         (location.source_version == "V11" and location.warehouse_floor == 3)
         or (
-            location.source_version == "TWIN_V1"
-            and location.warehouse_floor in {1, 3}
+            location.source_version in {"TWIN_V1", "CURRENT_MAP"}
+            and location.warehouse_floor in {1, 3, 4}
         )
         or (
             location.source_version == "P1-25C"
@@ -1896,7 +1900,7 @@ def load_mergeable_pallet(
     )
     if not supported_source:
         raise Floor3LocationError(
-            "栈板来源不属于已接入的一楼或三楼正式地图库位",
+            "栈板来源不属于已接入的一楼、三楼或四楼正式地图库位",
             status_code=409,
         )
     return pallet, profile

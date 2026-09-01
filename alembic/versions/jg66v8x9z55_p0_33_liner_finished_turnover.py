@@ -1,7 +1,7 @@
 """activate existing F34/F12 liner turnover anchors
 
 Revision ID: jg66v8x9z55
-Revises: iz61v8x9z50
+Revises: jf65v8x9z54
 Create Date: 2026-09-01
 """
 
@@ -14,7 +14,7 @@ from app.services.liner_finished_turnover import (
 
 
 revision = "jg66v8x9z55"
-down_revision = "iz61v8x9z50"
+down_revision = "jf65v8x9z54"
 branch_labels = None
 depends_on = None
 

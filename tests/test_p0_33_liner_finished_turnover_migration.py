@@ -27,7 +27,7 @@ from app.services.liner_finished_turnover import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PARENT = "iz61v8x9z50"
+PARENT = "jf65v8x9z54"
 TARGET = "jg66v8x9z55"
 
 

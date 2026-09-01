@@ -45,19 +45,25 @@ def test_filterbar_keeps_dates_statuses_actions_and_pager_in_order() -> None:
         "deliveryListFilters.status",
         "deliveryListFilters.return_status",
         ">查询<",
-        ">清空<",
-        '<pager :page="pages.deliveries"',
+        "deliveryDetailedSearchVisible",
+        ">清空全部<",
+        'class="pager top delivery-list-pager"',
     ]
     positions = [toolbar.index(marker) for marker in markers]
     assert positions == sorted(positions)
-    assert ':filter-count="deliveryListFilterCount"' in toolbar
-    assert "pages.deliveries=$event; loadDeliveries()" in toolbar
+    assert "deliveryListPages" in toolbar
+    assert "pages.deliveries-=1; loadDeliveries()" in toolbar
+    assert "pages.deliveries+=1; loadDeliveries()" in toolbar
 
 
 def test_filter_model_and_desktop_layout_use_unified_contract() -> None:
     assert (
         'deliveryListFilters: { customer_id:"", keyword:"", date_from:"", '
         'date_to:"", status:"", return_status:"" }'
+    ) in INDEX
+    assert (
+        'deliveryDetailedFilters: { customer_po:"", product_code:"", '
+        'product_name:"" }'
     ) in INDEX
     assert ".delivery-list-filterbar .delivery-keyword-input" in INDEX
     assert "width:108px" in INDEX
@@ -72,8 +78,9 @@ def test_delivery_loader_still_uses_server_paging_and_all_current_filters() -> N
     end = INDEX.index("async loadDeliveryPendingItems() {", start)
     loader = INDEX[start:end]
     assert "page: Number(this.pages.deliveries || 1)" in loader
-    assert "page_size: Number(this.pageSize)" in loader
+    assert "page_size: Number(this.deliveryListPageSize())" in loader
     assert "Object.entries(this.deliveryListFilters || {})" in loader
+    assert "Object.entries(this.deliveryDetailedFilters || {})" in loader
     assert 'axios.get("/api/deliveries", { params })' in loader
     assert "requestToken !== this.deliveryListState.request_token" in loader
 

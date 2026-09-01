@@ -3161,12 +3161,14 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
                 Order.order_number,
                 Order.customer_po,
                 func.coalesce(
-                    DeliveryItem.product_code_snapshot,
-                    OrderItem.snapshot_product_code,
+                    func.nullif(DeliveryItem.product_code_snapshot, ""),
+                    func.nullif(OrderItem.snapshot_product_code, ""),
+                    Product.product_code,
                 ).label("product_code"),
                 func.coalesce(
-                    DeliveryItem.product_name_snapshot,
-                    OrderItem.snapshot_product_name,
+                    func.nullif(DeliveryItem.product_name_snapshot, ""),
+                    func.nullif(OrderItem.snapshot_product_name, ""),
+                    Product.product_name,
                 ).label("product_name"),
                 DeliveryItem.specification_snapshot.label(
                     "delivery_specification_snapshot"
@@ -3205,6 +3207,76 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
         )
         result.append(mapping)
     return result
+
+
+_DELIVERY_SEARCH_FIELDS = ("customer_po", "product_code", "product_name")
+
+
+def _empty_delivery_search_matches(active_fields: list[str] | None = None) -> dict:
+    return {
+        "active_fields": list(active_fields or []),
+        "matched_fields": [],
+        "matched_values": {},
+        "items": [],
+    }
+
+
+def _delivery_search_matches(
+    db: Session,
+    delivery_ids: list[int],
+    *,
+    customer_po: str | None,
+    product_code: str | None,
+    product_name: str | None,
+) -> dict[int, dict]:
+    """Explain detailed list matches without exposing out-of-scope rows."""
+
+    filters = {
+        "customer_po": str(customer_po or "").strip(),
+        "product_code": str(product_code or "").strip(),
+        "product_name": str(product_name or "").strip(),
+    }
+    active_fields = [field for field in _DELIVERY_SEARCH_FIELDS if filters[field]]
+    if not delivery_ids or not active_fields:
+        return {}
+
+    payloads = {
+        int(delivery_id): _empty_delivery_search_matches(active_fields)
+        for delivery_id in delivery_ids
+    }
+    matched_values: dict[int, dict[str, list[str]]] = {
+        int(delivery_id): {field: [] for field in active_fields}
+        for delivery_id in delivery_ids
+    }
+    for item in _delivery_item_rows(db, delivery_ids):
+        delivery_id = int(item["delivery_id"])
+        if delivery_id not in payloads:
+            continue
+        item_matches: list[str] = []
+        for field in active_fields:
+            value = str(item.get(field) or "").strip()
+            if not value or filters[field].casefold() not in value.casefold():
+                continue
+            item_matches.append(field)
+            if value not in matched_values[delivery_id][field]:
+                matched_values[delivery_id][field].append(value)
+        if item_matches:
+            payloads[delivery_id]["items"].append(
+                {
+                    "delivery_item_id": int(item["id"]),
+                    "matched_fields": item_matches,
+                }
+            )
+
+    for delivery_id, payload in payloads.items():
+        payload["matched_fields"] = [
+            field for field in active_fields if matched_values[delivery_id][field]
+        ]
+        payload["matched_values"] = {
+            field: matched_values[delivery_id][field]
+            for field in payload["matched_fields"]
+        }
+    return payloads
 
 
 def _delivery_pick_task_summary(
@@ -4932,6 +5004,9 @@ def _delivery_summary_response(delivery_id: int, *, context: dict) -> dict:
             return_receipt.status if return_receipt else None
         ),
         "pick_task": context["pick_tasks"].get(delivery_id),
+        "search_matches": context.get("search_matches", {}).get(
+            delivery_id, _empty_delivery_search_matches()
+        ),
     }
 
 
@@ -7965,9 +8040,9 @@ def list_deliveries(
     keyword: str | None = Query(default=None, max_length=200),
     delivery_no: str | None = None,
     order_no: str | None = None,
-    customer_po: str | None = None,
-    product_code: str | None = None,
-    product_name: str | None = None,
+    customer_po: str | None = Query(default=None, max_length=200),
+    product_code: str | None = Query(default=None, max_length=200),
+    product_name: str | None = Query(default=None, max_length=200),
     spec: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
@@ -8079,13 +8154,23 @@ def list_deliveries(
     if date_to is not None:
         query = query.where(Delivery.delivery_date <= date_to)
 
+    item_product_code = func.coalesce(
+        func.nullif(DeliveryItem.product_code_snapshot, ""),
+        func.nullif(OrderItem.snapshot_product_code, ""),
+        Product.product_code,
+    )
+    item_product_name = func.coalesce(
+        func.nullif(DeliveryItem.product_name_snapshot, ""),
+        func.nullif(OrderItem.snapshot_product_name, ""),
+        Product.product_name,
+    )
     item_filters = [
         condition
         for condition in (
             _contains(Order.order_number, order_no),
             _contains(Order.customer_po, customer_po),
-            _contains(Product.product_code, product_code),
-            _contains(OrderItem.snapshot_product_name, product_name),
+            _contains(item_product_code, product_code),
+            _contains(item_product_name, product_name),
             _contains(OrderItem.snapshot_spec, spec),
         )
         if condition is not None
@@ -8095,9 +8180,13 @@ def list_deliveries(
             exists(
                 select(1)
                 .select_from(DeliveryItem)
-                .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-                .join(Order, Order.id == OrderItem.order_id)
-                .join(Product, Product.id == OrderItem.product_id)
+                .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+                .outerjoin(Order, Order.id == OrderItem.order_id)
+                .outerjoin(
+                    Product,
+                    Product.id
+                    == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
+                )
                 .where(
                     DeliveryItem.delivery_id == Delivery.id,
                     *item_filters,
@@ -8141,8 +8230,16 @@ def list_deliveries(
     delivery_ids = db.scalars(
         query.offset((page - 1) * page_size).limit(page_size)
     ).all()
+    search_matches = _delivery_search_matches(
+        db,
+        list(delivery_ids),
+        customer_po=customer_po,
+        product_code=product_code,
+        product_name=product_name,
+    )
     if view == "summary":
         summary_context = _delivery_list_summary_context(db, list(delivery_ids))
+        summary_context["search_matches"] = search_matches
         return {
             "total": total,
             "page": page,
@@ -8154,14 +8251,18 @@ def list_deliveries(
             ],
         }
     list_context = _delivery_list_page_context(db, list(delivery_ids))
+    response_items = []
+    for delivery_id in delivery_ids:
+        response = _delivery_response(db, delivery_id, list_context=list_context)
+        response["search_matches"] = search_matches.get(
+            int(delivery_id), _empty_delivery_search_matches()
+        )
+        response_items.append(response)
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [
-            _delivery_response(db, delivery_id, list_context=list_context)
-            for delivery_id in delivery_ids
-        ],
+        "items": response_items,
     }
 
 

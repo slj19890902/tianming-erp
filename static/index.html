@@ -512,6 +512,28 @@
       .delivery-list-detail .delivery-detail-name { width: 38%; }
       .delivery-list-detail .delivery-detail-spec { width: 25%; }
       .delivery-list-detail .delivery-detail-quantity { width: 15%; text-align: right; }
+      .delivery-list-panel .table-wrap {
+        max-height: none;
+        overflow-x: auto;
+        overflow-y: visible;
+      }
+      .delivery-list-pager { flex:0 0 auto; margin-left:auto; padding:3px 0 3px 6px; border:0; background:transparent; }
+      .delivery-detailed-filterbar {
+        display:flex; align-items:flex-end; gap:7px; flex-wrap:nowrap;
+        margin:0 0 8px; padding:9px 10px; border:1px solid var(--line);
+        border-radius:10px; background:var(--panel);
+      }
+      .delivery-detailed-filterbar .field { margin:0; min-width:0; flex:1 1 0; }
+      .delivery-detailed-filterbar .field label { display:block; margin-bottom:3px; }
+      .delivery-detailed-filterbar .input { width:100%; min-width:0; }
+      .delivery-search-match-summary { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+      .delivery-search-match-summary .status { white-space:normal; overflow-wrap:anywhere; }
+      .delivery-search-hit {
+        display:inline-flex; align-items:center; gap:4px; max-width:100%;
+        padding:2px 4px; border:1px solid #d97706; border-radius:5px;
+        background:#fff7d6; color:#7c2d12; font-weight:800;
+      }
+      .delivery-search-hit-label { font-size:11px; line-height:1; white-space:nowrap; }
       @media (max-width: 1400px) {
         .delivery-list-panel .table-wrap {
           width: 100%; max-width: 100%; min-width: 0; overflow-x: hidden;
@@ -548,6 +570,8 @@
         .ui-large .delivery-list-table .delivery-list-actions .btn.small {
           padding-left: 8px; padding-right: 8px; line-height: 1.3;
         }
+        .delivery-detailed-filterbar { flex-wrap:wrap; }
+        .delivery-detailed-filterbar .field { flex:1 1 220px; }
       }
       .finance-current-table { table-layout: fixed; white-space: normal; }
       .finance-current-table th,
@@ -4611,7 +4635,7 @@
             </template>
 
             <template v-else-if="activePage === 'deliveries'">
-              <div class="page-head delivery-page-head"><div><h2>送货与回单</h2><div class="muted">支持多订单合并、分批发货、打印及客户实收确认。</div></div><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button><button class="btn" @click="loadDeliveries">刷新</button></div></div>
+              <div class="page-head delivery-page-head"><div><h2>送货与回单</h2></div><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button><button class="btn" @click="loadDeliveries">刷新</button></div></div>
               <div v-if="deliveryDashboardMode==='pending_customers'" class="panel" style="margin-bottom:10px">
                 <div class="toolbar"><div><strong>下一步：选客户开送货单</strong><span class="muted" style="margin-left:8px">点客户后直接进入送货明细</span></div><button class="btn small" @click="deliveryDashboardMode=''">查看全部送货单</button></div>
                 <div v-if="deliveryPendingState.loading" class="empty">正在加载待送货客户…</div>
@@ -4628,8 +4652,21 @@
                 <select class="select delivery-status-select" v-model="deliveryListFilters.status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部送货状态</option><option value="pending">草稿</option><option value="dispatched">已发货</option><option value="voided">已作废</option></select>
                 <select class="select delivery-status-select" v-model="deliveryListFilters.return_status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部回单状态</option><option value="waiting_receipt">待回单</option><option value="confirmed">回单已确认</option><option value="cancelled">回单已取消</option></select>
                 <button class="btn" @click="pages.deliveries=1; loadDeliveries()">查询</button>
-                <button class="btn" @click="resetDeliveryListFilters()">清空</button>
-                <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="pageSize" :always="true" :compact="true" :filter-count="deliveryListFilterCount" @change="pages.deliveries=$event; loadDeliveries()"></pager>
+                <button class="btn" type="button" :aria-expanded="deliveryDetailedSearchVisible" @click="deliveryDetailedSearchVisible=!deliveryDetailedSearchVisible">{{ deliveryDetailedSearchVisible ? '收起详细查找' : '详细查找' }}</button>
+                <span v-if="deliveryDetailedFilterCount">已选 {{ deliveryDetailedFilterCount }} 项</span>
+                <button class="btn" @click="resetDeliveryListFilters()">清空全部</button>
+                <div class="pager top delivery-list-pager">
+                  <button class="btn small" :disabled="pages.deliveries <= 1" @click="pages.deliveries-=1; loadDeliveries()">上一页</button>
+                  <span>第 {{ pages.deliveries }}/{{ deliveryListPages }} 页</span>
+                  <button class="btn small" :disabled="pages.deliveries >= deliveryListPages" @click="pages.deliveries+=1; loadDeliveries()">下一页</button>
+                </div>
+              </div>
+              <div v-if="deliveryDetailedSearchVisible" class="delivery-detailed-filterbar">
+                <div class="field"><label>客户订单号</label><input class="input" v-model.trim="deliveryDetailedFilters.customer_po" placeholder="输入客户订单号" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
+                <div class="field"><label>存货编码</label><input class="input" v-model.trim="deliveryDetailedFilters.product_code" placeholder="输入存货编码" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
+                <div class="field"><label>产品名称</label><input class="input" v-model.trim="deliveryDetailedFilters.product_name" placeholder="输入产品名称" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
+                <button class="btn primary" type="button" @click="applyDeliveryDetailedFilters">查询详细条件</button>
+                <button class="btn" type="button" :disabled="!deliveryDetailedFilterCount" @click="clearDeliveryDetailedFilters">清空详细条件</button>
               </div>
               <div v-if="deliveryListState.initialLoading" class="panel delivery-list-panel empty">正在加载送货单</div>
               <div v-else-if="deliveryListState.error && !deliveries.length" class="panel delivery-list-panel empty">送货单加载失败：{{ deliveryListState.error }} <button class="btn small" @click="loadDeliveries">重试</button></div>
@@ -4641,7 +4678,7 @@
                 <tbody>
                   <template v-for="row in deliveries" :key="row.id">
                   <tr>
-                    <td>{{ row.delivery_number }}</td>
+                    <td>{{ row.delivery_number }}<div v-if="row.search_matches?.matched_fields?.length" class="delivery-search-match-summary"><span v-for="field in row.search_matches.matched_fields" :key="field" class="status orange">命中{{ deliverySearchFieldLabel(field) }}：{{ (row.search_matches.matched_values?.[field] || []).join('、') }}</span></div></td>
                     <td>{{ row.customer_name }}</td>
                     <td>{{ row.delivery_date }}<div v-if="row.is_historical_backfill" class="status blue" style="margin-top:4px">历史补录</div><div v-if="row.created_at" class="muted">ERP录入 {{ formatDateTime(row.created_at) }}</div></td>
                     <td>{{ row.vehicle_number || "-" }}</td>
@@ -4684,8 +4721,8 @@
                           <tbody>
                             <template v-for="item in row.items || []" :key="item.id">
                               <tr>
-                                <td><strong>{{ item.product_code || "未登记" }}</strong></td>
-                                <td>{{ item.product_name || "未登记" }}<div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td>
+                                <td><span :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_code')}"><strong>{{ item.product_code || "未登记" }}</strong><span v-if="deliverySearchItemFieldMatched(row,item,'product_code')" class="delivery-search-hit-label">命中存货编码</span></span></td>
+                                <td><span :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_name')}">{{ item.product_name || "未登记" }}<span v-if="deliverySearchItemFieldMatched(row,item,'product_name')" class="delivery-search-hit-label">命中产品名称</span></span><div v-if="item.customer_po && item.customer_po !== '无订单库存'" :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'customer_po')}" style="margin-top:4px">客户订单号：{{ item.customer_po }}<span v-if="deliverySearchItemFieldMatched(row,item,'customer_po')" class="delivery-search-hit-label">命中客户订单号</span></div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td>
                                 <td>{{ item.specification || "未登记" }}</td>
                                 <td class="delivery-detail-quantity"><strong>{{ item.delivered_quantity }}</strong></td>
                               </tr>
@@ -4706,7 +4743,6 @@
                 </tbody>
                 </table></div>
               </div>
-              <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="pageSize" @change="pages.deliveries=$event; loadDeliveries()"></pager>
             </template>
 
             <template v-else-if="activePage === 'finance'">
@@ -9085,6 +9121,8 @@
       const PRODUCTION_PENDING_PAGE_SIZE_LARGE = 4;
       const PRODUCTION_HISTORY_PAGE_SIZE_STANDARD = 13;
       const PRODUCTION_HISTORY_PAGE_SIZE_LARGE = 11;
+      const DELIVERY_LIST_PAGE_SIZE_STANDARD = 10;
+      const DELIVERY_LIST_PAGE_SIZE_LARGE = 6;
       const latestRequestControllers = new Map();
       const searchDebounceTimers = new Map();
       const pageSearchGenerations = new Map();
@@ -9498,7 +9536,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "", fluteRuleAction:{action:"",ruleId:null},
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryCustomerSources:{orders:true,inventory:false}, deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliveryLabelOpenState:{busy:false,deliveryId:null}, deliveryLabelRecoveryUrl:"", deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, deliveryReminderState:{loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryCustomerSources:{orders:true,inventory:false}, deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryDetailedSearchVisible:false, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliveryLabelOpenState:{busy:false,deliveryId:null}, deliveryLabelRecoveryUrl:"", deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, deliveryReminderState:{loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null,expected_ledger_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -9626,6 +9664,7 @@
             finishedReservationActionState:{action:"",committed:false,outcomeUncertain:false,itemId:null,lotId:null,reservationId:null,result:null},
             customersTotal: 0, productsTotal: 0, ordersTotal: 0, ordersUnfinishedTotal: 0, deliveriesTotal: 0,
             deliveryListFilters: { customer_id:"", keyword:"", date_from:"", date_to:"", status:"", return_status:"" },
+            deliveryDetailedFilters: { customer_po:"", product_code:"", product_name:"" },
             deliveryDashboardMode: "",
             financeView: "overview",
             financeOverviewMonth: month(),
@@ -10636,6 +10675,12 @@
           deliveryListFilterCount() {
             return Object.values(this.deliveryListFilters || {}).filter(value => value !== "" && value !== null && value !== undefined).length;
           },
+          deliveryDetailedFilterCount() {
+            return Object.values(this.deliveryDetailedFilters || {}).filter(value => String(value ?? "").trim() !== "").length;
+          },
+          deliveryListPages() {
+            return Math.max(1, Math.ceil(Number(this.deliveriesTotal || 0) / Number(this.deliveryListPageSize())));
+          },
           deliveryOptions() { return this.pendingDeliveryItems.filter(row => row.customer_id === Number(this.deliveryForm.customer_id)); },
           deliveryActiveLines() {
             return (this.deliveryForm.lines || []).filter(line => !!line.order_item_id);
@@ -11100,6 +11145,9 @@
           productionHistoryPageSize(mode=this.uiMode) {
             return mode === "large" ? PRODUCTION_HISTORY_PAGE_SIZE_LARGE : PRODUCTION_HISTORY_PAGE_SIZE_STANDARD;
           },
+          deliveryListPageSize(mode=this.uiMode) {
+            return mode === "large" ? DELIVERY_LIST_PAGE_SIZE_LARGE : DELIVERY_LIST_PAGE_SIZE_STANDARD;
+          },
           async reloadOrdersForUiModeChange(previousMode, nextMode) {
             if (previousMode === nextMode) return true;
             this.pages.orders = 1;
@@ -11138,6 +11186,10 @@
               }
               this.pages.productionHistory = 1;
               return this.loadProductionHistory();
+            }
+            if (this.activePage === "deliveries") {
+              this.pages.deliveries = 1;
+              return this.loadDeliveries();
             }
             return true;
           },
@@ -20504,9 +20556,13 @@
           async loadDeliveries() {
             const requestToken = Number(this.deliveryListState.request_token || 0) + 1;
             this.deliveryListState.request_token = requestToken;
-            const params = { page: Number(this.pages.deliveries || 1), page_size: Number(this.pageSize), view:"summary" };
+            const params = { page: Number(this.pages.deliveries || 1), page_size: Number(this.deliveryListPageSize()), view:"summary" };
             Object.entries(this.deliveryListFilters || {}).forEach(([key,value]) => {
               if (value !== "" && value !== null && value !== undefined) params[key] = value;
+            });
+            Object.entries(this.deliveryDetailedFilters || {}).forEach(([key,value]) => {
+              const normalized = String(value ?? "").trim();
+              if (normalized) params[key] = normalized;
             });
             const firstLoad = !this.deliveryListState.loaded;
             this.deliveryListState.initialLoading = firstLoad;
@@ -20572,8 +20628,27 @@
           },
           resetDeliveryListFilters() {
             this.deliveryListFilters = { customer_id:"", keyword:"", date_from:"", date_to:"", status:"", return_status:"" };
+            this.deliveryDetailedFilters = { customer_po:"", product_code:"", product_name:"" };
             this.pages.deliveries = 1;
             this.loadDeliveries();
+          },
+          applyDeliveryDetailedFilters() {
+            this.pages.deliveries = 1;
+            return this.loadDeliveries();
+          },
+          clearDeliveryDetailedFilters() {
+            this.deliveryDetailedFilters = { customer_po:"", product_code:"", product_name:"" };
+            this.pages.deliveries = 1;
+            return this.loadDeliveries();
+          },
+          deliverySearchFieldLabel(field) {
+            return ({customer_po:"客户订单号",product_code:"存货编码",product_name:"产品名称"})[field] || field;
+          },
+          deliverySearchItemFieldMatched(row, item, field) {
+            const itemId = Number(item?.id || 0);
+            if (!itemId) return false;
+            const match = (row?.search_matches?.items || []).find(entry => Number(entry?.delivery_item_id || 0) === itemId);
+            return Array.isArray(match?.matched_fields) && match.matched_fields.includes(field);
           },
           async loadFinance() {
             const requestAuthGeneration = this.authGeneration;

@@ -273,3 +273,56 @@ def test_unified_keyword_composes_with_status_date_receipt_and_pagination(
         assert _numbers(first) == ["TH-0002"]
         assert _numbers(second) == ["TH-0001"]
         assert first.json()["total"] == second.json()["total"] == 2
+
+
+def test_detailed_delivery_filters_return_structured_match_metadata(
+    delivery_filter_app,
+) -> None:
+    with TestClient(delivery_filter_app) as client:
+        _login(client, "admin")
+        response = client.get(
+            "/api/deliveries",
+            params={
+                "view": "summary",
+                "delivery_no": "TH-0001",
+                "customer_po": "TH-PO-77",
+                "product_code": "22000008",
+                "product_name": "天华外箱",
+            },
+        )
+        assert _numbers(response) == ["TH-0001"]
+        match = response.json()["items"][0]["search_matches"]
+        assert match["active_fields"] == [
+            "customer_po",
+            "product_code",
+            "product_name",
+        ]
+        assert match["matched_fields"] == match["active_fields"]
+        assert match["matched_values"] == {
+            "customer_po": ["TH-PO-77"],
+            "product_code": ["TH-22000008"],
+            "product_name": ["天华外箱"],
+        }
+        assert len(match["items"]) == 1
+        assert match["items"][0]["matched_fields"] == match["active_fields"]
+
+
+def test_detailed_product_filters_use_frozen_unordered_delivery_snapshots(
+    delivery_filter_app,
+) -> None:
+    with TestClient(delivery_filter_app) as client:
+        _login(client, "admin")
+        response = client.get(
+            "/api/deliveries",
+            params={
+                "view": "summary",
+                "status": "voided",
+                "product_code": "STOCK-X",
+                "product_name": "库存专用",
+            },
+        )
+        assert _numbers(response) == ["STOCK-0003"]
+        match = response.json()["items"][0]["search_matches"]
+        assert match["matched_fields"] == ["product_code", "product_name"]
+        assert match["matched_values"]["product_code"] == ["TH-STOCK-X"]
+        assert match["matched_values"]["product_name"] == ["库存专用外箱"]

@@ -13893,12 +13893,27 @@ def _location_label_dict(
     image = qrcode.make(lookup_url)
     buffer = BytesIO()
     image.save(buffer, format="PNG")
+    print_address_code = row.location_code
+    if (
+        row.address_kind == "rack_slot"
+        and row.warehouse_floor
+        and row.area_code
+        and row.rack_code
+        and row.level_no
+        and row.slot_no
+    ):
+        print_address_code = (
+            f"{int(row.warehouse_floor)}F-{str(row.area_code).strip().upper()}-"
+            f"{str(row.rack_code).strip().upper()}-"
+            f"{int(row.level_no)}-{int(row.slot_no)}"
+        )
     return {
         **_location_dict(row, projection_context),
         "floor_text": floor_text,
         "area_text": area_text,
         "area_master_name": area.area_name if area is not None else None,
         "display_path": readable_location,
+        "print_address_code": print_address_code,
         "layout_version": row.floor3_layout.version if row.floor3_layout else None,
         "lookup_url": lookup_url,
         "qr_data_url": (
@@ -13908,10 +13923,269 @@ def _location_label_dict(
     }
 
 
+@router.get("/location-label-workbench")
+def get_location_label_workbench(
+    floor_code: str | None = Query(default=None, min_length=2, max_length=12),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    """List printable rack cells projected from the current published map.
+
+    Retired, draft-only, temporary, unplaced and historical-alias locations are
+    deliberately absent.  This keeps the low-frequency print workbench on the
+    same spatial baseline as the operational map without deleting audit facts.
+    """
+
+    normalized_floor = str(floor_code or "").strip().upper()
+    requested_floor_codes = ["1F", "3F"]
+    if normalized_floor:
+        match = re.fullmatch(r"(\d{1,2})F", normalized_floor)
+        if match is None:
+            raise HTTPException(status_code=422, detail="楼层筛选格式无效")
+        requested_floor_codes = [normalized_floor]
+
+    formal_floors = list(
+        db.scalars(
+            select(WarehouseFloor)
+            .options(
+                selectinload(WarehouseFloor.areas).selectinload(
+                    WarehouseArea.storage_policy
+                )
+            )
+            .where(func.upper(WarehouseFloor.floor_code).in_(requested_floor_codes))
+        ).unique()
+    )
+    formal_floors_by_code = {
+        str(row.floor_code or "").strip().upper(): row for row in formal_floors
+    }
+    formal_areas_by_feature: dict[str, WarehouseArea] = {}
+    formal_areas_by_code: dict[tuple[str, str], WarehouseArea] = {}
+    for formal_floor in formal_floors:
+        current_floor_code = str(formal_floor.floor_code or "").strip().upper()
+        for area in formal_floor.areas:
+            formal_areas_by_code[(current_floor_code, area.area_code.upper())] = area
+            policy = area.storage_policy
+            feature_id = (
+                str(policy.map_feature_id or "").strip() if policy is not None else ""
+            )
+            if feature_id and policy.status == "published":
+                formal_areas_by_feature[feature_id] = area
+
+    floors_by_code: dict[str, dict] = {}
+    racks_by_id: dict[str, dict] = {}
+    for current_floor_code in requested_floor_codes:
+        try:
+            layout = load_warehouse_twin_floor(current_floor_code)
+        except WarehouseTwinLayoutNotFoundError:
+            continue
+        floor_model = formal_floors_by_code.get(current_floor_code)
+        current_floor = {
+            "floor_code": current_floor_code,
+            "floor_name": (
+                str(floor_model.floor_name or "").strip()
+                if floor_model is not None
+                else str(layout.get("name") or current_floor_code).strip()
+            ),
+            "areas_by_key": {},
+        }
+        floors_by_code[current_floor_code] = current_floor
+        zone_features = {
+            str(item.get("id") or "").strip(): item
+            for item in layout.get("features") or []
+            if item.get("feature_kind") == "zone"
+            and str(item.get("id") or "").strip()
+        }
+        zone_features_by_area: dict[str, list[dict]] = {}
+        for feature in zone_features.values():
+            feature_area_code = str(feature.get("erp_area_code") or "").strip().upper()
+            if feature_area_code:
+                zone_features_by_area.setdefault(feature_area_code, []).append(feature)
+
+        for rack in layout.get("racks") or []:
+            rack_id = str(rack.get("id") or "").strip()
+            if not rack_id:
+                continue
+            map_feature_id = str(rack.get("area_feature_id") or "").strip()
+            map_feature = zone_features.get(map_feature_id)
+            formal_area = formal_areas_by_feature.get(map_feature_id)
+            area_code = str(rack.get("area_code") or "").strip().upper()
+            if not area_code and map_feature is not None:
+                area_code = str(map_feature.get("erp_area_code") or "").strip().upper()
+            if formal_area is None and area_code:
+                formal_area = formal_areas_by_code.get(
+                    (current_floor_code, area_code)
+                )
+            if formal_area is not None:
+                area_code = formal_area.area_code.upper()
+                policy = formal_area.storage_policy
+                if not map_feature_id and policy is not None and policy.status == "published":
+                    map_feature_id = str(policy.map_feature_id or "").strip()
+                    map_feature = zone_features.get(map_feature_id)
+            if not map_feature_id and area_code:
+                candidates = zone_features_by_area.get(area_code, [])
+                if len(candidates) == 1:
+                    map_feature = candidates[0]
+                    map_feature_id = str(map_feature.get("id") or "").strip()
+
+            area_key = map_feature_id or (f"area:{area_code}" if area_code else "unassigned")
+            area_entry = current_floor["areas_by_key"].setdefault(
+                area_key,
+                {
+                    "area_id": formal_area.id if formal_area is not None else None,
+                    "area_code": area_code or "未归区",
+                    "area_name": (
+                        employee_area_name(
+                            formal_area,
+                            area_code=area_code,
+                            floor_number=(
+                                floor_model.floor_number
+                                if floor_model is not None
+                                else int(current_floor_code[:-1])
+                            ),
+                        )
+                        if formal_area is not None
+                        else str(
+                            (map_feature or {}).get("name")
+                            or (f"{area_code} 地图区域" if area_code else "地图未归区货架")
+                        ).strip()
+                    ),
+                    "map_feature_id": map_feature_id or None,
+                    "published_map_revision": str(layout.get("revision") or "").strip(),
+                    "racks_by_id": {},
+                },
+            )
+            try:
+                level_count = max(int(rack.get("levels") or 0), 0)
+            except (TypeError, ValueError):
+                level_count = 0
+            raw_counts = rack.get("level_cell_counts")
+            planned_cell_count = 0
+            if isinstance(raw_counts, list) and len(raw_counts) == level_count:
+                try:
+                    planned_cell_count = sum(max(int(value), 0) for value in raw_counts)
+                except (TypeError, ValueError):
+                    planned_cell_count = 0
+            rack_entry = {
+                "map_rack_id": rack_id,
+                "rack_code": "",
+                "rack_name": str(rack.get("name") or "未命名货架").strip(),
+                "level_count": level_count,
+                "planned_cell_count": planned_cell_count,
+                "locations": [],
+            }
+            area_entry["racks_by_id"][rack_id] = rack_entry
+            racks_by_id[rack_id] = rack_entry
+
+    query = select(WarehouseLocation).where(
+        _formal_inventory_location_condition(),
+        WarehouseLocation.is_active.is_(True),
+        WarehouseLocation.is_temporary.is_(False),
+        WarehouseLocation.placement_status == "placed",
+        WarehouseLocation.address_kind == "rack_slot",
+        WarehouseLocation.map_rack_id.is_not(None),
+        WarehouseLocation.rack_code.is_not(None),
+        WarehouseLocation.level_no.is_not(None),
+        WarehouseLocation.slot_no.is_not(None),
+    )
+    if normalized_floor:
+        query = query.where(WarehouseLocation.warehouse_floor == int(match.group(1)))
+    rows = list(
+        db.scalars(
+            query.order_by(
+                WarehouseLocation.warehouse_floor,
+                WarehouseLocation.area_code,
+                WarehouseLocation.rack_code,
+                WarehouseLocation.level_no,
+                WarehouseLocation.slot_no,
+                WarehouseLocation.id,
+            )
+        ).all()
+    )
+    projection_contexts = load_warehouse_location_projection_contexts(db, rows)
+    location_count = 0
+
+    for row in rows:
+        rack_id = str(row.map_rack_id or "").strip()
+        current_rack = racks_by_id.get(rack_id)
+        if current_rack is None:
+            # A location bound to a rack that is no longer on the published map
+            # remains auditable, but is not offered as a current printable rack.
+            continue
+        context = projection_contexts.get(int(row.id), {})
+        try:
+            _require_printable_location_label(row, context)
+        except HTTPException:
+            continue
+        payload = _location_dict(row, context)
+        current_rack["rack_code"] = str(row.rack_code or "").strip().upper()
+        print_address_code = (
+            f"{int(row.warehouse_floor or 0)}F-{str(row.area_code or '').strip().upper()}-"
+            f"{str(row.rack_code or '').strip().upper()}-"
+            f"{int(row.level_no or 0)}-{int(row.slot_no or 0)}"
+        )
+        current_rack["locations"].append(
+            {
+                "location_id": int(row.id),
+                "level_no": int(row.level_no or 0),
+                "slot_no": int(row.slot_no or 0),
+                "print_address_code": print_address_code,
+                "location_name": payload.get("employee_location_name"),
+            }
+        )
+        location_count += 1
+
+    floors: list[dict] = []
+    rack_count = 0
+    for current_floor in floors_by_code.values():
+        areas: list[dict] = []
+        for current_area in current_floor.pop("areas_by_key").values():
+            racks: list[dict] = []
+            for current_rack in current_area.pop("racks_by_id").values():
+                current_rack["locations"].sort(
+                    key=lambda item: (item["level_no"], item["slot_no"], item["location_id"])
+                )
+                current_rack["location_ids"] = [
+                    item["location_id"] for item in current_rack["locations"]
+                ]
+                current_rack["level_count"] = max(
+                    int(current_rack.get("level_count") or 0),
+                    max(
+                        (item["level_no"] for item in current_rack["locations"]),
+                        default=0,
+                    ),
+                )
+                current_rack["cell_count"] = len(current_rack["locations"])
+                current_rack["label_ready"] = bool(current_rack["locations"])
+                current_rack["setup_status"] = (
+                    "ready"
+                    if current_rack["locations"]
+                    else (
+                        "binding_pending"
+                        if int(current_rack.get("planned_cell_count") or 0) > 0
+                        else "cell_plan_pending"
+                    )
+                )
+                racks.append(current_rack)
+                rack_count += 1
+            racks.sort(key=lambda item: (str(item["rack_name"]), str(item["map_rack_id"])))
+            current_area["racks"] = racks
+            areas.append(current_area)
+        areas.sort(key=lambda item: (str(item["area_code"]), str(item["area_name"])))
+        current_floor["areas"] = areas
+        floors.append(current_floor)
+    floors.sort(key=lambda item: str(item["floor_code"]))
+    return {
+        "floors": floors,
+        "rack_count": rack_count,
+        "location_count": location_count,
+        "source": "current_published_measured_map",
+    }
+
+
 @router.get("/locations/labels")
 def get_location_labels(
     request: Request,
-    location_ids: str = Query(min_length=1, max_length=1200),
+    location_ids: str = Query(min_length=1, max_length=8000),
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
@@ -13919,8 +14193,8 @@ def get_location_labels(
     if not raw_ids or any(not part.isdigit() or int(part) <= 0 for part in raw_ids):
         raise HTTPException(status_code=422, detail="位置批量标签参数无效")
     ordered_ids = list(dict.fromkeys(int(part) for part in raw_ids))
-    if len(ordered_ids) > 100:
-        raise HTTPException(status_code=422, detail="一次最多打印 100 个位置")
+    if len(ordered_ids) > 500:
+        raise HTTPException(status_code=422, detail="一次最多打印 500 个位置")
     rows = db.scalars(
         select(WarehouseLocation)
         .options(

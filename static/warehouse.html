@@ -136,7 +136,9 @@
     .twin-operational-area-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin-top:9px}.twin-operational-area{min-height:42px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;color:#334155;cursor:pointer;font-weight:800}.twin-operational-area:hover,.twin-operational-area.active{border-color:#0f766e;background:#ccfbf1;color:#115e59}.twin-operational-area small{display:block;font-weight:500;color:#64748b}
     .twin-operational-canvas-shell{position:relative;min-width:0;overflow:hidden;border:1px solid #b8c8d5;border-radius:9px;background:#eef3f2}.twin-operational-svg{display:block;width:100%;height:100%;min-height:610px;touch-action:none;cursor:grab}.twin-operational-svg.is-panning{cursor:grabbing}.twin-operational-svg .base-wall{fill:none;stroke:#52606d;stroke-width:2}.twin-operational-svg .base-opening{fill:none;stroke:#0ea5e9;stroke-width:2}.twin-operational-svg .semantic-zone{cursor:pointer;transition:opacity .15s,stroke-width .15s}.twin-operational-svg .semantic-zone:hover,.twin-operational-svg .semantic-zone.active{opacity:.58;stroke:#0f766e;stroke-width:4}.twin-operational-svg .semantic-zone.unmapped{cursor:default}.twin-operational-svg .semantic-aisle{fill:none;opacity:.45}.twin-operational-svg .semantic-structure{fill:none}.twin-operational-svg .semantic-no-go{opacity:.23}.twin-operational-svg .twin-rack{fill:#8b5cf644;stroke:#6d28d9;stroke-width:2}.twin-operational-svg .twin-equipment{fill:#2563eb33;stroke:#1d4ed8;stroke-width:2}.twin-operational-svg text{font-family:Arial,"Microsoft YaHei",sans-serif;pointer-events:none;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round}.twin-operational-svg .zone-label{font-size:12px;font-weight:900;fill:#17324d}.twin-operational-svg .asset-label{font-size:9px;font-weight:800;fill:#475569}
     .twin-map-status{position:absolute;left:10px;bottom:10px;z-index:3;padding:5px 9px;border:1px solid #cbd5e1;border-radius:99px;background:#ffffffea;color:#475569;font-size:11px;pointer-events:none}.twin-location-list{display:grid;gap:6px;margin-top:9px}.twin-location-card{width:100%;border:1px solid #d6e0e8;border-radius:7px;background:#f8fafc;padding:8px;text-align:left;color:#334155;cursor:pointer}.twin-location-card:hover,.twin-location-card.active{border-color:#2563eb;background:#eff6ff}.twin-location-card b,.twin-location-card span,.twin-location-card small{display:block}.twin-location-card small{color:#64748b;white-space:normal}.twin-location-goods{margin-top:8px;padding-top:8px;border-top:1px solid #e2e8f0}.twin-location-goods strong{display:block;color:#12324c}.twin-location-goods p{margin:4px 0}
+    .location-label-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.location-label-head h2{margin:0 0 4px}.location-label-filters{display:grid;grid-template-columns:repeat(2,minmax(160px,240px));gap:10px;margin-top:12px}.location-label-workspace{display:grid;grid-template-columns:minmax(460px,1.45fr) minmax(320px,.8fr);gap:12px;min-height:650px}.location-label-map{min-width:0;display:flex;flex-direction:column}.location-label-map iframe{display:block;width:100%;min-height:620px;flex:1;border:1px solid #cbd5e1;border-radius:8px;background:#f1f5f9}.location-label-side{min-width:0;display:flex;flex-direction:column;gap:10px}.location-label-racks,.location-label-cells{display:grid;gap:7px;max-height:300px;overflow:auto}.location-label-rack,.location-label-cell{display:block;width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#1e293b;text-align:left;text-decoration:none;padding:9px;cursor:pointer}.location-label-rack:hover,.location-label-rack.active,.location-label-cell:hover,.location-label-cell.active{border-color:#2563eb;background:#eff6ff}.location-label-rack b,.location-label-rack span{display:block}.location-label-rack span{color:#475569}.location-label-cells{grid-template-columns:repeat(auto-fit,minmax(145px,1fr));max-height:230px}.location-label-cell{font-weight:800;text-align:center}.location-label-actions{display:flex;gap:8px;flex-wrap:wrap}.location-label-actions .btn.disabled{pointer-events:none;opacity:.48}.location-label-empty{padding:18px;border:1px dashed #94a3b8;border-radius:8px;color:#64748b;text-align:center}.location-label-current{padding:10px;border-left:4px solid #2563eb;background:#eff6ff}.location-label-current b,.location-label-current span{display:block}.location-label-current span{margin-top:3px;color:#475569}
     @media(max-width:1200px){.twin-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.twin-dashboard-grid{grid-template-columns:1fr 1.5fr}.twin-dashboard-grid>.twin-dashboard-column:last-child{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:900px){.location-label-workspace{grid-template-columns:1fr}.location-label-map iframe{min-height:500px}.location-label-filters{grid-template-columns:1fr}}
     @media(max-width:780px){.twin-dashboard-head{flex-direction:column}.twin-dashboard-actions{justify-content:flex-start}.twin-kpi-grid,.twin-dashboard-grid,.twin-floor-overview,.twin-dashboard-grid>.twin-dashboard-column:last-child{grid-template-columns:1fr}.twin-dashboard-grid>.twin-dashboard-column:last-child{grid-column:auto}.twin-search-row,.twin-search-item{grid-template-columns:1fr}.twin-floor-card{min-height:230px}.twin-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.capacity-review-list{grid-template-columns:1fr}}
   </style>
 </head>
@@ -158,6 +160,7 @@
         <a class="btn" href="/warehouse.html" target="_top">实测仓库地图</a>
         <button class="btn" data-tab="insights">库存经营看板</button>
         <button class="btn inventory-ledger-tab" data-tab="semi_finished">高级半成品台账</button>
+        <button class="btn" data-tab="location_labels">货架与货位标签</button>
         <button class="btn" data-tab="printing_plates">挂板位置</button>
         <button class="btn admin-only" type="button" onclick="openCapacityReviewLedger({focusChecklist:true})">容量复核</button>
         <button id="stocktakeReviewTab" class="btn stocktake-review-access hidden" data-tab="stocktake_review">盘点审核</button>
@@ -496,6 +499,34 @@
       <div class="panel table-wrap"><table><thead><tr><th>时间</th><th>流水号</th><th>库存批次</th><th>类型</th><th>数量</th><th>可用数量变化</th><th>原因</th></tr></thead><tbody id="movementBody"></tbody></table></div>
     </section>
 
+    <section id="locationLabelWorkbenchSection" class="hidden">
+      <div class="panel">
+        <div class="location-label-head">
+          <div><h2>货架与货位标签</h2><div class="muted">只读取当前正式实测地图中正在使用的货架与层格；退役、历史关联和未发布位置不在此显示。</div></div>
+          <div class="actions"><button class="btn" type="button" onclick="switchTab('finished')">返回库存台账</button><button id="refreshLocationLabelWorkbench" class="btn" type="button" onclick="loadLocationLabelWorkbench(true)">刷新</button></div>
+        </div>
+        <div class="location-label-filters">
+          <div class="field"><label for="locationLabelFloorFilter">楼层</label><select id="locationLabelFloorFilter" onchange="selectLocationLabelFloor(this.value)"></select></div>
+          <div class="field"><label for="locationLabelAreaFilter">区域</label><select id="locationLabelAreaFilter" onchange="selectLocationLabelArea(this.value)"></select></div>
+        </div>
+      </div>
+      <div class="location-label-workspace">
+        <div class="panel location-label-map">
+          <div class="actions" style="justify-content:space-between;margin-bottom:8px"><b id="locationLabelMapTitle">当前正式实测地图</b><button class="btn" type="button" onclick="openLocationLabelMapFull()">全屏打开地图</button></div>
+          <iframe id="locationLabelMapPreview" title="当前正式实测地图" src="/warehouse.html?embedded=1&amp;floor=3F&amp;view=2d"></iframe>
+        </div>
+        <aside class="panel location-label-side">
+          <div id="locationLabelCurrent" class="location-label-current"><b>正在读取当前地图货架…</b></div>
+          <div class="location-label-actions"><a id="printLocationLabelRack" class="btn primary disabled" aria-disabled="true">打印本货架全部标签</a><a id="editLocationLabelRack" class="btn admin-only disabled" aria-disabled="true">在实测地图编辑</a></div>
+          <div class="muted">选中一个货架后，按已发布的层数和每层每格自动生成对应数量的 80×40 毫米标签。</div>
+          <h3 style="margin:4px 0 0">当前区域货架</h3>
+          <div id="locationLabelRackList" class="location-label-racks"></div>
+          <h3 style="margin:4px 0 0">货架层格</h3>
+          <div id="locationLabelCellList" class="location-label-cells"></div>
+        </aside>
+      </div>
+    </section>
+
     <section id="locationSection" class="hidden">
       <div class="panel">
         <div class="actions" style="justify-content:space-between">
@@ -514,8 +545,8 @@
       </div>
       <div class="panel">
         <div class="grid">
-          <details style="grid-column:span 2">
-            <summary>新增 / 编辑楼层</summary>
+          <details class="hidden" hidden style="grid-column:span 2">
+            <summary>历史楼层台账兼容</summary>
             <form id="warehouseFloorForm" class="grid" style="grid-template-columns:repeat(2,minmax(120px,1fr));margin-top:10px"><input id="warehouseFloorId" type="hidden">
               <div class="field"><label>楼层编码</label><input id="warehouseFloorCode" required placeholder="例如 1F"></div>
               <div class="field"><label>楼层名称</label><input id="warehouseFloorName" required placeholder="例如 一楼成品区"></div>
@@ -526,8 +557,8 @@
               <button class="btn primary" type="submit">保存楼层</button>
             </form>
           </details>
-          <details style="grid-column:span 3">
-            <summary>新增 / 编辑区域与容量</summary>
+          <details class="hidden" hidden style="grid-column:span 3">
+            <summary>历史区域台账兼容</summary>
             <form id="warehouseAreaForm" class="grid" style="grid-template-columns:repeat(3,minmax(120px,1fr));margin-top:10px"><input id="warehouseAreaId" type="hidden">
               <div class="field"><label>所属楼层</label><select id="warehouseAreaFloor" required></select></div>
               <div class="field"><label>区域编码</label><input id="warehouseAreaCode" required placeholder="例如 C1"></div>
@@ -543,8 +574,8 @@
           </details>
         </div>
       </div>
-      <form id="locationForm" class="panel">
-        <h2>新增 / 编辑库位台账</h2><input id="locationId" type="hidden">
+      <form id="locationForm" class="panel hidden" hidden>
+        <h2>历史库位台账兼容</h2><input id="locationId" type="hidden">
         <div class="notice info" style="margin-bottom:10px">新库位只登记台账，默认待布局；不会自动出现在三楼或其他平面图，也不能用于正式入库。</div>
         <div class="grid">
           <div class="field"><label>库位编码</label><input id="locationCode" required></div>
@@ -557,8 +588,8 @@
           <div class="field"><label>&nbsp;</label><button class="btn primary" type="submit">保存库位</button></div>
         </div>
       </form>
-      <details id="locationAddressManager" class="panel admin-only">
-        <summary><b>统一位置地址与永久旧码</b></summary>
+      <details id="locationAddressManager" class="panel admin-only hidden" hidden>
+        <summary><b>历史地址兼容工具</b></summary>
         <div class="notice info" style="margin:10px 0">先预览全部下级新地址、占用影响和冲突，再确认一次保存。保存只改当前地址并保留旧码，不移动货物、不改数量、不生成库存流水。</div>
         <form id="locationAddressForm" class="grid" onsubmit="previewLocationAddress(event)">
           <div class="field"><label>调整范围</label><select id="locationAddressAction" onchange="syncLocationAddressFields()"><option value="location">单个位置</option><option value="rack">整组货架</option><option value="area">整个子区</option></select></div>
@@ -841,7 +872,7 @@
     }
     // END IDEMPOTENCY_KEY_HELPER
 
-    const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"finished",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"ledger",locations:[],locationLabelSelection:new Set(),locationAddress:{preview:null,payload:null,attemptKey:null},finishedLocationCandidates:[],locationsLoaded:false,locationsPromise:null,warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],customersLoaded:false,customersPromise:null,lots:[],molds:[],moldPage:1,moldPageSize:20,moldTotal:0,moldSortBy:"updated_desc",moldSelection:new Set(),moldCustomerSelection:new Set(),moldMasterAttempt:null,moldLabelPrintAttempt:null,moldLocationOptions:[],moldLocationOptionsLoaded:false,moldSaving:false,moldCodePreviewRequestId:0,moldCodePreviewTimer:null,moldBinding:{moldId:null,customerId:null,items:[],selected:null,requestId:0,saving:false},printingPlates:[],insights:null,loadRequests:{lots:0,locations:0,insights:0,movements:0,molds:0,printingPlates:0},operationPending:new Set(),finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},factoryMap:{activeFloor:"3F",floor1:null,selectedZoneCode:"",selectedRackId:"",selectedRackSlot:"",loading:false,twinFloors:{},selectedTwinFeatureId:"",selectedTwinLocationId:null,twinZoom:100,twinViewBox:null,pan:{active:false,startX:0,startY:0,viewBox:null}},twinDashboard:{data:null,days:30,loading:false,requestId:0,searchTimer:null,searchRequestId:0,search:null,lastError:null},capacityForecast:{data:null,days:7,loading:false,requestId:0},floor3:{locations:[],mapLocations:[],moveLocations:[],mergeLocations:[],mergeAttempt:{signature:"",key:null},detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,loading:false,error:"",pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
+    const state={user:null,permissions:[],readOnly:warehouseReadonlyMode,tab:"finished",lotPage:1,lotPageSize:25,lotTotal:0,locationView:"ledger",locations:[],locationLabelSelection:new Set(),locationLabelWorkbench:{loaded:false,loading:false,floors:[],floorCode:"",areaKey:"",rackId:"",locationId:null},locationAddress:{preview:null,payload:null,attemptKey:null},finishedLocationCandidates:[],locationsLoaded:false,locationsPromise:null,warehouseFloors:[],selectedWarehouseFloorId:null,customers:[],customersLoaded:false,customersPromise:null,lots:[],molds:[],moldPage:1,moldPageSize:20,moldTotal:0,moldSortBy:"updated_desc",moldSelection:new Set(),moldCustomerSelection:new Set(),moldMasterAttempt:null,moldLabelPrintAttempt:null,moldLocationOptions:[],moldLocationOptionsLoaded:false,moldSaving:false,moldCodePreviewRequestId:0,moldCodePreviewTimer:null,moldBinding:{moldId:null,customerId:null,items:[],selected:null,requestId:0,saving:false},printingPlates:[],insights:null,loadRequests:{lots:0,locations:0,insights:0,movements:0,molds:0,printingPlates:0},operationPending:new Set(),finishedProductCandidates:[],finishedProductSearchTimer:null,finishedProductSearchRequestId:0,stocktakeReviews:[],stocktakeReviewDetail:null,stocktakeReviewSelectedId:null,stocktakeReviewAttempt:{signature:"",key:null},lotEdit:{lotId:null,version:null,candidates:[],selectedProduct:null,searchTimer:null,requestId:0,sessionId:0,saving:false},stagingTransfer:{lotId:null,version:null,total:0,saving:false,sessionId:0},semiLotEdit:null,assignment:{lotId:null,items:[],selected:new Set()},onboarding:{batches:[],batch:null,lines:[],selectedBatchId:null,editingLineId:null,busy:false,submitAttempt:{signature:"",key:null}},factoryMap:{activeFloor:"3F",floor1:null,selectedZoneCode:"",selectedRackId:"",selectedRackSlot:"",loading:false,twinFloors:{},selectedTwinFeatureId:"",selectedTwinLocationId:null,twinZoom:100,twinViewBox:null,pan:{active:false,startX:0,startY:0,viewBox:null}},twinDashboard:{data:null,days:30,loading:false,requestId:0,searchTimer:null,searchRequestId:0,search:null,lastError:null},capacityForecast:{data:null,days:7,loading:false,requestId:0},floor3:{locations:[],mapLocations:[],moveLocations:[],mergeLocations:[],mergeAttempt:{signature:"",key:null},detail:null,selectedLocationId:null,selectedAreaCode:"",planZoom:100,viewMode:"overview",mapPopoverLocationId:null,mapPopoverPoint:{left:50,top:50},pendingMove:null,moveMode:false,layoutEdit:false,layoutDrag:null,layoutDraft:{},areaNavCollapsed:false,legendVisible:true,searchFocusLocationId:null,deepLinkLotId:null,searchTimer:null,searchRequestId:0,loading:false,error:"",pan:{active:false,startX:0,startY:0,scrollLeft:0,scrollTop:0},bindPanelOpen:false,bindRows:[],addCandidates:[],addCandidate:null,addSearchTimer:null,addSearchRequestId:0,addSearchKey:"",addInventoryIdempotencyKey:null,promotionKeys:{},promotionPending:new Set()}};
     state.moldRepairAttempt=null;
     state.moldLocationOptionsLoadedAt=0;
     state.moldEditLocation={moldId:null,originalLocation:"",expectedVersion:null,syncing:false,selectionChanged:false,attempt:null};
@@ -971,12 +1002,9 @@
         toast("容量复核链接缺少完整地图区域身份，请返回实测地图重新进入",true);return
       }
       if(requestedTab==="locations"&&requestedLocationView==="ledger"&&params.get("label_print")==="1"){
-        activateWarehouseLocationHub();
-        await switchLocationView("ledger");
-        requestAnimationFrame(()=>{$("locationBatchPrint").scrollIntoView({behavior:"smooth",block:"center"});$("locationLabelSelectAll").focus()});
-        toast("请选择一个或多个正式货位，再打印 80×40 毫米货位编号标签");
-        return
+        await switchTab("location_labels");return
       }
+      if(requestedTab==="location_labels"){await switchTab("location_labels");return}
       if(requestedTab==="locations"){openMeasuredWarehouseMap(params);return}
       const fromPdfOrder=params.get("source")==="pdf-order";
       if(fromPdfOrder&&!lotId){toast("库存定位链接缺少批次信息，请返回 PDF 订单后重新打开",true);return}
@@ -1235,6 +1263,43 @@
     async function openTwinSearchResult(index){const row=state.twinDashboard.search?.items?.[index];if(!row)return;if(row.position_status!=="mapped"){toast(`${row.location_name||"该位置"}：尚无已发布坐标，仅显示文字位置`,true);return}await openTwinFloor(row.floor_code,row.location_id)}
     async function openTwinLocationMatch(){const row=state.twinDashboard.search?.location_match;if(!row)return;const current=row.current||{},floor=`${Number(current.warehouse_floor||0)}F`;if(row.position_status!=="mapped"){toast(`${current.employee_location_name||"该位置"} 尚未映射到当前已发布实测地图，只显示文字位置`,true);return}await openTwinFloor(floor,row.location_id)}
     async function openTwinFloor(floorCode,locationId=null){const normalized=String(floorCode||"").toUpperCase()==="1F"?"1F":"3F";state.factoryMap.activeFloor=normalized;await switchLocationView("floor3");if(normalized==="3F"&&locationId)await focusTwinOperationalLocation(Number(locationId));else if(locationId)toast("已定位到一楼实测区域，请查看地图库存标记")}
+    function locationLabelFloor(){const workbench=state.locationLabelWorkbench;return workbench.floors.find(row=>row.floor_code===workbench.floorCode)||null}
+    function locationLabelArea(){const workbench=state.locationLabelWorkbench,floor=locationLabelFloor();return floor?.areas?.find(row=>String(row.area_id||row.map_feature_id||row.area_code)===String(workbench.areaKey))||null}
+    function locationLabelRack(){const workbench=state.locationLabelWorkbench,area=locationLabelArea();return area?.racks?.find(row=>row.map_rack_id===workbench.rackId)||null}
+    function locationLabelMapUrl({embedded=true,edit=false}={}){
+      const workbench=state.locationLabelWorkbench,area=locationLabelArea(),rack=locationLabelRack(),params=new URLSearchParams({floor:workbench.floorCode||"3F",view:"2d"});
+      if(embedded)params.set("embedded","1");
+      if(area?.map_feature_id)params.set("map_feature_id",area.map_feature_id);
+      if(rack?.map_rack_id)params.set("rack_id",rack.map_rack_id);
+      if(workbench.locationId)params.set("location_id",String(workbench.locationId));
+      if(edit){params.set("mode","planning");params.set("edit",rack?.map_rack_id?"rack":"area_policy")}
+      return `/warehouse.html?${params.toString()}`
+    }
+    function locationLabelSelectionUrl({rackId="",locationId=null}={}){const workbench=state.locationLabelWorkbench,params=new URLSearchParams({tab:"location_labels",floor:workbench.floorCode||"3F",area:workbench.areaKey||""});if(rackId)params.set("rack_id",rackId);if(locationId)params.set("location_id",String(locationId));return `/warehouse-ledger.html?${params.toString()}`}
+    function updateLocationLabelMapPreview(){const frame=$("locationLabelMapPreview"),url=locationLabelMapUrl();if(frame&&frame.getAttribute("src")!==url)frame.setAttribute("src",url)}
+    function renderLocationLabelWorkbench(){
+      const workbench=state.locationLabelWorkbench,floor=locationLabelFloor(),area=locationLabelArea(),selectedRack=locationLabelRack(),floorSelect=$("locationLabelFloorFilter"),areaSelect=$("locationLabelAreaFilter");
+      floorSelect.innerHTML=workbench.floors.map(row=>`<option value="${h(row.floor_code)}">${h(row.floor_code)} · ${h(row.floor_name||row.floor_code)}</option>`).join("")||'<option value="">当前没有可打印楼层</option>';floorSelect.value=workbench.floorCode;
+      areaSelect.innerHTML=(floor?.areas||[]).map(row=>{const key=String(row.area_id||row.map_feature_id||row.area_code);return `<option value="${h(key)}">${h(row.area_code)} · ${h(row.area_name)}</option>`}).join("")||'<option value="">当前楼层没有可打印区域</option>';areaSelect.value=workbench.areaKey;
+      $("locationLabelRackList").innerHTML=(area?.racks||[]).map(rack=>{const prefix=rack.rack_code?`${h(rack.rack_code)} · `:"",status=rack.label_ready?`${Number(rack.level_count||0)} 层 · ${Number(rack.cell_count||0)} 张标签`:rack.setup_status==="binding_pending"?"层格已规划 · 待确认现有货位关联":"层格数量待在地图确认",href=locationLabelSelectionUrl({rackId:rack.map_rack_id});return `<a class="location-label-rack ${rack.map_rack_id===workbench.rackId?"active":""}" href="${h(href)}"><b>${prefix}${h(rack.rack_name)}</b><span>${h(status)}</span></a>`}).join("")||'<div class="location-label-empty">该区域当前没有实测地图货架</div>';
+      $("locationLabelCellList").innerHTML=(selectedRack?.locations||[]).map(location=>{const href=locationLabelSelectionUrl({rackId:selectedRack.map_rack_id,locationId:location.location_id});return `<a class="location-label-cell ${Number(location.location_id)===Number(workbench.locationId)?"active":""}" href="${h(href)}">${h(location.print_address_code)}</a>`}).join("")||(selectedRack?'<div class="location-label-empty">该货架尚未形成可打印层格。点击“编辑地图货架”，在实测地图中确认层数、格数并发布后才可打印。</div>':'<div class="location-label-empty">请先选择一个地图货架</div>');
+      const title=selectedRack?`${workbench.floorCode} · ${area?.area_name||area?.area_code} · ${selectedRack.rack_name}`:area?`${workbench.floorCode} · ${area.area_name}`:floor?`${workbench.floorCode} · ${floor.floor_name}`:"当前没有可打印货架";
+      $("locationLabelCurrent").innerHTML=`<b>${h(title)}</b><span>${selectedRack?(selectedRack.label_ready?`${Number(selectedRack.level_count||0)} 层，共 ${Number(selectedRack.cell_count||0)} 个正式层格标签`:"地图位置已显示；层格尚未确认，因此暂不允许打印"):area?`该区域共 ${(area.racks||[]).length} 个实测地图货架`:"仅显示当前正式实测地图数据"}</span>`;
+      $("locationLabelMapTitle").textContent=title;const printLink=$("printLocationLabelRack"),editLink=$("editLocationLabelRack"),printReady=Boolean(selectedRack?.location_ids?.length),editReady=Boolean(selectedRack?.map_rack_id);printLink.classList.toggle("disabled",!printReady);printLink.setAttribute("aria-disabled",String(!printReady));if(printReady){const returnTo=encodeURIComponent("/warehouse-ledger.html?tab=location_labels");printLink.href=`/static/location-label.html?location_ids=${selectedRack.location_ids.join(",")}&return_to=${returnTo}`}else printLink.removeAttribute("href");editLink.classList.toggle("disabled",!editReady);editLink.setAttribute("aria-disabled",String(!editReady));if(editReady)editLink.href=locationLabelMapUrl({embedded:false,edit:true});else editLink.removeAttribute("href");updateLocationLabelMapPreview()
+    }
+    async function loadLocationLabelWorkbench(force=false){
+      const workbench=state.locationLabelWorkbench;if(workbench.loading)return;if(workbench.loaded&&!force){renderLocationLabelWorkbench();return}workbench.loading=true;$("refreshLocationLabelWorkbench").disabled=true;
+      try{const data=await api("/api/warehouse/location-label-workbench"),params=new URLSearchParams(location.search),requestedFloor=String(params.get("floor")||workbench.floorCode||"").toUpperCase(),requestedArea=String(params.get("area")||""),requestedRack=String(params.get("rack_id")||""),requestedLocation=Number(params.get("location_id")||0)||null;workbench.floors=data.floors||[];workbench.floorCode=workbench.floors.some(row=>row.floor_code===requestedFloor)?requestedFloor:workbench.floors.some(row=>row.floor_code==="3F")?"3F":workbench.floors[0]?.floor_code||"";const floor=locationLabelFloor(),areaKeys=(floor?.areas||[]).map(row=>String(row.area_id||row.map_feature_id||row.area_code));workbench.areaKey=areaKeys.includes(requestedArea)?requestedArea:areaKeys[0]||"";const area=locationLabelArea();workbench.rackId=(area?.racks||[]).some(row=>row.map_rack_id===requestedRack)?requestedRack:"";const rack=locationLabelRack();workbench.locationId=(rack?.locations||[]).some(row=>Number(row.location_id)===requestedLocation)?requestedLocation:null;workbench.loaded=true;renderLocationLabelWorkbench()}catch(error){$("locationLabelCurrent").innerHTML=`<b class="error-text">货架标签台读取失败：${h(error.message)}</b>`;toast(`货架标签台读取失败：${error.message}`,true)}finally{workbench.loading=false;$("refreshLocationLabelWorkbench").disabled=false}
+    }
+    function selectLocationLabelFloor(floorCode){const workbench=state.locationLabelWorkbench;workbench.floorCode=String(floorCode||"");const floor=locationLabelFloor();workbench.areaKey=String(floor?.areas?.[0]?.area_id||floor?.areas?.[0]?.map_feature_id||floor?.areas?.[0]?.area_code||"");workbench.rackId="";workbench.locationId=null;renderLocationLabelWorkbench()}
+    function selectLocationLabelArea(areaKey){const workbench=state.locationLabelWorkbench;workbench.areaKey=String(areaKey||"");workbench.rackId="";workbench.locationId=null;renderLocationLabelWorkbench()}
+    function openLocationLabelRack(rackId){const workbench=state.locationLabelWorkbench;workbench.rackId=String(rackId||"");workbench.locationId=null;renderLocationLabelWorkbench()}
+    function focusLocationLabelCell(locationId){state.locationLabelWorkbench.locationId=Number(locationId)||null;renderLocationLabelWorkbench()}
+    function openLocationLabelMapFull(){window.top.location.href=locationLabelMapUrl({embedded:false})}
+    function editSelectedLocationLabelRack(){if(!locationLabelArea())return;window.top.location.href=locationLabelMapUrl({embedded:false,edit:true})}
+    function printSelectedLocationLabelRack(){const selectedRack=locationLabelRack();if(!selectedRack?.location_ids?.length){toast("请先选择一个有正式层格的货架",true);return}const returnTo=encodeURIComponent("/warehouse-ledger.html?tab=location_labels");window.open(`/static/location-label.html?location_ids=${selectedRack.location_ids.join(",")}&return_to=${returnTo}`,"_blank")}
+    function openMeasuredWarehouseArea(areaId,edit=false){const area=state.warehouseFloors.flatMap(row=>row.areas||[]).find(row=>Number(row.id)===Number(areaId));if(!area?.storage_policy?.map_feature_id){toast("该区域尚未关联当前实测地图",true);return}const params=new URLSearchParams({floor:area.floor_code||`${Number(area.floor_number||3)}F`,view:"2d",map_feature_id:area.storage_policy.map_feature_id});if(edit){params.set("mode","planning");params.set("edit","area_policy")}window.top.location.href=`/warehouse.html?${params.toString()}`}
+    function openMeasuredWarehouseLocation(locationId){const row=state.locations.find(item=>Number(item.id)===Number(locationId));if(!row)return;const params=new URLSearchParams({floor:`${Number(row.warehouse_floor||3)}F`,view:"2d",location_id:String(row.id)});window.top.location.href=`/warehouse.html?${params.toString()}`}
     let capacityReviewSpaceOnly=false;
     async function switchLocationView(view){
       const spaceOnly=capacityReviewSpaceOnly;
@@ -1252,7 +1317,7 @@
     }
     function activateWarehouseLocationHub(){
       state.tab="locations";document.querySelectorAll("[data-tab]").forEach(button=>button.classList.remove("active"));$("locationViewTabs").classList.add("hidden");document.body.classList.remove("floor3-mode","floor3-area-mode","floor3-workspace-mode");
-      $("inventorySection").classList.add("hidden");$("insightSection").classList.add("hidden");$("movementSection").classList.add("hidden");$("moldSection").classList.add("hidden");$("printingPlateSection").classList.add("hidden");setStocktakeReviewSectionVisibility("locations");setInventoryOnboardingSectionVisibility("locations");$("finishedForm").classList.add("hidden");$("semiForm").classList.add("hidden");
+      $("inventorySection").classList.add("hidden");$("insightSection").classList.add("hidden");$("movementSection").classList.add("hidden");$("locationLabelWorkbenchSection").classList.add("hidden");$("moldSection").classList.add("hidden");$("printingPlateSection").classList.add("hidden");setStocktakeReviewSectionVisibility("locations");setInventoryOnboardingSectionVisibility("locations");$("finishedForm").classList.add("hidden");$("semiForm").classList.add("hidden");
     }
     async function openCapacityReviewLedger({areaId=null,floorId=null,areaCode=null,mapFeatureId=null,focusChecklist=false}={}){
       if(!canManageLocations()){toast("只有管理员可以复核仓库安全容量",true);return false}
@@ -1273,6 +1338,7 @@
       $("inventorySection").classList.toggle("hidden",!["finished","semi_finished"].includes(tab));
       $("insightSection").classList.toggle("hidden",tab!=="insights");
       $("movementSection").classList.toggle("hidden",tab!=="movements");$("locationSection").classList.add("hidden");
+      $("locationLabelWorkbenchSection").classList.toggle("hidden",tab!=="location_labels");
       $("twinDashboardSection").classList.add("hidden");
       $("moldSection").classList.toggle("hidden",tab!=="molds");
       $("printingPlateSection").classList.toggle("hidden",tab!=="printing_plates");
@@ -1293,7 +1359,7 @@
           refreshInventoryFloorOptions("floorFilter",tab,"全部楼层",true);refreshInventoryAreaOptions("floorFilter","areaFilter",tab,"全部区域");refreshInventoryLocationOptions("floorFilter","areaFilter","locationFilter",tab,"全部库位");
           try{await loadLots()}catch(error){throw new Error(`库存批次加载失败：${error.message}`)}
         }catch(error){renderLotLoading(`库存页面加载失败：${error.message}`,true);toast(`库存页面加载失败：${error.message}`,true)}
-      }else if(tab==="insights")loadInsights();else if(tab==="movements")loadMovements();else if(tab==="molds"){await loadMoldLocationOptions(true);loadMolds()}else if(tab==="printing_plates")loadPrintingPlates();else if(tab==="stocktake_review")loadStocktakeReviews();else if(tab==="inventory_onboarding")loadInventoryOnboardingBatches();
+      }else if(tab==="location_labels")await loadLocationLabelWorkbench();else if(tab==="insights")loadInsights();else if(tab==="movements")loadMovements();else if(tab==="molds"){await loadMoldLocationOptions(true);loadMolds()}else if(tab==="printing_plates")loadPrintingPlates();else if(tab==="stocktake_review")loadStocktakeReviews();else if(tab==="inventory_onboarding")loadInventoryOnboardingBatches();
     }
     async function loadInsights(){
       const requestId=++state.loadRequests.insights,hadData=Boolean(state.insights);if(hadData)$("insightScope").textContent="正在刷新库存看板，保留当前结果";else $("insightActionBody").innerHTML='<tr><td colspan="7" class="empty">正在加载库存看板…</td></tr>';
@@ -1382,7 +1448,7 @@
       const floors=state.warehouseFloors||[];
       $("warehouseFloorSummary").innerHTML=floors.map(row=>{const capacity=row.capacity||{},reference=capacity.confirmed?capacity.reference_pallet_capacity:capacity.planned_pallet_capacity;return `<button type="button" class="metric-card" style="text-align:left;cursor:pointer;border-color:${Number(row.id)===Number(state.selectedWarehouseFloorId)?"#2563eb":"#dbe3ef"}" onclick="selectWarehouseFloor(${row.id})"><span class="muted">${h(row.floor_code)} · ${h(warehouseStatusLabel(row.construction_status))}</span><strong>${h(row.floor_name)}</strong><span>${row.recorded_location_count}/${row.planned_location_count} 库位 · 已占 ${row.occupied_pallet_count} 栈板${capacity.confirmed?` / 安全容量 ${h(reference??"待补")}`:` · 规划参考 ${h(reference||0)}`}</span><small>${capacity.confirmed?(capacity.utilization_percent==null?"安全容量待补":`利用率 ${capacity.utilization_percent}% · 覆盖 ${capacity.coverage_percent}%`):`现场安全容量待确认 · 覆盖 ${capacity.coverage_percent||0}%`}</small></button>`}).join("")||'<div class="notice info" style="grid-column:1/-1">尚未建立楼层台账。请按现场真实情况新增，不会自动生成一楼或其他区域。</div>';
       const floor=floors.find(row=>Number(row.id)===Number(state.selectedWarehouseFloorId));
-      $("warehouseAreaBody").innerHTML=(floor?.areas||[]).map(area=>`<tr><td><b>${h(area.current_address_code||area.area_code)}</b><br>${h(readableArea(area))}</td><td><span class="tag ${area.construction_status==="enabled"?"":"warn"}">${h(warehouseStatusLabel(area.construction_status))}</span></td><td>${area.planned_location_count} / <b>${area.recorded_location_count}</b></td><td>${area.laid_out_location_count} / <b>${area.pending_layout_count}</b>${area.retired_location_count?`<br><span class="muted">已退役 ${area.retired_location_count}</span>`:""}</td><td>规划 ${area.planned_pallet_capacity} / 已占 <b>${area.occupied_pallet_count}</b><br><span class="tag ${area.capacity_review_status==="pending"?"warn":area.capacity_review_status==="confirmed"?"blue":""}">${h(warehouseCapacityReviewLabel(area.capacity_review_status))}</span>${area.confirmed_pallet_capacity?` <b>${area.confirmed_pallet_capacity}</b> 位`:""}<small class="capacity-review-evidence">${h(warehouseCapacityReviewEvidenceText(area))}</small></td><td>${h(area.remarks||"-")}</td><td><button class="btn" type="button" onclick="editWarehouseArea(${area.id})">编辑区域</button><button class="btn" type="button" onclick="openLocationAddressArea(${area.id})">统一命名</button></td></tr>`).join("")||'<tr><td colspan="7" class="empty">当前楼层尚未建立区域台账</td></tr>';
+      $("warehouseAreaBody").innerHTML=(floor?.areas||[]).map(area=>`<tr><td><b>${h(area.current_address_code||area.area_code)}</b><br>${h(readableArea(area))}</td><td><span class="tag ${area.construction_status==="enabled"?"":"warn"}">${h(warehouseStatusLabel(area.construction_status))}</span></td><td>${area.planned_location_count} / <b>${area.recorded_location_count}</b></td><td>${area.laid_out_location_count} / <b>${area.pending_layout_count}</b>${area.retired_location_count?`<br><span class="muted">已退役 ${area.retired_location_count}</span>`:""}</td><td>规划 ${area.planned_pallet_capacity} / 已占 <b>${area.occupied_pallet_count}</b><br><span class="tag ${area.capacity_review_status==="pending"?"warn":area.capacity_review_status==="confirmed"?"blue":""}">${h(warehouseCapacityReviewLabel(area.capacity_review_status))}</span>${area.confirmed_pallet_capacity?` <b>${area.confirmed_pallet_capacity}</b> 位`:""}<small class="capacity-review-evidence">${h(warehouseCapacityReviewEvidenceText(area))}</small></td><td>${h(area.remarks||"-")}</td><td><button class="btn" type="button" onclick="openMeasuredWarehouseArea(${area.id})">地图定位</button><button class="btn" type="button" onclick="openMeasuredWarehouseArea(${area.id},true)">区域规划</button></td></tr>`).join("")||'<tr><td colspan="7" class="empty">当前楼层尚未建立区域台账</td></tr>';
       renderCapacityReviewChecklist();
     }
     function selectWarehouseFloor(id){state.selectedWarehouseFloorId=Number(id);$("warehouseFloorFilter").value=String(id);renderWarehouseSpace()}
@@ -2225,7 +2291,7 @@
     }
     function locationLabelEligible(row){return row.is_active!==false&&row.position_status==="mapped"&&!row.is_temporary&&row.storage_type!=="temporary_aisle"}
     function renderLocations(){
-      $("locationBody").innerHTML=state.locations.map(x=>{const placed=x.placement_status==="placed",mapped=x.position_status==="mapped",managed=["V11","TWIN_V1","CURRENT_MAP"].includes(String(x.source_version||"").toUpperCase()),printable=locationLabelEligible(x),status=!x.is_active?"已退役":mapped?"已发布":placed?"待地图发布":"待布局",selector=`<input type="checkbox" aria-label="选择位置 ${h(readableLocation(x))}" ${printable?"":"disabled"} ${state.locationLabelSelection.has(x.id)?"checked":""} onchange="toggleLocationLabel(${x.id},this.checked)">`,label=printable?`<button class="btn" onclick="window.open('/static/location-label.html?location_id=${x.id}','_blank')">打印位置标签</button>`:"",address=`<button class="btn" type="button" onclick="openLocationAddress(${x.id})">统一地址</button>`,mapAction=mapped?`<button class="btn" onclick="openTwinFloor('${Number(x.warehouse_floor||3)}F',${x.id})">实测地图定位</button>${label}${address}`:managed?`${address}<span class="tag warn">请在实测地图完成发布</span>`:`<button class="btn" onclick="editLocation(${x.id})">编辑</button>${address}<button class="btn ${x.is_active?"danger":""}" onclick="toggleLocation(${x.id},${x.is_active})">${x.is_active?"退役":"恢复"}</button>`;return `<tr><td>${selector}</td><td>${h(x.current_address_code||x.location_code)}</td><td>${h(readableLocation(x))}</td><td>${h(labels[x.warehouse_type]||x.warehouse_type)}</td><td>${h(locationAreaLabel(x))}${mapped?'<br><span class="tag">当前实测地图已发布</span>':!x.is_active?'<br><span class="tag">保留历史关联</span>':placed?'<br><span class="tag warn">当前实测地图未发布</span>':'<br><span class="tag warn">待布局，禁止入库</span>'}</td><td>${h(status)}</td><td>${h(x.remarks||"-")}</td><td>${mapAction}</td></tr>`}).join("")||`<tr><td colspan="8" class="empty">暂无库位</td></tr>`;updateLocationLabelControls();refreshLocationAddressLocationOptions()
+      $("locationBody").innerHTML=state.locations.map(x=>{const placed=x.placement_status==="placed",mapped=x.position_status==="mapped",managed=["V11","TWIN_V1","CURRENT_MAP"].includes(String(x.source_version||"").toUpperCase()),printable=locationLabelEligible(x),status=!x.is_active?"已退役":mapped?"已发布":placed?"待地图发布":"待布局",selector=`<input type="checkbox" aria-label="选择位置 ${h(readableLocation(x))}" ${printable?"":"disabled"} ${state.locationLabelSelection.has(x.id)?"checked":""} onchange="toggleLocationLabel(${x.id},this.checked)">`,label=printable?`<button class="btn" onclick="window.open('/static/location-label.html?location_id=${x.id}','_blank')">打印位置标签</button>`:"",mapAction=mapped?`<button class="btn" onclick="openMeasuredWarehouseLocation(${x.id})">实测地图定位</button>${label}`:managed?'<span class="tag warn">请在实测地图完成发布</span>':`<span class="tag warn">历史兼容位置，不在日常界面编辑</span>`;return `<tr><td>${selector}</td><td>${h(x.current_address_code||x.location_code)}</td><td>${h(readableLocation(x))}</td><td>${h(labels[x.warehouse_type]||x.warehouse_type)}</td><td>${h(locationAreaLabel(x))}${mapped?'<br><span class="tag">当前实测地图已发布</span>':!x.is_active?'<br><span class="tag">保留历史关联</span>':placed?'<br><span class="tag warn">当前实测地图未发布</span>':'<br><span class="tag warn">待布局，禁止入库</span>'}</td><td>${h(status)}</td><td>${h(x.remarks||"-")}</td><td>${mapAction}</td></tr>`}).join("")||`<tr><td colspan="8" class="empty">暂无库位</td></tr>`;updateLocationLabelControls();refreshLocationAddressLocationOptions()
     }
     function updateLocationLabelControls(){const printable=state.locations.filter(locationLabelEligible),count=state.locationLabelSelection.size;$("locationBatchCount").textContent=`已选 ${count} 个正式位置`;$("locationBatchPrint").disabled=count===0;$("locationLabelSelectAll").checked=printable.length>0&&count===printable.length;$("locationLabelSelectAll").indeterminate=count>0&&count<printable.length}
     function toggleLocationLabel(id,checked){if(checked){if(state.locationLabelSelection.size>=100){toast("一次最多选择 100 个位置",true);renderLocations();return}state.locationLabelSelection.add(id)}else state.locationLabelSelection.delete(id);updateLocationLabelControls()}

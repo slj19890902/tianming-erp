@@ -2022,9 +2022,10 @@ export function WarehouseTwinApp() {
       visualLocations,
       floorCode,
       standardPallet,
-      layout?.id
+      layout?.id,
+      locationEditMode
     ),
-    [features, visualLocations, floorCode, standardPallet, layout?.id]
+    [features, visualLocations, floorCode, standardPallet, layout?.id, locationEditMode]
   );
   const palletColumnConflicts = useMemo(
     () => layout ? findPalletColumnConflicts(mappedLocationPallets, layout.structures, features) : [],
@@ -5769,7 +5770,7 @@ export function WarehouseTwinApp() {
                   <button type="button" className="save" disabled={locationEditBusy || !locationPointDraftCount} onClick={saveLocationDrafts}>保存并固定{locationPointDraftCount ? ` ${locationPointDraftCount}` : ""}</button>
                   <button type="button" disabled={locationEditBusy} onClick={cancelLocationPointEditing}>取消点位调整</button>
                 </div> : null}
-                <p>{locationPointEditAreaCode === selectedAreaCode ? "请直接在二维地图拖到现场实际位置；有货货位请先按现场实际核对，并主动留出通行、货物外伸和操作间距。红色冲突必须先拖离。保存会同步权威排位，但不改库存、栈板绑定或数量。" : "直接按住货位拖动，系统会自动进入当前区域的保存状态；只有点击区域空白处才选择区域。系统不再强制把栈板紧贴均匀排布，保存后查货、移货、盘点和手机版统一读取现场位置。"}</p>
+                <p>{locationPointEditAreaCode === selectedAreaCode ? "绿色为空货位，蓝色为有货货位；请直接在二维地图拖到现场实际位置。有货货位请先按现场实际核对，并主动留出通行、货物外伸和操作间距。红色冲突必须先拖离。保存会同步权威排位，但不改库存、栈板绑定或数量。" : "区域规划会按已发布容量显示全部正式货位：绿色为空货位，蓝色为有货货位。直接按住货位拖动，系统会自动进入当前区域的保存状态；只有点击区域空白处才选择区域。系统不再强制把栈板紧贴均匀排布，保存后查货、移货、盘点和手机版统一读取现场位置。"}</p>
               </div>}
               {legacyRackBindingPreview?.groups.length ? <div className="twin-location-readonly-note">
                 <b>旧货位对应当前货架</b>

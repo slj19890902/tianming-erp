@@ -324,7 +324,8 @@ export function buildMappedLocationPallets(
   locations,
   floorCode,
   standardPallet,
-  layoutId = "erp-twin"
+  layoutId = "erp-twin",
+  renderEmptyPlanningSlots = false
 ) {
   const standard = normalizeStandardPalletContract(standardPallet);
   if (!standard) return [];
@@ -376,6 +377,11 @@ export function buildMappedLocationPallets(
       const rotation = mappedWidthMm > 0 && mappedDepthMm > 0 && Math.abs(mappedWidthMm - mappedDepthMm) > 50
         ? (mappedWidthMm < mappedDepthMm ? 90 : 0)
         : Math.max(...ys) - Math.min(...ys) > Math.max(...xs) - Math.min(...xs) ? 90 : 0;
+      const isEmptyGroundLocation = !occupied && (
+        position?.layout_kind === "physical_pallet"
+        || location.storage_type === "ground"
+      );
+      const isPlanningLocationSlot = renderEmptyPlanningSlots && isEmptyGroundLocation;
       const isLogicalAnchor = locationPallets.length !== 1;
       // The measured rectangle remains authoritative for the location centre and
       // orientation.  A physical pallet never inherits or scales to that legacy
@@ -412,6 +418,9 @@ export function buildMappedLocationPallets(
         display_label: readableLocationName,
         operational_group_id: `location:${location.location_id}`,
         is_logical_anchor: isLogicalAnchor,
+        is_planning_location_slot: isPlanningLocationSlot,
+        planning_slot_width_mm: isPlanningLocationSlot ? standard.width_mm : undefined,
+        planning_slot_depth_mm: isPlanningLocationSlot ? standard.depth_mm : undefined,
         is_simulated: false,
         version: 1,
         snapped: false

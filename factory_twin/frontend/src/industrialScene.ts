@@ -303,9 +303,10 @@ export function buildPalletVisual(pallet: Pallet, viewMode: ViewMode, violated: 
 }
 
 export function palletMarkerSpec(pallet: Pallet, viewMode: ViewMode, violated: boolean) {
-  const minimumFootprint = pallet.is_logical_anchor ? 180 : 400;
-  const width = Math.max(pallet.width_mm, minimumFootprint);
-  const depth = Math.max(pallet.depth_mm, minimumFootprint);
+  const planningSlot = Boolean(pallet.is_planning_location_slot);
+  const minimumFootprint = pallet.is_logical_anchor && !planningSlot ? 180 : 400;
+  const width = Math.max(planningSlot ? Number(pallet.planning_slot_width_mm || 0) : pallet.width_mm, minimumFootprint);
+  const depth = Math.max(planningSlot ? Number(pallet.planning_slot_depth_mm || 0) : pallet.depth_mm, minimumFootprint);
   const state = palletStatusInfo(pallet.visual_status);
   const statusColor = violated ? "#dc2626" : pallet.candidate_status_color || state.color;
   const baseColor = violated ? "#991b1b" : pallet.color || "#9a6a3a";
@@ -334,6 +335,22 @@ export function buildPalletMarkerVisual(pallet: Pallet, viewMode: ViewMode, viol
 
   if (pallet.is_logical_anchor) {
     const markerColor = violated ? 0xdc2626 : new THREE.Color(spec.loadColor).getHex();
+    if (pallet.is_planning_location_slot) {
+      const height = viewMode === "2d" ? 28 : 48;
+      const geometry = new THREE.BoxGeometry(spec.width, height, spec.depth);
+      const fill = new THREE.Mesh(
+        geometry,
+        new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.3 })
+      );
+      fill.position.y = height / 2;
+      const outline = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geometry),
+        new THREE.LineBasicMaterial({ color: markerColor, transparent: true, opacity: 0.95 })
+      );
+      outline.position.copy(fill.position);
+      group.add(fill, outline);
+      return group;
+    }
     const diameter = Math.min(Math.max(spec.width, spec.depth, 180), 260);
     const base = new THREE.Mesh(
       new THREE.CylinderGeometry(diameter / 2, diameter / 2, viewMode === "2d" ? 28 : 42, 24),

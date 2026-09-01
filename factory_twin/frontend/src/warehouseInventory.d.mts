@@ -205,7 +205,8 @@ export function buildMappedLocationPallets(
   locations: InventoryProjectionLocation[],
   floorCode: string,
   standardPallet?: StandardPalletContract | null,
-  layoutId?: string
+  layoutId?: string,
+  renderEmptyPlanningSlots?: boolean
 ): import("./types").Pallet[];
 
 export function findPalletColumnConflicts(

@@ -336,6 +336,64 @@ test("full delivery leaves a mapped empty location while partial reserved and da
   assert.deepEqual(mapped.map((item) => item.candidate_status_color), ["#16a34a", "#2563eb", "#2563eb", "#2563eb"]);
 });
 
+test("area planning renders every mapped empty location as a full draggable slot", () => {
+  const zone = {
+    id: "zone-e2",
+    feature_kind: "zone",
+    feature_code: "E2",
+    erp_area_code: "E2",
+    points: [[0, 0], [12000, 0], [12000, 6000], [0, 6000]]
+  };
+  const locations = [
+    {
+      location_id: 201,
+      location_code: "3F-E2-P01-01",
+      location_name: "三楼 右区E2·E2-1",
+      floor_code: "3F",
+      area_code: "E2",
+      storage_type: "ground",
+      map_feature_id: "zone-e2",
+      position_status: "mapped",
+      occupancy_status: "empty",
+      map_position: { left_pct: 10, top_pct: 20, width_pct: 10, height_pct: 20, version: 1, layout_kind: "physical_pallet" },
+      pallets: [],
+      loose_items: []
+    },
+    {
+      location_id: 202,
+      location_code: "3F-E2-P01-02",
+      location_name: "三楼 右区E2·E2-2",
+      floor_code: "3F",
+      area_code: "E2",
+      storage_type: "ground",
+      map_feature_id: "zone-e2",
+      position_status: "mapped",
+      occupancy_status: "occupied",
+      map_position: { left_pct: 30, top_pct: 20, width_pct: 10, height_pct: 20, version: 1 },
+      pallets: [{ pallet_id: 202, pallet_code: "PLT-E2-202", version: 1, items: [{ lot_id: 202, available_quantity: 8 }] }],
+      loose_items: []
+    }
+  ].map(normalizeInventoryLocationProjection);
+
+  const planned = buildMappedLocationPallets(
+    [zone],
+    locations,
+    "3F",
+    STANDARD_PALLET,
+    "layout-3f",
+    true
+  );
+
+  assert.equal(planned.length, 2);
+  assert.deepEqual(planned.map((item) => item.is_logical_anchor), [true, false]);
+  assert.equal(planned[0].is_planning_location_slot, true);
+  assert.equal(planned[0].planning_slot_width_mm, 1200);
+  assert.equal(planned[0].planning_slot_depth_mm, 1000);
+  assert.equal(planned[0].width_mm, 0);
+  assert.equal(planned[0].depth_mm, 0);
+  assert.deepEqual(planned.map((item) => item.candidate_status_color), ["#16a34a", "#2563eb"]);
+});
+
 test("unmatched goods and known-location discrepancies keep formal positions red", () => {
   const zone = {
     id: "zone-a1",

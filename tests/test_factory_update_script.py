@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.221"
-    assert APP_VERSION_NAME == "实际材料成本送货冻结与缺口报告"
+    assert APP_VERSION == "v0.22.222"
+    assert APP_VERSION_NAME == "区域规划完整货位显示与直接拖动"
     assert APP_BUILD_DATE == "2026-09-01"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,12 +49,12 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "实际采购价" in item and "送货消耗" in item for item in current_release)
-    assert any("本次更新｜" in item and "不可改成本事实" in item and "不重复记账" in item for item in current_release)
-    assert any("本次更新｜" in item and "可展开缺口" in item and "不按零成本" in item for item in current_release)
-    assert any("本次更新｜" in item and "产品资料毛利参考" in item and "不开放正式月结" in item for item in current_release)
-    assert any("本次更新｜" in item and "iy60v8x9z49" in item and "不自动回填旧送货" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.221" in item and "iy60v8x9z49" in item for item in current_release)
+    assert any("本次更新｜" in item and "全部地堆货位" in item and "淡绿色货位框" in item for item in current_release)
+    assert any("本次更新｜" in item and "点击货位" in item and "区域空白处" in item for item in current_release)
+    assert any("本次更新｜" in item and "一次保存" in item and "不改变库存" in item for item in current_release)
+    assert any("本次更新｜" in item and "轻量逻辑位置" in item and "不冒充实物栈板" in item for item in current_release)
+    assert any("本次更新｜" in item and "iy60v8x9z49" in item and "无数据库迁移" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.222" in item and "iy60v8x9z49" in item for item in current_release)
     prior_release_220 = [item for item in APP_CHANGELOG if item.startswith("v0.22.220：")]
     assert any("本次更新｜" in item and "四个工作区" in item and "不增加收款录入" in item for item in prior_release_220)
     assert any("本次更新｜" in item and "三个现场动作" in item and "同一张实测地图" in item for item in prior_release_220)

@@ -112,6 +112,9 @@ export interface Pallet {
   display_label?: string;
   operational_group_id?: string;
   is_logical_anchor?: boolean;
+  is_planning_location_slot?: boolean;
+  planning_slot_width_mm?: number;
+  planning_slot_depth_mm?: number;
   is_simulated: boolean;
   version: number;
   snapped: boolean;

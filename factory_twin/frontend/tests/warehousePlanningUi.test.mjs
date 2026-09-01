@@ -5,6 +5,7 @@ import test from "node:test";
 const source = readFileSync(new URL("../src/WarehouseTwinApp.tsx", import.meta.url), "utf8");
 const editorSource = readFileSync(new URL("../src/EditorCanvas.tsx", import.meta.url), "utf8");
 const sceneSource = readFileSync(new URL("../src/industrialScene.ts", import.meta.url), "utf8");
+const inventorySource = readFileSync(new URL("../src/warehouseInventory.mjs", import.meta.url), "utf8");
 const cssSource = readFileSync(new URL("../src/warehouseTwin.css", import.meta.url), "utf8");
 
 test("ordinary area planning exposes a current-area-only point editing workflow", () => {
@@ -30,6 +31,17 @@ test("area planning gives a clicked location priority over its enclosing area", 
   assert.match(source, /if \(!locationEditMode\) return/);
   assert.match(source, /setLocationPointEditAreaCode\(location\.area_code\)/);
   assert.match(source, /palletEditingOnly=\{locationEditMode \|\| warehouseMoveModeActive\}/);
+});
+
+test("area planning shows every empty ground location with a full green slot footprint", () => {
+  assert.match(source, /layout\?\.id,\s*locationEditMode/);
+  assert.match(source, /区域规划会按已发布容量显示全部正式货位/);
+  assert.match(source, /绿色为空货位，蓝色为有货货位/);
+  assert.match(inventorySource, /renderEmptyPlanningSlots && isEmptyGroundLocation/);
+  assert.match(inventorySource, /planning_slot_width_mm: isPlanningLocationSlot \? standard\.width_mm/);
+  assert.match(inventorySource, /planning_slot_depth_mm: isPlanningLocationSlot \? standard\.depth_mm/);
+  assert.match(sceneSource, /pallet\.is_planning_location_slot/);
+  assert.match(sceneSource, /new THREE\.EdgesGeometry\(geometry\)/);
 });
 
 test("published ground positions use the dedicated atomic save contract", () => {

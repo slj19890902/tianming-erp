@@ -3142,19 +3142,22 @@ def test_one_step_raw_material_area_creates_shared_pallet_positions(
                 )
             ) == 4
 
-            claimed_floor_numbers: list[int] = []
+            claimed_floor_ids: list[int] = []
             with monkeypatch.context() as scoped:
                 scoped.setattr(
                     warehouse_api,
-                    'claim_warehouse_floor_projection',
-                    lambda _db, *, floor_number: (
-                        claimed_floor_numbers.append(int(floor_number)) or True
+                    'claim_warehouse_floor_projection_by_id',
+                    lambda _db, *, floor_id: (
+                        claimed_floor_ids.append(int(floor_id)) or True
                     ),
                 )
                 warehouse_api._claim_floor_projection_for_layout_write(
                     db, floor_code='F3'
                 )
-            assert claimed_floor_numbers == [3]
+            floor_id = db.scalar(
+                select(WarehouseFloor.id).where(WarehouseFloor.floor_number == 3)
+            )
+            assert claimed_floor_ids == [floor_id]
 
             customer = Customer(
                 name='P1-47B raw-only ground candidate',
@@ -5471,7 +5474,7 @@ def test_simple_planning_uses_one_contextual_map_operation_workflow() -> None:
     assert 'onBlur={saveSelectedZoneGeometry}' in TWIN_SOURCE
     assert 'zoneGeometryDraftsRef.current[selectedAreaFeature.id]' in TWIN_SOURCE
     assert 'deleteSelectedLayoutFeature' in TWIN_SOURCE
-    assert '/features/${selectedLayoutFeature.id}?expected_revision=' in TWIN_SOURCE
+    assert '/features/${feature.id}?${query.toString()}' in TWIN_SOURCE
     assert 'mapPanLocked={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"}' in TWIN_SOURCE
     assert 'aria-label="货架方向"' in TWIN_SOURCE
     assert 'saveRackDraftImmediately' in TWIN_SOURCE

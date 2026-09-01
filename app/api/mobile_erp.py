@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, and_, case, cast, exists, func, or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api.deps import (
@@ -85,6 +85,7 @@ from app.services.warehouse_location_address import (
 )
 from app.services.audit_log import append_audit_event
 from app.services.location_candidates import (
+    claim_warehouse_floor_projection,
     current_same_location_pallet,
     load_warehouse_location_projection_contexts,
     list_operational_locations,
@@ -2970,6 +2971,35 @@ def _mobile_location_is_published(db: Session, location: WarehouseLocation) -> b
     )
 
 
+def _claim_mobile_warehouse_floors(
+    db: Session,
+    *locations: WarehouseLocation,
+) -> None:
+    floor_numbers = sorted(
+        {
+            int(location.warehouse_floor)
+            for location in locations
+            if location.warehouse_floor is not None
+        }
+    )
+    try:
+        for floor_number in floor_numbers:
+            if not claim_warehouse_floor_projection(
+                db,
+                floor_number=floor_number,
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="仓库楼层台账已变化，请刷新后重试",
+                )
+    except OperationalError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="仓库区域正在调整，请稍后刷新重试",
+        ) from error
+
+
 def _mobile_goods_payload(lot: InventoryLot) -> dict:
     if lot.finished_detail is not None:
         detail = lot.finished_detail
@@ -3793,6 +3823,20 @@ def report_mobile_warehouse_location_discrepancy(
         .where(WarehouseLocation.id == payload.observed_location_id)
     )
     registered = lot.location
+    if observed is not None and registered is not None:
+        _claim_mobile_warehouse_floors(db, registered, observed)
+        db.expire(lot)
+        lot = _require_mobile_lot(
+            db,
+            lot_id=payload.inventory_lot_id,
+            visible_customer_ids=visible_customer_ids,
+        )
+        registered = lot.location
+        observed = db.scalar(
+            select(WarehouseLocation)
+            .options(selectinload(WarehouseLocation.floor3_layout))
+            .where(WarehouseLocation.id == payload.observed_location_id)
+        )
     if observed is None or not _mobile_location_is_published(db, observed):
         raise HTTPException(status_code=409, detail="现场观察位置尚未正式发布")
     if (
@@ -4181,6 +4225,9 @@ def report_mobile_unmatched_inventory_observation(
         .options(selectinload(WarehouseLocation.floor3_layout))
         .where(WarehouseLocation.id == payload.observed_location_id)
     )
+    if location is not None:
+        _claim_mobile_warehouse_floors(db, location)
+        db.refresh(location)
     if location is None or not _mobile_location_is_published(db, location):
         raise HTTPException(status_code=409, detail="现场观察货位已失效或尚未正式发布")
     if (

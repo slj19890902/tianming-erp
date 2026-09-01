@@ -691,7 +691,19 @@ def warehouse_capacity_summary(
             "thresholds": None,
         }
 
-    areas = list(floor.areas) if floor is not None else []
+    areas = (
+        [
+            area
+            for area in floor.areas
+            if area.construction_status != "archived"
+            and not (
+                area.storage_policy is not None
+                and area.storage_policy.status == "archived"
+            )
+        ]
+        if floor is not None
+        else []
+    )
     review_required = [area for area in areas if area.construction_status == "enabled"]
     reviewed = [
         area

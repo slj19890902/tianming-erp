@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.customer import Customer
@@ -16,10 +17,12 @@ from app.models.user import User
 from app.models.warehouse_inventory import (
     InventoryPallet,
     WarehouseArea,
+    WarehouseFloor,
     WarehouseLocation,
 )
 from app.services.location_candidates import (
     OperationalLocationRow,
+    claim_warehouse_floor_projection,
     list_operational_locations,
     operational_location_issue,
 )
@@ -448,6 +451,33 @@ def replace_preferred_areas(
     user: User,
 ) -> bool:
     normalized = _normalized_area_ids(area_ids)
+    existing_area_ids = ordered_preferred_area_ids(db, int(customer.id))
+    involved_area_ids = sorted({*existing_area_ids, *normalized})
+    floor_numbers = sorted(
+        {
+            int(value)
+            for value in db.scalars(
+                select(WarehouseFloor.floor_number)
+                .join(WarehouseArea, WarehouseArea.floor_id == WarehouseFloor.id)
+                .where(WarehouseArea.id.in_(involved_area_ids))
+            ).all()
+        }
+    ) if involved_area_ids else []
+    try:
+        for floor_number in floor_numbers:
+            if not claim_warehouse_floor_projection(
+                db,
+                floor_number=floor_number,
+            ):
+                raise CustomerFinishedStoragePreferenceError(
+                    "CUSTOMER_FINISHED_STORAGE_FLOOR_CHANGED",
+                    "仓库楼层台账已变化，请刷新后重试",
+                )
+    except OperationalError as error:
+        raise CustomerFinishedStoragePreferenceError(
+            "CUSTOMER_FINISHED_STORAGE_FLOOR_BUSY",
+            "仓库区域正在调整，请稍后刷新重试",
+        ) from error
     current_version = int(customer.version or 1)
     if current_version != int(expected_version):
         raise HTTPException(

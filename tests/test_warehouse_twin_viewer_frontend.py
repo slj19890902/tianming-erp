@@ -597,6 +597,8 @@ def test_phase2c10_flags_column_conflicts_and_blocks_conflicting_layout_drafts()
     assert "该货位与固定柱子冲突" in SOURCE
     assert "planningGeometryConflicts" in SOURCE
     assert "柱子冲突" in ERP_INDEX
+    assert "货位越界，或与其他货位、柱子、通道、设备、货架、禁放区冲突" in SOURCE
+    assert "已阻止整区保存" in SOURCE
     assert "EMPTY_CANVAS_POINTS" in SOURCE
 
 

@@ -1246,6 +1246,10 @@ body.warehouse-twin-page {
 .twin-layout-map-tools-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .twin-layout-delete { min-height: 32px; border: 1px solid #d7a2a2; border-radius: 3px; color: #9f2d2d; background: #fff5f5; font: 800 10px/1.2 inherit; cursor: pointer; }
 .twin-layout-delete:disabled { opacity: .5; cursor: not-allowed; }
+.twin-feature-context-menu { position: fixed; z-index: 80; width: 156px; padding: 6px; display: grid; gap: 5px; border: 1px solid #9daca9; border-radius: 4px; background: #fff; box-shadow: 0 8px 24px rgb(20 46 53 / 24%); transform: translate(4px, 4px); }
+.twin-feature-context-menu button { min-height: 34px; border: 1px solid #d7a2a2; border-radius: 3px; color: #9f2d2d; background: #fff5f5; font: 800 11px/1.2 inherit; cursor: pointer; }
+.twin-feature-context-menu button:disabled { opacity: .5; cursor: not-allowed; }
+.twin-feature-context-menu small { color: #60747d; font-size: 8px; line-height: 1.4; }
 .twin-zone-geometry-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
 .twin-layout-map-tools > p,
 .twin-layout-draft-note { margin: 0; color: #60747d; font-size: 8px; line-height: 1.45; }

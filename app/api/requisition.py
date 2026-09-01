@@ -14,7 +14,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from sqlalchemy import and_, exists, func, or_, select, text, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased, load_only, selectinload
 
 from app.api.deps import (
@@ -93,6 +93,7 @@ from app.services.historical_purchase_lookup import (
     search_historical_purchase_database,
 )
 from app.services.location_candidates import (
+    claim_warehouse_floor_projection,
     load_warehouse_location_projection_contexts,
     list_operational_locations,
     operational_location_payload,
@@ -14034,6 +14035,42 @@ def _apply_stock_policy_payload(
     row.updated_by = user_id
 
 
+def _claim_stock_policy_location_floors(
+    db: Session,
+    *location_ids: int | None,
+) -> None:
+    normalized_ids = {int(value) for value in location_ids if value is not None}
+    if not normalized_ids:
+        return
+    floor_numbers = sorted(
+        {
+            int(value)
+            for value in db.scalars(
+                select(WarehouseLocation.warehouse_floor).where(
+                    WarehouseLocation.id.in_(normalized_ids),
+                    WarehouseLocation.warehouse_floor.is_not(None),
+                )
+            ).all()
+        }
+    )
+    try:
+        for floor_number in floor_numbers:
+            if not claim_warehouse_floor_projection(
+                db,
+                floor_number=floor_number,
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="仓库楼层台账已变化，请刷新后重试。",
+                )
+    except OperationalError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="仓库区域正在调整，请稍后刷新重试。",
+        ) from error
+
+
 @router.get("/stock-policies")
 def list_stock_policies(
     q: str | None = None,
@@ -14344,6 +14381,7 @@ def create_stock_policy(
         else nullcontext()
     )
     with guard:
+        _claim_stock_policy_location_floors(db, payload.default_location_id)
         existing_rows = (
             _active_finished_stock_policies(db, product_id=payload.product_id)
             if payload.target_inventory_type == "finished"
@@ -14403,6 +14441,12 @@ def update_stock_policy(
         else nullcontext()
     )
     with guard:
+        _claim_stock_policy_location_floors(
+            db,
+            row.default_location_id,
+            payload.default_location_id,
+        )
+        db.refresh(row)
         _require_stock_policy_customer_access(db, row, user)
         try:
             _apply_stock_policy_payload(row, payload, user_id=user.id)

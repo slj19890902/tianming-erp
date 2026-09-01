@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -44,6 +44,13 @@ from app.services.master_data_versioning import (
     normalize_json_value,
     record_versioned_create,
     serialize_versioned_entity,
+)
+from app.services.location_candidates import claim_warehouse_floor_projection
+from app.services.warehouse_area_activation import warehouse_floor_for_code
+from app.services.warehouse_area_tombstones import (
+    ArchivedWarehouseAreaTargetError,
+    assert_warehouse_asset_location_not_archived,
+    warehouse_asset_location_floor,
 )
 from app.services.product_drawings import (
     DrawingValidationError,
@@ -1967,8 +1974,50 @@ def apply_product_import(
 
     saved_paths: list[tuple[str, str]] = []
     try:
+        mold_floor_codes = sorted(
+            {
+                floor_code
+                for item in preview.mold_items
+                if (
+                    floor_code := warehouse_asset_location_floor(
+                        asset_kind="mold",
+                        location_text=item["rack_location"],
+                    )
+                )
+            }
+        )
+        try:
+            for floor_code in mold_floor_codes:
+                floor = warehouse_floor_for_code(db, floor_code)
+                if floor is not None and not claim_warehouse_floor_projection(
+                    db,
+                    floor_number=int(floor.floor_number),
+                ):
+                    raise ProductImportWorkbookError(
+                        "PRODUCT_IMPORT_WAREHOUSE_CHANGED",
+                        "仓库楼层台账已变化，请重新预检后再导入",
+                        status_code=409,
+                    )
+        except OperationalError as error:
+            raise ProductImportWorkbookError(
+                "PRODUCT_IMPORT_WAREHOUSE_BUSY",
+                "仓库区域正在调整，请稍后重新预检后再导入",
+                status_code=409,
+            ) from error
         molds_by_code: dict[str, MoldTool] = {}
         for item in preview.mold_items:
+            try:
+                assert_warehouse_asset_location_not_archived(
+                    db,
+                    asset_kind="mold",
+                    location_text=item["rack_location"],
+                )
+            except ArchivedWarehouseAreaTargetError as error:
+                raise ProductImportWorkbookError(
+                    "PRODUCT_IMPORT_ARCHIVED_WAREHOUSE_AREA",
+                    str(error),
+                    status_code=409,
+                ) from error
             mold = MoldTool(
                 mold_code=item["mold_code"],
                 mold_name=item["mold_name"],

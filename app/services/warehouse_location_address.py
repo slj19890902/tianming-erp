@@ -9,6 +9,7 @@ from threading import RLock
 import unicodedata
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.mold_tool import MoldTool
@@ -25,6 +26,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocationAddressMutation,
     WarehouseLocationAlias,
 )
+from app.services.warehouse_floor_claim import claim_warehouse_floor_projection
 
 
 WAREHOUSE_LOCATION_ADDRESS_LOCK = RLock()
@@ -683,7 +685,10 @@ def location_address_payload(
 def _load_area(db: Session, area_id: int, *, lock: bool = False) -> WarehouseArea:
     query = (
         select(WarehouseArea)
-        .options(selectinload(WarehouseArea.floor))
+        .options(
+            selectinload(WarehouseArea.floor),
+            selectinload(WarehouseArea.storage_policy),
+        )
         .where(WarehouseArea.id == area_id)
     )
     if lock:
@@ -693,6 +698,7 @@ def _load_area(db: Session, area_id: int, *, lock: bool = False) -> WarehouseAre
         raise WarehouseLocationAddressError(
             "WAREHOUSE_ADDRESS_AREA_NOT_FOUND", "区域不存在。", status_code=404
         )
+    _reject_archived_address_area(area)
     return area
 
 
@@ -705,6 +711,9 @@ def _load_location(
             selectinload(WarehouseLocation.address_area).selectinload(
                 WarehouseArea.floor
             ),
+            selectinload(WarehouseLocation.address_area).selectinload(
+                WarehouseArea.storage_policy
+            ),
             selectinload(WarehouseLocation.floor3_layout),
         )
         .where(WarehouseLocation.id == location_id)
@@ -716,7 +725,37 @@ def _load_location(
         raise WarehouseLocationAddressError(
             "WAREHOUSE_ADDRESS_LOCATION_NOT_FOUND", "位置不存在。", status_code=404
         )
+    source_area = location.address_area
+    if (
+        source_area is None
+        and location.warehouse_floor is not None
+        and str(location.area_code or "").strip()
+    ):
+        source_area = db.scalar(
+            select(WarehouseArea)
+            .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
+            .options(selectinload(WarehouseArea.storage_policy))
+            .where(
+                WarehouseFloor.floor_number == location.warehouse_floor,
+                func.upper(WarehouseArea.area_code)
+                == str(location.area_code).strip().upper(),
+            )
+        )
+    if source_area is not None:
+        _reject_archived_address_area(source_area)
     return location
+
+
+def _reject_archived_address_area(area: WarehouseArea) -> None:
+    policy = area.storage_policy
+    if area.construction_status == "archived" or (
+        policy is not None and policy.status == "archived"
+    ):
+        raise WarehouseLocationAddressError(
+            "WAREHOUSE_ADDRESS_AREA_ARCHIVED",
+            "该区域已经归档，普通地址治理不能修改区域或迁出其历史位置。",
+            status_code=409,
+        )
 
 
 def _structured_area(area: WarehouseArea) -> None:
@@ -1286,6 +1325,32 @@ def confirm_address_change(
             response["replayed"] = True
             return response, True
 
+        floor_number = db.scalar(
+            select(WarehouseFloor.floor_number)
+            .join(WarehouseArea, WarehouseArea.floor_id == WarehouseFloor.id)
+            .where(WarehouseArea.id == int(command.area_id or 0))
+        )
+        if floor_number is None:
+            raise WarehouseLocationAddressError(
+                "WAREHOUSE_ADDRESS_AREA_NOT_FOUND",
+                "地址治理目标区域不存在，请刷新后重试。",
+                status_code=404,
+            )
+        try:
+            floor_claimed = claim_warehouse_floor_projection(
+                db,
+                floor_number=int(floor_number),
+            )
+        except OperationalError as error:
+            raise WarehouseLocationAddressError(
+                "WAREHOUSE_ADDRESS_FLOOR_BUSY",
+                "仓库区域正在调整，请稍后刷新重试。",
+            ) from error
+        if not floor_claimed:
+            raise WarehouseLocationAddressError(
+                "WAREHOUSE_ADDRESS_FLOOR_CHANGED",
+                "仓库楼层台账已变化，请刷新后重试。",
+            )
         preview = build_address_change_preview(db, command, lock=True)
         if preview["preview_fingerprint"] != preview_fingerprint:
             raise WarehouseLocationAddressError(

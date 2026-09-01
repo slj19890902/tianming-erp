@@ -7,7 +7,8 @@ from io import StringIO
 import json
 from typing import Any, Iterable
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import (
@@ -29,6 +30,9 @@ from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryPallet,
     InventoryPalletItem,
+    WarehouseArea,
+    WarehouseAreaStoragePolicy,
+    WarehouseFloor,
     WarehouseLocation,
 )
 from app.services.inventory_onboarding_uploads import (
@@ -37,6 +41,7 @@ from app.services.inventory_onboarding_uploads import (
     StoredInventoryOnboardingUpload,
 )
 from app.services.location_candidates import (
+    claim_warehouse_floor_projection,
     load_warehouse_location_projection_contexts,
     warehouse_location_projection,
 )
@@ -756,7 +761,11 @@ def _resolve_location(
 ) -> WarehouseLocation | None:
     location: WarehouseLocation | None = None
     if line.location_id is not None:
-        location = db.get(WarehouseLocation, line.location_id)
+        location = db.get(
+            WarehouseLocation,
+            line.location_id,
+            populate_existing=True,
+        )
         if location is None:
             _append_once(errors, "LOCATION_ID_NOT_FOUND")
             return None
@@ -774,6 +783,7 @@ def _resolve_location(
                 == line.location_code_snapshot
             )
             .order_by(WarehouseLocation.id)
+            .execution_options(populate_existing=True)
         ).all()
         if len(rows) == 1:
             location = rows[0]
@@ -811,6 +821,7 @@ def _resolve_location(
             return None
         _append_once(errors, "LOCATION_NOT_FOUND")
         return None
+    _assert_onboarding_location_not_archived(db, location)
     if not location.is_active:
         _append_once(errors, "LOCATION_INACTIVE")
     if location.placement_status != "placed":
@@ -847,6 +858,177 @@ def _resolve_location(
         **_location_layout_evidence(db, location),
     }
     return location
+
+
+def _assert_onboarding_location_not_archived(
+    db: Session,
+    location: WarehouseLocation,
+) -> None:
+    identity_conditions = []
+    if location.address_area_id is not None:
+        identity_conditions.append(WarehouseArea.id == location.address_area_id)
+    if location.warehouse_floor is not None and str(location.area_code or "").strip():
+        identity_conditions.append(
+            (
+                WarehouseFloor.floor_number == int(location.warehouse_floor)
+            )
+            & (
+                func.upper(WarehouseArea.area_code)
+                == str(location.area_code).strip().upper()
+            )
+        )
+    if not identity_conditions:
+        return
+    archived = db.scalar(
+        select(WarehouseArea.id)
+        .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
+        .outerjoin(
+            WarehouseAreaStoragePolicy,
+            WarehouseAreaStoragePolicy.area_id == WarehouseArea.id,
+        )
+        .where(
+            or_(*identity_conditions),
+            or_(
+                WarehouseArea.construction_status == "archived",
+                WarehouseAreaStoragePolicy.status == "archived",
+            ),
+        )
+        .limit(1)
+    )
+    if archived is not None:
+        raise InventoryOnboardingError(
+            "所选库位属于已归档区域，不能导入、重新匹配或冻结建账草稿。",
+            409,
+            "INVENTORY_ONBOARDING_LOCATION_ARCHIVED",
+        )
+
+
+def _claim_onboarding_location_floors(
+    db: Session,
+    lines: Iterable[InventoryOnboardingLine],
+    *,
+    extra_location_ids: Iterable[int] = (),
+    extra_location_codes: Iterable[str] = (),
+) -> None:
+    """Serialize onboarding references with formal-area archive transactions."""
+
+    line_rows = list(lines)
+    location_ids = {
+        int(value)
+        for value in (
+            [line.location_id for line in line_rows]
+            + list(extra_location_ids)
+        )
+        if value is not None
+    }
+    location_codes = {
+        str(value).strip()
+        for value in (
+            [line.location_code_snapshot for line in line_rows]
+            + list(extra_location_codes)
+        )
+        if str(value or "").strip()
+    }
+    lot_ids = {
+        int(value)
+        for line in line_rows
+        for value in (
+            line.existing_lot_id,
+            _source_integer(line, "existing_lot_id"),
+        )
+        if value is not None
+    }
+    if not location_ids and not location_codes and not lot_ids:
+        return
+    with db.no_autoflush:
+        lots = (
+            db.scalars(
+                select(InventoryLot).where(InventoryLot.id.in_(lot_ids))
+            ).all()
+            if lot_ids
+            else []
+        )
+        discovered_lot_locations = {
+            int(lot.id): int(lot.warehouse_location_id)
+            for lot in lots
+            if lot.warehouse_location_id is not None
+        }
+        location_ids.update(discovered_lot_locations.values())
+        candidates = db.scalars(
+            select(WarehouseLocation).where(
+                or_(
+                    WarehouseLocation.id.in_(location_ids),
+                    WarehouseLocation.location_code.in_(location_codes),
+                )
+            )
+        ).all()
+        discovered_floors = {
+            int(row.id): int(row.warehouse_floor)
+            for row in candidates
+            if row.warehouse_floor is not None
+        }
+        floor_numbers = sorted(set(discovered_floors.values()))
+        registered_floors = set(
+            int(value)
+            for value in db.scalars(
+                select(WarehouseFloor.floor_number).where(
+                    WarehouseFloor.floor_number.in_(floor_numbers)
+                )
+            ).all()
+        )
+        for floor_number in sorted(registered_floors):
+            try:
+                claimed = claim_warehouse_floor_projection(
+                    db,
+                    floor_number=floor_number,
+                )
+            except OperationalError as error:
+                raise InventoryOnboardingError(
+                    "仓库区域正在调整，请稍后刷新后重试建账。",
+                    409,
+                    "INVENTORY_ONBOARDING_FLOOR_BUSY",
+                ) from error
+            if not claimed:
+                raise InventoryOnboardingError(
+                    "仓库楼层台账已变化，请刷新后重试建账。",
+                    409,
+                    "INVENTORY_ONBOARDING_FLOOR_CHANGED",
+                )
+        for location_id, discovered_floor in discovered_floors.items():
+            current = db.get(
+                WarehouseLocation,
+                location_id,
+                populate_existing=True,
+            )
+            if (
+                current is None
+                or current.warehouse_floor is None
+                or int(current.warehouse_floor) != discovered_floor
+            ):
+                raise InventoryOnboardingError(
+                    "库位所属楼层已变化，请刷新后重新匹配。",
+                    409,
+                    "INVENTORY_ONBOARDING_LOCATION_CHANGED",
+                )
+            _assert_onboarding_location_not_archived(db, current)
+            if not current.is_active:
+                raise InventoryOnboardingError(
+                    "所选库位已停用，不能导入、重新匹配或冻结建账草稿。",
+                    409,
+                    "INVENTORY_ONBOARDING_LOCATION_INACTIVE",
+                )
+        for lot_id, discovered_location_id in discovered_lot_locations.items():
+            current_lot = db.get(InventoryLot, lot_id, populate_existing=True)
+            if (
+                current_lot is None
+                or current_lot.warehouse_location_id is None
+                or int(current_lot.warehouse_location_id) != discovered_location_id
+            ):
+                raise InventoryOnboardingError(
+                    "库存批次所在库位已变化，请刷新后重新导入或匹配。",
+                    409,
+                    "INVENTORY_ONBOARDING_LOT_LOCATION_CHANGED",
+                )
 
 
 def _location_layout_evidence(
@@ -982,7 +1164,7 @@ def _resolve_exported_existing_lot(
     if lot_id is None:
         return None
     line.existing_lot_id = lot_id
-    lot = db.get(InventoryLot, lot_id)
+    lot = db.get(InventoryLot, lot_id, populate_existing=True)
     if (
         lot is None
         or lot.inventory_type != "finished"
@@ -1014,10 +1196,15 @@ def _resolve_exported_existing_lot(
         _append_once(errors, "EXPORTED_INVENTORY_CHANGED")
 
     detail = lot.finished_detail
-    location = db.get(WarehouseLocation, lot.warehouse_location_id)
+    location = db.get(
+        WarehouseLocation,
+        lot.warehouse_location_id,
+        populate_existing=True,
+    )
     if location is None or not location.is_active:
         _append_once(errors, "LOCATION_NOT_FOUND")
         return lot
+    _assert_onboarding_location_not_archived(db, location)
     product = db.get(Product, detail.product_id)
     customer = (
         db.get(Customer, detail.owner_customer_id)
@@ -1384,6 +1571,7 @@ def match_onboarding_line(
     # inside one no-autoflush window so the database sees exactly one
     # versioned UPDATE for this draft line.
     with db.no_autoflush:
+        _claim_onboarding_location_floors(db, [line])
         return _match_onboarding_line(db, batch=batch, line=line)
 
 
@@ -1400,6 +1588,7 @@ def _match_onboarding_line(
         "source_row_hash": line.source_row_hash,
     }
     if line.action_decision == "exclude":
+        line.location_id = None
         line.match_status = "excluded"
         line.error_codes_json = []
         line.warning_codes_json = []
@@ -1544,6 +1733,7 @@ def _rematch_batch_lines(
     if lines is None:
         with db.no_autoflush:
             lines = _batch_lines(db, batch.id)
+    _claim_onboarding_location_floors(db, lines)
     for line in lines:
         if bump_versions:
             line.version += 1
@@ -1833,6 +2023,30 @@ def update_onboarding_line(
         )
     line_version_before = line.version
     batch_version_before = batch.version
+    proposed_location_id = (
+        _integer(values.get("location_id"))
+        if "location_id" in values
+        else None
+    )
+    proposed_location_code = (
+        _text(values.get("location_code"))
+        if "location_code" in values
+        else None
+    )
+    _claim_onboarding_location_floors(
+        db,
+        [line],
+        extra_location_ids=(
+            [proposed_location_id]
+            if proposed_location_id is not None
+            else []
+        ),
+        extra_location_codes=(
+            [proposed_location_code]
+            if proposed_location_code is not None
+            else []
+        ),
+    )
 
     direct_text_fields = {
         "stocktaker_name",
@@ -2249,6 +2463,7 @@ def submit_onboarding_batch(
             "INVENTORY_ONBOARDING_SOURCE_FILE_STALE",
         )
     lines = _batch_lines(db, batch.id)
+    _claim_onboarding_location_floors(db, lines)
     if (
         _fingerprint_for(batch, lines) != batch.dry_run_fingerprint
         or not _evidence_is_current(db, lines)

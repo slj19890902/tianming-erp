@@ -275,6 +275,19 @@ def warehouse_floor_for_code(db: Session, floor_code: str) -> WarehouseFloor | N
     )
 
 
+def assert_area_not_archived(area: WarehouseArea) -> None:
+    """Keep archived warehouse facts immutable outside a controlled restore flow."""
+
+    policy = area.storage_policy
+    if area.construction_status == "archived" or (
+        policy is not None and policy.status == "archived"
+    ):
+        raise WarehouseAreaActivationError(
+            "该区域已经归档，普通库位、布局和发布流程不能恢复或修改；如需恢复，请走单独的受控恢复流程。",
+            status_code=409,
+        )
+
+
 def resolve_area_location_management(
     db: Session,
     *,
@@ -289,6 +302,16 @@ def resolve_area_location_management(
         raise WarehouseAreaActivationError("正式仓库楼层不存在", status_code=404)
     if not normalized_area:
         raise WarehouseAreaActivationError("正式仓库区域不存在", status_code=404)
+    registered_area = db.scalar(
+        select(WarehouseArea)
+        .options(selectinload(WarehouseArea.storage_policy))
+        .where(
+            WarehouseArea.floor_id == floor.id,
+            func.upper(WarehouseArea.area_code) == normalized_area,
+        )
+    )
+    if registered_area is not None:
+        assert_area_not_archived(registered_area)
 
     raw_sources = list(
         db.scalars(
@@ -349,11 +372,36 @@ def resolve_location_management(
 ) -> tuple[WarehouseLocation, AreaLocationManagementRoute]:
     location = db.scalar(
         select(WarehouseLocation)
-        .options(selectinload(WarehouseLocation.floor3_layout))
+        .options(
+            selectinload(WarehouseLocation.floor3_layout),
+            selectinload(WarehouseLocation.address_area).selectinload(
+                WarehouseArea.floor
+            ),
+            selectinload(WarehouseLocation.address_area).selectinload(
+                WarehouseArea.storage_policy
+            ),
+        )
         .where(WarehouseLocation.id == location_id)
     )
     if location is None:
         raise WarehouseAreaActivationError("正式区域库位不存在", status_code=404)
+    if location.address_area_id is not None:
+        area = location.address_area
+        if area is None or area.floor is None:
+            raise WarehouseAreaActivationError(
+                "库位正式区域归属已失效，请停止操作并核对",
+                status_code=409,
+            )
+        assert_area_not_archived(area)
+        if (
+            location.warehouse_floor != area.floor.floor_number
+            or str(location.area_code or "").strip().upper()
+            != area.area_code.strip().upper()
+        ):
+            raise WarehouseAreaActivationError(
+                "库位正式区域归属与楼层或区域编号不一致，请停止操作并核对",
+                status_code=409,
+            )
     if location.warehouse_floor is None or not str(location.area_code or "").strip():
         raise WarehouseAreaActivationError("库位尚未绑定正式楼层和区域", status_code=409)
     route = resolve_area_location_management(
@@ -622,6 +670,7 @@ def formal_area(
         raise WarehouseAreaActivationError(
             "区域尚未绑定正式存放策略，请先在区域设置中保存", status_code=409
         )
+    assert_area_not_archived(area)
     return floor, area, area.storage_policy
 
 
@@ -1148,6 +1197,22 @@ def publish_floor_area_policies(
             .options(selectinload(WarehouseAreaStoragePolicy.area))
         ).all()
     }
+    for feature in published_features:
+        if feature.get("feature_kind") != "zone":
+            continue
+        feature_id = str(feature.get("id") or "").strip()
+        area_code = str(feature.get("erp_area_code") or "").strip().upper()
+        candidates = [
+            areas_by_code.get(area_code) if area_code else None,
+            (
+                policies_by_feature[feature_id].area
+                if feature_id in policies_by_feature
+                else None
+            ),
+        ]
+        for candidate in candidates:
+            if candidate is not None:
+                assert_area_not_archived(candidate)
     proposals: list[
         tuple[dict, str, str, list[str], str, WarehouseArea | None,
               WarehouseAreaStoragePolicy | None]

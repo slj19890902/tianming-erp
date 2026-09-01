@@ -29,6 +29,7 @@ from app.services.warehouse_location_address import (
     published_measured_map_readiness,
     rack_cell_identity_payload,
 )
+from app.services.warehouse_floor_claim import claim_warehouse_floor_projection
 from app.services.warehouse_twin_layout import (
     WarehouseTwinLayoutNotFoundError,
     load_warehouse_twin_published_floor_identity,
@@ -346,6 +347,12 @@ def _registered_enabled_space_exists():
             WarehouseFloor.floor_number == WarehouseLocation.warehouse_floor,
             WarehouseFloor.construction_status == "enabled",
             WarehouseArea.construction_status == "enabled",
+            ~exists(
+                select(WarehouseAreaStoragePolicy.id).where(
+                    WarehouseAreaStoragePolicy.area_id == WarehouseArea.id,
+                    WarehouseAreaStoragePolicy.status == "archived",
+                )
+            ),
             func.upper(WarehouseArea.area_code)
             == func.upper(WarehouseLocation.area_code),
         )
@@ -384,30 +391,6 @@ def location_has_live_inventory(db: Session, location_id: int) -> bool:
             .limit(1)
         )
     )
-
-
-def claim_warehouse_floor_projection(
-    db: Session,
-    *,
-    floor_number: int,
-) -> bool:
-    """Acquire the persistent floor mutex shared by map and inventory writes.
-
-    The no-op update is held until the caller commits or rolls back.  SQLite
-    therefore serializes every writer, while row-locking databases serialize
-    projection changes and inventory placement on the same floor row.
-    """
-
-    result = db.execute(
-        update(WarehouseFloor)
-        .where(WarehouseFloor.floor_number == int(floor_number))
-        .values(
-            construction_status=WarehouseFloor.construction_status,
-            updated_at=WarehouseFloor.updated_at,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    return result.rowcount == 1
 
 
 def _current_pallet_exists(location_id_expression):

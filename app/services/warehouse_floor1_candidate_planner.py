@@ -30,6 +30,10 @@ from app.services.warehouse_pallet_standard import (
     STANDARD_PALLET_WIDTH_MM,
 )
 from app.services.warehouse_location_address import employee_area_name
+from app.services.warehouse_area_tombstones import (
+    archived_area_tombstones_for_floor,
+    filter_archived_area_layout,
+)
 
 
 LOGICAL_ANCHOR_FOOTPRINT_MM = 400
@@ -1569,15 +1573,7 @@ def overlay_formal_area_bindings(
         .options(selectinload(WarehouseAreaStoragePolicy.area))
         .where(WarehouseArea.floor_id == floor.id)
     )
-    if not include_draft:
-        policy_query = policy_query.where(
-            WarehouseAreaStoragePolicy.status == "published"
-        )
-    policies = list(
-        db.scalars(
-            policy_query
-        ).all()
-    )
+    all_policies = list(db.scalars(policy_query).all())
     area_rows = list(
         db.scalars(
             select(WarehouseArea)
@@ -1585,7 +1581,31 @@ def overlay_formal_area_bindings(
             .where(WarehouseArea.floor_id == floor.id)
         ).all()
     )
-    areas_by_code = {area.area_code.upper(): area for area in area_rows}
+    tombstones = archived_area_tombstones_for_floor(
+        db,
+        floor_code=floor.floor_code,
+    )
+    floor_layout = filter_archived_area_layout(
+        floor_layout,
+        tombstones=tombstones,
+    )
+    policies = [
+        policy
+        for policy in all_policies
+        if policy.status != "archived"
+        and policy.area.construction_status != "archived"
+        and (include_draft or policy.status == "published")
+    ]
+    active_area_rows = [
+        area
+        for area in area_rows
+        if area.construction_status != "archived"
+        and (
+            area.storage_policy is None
+            or area.storage_policy.status != "archived"
+        )
+    ]
+    areas_by_code = {area.area_code.upper(): area for area in active_area_rows}
     areas_by_id = {area.id: area for area in areas_by_code.values()}
     feature_area_code_counts: dict[str, int] = {}
     for raw in floor_layout.get("features") or []:
@@ -1607,6 +1627,10 @@ def overlay_formal_area_bindings(
             feature["formal_area_id"] = policy.area.id
             feature["formal_floor_id"] = policy.area.floor_id
             feature["formal_policy_status"] = policy.status
+            feature["formal_policy_version"] = policy.version
+            feature["formal_published_map_revision"] = (
+                policy.published_map_revision
+            )
             if include_draft:
                 feature.setdefault("erp_area_code", policy.area.area_code)
                 feature.setdefault("allowed_inventory_types", policy_types)

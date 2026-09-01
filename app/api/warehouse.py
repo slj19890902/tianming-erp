@@ -17,8 +17,8 @@ from urllib.parse import urlsplit, urlunsplit
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import qrcode
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import and_, case, func, or_, select, update
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy import and_, case, func, inspect, or_, select, text, update
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import (
@@ -69,8 +69,18 @@ from app.models.requisition import Requisition, RequisitionItem
 from app.models.order import Order, OrderItem
 from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.incoming_receipt import IncomingReceipt
+from app.models.inventory_onboarding import (
+    InventoryOnboardingBatch,
+    InventoryOnboardingLine,
+)
 from app.models.master_data_object_version import MasterDataObjectVersion
 from app.models.production import ProductionTask
+from app.models.stock_replenishment import (
+    InventoryStockPolicy,
+    StockReplenishmentOrder,
+    StockReplenishmentOrderItem,
+)
+from app.models.stocktake import StocktakeOrder
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
@@ -86,6 +96,7 @@ from app.models.warehouse_inventory import (
     InventoryPallet,
     InventoryPalletItem,
     InventoryReservation,
+    OrderedFinishedReceiptReturn,
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
     SemiFinishedLotAllowedProduct,
@@ -100,7 +111,9 @@ from app.models.warehouse_inventory import (
     WarehouseGroundPlacementMutation,
     WarehouseLocation,
     WarehouseLocationAlias,
+    WarehouseLocationDiscrepancy,
     WarehouseRackLevelLabelPrintJob,
+    WarehouseUnmatchedInventoryObservation,
 )
 from app.services.floor3_locations import (
     Floor3LocationError,
@@ -122,6 +135,7 @@ from app.services.warehouse_area_activation import (
     WarehouseAreaActivationError,
     adjust_area_location_count as adjust_activated_area_location_count,
     area_location_management_payload,
+    assert_area_not_archived,
     formal_area_location_rows,
     floor3_v11_map_binding_is_proven,
     formal_area,
@@ -143,6 +157,14 @@ from app.services.warehouse_twin_layout import (
     load_warehouse_twin_floor,
 )
 from app.services.warehouse_pallet_standard import standard_pallet_contract
+from app.services.warehouse_area_tombstones import (
+    ArchivedWarehouseAreaTargetError,
+    archived_area_identity_sets,
+    archived_area_tombstones_for_floor,
+    assert_warehouse_asset_location_not_archived,
+    partition_archived_area_layout,
+    warehouse_asset_location_floor,
+)
 from app.services.warehouse_floor1_candidate_planner import (
     Floor1CandidatePlanningError,
     _percent_round_trip_epsilon,
@@ -158,6 +180,7 @@ from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditError,
     WarehouseTwinLayoutEditNotFoundError,
     WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK,
+    apply_warehouse_twin_archived_area_tombstones,
     begin_warehouse_twin_one_step_publish,
     calibrate_floor4_freight_elevator,
     create_warehouse_twin_feature,
@@ -322,6 +345,9 @@ from app.services.location_candidates import (
     operational_location_payload,
     pallet_has_physical_goods_condition,
     warehouse_location_projection,
+)
+from app.services.warehouse_floor_claim import (
+    claim_warehouse_floor_projection_by_id,
 )
 from app.services.warehouse_location_address import (
     AddressChangeCommand,
@@ -4307,6 +4333,7 @@ def _assert_legacy_floor3_write_allowed(
 ) -> None:
     """Prevent old V11 endpoints from bypassing formal-area safety gates."""
 
+    _claim_floor_projection_for_layout_write(db, floor_code="3F")
     area = db.scalar(
         select(WarehouseArea)
         .join(WarehouseFloor, WarehouseArea.floor_id == WarehouseFloor.id)
@@ -4316,6 +4343,17 @@ def _assert_legacy_floor3_write_allowed(
             func.upper(WarehouseArea.area_code) == area_code.strip().upper(),
         )
     )
+    if area is not None and (
+        area.construction_status == "archived"
+        or (
+            area.storage_policy is not None
+            and area.storage_policy.status == "archived"
+        )
+    ):
+        raise Floor3LocationError(
+            "该区域已经归档，旧版三楼入口不能恢复或修改。",
+            status_code=409,
+        )
     if area is not None and area.storage_policy is not None:
         raise Floor3LocationError(
             "该区域已进入正式区域管理，请从区域规划入口维护货位",
@@ -4386,7 +4424,6 @@ def _claim_empty_location_for_reflow(
             ~select(InventoryLot.id)
             .where(
                 InventoryLot.warehouse_location_id == location.id,
-                InventoryLot.status.in_(("active", "frozen")),
                 (
                     InventoryLot.quantity_available
                     + InventoryLot.quantity_reserved
@@ -4426,6 +4463,7 @@ def _area_layout_context(
     )
     if area is None:
         raise WarehouseAreaActivationError("正式仓库区域不存在", status_code=404)
+    assert_area_not_archived(area)
     return floor, area, area.storage_policy
 
 
@@ -4440,6 +4478,7 @@ def _sync_formal_area_location_count(
 ) -> None:
     """Keep the formal area ledger in lockstep with its active location set."""
 
+    assert_area_not_archived(area)
     db.flush()
     if increment_policy_version:
         expected_version = policy.version
@@ -5005,6 +5044,10 @@ def save_ground_layout_draft(
 ) -> dict:
     with GROUND_STORAGE_TRANSACTION_LOCK:
         try:
+            _claim_floor_projection_for_layout_write(
+                db,
+                floor_code=floor_code,
+            )
             floor, area, policy = _ground_layout_context(
                 db, floor_code=floor_code, area_code=area_code
             )
@@ -9310,8 +9353,27 @@ def _warehouse_area_dict(db: Session, row: WarehouseArea) -> dict:
     }
 
 
-def _warehouse_floor_dict(db: Session, row: WarehouseFloor) -> dict:
-    areas = sorted(row.areas, key=lambda item: (item.area_code, item.id))
+def _warehouse_floor_dict(
+    db: Session,
+    row: WarehouseFloor,
+    *,
+    include_archived: bool = False,
+) -> dict:
+    areas = sorted(
+        (
+            item
+            for item in row.areas
+            if include_archived
+            or (
+                item.construction_status != "archived"
+                and not (
+                    item.storage_policy is not None
+                    and item.storage_policy.status == "archived"
+                )
+            )
+        ),
+        key=lambda item: (item.area_code, item.id),
+    )
     area_items = [_warehouse_area_dict(db, area) for area in areas]
     occupied_pallet_count = sum(
         area["occupied_pallet_count"] for area in area_items
@@ -9363,6 +9425,7 @@ def _require_registered_area(
         raise HTTPException(status_code=409, detail="请先同时选择楼层和区域")
     area = db.scalar(
         select(WarehouseArea)
+        .options(selectinload(WarehouseArea.storage_policy))
         .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
         .where(
             WarehouseFloor.floor_number == floor_number,
@@ -9373,6 +9436,65 @@ def _require_registered_area(
         raise HTTPException(
             status_code=409,
             detail="该楼层区域尚未建立台账，请先新增楼层和区域。",
+        )
+    if area.construction_status == "archived" or (
+        area.storage_policy is not None and area.storage_policy.status == "archived"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该区域已经归档，普通库位维护不能恢复或修改。",
+        )
+    return area
+
+
+def _require_location_source_not_archived(
+    db: Session,
+    location: WarehouseLocation,
+) -> WarehouseArea | None:
+    if location.address_area_id is not None:
+        area = db.scalar(
+            select(WarehouseArea)
+            .where(WarehouseArea.id == location.address_area_id)
+            .options(selectinload(WarehouseArea.storage_policy))
+        )
+        if area is None:
+            raise HTTPException(
+                status_code=409,
+                detail="该库位的正式区域归属已失效，请先完成地址治理。",
+            )
+        if area.construction_status == "archived" or (
+            area.storage_policy is not None
+            and area.storage_policy.status == "archived"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="该库位属于已归档区域，普通库位维护不能恢复或修改。",
+        )
+        return area
+    area = db.scalar(
+        select(WarehouseArea)
+        .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
+        .where(
+            WarehouseFloor.floor_number == location.warehouse_floor,
+            func.upper(WarehouseArea.area_code)
+            == str(location.area_code or "").strip().upper(),
+        )
+        .options(selectinload(WarehouseArea.storage_policy))
+    )
+    if area is None:
+        if location.source_version == "V11":
+            return None
+        raise HTTPException(
+            status_code=409,
+            detail="该库位的正式区域归属已失效，请先完成地址治理。",
+        )
+    if area.construction_status == "archived" or (
+        area.storage_policy is not None
+        and area.storage_policy.status == "archived"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该库位属于已归档区域，普通库位维护不能恢复或修改。",
         )
     return area
 
@@ -9722,7 +9844,13 @@ def preview_floor1_formal_candidates(
     _user: User = Depends(admin_only),
 ) -> dict:
     try:
-        plan = build_floor1_formal_candidate_plan(load_warehouse_twin_floor("1F"))
+        floor_layout = overlay_formal_area_bindings(
+            db,
+            floor_code="1F",
+            floor_layout=load_warehouse_twin_floor("1F"),
+            include_draft=False,
+        )
+        plan = build_floor1_formal_candidate_plan(floor_layout)
         return {
             **plan,
             "formal_state": inspect_floor1_formal_candidate_state(db, plan=plan),
@@ -9740,9 +9868,16 @@ def confirm_floor1_formal_candidates(
     user: User = Depends(admin_only),
 ) -> dict:
     try:
+        _claim_floor_projection_for_layout_write(db, floor_code="1F")
+        floor_layout = overlay_formal_area_bindings(
+            db,
+            floor_code="1F",
+            floor_layout=load_warehouse_twin_floor("1F"),
+            include_draft=False,
+        )
         result = confirm_floor1_formal_candidate_plan(
             db,
-            floor_layout=load_warehouse_twin_floor("1F"),
+            floor_layout=floor_layout,
             expected_revision=payload.expected_map_revision,
             expected_fingerprint=payload.expected_plan_fingerprint,
             expected_formal_state_fingerprint=(
@@ -9906,33 +10041,44 @@ def validate_twin_layout_draft(
     user: User = Depends(admin_only),
 ) -> dict:
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
-        identity_blockers = _formal_area_identity_blockers(db, floor_code)
-        if identity_blockers:
-            raise HTTPException(
-                status_code=409,
-                detail="正式区域身份核验未通过：" + "；".join(identity_blockers[:5]),
-            )
-        geometry_blockers = _formal_location_zone_geometry_blockers(db, floor_code)
-        if geometry_blockers:
-            raise HTTPException(
-                status_code=409,
-                detail="正式货位坐标核验未通过：" + "；".join(geometry_blockers[:5]),
-            )
-        mold_relocation_warnings: list[str] = []
-        if floor_code.strip().upper() == "1F":
-            mold_relocations = plan_mold_rack_layout_relocations(
-                db,
-                load_effective_warehouse_twin_floor_for_edit("1F"),
-            )
-            mold_relocation_warnings = mold_rack_layout_relocation_warnings(
-                mold_relocations
-            )
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         result = None
+        tombstone_projection = None
         try:
+            validation_revision, tombstone_projection = (
+                _apply_archived_area_tombstones_before_validation(
+                    db,
+                    floor_code=floor_code,
+                    expected_revision=payload.expected_revision,
+                )
+            )
+            identity_blockers = _formal_area_identity_blockers(db, floor_code)
+            if identity_blockers:
+                raise HTTPException(
+                    status_code=409,
+                    detail="正式区域身份核验未通过："
+                    + "；".join(identity_blockers[:5]),
+                )
+            geometry_blockers = _formal_location_zone_geometry_blockers(db, floor_code)
+            if geometry_blockers:
+                raise HTTPException(
+                    status_code=409,
+                    detail="正式货位坐标核验未通过："
+                    + "；".join(geometry_blockers[:5]),
+                )
+            mold_relocation_warnings: list[str] = []
+            if floor_code.strip().upper() == "1F":
+                mold_relocations = plan_mold_rack_layout_relocations(
+                    db,
+                    load_effective_warehouse_twin_floor_for_edit("1F"),
+                )
+                mold_relocation_warnings = mold_rack_layout_relocation_warnings(
+                    mold_relocations
+                )
             result = validate_warehouse_twin_layout_draft(
                 floor_code,
-                expected_revision=payload.expected_revision,
+                expected_revision=validation_revision,
                 additional_warnings=mold_relocation_warnings,
             )
             _twin_layout_asset_log(
@@ -9943,20 +10089,31 @@ def validate_twin_layout_draft(
                 entity_type="twin_layout_draft",
                 entity_id=floor_code.upper(),
                 description="管理员校验仓库地图草稿",
-                details=result.value,
+                details={
+                    **result.value,
+                    "archive_tombstone_projection": tombstone_projection,
+                },
             )
             db.commit()
         except WarehouseTwinLayoutEditError as error:
             db.rollback()
-            if result is not None and result.applied:
+            if tombstone_projection is not None or (
+                result is not None and result.applied
+            ):
                 restore_warehouse_twin_layout_draft(draft_snapshot)
             _handle_twin_layout_edit_error(error)
         except Exception:
             db.rollback()
-            if result is not None and result.applied:
+            if tombstone_projection is not None or (
+                result is not None and result.applied
+            ):
                 restore_warehouse_twin_layout_draft(draft_snapshot)
             raise
-        return {**result.value, "applied": result.applied}
+        return {
+            **result.value,
+            "applied": result.applied,
+            "archive_tombstone_projection": tombstone_projection,
+        }
 
 
 @router.post("/twin-layout/floors/{floor_code}/draft/calibrate-freight-elevator")
@@ -10148,6 +10305,12 @@ def _formal_area_publish_blockers(
             .options(selectinload(WarehouseAreaStoragePolicy.area))
         ).all()
     )
+    policies = [
+        policy
+        for policy in policies
+        if policy.status != "archived"
+        and policy.area.construction_status != "archived"
+    ]
     all_areas = list(
         db.scalars(
             select(WarehouseArea)
@@ -10155,6 +10318,15 @@ def _formal_area_publish_blockers(
             .options(selectinload(WarehouseArea.storage_policy))
         ).all()
     )
+    all_areas = [
+        area
+        for area in all_areas
+        if area.construction_status != "archived"
+        and (
+            area.storage_policy is None
+            or area.storage_policy.status != "archived"
+        )
+    ]
     customer_preferred_area_ids = {
         int(area_id)
         for area_id in db.scalars(
@@ -10467,14 +10639,17 @@ def _claim_floor_projection_for_layout_write(
 ) -> None:
     """Serialize a runtime-map change with every inventory destination write."""
 
-    floor = warehouse_floor_for_code(db, floor_code)
+    normalized_floor = floor_code.strip().upper()
+    floor = warehouse_floor_for_code(db, normalized_floor)
     if floor is None:
         return
+    floor_id = int(floor.id)
+    floor_stored_code = floor.floor_code.strip().upper()
     floor_number = int(floor.floor_number)
     try:
-        floor_claimed = claim_warehouse_floor_projection(
+        floor_claimed = claim_warehouse_floor_projection_by_id(
             db,
-            floor_number=int(floor_number),
+            floor_id=floor_id,
         )
     except OperationalError as error:
         db.rollback()
@@ -10488,9 +10663,70 @@ def _claim_floor_projection_for_layout_write(
             status_code=409,
             detail="仓库楼层台账已变化，请刷新后重新发布",
         )
+    current_floor = db.scalar(
+        select(WarehouseFloor)
+        .where(WarehouseFloor.id == floor_id)
+        .execution_options(populate_existing=True)
+    )
+    if (
+        current_floor is None
+        or current_floor.floor_code.strip().upper() != floor_stored_code
+        or int(current_floor.floor_number) != floor_number
+    ):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="仓库楼层身份已变化，请刷新后重新操作",
+        )
+    resolved_floor = warehouse_floor_for_code(db, normalized_floor)
+    if resolved_floor is None or int(resolved_floor.id) != floor_id:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="仓库楼层路由已变化，请刷新后重新操作",
+        )
     # All spatial reads below occur after this persistent claim.  Canonical
     # projection loaders use ``populate_existing`` for their exact objects;
     # never expire unrelated dirty business rows in this shared transaction.
+
+
+def _claim_floor_numbers_for_layout_write(
+    db: Session,
+    *floor_numbers: int | None,
+) -> None:
+    for floor_number in sorted(
+        {int(value) for value in floor_numbers if value is not None}
+    ):
+        _claim_floor_projection_for_layout_write(
+            db,
+            floor_code=f"{floor_number}F",
+        )
+
+
+def _claim_floor_ids_for_layout_write(
+    db: Session,
+    *floor_ids: int | None,
+) -> None:
+    """Claim stable floor rows before editing floor or area identities."""
+
+    for floor_id in sorted({int(value) for value in floor_ids if value is not None}):
+        try:
+            floor_claimed = claim_warehouse_floor_projection_by_id(
+                db,
+                floor_id=floor_id,
+            )
+        except OperationalError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="该楼层正在执行区域归档、入库或地图调整，请稍后刷新重试",
+            ) from error
+        if not floor_claimed:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="仓库楼层台账已变化，请刷新后重试",
+            )
 
 
 @router.get("/twin-layout/floors/{floor_code}/draft/rack-cell-bindings/preview")
@@ -10546,6 +10782,23 @@ def _publish_twin_layout_draft_locked(
 ) -> dict:
     if not floor_projection_claimed:
         _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+
+    sanitized_revision, tombstone_projection = (
+        _apply_archived_area_tombstones_before_validation(
+            db,
+            floor_code=floor_code,
+            expected_revision=payload.expected_draft_revision,
+        )
+    )
+    if tombstone_projection is not None:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "归档区域已从当前地图草稿剔除；请按新版本重新校验后发布。"
+                f"新草稿版本：{sanitized_revision}"
+            ),
+        )
 
     mold_relocations = []
     mold_relocation_warnings: list[str] = []
@@ -10980,14 +11233,25 @@ def discard_twin_layout_draft(
     user: User = Depends(admin_only),
 ) -> dict:
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         result = None
+        tombstone_projection = None
+        sanitized_revision = ""
         try:
             result = discard_warehouse_twin_layout_draft(
                 floor_code,
                 expected_revision=payload.expected_revision,
             )
-            if result.applied:
+            effective_floor = load_effective_warehouse_twin_floor_for_edit(floor_code)
+            sanitized_revision, tombstone_projection = (
+                _apply_archived_area_tombstones_before_validation(
+                    db,
+                    floor_code=floor_code,
+                    expected_revision=str(effective_floor.get("revision") or ""),
+                )
+            )
+            if result.applied or tombstone_projection is not None:
                 _twin_layout_asset_log(
                     db,
                     request=request,
@@ -10996,20 +11260,29 @@ def discard_twin_layout_draft(
                     entity_type="twin_layout_draft",
                     entity_id=floor_code.upper(),
                     description="管理员放弃仓库地图草稿",
-                    details=result.value,
+                    details={
+                        **result.value,
+                        "tombstone_projection": tombstone_projection,
+                        "revision": sanitized_revision,
+                    },
                 )
                 db.commit()
         except WarehouseTwinLayoutEditError as error:
             db.rollback()
-            if result is not None and result.applied:
+            if (result is not None and result.applied) or tombstone_projection is not None:
                 restore_warehouse_twin_layout_draft(draft_snapshot)
             _handle_twin_layout_edit_error(error)
         except Exception:
             db.rollback()
-            if result is not None and result.applied:
+            if (result is not None and result.applied) or tombstone_projection is not None:
                 restore_warehouse_twin_layout_draft(draft_snapshot)
             raise
-        return {**result.value, "applied": result.applied}
+        return {
+            **result.value,
+            "revision": sanitized_revision,
+            "tombstone_projection": tombstone_projection,
+            "applied": result.applied or tombstone_projection is not None,
+        }
 
 
 @router.post("/twin-layout/floors/{floor_code}/draft/rebuild-stale")
@@ -11023,14 +11296,25 @@ def rebuild_stale_twin_layout_draft(
     """Explicitly abandon an obsolete draft and seed one from the live map."""
 
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         result = None
+        tombstone_projection = None
+        sanitized_revision = ""
         try:
             result = rebuild_stale_warehouse_twin_layout_draft(
                 floor_code,
                 expected_published_revision=payload.expected_published_revision,
             )
-            if result.applied:
+            effective_floor = load_effective_warehouse_twin_floor_for_edit(floor_code)
+            sanitized_revision, tombstone_projection = (
+                _apply_archived_area_tombstones_before_validation(
+                    db,
+                    floor_code=floor_code,
+                    expected_revision=str(effective_floor.get("revision") or ""),
+                )
+            )
+            if result.applied or tombstone_projection is not None:
                 _twin_layout_asset_log(
                     db,
                     request=request,
@@ -11042,20 +11326,27 @@ def rebuild_stale_twin_layout_draft(
                     details={
                         **result.value,
                         "operation_key": payload.operation_key,
+                        "tombstone_projection": tombstone_projection,
+                        "revision": sanitized_revision,
                     },
                 )
                 db.commit()
         except WarehouseTwinLayoutEditError as error:
             db.rollback()
-            if result is not None and result.applied:
+            if (result is not None and result.applied) or tombstone_projection is not None:
                 restore_warehouse_twin_layout_draft(draft_snapshot)
             _handle_twin_layout_edit_error(error)
         except Exception:
             db.rollback()
-            if result is not None and result.applied:
+            if (result is not None and result.applied) or tombstone_projection is not None:
                 restore_warehouse_twin_layout_draft(draft_snapshot)
             raise
-        return {**result.value, "applied": result.applied}
+        return {
+            **result.value,
+            "revision": sanitized_revision,
+            "tombstone_projection": tombstone_projection,
+            "applied": result.applied or tombstone_projection is not None,
+        }
 
 
 @router.post("/twin-layout/floors/{floor_code}/features", status_code=201)
@@ -11067,6 +11358,7 @@ def create_twin_layout_feature(
     user: User = Depends(admin_only),
 ) -> dict:
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         mutation = None
         try:
@@ -11123,6 +11415,12 @@ def update_twin_layout_feature_geometry(
     user: User = Depends(admin_only),
 ) -> dict:
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+        _assert_twin_feature_not_archived(
+            db,
+            floor_code=floor_code,
+            feature_id=feature_id,
+        )
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         mutation = None
         try:
@@ -11168,6 +11466,550 @@ def update_twin_layout_feature_geometry(
         }
 
 
+def _archived_area_tombstones_for_floor(
+    db: Session,
+    *,
+    floor_code: str,
+) -> list[dict]:
+    return archived_area_tombstones_for_floor(db, floor_code=floor_code)
+
+
+def _assert_twin_feature_not_archived(
+    db: Session,
+    *,
+    floor_code: str,
+    feature_id: str,
+    area_code: str | None = None,
+) -> None:
+    identities = archived_area_identity_sets(db, floor_code=floor_code)
+    normalized_feature_id = str(feature_id or "").strip()
+    normalized_area_code = str(area_code or "").strip().upper()
+    if not normalized_area_code and normalized_feature_id:
+        try:
+            floor_layout = load_effective_warehouse_twin_floor_for_edit(floor_code)
+        except WarehouseTwinLayoutEditError as error:
+            _handle_twin_layout_edit_error(error)
+        feature = next(
+            (
+                item
+                for item in floor_layout.get("features") or []
+                if str(item.get("id") or "").strip() == normalized_feature_id
+            ),
+            None,
+        )
+        if feature is not None:
+            normalized_area_code = str(
+                feature.get("erp_area_code") or ""
+            ).strip().upper()
+    if (
+        normalized_feature_id in identities["feature_ids"]
+        or normalized_feature_id.upper() in identities["feature_codes"]
+        or normalized_area_code in identities["area_codes"]
+        or normalized_area_code in identities["feature_codes"]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该区域已经归档，普通地图编辑不能恢复或修改。",
+        )
+
+
+def _assert_twin_rack_not_archived(
+    db: Session,
+    *,
+    floor_code: str,
+    rack_id: str,
+) -> None:
+    identities = archived_area_identity_sets(db, floor_code=floor_code)
+    if str(rack_id or "").strip() in identities["rack_ids"]:
+        raise HTTPException(
+            status_code=409,
+            detail="该区域已经归档，普通地图编辑不能恢复或修改。",
+        )
+    try:
+        floor_layout = load_effective_warehouse_twin_floor_for_edit(floor_code)
+    except WarehouseTwinLayoutEditError as error:
+        _handle_twin_layout_edit_error(error)
+    rack = next(
+        (
+            item
+            for item in floor_layout.get("racks") or []
+            if str(item.get("id") or "").strip() == str(rack_id).strip()
+        ),
+        None,
+    )
+    if rack is None:
+        return
+    feature_id = str(rack.get("area_feature_id") or "").strip()
+    area_code = str(rack.get("area_code") or "").strip().upper()
+    if not feature_id and area_code:
+        matching_features = [
+            item
+            for item in floor_layout.get("features") or []
+            if item.get("feature_kind") == "zone"
+            and str(item.get("erp_area_code") or "").strip().upper() == area_code
+        ]
+        if len(matching_features) == 1:
+            feature_id = str(matching_features[0].get("id") or "").strip()
+    _assert_twin_feature_not_archived(
+        db,
+        floor_code=floor_code,
+        feature_id=feature_id,
+        area_code=area_code,
+    )
+
+
+def _apply_archived_area_tombstones_before_validation(
+    db: Session,
+    *,
+    floor_code: str,
+    expected_revision: str,
+) -> tuple[str, dict | None]:
+    tombstones = _archived_area_tombstones_for_floor(db, floor_code=floor_code)
+    if not tombstones:
+        return expected_revision, None
+    floor_layout = load_effective_warehouse_twin_floor_for_edit(floor_code)
+    actual_revision = str(floor_layout.get("revision") or "")
+    if actual_revision != str(expected_revision or ""):
+        raise HTTPException(
+            status_code=409,
+            detail="布局草稿已更新，请刷新后重新校验",
+        )
+    partition = partition_archived_area_layout(
+        floor_layout,
+        tombstones=tombstones,
+    )
+    if not any(
+        partition[key]
+        for key in ("removed_features", "removed_racks", "removed_pallets")
+    ):
+        return expected_revision, None
+    identity = json.dumps(
+        sorted(
+            (
+                str(item.get("feature_id") or ""),
+                str(item.get("area_code") or "").upper(),
+            )
+            for item in tombstones
+        ),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    operation_key = "archive-tombstone-" + hashlib.sha256(
+        f"{floor_code.upper()}|{actual_revision}|{identity}".encode("utf-8")
+    ).hexdigest()[:48]
+    mutation = apply_warehouse_twin_archived_area_tombstones(
+        floor_code,
+        expected_revision=actual_revision,
+        operation_key=operation_key,
+        tombstones=tombstones,
+    )
+    return mutation.floor_revision, mutation.value
+
+
+def _formal_area_archive_location_rows(
+    db: Session,
+    *,
+    area: WarehouseArea,
+    owned_map_rack_ids: set[str],
+) -> tuple[list[WarehouseLocation], list[str]]:
+    floor_number = int(area.floor.floor_number)
+    area_code = area.area_code.strip().upper()
+    rows = list(
+        db.scalars(
+            select(WarehouseLocation)
+            .where(
+                or_(
+                    WarehouseLocation.address_area_id == area.id,
+                    and_(
+                        WarehouseLocation.address_area_id.is_(None),
+                        WarehouseLocation.warehouse_floor == floor_number,
+                        func.upper(WarehouseLocation.area_code) == area_code,
+                    ),
+                )
+            )
+            .options(selectinload(WarehouseLocation.floor3_layout))
+            .order_by(WarehouseLocation.id)
+        ).all()
+    )
+    structured_drift = sum(
+        1
+        for row in rows
+        if row.address_area_id == area.id
+        and (
+            row.warehouse_floor != floor_number
+            or str(row.area_code or "").strip().upper() != area_code
+        )
+    )
+    foreign_identity_drift = int(
+        db.scalar(
+            select(func.count(WarehouseLocation.id)).where(
+                WarehouseLocation.address_area_id.is_not(None),
+                WarehouseLocation.address_area_id != area.id,
+                WarehouseLocation.warehouse_floor == floor_number,
+                func.upper(WarehouseLocation.area_code) == area_code,
+            )
+        )
+        or 0
+    )
+    blockers: list[str] = []
+    if structured_drift:
+        blockers.append(f"仍有正式地址归属与楼层/区域编码不一致的库位 {structured_drift} 个")
+    if foreign_identity_drift:
+        blockers.append(f"仍有同编码但归属其他正式区域的库位 {foreign_identity_drift} 个")
+    rack_identity_drift = sum(
+        1
+        for row in rows
+        if str(row.map_rack_id or "").strip()
+        and str(row.map_rack_id or "").strip() not in owned_map_rack_ids
+    )
+    if rack_identity_drift:
+        blockers.append(f"仍有库位绑定其他区域地图货架 {rack_identity_drift} 个")
+    canonical_location_ids = {int(row.id) for row in rows}
+    foreign_rack_location_count = (
+        int(
+            db.scalar(
+                select(func.count(WarehouseLocation.id)).where(
+                    WarehouseLocation.map_rack_id.in_(owned_map_rack_ids),
+                    WarehouseLocation.id.not_in(canonical_location_ids),
+                )
+            )
+            or 0
+        )
+        if owned_map_rack_ids
+        else 0
+    )
+    if foreign_rack_location_count:
+        blockers.append(
+            f"仍有其他区域库位绑定本区地图货架 {foreign_rack_location_count} 个"
+        )
+    return rows, blockers
+
+
+def _formal_area_archive_blockers(
+    db: Session,
+    *,
+    floor_layout: dict,
+    feature: dict,
+    area: WarehouseArea,
+    locations: list[WarehouseLocation],
+) -> list[str]:
+    if area.area_code.upper() == "DISPATCH" or str(feature.get("id") or "").upper() == "F1-DISPATCH-01":
+        return ["一楼直接待送业务锚点不能作为普通空区域归档"]
+    location_ids = [int(row.id) for row in locations]
+    blockers: list[str] = []
+    try:
+        customer_default_count = int(
+            db.scalar(
+                select(func.count())
+                .select_from(CustomerFinishedStoragePreference)
+                .where(
+                    CustomerFinishedStoragePreference.warehouse_area_id
+                    == int(area.id)
+                )
+            )
+            or 0
+        )
+    except SQLAlchemyError:
+        blockers.append("客户默认成品区域引用暂无法核对")
+    else:
+        if customer_default_count:
+            blockers.append(f"仍有客户默认成品区域配置 {customer_default_count} 条")
+    if location_ids:
+        lot_count, lot_quantity = db.execute(
+            select(
+                func.count(InventoryLot.id),
+                func.coalesce(
+                    func.sum(
+                        InventoryLot.quantity_available
+                        + InventoryLot.quantity_reserved
+                        + InventoryLot.quantity_damaged
+                    ),
+                    0,
+                ),
+            ).where(
+                InventoryLot.warehouse_location_id.in_(location_ids),
+                (
+                    InventoryLot.quantity_available
+                    + InventoryLot.quantity_reserved
+                    + InventoryLot.quantity_damaged
+                )
+                > 0,
+            )
+        ).one()
+        if int(lot_count or 0):
+            blockers.append(
+                f"仍有库存 {int(lot_count)} 批，共 {int(lot_quantity or 0)} 个物理单位"
+            )
+        reservation_count = int(
+            db.scalar(
+                select(func.count(InventoryReservation.id))
+                .join(
+                    InventoryLot,
+                    InventoryLot.id == InventoryReservation.inventory_lot_id,
+                )
+                .where(
+                    InventoryLot.warehouse_location_id.in_(location_ids),
+                    InventoryReservation.status.in_(("active", "partial")),
+                    InventoryReservation.reserved_stock_quantity
+                    > InventoryReservation.consumed_stock_quantity
+                    + InventoryReservation.released_stock_quantity,
+                )
+            )
+            or 0
+        )
+        if reservation_count:
+            blockers.append(f"仍有未完成库存预占 {reservation_count} 条")
+        receipt_return_count = int(
+            db.scalar(
+                select(func.count(OrderedFinishedReceiptReturn.id)).where(
+                    OrderedFinishedReceiptReturn.return_location_id.in_(location_ids),
+                    OrderedFinishedReceiptReturn.status == "active",
+                )
+            )
+            or 0
+        )
+        if receipt_return_count:
+            blockers.append(f"仍有活动订单成品退回记录 {receipt_return_count} 条")
+        pallet_count = int(
+            db.scalar(
+                select(func.count(InventoryPallet.id)).where(
+                    InventoryPallet.location_id.in_(location_ids),
+                    InventoryPallet.is_current.is_(True),
+                )
+            )
+            or 0
+        )
+        if pallet_count:
+            blockers.append(f"仍有活动栈板 {pallet_count} 块")
+        occupancy_count = int(
+            db.scalar(
+                select(func.count(func.distinct(WarehouseGroundOccupancy.id)))
+                .outerjoin(
+                    WarehouseGroundOccupancySlot,
+                    WarehouseGroundOccupancySlot.occupancy_id
+                    == WarehouseGroundOccupancy.id,
+                )
+                .where(
+                    WarehouseGroundOccupancy.status == "active",
+                    or_(
+                        WarehouseGroundOccupancy.primary_location_id.in_(location_ids),
+                        and_(
+                            WarehouseGroundOccupancySlot.location_id.in_(location_ids),
+                            WarehouseGroundOccupancySlot.status == "active",
+                        ),
+                    ),
+                )
+            )
+            or 0
+        )
+        if occupancy_count:
+            blockers.append(f"仍有活动地堆占用 {occupancy_count} 条")
+        stocktake_count = int(
+            db.scalar(
+                select(func.count(StocktakeOrder.id)).where(
+                    StocktakeOrder.location_id.in_(location_ids),
+                    StocktakeOrder.status.in_(("draft", "submitted")),
+                )
+            )
+            or 0
+        )
+        if stocktake_count:
+            blockers.append(f"仍有未完成盘点 {stocktake_count} 单")
+        onboarding_count = int(
+            db.scalar(
+                select(func.count(InventoryOnboardingLine.id))
+                .join(
+                    InventoryOnboardingBatch,
+                    InventoryOnboardingBatch.id == InventoryOnboardingLine.batch_id,
+                )
+                .where(
+                    InventoryOnboardingLine.location_id.in_(location_ids),
+                    InventoryOnboardingBatch.status.in_(("draft", "submitted")),
+                )
+            )
+            or 0
+        )
+        if onboarding_count:
+            blockers.append(f"仍有待处理库存补录 {onboarding_count} 条")
+        default_policy_count = int(
+            db.scalar(
+                select(func.count(InventoryStockPolicy.id)).where(
+                    InventoryStockPolicy.default_location_id.in_(location_ids),
+                    InventoryStockPolicy.active.is_(True),
+                )
+            )
+            or 0
+        )
+        if default_policy_count:
+            blockers.append(f"仍有库存预警/补库默认位置 {default_policy_count} 条")
+        replenishment_count = int(
+            db.scalar(
+                select(func.count(StockReplenishmentOrderItem.id))
+                .join(
+                    StockReplenishmentOrder,
+                    StockReplenishmentOrder.id
+                    == StockReplenishmentOrderItem.replenishment_order_id,
+                )
+                .where(
+                    StockReplenishmentOrderItem.location_id.in_(location_ids),
+                    StockReplenishmentOrder.status.in_(
+                        ("draft", "confirmed", "partially_stocked")
+                    ),
+                )
+            )
+            or 0
+        )
+        if replenishment_count:
+            blockers.append(f"仍有活动补库明细 {replenishment_count} 条")
+        unmatched_count = int(
+            db.scalar(
+                select(func.count(WarehouseUnmatchedInventoryObservation.id)).where(
+                    WarehouseUnmatchedInventoryObservation.observed_location_id.in_(
+                        location_ids
+                    ),
+                    WarehouseUnmatchedInventoryObservation.status == "open",
+                )
+            )
+            or 0
+        )
+        if unmatched_count:
+            blockers.append(f"仍有现场实物待核对标记 {unmatched_count} 条")
+        discrepancy_count = int(
+            db.scalar(
+                select(func.count(WarehouseLocationDiscrepancy.id)).where(
+                    WarehouseLocationDiscrepancy.status == "open",
+                    or_(
+                        WarehouseLocationDiscrepancy.registered_location_id.in_(
+                            location_ids
+                        ),
+                        WarehouseLocationDiscrepancy.observed_location_id.in_(
+                            location_ids
+                        ),
+                    ),
+                )
+            )
+            or 0
+        )
+        if discrepancy_count:
+            blockers.append(f"仍有未处理库位差异 {discrepancy_count} 条")
+    feature_id = str(feature.get("id") or "").strip()
+    feature_code = str(feature.get("feature_code") or "").strip().upper()
+    area_code = area.area_code.strip().upper()
+    mapped_pallet_count = sum(
+        1
+        for pallet in floor_layout.get("pallets") or []
+        if str(pallet.get("zone_id") or "").strip() == feature_id
+        or str(pallet.get("zone_code") or "").strip().upper()
+        in {feature_code, area_code} - {""}
+    )
+    if mapped_pallet_count:
+        blockers.append(f"地图区域仍有栈板对象 {mapped_pallet_count} 块")
+    asset_blockers = _zone_asset_and_production_blockers(
+        db,
+        floor_layout=floor_layout,
+        feature=feature,
+        area_code=area.area_code.upper(),
+        fail_closed_on_mapping_error=True,
+    )
+    blockers.extend(
+        message.replace("不能改变区域策略", "不能删除区域")
+        for message in asset_blockers
+    )
+    return list(dict.fromkeys(blockers))
+
+
+def _formal_area_archive_replay_response(
+    policy: WarehouseAreaStoragePolicy,
+    *,
+    floor_code: str,
+    feature_id: str,
+) -> dict:
+    try:
+        snapshot = json.loads(policy.archive_feature_snapshot_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise HTTPException(
+            status_code=409,
+            detail="区域归档快照损坏，已停止回放，请先完成受控修复。",
+        )
+    stored_result = snapshot.get("result") if isinstance(snapshot, dict) else None
+    if not isinstance(stored_result, dict) or not isinstance(
+        stored_result.get("item"), dict
+    ) or not str(stored_result.get("revision") or "").strip():
+        raise HTTPException(
+            status_code=409,
+            detail="区域归档回放结果不完整，已停止回放，请先完成受控修复。",
+        )
+    stored_item = dict(stored_result["item"])
+    return {
+        "item": {
+            **stored_item,
+            "id": feature_id,
+            "feature_kind": "zone",
+            "deleted": True,
+            "archived": True,
+            "formal_area_id": policy.area_id,
+            "inactive_location_count": int(
+                stored_item.get("inactive_location_count") or 0
+            ),
+        },
+        "revision": (
+            str(stored_result.get("revision") or "")
+            if isinstance(stored_result, dict)
+            else ""
+        ),
+        "applied": False,
+        "idempotent_replay": True,
+    }
+
+
+def _pure_draft_feature_delete_blocker(
+    db: Session,
+    *,
+    floor_code: str,
+    feature_id: str,
+) -> str | None:
+    """Keep legacy formal identities out of the unbound draft-delete path."""
+
+    normalized_floor = floor_code.strip().upper()
+    effective_floor = load_effective_warehouse_twin_floor_for_edit(normalized_floor)
+    feature = next(
+        (
+            item
+            for item in effective_floor.get("features") or []
+            if str(item.get("id") or "") == feature_id
+        ),
+        None,
+    )
+    if feature is None or feature.get("feature_kind") != "zone":
+        return None
+    if (
+        feature.get("formal_area_id") not in (None, "")
+        or feature.get("formal_floor_id") not in (None, "")
+    ):
+        return "该区域已有正式身份，不能作为纯规划草稿删除，请先治理正式绑定。"
+    floor = warehouse_floor_for_code(db, normalized_floor)
+    area_code = str(feature.get("erp_area_code") or "").strip().upper()
+    if floor is None or not area_code:
+        return None
+    formal_area = db.scalar(
+        select(WarehouseArea.id).where(
+            WarehouseArea.floor_id == floor.id,
+            func.upper(WarehouseArea.area_code) == area_code,
+        )
+    )
+    formal_location = db.scalar(
+        select(WarehouseLocation.id)
+        .where(
+            WarehouseLocation.warehouse_floor == floor.floor_number,
+            func.upper(WarehouseLocation.area_code) == area_code,
+        )
+        .limit(1)
+    )
+    if formal_area is not None or formal_location is not None:
+        return "该旧版实测区域已有正式区域或货位台账，不能作为纯规划草稿删除，请先治理正式绑定。"
+    return None
+
+
 @router.delete("/twin-layout/floors/{floor_code}/features/{feature_id}")
 def delete_twin_layout_feature(
     floor_code: str,
@@ -11175,21 +12017,507 @@ def delete_twin_layout_feature(
     expected_revision: str = Query(min_length=1, max_length=64),
     expected_version: int = Query(ge=1),
     operation_key: str = Query(min_length=8, max_length=120),
+    expected_policy_version: int | None = Query(default=None, ge=1),
+    expected_published_revision: str | None = Query(
+        default=None, min_length=1, max_length=64
+    ),
     request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
+    # Direct service-level tests and internal callers bypass FastAPI's query
+    # parsing, so optional Query defaults may arrive as parameter descriptors.
+    # Normalize those descriptors without weakening real HTTP validation.
+    if not isinstance(expected_policy_version, int):
+        expected_policy_version = None
+    if not isinstance(expected_published_revision, str):
+        expected_published_revision = None
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
-        formal_policy = db.scalar(
-            select(WarehouseAreaStoragePolicy).where(
-                WarehouseAreaStoragePolicy.map_feature_id == feature_id
+        normalized_floor = floor_code.strip().upper()
+        request_facts = {
+            "floor_code": normalized_floor,
+            "feature_id": feature_id,
+            "expected_revision": expected_revision,
+            "expected_version": expected_version,
+            "expected_policy_version": expected_policy_version,
+            "expected_published_revision": expected_published_revision,
+        }
+        request_hash = hashlib.sha256(
+            json.dumps(
+                request_facts,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        operation_policy = db.scalar(
+            select(WarehouseAreaStoragePolicy)
+            .options(
+                selectinload(WarehouseAreaStoragePolicy.area).selectinload(
+                    WarehouseArea.floor
+                )
+            )
+            .where(
+                WarehouseAreaStoragePolicy.archive_operation_key == operation_key
             )
         )
-        if formal_policy is not None:
+        if operation_policy is not None:
+            if (
+                operation_policy.status == "archived"
+                and operation_policy.map_feature_id == feature_id
+                and operation_policy.area.floor.floor_code == normalized_floor
+                and operation_policy.archive_request_hash == request_hash
+            ):
+                return _formal_area_archive_replay_response(
+                    operation_policy,
+                    floor_code=normalized_floor,
+                    feature_id=feature_id,
+                )
             raise HTTPException(
                 status_code=409,
-                detail="区域已绑定正式区域，不能从规划草稿删除；请先按正式停用流程处理",
+                detail="该操作键已被其他区域或不同请求使用，请刷新后重新操作。",
             )
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+        formal_policy = db.scalar(
+            select(WarehouseAreaStoragePolicy)
+            .options(
+                selectinload(WarehouseAreaStoragePolicy.area).selectinload(
+                    WarehouseArea.floor
+                )
+            )
+            .where(
+                WarehouseAreaStoragePolicy.map_feature_id == feature_id
+            )
+            .execution_options(populate_existing=True)
+        )
+        if formal_policy is not None:
+            if formal_policy.area.floor.floor_code != normalized_floor:
+                raise HTTPException(status_code=404, detail="区域不存在或不属于当前楼层")
+            if formal_policy.area.floor.construction_status != "enabled":
+                raise HTTPException(
+                    status_code=409,
+                    detail="楼层尚未处于正式启用状态，不能归档区域。",
+                )
+            if formal_policy.status == "archived":
+                if (
+                    formal_policy.archive_operation_key == operation_key
+                    and formal_policy.archive_request_hash == request_hash
+                ):
+                    return _formal_area_archive_replay_response(
+                        formal_policy,
+                        floor_code=normalized_floor,
+                        feature_id=feature_id,
+                    )
+                raise HTTPException(
+                    status_code=409,
+                    detail="该正式区域已经归档，请刷新地图后继续操作。",
+                )
+            if formal_policy.status != "published":
+                raise HTTPException(
+                    status_code=409,
+                    detail="该正式区域仍是绑定草稿，请先发布或放弃草稿，不能直接归档。",
+                )
+            if formal_policy.area.construction_status != "enabled":
+                raise HTTPException(
+                    status_code=409,
+                    detail="正式区域状态不一致，请先完成区域治理后再归档。",
+                )
+            if expected_policy_version != formal_policy.version:
+                raise HTTPException(
+                    status_code=409,
+                    detail="正式区域设置版本已变化，请刷新后重试。",
+                )
+            if not expected_published_revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail="缺少当前正式地图版本，请刷新后重试。",
+                )
+            published_floor = load_published_warehouse_twin_floor_for_edit(floor_code)
+            actual_published_revision = str(published_floor.get("revision") or "")
+            if (
+                expected_published_revision != actual_published_revision
+                or formal_policy.published_map_revision != actual_published_revision
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="正式地图版本已变化，请刷新后重新删除。",
+                )
+            effective_floor = load_effective_warehouse_twin_floor_for_edit(floor_code)
+            actual_effective_revision = str(effective_floor.get("revision") or "")
+            if actual_effective_revision != str(expected_revision or ""):
+                raise HTTPException(
+                    status_code=409,
+                    detail="布局草稿已变化，请刷新后重新归档。",
+                )
+            feature = next(
+                (
+                    item
+                    for item in effective_floor.get("features") or []
+                    if str(item.get("id") or "") == feature_id
+                ),
+                None,
+            )
+            if feature is None or feature.get("feature_kind") != "zone":
+                raise HTTPException(status_code=404, detail="区域不存在或已被移除")
+            try:
+                actual_feature_version = int(feature.get("version") or 1)
+            except (TypeError, ValueError):
+                actual_feature_version = 0
+            if actual_feature_version != expected_version:
+                raise HTTPException(
+                    status_code=409,
+                    detail="区域布局版本已变化，请刷新后重新归档。",
+                )
+            area = formal_policy.area
+            published_feature = next(
+                (
+                    item
+                    for item in published_floor.get("features") or []
+                    if str(item.get("id") or "") == feature_id
+                ),
+                None,
+            )
+            if (
+                published_feature is None
+                or published_feature.get("feature_kind") != "zone"
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="正式地图中的区域身份已变化，请先完成区域治理。",
+                )
+            for label, candidate in (
+                ("当前草稿", feature),
+                ("正式地图", published_feature),
+            ):
+                candidate_area_code = str(
+                    candidate.get("erp_area_code") or ""
+                ).strip().upper()
+                if candidate_area_code and candidate_area_code != area.area_code.upper():
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"{label}区域编号与正式区域不一致，请先完成治理。",
+                    )
+                raw_area_id = candidate.get("formal_area_id")
+                raw_floor_id = candidate.get("formal_floor_id")
+                if raw_area_id not in (None, "") and str(raw_area_id) != str(area.id):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"{label}绑定的正式区域身份不一致，请先完成治理。",
+                    )
+                if raw_floor_id not in (None, "") and str(raw_floor_id) != str(area.floor_id):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"{label}绑定的正式楼层身份不一致，请先完成治理。",
+                    )
+            archive_partition = partition_archived_area_layout(
+                effective_floor,
+                tombstones=[
+                    {"feature_id": feature_id, "area_code": area.area_code}
+                ],
+            )
+            published_archive_partition = partition_archived_area_layout(
+                published_floor,
+                tombstones=[
+                    {"feature_id": feature_id, "area_code": area.area_code}
+                ],
+            )
+            for label, partition in (
+                ("当前草稿", archive_partition),
+                ("正式地图", published_archive_partition),
+            ):
+                removed_feature_ids = [
+                    str(item.get("id") or "")
+                    for item in partition["removed_features"]
+                ]
+                if removed_feature_ids != [feature_id]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"{label}存在重复或漂移的区域身份，请先完成治理。",
+                    )
+            owned_map_rack_ids = {
+                str(item.get("id") or "").strip()
+                for partition in (
+                    archive_partition,
+                    published_archive_partition,
+                )
+                for item in partition["removed_racks"]
+                if str(item.get("id") or "").strip()
+            }
+            locations, location_identity_blockers = _formal_area_archive_location_rows(
+                db,
+                area=area,
+                owned_map_rack_ids=owned_map_rack_ids,
+            )
+            blockers = [*location_identity_blockers, *_formal_area_archive_blockers(
+                db,
+                floor_layout=effective_floor,
+                feature=feature,
+                area=area,
+                locations=locations,
+            )]
+            ground_plan = db.scalar(
+                select(WarehouseGroundLayoutPlan).where(
+                    WarehouseGroundLayoutPlan.area_id == area.id
+                )
+            )
+            if ground_plan is not None:
+                if ground_plan.status == "draft":
+                    blockers.append("仍有未发布地堆排位草稿，请先放弃该草稿")
+                else:
+                    blockers.append("仍有已发布地堆排位方案，不能直接归档，请先完成受控处置")
+            if blockers:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{area.area_name} 不能删除：" + "；".join(blockers[:8]),
+                )
+            archive_snapshot = {
+                "effective_layout_objects": {
+                    "features": archive_partition["removed_features"],
+                    "racks": archive_partition["removed_racks"],
+                    "pallets": archive_partition["removed_pallets"],
+                },
+                "published_layout_objects": {
+                    "features": published_archive_partition["removed_features"],
+                    "racks": published_archive_partition["removed_racks"],
+                    "pallets": published_archive_partition["removed_pallets"],
+                },
+                "effective_map_revision": actual_effective_revision,
+                "published_map_revision": actual_published_revision,
+                "area": {
+                    "id": area.id,
+                    "area_code": area.area_code,
+                    "area_name": area.area_name,
+                    "construction_status": area.construction_status,
+                    "planned_location_count": area.planned_location_count,
+                    "planned_pallet_capacity": area.planned_pallet_capacity,
+                    "capacity_review_status": area.capacity_review_status,
+                    "capacity_eligible": area.capacity_eligible,
+                    "confirmed_pallet_capacity": area.confirmed_pallet_capacity,
+                    "capacity_reviewed_by": area.capacity_reviewed_by,
+                    "capacity_reviewed_at": (
+                        area.capacity_reviewed_at.isoformat()
+                        if area.capacity_reviewed_at is not None
+                        else None
+                    ),
+                },
+                "policy": {
+                    "id": formal_policy.id,
+                    "status": formal_policy.status,
+                    "version": formal_policy.version,
+                    "published_map_revision": formal_policy.published_map_revision,
+                },
+                "ground_layout_plan": (
+                    None
+                    if ground_plan is None
+                    else {
+                        "id": ground_plan.id,
+                        "status": ground_plan.status,
+                        "version": ground_plan.version,
+                        "published_map_revision": ground_plan.published_map_revision,
+                    }
+                ),
+                "locations": [
+                    {
+                        "id": int(row.id),
+                        "location_code": row.location_code,
+                        "is_active": bool(row.is_active),
+                        "source_version": row.source_version,
+                        "address_version": row.address_version,
+                        "placement_status": row.placement_status,
+                        "layout_version": (
+                            row.floor3_layout.version
+                            if row.floor3_layout is not None
+                            else None
+                        ),
+                    }
+                    for row in locations
+                ],
+            }
+            latest_locations, latest_identity_blockers = (
+                _formal_area_archive_location_rows(
+                    db,
+                    area=area,
+                    owned_map_rack_ids=owned_map_rack_ids,
+                )
+            )
+            if [int(row.id) for row in latest_locations] != [
+                int(row.id) for row in locations
+            ]:
+                latest_identity_blockers.append(
+                    "区域库位集合刚被其他操作更新，请刷新后重试"
+                )
+            latest_blockers = [
+                *latest_identity_blockers,
+                *_formal_area_archive_blockers(
+                    db,
+                    floor_layout=effective_floor,
+                    feature=feature,
+                    area=area,
+                    locations=latest_locations,
+                ),
+            ]
+            latest_ground_plan_count = int(
+                db.scalar(
+                    select(func.count(WarehouseGroundLayoutPlan.id)).where(
+                        WarehouseGroundLayoutPlan.area_id == area.id
+                    )
+                )
+                or 0
+            )
+            if latest_ground_plan_count:
+                latest_blockers.append("区域地堆排位事实刚被其他操作更新，请刷新后重试")
+            if latest_blockers:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{area.area_name} 不能删除："
+                    + "；".join(list(dict.fromkeys(latest_blockers))[:8]),
+                )
+            try:
+                now = beijing_now_naive()
+                inactive_count = 0
+                for location in locations:
+                    if not location.is_active:
+                        continue
+                    if not _claim_empty_location_for_reflow(db, location):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="区域内货位刚被占用，请刷新后先完成移货。",
+                        )
+                    location.is_active = False
+                    location.updated_at = now
+                    inactive_count += 1
+                result_item = {
+                    "id": feature_id,
+                    "feature_code": feature.get("feature_code"),
+                    "feature_kind": "zone",
+                    "deleted": True,
+                    "archived": True,
+                    "formal_area_id": area.id,
+                    "inactive_location_count": inactive_count,
+                    "archived_child_rack_count": len(
+                        archive_partition["removed_racks"]
+                    ),
+                    "archived_child_pallet_count": len(
+                        archive_partition["removed_pallets"]
+                    ),
+                    "draft_changed": False,
+                    "inventory_changed": False,
+                    "published_map_changed": False,
+                }
+                archive_snapshot["result"] = {
+                    "item": result_item,
+                    "revision": actual_effective_revision,
+                }
+                update_result = db.execute(
+                    update(WarehouseAreaStoragePolicy)
+                    .where(
+                        WarehouseAreaStoragePolicy.id == formal_policy.id,
+                        WarehouseAreaStoragePolicy.version == expected_policy_version,
+                        WarehouseAreaStoragePolicy.status == "published",
+                    )
+                    .values(
+                        status="archived",
+                        version=formal_policy.version + 1,
+                        updated_by=user.id,
+                        updated_at=now,
+                        archived_at=now,
+                        archived_by=user.id,
+                        archive_operation_key=operation_key,
+                        archive_request_hash=request_hash,
+                        archive_feature_snapshot_json=json.dumps(
+                            archive_snapshot,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if update_result.rowcount != 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="区域设置已被其他操作更新，请刷新后重试。",
+                    )
+                area.construction_status = "archived"
+                area.capacity_review_status = "excluded"
+                area.capacity_eligible = False
+                area.confirmed_pallet_capacity = None
+                area.capacity_reviewed_by = _capacity_reviewer_name(user)
+                area.capacity_reviewed_at = now
+                _twin_layout_asset_log(
+                    db,
+                    request=request,
+                    user=user,
+                    action="TWIN_LAYOUT_FORMAL_AREA_ARCHIVE",
+                    entity_type="warehouse_area",
+                    entity_id=str(area.id),
+                    description="管理员归档完全空闲的正式仓库区域",
+                    details={
+                        "floor_code": floor_code,
+                        "feature_id": feature_id,
+                        "area_code": area.area_code,
+                        "policy_version_before": expected_policy_version,
+                        "published_map_revision": actual_published_revision,
+                        "inactive_location_count": inactive_count,
+                        "archived_child_rack_count": len(
+                            archive_partition["removed_racks"]
+                        ),
+                        "archived_child_pallet_count": len(
+                            archive_partition["removed_pallets"]
+                        ),
+                        "draft_changed": False,
+                        "inventory_changed": False,
+                    },
+                )
+                db.commit()
+            except IntegrityError as error:
+                db.rollback()
+                operation_collision = db.scalar(
+                    select(WarehouseAreaStoragePolicy)
+                    .options(
+                        selectinload(WarehouseAreaStoragePolicy.area).selectinload(
+                            WarehouseArea.floor
+                        )
+                    )
+                    .where(
+                        WarehouseAreaStoragePolicy.archive_operation_key
+                        == operation_key
+                    )
+                )
+                if operation_collision is not None:
+                    if (
+                        operation_collision.status == "archived"
+                        and operation_collision.map_feature_id == feature_id
+                        and operation_collision.area.floor.floor_code
+                        == normalized_floor
+                        and operation_collision.archive_request_hash == request_hash
+                    ):
+                        return _formal_area_archive_replay_response(
+                            operation_collision,
+                            floor_code=normalized_floor,
+                            feature_id=feature_id,
+                        )
+                    raise HTTPException(
+                        status_code=409,
+                        detail="该操作键已被其他归档请求占用，请刷新后重新操作。",
+                    ) from error
+                raise
+            except Exception:
+                db.rollback()
+                raise
+            return {
+                "item": result_item,
+                "revision": actual_effective_revision,
+                "applied": True,
+                "idempotent_replay": False,
+            }
+        pure_draft_blocker = _pure_draft_feature_delete_blocker(
+            db,
+            floor_code=normalized_floor,
+            feature_id=feature_id,
+        )
+        if pure_draft_blocker:
+            raise HTTPException(status_code=409, detail=pure_draft_blocker)
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         mutation = None
         try:
@@ -11237,29 +12565,54 @@ def create_twin_layout_rack(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
-    try:
-        mutation = create_warehouse_twin_rack(
-            floor_code,
-            expected_revision=payload.expected_revision,
-            operation_key=payload.operation_key,
-            area_feature_id=payload.area_feature_id,
-            values=_rack_layout_values(payload),
-        )
-    except WarehouseTwinLayoutEditError as error:
-        _handle_twin_layout_edit_error(error)
-    if mutation.applied:
-        _twin_layout_asset_log(
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+        _assert_twin_feature_not_archived(
             db,
-            request=request,
-            user=user,
-            action="TWIN_RACK_CREATE",
-            entity_type="twin_rack_layout",
-            entity_id=str(mutation.value.get("id") or ""),
-            description="二维库位布局新增货架",
-            details={"floor_code": floor_code, "rack": mutation.value, "inventory_changed": False},
+            floor_code=floor_code,
+            feature_id=payload.area_feature_id,
         )
-        db.commit()
-    return {"item": mutation.value, "revision": mutation.floor_revision, "applied": mutation.applied}
+        draft_snapshot = snapshot_warehouse_twin_layout_draft()
+        mutation = None
+        try:
+            mutation = create_warehouse_twin_rack(
+                floor_code,
+                expected_revision=payload.expected_revision,
+                operation_key=payload.operation_key,
+                area_feature_id=payload.area_feature_id,
+                values=_rack_layout_values(payload),
+            )
+            if mutation.applied:
+                _twin_layout_asset_log(
+                    db,
+                    request=request,
+                    user=user,
+                    action="TWIN_RACK_CREATE",
+                    entity_type="twin_rack_layout",
+                    entity_id=str(mutation.value.get("id") or ""),
+                    description="二维库位布局新增货架",
+                    details={
+                        "floor_code": floor_code,
+                        "rack": mutation.value,
+                        "inventory_changed": False,
+                    },
+                )
+                db.commit()
+        except WarehouseTwinLayoutEditError as error:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            _handle_twin_layout_edit_error(error)
+        except Exception:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            raise
+        return {
+            "item": mutation.value,
+            "revision": mutation.floor_revision,
+            "applied": mutation.applied,
+        }
 
 
 @router.patch("/twin-layout/floors/{floor_code}/racks/{rack_id}")
@@ -11271,30 +12624,55 @@ def update_twin_layout_rack(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
-    try:
-        mutation = update_warehouse_twin_rack(
-            floor_code,
-            rack_id,
-            expected_revision=payload.expected_revision,
-            expected_version=payload.expected_version,
-            operation_key=payload.operation_key,
-            values=_rack_layout_values(payload),
-        )
-    except WarehouseTwinLayoutEditError as error:
-        _handle_twin_layout_edit_error(error)
-    if mutation.applied:
-        _twin_layout_asset_log(
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+        _assert_twin_rack_not_archived(
             db,
-            request=request,
-            user=user,
-            action="TWIN_RACK_UPDATE",
-            entity_type="twin_rack_layout",
-            entity_id=rack_id,
-            description="二维库位布局修改货架参数",
-            details={"floor_code": floor_code, "rack": mutation.value, "inventory_changed": False},
+            floor_code=floor_code,
+            rack_id=rack_id,
         )
-        db.commit()
-    return {"item": mutation.value, "revision": mutation.floor_revision, "applied": mutation.applied}
+        draft_snapshot = snapshot_warehouse_twin_layout_draft()
+        mutation = None
+        try:
+            mutation = update_warehouse_twin_rack(
+                floor_code,
+                rack_id,
+                expected_revision=payload.expected_revision,
+                expected_version=payload.expected_version,
+                operation_key=payload.operation_key,
+                values=_rack_layout_values(payload),
+            )
+            if mutation.applied:
+                _twin_layout_asset_log(
+                    db,
+                    request=request,
+                    user=user,
+                    action="TWIN_RACK_UPDATE",
+                    entity_type="twin_rack_layout",
+                    entity_id=rack_id,
+                    description="二维库位布局修改货架参数",
+                    details={
+                        "floor_code": floor_code,
+                        "rack": mutation.value,
+                        "inventory_changed": False,
+                    },
+                )
+                db.commit()
+        except WarehouseTwinLayoutEditError as error:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            _handle_twin_layout_edit_error(error)
+        except Exception:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            raise
+        return {
+            "item": mutation.value,
+            "revision": mutation.floor_revision,
+            "applied": mutation.applied,
+        }
 
 
 @router.delete("/twin-layout/floors/{floor_code}/racks/{rack_id}")
@@ -11308,29 +12686,50 @@ def delete_twin_layout_rack(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
-    try:
-        mutation = delete_warehouse_twin_rack(
-            floor_code,
-            rack_id,
-            expected_revision=expected_revision,
-            expected_version=expected_version,
-            operation_key=operation_key,
-        )
-    except WarehouseTwinLayoutEditError as error:
-        _handle_twin_layout_edit_error(error)
-    if mutation.applied:
-        _twin_layout_asset_log(
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+        _assert_twin_rack_not_archived(
             db,
-            request=request,
-            user=user,
-            action="TWIN_RACK_DELETE",
-            entity_type="twin_rack_layout",
-            entity_id=rack_id,
-            description="二维库位布局删除货架并释放为空地",
-            details={"floor_code": floor_code, **mutation.value},
+            floor_code=floor_code,
+            rack_id=rack_id,
         )
-        db.commit()
-    return {"item": mutation.value, "revision": mutation.floor_revision, "applied": mutation.applied}
+        draft_snapshot = snapshot_warehouse_twin_layout_draft()
+        mutation = None
+        try:
+            mutation = delete_warehouse_twin_rack(
+                floor_code,
+                rack_id,
+                expected_revision=expected_revision,
+                expected_version=expected_version,
+                operation_key=operation_key,
+            )
+            if mutation.applied:
+                _twin_layout_asset_log(
+                    db,
+                    request=request,
+                    user=user,
+                    action="TWIN_RACK_DELETE",
+                    entity_type="twin_rack_layout",
+                    entity_id=rack_id,
+                    description="二维库位布局删除货架并释放为空地",
+                    details={"floor_code": floor_code, **mutation.value},
+                )
+                db.commit()
+        except WarehouseTwinLayoutEditError as error:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            _handle_twin_layout_edit_error(error)
+        except Exception:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            raise
+        return {
+            "item": mutation.value,
+            "revision": mutation.floor_revision,
+            "applied": mutation.applied,
+        }
 
 
 @router.patch('/twin-layout/floors/{floor_code}/zones/{feature_id}/geometry')
@@ -11359,6 +12758,12 @@ def _update_twin_zone_geometry_locked(
     db: Session,
     user: User,
 ) -> dict:
+    _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+    _assert_twin_feature_not_archived(
+        db,
+        floor_code=floor_code,
+        feature_id=feature_id,
+    )
     draft_snapshot = snapshot_warehouse_twin_layout_draft()
     mutation = None
     try:
@@ -11424,7 +12829,15 @@ def _update_twin_zone_storage_policy_locked(
     commit: bool = True,
     allow_legacy_v11_name_only: bool = True,
 ) -> dict:
+    if commit:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
     requested_area_code = str(payload.erp_area_code or "").strip().upper()
+    _assert_twin_feature_not_archived(
+        db,
+        floor_code=floor_code,
+        feature_id=feature_id,
+        area_code=requested_area_code,
+    )
     formal_area: WarehouseArea | None = None
     policy: WarehouseAreaStoragePolicy | None = None
     try:
@@ -11457,6 +12870,17 @@ def _update_twin_zone_storage_policy_locked(
             func.upper(WarehouseArea.area_code) == requested_area_code,
         )
     )
+    if formal_area is not None and (
+        formal_area.construction_status == "archived"
+        or (
+            formal_area.storage_policy is not None
+            and formal_area.storage_policy.status == "archived"
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该区域已经归档，普通区域设置不能恢复或修改。",
+        )
     if (
         formal_area is not None
         and formal_area.storage_policy is None
@@ -11477,6 +12901,14 @@ def _update_twin_zone_storage_policy_locked(
         )
         if selected_area is None:
             raise HTTPException(status_code=409, detail="所选现有区域已变化或不属于当前楼层")
+        if selected_area.construction_status == "archived" or (
+            selected_area.storage_policy is not None
+            and selected_area.storage_policy.status == "archived"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="所选区域已经归档，普通区域设置不能恢复或修改。",
+            )
         if selected_area.area_code.upper() != requested_area_code:
             raise HTTPException(status_code=409, detail="所选现有区域与正式区域编号不一致")
         if formal_area is None or formal_area.id != selected_area.id:
@@ -12673,7 +14105,12 @@ def get_warehouse_twin_production_tasks(
     db: Session = Depends(get_db),
 ) -> dict:
     try:
-        floor = load_warehouse_twin_floor("1F")
+        floor = overlay_formal_area_bindings(
+            db,
+            floor_code="1F",
+            floor_layout=load_warehouse_twin_floor("1F"),
+            include_draft=False,
+        )
         if str(floor["layout_id"]) != layout_id:
             raise HTTPException(status_code=404, detail="一楼数字孪生布局不存在")
         tasks = _current_visible_production_tasks(user, db)
@@ -12704,29 +14141,43 @@ def put_warehouse_twin_production_mapping(
     _orders_user: User = Depends(can_read_orders),
     db: Session = Depends(get_db),
 ) -> dict:
-    try:
-        floor = load_warehouse_twin_floor("1F")
-        if str(floor["layout_id"]) != layout_id:
-            raise HTTPException(status_code=404, detail="一楼数字孪生布局不存在")
-        current_ids = {
-            int(item["id"]) for item in _current_visible_production_tasks(user, db)
-        }
-        if source_task_id not in current_ids:
-            raise HTTPException(
-                status_code=409,
-                detail="该任务已不在当前账号可见的ERP待生产清单中，请刷新",
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        try:
+            _claim_floor_projection_for_layout_write(db, floor_code="1F")
+            floor = overlay_formal_area_bindings(
+                db,
+                floor_code="1F",
+                floor_layout=load_warehouse_twin_floor("1F"),
+                include_draft=False,
             )
-        return save_production_projection_mapping(
-            floor=floor,
-            source_task_id=source_task_id,
-            target_kind=body.target_kind,
-            target_id=body.target_id,
-            expected_version=body.version,
-        )
-    except WarehouseTwinLayoutNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except WarehouseTwinProductionError as error:
-        _raise_twin_production_error(error)
+            if str(floor["layout_id"]) != layout_id:
+                raise HTTPException(status_code=404, detail="一楼数字孪生布局不存在")
+            current_ids = {
+                int(item["id"]) for item in _current_visible_production_tasks(user, db)
+            }
+            if source_task_id not in current_ids:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该任务已不在当前账号可见的ERP待生产清单中，请刷新",
+                )
+            result = save_production_projection_mapping(
+                floor=floor,
+                source_task_id=source_task_id,
+                target_kind=body.target_kind,
+                target_id=body.target_id,
+                expected_version=body.version,
+            )
+            db.commit()
+            return result
+        except WarehouseTwinLayoutNotFoundError as error:
+            db.rollback()
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except WarehouseTwinProductionError as error:
+            db.rollback()
+            _raise_twin_production_error(error)
+        except Exception:
+            db.rollback()
+            raise
 
 
 @router.delete(
@@ -12792,7 +14243,23 @@ def _twin_dashboard_source_rows(
     locations = list(
         db.scalars(
             select(WarehouseLocation)
-            .where(_formal_inventory_location_condition())
+            .where(
+                _formal_inventory_location_condition(),
+                WarehouseLocation.is_active.is_(True),
+                ~select(WarehouseArea.id)
+                .where(
+                    WarehouseArea.id == WarehouseLocation.address_area_id,
+                    WarehouseArea.construction_status == "archived",
+                )
+                .exists(),
+                ~select(WarehouseAreaStoragePolicy.id)
+                .where(
+                    WarehouseAreaStoragePolicy.area_id
+                    == WarehouseLocation.address_area_id,
+                    WarehouseAreaStoragePolicy.status == "archived",
+                )
+                .exists(),
+            )
             .options(
                 selectinload(WarehouseLocation.floor3_layout),
                 selectinload(WarehouseLocation.address_area).selectinload(
@@ -12809,7 +14276,21 @@ def _twin_dashboard_source_rows(
             .where(
                 InventoryPallet.is_current.is_(True),
                 InventoryPallet.status == "active",
+                WarehouseLocation.is_active.is_(True),
                 _formal_inventory_location_condition(),
+                ~select(WarehouseArea.id)
+                .where(
+                    WarehouseArea.id == WarehouseLocation.address_area_id,
+                    WarehouseArea.construction_status == "archived",
+                )
+                .exists(),
+                ~select(WarehouseAreaStoragePolicy.id)
+                .where(
+                    WarehouseAreaStoragePolicy.area_id
+                    == WarehouseLocation.address_area_id,
+                    WarehouseAreaStoragePolicy.status == "archived",
+                )
+                .exists(),
             )
             .options(selectinload(InventoryPallet.items))
             .order_by(InventoryPallet.id)
@@ -13318,6 +14799,109 @@ def _twin_reference_feature_codes(kind: str, location_text: str | None) -> list[
     return [code for code in candidates if code in normalized]
 
 
+def _assert_asset_location_operational(
+    db: Session,
+    *,
+    asset_kind: Literal["mold", "printing_plate"],
+    location_text: str,
+    claim_floor: bool = False,
+) -> None:
+    normalized = str(location_text or "").strip().upper()
+    if asset_kind == "printing_plate":
+        try:
+            normalize_printing_plate_location(normalized)
+        except PrintingPlateLocationError:
+            return
+    floor_code = warehouse_asset_location_floor(
+        asset_kind=asset_kind,
+        location_text=normalized,
+    )
+    if claim_floor and floor_code:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+    try:
+        assert_warehouse_asset_location_not_archived(
+            db,
+            asset_kind=asset_kind,
+            location_text=normalized,
+        )
+    except ArchivedWarehouseAreaTargetError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if asset_kind == "printing_plate":
+        floor_code = "1F"
+        raw_floor = load_warehouse_twin_floor(floor_code)
+        active_floor = overlay_formal_area_bindings(
+            db,
+            floor_code=floor_code,
+            floor_layout=raw_floor,
+            include_draft=False,
+        )
+        feature_code = "ZONE-1F-PLATE-002"
+        raw_has_target = any(
+            str(item.get("feature_code") or "").strip().upper() == feature_code
+            for item in raw_floor.get("features") or []
+        )
+        active_has_target = any(
+            str(item.get("feature_code") or "").strip().upper() == feature_code
+            for item in active_floor.get("features") or []
+        )
+        if raw_has_target and not active_has_target:
+            raise HTTPException(
+                status_code=409,
+                detail="该挂板区域已经归档，不能新增、启用或移入挂板。",
+            )
+        return
+
+    guide = describe_mold_location(normalized)
+    floor_code = str(guide.get("floor") or "").strip().upper()
+    if not floor_code:
+        return
+    if guide.get("kind") == "archive_area":
+        floor = warehouse_floor_for_code(db, floor_code)
+        area_code = str(guide.get("area") or "").strip().upper()
+        if floor is None or not area_code:
+            return
+        area = db.scalar(
+            select(WarehouseArea)
+            .where(
+                WarehouseArea.floor_id == floor.id,
+                func.upper(WarehouseArea.area_code) == area_code,
+            )
+            .options(selectinload(WarehouseArea.storage_policy))
+        )
+        if area is not None and (
+            area.construction_status == "archived"
+            or (
+                area.storage_policy is not None
+                and area.storage_policy.status == "archived"
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="该模具封存区域已经归档，不能再移入模具。",
+            )
+        return
+    if floor_code != "1F":
+        return
+    raw_floor = load_warehouse_twin_floor("1F")
+    active_floor = overlay_formal_area_bindings(
+        db,
+        floor_code="1F",
+        floor_layout=raw_floor,
+        include_draft=False,
+    )
+    raw_codes = set(
+        mold_location_feature_codes(normalized, floor_layout=raw_floor)
+    )
+    active_codes = set(
+        mold_location_feature_codes(normalized, floor_layout=active_floor)
+    )
+    if raw_codes and not raw_codes.issubset(active_codes):
+        raise HTTPException(
+            status_code=409,
+            detail="该模具货架所在区域已经归档，不能新增、恢复或移入模具。",
+        )
+
+
 def _twin_locator_visible_customer_ids(
     db: Session,
     user: User,
@@ -13336,13 +14920,18 @@ def _twin_locator_visible_customer_ids(
     return _visible_customer_ids(user, db)
 
 
-def _twin_reference_area_resources(keyword: str) -> list[dict]:
+def _twin_reference_area_resources(db: Session, keyword: str) -> list[dict]:
     needle = keyword.casefold()
     subtype_labels = {"mold": "模具", "printing_plate": "印刷版 模板"}
     resources: list[dict] = []
     for floor_code in ("1F", "3F", "4F"):
         try:
-            floor = load_warehouse_twin_floor(floor_code)
+            floor = overlay_formal_area_bindings(
+                db,
+                floor_code=floor_code,
+                floor_layout=load_warehouse_twin_floor(floor_code),
+                include_draft=False,
+            )
         except WarehouseTwinLayoutNotFoundError:
             continue
         for feature in floor.get("features") or []:
@@ -13388,7 +14977,12 @@ def _twin_mold_resources(
     visible_customer_ids: set[int] | None,
 ) -> list[dict]:
     try:
-        floor1_layout = load_warehouse_twin_floor("1F")
+        floor1_layout = overlay_formal_area_bindings(
+            db,
+            floor_code="1F",
+            floor_layout=load_warehouse_twin_floor("1F"),
+            include_draft=False,
+        )
     except WarehouseTwinLayoutNotFoundError:
         floor1_layout = None
     response = list_mold_tools(
@@ -13466,6 +15060,20 @@ def _twin_printing_plate_resources(
     keyword: str,
     visible_customer_ids: set[int] | None,
 ) -> list[dict]:
+    try:
+        active_floor = overlay_formal_area_bindings(
+            db,
+            floor_code="1F",
+            floor_layout=load_warehouse_twin_floor("1F"),
+            include_draft=False,
+        )
+    except WarehouseTwinLayoutNotFoundError:
+        active_floor = {"features": []}
+    active_feature_codes = {
+        str(item.get("feature_code") or "").strip().upper()
+        for item in active_floor.get("features") or []
+        if str(item.get("feature_code") or "").strip()
+    }
     response = list_printing_plates(
         q=keyword,
         customer_id=None,
@@ -13487,6 +15095,7 @@ def _twin_printing_plate_resources(
         feature_codes = (
             ["ZONE-1F-PLATE-002"]
             if guide.get("kind") == "plate_rack"
+            and "ZONE-1F-PLATE-002" in active_feature_codes
             else []
         )
         product_summary = "、".join(
@@ -13668,7 +15277,7 @@ def locate_warehouse_twin_objects(
         pick_resources, pick_tasks = _twin_pick_task_resources(
             db, user, effective_keyword, visible_customer_ids
         )
-    area_resources = _twin_reference_area_resources(effective_keyword)
+    area_resources = _twin_reference_area_resources(db, effective_keyword)
     resources: list[dict] = []
     if search_type in {"all", "mold"}:
         resources.extend(
@@ -13706,6 +15315,7 @@ def locate_warehouse_twin_objects(
 
 @router.get("/space/floors")
 def list_warehouse_floors(
+    include_archived: bool = Query(default=False),
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
@@ -13717,7 +15327,10 @@ def list_warehouse_floors(
         )
         .order_by(WarehouseFloor.floor_number, WarehouseFloor.id)
     ).all()
-    items = [_warehouse_floor_dict(db, row) for row in rows]
+    items = [
+        _warehouse_floor_dict(db, row, include_archived=include_archived)
+        for row in rows
+    ]
     if items and not all(item["capacity"]["confirmed"] for item in items):
         for item in items:
             item["capacity"] = suppress_capacity_metrics_until_all_confirmed(
@@ -13772,6 +15385,15 @@ def update_warehouse_floor(
     row = db.get(WarehouseFloor, floor_id)
     if row is None:
         raise HTTPException(status_code=404, detail="楼层不存在")
+    _claim_floor_ids_for_layout_write(db, row.id)
+    row = db.scalar(
+        select(WarehouseFloor)
+        .where(WarehouseFloor.id == floor_id)
+        .execution_options(populate_existing=True)
+    )
+    if row is None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="楼层台账已变化，请刷新后重试")
     if (
         row.construction_status == "enabled"
         and payload.construction_status != "enabled"
@@ -13791,8 +15413,29 @@ def update_warehouse_floor(
             status_code=409,
             detail="该楼层仍是客户默认成品区域，请先在客户资料中移除后再停用。",
         )
+    floor_identity_changed = (
+        row.floor_code != payload.floor_code
+        or row.floor_number != payload.floor_number
+    )
+    archived_area_exists = db.scalar(
+        select(WarehouseArea.id)
+        .outerjoin(WarehouseAreaStoragePolicy)
+        .where(
+            WarehouseArea.floor_id == row.id,
+            or_(
+                WarehouseArea.construction_status == "archived",
+                WarehouseAreaStoragePolicy.status == "archived",
+            ),
+        )
+        .limit(1)
+    ) is not None
+    if floor_identity_changed and archived_area_exists:
+        raise HTTPException(
+            status_code=409,
+            detail="该楼层存在已归档区域，楼层编码和序号不能通过普通台账修改。",
+        )
     if (
-        (row.floor_code != payload.floor_code or row.floor_number != payload.floor_number)
+        floor_identity_changed
         and db.scalar(
             select(WarehouseArea.id)
             .where(
@@ -13886,9 +15529,35 @@ def update_warehouse_area(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
-    row = db.get(WarehouseArea, area_id)
+    row = db.scalar(
+        select(WarehouseArea)
+        .where(WarehouseArea.id == area_id)
+        .options(selectinload(WarehouseArea.storage_policy))
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="区域不存在")
+    source_floor_id = int(row.floor_id)
+    _claim_floor_ids_for_layout_write(db, source_floor_id, payload.floor_id)
+    row = db.scalar(
+        select(WarehouseArea)
+        .where(WarehouseArea.id == area_id)
+        .options(selectinload(WarehouseArea.storage_policy))
+        .execution_options(populate_existing=True)
+    )
+    if row is None or int(row.floor_id) != source_floor_id:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="区域所属楼层已变化，请刷新后重新编辑。",
+        )
+    if row.construction_status == "archived" or (
+        row.storage_policy is not None
+        and row.storage_policy.status == "archived"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该区域已经归档，普通编辑不能恢复；如需恢复，请走单独的受控恢复流程。",
+        )
     if row.address_zone_code and (
         row.floor_id != payload.floor_id or row.area_code != payload.area_code
     ):
@@ -13896,7 +15565,11 @@ def update_warehouse_area(
             status_code=409,
             detail="该区域已启用结构化地址，请通过地址治理预览和一次确认修改。",
         )
-    floor = db.get(WarehouseFloor, payload.floor_id)
+    floor = db.scalar(
+        select(WarehouseFloor)
+        .where(WarehouseFloor.id == payload.floor_id)
+        .execution_options(populate_existing=True)
+    )
     if floor is None:
         raise HTTPException(status_code=404, detail="楼层不存在")
     is_customer_preferred = db.scalar(
@@ -14241,6 +15914,11 @@ def get_location_label_workbench(
     for formal_floor in formal_floors:
         current_floor_code = str(formal_floor.floor_code or "").strip().upper()
         for area in formal_floor.areas:
+            if area.construction_status == "archived" or (
+                area.storage_policy is not None
+                and area.storage_policy.status == "archived"
+            ):
+                continue
             formal_areas_by_code[(current_floor_code, area.area_code.upper())] = area
             policy = area.storage_policy
             feature_id = (
@@ -14256,6 +15934,12 @@ def get_location_label_workbench(
             layout = load_warehouse_twin_floor(current_floor_code)
         except WarehouseTwinLayoutNotFoundError:
             continue
+        layout = overlay_formal_area_bindings(
+            db,
+            floor_code=current_floor_code,
+            floor_layout=layout,
+            include_draft=False,
+        )
         floor_model = formal_floors_by_code.get(current_floor_code)
         current_floor = {
             "floor_code": current_floor_code,
@@ -15043,6 +16727,12 @@ def create_printing_plate(
     customer = db.get(Customer, payload.customer_id)
     if customer is None:
         raise HTTPException(status_code=400, detail="客户不存在")
+    _assert_asset_location_operational(
+        db,
+        asset_kind="printing_plate",
+        location_text=payload.rack_location,
+        claim_floor=True,
+    )
     location = normalize_printing_plate_location(payload.rack_location)
     occupied = db.scalar(
         select(PrintingPlate.id).where(
@@ -15124,6 +16814,12 @@ def update_printing_plate_status(
     ) is not None:
         raise HTTPException(status_code=409, detail="该挂板仍绑定常用箱，请先解除绑定")
     if payload.status == "active":
+        _assert_asset_location_operational(
+            db,
+            asset_kind="printing_plate",
+            location_text=row.rack_location,
+            claim_floor=True,
+        )
         occupant = db.scalar(
             select(PrintingPlate.id).where(
                 PrintingPlate.id != plate_id,
@@ -15360,6 +17056,11 @@ def preview_printing_plate_location_movement(
     user: User = Depends(can_read),
 ) -> dict:
     try:
+        _assert_asset_location_operational(
+            db,
+            asset_kind="printing_plate",
+            location_text=payload.target_location,
+        )
         preview = preview_printing_plate_move(
             db,
             plate_code=payload.plate_code,
@@ -15379,6 +17080,12 @@ def confirm_printing_plate_location_movement(
     user: User = Depends(can_operate),
 ) -> dict:
     try:
+        _assert_asset_location_operational(
+            db,
+            asset_kind="printing_plate",
+            location_text=payload.target_location,
+            claim_floor=True,
+        )
         preview = preview_printing_plate_move(
             db,
             plate_code=payload.plate_code,
@@ -16335,7 +18042,12 @@ def list_mold_tools_by_map_area(
     """List real mold masters assigned to one measured-map mold area."""
 
     try:
-        floor = load_warehouse_twin_floor(floor_code)
+        floor = overlay_formal_area_bindings(
+            db,
+            floor_code=floor_code,
+            floor_layout=load_warehouse_twin_floor(floor_code),
+            include_draft=False,
+        )
     except WarehouseTwinLayoutNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     normalized_feature_code = feature_code.strip().upper()
@@ -16437,7 +18149,12 @@ def list_mold_tools_by_map_rack(
     """Project real mold masters into one published measured-map rack."""
 
     try:
-        floor = load_warehouse_twin_floor(floor_code)
+        floor = overlay_formal_area_bindings(
+            db,
+            floor_code=floor_code,
+            floor_layout=load_warehouse_twin_floor(floor_code),
+            include_draft=False,
+        )
     except WarehouseTwinLayoutNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     rack = next(
@@ -16745,6 +18462,12 @@ def archive_mold(
 ) -> dict:
     _require_mold_archive_operator(user)
     try:
+        _assert_asset_location_operational(
+            db,
+            asset_kind="mold",
+            location_text="3F-M-ARCHIVE-AB2-N",
+            claim_floor=True,
+        )
         result = archive_mold_tool(
             db,
             mold_id=mold_id,
@@ -16774,6 +18497,12 @@ def restore_mold(
 ) -> dict:
     _require_mold_archive_operator(user)
     try:
+        _assert_asset_location_operational(
+            db,
+            asset_kind="mold",
+            location_text=payload.target_location,
+            claim_floor=True,
+        )
         result = restore_mold_tool(
             db,
             mold_id=mold_id,
@@ -16795,14 +18524,21 @@ def restore_mold(
 
 @router.get("/molds/location-options")
 def get_mold_location_options(
+    db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
+    floor_layout = overlay_formal_area_bindings(
+        db,
+        floor_code="1F",
+        floor_layout=load_warehouse_twin_floor("1F"),
+        include_draft=False,
+    )
     return {
         "floor_code": "1F",
         "position_order": None,
         "position_numbers_are_dynamic": False,
         "storage_rule": "rack_level_grid",
-        "racks": one_floor_mold_location_options(),
+        "racks": one_floor_mold_location_options(floor_layout=floor_layout),
     }
 
 
@@ -16813,6 +18549,11 @@ def preview_mold_location_movement(
     user: User = Depends(can_read),
 ) -> dict:
     try:
+        _assert_asset_location_operational(
+            db,
+            asset_kind="mold",
+            location_text=payload.target_location,
+        )
         allowed_customer_ids = _mold_customer_scope(user, db)
         preview = preview_mold_location_move(
             db,
@@ -16833,6 +18574,12 @@ def confirm_mold_location_movement(
     user: User = Depends(can_operate),
 ) -> dict:
     try:
+        _assert_asset_location_operational(
+            db,
+            asset_kind="mold",
+            location_text=payload.target_location,
+            claim_floor=True,
+        )
         allowed_customer_ids = _mold_customer_scope(user, db)
         scoped_preview = preview_mold_location_move(
             db,
@@ -19192,6 +20939,12 @@ def create_mold_tool(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
+    _assert_asset_location_operational(
+        db,
+        asset_kind="mold",
+        location_text=payload.rack_location,
+        claim_floor=True,
+    )
     formal_identity = payload.customers is not None
     with _MOLD_CODE_WRITE_LOCK:
         if formal_identity:
@@ -19461,6 +21214,12 @@ def update_mold_tool(
     location_changed = payload.rack_location.strip() != row.rack_location.strip()
     result: MoldLocationMoveResult | None = None
     if location_changed:
+        _assert_asset_location_operational(
+            db,
+            asset_kind="mold",
+            location_text=payload.rack_location,
+            claim_floor=True,
+        )
         if not payload.physical_move_confirmed:
             raise HTTPException(status_code=409, detail="请先确认模具实物已经搬到新位置")
         if payload.expected_location_version is None:
@@ -19973,6 +21732,7 @@ def create_location(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
+    _claim_floor_numbers_for_layout_write(db, payload.warehouse_floor)
     if location_alias_conflict(db, payload.location_code):
         raise HTTPException(
             status_code=409,
@@ -20007,6 +21767,13 @@ def update_location(
     row = db.get(WarehouseLocation, location_id)
     if row is None:
         raise HTTPException(status_code=404, detail="库位不存在")
+    _claim_floor_numbers_for_layout_write(
+        db,
+        row.warehouse_floor,
+        payload.warehouse_floor,
+    )
+    db.refresh(row)
+    _require_location_source_not_archived(db, row)
     if row.address_kind != "legacy" and any(
         (
             row.location_code != payload.location_code,
@@ -20085,6 +21852,9 @@ def enable_location(
     row = db.get(WarehouseLocation, location_id)
     if row is None:
         raise HTTPException(status_code=404, detail="库位不存在")
+    _claim_floor_numbers_for_layout_write(db, row.warehouse_floor)
+    db.refresh(row)
+    _require_location_source_not_archived(db, row)
     _reject_v11_location_configuration(row)
     row.is_active = True
     db.commit()
@@ -20100,6 +21870,9 @@ def disable_location(
     row = db.get(WarehouseLocation, location_id)
     if row is None:
         raise HTTPException(status_code=404, detail="库位不存在")
+    _claim_floor_numbers_for_layout_write(db, row.warehouse_floor)
+    db.refresh(row)
+    _require_location_source_not_archived(db, row)
     _reject_v11_location_configuration(row)
     row.is_active = False
     db.commit()

@@ -51,6 +51,21 @@ function mappedLocationPoint(zone, location) {
   ];
 }
 
+export function mergePublishedFeatureGeometry(activeFeatures = [], publishedFeatures = []) {
+  if (!publishedFeatures.length) return [];
+  const activeById = new Map(
+    activeFeatures.map((feature) => [String(feature?.id || ""), feature])
+  );
+  return publishedFeatures.map((published) => {
+    const active = activeById.get(String(published?.id || ""));
+    return {
+      ...(active || {}),
+      ...published,
+      points: (published.points || []).map((point) => [...point])
+    };
+  });
+}
+
 export function locationLayoutGeometry(zone, location, xMm, yMm) {
   const position = location.map_position;
   if (!zone?.points?.length || !position || !location.location_id || !Number(position.version)) return null;
@@ -377,11 +392,11 @@ export function buildMappedLocationPallets(
       const rotation = mappedWidthMm > 0 && mappedDepthMm > 0 && Math.abs(mappedWidthMm - mappedDepthMm) > 50
         ? (mappedWidthMm < mappedDepthMm ? 90 : 0)
         : Math.max(...ys) - Math.min(...ys) > Math.max(...xs) - Math.min(...xs) ? 90 : 0;
-      const isEmptyGroundLocation = !occupied && (
+      const isGroundLocation = (
         position?.layout_kind === "physical_pallet"
         || location.storage_type === "ground"
       );
-      const isPlanningLocationSlot = renderEmptyPlanningSlots && isEmptyGroundLocation;
+      const isPlanningLocationSlot = renderEmptyPlanningSlots && isGroundLocation;
       const isLogicalAnchor = locationPallets.length !== 1;
       // The measured rectangle remains authoritative for the location centre and
       // orientation.  A physical pallet never inherits or scales to that legacy
@@ -433,8 +448,14 @@ export function buildMappedLocationPallets(
 function palletBounds(pallet, clearanceMm = 0) {
   const quarterTurns = Math.round((Number(pallet.rotation_deg || 0) % 180) / 90);
   const swapAxes = Math.abs(quarterTurns) % 2 === 1;
-  const width = swapAxes ? Number(pallet.depth_mm || 0) : Number(pallet.width_mm || 0);
-  const depth = swapAxes ? Number(pallet.width_mm || 0) : Number(pallet.depth_mm || 0);
+  const footprintWidth = pallet.is_planning_location_slot
+    ? Number(pallet.planning_slot_width_mm || 0)
+    : Number(pallet.width_mm || 0);
+  const footprintDepth = pallet.is_planning_location_slot
+    ? Number(pallet.planning_slot_depth_mm || 0)
+    : Number(pallet.depth_mm || 0);
+  const width = swapAxes ? footprintDepth : footprintWidth;
+  const depth = swapAxes ? footprintWidth : footprintDepth;
   return {
     minX: Number(pallet.x_mm) - width / 2 - clearanceMm,
     maxX: Number(pallet.x_mm) + width / 2 + clearanceMm,
@@ -468,11 +489,63 @@ function segmentBounds(start, end, widthMm) {
   };
 }
 
-function boundsOverlap(left, right) {
-  return left.minX < right.maxX && left.maxX > right.minX && left.minY < right.maxY && left.maxY > right.minY;
+function boundsOverlap(left, right, toleranceMm = 0) {
+  return left.minX < right.maxX - toleranceMm
+    && left.maxX > right.minX + toleranceMm
+    && left.minY < right.maxY - toleranceMm
+    && left.maxY > right.minY + toleranceMm;
 }
 
-export function findPalletColumnConflicts(pallets, structures = [], features = [], clearanceMm = 0) {
+function percentRoundTripTolerance(points = []) {
+  const xs = points.map((point) => Number(point?.[0])).filter(Number.isFinite);
+  const ys = points.map((point) => Number(point?.[1])).filter(Number.isFinite);
+  if (!xs.length || !ys.length) return 0.01;
+  const span = Math.max(
+    Math.max(...xs) - Math.min(...xs),
+    Math.max(...ys) - Math.min(...ys)
+  );
+  return Math.max(0.01, span * 0.0000025);
+}
+
+function pointInsidePolygon(point, polygon, toleranceMm = 1) {
+  const [x, y] = point;
+  let inside = false;
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
+    const [x1, y1] = polygon[previous];
+    const [x2, y2] = polygon[index];
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared > 0) {
+      const projection = Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / lengthSquared));
+      const nearestX = x1 + projection * dx;
+      const nearestY = y1 + projection * dy;
+      if (Math.hypot(x - nearestX, y - nearestY) <= toleranceMm) return true;
+    }
+    const crosses = (y1 > y) !== (y2 > y)
+      && x < ((x2 - x1) * (y - y1)) / (y2 - y1) + x1;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function boundsInsidePolygon(bounds, polygon) {
+  return [
+    [bounds.minX, bounds.minY],
+    [bounds.minX, bounds.maxY],
+    [bounds.maxX, bounds.minY],
+    [bounds.maxX, bounds.maxY]
+  ].every((point) => pointInsidePolygon(point, polygon));
+}
+
+export function findPalletColumnConflicts(
+  pallets,
+  structures = [],
+  features = [],
+  clearanceMm = 0,
+  placements = [],
+  racks = []
+) {
   const columnBounds = [];
   for (const structure of structures) {
     if (structure.kind !== "column") continue;
@@ -492,24 +565,86 @@ export function findPalletColumnConflicts(pallets, structures = [], features = [
       if (xs.length && ys.length) columnBounds.push({ column_id: structure.id, minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) });
     }
   }
+  for (const obstacle of [...placements, ...racks]) {
+    if (obstacle?.status && obstacle.status !== "confirmed") continue;
+    if (obstacle?.is_confirmed === false) continue;
+    let width = Number(obstacle?.width_mm || 0);
+    let depth = Number(obstacle?.depth_mm || 0);
+    if (Math.abs(Math.round(Number(obstacle?.rotation_deg || 0) / 90)) % 2 === 1) {
+      [width, depth] = [depth, width];
+    }
+    if (width <= 0 || depth <= 0) continue;
+    columnBounds.push({
+      column_id: obstacle.id,
+      minX: Number(obstacle.x_mm) - width / 2,
+      maxX: Number(obstacle.x_mm) + width / 2,
+      minY: Number(obstacle.y_mm) - depth / 2,
+      maxY: Number(obstacle.y_mm) + depth / 2
+    });
+  }
   for (const feature of features) {
-    if (feature.feature_kind !== "structure" || feature.subtype !== "custom_column") continue;
-    for (let index = 0; index < (feature.points?.length || 0) - 1; index += 1) {
-      const bounds = segmentBounds(feature.points[index], feature.points[index + 1], feature.width_mm);
-      if (bounds) columnBounds.push({ column_id: feature.id, ...bounds });
+    if (feature.feature_kind === "aisle" || (feature.feature_kind === "structure" && feature.subtype === "custom_column")) {
+      for (let index = 0; index < (feature.points?.length || 0) - 1; index += 1) {
+        const bounds = segmentBounds(feature.points[index], feature.points[index + 1], feature.width_mm);
+        if (bounds) columnBounds.push({ column_id: feature.id, ...bounds });
+      }
+      continue;
+    }
+    if (feature.feature_kind !== "no_go" || (feature.points?.length || 0) < 3) continue;
+    const xs = feature.points.map((point) => Number(point[0])).filter(Number.isFinite);
+    const ys = feature.points.map((point) => Number(point[1])).filter(Number.isFinite);
+    if (xs.length && ys.length) {
+      columnBounds.push({
+        column_id: feature.id,
+        minX: Math.min(...xs),
+        maxX: Math.max(...xs),
+        minY: Math.min(...ys),
+        maxY: Math.max(...ys)
+      });
     }
   }
   const conflicts = [];
   const seen = new Set();
-  for (const pallet of pallets) {
-    if (pallet?.visual_kind === "location_anchor" || pallet?.is_logical_anchor) continue;
+  const zoneToleranceById = new Map(
+    features
+      .filter((feature) => feature.feature_kind === "zone" && feature.id)
+      .map((feature) => [String(feature.id), percentRoundTripTolerance(feature.points)])
+  );
+  const physicalPallets = pallets.filter((pallet) => (
+    !((pallet?.visual_kind === "location_anchor" || pallet?.is_logical_anchor) && !pallet?.is_planning_location_slot)
+  ));
+  for (const pallet of physicalPallets) {
     const candidate = palletBounds(pallet, clearanceMm);
+    const zone = features.find((feature) => (
+      feature.feature_kind === "zone" && String(feature.id) === String(pallet.zone_id)
+    ));
+    if (zone?.points?.length >= 3 && !boundsInsidePolygon(candidate, zone.points)) {
+      const key = `${pallet.id}:zone-boundary:${zone.id}`;
+      seen.add(key);
+      conflicts.push({ pallet_id: pallet.id, column_id: `zone-boundary:${zone.id}` });
+    }
     for (const column of columnBounds) {
       if (!boundsOverlap(candidate, column)) continue;
       const key = `${pallet.id}:${column.column_id}`;
       if (seen.has(key)) continue;
       seen.add(key);
       conflicts.push({ pallet_id: pallet.id, column_id: column.column_id });
+    }
+  }
+  for (let leftIndex = 0; leftIndex < physicalPallets.length; leftIndex += 1) {
+    const left = physicalPallets[leftIndex];
+    const leftBounds = palletBounds(left, clearanceMm);
+    for (let rightIndex = leftIndex + 1; rightIndex < physicalPallets.length; rightIndex += 1) {
+      const right = physicalPallets[rightIndex];
+      if (String(left.zone_id || "") !== String(right.zone_id || "")) continue;
+      const roundTripTolerance = zoneToleranceById.get(String(left.zone_id || "")) || 0.01;
+      if (!boundsOverlap(leftBounds, palletBounds(right, clearanceMm), roundTripTolerance)) continue;
+      for (const [pallet, related] of [[left, right], [right, left]]) {
+        const key = `${pallet.id}:location:${related.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        conflicts.push({ pallet_id: pallet.id, column_id: `location:${related.id}` });
+      }
     }
   }
   return conflicts;

@@ -209,11 +209,21 @@ export function buildMappedLocationPallets(
   renderEmptyPlanningSlots?: boolean
 ): import("./types").Pallet[];
 
+export function mergePublishedFeatureGeometry<T extends {
+  id?: string | null;
+  points?: number[][];
+}>(
+  activeFeatures?: T[],
+  publishedFeatures?: T[]
+): T[];
+
 export function findPalletColumnConflicts(
   pallets: import("./types").Pallet[],
   structures?: import("./types").Structure[],
   features?: import("./types").LayoutFeature[],
-  clearanceMm?: number
+  clearanceMm?: number,
+  placements?: import("./types").Placement[],
+  racks?: import("./types").Rack[]
 ): Array<{ pallet_id: string; column_id: string }>;
 
 export function locationLayoutGeometry(

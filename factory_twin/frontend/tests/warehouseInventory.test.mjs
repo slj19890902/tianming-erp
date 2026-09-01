@@ -16,6 +16,7 @@ import {
   inventoryPhysicalQuantity,
   inventoryUnitLabel,
   locationLayoutGeometry,
+  mergePublishedFeatureGeometry,
   normalizeInventoryLocationProjection,
   normalizeStandardPalletContract,
   searchHighlightAreaCodes,
@@ -386,7 +387,7 @@ test("area planning renders every mapped empty location as a full draggable slot
 
   assert.equal(planned.length, 2);
   assert.deepEqual(planned.map((item) => item.is_logical_anchor), [true, false]);
-  assert.equal(planned[0].is_planning_location_slot, true);
+  assert.deepEqual(planned.map((item) => item.is_planning_location_slot), [true, true]);
   assert.equal(planned[0].planning_slot_width_mm, 1200);
   assert.equal(planned[0].planning_slot_depth_mm, 1000);
   assert.equal(planned[0].width_mm, 0);
@@ -614,6 +615,47 @@ test("mapped locations use area-relative layout coordinates and convert 2D drags
   });
 });
 
+test("location planning keeps published zone geometry when an administrator draft was moved", () => {
+  const published = [{
+    id: "zone-d1",
+    feature_kind: "zone",
+    feature_code: "ZONE-D1",
+    erp_area_code: "D1",
+    points: [[1000, 0], [3550, 0], [3550, 15000], [1000, 15000]],
+    version: 2
+  }];
+  const draft = [{
+    ...published[0],
+    points: [[1300, 900], [3850, 900], [3850, 15900], [1300, 15900]],
+    version: 23,
+    name: "D1 草稿名称"
+  }];
+  const [projected] = mergePublishedFeatureGeometry(draft, published);
+  assert.deepEqual(projected.points, published[0].points);
+  assert.equal(projected.version, 2);
+  assert.equal(projected.name, "D1 草稿名称");
+  assert.deepEqual(mergePublishedFeatureGeometry(draft, []), []);
+  assert.deepEqual(
+    mergePublishedFeatureGeometry([...draft, {...draft[0], id: "draft-only"}], published).map((item) => item.id),
+    ["zone-d1"]
+  );
+
+  const location = {
+    location_id: 151,
+    map_position: {left_pct: 0, top_pct: 0, width_pct: 47.0588, height_pct: 6.6667, version: 4}
+  };
+  const geometry = locationLayoutGeometry(projected, location, 2800, 7500);
+  assert.deepEqual(geometry, {
+    location_id: 151,
+    expected_version: 4,
+    left_pct: 47.0588,
+    top_pct: 46.6666,
+    width_pct: 47.0588,
+    height_pct: 6.6667,
+    z_index: 0
+  });
+});
+
 test("mapped pallet rotation follows each measured slot orientation", () => {
   const zone = {id: "zone-fin", feature_kind: "zone", feature_code: "ZONE-1F-FIN", erp_area_code: "FIN", points: [[0, 0], [2400, 0], [2400, 5000], [0, 5000]]};
   const base = {location_code: "FIN-L001", location_name: "成品位", floor_code: "1F", area_code: "FIN", source_version: "TWIN_V1", map_feature_id: "zone-fin", position_status: "mapped", occupancy_status: "occupied", pallet: {pallet_code: "PLT-FIN", items: [{lot_id: 1, quantity: 1}]}, loose_items: []};
@@ -766,6 +808,200 @@ test("mapped pallet locations detect column overlap without moving either object
   ]);
   assert.equal(pallets[0].x_mm, 0);
   assert.equal(columns[0].points[0][0], -325);
+});
+
+test("empty planning slots use their visible pallet footprint for column conflicts", () => {
+  const planningSlot = {
+    id: "erp-location-151",
+    x_mm: 0,
+    y_mm: 0,
+    width_mm: 0,
+    depth_mm: 0,
+    rotation_deg: 0,
+    visual_kind: "location_anchor",
+    is_logical_anchor: true,
+    is_planning_location_slot: true,
+    planning_slot_width_mm: 1200,
+    planning_slot_depth_mm: 1000
+  };
+  const columns = [{
+    id: "column-d1",
+    feature_kind: "structure",
+    subtype: "custom_column",
+    points: [[-325, 0], [325, 0]],
+    width_mm: 700
+  }];
+  assert.deepEqual(findPalletColumnConflicts([planningSlot], [], columns), [
+    { pallet_id: "erp-location-151", column_id: "column-d1" }
+  ]);
+});
+
+test("planning conflict preview includes aisles before the authoritative save", () => {
+  const pallet = {
+    id: "erp-location-153",
+    x_mm: 2000,
+    y_mm: 3000,
+    width_mm: 1200,
+    depth_mm: 1000,
+    rotation_deg: 0
+  };
+  const aisle = {
+    id: "aisle-d1",
+    feature_kind: "aisle",
+    points: [[2000, 0], [2000, 6000]],
+    width_mm: 800
+  };
+  assert.deepEqual(findPalletColumnConflicts([pallet], [], [aisle]), [
+    { pallet_id: "erp-location-153", column_id: "aisle-d1" }
+  ]);
+});
+
+test("planning conflict preview marks both overlapping locations in the same area", () => {
+  const conflicts = findPalletColumnConflicts([
+    {
+      id: "erp-location-1",
+      zone_id: "zone-d1",
+      x_mm: 1000,
+      y_mm: 1000,
+      width_mm: 1200,
+      depth_mm: 1000,
+      rotation_deg: 0
+    },
+    {
+      id: "erp-location-2",
+      zone_id: "zone-d1",
+      x_mm: 1500,
+      y_mm: 1000,
+      width_mm: 1200,
+      depth_mm: 1000,
+      rotation_deg: 0
+    },
+    {
+      id: "erp-location-3",
+      zone_id: "zone-e1",
+      x_mm: 1000,
+      y_mm: 1000,
+      width_mm: 1200,
+      depth_mm: 1000,
+      rotation_deg: 0
+    }
+  ]);
+
+  assert.deepEqual(conflicts, [
+    { pallet_id: "erp-location-1", column_id: "location:erp-location-2" },
+    { pallet_id: "erp-location-2", column_id: "location:erp-location-1" }
+  ]);
+});
+
+test("percentage quantisation does not merge edge-touching D1 locations", () => {
+  const zone = {
+    id: "zone-d1",
+    feature_kind: "zone",
+    points: [[0, 0], [2550, 0], [2550, 15000], [0, 15000]]
+  };
+  const first = {
+    id: "erp-location-151",
+    zone_id: "zone-d1",
+    x_mm: 600,
+    y_mm: 500,
+    width_mm: 1200,
+    depth_mm: 1000,
+    rotation_deg: 0
+  };
+  const quantisedTouch = {
+    ...first,
+    id: "erp-location-152",
+    x_mm: 1799.9994
+  };
+  assert.deepEqual(
+    findPalletColumnConflicts([first, quantisedTouch], [], [zone]),
+    []
+  );
+
+  const realOverlap = { ...quantisedTouch, x_mm: 1799.9 };
+  assert.deepEqual(
+    findPalletColumnConflicts([first, realOverlap], [], [zone]),
+    [
+      { pallet_id: "erp-location-151", column_id: "location:erp-location-152" },
+      { pallet_id: "erp-location-152", column_id: "location:erp-location-151" }
+    ]
+  );
+});
+
+test("planning conflict preview rejects zone overflow and confirmed equipment", () => {
+  const zone = {
+    id: "zone-d1",
+    feature_kind: "zone",
+    points: [[0, 0], [3000, 0], [3000, 2000], [0, 2000]]
+  };
+  const outOfBounds = {
+    id: "erp-location-11",
+    zone_id: "zone-d1",
+    x_mm: 300,
+    y_mm: 1000,
+    width_mm: 1200,
+    depth_mm: 1000,
+    rotation_deg: 0
+  };
+  const besideEquipment = {
+    id: "erp-location-12",
+    zone_id: "zone-d1",
+    x_mm: 2100,
+    y_mm: 1000,
+    width_mm: 1200,
+    depth_mm: 1000,
+    rotation_deg: 0
+  };
+  const equipment = {
+    id: "equipment-1",
+    x_mm: 2100,
+    y_mm: 1000,
+    width_mm: 500,
+    depth_mm: 500,
+    rotation_deg: 0,
+    is_confirmed: true
+  };
+
+  assert.deepEqual(
+    findPalletColumnConflicts([outOfBounds, besideEquipment], [], [zone], 0, [equipment]),
+    [
+      { pallet_id: "erp-location-11", column_id: "zone-boundary:zone-d1" },
+      { pallet_id: "erp-location-12", column_id: "equipment-1" }
+    ]
+  );
+});
+
+test("shared occupied ground locations keep a full planning footprint", () => {
+  const zone = {
+    id: "zone-d1",
+    feature_kind: "zone",
+    feature_code: "D1",
+    erp_area_code: "D1",
+    points: [[0, 0], [3000, 0], [3000, 2000], [0, 2000]]
+  };
+  const location = normalizeInventoryLocationProjection({
+    location_id: 14,
+    location_code: "3F-D01-P01-01",
+    location_name: "三楼 D1区·第1排·1号位",
+    floor_code: "3F",
+    area_code: "D1",
+    storage_type: "ground",
+    map_feature_id: "zone-d1",
+    position_status: "mapped",
+    occupancy_status: "occupied",
+    map_position: { left_pct: 20, top_pct: 25, width_pct: 40, height_pct: 50, version: 1, layout_kind: "physical_pallet" },
+    pallets: [
+      { pallet_id: 1, pallet_code: "PLT-1", items: [{ lot_id: 1, available_quantity: 1 }] },
+      { pallet_id: 2, pallet_code: "PLT-2", items: [{ lot_id: 2, available_quantity: 1 }] }
+    ],
+    loose_items: []
+  });
+  const [planned] = buildMappedLocationPallets([zone], [location], "3F", STANDARD_PALLET, "layout-3f", true);
+
+  assert.equal(planned.is_logical_anchor, true);
+  assert.equal(planned.is_planning_location_slot, true);
+  assert.equal(planned.planning_slot_width_mm, 1200);
+  assert.equal(planned.planning_slot_depth_mm, 1000);
 });
 
 test("move targets are the intersection of empty API candidates and mapped dashboard locations", () => {

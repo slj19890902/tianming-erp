@@ -77,6 +77,11 @@ def p187_app(tmp_path, monkeypatch):
         warehouse_api, "load_warehouse_twin_floor", lambda _floor_code: _measured_layout()
     )
     monkeypatch.setattr(
+        warehouse_api,
+        "load_published_warehouse_twin_floor_for_edit",
+        lambda _floor_code: _measured_layout(),
+    )
+    monkeypatch.setattr(
         location_candidates,
         "load_warehouse_twin_published_floor_identity",
         lambda floor_number: (
@@ -265,6 +270,21 @@ def test_admin_can_drag_published_ground_slots_with_gaps_and_replay_safely(
         slots = published.json()["slots"]
         moved = slots[-1]
         with factory() as db:
+            before_layouts = {
+                row.location_id: (
+                    row.left_pct,
+                    row.top_pct,
+                    row.width_pct,
+                    row.height_pct,
+                    row.z_index,
+                    row.version,
+                )
+                for row in db.scalars(select(Floor3LocationLayout)).all()
+            }
+            before_ground_positions = {
+                row.location_id: (row.x_mm, row.y_mm, row.width_mm, row.depth_mm)
+                for row in db.scalars(select(WarehouseGroundLayoutSlot)).all()
+            }
             layout = db.scalar(
                 select(Floor3LocationLayout).where(
                     Floor3LocationLayout.location_id == moved["location_id"]
@@ -338,7 +358,105 @@ def test_admin_can_drag_published_ground_slots_with_gaps_and_replay_safely(
             )
             assert saved is not None
             assert saved.version == payload_slot["expected_version"] + 1
+            after_layouts = {
+                row.location_id: (
+                    row.left_pct,
+                    row.top_pct,
+                    row.width_pct,
+                    row.height_pct,
+                    row.z_index,
+                    row.version,
+                )
+                for row in db.scalars(select(Floor3LocationLayout)).all()
+            }
+            after_ground_positions = {
+                row.location_id: (row.x_mm, row.y_mm, row.width_mm, row.depth_mm)
+                for row in db.scalars(select(WarehouseGroundLayoutSlot)).all()
+            }
+            unchanged_location_ids = set(before_layouts) - {moved["location_id"]}
+            assert {
+                location_id: before_layouts[location_id]
+                for location_id in unchanged_location_ids
+            } == {
+                location_id: after_layouts[location_id]
+                for location_id in unchanged_location_ids
+            }
+            for location_id in unchanged_location_ids:
+                before_ground = before_ground_positions[location_id]
+                after_ground = after_ground_positions[location_id]
+                assert float(after_ground[0]) == pytest.approx(
+                    float(before_ground[0]), abs=0.02
+                )
+                assert float(after_ground[1]) == pytest.approx(
+                    float(before_ground[1]), abs=0.02
+                )
+                assert after_ground[2:] == before_ground[2:]
+            moved_ground = after_ground_positions[moved["location_id"]]
+            assert float(moved_ground[0]) == pytest.approx(
+                payload_slot["left_pct"] / 100 * 3600,
+                abs=0.02,
+            )
+            assert float(moved_ground[1]) == pytest.approx(
+                2000
+                - (payload_slot["top_pct"] + payload_slot["height_pct"])
+                / 100
+                * 2000,
+                abs=0.02,
+            )
             assert after == before
+
+
+def test_map_publish_blocks_zone_drift_when_formal_ground_locations_exist(
+    p187_app,
+    monkeypatch,
+) -> None:
+    app, factory, _ids = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        _publish_six_slots(client)
+
+    published = _measured_layout()
+    moved = {
+        **published,
+        "revision": "p1-87-map-draft-moved",
+        "features": [
+            {
+                **published["features"][0],
+                "points": [
+                    [1000, 0],
+                    [4600, 0],
+                    [4600, 2000],
+                    [1000, 2000],
+                ],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        warehouse_api,
+        "load_warehouse_twin_layout_draft",
+        lambda _floor_code: moved,
+    )
+
+    with factory() as db:
+        geometry_blockers = warehouse_api._formal_location_zone_geometry_blockers(
+            db,
+            "3F",
+            draft_layout=moved,
+            published_layout=published,
+        )
+        assert geometry_blockers == [
+            "A01 区已有正式货位，不能随区域边界一起移动或缩放；"
+            "请放弃该区域几何草稿，改为逐个调整货位"
+        ]
+        assert geometry_blockers[0] in warehouse_api._formal_area_publish_blockers(
+            db, "3F"
+        )
+        assert warehouse_api._formal_location_zone_geometry_blockers(
+            db,
+            "3F",
+            draft_layout=published,
+            published_layout=published,
+        ) == []
 
 
 def test_numbering_preview_uses_standard_footprint_and_custom_direction() -> None:

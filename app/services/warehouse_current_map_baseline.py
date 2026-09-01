@@ -414,7 +414,15 @@ def _pack_slots(bounds: tuple[float, float, float, float], target: int) -> list[
                 "width": width_mm,
                 "depth": depth_mm,
                 "left_pct": round((x_mm - min_x) / zone_width * 100, 4),
-                "top_pct": round((y_mm - min_y) / zone_height * 100, 4),
+                # Layout percentages use CSS top-origin semantics while measured
+                # map Y increases upward.  Preserve the exact absolute rectangle
+                # on every round trip instead of vertically mirroring the row.
+                "top_pct": round(
+                    (min_y + zone_height - (y_mm + depth_mm))
+                    / zone_height
+                    * 100,
+                    4,
+                ),
                 "width_pct": round(width_mm / zone_width * 100, 4),
                 "height_pct": round(depth_mm / zone_height * 100, 4),
             }

@@ -1553,6 +1553,28 @@ def load_warehouse_twin_layout_draft(
         }
 
 
+def load_published_warehouse_twin_floor_for_edit(
+    floor_code: str,
+    *,
+    published_path: Path | None = None,
+) -> dict[str, Any]:
+    """Read the exact published source used by the editor, ignoring its draft."""
+
+    normalized = _normalize_floor_code(floor_code)
+    published_source = _published_layout_paths(published_path).source
+    with _LAYOUT_EDIT_LOCK:
+        published = _read_document(published_source)
+        floor = (published.get("floors") or {}).get(normalized)
+        if not isinstance(floor, dict):
+            raise WarehouseTwinLayoutEditNotFoundError(
+                f"数字孪生平面缺少 {normalized}"
+            )
+        return {
+            **keep_measured_floor_features(deepcopy(floor)),
+            "generated_at": published.get("generated_at"),
+        }
+
+
 def load_effective_warehouse_twin_floor_for_edit(
     floor_code: str,
     *,

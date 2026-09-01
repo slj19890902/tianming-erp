@@ -162,6 +162,7 @@ from app.services.warehouse_twin_layout_editor import (
     delete_warehouse_twin_rack,
     discard_warehouse_twin_layout_draft,
     load_effective_warehouse_twin_floor_for_edit,
+    load_published_warehouse_twin_floor_for_edit,
     load_warehouse_twin_layout_draft,
     publish_warehouse_twin_layout_draft,
     rebuild_stale_warehouse_twin_layout_draft,
@@ -9888,6 +9889,12 @@ def validate_twin_layout_draft(
                 status_code=409,
                 detail="正式区域身份核验未通过：" + "；".join(identity_blockers[:5]),
             )
+        geometry_blockers = _formal_location_zone_geometry_blockers(db, floor_code)
+        if geometry_blockers:
+            raise HTTPException(
+                status_code=409,
+                detail="正式货位坐标核验未通过：" + "；".join(geometry_blockers[:5]),
+            )
         mold_relocation_warnings: list[str] = []
         if floor_code.strip().upper() == "1F":
             mold_relocations = plan_mold_rack_layout_relocations(
@@ -9929,6 +9936,123 @@ def validate_twin_layout_draft(
         return {**result.value, "applied": result.applied}
 
 
+def _map_feature_points_match(
+    published_feature: Mapping,
+    draft_feature: Mapping,
+    *,
+    tolerance_mm: Decimal = Decimal("0.001"),
+) -> bool:
+    """Compare one measured feature without treating numeric formatting as movement."""
+
+    published_points = list(published_feature.get("points") or [])
+    draft_points = list(draft_feature.get("points") or [])
+    if len(published_points) != len(draft_points):
+        return False
+    try:
+        return all(
+            len(published_point) >= 2
+            and len(draft_point) >= 2
+            and abs(
+                Decimal(str(published_point[0])) - Decimal(str(draft_point[0]))
+            )
+            <= tolerance_mm
+            and abs(
+                Decimal(str(published_point[1])) - Decimal(str(draft_point[1]))
+            )
+            <= tolerance_mm
+            for published_point, draft_point in zip(
+                published_points, draft_points, strict=True
+            )
+        )
+    except (ArithmeticError, TypeError, ValueError):
+        return False
+
+
+def _formal_location_zone_geometry_blockers(
+    db: Session,
+    floor_code: str,
+    *,
+    draft_layout: Mapping | None = None,
+    published_layout: Mapping | None = None,
+) -> list[str]:
+    """Reject zone movement that would reinterpret saved percentage positions.
+
+    Formal ground locations store their rectangles relative to the published
+    zone.  Moving or resizing that zone without an explicit coordinate rebase
+    would therefore move every physical location even though no location save
+    occurred.  Keep that operation fail-closed until a dedicated, atomic rebase
+    flow is used.
+    """
+
+    normalized = floor_code.strip().upper()
+    floor = warehouse_floor_for_code(db, normalized)
+    if floor is None:
+        return []
+    draft = draft_layout or load_warehouse_twin_layout_draft(normalized)
+    mapped_area_codes = {
+        str(value or "").strip().upper()
+        for value in db.scalars(
+            select(WarehouseLocation.area_code)
+            .join(
+                Floor3LocationLayout,
+                Floor3LocationLayout.location_id == WarehouseLocation.id,
+            )
+            .where(
+                WarehouseLocation.warehouse_floor == floor.floor_number,
+                WarehouseLocation.storage_type == "ground",
+                WarehouseLocation.is_active.is_(True),
+            )
+            .distinct()
+        ).all()
+        if str(value or "").strip()
+    }
+    if not mapped_area_codes:
+        return []
+    if published_layout is None:
+        try:
+            published = load_published_warehouse_twin_floor_for_edit(normalized)
+        except WarehouseTwinLayoutEditNotFoundError:
+            return ["正式地图缺失，无法核对已有正式货位的绝对坐标"]
+    else:
+        published = published_layout
+    draft_features = {
+        str(item.get("id") or ""): item
+        for item in draft.get("features") or []
+        if item.get("feature_kind") == "zone" and item.get("id")
+    }
+    published_features = {
+        str(item.get("id") or ""): item
+        for item in published.get("features") or []
+        if item.get("feature_kind") == "zone" and item.get("id")
+    }
+    policies = list(
+        db.scalars(
+            select(WarehouseAreaStoragePolicy)
+            .join(WarehouseArea)
+            .where(
+                WarehouseArea.floor_id == floor.id,
+                WarehouseAreaStoragePolicy.status == "published",
+            )
+            .options(selectinload(WarehouseAreaStoragePolicy.area))
+        ).all()
+    )
+    blockers: list[str] = []
+    for policy in policies:
+        area_code = policy.area.area_code.strip().upper()
+        if area_code not in mapped_area_codes:
+            continue
+        published_feature = published_features.get(policy.map_feature_id)
+        draft_feature = draft_features.get(policy.map_feature_id)
+        if published_feature is None or draft_feature is None:
+            continue
+        if not _map_feature_points_match(published_feature, draft_feature):
+            blockers.append(
+                f"{area_code} 区已有正式货位，不能随区域边界一起移动或缩放；"
+                "请放弃该区域几何草稿，改为逐个调整货位"
+            )
+    return blockers
+
+
 def _formal_area_publish_blockers(
     db: Session,
     floor_code: str,
@@ -9960,7 +10084,11 @@ def _formal_area_publish_blockers(
             .options(selectinload(WarehouseArea.storage_policy))
         ).all()
     )
-    blockers: list[str] = []
+    blockers: list[str] = _formal_location_zone_geometry_blockers(
+        db,
+        normalized,
+        draft_layout=draft,
+    )
     policies_by_feature = {policy.map_feature_id: policy for policy in policies}
     areas_by_code = {area.area_code.upper(): area for area in all_areas}
     feature_area_code_counts: dict[str, int] = {}

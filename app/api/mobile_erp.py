@@ -2862,6 +2862,60 @@ def _mobile_layout_payload(layout: Floor3LocationLayout) -> dict:
     }
 
 
+def _mobile_short_location_label(
+    location: WarehouseLocation,
+    *,
+    canonical: Mapping,
+    area_code: str,
+) -> str:
+    """Return one concise but unique physical address for the phone map."""
+
+    compact_area = re.sub(r"^([A-Z]+)0+(\d+)$", r"\1\2", area_code.upper())
+    if location.ground_row_no and location.slot_no:
+        return f"{compact_area}·{int(location.ground_row_no)}排·{int(location.slot_no)}号位"
+    level_no = canonical.get("level_no")
+    slot_no = canonical.get("slot_no")
+    rack_name = str(canonical.get("rack_display_name") or "").strip()
+    if rack_name and level_no and slot_no:
+        return f"{rack_name}·{int(level_no)}层·{int(slot_no)}格"
+    employee_name = str(canonical.get("employee_location_name") or "").strip()
+    return employee_name or location.location_code
+
+
+def _mobile_area_display_bounds(
+    features: list[dict], *, area_code: str
+) -> dict[str, float] | None:
+    """Fit the phone canvas to one formal zone, not the entire warehouse floor."""
+
+    normalized_area = str(area_code or "").strip().upper()
+    zone = next(
+        (
+            feature
+            for feature in features
+            if str(feature.get("feature_kind") or "") == "zone"
+            and str(feature.get("erp_area_code") or "").strip().upper()
+            == normalized_area
+        ),
+        None,
+    )
+    points = zone.get("points") if isinstance(zone, dict) else None
+    if not isinstance(points, list) or len(points) < 3:
+        return None
+    try:
+        xs = [float(point[0]) for point in points]
+        ys = [float(point[1]) for point in points]
+    except (IndexError, TypeError, ValueError):
+        return None
+    if not xs or not ys or max(xs) <= min(xs) or max(ys) <= min(ys):
+        return None
+    return {
+        "min_x": min(xs),
+        "min_y": min(ys),
+        "max_x": max(xs),
+        "max_y": max(ys),
+    }
+
+
 def _mobile_lot_customer_id(lot: InventoryLot) -> int | None:
     if lot.finished_detail is not None:
         return lot.finished_detail.owner_customer_id
@@ -3251,8 +3305,14 @@ def mobile_warehouse_map_area(
     except (WarehouseTwinLayoutNotFoundError, ValueError):
         map_floor = None
     features: list[dict] = []
+    area_display_bounds: dict[str, float] | None = None
     if map_floor is not None:
-        for raw in map_floor.get("features") or []:
+        raw_features = list(map_floor.get("features") or [])
+        area_display_bounds = _mobile_area_display_bounds(
+            raw_features,
+            area_code=normalized_area,
+        )
+        for raw in raw_features:
             kind = str(raw.get("feature_kind") or "")
             bound_area = str(raw.get("erp_area_code") or "").strip().upper()
             if kind == "aisle" or (kind == "zone" and bound_area == normalized_area):
@@ -3285,6 +3345,11 @@ def mobile_warehouse_map_area(
                 "location_master_name": location.location_name,
                 "current_address_name": canonical["current_address_name"],
                 "employee_location_name": canonical["employee_location_name"],
+                "short_location_label": _mobile_short_location_label(
+                    location,
+                    canonical=canonical,
+                    area_code=normalized_area,
+                ),
                 "area_code": normalized_area,
                 "map_rack_id": canonical["map_rack_id"],
                 "rack_display_name": canonical["rack_display_name"],
@@ -3340,7 +3405,7 @@ def mobile_warehouse_map_area(
             if has_geometry
             else "未建立实测地图，只能查看文字区域和库位；系统不会生成假坐标或编号格子。"
         ),
-        "bounds_mm": map_floor.get("bounds_mm") if map_floor else None,
+        "bounds_mm": area_display_bounds,
         "features": features,
         "locations": location_payloads,
         "can_execute": has_permission(user, "warehouse.execute"),

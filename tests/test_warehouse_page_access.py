@@ -87,8 +87,8 @@ def test_warehouse_shell_uses_the_main_topbar_without_a_second_banner() -> None:
     assert 'class="warehouse-top-shortcuts"' in INDEX_HTML
     assert "1F 生产车间" in INDEX_HTML
     assert "3F 成品仓库" in INDEX_HTML
-    assert "打印货位编号" in INDEX_HTML
-    assert "/warehouse-ledger.html?tab=locations&amp;location_view=ledger&amp;label_print=1" in INDEX_HTML
+    assert "打印货位编号" not in INDEX_HTML
+    assert 'data-tab="location_labels">货架与货位标签' in WAREHOUSE_HTML
     assert 'href="/warehouse-ledger.html?tab=finished">库存台账</a>' in INDEX_HTML
     assert 'class="warehouse-shell-head"' not in INDEX_HTML
     assert "新增或编辑生产模具，请进入模具档案" not in INDEX_HTML

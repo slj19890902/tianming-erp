@@ -37,7 +37,7 @@ def test_factory_update_reports_current_release_version() -> None:
     )
 
     assert APP_VERSION == "v0.22.224"
-    assert APP_VERSION_NAME == "四楼扫描规划与客户成品区域"
+    assert APP_VERSION_NAME == "四楼仓库、货架标签与订单结构"
     assert APP_BUILD_DATE == "2026-09-01"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -51,10 +51,10 @@ def test_factory_update_reports_current_release_version() -> None:
     ]
     assert any("本次更新｜" in item and "4F实测扫描规划层" in item and "来源哈希" in item for item in current_release)
     assert any("本次更新｜" in item and "三个现场点" in item and "禁止镜像" in item for item in current_release)
-    assert any("本次更新｜" in item and "多选默认成品区域" in item and "稳定区域身份" in item for item in current_release)
-    assert any("本次更新｜" in item and "绝不静默回落一楼" in item and "原规则" in item for item in current_release)
-    assert any("本次更新｜" in item and "ja62v8x9z51" in item and "不预设任何客户" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.224" in item and "ja62v8x9z51" in item for item in current_release)
+    assert any("本次更新｜" in item and "多选默认成品区域" in item and "绝不静默回落一楼" in item for item in current_release)
+    assert any("本次更新｜" in item and "货架标签台" in item and "80×40毫米无外框标签" in item for item in current_release)
+    assert any("本次更新｜" in item and "ja62v8x9z51→jb63v8x9z52" in item and "不重编订单" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.224" in item and "jb63v8x9z52" in item for item in current_release)
     prior_release_223 = [item for item in APP_CHANGELOG if item.startswith("v0.22.223：")]
     assert any("本次更新｜" in item and "生产参数" in item and "四档模切" in item for item in prior_release_223)
     assert any("本次更新｜" in item and "生产月薪" in item and "司机工资" in item for item in prior_release_223)

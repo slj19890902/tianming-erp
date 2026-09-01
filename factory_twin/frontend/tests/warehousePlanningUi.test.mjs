@@ -64,13 +64,14 @@ test("map-first toolbar hides empty delayed dispatch and consolidates selective 
   assert.match(source, /type="checkbox" checked=\{selected\}/);
 });
 
-test("warehouse header exposes the formal location label printing entry", () => {
-  assert.match(source, /href="\/warehouse-ledger\.html\?tab=locations&amp;location_view=ledger&amp;label_print=1"/);
-  assert.match(source, />打印货位编号<\/a>/);
+test("warehouse header keeps label printing in the low-frequency ledger", () => {
+  assert.doesNotMatch(source, /label_print=1/);
+  assert.doesNotMatch(source, />打印货位编号<\/a>/);
+  assert.match(source, /href="\/warehouse-ledger\.html\?tab=finished"/);
 });
 
-test("warehouse header keeps both label and ledger links on the command row", () => {
-  assert.match(cssSource, /grid-template-columns:\s*minmax\(680px, 1fr\) auto auto auto/);
+test("warehouse header keeps the ledger link on the command row", () => {
+  assert.match(cssSource, /grid-template-columns:\s*minmax\(680px, 1fr\) auto auto/);
   assert.match(cssSource, /@media \(max-width: 1180px\)[\s\S]*grid-template-columns:\s*minmax\(470px, 1fr\) auto auto/);
 });
 

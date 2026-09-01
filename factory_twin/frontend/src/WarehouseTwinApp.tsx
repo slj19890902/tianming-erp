@@ -835,16 +835,6 @@ interface LegacyRackBindingPreview {
   }>;
 }
 
-interface RackLevelLabelPrintResponse {
-  id: number;
-  floor_code: string;
-  map_revision: string;
-  area_name: string;
-  rack_name: string;
-  level_count: number;
-  replayed: boolean;
-}
-
 interface OneStepAreaConfirmResponse extends LayoutDraftPublishResponse {
   area: FormalWarehouseAreaOption;
   message: string;
@@ -1652,7 +1642,9 @@ export function WarehouseTwinApp() {
   const [productionPanelOpen, setProductionPanelOpen] = useState(false);
   const [pendingAreaCode, setPendingAreaCode] = useState<string | null>(() => query.get("area_code")?.trim().toUpperCase() || null);
   const [pendingMapFeatureId, setPendingMapFeatureId] = useState<string | null>(() => query.get("map_feature_id")?.trim() || null);
+  const [pendingRackId, setPendingRackId] = useState<string | null>(() => query.get("rack_id")?.trim() || null);
   const [pendingAreaPolicyEdit, setPendingAreaPolicyEdit] = useState(query.get("edit") === "area_policy");
+  const [pendingRackEdit, setPendingRackEdit] = useState(query.get("edit") === "rack");
   const areaPolicyDeepLinkStartedRef = useRef(false);
   const [productionProjection, setProductionProjection] = useState<ProductionProjectionResponse | null>(null);
   const [productionTaskId, setProductionTaskId] = useState<number | null>(null);
@@ -1850,7 +1842,7 @@ export function WarehouseTwinApp() {
     replaceZoneGeometryDrafts({});
     setLayoutDraftControl(null);
     setPublishedFloorRevision("");
-    setMapMode((current) => current === "move" || (current === "planning" && pendingAreaPolicyEdit) ? current : "lookup");
+    setMapMode((current) => current === "move" || (current === "planning" && (pendingAreaPolicyEdit || pendingRackEdit)) ? current : "lookup");
     setSearchPanelOpen(true);
     setLocationEditMode(false);
     setAreaPolicyEditMode(false);
@@ -1971,6 +1963,17 @@ export function WarehouseTwinApp() {
     }
     setPendingAreaCode(null);
   }, [layout, pendingAreaCode]);
+
+  useEffect(() => {
+    if (!layout || layout.floor_code !== floorCode || !pendingRackId) return;
+    const target = layout.racks.find((rack) => rack.id === pendingRackId);
+    if (target) {
+      setSelected({ kind: "rack", id: target.id });
+      cameraFocusSequenceRef.current += 1;
+      setCameraFocusTarget({ entity: { kind: "rack", id: target.id }, token: cameraFocusSequenceRef.current, source: "search" });
+    }
+    setPendingRackId(null);
+  }, [layout, floorCode, pendingRackId]);
 
   const features = stableTwinFeatures(layout) as TwinFeature[];
   const standardPallet = useMemo(
@@ -4330,7 +4333,7 @@ export function WarehouseTwinApp() {
 
   useEffect(() => {
     if (
-      !pendingAreaPolicyEdit
+      (!pendingAreaPolicyEdit && !pendingRackEdit)
       || !canEditLocations
       || !layout
       || spatialEditBusy
@@ -4352,19 +4355,23 @@ export function WarehouseTwinApp() {
         setSearchPanelOpen(false);
         setLocationEditMode(true);
         setAreaPolicyEditMode(true);
-        setAdvancedAreaMaintenanceOpen(false);
+        setAdvancedAreaMaintenanceOpen(pendingRackEdit);
         setLocationPointEditAreaCode(null);
         setRackDrafts({});
         setZonePolicyDrafts({});
         replaceZoneGeometryDrafts({});
         setPendingAreaPolicyEdit(false);
-        setLocationEditMessage("已打开阻断区域设置；处理并发布后，请返回原页面重新检查。");
+        setLocationEditMessage(pendingRackEdit
+          ? "已打开实测地图货架编辑；修改名称、层数或格数后保存草稿，发布后标签与地图同步更新。"
+          : "已打开阻断区域设置；处理并发布后，请返回原页面重新检查。"
+        );
       } catch (reason) {
         if (!active) return;
         const message = (reason as Error).message;
         setStaleLayoutDraft(message.includes("当前草稿已过期"));
         setLocationEditMessage(`打开阻断区域设置失败：${message}`);
         setPendingAreaPolicyEdit(false);
+        setPendingRackEdit(false);
       } finally {
         areaPolicyDeepLinkStartedRef.current = false;
         if (active) setSpatialEditBusy(false);
@@ -4372,7 +4379,15 @@ export function WarehouseTwinApp() {
     };
     void openAreaPolicy();
     return () => { active = false; };
-  }, [pendingAreaPolicyEdit, canEditLocations, layout?.id, floorCode]);
+  }, [pendingAreaPolicyEdit, pendingRackEdit, canEditLocations, layout?.id, floorCode]);
+
+  useEffect(() => {
+    if (!pendingRackEdit || !locationEditMode || !selectedRack) return;
+    setAdvancedAreaMaintenanceOpen(true);
+    setAreaPolicyEditMode(true);
+    setPendingRackEdit(false);
+    setLocationEditMessage("已定位到实测地图货架；修改名称、层数或格数后保存草稿，发布后标签与地图同步更新。");
+  }, [pendingRackEdit, locationEditMode, selectedRack?.id]);
 
   const rememberServerDraft = (revision: string) => {
     setLegacyRackBindingPreview(null);
@@ -4566,39 +4581,6 @@ export function WarehouseTwinApp() {
       setLocationEditMessage(`预览并发布失败：${(reason as Error).message}`);
     } finally {
       setSpatialEditBusy(false);
-    }
-  };
-
-  const printPublishedRackLevelLabels = async (rack: RackDraft) => {
-    const popup = window.open("", "_blank");
-    if (!popup) {
-      setLocationEditMessage("浏览器阻止了标签窗口，请允许本站打开新窗口后重试。");
-      return;
-    }
-    popup.document.title = "正在准备货架层标签";
-    popup.document.body.textContent = "正在登记正式货架层标签，请稍候…";
-    try {
-      const result = await mutateJson<RackLevelLabelPrintResponse>(
-        "/api/warehouse/rack-level-labels/prints",
-        "POST",
-        {
-          floor_code: floorCode,
-          map_rack_id: rack.id,
-          expected_map_revision: planningPublishedRevision || layoutDraftControl?.published_revision || "",
-          template_version: "rack_level_80x40_v1",
-          source: "region_planning",
-          idempotency_key: operationKey("rack-level-label-print")
-        }
-      );
-      if (!result) {
-        popup.close();
-        return;
-      }
-      popup.location.replace(`/static/warehouse-rack-level-label.html?print_job_id=${encodeURIComponent(result.id)}`);
-      setLocationEditMessage(`已登记 ${result.area_name} · ${result.rack_name} 的 ${result.level_count} 张 80×40 层标签。`);
-    } catch (reason) {
-      popup.close();
-      setLocationEditMessage(`货架层标签登记失败：${(reason as Error).message}`);
     }
   };
 
@@ -5293,7 +5275,6 @@ export function WarehouseTwinApp() {
         <button type="button" className="planning" onClick={() => setLocationEditMessage("5F 小区域正在等待现场尺寸、用途和安全资料；当前未建立可作业地图。")}><b>5F</b><span>小区规划中</span></button>
       </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorCode === "4F" && !floor4CalibrationApplied ? `${floorTitle} · 扫描规划 / 待现场标定，尚未启用正式作业` : `${floorTitle} · 正式仓库作业层`}</p></div>
       <div className="twin-command-status"><span className="live">{mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : layoutMapToolsOpen ? "区域规划 · 调整地图" : advancedAreaMaintenanceOpen ? "区域规划 · 整理货位/货架" : "区域规划 · 核对区域" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
-      <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=locations&amp;location_view=ledger&amp;label_print=1" target="_top">打印货位编号</a>
       <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
     </header>
 
@@ -5644,7 +5625,7 @@ export function WarehouseTwinApp() {
             <label><span>最小通道 mm</span><input type="number" min="0" value={selectedRackEditDraft.min_aisle_width_mm} onChange={(event) => updateRackDraft(selectedRackEditDraft.id, { min_aisle_width_mm: Number(event.target.value) })} /></label>
           </div>
           <div className="twin-rack-level-editor"><b>逐层设置（修改净高会自动合计总高度）</b>{selectedRackEditDraft.level_clear_heights_mm.map((height, index) => <div className="twin-rack-level-row" key={`${selectedRackEditDraft.id}-level-${index}`}><label><span>第 {index + 1} 层净高 mm</span><input type="number" min="1" value={height} onChange={(event) => changeRackLevelHeight(selectedRackEditDraft, index, Number(event.target.value))} /></label><label><span>第 {index + 1} 层格数</span><input type="number" min="0" max="50" value={selectedRackEditDraft.level_cell_counts[index]} onChange={(event) => changeRackLevelCellCount(selectedRackEditDraft, index, Number(event.target.value))} /></label></div>)}<small>格数填 0 表示本层不生成正式货位；发布后，成品和半成品货架会同步为稳定层格，其他用途仍走原有专项台账。</small></div>
-          <div className="twin-layout-editor-actions"><button type="button" className="primary" disabled={spatialEditBusy} onClick={saveSelectedRack}>保存到草稿</button><button type="button" disabled={spatialEditBusy} onClick={() => printPublishedRackLevelLabels(selectedRackEditDraft)}>打印正式层标签</button><button type="button" disabled={spatialEditBusy} onClick={() => setRackDrafts((current) => { const next = { ...current }; delete next[selectedRackEditDraft.id]; return next; })}>取消本次修改</button><button type="button" className="danger" disabled={spatialEditBusy || selectedRackEditDraft.is_locked} onClick={deleteSelectedRack}>从草稿删除</button></div>
+          <div className="twin-layout-editor-actions"><button type="button" className="primary" disabled={spatialEditBusy} onClick={saveSelectedRack}>保存到草稿</button><button type="button" disabled={spatialEditBusy} onClick={() => setRackDrafts((current) => { const next = { ...current }; delete next[selectedRackEditDraft.id]; return next; })}>取消本次修改</button><button type="button" className="danger" disabled={spatialEditBusy || selectedRackEditDraft.is_locked} onClick={deleteSelectedRack}>从草稿删除</button></div>
           <p>保存后仍是管理员草稿；校验并发布前，员工地图、库存数量、栈板和正式库位均不改变。</p>
         </section>}
         {delayedDispatchOpen && dashboard?.delayed_dispatch_relocation && <section className="twin-location-card twin-delayed-dispatch-board">

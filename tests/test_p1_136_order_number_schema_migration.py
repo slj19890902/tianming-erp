@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PARENT_REVISION = "ja62v8x9z51"
 TARGET_REVISION = "jb63v8x9z52"
-CURRENT_HEAD = "jg66v8x9z55"
+CURRENT_HEAD = "jh67v8x9z56"
 EXPECTED_ORDER_INDEXES = {
     "ix_sales_orders_customer_po": ("customer_po",),
     "ix_sales_orders_customer_po_group": ("customer_id", "customer_po"),

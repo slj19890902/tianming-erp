@@ -197,6 +197,7 @@ globalThis.localStorage = {{setItem() {{}}, removeItem() {{}}}};
     uiMode:"standard", syncDesktopListPageSize:()=>{{}},
     loadProductBoxTypeRules: async () => true,
     loadEffectiveUiLayout: async () => true,
+    syncDesktopListPageSize: () => {{}},
     restoreFinanceManualMutationAttemptsForCurrentUser: () => {{}},
     redirectAfterLogin: () => false,
     initialPageFromLocation: () => "dashboard",

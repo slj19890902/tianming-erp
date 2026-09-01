@@ -10124,46 +10124,59 @@ def calibrate_twin_floor4_freight_elevator(
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
-    draft_snapshot = snapshot_warehouse_twin_layout_draft()
-    result = None
-    try:
-        result = calibrate_floor4_freight_elevator(
-            floor_code,
-            expected_revision=payload.expected_revision,
-            operation_key=payload.operation_key,
-            source_points=payload.source_points,
-        )
-        _twin_layout_asset_log(
-            db,
-            request=request,
-            user=user,
-            action="TWIN_LAYOUT_FLOOR4_CALIBRATE",
-            entity_type="twin_layout_calibration",
-            entity_id="4F:LIFT-002",
-            description="管理员完成四楼三点货梯标定",
-            details={
-                "floor_code": floor_code.strip().upper(),
-                "revision": result.floor_revision,
-                "applied": result.applied,
-                **result.value,
-            },
-        )
-        db.commit()
-    except WarehouseTwinLayoutEditError as error:
-        db.rollback()
-        if result is not None and result.applied:
-            restore_warehouse_twin_layout_draft(draft_snapshot)
-        _handle_twin_layout_edit_error(error)
-    except Exception:
-        db.rollback()
-        if result is not None and result.applied:
-            restore_warehouse_twin_layout_draft(draft_snapshot)
-        raise
-    return {
-        "item": result.value,
-        "revision": result.floor_revision,
-        "applied": result.applied,
-    }
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        draft_snapshot = snapshot_warehouse_twin_layout_draft()
+        result = None
+        try:
+            result = calibrate_floor4_freight_elevator(
+                floor_code,
+                expected_revision=payload.expected_revision,
+                operation_key=payload.operation_key,
+                source_points=payload.source_points,
+            )
+            if result.applied:
+                recalibrated = result.value.get("recalibrated") is True
+                _twin_layout_asset_log(
+                    db,
+                    request=request,
+                    user=user,
+                    action=(
+                        "TWIN_LAYOUT_FLOOR4_RECALIBRATE"
+                        if recalibrated
+                        else "TWIN_LAYOUT_FLOOR4_CALIBRATE"
+                    ),
+                    entity_type="twin_layout_calibration",
+                    entity_id="4F:LIFT-002",
+                    description=(
+                        "管理员重新完成四楼三点货梯标定"
+                        if recalibrated
+                        else "管理员完成四楼三点货梯标定"
+                    ),
+                    details={
+                        "floor_code": floor_code.strip().upper(),
+                        "revision": result.floor_revision,
+                        "applied": result.applied,
+                        **result.value,
+                    },
+                )
+            db.commit()
+        except WarehouseTwinLayoutEditError as error:
+            db.rollback()
+            if result is not None and result.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            _handle_twin_layout_edit_error(error)
+        except Exception:
+            db.rollback()
+            if result is not None and result.applied:
+                restore_warehouse_twin_layout_draft(draft_snapshot)
+            raise
+        return {
+            "item": result.value,
+            "revision": result.floor_revision,
+            "applied": result.applied,
+        }
+
+
 def _map_feature_points_match(
     published_feature: Mapping,
     draft_feature: Mapping,

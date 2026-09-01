@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -11,9 +12,13 @@ from sqlalchemy import func, select
 from app.models.audit import OperationLog
 from app.models.stocktake import StocktakeItem, StocktakeOrder, StocktakeReview
 from app.models.warehouse_inventory import (
+    Floor3LocationLayout,
     FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryMovement,
+    WarehouseArea,
+    WarehouseAreaStoragePolicy,
+    WarehouseFloor,
     WarehouseLocation,
 )
 from app.services.warehouse_inventory import _lot_location_transfer_hash
@@ -95,6 +100,123 @@ def test_mobile_short_location_label_keeps_row_and_slot_unique() -> None:
     assert rack_one == "R01·1层·1格"
     assert rack_two == "R02·1层·1格"
     assert rack_one != rack_two
+
+
+def test_mobile_stocktake_only_lists_current_published_floor4_locations(
+    stocktake_api, monkeypatch
+) -> None:
+    application, factory, ids = stocktake_api
+    revision = "p1-134-mobile-4f-map-v1"
+    feature_id = "ZONE-4F-PUBLISHED"
+    monkeypatch.setattr(
+        "app.services.location_candidates.load_warehouse_twin_published_floor_identity",
+        lambda floor_number: {
+            "revision": revision,
+            "feature_ids": frozenset({feature_id}),
+            "erp_area_codes": frozenset({"XZ"}),
+            "zones_by_id": {feature_id: "XZ"},
+            "zone_ids_by_area": {"XZ": (feature_id,)},
+        }
+        if int(floor_number) == 4
+        else None,
+    )
+    with factory() as db:
+        floor = WarehouseFloor(
+            floor_code="4F",
+            floor_name="四楼成品仓",
+            floor_number=4,
+            construction_status="enabled",
+            planning_reference_pallet_capacity=0,
+        )
+        db.add(floor)
+        db.flush()
+        area = WarehouseArea(
+            floor_id=floor.id,
+            area_code="XZ",
+            area_name="新振成品区",
+            planned_location_count=2,
+            planned_pallet_capacity=0,
+            construction_status="enabled",
+            capacity_review_status="pending",
+            capacity_eligible=False,
+        )
+        db.add(area)
+        db.flush()
+        area.storage_policy = WarehouseAreaStoragePolicy(
+            map_feature_id=feature_id,
+            allowed_inventory_types_json=json.dumps(["finished"]),
+            storage_layout="rack",
+            status="published",
+            draft_map_revision=revision,
+            published_map_revision=revision,
+            version=1,
+            updated_by=ids["admin"],
+        )
+        published = WarehouseLocation(
+            location_code="4F-XZ-R01-01",
+            location_name="4F 新振货架 1层1格",
+            warehouse_type="finished",
+            is_active=True,
+            warehouse_floor=4,
+            area_code="XZ",
+            storage_type="rack",
+            source_version="CURRENT_MAP",
+            address_kind="rack_slot",
+            address_area_id=area.id,
+            rack_code="A",
+            level_no=1,
+            slot_no=1,
+            address_version=1,
+            placement_status="placed",
+        )
+        unpublished = WarehouseLocation(
+            location_code="4F-XZ-R01-02",
+            location_name="4F 尚未发布货架 1层2格",
+            warehouse_type="finished",
+            is_active=True,
+            warehouse_floor=4,
+            area_code="XZ",
+            storage_type="rack",
+            source_version="CURRENT_MAP",
+            address_kind="rack_slot",
+            address_area_id=area.id,
+            rack_code="A",
+            level_no=1,
+            slot_no=2,
+            address_version=1,
+            placement_status="placed",
+        )
+        db.add_all([published, unpublished])
+        db.flush()
+        db.add(
+            Floor3LocationLayout(
+                location_id=published.id,
+                left_pct=10,
+                top_pct=10,
+                width_pct=8,
+                height_pct=8,
+                source_type="manual",
+                version=1,
+            )
+        )
+        db.commit()
+        published_id = int(published.id)
+        unpublished_id = int(unpublished.id)
+
+    with TestClient(application) as client:
+        _login(client, "n035-workshop")
+        listing = client.get("/api/warehouse/stocktake/locations")
+        assert listing.status_code == 200, listing.text
+        listed_ids = {int(item["id"]) for item in listing.json()["items"]}
+        assert published_id in listed_ids
+        assert unpublished_id not in listed_ids
+
+        detail = client.get(
+            f"/api/warehouse/stocktake/locations/{unpublished_id}"
+        )
+        assert detail.status_code == 409, detail.text
+        assert detail.json()["detail"]["code"] == "STOCKTAKE_LOCATION_NOT_OPERATIONAL"
+        assert "地图" in detail.json()["detail"]["message"]
 
 
 def _inventory_state(factory) -> list[tuple[object, ...]]:

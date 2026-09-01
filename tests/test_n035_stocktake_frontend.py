@@ -75,7 +75,10 @@ def test_mobile_stocktake_renders_all_lots_and_requires_every_count() -> None:
     assert "Number.isInteger(value)" in MOBILE
     assert "请先填完全部批次的实盘数量" in MOBILE
     assert "非负整数" in MOBILE
-    assert "window.confirm(\"确认提交本库位盘点？" in MOBILE
+    submit = _function_line(MOBILE, "submitStocktake")
+    assert "window.confirm" not in submit
+    assert "state.submitting=true" in submit
+    assert "resetLockedInputs" in submit
     assert "resetLockedInputs" in MOBILE
 
 

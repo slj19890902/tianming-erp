@@ -142,6 +142,8 @@ def test_n029_production_requests_disable_duplicates_and_reuse_idempotency_keys(
     start = INDEX.index("async loadProduction()")
     end = INDEX.index("async loadIncoming()", start)
     logic = INDEX[start:end]
+    assert 'if (this.productionTab === "pending") {' in logic
+    assert "this.loadProductionPage(this.pages.productionPending || 1)" in logic
     assert 'if (this.productionTab === "placement") return this.loadProductionPlacement();' in logic
     assert 'this.loadProductionHistory(),' in logic
     assert 'this.loadProductionPlacement(),' in logic

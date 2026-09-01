@@ -2224,11 +2224,19 @@ def _production_direct_finished_target(
     return _production_direct_staging_location(db), None
 
 
-def receipt_auto_finished_location_projection(db: Session) -> dict[str, object]:
+def receipt_auto_finished_location_projection(
+    db: Session,
+    *,
+    customer_id: int | None = None,
+) -> dict[str, object]:
     """Return the authoritative employee-safe real receipt destination."""
 
     try:
-        target = _receipt_auto_finished_ground_target(db, claim=False)
+        target = _receipt_auto_finished_ground_target(
+            db,
+            claim=False,
+            customer_id=customer_id,
+        )
     except ProductionWorkflowError as error:
         return {
             "ready": False,

@@ -1,3 +1,5 @@
+import { zoneLayoutFrame } from "./warehouseInventory.mjs";
+
 function normalizedId(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : null;
@@ -24,6 +26,25 @@ export function moveLocationBounds(features, location) {
     feature?.feature_kind === "zone"
     && String(feature?.erp_area_code || "") === areaCode
   );
+  const frame = zoneLayoutFrame(zone?.points);
+  if (frame) {
+    const leftRatio = Number(position.left_pct) / 100;
+    const rightRatio = (Number(position.left_pct) + Number(position.width_pct)) / 100;
+    const topRatio = Number(position.top_pct) / 100;
+    const bottomRatio = (Number(position.top_pct) + Number(position.height_pct)) / 100;
+    const corners = [
+      [leftRatio, topRatio],
+      [rightRatio, topRatio],
+      [rightRatio, bottomRatio],
+      [leftRatio, bottomRatio]
+    ].map(([horizontal, vertical]) => [
+      frame.anchor[0] + frame.right[0] * horizontal + frame.down[0] * vertical,
+      frame.anchor[1] + frame.right[1] * horizontal + frame.down[1] * vertical
+    ]);
+    const xs = corners.map((point) => point[0]);
+    const ys = corners.map((point) => point[1]);
+    return { left: Math.min(...xs), right: Math.max(...xs), bottom: Math.min(...ys), top: Math.max(...ys) };
+  }
   const bounds = zoneBounds(zone?.points);
   if (!bounds) return null;
   const width = Math.max(1, bounds.maxX - bounds.minX);

@@ -62,6 +62,9 @@ def test_stock_location_only_selects_locally_then_customer_groups_are_posted() -
     assert "全部入库：选好库位，再点顶部“批量确认入库”" not in INDEX
     assert "合格品全部入库" in INDEX
     assert "`批量确认入库（${productionSelectedCount()}）`" not in INDEX
+    assert "确认入库（' + productionSelectedCount() + '）" in INDEX
+    assert '@click="batchConfirmProduction"' in INDEX
+    assert 'productionBusy || !productionSelectedCount()' in INDEX
     assert "待送成品归位" in INDEX
     assert '@change="onProductionLocationSelection(row)"' in INDEX
     assert "确认入库位置" not in INDEX

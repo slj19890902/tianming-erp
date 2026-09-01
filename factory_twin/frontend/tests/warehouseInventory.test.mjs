@@ -27,7 +27,8 @@ import {
   warehouseSearchFloorSummaries,
   warehouseSearchLocationSummaries,
   warehouseSearchProductKey,
-  singleLocationPallet
+  singleLocationPallet,
+  zoneLayoutFrame
 } from "../src/warehouseInventory.mjs";
 
 import {
@@ -658,6 +659,121 @@ test("location planning keeps published zone geometry when an administrator draf
   });
 });
 
+test("mapped locations keep the same area-relative position when a calibrated floor rotates", () => {
+  const zone = {id: "zone-4f", feature_kind: "zone", feature_code: "ZONE-4F", erp_area_code: "XZ", points: [[0, 0], [0, 10000], [-5000, 10000], [-5000, 0]]};
+  const location = {
+    location_id: 632, location_code: "4F-XZ-L001", location_name: "新振成品区第一位", floor_code: "4F", area_code: "XZ",
+    source_version: "CURRENT_MAP", map_feature_id: "zone-4f",
+    position_status: "mapped", occupancy_status: "empty", pallet: null, loose_items: [],
+    map_position: {left_pct: 0, top_pct: 0, width_pct: 50, height_pct: 20, version: 2, z_index: 0}
+  };
+
+  assert.ok(zoneLayoutFrame(zone.points));
+  const [pallet] = buildMappedLocationPallets([zone], [location], "4F", STANDARD_PALLET, "layout-4f");
+  assert.equal(pallet.x_mm, -4500);
+  assert.equal(pallet.y_mm, 2500);
+  assert.equal(pallet.rotation_deg, 90);
+  assert.deepEqual(locationLayoutGeometry(zone, location, -4500, 2500), {
+    location_id: 632,
+    expected_version: 2,
+    left_pct: 0,
+    top_pct: 0,
+    width_pct: 50,
+    height_pct: 20,
+    z_index: 0
+  });
+});
+
+test("legacy FIN-LOOSE measured quadrilateral keeps its axis-aligned location projection", () => {
+  const zone = {
+    id: "c399826c-0049-41bc-a687-04993152608f",
+    feature_kind: "zone",
+    feature_code: "ZONE-3F-FG-001",
+    erp_area_code: "FIN-LOOSE-001",
+    points: [[3873, -3515], [3862, -3799], [8969, -3826], [8969, -3482]]
+  };
+  const location = {
+    location_id: 269,
+    location_code: "FIN-LOOSE-001",
+    location_name: "送货剩余零散库存暂存区",
+    floor_code: "3F",
+    area_code: "FIN-LOOSE-001",
+    source_version: "CURRENT_MAP",
+    map_feature_id: zone.id,
+    position_status: "mapped",
+    occupancy_status: "empty",
+    pallets: [],
+    loose_items: [],
+    map_position: {
+      left_pct: 44.75,
+      top_pct: 16,
+      width_pct: 4.25,
+      height_pct: 68,
+      version: 3,
+      z_index: 0,
+      layout_kind: "logical_anchor"
+    }
+  };
+
+  assert.equal(zoneLayoutFrame(zone.points), null);
+  const [mapped] = buildMappedLocationPallets([zone], [location], "3F", STANDARD_PALLET, "layout-3f");
+  assert.equal(mapped.x_mm, 6255.90625);
+  assert.equal(mapped.y_mm, -3654);
+});
+
+test("legacy FG-008 measured slots keep their axis-aligned location projections", () => {
+  const zone = {
+    id: "d89b19bb-a899-4949-98ef-fdc11e7c8c30",
+    feature_kind: "zone",
+    feature_code: "ZONE-3F-FG-008",
+    erp_area_code: "FG-008",
+    points: [[-23650, -15032], [-20758, -14993], [-20798, -20500], [-23650, -20520]]
+  };
+  const positions = [
+    [626, "3F-FG-008-L001", 0, 0],
+    [627, "3F-FG-008-L002", 34.578, 0],
+    [628, "3F-FG-008-L003", 0, 21.712],
+    [629, "3F-FG-008-L004", 34.578, 21.712],
+    [630, "3F-FG-008-L005", 0, 43.423]
+  ];
+  const locations = positions.map(([locationId, locationCode, leftPct, topPct]) => ({
+    location_id: locationId,
+    location_code: locationCode,
+    location_name: locationCode,
+    floor_code: "3F",
+    area_code: "FG-008",
+    source_version: "CURRENT_MAP",
+    map_feature_id: zone.id,
+    position_status: "mapped",
+    occupancy_status: "empty",
+    pallets: [],
+    loose_items: [],
+    map_position: {
+      left_pct: leftPct,
+      top_pct: topPct,
+      width_pct: 34.578,
+      height_pct: 21.712,
+      version: 4,
+      z_index: 0,
+      layout_kind: "physical_pallet"
+    }
+  }));
+
+  assert.equal(zoneLayoutFrame(zone.points), null);
+  const mapped = buildMappedLocationPallets([zone], locations, "3F", STANDARD_PALLET, "layout-3f");
+  assert.deepEqual(mapped.map((item) => [Number(item.x_mm.toFixed(4)), Number(item.y_mm.toFixed(4))]), [
+    [-23150.0021, -15593.0111],
+    [-22150.0064, -15593.0111],
+    [-23150.0021, -16793.0334],
+    [-22150.0064, -16793.0334],
+    [-23150.0021, -17993.0003]
+  ]);
+});
+
+test("zone local frames reject a right-angled quadrilateral whose opposite corner does not close", () => {
+  assert.equal(zoneLayoutFrame([[0, 0], [10000, 0], [9000, -5000], [0, -5000]]), null);
+});
+
 test("mapped pallet rotation follows each measured slot orientation", () => {
   const zone = {id: "zone-fin", feature_kind: "zone", feature_code: "ZONE-1F-FIN", erp_area_code: "FIN", points: [[0, 0], [2400, 0], [2400, 5000], [0, 5000]]};
   const base = {location_code: "FIN-L001", location_name: "成品位", floor_code: "1F", area_code: "FIN", source_version: "TWIN_V1", map_feature_id: "zone-fin", position_status: "mapped", occupancy_status: "occupied", pallet: {pallet_code: "PLT-FIN", items: [{lot_id: 1, quantity: 1}]}, loose_items: []};
@@ -1181,6 +1297,14 @@ test("same-floor drag resolves one published empty location without changing geo
   assert.equal(resolveMoveDropTarget(features, [target], "3F", 2000, 3250).target?.location_id, 8);
   assert.match(resolveMoveDropTarget(features, [target], "3F", 9000, 1000).error, /空货位|三级选择/);
   assert.deepEqual(target, before);
+});
+
+test("same-floor drag keeps rotated calibrated area targets selectable", () => {
+  const features = [{ feature_kind: "zone", erp_area_code: "XZ", points: [[0, 0], [0, 10000], [-5000, 10000], [-5000, 0]] }];
+  const target = { location_id: 632, floor_code: "4F", area_code: "XZ", occupancy_status: "empty", position_status: "mapped", map_position: { version: 2, left_pct: 10, top_pct: 20, width_pct: 20, height_pct: 30 } };
+
+  assert.equal(resolveMoveDropTarget(features, [target], "4F", -3250, 2000).target?.location_id, 632);
+  assert.match(resolveMoveDropTarget(features, [target], "4F", -4900, 500).error, /空货位|三级选择/);
 });
 
 test("move drafts replace one source, reject target collision, and build one confirmed batch", () => {

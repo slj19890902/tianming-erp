@@ -773,7 +773,15 @@ interface TwinFloorResponse {
   standard_pallet: StandardPalletContract;
   metadata?: { calibration?: { status?: string; applied?: boolean } };
   calibration?: { status?: string; applied?: boolean };
+  alignment_status?: string;
+  alignment_applied?: boolean;
 }
+
+const isFloor4Aligned = (layout: Pick<TwinFloorResponse, "metadata" | "calibration" | "alignment_status" | "alignment_applied">) => {
+  const calibration = layout.metadata?.calibration || layout.calibration;
+  return (calibration?.status === "aligned" && calibration?.applied === true)
+    || (layout.alignment_status === "aligned" && layout.alignment_applied === true);
+};
 
 interface LayoutDraftControl {
   has_draft: boolean;
@@ -925,9 +933,10 @@ async function mutateJson<T>(path: string, method: "POST" | "PUT" | "PATCH" | "D
 
 function hydrateLayout(raw: TwinFloorResponse): Layout {
   const operationalFeatures = filterOperationalFeatures(raw.floor_code, raw.bounds_mm, raw.features || []);
+  const floor4Aligned = raw.floor_code.toUpperCase() === "4F" && isFloor4Aligned(raw);
   return {
     id: raw.layout_id,
-    name: raw.name,
+    name: floor4Aligned ? "四楼实测成品仓库（已与3F货梯对齐）" : raw.name,
     floor_code: raw.floor_code,
     source_name: raw.source_name,
     source_sha256: raw.revision || raw.source_sha256 || "",
@@ -942,7 +951,11 @@ function hydrateLayout(raw: TwinFloorResponse): Layout {
     pallets: raw.pallets || [],
     features: operationalFeatures,
     violations: [],
-    rule_defaults: {}
+    rule_defaults: {},
+    metadata: raw.metadata,
+    calibration: raw.calibration,
+    alignment_status: raw.alignment_status,
+    alignment_applied: raw.alignment_applied
   };
 }
 
@@ -1884,8 +1897,7 @@ export function WarehouseTwinApp() {
         setPlanningPublishedLayout(hydrated);
         setLayoutStandardPallet(normalizeStandardPalletContract(raw.standard_pallet));
         setAssets(raw.assets || []);
-        const calibration = raw.metadata?.calibration || raw.calibration;
-        setFloor4CalibrationApplied(calibration?.status === "aligned" && calibration?.applied === true);
+        setFloor4CalibrationApplied(isFloor4Aligned(raw));
         setPublishedFloorRevision(raw.revision);
       })
       .catch((reason: Error) => active && setError(reason.message))
@@ -4224,8 +4236,7 @@ export function WarehouseTwinApp() {
     setLayout(hydrateLayout(raw));
     setLayoutStandardPallet(normalizeStandardPalletContract(raw.standard_pallet));
     setAssets(raw.assets || []);
-    const calibration = raw.metadata?.calibration || raw.calibration;
-    setFloor4CalibrationApplied(calibration?.status === "aligned" && calibration?.applied === true);
+    setFloor4CalibrationApplied(isFloor4Aligned(raw));
   };
 
   const refreshPublishedTwinFloor = async () => {
@@ -5023,20 +5034,6 @@ export function WarehouseTwinApp() {
       setLocationEditMessage("所选现有区域与地图编号不一致，请重新选择；系统不会按名称猜测绑定。");
       return;
     }
-    const usageLabel = ({
-      finished: "成品",
-      semi_finished: "半成品",
-      raw_material: "原材料",
-      mold: "模具",
-      print_plate: "印刷版",
-      temporary_turnover: "临时周转"
-    } as Record<InventoryUsage, string>)[simpleAreaUsage];
-    const layoutLabel = simpleAreaLayout === "rack" ? "货架区" : "栈板区";
-    if (!window.confirm(
-      `确认启用 ${formalAreaCodeDraft.trim().toUpperCase()} ${formalAreaNameDraft.trim() || employeeAreaName(selectedAreaFeature, { floorCode })}？\n\n` +
-      `用途：${usageLabel}\n存储方式：${layoutLabel}\n最大栈板数：${capacity}\n\n` +
-      "系统会自动保存、校验并启用该区域；不会移动库存、栈板或产品。"
-    )) return;
     setSpatialEditBusy(true);
     setLocationEditMessage("正在确认并启用区域…");
     try {
@@ -5273,14 +5270,16 @@ export function WarehouseTwinApp() {
   };
 
   const beginFloor4Calibration = () => {
-    if (floorCode !== "4F" || !locationEditMode || spatialEditBusy || floor4CalibrationApplied) return;
+    if (floorCode !== "4F" || !locationEditMode || spatialEditBusy) return;
     setViewMode("2d");
+    setLayers((current) => ({ ...current, structures: true }));
     setLayoutMapToolsOpen(false);
     setLayoutDrawPoints([]);
+    replaceZoneGeometryDrafts({});
     setFloor4CalibrationPoints([]);
     setFloor4CalibrationOperationKey(operationKey("floor4-calibration"));
     setFloor4CalibrationMode(true);
-    setLocationEditMessage("货梯标定 0/3：请点击 A · 货梯第一角。");
+    setLocationEditMessage("货梯标定 0/3：请点击 A · 货梯第一角；三点将同时校正位置和朝向。");
   };
 
   const cancelFloor4Calibration = () => {
@@ -5311,7 +5310,7 @@ export function WarehouseTwinApp() {
       setFloor4CalibrationMode(false);
       setFloor4CalibrationPoints([]);
       setLocationEditMessage(
-        `货梯标定完成；最大误差 ${response.item.calibration.max_residual_mm.toFixed(1)} mm，已保存到 4F 草稿。`
+        `货梯位置与朝向标定完成；最大误差 ${response.item.calibration.max_residual_mm.toFixed(1)} mm，已保存到 4F 草稿。`
       );
     } catch (reason) {
       setLocationEditMessage(`货梯标定失败：${(reason as Error).message}。三点已保留，可重试或取消。`);
@@ -5449,7 +5448,7 @@ export function WarehouseTwinApp() {
         <button type="button" className={floorCode === "3F" ? "active" : ""} onClick={() => switchWarehouseFloor("3F")}><b>3F</b><span>成品仓库</span></button>
         <button type="button" className={floorCode === "4F" ? "active" : ""} onClick={() => switchWarehouseFloor("4F")}><b>4F</b><span>成品仓库</span></button>
         <button type="button" className="planning" onClick={() => setLocationEditMessage("5F 小区域正在等待现场尺寸、用途和安全资料；当前未建立可作业地图。")}><b>5F</b><span>小区规划中</span></button>
-      </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorCode === "4F" && !floor4CalibrationApplied ? `${floorTitle} · 扫描规划 / 待现场标定，尚未启用正式作业` : `${floorTitle} · 正式仓库作业层`}</p></div>
+      </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorCode === "4F" ? floor4CalibrationMode ? `${floorTitle} · 正在重新校正货梯位置与朝向` : floor4CalibrationApplied ? `${floorTitle} · 已与 3F 货梯对齐` : `${floorTitle} · 扫描规划 / 待现场标定，尚未启用正式作业` : `${floorTitle} · 正式仓库作业层`}</p></div>
       <div className="twin-command-status"><span className="live">{mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : layoutMapToolsOpen ? "区域规划 · 调整地图" : advancedAreaMaintenanceOpen ? "区域规划 · 整理货位/货架" : "区域规划 · 核对区域" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
       <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
     </header>
@@ -5475,12 +5474,12 @@ export function WarehouseTwinApp() {
           <button
             type="button"
             className={floor4CalibrationMode ? "active" : ""}
-            disabled={spatialEditBusy || floor4CalibrationApplied || Boolean(locationPointEditAreaCode)}
-            title={floor4CalibrationApplied ? "4F 已完成货梯标定" : "按 A 第一角、C 对角、B 邻角的顺序点选"}
+            disabled={spatialEditBusy || Boolean(locationPointEditAreaCode)}
+            title={floor4CalibrationApplied && !floor4CalibrationMode ? "重新按 A 第一角、C 对角、B 邻角校正货梯位置和朝向" : "按 A 第一角、C 对角、B 邻角的顺序点选"}
             onClick={floor4CalibrationMode && floor4CalibrationPoints.length === 3
               ? () => void submitFloor4Calibration(floor4CalibrationPoints)
               : beginFloor4Calibration}
-          >{floor4CalibrationApplied ? "货梯已标定" : floor4CalibrationMode ? floor4CalibrationPoints.length === 3 ? "重试标定" : `标定货梯 ${floor4CalibrationPoints.length}/3` : "标定货梯"}</button>
+          >{floor4CalibrationMode ? floor4CalibrationPoints.length === 3 ? "重试标定" : `标定货梯 ${floor4CalibrationPoints.length}/3` : floor4CalibrationApplied ? "重新标定货梯/朝向" : "标定货梯/朝向"}</button>
           {floor4CalibrationMode && <button type="button" disabled={spatialEditBusy} onClick={cancelFloor4Calibration}>取消</button>}
         </>}
         {canEditLocations && staleLayoutDraft && <button type="button" className="warning" disabled={spatialEditBusy} onClick={rebuildStaleLayoutDraft}>放弃旧草稿并重新规划</button>}
@@ -5568,7 +5567,7 @@ export function WarehouseTwinApp() {
 
       <div className={`twin-stage ${focusedRack ? "rack-focused" : ""}`}>
         <div className="twin-map-pane">
-          <div className="twin-stage-heading"><div><small>{floorCode} · 实测布局</small><b>{layout?.name || floorTitle}</b></div><span>{locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust" ? "地图调整：只拖区域或通道" : locationEditMode ? "货位摆放：拖货位；点空白选区域" : viewMode === "2d" ? "按住左键平移 · 滚轮缩放" : "左键平移 · 右键旋转 · 滚轮缩放"}</span></div>
+          <div className="twin-stage-heading"><div><small>{floorCode} · 实测布局</small><b>{floor4CalibrationMode ? "四楼实测成品仓库（重新校正中）" : layout?.name || floorTitle}</b></div><span>{floor4CalibrationMode ? "按 A / C / B 点选 · 地图已锁定" : locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust" ? "地图调整：只拖区域或通道" : locationEditMode ? "货位摆放：拖货位；点空白选区域" : viewMode === "2d" ? "按住左键平移 · 滚轮缩放" : "左键平移 · 右键旋转 · 滚轮缩放"}</span></div>
           {loading && <div className="twin-loading">正在加载实测布局…</div>}
           {error && <div className="twin-error"><b>地图加载失败</b><span>{error}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
           {standardPalletError && <div className="twin-error"><b>栈板尺寸读取失败</b><span>{standardPalletError}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
@@ -5606,7 +5605,7 @@ export function WarehouseTwinApp() {
           palletEditingOnly={locationEditMode || warehouseMoveModeActive}
           rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}
           featureEditingEnabled={locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"}
-          mapPanLocked={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"}
+          mapPanLocked={floor4CalibrationMode || (locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust")}
           allowPalletSelection={viewMode === "25d" || locationEditMode || canEditLocations || canExecuteWarehouse || canStocktake}
           draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : layoutMapToolsOpen ? [] : locationPointEditPalletIds}
           readOnly={!locationEditMode && !warehouseMoveModeActive}
@@ -6053,6 +6052,7 @@ export function WarehouseTwinApp() {
               <header><div><b>用途与容量</b></div>{selectedAreaHasPublishedBinding && <span>已启用，可更新</span>}</header>
               {!selectedAreaFeature.formal_area_id && formalAreaOptions.length > 0 && <label className="twin-zone-simple-existing"><span>已有区域（可选）</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">按地图编号新建</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.area_code} · {employeeAreaName(area, { floorCode: area.floor_code })}</option>)}</select></label>}
               <div className="twin-zone-primary-fields">
+                <label className="twin-zone-name-field"><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 4F 新振成品区" /></label>
                 <label><span>用途</span><select value={simpleAreaUsage} onChange={(event) => setSimpleAreaUsage(event.target.value as InventoryUsage)}><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="raw_material">原材料</option><option value="mold">模具</option><option value="print_plate">印刷版</option><option value="temporary_turnover">临时周转</option></select></label>
                 <label><span>形式</span><select value={simpleAreaLayout} onChange={(event) => setSimpleAreaLayout(event.target.value as Exclude<StorageLayout, "mixed">)}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
                 <label><span>最大栈板数</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /></label>

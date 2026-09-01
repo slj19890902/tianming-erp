@@ -36,6 +36,21 @@ ALLOWED_STORAGE_LAYOUTS = {"rack", "pallet_ground", "mixed", "functional"}
 ALLOWED_ACCESS_SIDES = {"north", "south", "east", "west", "both"}
 FLOOR4_CALIBRATION_MAX_RESIDUAL_MM = 50.0
 FLOOR4_CALIBRATION_RMSE_MM = 30.0
+FLOOR4_CANONICAL_FREIGHT_ELEVATOR_ID = "LIFT-002-4F-CANONICAL"
+FLOOR4_SPATIAL_BOUNDS_POLYGON_KEY = "spatial_bounds_polygon_mm"
+FLOOR4_STALE_CALIBRATION_NAME_MARKERS = (
+    "（待现场三点标定）",
+    "(待现场三点标定)",
+)
+FLOOR4_STALE_CALIBRATION_WARNING_MARKERS = (
+    "待现场三点标定",
+    "完成现场三点标定前不得作为正式位置或库存地图",
+    "本资产未生成四楼货梯几何",
+    "未生成货梯",
+)
+FLOOR4_STALE_EMPTY_WAREHOUSE_WARNING_MARKERS = (
+    "本资产未生成区域、货架、栈板、库存或正式库位",
+)
 _LAYOUT_EDIT_LOCK = RLock()
 WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK = _LAYOUT_EDIT_LOCK
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -308,19 +323,6 @@ def begin_warehouse_twin_one_step_publish(
             raise WarehouseTwinLayoutEditConflictError(
                 "正式地图已更新，请刷新后重新确认"
             )
-        published_feature = next(
-            (
-                item
-                for item in published_floor.get("features") or []
-                if str(item.get("id") or "") == feature_id
-            ),
-            None,
-        )
-        if not isinstance(published_feature, dict) or published_feature.get(
-            "feature_kind"
-        ) != "zone":
-            raise WarehouseTwinLayoutEditNotFoundError("区域不存在或已被删除")
-
         draft_snapshot = snapshot_warehouse_twin_layout_draft(
             draft_path=draft_target
         )
@@ -342,8 +344,17 @@ def begin_warehouse_twin_one_step_publish(
                 "地图或区域已被其他操作更新，请刷新后重新确认"
             )
 
+        published_feature = next(
+            (
+                item
+                for item in published_floor.get("features") or []
+                if str(item.get("id") or "") == feature_id
+            ),
+            None,
+        )
+        draft_feature: dict[str, Any] | None = None
         if active_draft is not None:
-            draft_feature = next(
+            candidate_feature = next(
                 (
                     item
                     for item in effective_floor.get("features") or []
@@ -351,19 +362,93 @@ def begin_warehouse_twin_one_step_publish(
                 ),
                 None,
             )
-            if not isinstance(draft_feature, dict) or draft_feature.get(
+            if not isinstance(candidate_feature, dict) or candidate_feature.get(
                 "feature_kind"
             ) != "zone":
                 raise WarehouseTwinLayoutEditConflictError(
                     "当前区域已在高级维护草稿中删除或改变类型；请刷新地图后重新确认"
                 )
+            draft_feature = candidate_feature
+
+        if published_feature is not None and (
+            not isinstance(published_feature, dict)
+            or published_feature.get("feature_kind") != "zone"
+        ):
+            raise WarehouseTwinLayoutEditConflictError(
+                "正式地图中的同名对象不是区域；请刷新地图后重新确认"
+            )
+        if published_feature is None and draft_feature is None:
+            raise WarehouseTwinLayoutEditNotFoundError("区域不存在或已被删除")
+
+        one_step_floor_revision = published_revision
+        one_step_feature = published_feature
+        if active_draft is not None and published_feature is None:
+            # A newly drawn zone exists only in the administrator's advanced
+            # draft.  Build a disposable draft from the published map and
+            # inject only that selected zone.  Publishing the full advanced
+            # draft here would also publish unrelated aisles, racks or other
+            # floor edits without an explicit review.
+            isolated = _new_draft_document(published_source)
+            isolated_floor = isolated["floors"].get(normalized)
+            if not isinstance(isolated_floor, dict) or draft_feature is None:
+                raise WarehouseTwinLayoutEditError(f"布局草稿缺少 {normalized}")
+            isolated_features = list(isolated_floor.get("features") or [])
+            if any(
+                str(item.get("id") or "") == feature_id
+                for item in isolated_features
+            ):
+                raise WarehouseTwinLayoutEditConflictError(
+                    "正式地图已出现同一对象，请刷新后重新确认"
+                )
+            isolated_feature = deepcopy(draft_feature)
+            isolated_features.append(isolated_feature)
+            isolated_floor["features"] = isolated_features
+            isolated_floor["erp_area_codes"] = sorted(
+                {
+                    str(item.get("erp_area_code") or "").strip().upper()
+                    for item in isolated_features
+                    if str(item.get("erp_area_code") or "").strip()
+                }
+            )
+
+            receipts = list(isolated_floor.get("layout_edit_receipts") or [])
+            receipt_keys = {
+                (
+                    str(receipt.get("operation_key") or ""),
+                    str(receipt.get("action") or ""),
+                )
+                for receipt in receipts
+            }
+            for receipt in effective_floor.get("layout_edit_receipts") or []:
+                result = receipt.get("result") or {}
+                if str(result.get("id") or "") != feature_id:
+                    continue
+                key = (
+                    str(receipt.get("operation_key") or ""),
+                    str(receipt.get("action") or ""),
+                )
+                if key in receipt_keys:
+                    continue
+                receipt_keys.add(key)
+                receipts.append(deepcopy(receipt))
+            isolated_floor["layout_edit_receipts"] = receipts[-100:]
+            isolated_floor["layout_edited_at"] = _utc_iso()
+            isolated_floor["revision"] = _floor_revision(isolated_floor)
+            isolated["generated_at"] = isolated_floor["layout_edited_at"]
+            _mark_draft_changed(isolated, normalized)
+            _write_document(draft_target, isolated)
+            one_step_floor_revision = str(isolated_floor["revision"])
+            one_step_feature = isolated_feature
+        elif active_draft is not None:
             draft_target.unlink(missing_ok=True)
+
+        assert isinstance(one_step_feature, dict)
 
         return LayoutOneStepDraftContext(
             draft_snapshot=draft_snapshot,
             had_active_draft=active_draft is not None,
-            published_floor_revision=published_revision,
-            published_feature_version=int(published_feature.get("version") or 1),
+            published_floor_revision=one_step_floor_revision,
+            published_feature_version=int(one_step_feature.get("version") or 1),
         )
 
 
@@ -431,6 +516,13 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
         )
         advanced_features[advanced_index] = rebased_feature
         advanced_floor["features"] = advanced_features
+        advanced_floor["erp_area_codes"] = sorted(
+            {
+                str(item.get("erp_area_code") or "").strip().upper()
+                for item in advanced_features
+                if str(item.get("erp_area_code") or "").strip()
+            }
+        )
 
         receipts: list[dict[str, Any]] = []
         receipt_keys: set[tuple[str, str]] = set()
@@ -847,7 +939,7 @@ def _transform_floor4_bounds(floor: dict[str, Any], *, transform: dict[str, Any]
     if not isinstance(bounds, dict):
         return
     try:
-        corners = [
+        bounds_corners = [
             (float(bounds["min_x"]), float(bounds["min_y"])),
             (float(bounds["min_x"]), float(bounds["max_y"])),
             (float(bounds["max_x"]), float(bounds["min_y"])),
@@ -855,12 +947,93 @@ def _transform_floor4_bounds(floor: dict[str, Any], *, transform: dict[str, Any]
         ]
     except (KeyError, TypeError, ValueError) as error:
         raise WarehouseTwinLayoutEditError("4F 地图边界格式无效") from error
-    transformed = [transform["apply"](point) for point in corners]
+
+    metadata = floor.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        floor["metadata"] = metadata
+    stored_polygon = metadata.get(FLOOR4_SPATIAL_BOUNDS_POLYGON_KEY)
+    if stored_polygon is None:
+        polygon = bounds_corners
+    else:
+        if not isinstance(stored_polygon, list) or len(stored_polygon) != 4:
+            raise WarehouseTwinLayoutEditConflictError("4F 持久边界几何无效，拒绝再次标定")
+        polygon = [
+            _calibration_point(point, label=f"4F 持久边界第{index + 1}点")
+            for index, point in enumerate(stored_polygon)
+        ]
+        polygon_bounds = {
+            "min_x": round(min(point[0] for point in polygon), 3),
+            "min_y": round(min(point[1] for point in polygon), 3),
+            "max_x": round(max(point[0] for point in polygon), 3),
+            "max_y": round(max(point[1] for point in polygon), 3),
+        }
+        current_bounds = {
+            "min_x": round(bounds_corners[0][0], 3),
+            "min_y": round(bounds_corners[0][1], 3),
+            "max_x": round(bounds_corners[3][0], 3),
+            "max_y": round(bounds_corners[3][1], 3),
+        }
+        if polygon_bounds != current_bounds:
+            raise WarehouseTwinLayoutEditConflictError(
+                "4F 持久边界与当前地图边界不一致，拒绝再次标定"
+            )
+
+    transformed = [transform["apply"](point) for point in polygon]
+    rounded_polygon = [_rounded_point(point) for point in transformed]
+    metadata[FLOOR4_SPATIAL_BOUNDS_POLYGON_KEY] = rounded_polygon
     floor["bounds_mm"] = {
-        "min_x": round(min(point[0] for point in transformed), 3),
-        "min_y": round(min(point[1] for point in transformed), 3),
-        "max_x": round(max(point[0] for point in transformed), 3),
-        "max_y": round(max(point[1] for point in transformed), 3),
+        "min_x": min(point[0] for point in rounded_polygon),
+        "min_y": min(point[1] for point in rounded_polygon),
+        "max_x": max(point[0] for point in rounded_polygon),
+        "max_y": max(point[1] for point in rounded_polygon),
+    }
+
+
+def _clear_floor4_stale_calibration_text(floor: dict[str, Any]) -> dict[str, Any]:
+    name = floor.get("name")
+    if isinstance(name, str):
+        for marker in FLOOR4_STALE_CALIBRATION_NAME_MARKERS:
+            name = name.replace(marker, "")
+        floor["name"] = name.strip()
+
+    warnings = floor.get("warnings")
+    if warnings is None:
+        return {"floor_name": floor.get("name"), "removed_warnings": []}
+    if not isinstance(warnings, list) or not all(
+        isinstance(item, str) for item in warnings
+    ):
+        raise WarehouseTwinLayoutEditError("4F warnings 列表格式无效")
+    has_spatial_facts = bool(
+        any(
+            isinstance(item, dict) and item.get("feature_kind") == "zone"
+            for item in (floor.get("features") or [])
+        )
+        or any(isinstance(item, dict) for item in (floor.get("racks") or []))
+        or any(isinstance(item, dict) for item in (floor.get("pallets") or []))
+        or any(
+            str(value or "").strip()
+            for value in (floor.get("erp_area_codes") or [])
+        )
+    )
+    removed_warnings: list[str] = []
+    for warning in warnings:
+        calibration_warning = any(
+            marker in warning
+            for marker in FLOOR4_STALE_CALIBRATION_WARNING_MARKERS
+        )
+        empty_warehouse_warning = has_spatial_facts and any(
+            marker in warning
+            for marker in FLOOR4_STALE_EMPTY_WAREHOUSE_WARNING_MARKERS
+        )
+        if calibration_warning or empty_warehouse_warning:
+            removed_warnings.append(warning)
+    floor["warnings"] = [
+        warning for warning in warnings if warning not in removed_warnings
+    ]
+    return {
+        "floor_name": floor.get("name"),
+        "removed_warnings": removed_warnings,
     }
 
 
@@ -926,6 +1099,9 @@ def calibrate_floor4_freight_elevator(
     normalized_key = str(operation_key or "").strip()
     if len(normalized_key) < 8 or len(normalized_key) > 120:
         raise WarehouseTwinLayoutEditError("布局操作键长度必须为 8 至 120 个字符")
+    normalized_source = _three_calibration_points(
+        list(source_points), label="4F 现场源点"
+    )
     published_source = _published_layout_paths(published_path).source
     draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
     action = "floor4.freight_elevator.calibrate"
@@ -943,8 +1119,16 @@ def calibrate_floor4_freight_elevator(
             raise WarehouseTwinLayoutEditNotFoundError("数字孪生平面缺少 4F")
         receipt = _find_receipt(floor, normalized_key, action)
         if receipt is not None:
+            receipt_result = receipt.get("result") or {}
+            receipt_calibration = receipt_result.get("calibration") or {}
+            if receipt_calibration.get("source_points") != [
+                _rounded_point(point) for point in normalized_source
+            ]:
+                raise WarehouseTwinLayoutEditConflictError(
+                    "该操作键已用于不同的三点标定请求"
+                )
             return LayoutMutation(
-                value=dict(receipt.get("result") or {}),
+                value=dict(receipt_result),
                 floor_revision=str(floor.get("revision") or ""),
                 applied=False,
             )
@@ -958,20 +1142,60 @@ def calibrate_floor4_freight_elevator(
             if isinstance(existing_metadata, dict)
             else {}
         )
-        if existing_calibration.get("applied") is True:
-            raise WarehouseTwinLayoutEditConflictError("4F 已完成标定，不能重复变换地图")
-        if any(
-            isinstance(item, dict) and item.get("feature_code") == "LIFT-002"
-            for item in floor.get("features") or []
+        recalibrating = existing_calibration.get("applied") is True
+        features = floor.get("features")
+        if not isinstance(features, list) or not all(
+            isinstance(item, dict) for item in features
         ):
-            raise WarehouseTwinLayoutEditConflictError("4F 已存在货梯 LIFT-002，拒绝重复物化")
+            raise WarehouseTwinLayoutEditError("4F features 几何列表无效")
+        materialized_lifts = [
+            item for item in features if item.get("feature_code") == "LIFT-002"
+        ]
+        previous_lift_version = 0
+        if recalibrating:
+            if len(materialized_lifts) != 1:
+                raise WarehouseTwinLayoutEditConflictError(
+                    "4F 再次标定前必须且只能存在一个物化货梯 LIFT-002"
+                )
+            materialized_lift = materialized_lifts[0]
+            if (
+                materialized_lift.get("id")
+                != FLOOR4_CANONICAL_FREIGHT_ELEVATOR_ID
+                or materialized_lift.get("is_locked") is not True
+            ):
+                raise WarehouseTwinLayoutEditConflictError(
+                    "4F 现有货梯不是受控物化的 LIFT-002，拒绝再次标定"
+                )
+            canonical_state = floor.get("canonical_authority")
+            if (
+                not isinstance(canonical_state, dict)
+                or canonical_state.get("feature_code") != "LIFT-002"
+                or canonical_state.get("materialized_on_4f") is not True
+                or canonical_state.get("status") != "applied"
+            ):
+                raise WarehouseTwinLayoutEditConflictError(
+                    "4F 货梯权威物化状态不完整，拒绝再次标定"
+                )
+            try:
+                previous_lift_version = int(materialized_lift.get("version") or 1)
+            except (TypeError, ValueError) as error:
+                raise WarehouseTwinLayoutEditConflictError(
+                    "4F 物化货梯版本无效，拒绝再次标定"
+                ) from error
+        elif materialized_lifts:
+            raise WarehouseTwinLayoutEditConflictError(
+                "4F 未完成标定但已存在货梯 LIFT-002，拒绝重复物化"
+            )
 
         metadata = floor.get("metadata") if isinstance(floor.get("metadata"), dict) else {}
+        # The imported 4F scan predates the metadata container.  Bind the
+        # normalized container before bounds calibration so the persistent
+        # oriented polygon written there is not replaced later in this mutation.
+        floor["metadata"] = metadata
+        previous_calibration = deepcopy(existing_calibration) if recalibrating else None
+        previous_floor_revision = str(floor.get("revision") or "")
         legacy_calibration = (
             floor.get("calibration") if isinstance(floor.get("calibration"), dict) else {}
-        )
-        normalized_source = _three_calibration_points(
-            list(source_points), label="4F 现场源点"
         )
         normalized_target = _three_calibration_points(
             _canonical_freight_elevator_target_points(authority), label="4F 标准目标点"
@@ -981,6 +1205,12 @@ def calibrate_floor4_freight_elevator(
         protected = {
             code: deepcopy(document["floors"].get(code)) for code in ("1F", "3F")
         }
+        if recalibrating:
+            floor["features"] = [
+                item
+                for item in features
+                if item.get("feature_code") != "LIFT-002"
+            ]
         for collection_name in (
             "structures",
             "features",
@@ -1001,17 +1231,44 @@ def calibrate_floor4_freight_elevator(
         _transform_floor4_bounds(floor, transform=transform)
 
         lift = deepcopy(authority)
-        lift["id"] = "LIFT-002-4F-CANONICAL"
+        lift["id"] = FLOOR4_CANONICAL_FREIGHT_ELEVATOR_ID
         lift["layout_id"] = floor.get("layout_id")
         lift["is_locked"] = True
         lift["status"] = "confirmed"
-        lift["version"] = 1
+        lift["version"] = previous_lift_version + 1
         floor.setdefault("features", []).append(lift)
         now = _utc_iso()
+        audit = {
+            "event": "recalibration" if recalibrating else "calibration",
+            "operation_key": normalized_key,
+            "applied_at": now,
+            "source_floor_code": "4F",
+            "source_floor_revision": previous_floor_revision,
+            "authority_floor_code": "3F",
+            "authority_feature_code": "LIFT-002",
+            "authority_feature_id": authority.get("id"),
+            "authority_floor_revision": (published.get("floors") or {})
+            .get("3F", {})
+            .get("revision"),
+        }
+        if recalibrating:
+            previous_audit = (
+                previous_calibration.get("audit")
+                if isinstance(previous_calibration, dict)
+                and isinstance(previous_calibration.get("audit"), dict)
+                else {}
+            )
+            audit.update(
+                {
+                    "previous_operation_key": previous_audit.get("operation_key"),
+                    "previous_floor_revision": previous_floor_revision,
+                }
+            )
         calibration_result = {
             "status": "aligned",
             "applied": True,
             "method": "three_point_rigid_2d",
+            "source_coordinate_basis": "current_floor4_geometry",
             "scale": 1.0,
             "mirror": False,
             "source_points": [_rounded_point(point) for point in normalized_source],
@@ -1025,18 +1282,25 @@ def calibrate_floor4_freight_elevator(
                 "max_residual": FLOOR4_CALIBRATION_MAX_RESIDUAL_MM,
                 "rmse": FLOOR4_CALIBRATION_RMSE_MM,
             },
-            "audit": {
-                "operation_key": normalized_key,
-                "applied_at": now,
-                "source_floor_code": "4F",
-                "authority_floor_code": "3F",
-                "authority_feature_code": "LIFT-002",
-                "authority_feature_id": authority.get("id"),
-                "authority_floor_revision": (published.get("floors") or {})
-                .get("3F", {})
-                .get("revision"),
-            },
+            "audit": audit,
         }
+        if recalibrating:
+            recalibration_history = metadata.get("recalibration_history") or []
+            if not isinstance(recalibration_history, list) or not all(
+                isinstance(item, dict) for item in recalibration_history
+            ):
+                raise WarehouseTwinLayoutEditError("4F 再次标定审计历史无效")
+            recalibration_history = list(recalibration_history)
+            recalibration_history.append(
+                {
+                    "event": "recalibration",
+                    "operation_key": normalized_key,
+                    "applied_at": now,
+                    "previous_floor_revision": previous_floor_revision,
+                    "previous_calibration": previous_calibration,
+                }
+            )
+            metadata["recalibration_history"] = recalibration_history[-20:]
         metadata["calibration"] = calibration_result
         floor["metadata"] = metadata
         floor["calibration"] = {
@@ -1061,12 +1325,16 @@ def calibrate_floor4_freight_elevator(
         floor["canonical_authority"] = canonical_authority
         floor["alignment_status"] = "aligned"
         floor["alignment_applied"] = True
+        stale_text_cleanup = _clear_floor4_stale_calibration_text(floor)
         if any(document["floors"].get(code) != protected[code] for code in ("1F", "3F")):
             raise WarehouseTwinLayoutEditError("标定越过 4F 边界，已拒绝保存")
 
         result = {
             "calibration": deepcopy(calibration_result),
             "freight_elevator": deepcopy(lift),
+            "recalibrated": recalibrating,
+            "inventory_changed": False,
+            "stale_calibration_text_cleanup": stale_text_cleanup,
         }
         _remember_receipt(
             floor,

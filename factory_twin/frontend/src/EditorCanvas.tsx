@@ -111,8 +111,10 @@ function usesRealEastCompass(layout: Layout) {
   if (["1F", "3F"].includes(floorCode)) return true;
   const calibration = layout.metadata?.calibration || layout.calibration;
   return floorCode === "4F"
-    && calibration?.status === "aligned"
-    && calibration?.applied === true;
+    && (
+      (calibration?.status === "aligned" && calibration?.applied === true)
+      || (layout.alignment_status === "aligned" && layout.alignment_applied === true)
+    );
 }
 
 function clearHighlightGroup(group: THREE.Group) {
@@ -713,6 +715,13 @@ export function EditorCanvas({
     }
 
     for (const feature of layout.features) {
+      if (
+        calibrationMode
+        && layout.floor_code.toUpperCase() === "4F"
+        && feature.feature_kind === "structure"
+        && feature.subtype === "freight_elevator"
+        && feature.feature_code === "LIFT-002"
+      ) continue;
       const visible = feature.feature_kind === "zone" ? layers.zones : feature.feature_kind === "aisle" ? layers.aisles : feature.feature_kind === "structure" ? layers.customStructures : layers.noGo;
       if (feature.feature_kind === "structure" && feature.subtype === "dxf_hidden") continue;
       if (!visible || feature.points.length < 2) continue;
@@ -1526,9 +1535,13 @@ export function EditorCanvas({
   }, [highlightFeatureIds, highlightedPalletIds]);
 
   const realEastCompass = usesRealEastCompass(layout);
+  const floor4SharedCompass = layout.floor_code.toUpperCase() === "4F" && realEastCompass;
+  const floor4CalibratingCompass = layout.floor_code.toUpperCase() === "4F" && calibrationMode;
+  const compassCode = floor4CalibratingCompass ? "3F" : floor4SharedCompass ? "3F" : realEastCompass ? "E" : "N";
+  const compassLabel = floor4CalibratingCompass ? "对齐3F" : floor4SharedCompass ? "与3F同向" : realEastCompass ? "现实东向" : "图纸北向";
   return <div className={`editor-canvas ${visualTheme === "warehouse" ? "warehouse-theme" : ""} ${effectiveDrawMode || measureMode ? "drawing" : ""}`} ref={containerRef}>
     <div className="canvas-mount" ref={canvasMountRef} />
-    <div className="map-compass" aria-label={realEastCompass ? "现实东向" : "图纸北向"}><span ref={northArrowRef}>↑</span><b>{realEastCompass ? "E" : "N"}</b><small>{realEastCompass ? "现实东向" : "图纸北向"}</small></div>
+    <div className="map-compass" aria-label={compassLabel}><span ref={northArrowRef}>↑</span><b>{compassCode}</b><small>{compassLabel}</small></div>
     {referenceLayout && referenceOverlay?.enabled && layout.floor_code.toUpperCase()==="1F" && <div className="reference-overlay-badge">{referenceOverlay.shared_coordinates ? "3F 左半区柱墙 · 同坐标复核" : "3F 左半区柱墙参照 · 草稿"}</div>}
     <div className="map-scale"><span ref={scaleBarRef} /><b ref={scaleLabelRef}>—</b></div>
     <small className="map-coordinate" ref={coordinateRef}>X — · Y — mm</small>

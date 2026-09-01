@@ -261,4 +261,6 @@ export interface Layout extends LayoutSummary {
     status?: string;
     applied?: boolean;
   };
+  alignment_status?: string;
+  alignment_applied?: boolean;
 }

@@ -1289,6 +1289,7 @@ body.warehouse-twin-page {
 .twin-zone-policy-fields,
 .twin-rack-primary-fields,
 .twin-mold-rack-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 6px; }
+.twin-zone-primary-fields .twin-zone-name-field { min-width: 150px; }
 .twin-zone-policy-fields label { min-width: 0; display: grid; gap: 3px; color: #45606b; font-size: 9px; }
 .twin-field-span-2 { grid-column: span 2; }
 .twin-rack-level-editor { padding: 7px; display: grid; gap: 6px; border: 1px solid #d4e2e0; background: #fff; }

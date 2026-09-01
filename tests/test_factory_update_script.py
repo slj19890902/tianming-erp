@@ -36,9 +36,9 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.225"
-    assert APP_VERSION_NAME == "四楼仓库、区域归档、衬板周转与送货修订"
-    assert APP_BUILD_DATE == "2026-09-01"
+    assert APP_VERSION == "v0.22.226"
+    assert APP_VERSION_NAME == "4F货梯重新标定与现场盘点一致性"
+    assert APP_BUILD_DATE == "2026-09-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
     assert metadata["external_acceptance_required"] is True
@@ -49,14 +49,21 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "4F实测扫描规划层" in item and "客户成品区域优先级" in item for item in current_release)
-    assert any("本次更新｜" in item and "半张A4" in item and "真实容量门禁" in item for item in current_release)
-    assert any("本次更新｜" in item and "顶部唯一分页" in item and "默认收起" in item for item in current_release)
-    assert any("本次更新｜" in item and "实际签收数量" in item and "原送货数量" in item for item in current_release)
-    assert any("本次更新｜" in item and "受控修订" in item and "ja62v8x9z51→jb63v8x9z52→jc64v8x9z53→jf65v8x9z54→jg66v8x9z55" in item for item in current_release)
-    assert any("本次更新｜" in item and "逻辑归档" in item for item in current_release)
-    assert any("本次更新｜" in item and "F34" in item and "F12" in item and "整单" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.225" in item and "jg66v8x9z55" in item for item in current_release)
+    assert any("本次更新｜" in item and "四楼正式接入" in item and "不会预造现场位置" in item for item in current_release)
+    assert any("本次更新｜" in item and "同一处填写区域名称" in item and "不夹带其他高级草稿" in item for item in current_release)
+    assert any("本次更新｜" in item and "重新校正货梯位置" in item and "与3F同向" in item for item in current_release)
+    assert any("本次更新｜" in item and "新振" in item and "同一正式楼层" in item for item in current_release)
+    assert any("本次更新｜" in item and "jh67v8x9z56" in item and "jg66v8x9z55" in item and "不预设客户" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.226" in item and "jh67v8x9z56" in item for item in current_release)
+    prior_release_225 = [item for item in APP_CHANGELOG if item.startswith("v0.22.225：")]
+    assert any("本次更新｜" in item and "4F实测扫描规划层" in item and "客户成品区域优先级" in item for item in prior_release_225)
+    assert any("本次更新｜" in item and "半张A4" in item and "真实容量门禁" in item for item in prior_release_225)
+    assert any("本次更新｜" in item and "顶部唯一分页" in item and "默认收起" in item for item in prior_release_225)
+    assert any("本次更新｜" in item and "实际签收数量" in item and "原送货数量" in item for item in prior_release_225)
+    assert any("本次更新｜" in item and "受控修订" in item and "ja62v8x9z51→jb63v8x9z52→jc64v8x9z53→jf65v8x9z54→jg66v8x9z55" in item for item in prior_release_225)
+    assert any("本次更新｜" in item and "逻辑归档" in item for item in prior_release_225)
+    assert any("本次更新｜" in item and "F34" in item and "F12" in item and "整单" in item for item in prior_release_225)
+    assert any("如何验证｜" in item and "v0.22.225" in item and "jg66v8x9z55" in item for item in prior_release_225)
     prior_release_224 = [item for item in APP_CHANGELOG if item.startswith("v0.22.224：")]
     assert any("本次更新｜" in item and "正式区域坐标" in item and "D1货位" in item for item in prior_release_224)
     assert any("本次更新｜" in item and "点击具体货位" in item and "区域空白处" in item for item in prior_release_224)

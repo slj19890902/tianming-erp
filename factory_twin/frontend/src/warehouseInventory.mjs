@@ -39,9 +39,55 @@ function zoneBounds(points) {
   };
 }
 
+export function zoneLayoutFrame(points) {
+  if (!Array.isArray(points) || points.length !== 4) return null;
+  const relativeTolerance = 1e-4;
+  const normalized = points.map((point) => [Number(point?.[0]), Number(point?.[1])]);
+  if (normalized.some((point) => !point.every(Number.isFinite))) return null;
+  const area2 = normalized.reduce((sum, point, index) => {
+    const next = normalized[(index + 1) % normalized.length];
+    return sum + point[0] * next[1] - point[1] * next[0];
+  }, 0);
+  if (Math.abs(area2) < 1) return null;
+  const anchor = area2 > 0 ? normalized[3] : normalized[0];
+  const rightPoint = area2 > 0 ? normalized[2] : normalized[1];
+  const downPoint = area2 > 0 ? normalized[0] : normalized[3];
+  const oppositePoint = area2 > 0 ? normalized[1] : normalized[2];
+  const right = [rightPoint[0] - anchor[0], rightPoint[1] - anchor[1]];
+  const down = [downPoint[0] - anchor[0], downPoint[1] - anchor[1]];
+  const width = Math.hypot(...right);
+  const height = Math.hypot(...down);
+  if (width < 1 || height < 1) return null;
+  const orthogonality = Math.abs((right[0] * down[0] + right[1] * down[1]) / (width * height));
+  if (orthogonality > relativeTolerance) return null;
+  const expectedOpposite = [anchor[0] + right[0] + down[0], anchor[1] + right[1] + down[1]];
+  const closureError = Math.hypot(
+    oppositePoint[0] - expectedOpposite[0],
+    oppositePoint[1] - expectedOpposite[1]
+  ) / Math.max(width, height);
+  if (closureError > relativeTolerance) return null;
+  return {
+    anchor,
+    right,
+    down,
+    width,
+    height,
+    rotation_deg: Math.atan2(right[1], right[0]) * 180 / Math.PI
+  };
+}
+
 function mappedLocationPoint(zone, location) {
   const position = location.map_position;
   if (!position) return null;
+  const frame = zoneLayoutFrame(zone.points);
+  if (frame) {
+    const horizontal = (Number(position.left_pct) + Number(position.width_pct) / 2) / 100;
+    const vertical = (Number(position.top_pct) + Number(position.height_pct) / 2) / 100;
+    return [
+      frame.anchor[0] + frame.right[0] * horizontal + frame.down[0] * vertical,
+      frame.anchor[1] + frame.right[1] * horizontal + frame.down[1] * vertical
+    ];
+  }
   const bounds = zoneBounds(zone.points);
   const width = Math.max(1, bounds.maxX - bounds.minX);
   const height = Math.max(1, bounds.maxY - bounds.minY);
@@ -69,13 +115,22 @@ export function mergePublishedFeatureGeometry(activeFeatures = [], publishedFeat
 export function locationLayoutGeometry(zone, location, xMm, yMm) {
   const position = location.map_position;
   if (!zone?.points?.length || !position || !location.location_id || !Number(position.version)) return null;
-  const bounds = zoneBounds(zone.points);
-  const width = Math.max(1, bounds.maxX - bounds.minX);
-  const height = Math.max(1, bounds.maxY - bounds.minY);
   const widthPct = Number(position.width_pct);
   const heightPct = Number(position.height_pct);
-  const left = ((Number(xMm) - bounds.minX) / width) * 100 - widthPct / 2;
-  const top = ((bounds.maxY - Number(yMm)) / height) * 100 - heightPct / 2;
+  const frame = zoneLayoutFrame(zone.points);
+  let left;
+  let top;
+  if (frame) {
+    const delta = [Number(xMm) - frame.anchor[0], Number(yMm) - frame.anchor[1]];
+    left = ((delta[0] * frame.right[0] + delta[1] * frame.right[1]) / (frame.width * frame.width)) * 100 - widthPct / 2;
+    top = ((delta[0] * frame.down[0] + delta[1] * frame.down[1]) / (frame.height * frame.height)) * 100 - heightPct / 2;
+  } else {
+    const bounds = zoneBounds(zone.points);
+    const width = Math.max(1, bounds.maxX - bounds.minX);
+    const height = Math.max(1, bounds.maxY - bounds.minY);
+    left = ((Number(xMm) - bounds.minX) / width) * 100 - widthPct / 2;
+    top = ((bounds.maxY - Number(yMm)) / height) * 100 - heightPct / 2;
+  }
   const rounded = (value) => Number(value.toFixed(4));
   return {
     location_id: Number(location.location_id),
@@ -375,6 +430,7 @@ export function buildMappedLocationPallets(
     const positions = ordered.map((location) => mappedLocationPoint(zone, location));
     const xs = zone.points.map((point) => Number(point[0]));
     const ys = zone.points.map((point) => Number(point[1]));
+    const frame = zoneLayoutFrame(zone.points);
     ordered.forEach((location, index) => {
       const readableLocationName = employeeLocationName(location);
       const occupied = location.occupancy_status === "occupied";
@@ -387,11 +443,12 @@ export function buildMappedLocationPallets(
       const actualPalletCode = locationPallets.length === 1 ? locationPallets[0].pallet_code : null;
       const palletSummary = locationPallets.length > 1 ? `${locationPallets.length} 块系统栈板` : null;
       const position = location.map_position;
-      const mappedWidthMm = position ? (Number(position.width_pct) / 100) * (Math.max(...xs) - Math.min(...xs)) : 0;
-      const mappedDepthMm = position ? (Number(position.height_pct) / 100) * (Math.max(...ys) - Math.min(...ys)) : 0;
-      const rotation = mappedWidthMm > 0 && mappedDepthMm > 0 && Math.abs(mappedWidthMm - mappedDepthMm) > 50
+      const mappedWidthMm = position ? (Number(position.width_pct) / 100) * (frame?.width || (Math.max(...xs) - Math.min(...xs))) : 0;
+      const mappedDepthMm = position ? (Number(position.height_pct) / 100) * (frame?.height || (Math.max(...ys) - Math.min(...ys))) : 0;
+      const localRotation = mappedWidthMm > 0 && mappedDepthMm > 0 && Math.abs(mappedWidthMm - mappedDepthMm) > 50
         ? (mappedWidthMm < mappedDepthMm ? 90 : 0)
         : Math.max(...ys) - Math.min(...ys) > Math.max(...xs) - Math.min(...xs) ? 90 : 0;
+      const rotation = ((frame?.rotation_deg || 0) + localRotation + 360) % 360;
       const isGroundLocation = (
         position?.layout_kind === "physical_pallet"
         || location.storage_type === "ground"

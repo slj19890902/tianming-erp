@@ -37,7 +37,10 @@ def test_delivery_modal_is_selection_first_without_blank_manual_rows() -> None:
 
 
 def test_saved_draft_exposes_pick_and_one_step_dispatch_print() -> None:
-    assert "modal?.type === 'delivery' && deliveryForm.editingId && !deliveryFormIsDirty()" in INDEX
+    assert (
+        "modal?.type === 'delivery' && deliveryForm.editingId && "
+        "deliveryForm.editing_status==='pending' && !deliveryFormIsDirty()"
+    ) in INDEX
     assert "createCurrentDeliveryPickTask" in INDEX
     assert "deliveryPrimaryAction()" in INDEX
     label = _method_body("deliveryPrimaryLabel")

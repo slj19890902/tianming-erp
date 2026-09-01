@@ -545,7 +545,7 @@ body.warehouse-twin-page {
 .twin-command-bar,
 .twin-command-bar.embedded {
   padding: 6px 12px;
-  grid-template-columns: minmax(680px, 1fr) auto auto;
+  grid-template-columns: minmax(680px, 1fr) auto auto auto;
   gap: 10px;
   border-color: #c7d2d8;
   background: linear-gradient(90deg, #ffffff 0%, #f7fafb 65%, #edf4f4 100%);
@@ -1086,7 +1086,7 @@ body.warehouse-twin-page {
 
 @media (max-width: 1180px) {
   .twin-command-bar,
-  .twin-command-bar.embedded { grid-template-columns: minmax(470px, 1fr) auto; }
+  .twin-command-bar.embedded { grid-template-columns: minmax(470px, 1fr) auto auto; }
   .twin-toolbar-summary > span:nth-child(2) { display: none; }
   .twin-layout-draft-workflow .status { display: none; }
   .twin-workspace.layers-open { grid-template-columns: 115px 190px minmax(360px, 1fr) 260px; }

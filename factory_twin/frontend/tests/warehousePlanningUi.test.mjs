@@ -69,6 +69,11 @@ test("warehouse header exposes the formal location label printing entry", () => 
   assert.match(source, />打印货位编号<\/a>/);
 });
 
+test("warehouse header keeps both label and ledger links on the command row", () => {
+  assert.match(cssSource, /grid-template-columns:\s*minmax\(680px, 1fr\) auto auto auto/);
+  assert.match(cssSource, /@media \(max-width: 1180px\)[\s\S]*grid-template-columns:\s*minmax\(470px, 1fr\) auto auto/);
+});
+
 test("lookup has one entry and area planning uses short adaptive actions", () => {
   const toolbar = source.slice(source.indexOf('<section className="twin-toolbar">'), source.indexOf('<section className={`twin-workspace'));
   assert.doesNotMatch(toolbar, /twin-warehouse-search-toggle/);

@@ -64,6 +64,11 @@ test("map-first toolbar hides empty delayed dispatch and consolidates selective 
   assert.match(source, /type="checkbox" checked=\{selected\}/);
 });
 
+test("warehouse header exposes the formal location label printing entry", () => {
+  assert.match(source, /href="\/warehouse-ledger\.html\?tab=locations&amp;location_view=ledger&amp;label_print=1"/);
+  assert.match(source, />打印货位编号<\/a>/);
+});
+
 test("lookup has one entry and area planning uses short adaptive actions", () => {
   const toolbar = source.slice(source.indexOf('<section className="twin-toolbar">'), source.indexOf('<section className={`twin-workspace'));
   assert.doesNotMatch(toolbar, /twin-warehouse-search-toggle/);

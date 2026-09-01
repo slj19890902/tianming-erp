@@ -22,7 +22,7 @@ def test_historical_delivery_is_explicit_and_keeps_normal_flow_compact() -> None
 
 
 def test_actual_date_correction_and_reconciliation_month_are_separate() -> None:
-    assert "更正实际日期" in INDEX
+    assert "实际送货日期已更正" in INDEX
     assert "/actual-date`" in INDEX
     assert "ERP录入时间不会改变" in INDEX
     assert "对账归属月份" in INDEX

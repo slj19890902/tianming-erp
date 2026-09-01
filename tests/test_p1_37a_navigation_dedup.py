@@ -18,7 +18,7 @@ def _block(start_marker: str, end_marker: str) -> str:
 
 def test_order_flow_is_first_and_duplicate_workbench_tabs_are_not_rendered() -> None:
     shell = _block(
-        '<main :class="[\'main\'',
+        '<main\n            :class="[\'main\'',
         '<section v-if="orderNextStepGuide.visible',
     )
     assert shell.index('<section v-if="businessFlowCurrentStep"') < shell.index(

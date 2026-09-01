@@ -129,7 +129,7 @@ def test_open_review_selects_floor_opens_existing_form_and_focuses_review() -> N
 const calls=[];
 const fakeClassList={add(){},remove(){}};
 const elements=new Map();
-for(const id of ["locationViewTabs","inventorySection","insightSection","movementSection","moldSection","printingPlateSection","finishedForm","semiForm","warehouseAreaCapacityReview","capacityReviewChecklist"]){
+for(const id of ["locationViewTabs","inventorySection","insightSection","movementSection","locationLabelWorkbenchSection","moldSection","printingPlateSection","finishedForm","semiForm","warehouseAreaCapacityReview","capacityReviewChecklist"]){
   elements.set(id,{classList:fakeClassList,scrollIntoView(){calls.push(`scroll:${id}`)},focus(){calls.push(`focus:${id}`)}});
 }
 const $=id=>elements.get(id);
@@ -169,7 +169,7 @@ def test_open_review_fails_closed_when_declared_map_area_identity_has_drifted() 
 const calls=[];
 const fakeClassList={add(){},remove(){}};
 const elements=new Map();
-for(const id of ["locationViewTabs","inventorySection","insightSection","movementSection","moldSection","printingPlateSection","finishedForm","semiForm","warehouseAreaCapacityReview","capacityReviewChecklist"]){
+for(const id of ["locationViewTabs","inventorySection","insightSection","movementSection","locationLabelWorkbenchSection","moldSection","printingPlateSection","finishedForm","semiForm","warehouseAreaCapacityReview","capacityReviewChecklist"]){
   elements.set(id,{classList:fakeClassList,scrollIntoView(){calls.push(`scroll:${id}`)},focus(){calls.push(`focus:${id}`)}});
 }
 const $=id=>elements.get(id);
@@ -214,7 +214,7 @@ def test_exact_map_review_rejects_a_nonpublished_storage_policy() -> None:
 const calls=[];
 const fakeClassList={add(){},remove(){}};
 const elements=new Map();
-for(const id of ["locationViewTabs","inventorySection","insightSection","movementSection","moldSection","printingPlateSection","finishedForm","semiForm","warehouseAreaCapacityReview","capacityReviewChecklist"]){
+for(const id of ["locationViewTabs","inventorySection","insightSection","movementSection","locationLabelWorkbenchSection","moldSection","printingPlateSection","finishedForm","semiForm","warehouseAreaCapacityReview","capacityReviewChecklist"]){
   elements.set(id,{classList:fakeClassList,scrollIntoView(){calls.push(`scroll:${id}`)},focus(){calls.push(`focus:${id}`)}});
 }
 const $=id=>elements.get(id);

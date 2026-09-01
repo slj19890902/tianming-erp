@@ -65,7 +65,7 @@ def test_supplier_groups_and_external_product_editor_are_explicit() -> None:
     assert "包材供应商只维护包材产品、规格和正式报价" in supplier_panel
 
     supplier_rows = supplier_panel.split(
-        '<tbody><tr v-for="row in filteredSuppliers"', 1
+        '<tbody><tr v-for="row in pagedSuppliers"', 1
     )[1].split("</tbody>", 1)[0]
     assert 'supplierGroupFilter===\'corrugated\'' in supplier_rows
     assert 'supplierGroupFilter===\'packaging\'' in supplier_rows

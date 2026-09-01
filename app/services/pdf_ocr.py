@@ -58,10 +58,14 @@ def analyze_pdf_text_quality(pdf_text: str | None) -> dict[str, int | float | st
 
 def _try_import_fitz():
     try:
-        import fitz  # PyMuPDF
-        return fitz
+        import pymupdf  # type: ignore
+        return pymupdf
     except ImportError:
-        return None
+        try:
+            import fitz  # type: ignore  # PyMuPDF legacy module name
+            return fitz
+        except ImportError:
+            return None
 
 
 def _try_import_easyocr():

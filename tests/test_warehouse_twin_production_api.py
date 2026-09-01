@@ -37,6 +37,11 @@ def test_twin_production_read_requires_both_warehouse_and_order_permissions(
         "load_warehouse_twin_floor",
         lambda _floor: {"layout_id": "layout-1f", "floor_code": "1F"},
     )
+    monkeypatch.setattr(
+        warehouse,
+        "overlay_formal_area_bindings",
+        lambda _db, *, floor_code, floor_layout, include_draft=False: floor_layout,
+    )
     monkeypatch.setattr(warehouse, "_current_visible_production_tasks", lambda *_args: [])
     monkeypatch.setattr(warehouse, "_visible_production_task_ids", lambda *_args: set())
     monkeypatch.setattr(warehouse, "_production_task_dates", lambda *_args: {})

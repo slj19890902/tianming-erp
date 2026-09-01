@@ -21,7 +21,7 @@ def test_production_success_guide_is_destination_specific_and_short() -> None:
         '<section v-if="productionNextStepGuide.visible',
         '<section v-if="warehouseFrameUrl"',
     )
-    assert "已进入一楼待送区，下一步按客户开送货单。" in guide
+    assert "已进入系统选择的真实成品位置，下一步按客户开送货单。" in guide
     assert "继续完成同订单其他组件，整套齐后再开送货单。" in guide
     assert "留在成品仓等待后续送货。" in guide
     assert "下一步：开送货单" in guide

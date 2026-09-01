@@ -128,6 +128,7 @@ async function drainTimers() {{
     isCancelledRequest: () => false,
     errorMessage: error => String(error?.message || error),
     showToast(message) {{ this.toasts.push(String(message)); }},
+    resetSingleScreenExpansion() {{}},
   }};
   vm.cancelQueuedPageSearch = new FunctionCtor("page", cancelBody).bind(vm);
   vm.pageSearchCacheKey = new FunctionCtor("page", cacheKeyBody).bind(vm);

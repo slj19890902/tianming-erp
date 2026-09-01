@@ -194,6 +194,7 @@ globalThis.localStorage = {{setItem() {{}}, removeItem() {{}}}};
   }};
   const common = {{
     authGeneration: 0, loginAttemptSequence: 0, user: null, loginError: "", loading: false,
+    uiMode:"standard", syncDesktopListPageSize:()=>{{}},
     loadProductBoxTypeRules: async () => true,
     loadEffectiveUiLayout: async () => true,
     restoreFinanceManualMutationAttemptsForCurrentUser: () => {{}},
@@ -372,6 +373,7 @@ const authData = userId => ({{data:{{
   globalThis.axios = {{get: () => sessionMe.promise}};
   const sessionVm = {{
     authGeneration:0,user:null,loginError:"",activePage:"dashboard",
+    uiMode:"standard",syncDesktopListPageSize:()=>{{}},
     loadProductBoxTypeRules:async () => {{ sessionRules += 1; }},
     loadEffectiveUiLayout:async () => true,
     redirectAfterLogin:() => false,initialPageFromLocation:() => "dashboard",
@@ -403,6 +405,7 @@ const authData = userId => ({{data:{{
   }};
   const loginVm = {{
     authGeneration:0,loginAttemptSequence:0,user:null,loginError:"",loading:false,
+    uiMode:"standard",syncDesktopListPageSize:()=>{{}},
     activePage:"dashboard",loginForm:{{remember_me:false,username:"old",password:"secret"}},
     loadProductBoxTypeRules:async () => {{ loginRules += 1; }},
     loadEffectiveUiLayout:async () => true,

@@ -240,6 +240,7 @@ const raw='1, / ,';
 const context={{
   customers:[],customerForm:null,canManageInvoiceProfiles:false,canEditCustomers:true,
   customerInvoiceState:{{}},
+  resetCustomerFinishedStorage(){{}},loadCustomerFinishedStorage(){{}},
   loadCustomerQuotePreferences(){{}},blankCustomerQuotePreferenceDraft(){{return {{}}}},
   beginMasterEdit(){{}},ensureCustomerQuotePreferenceOptions(){{}},
 }};

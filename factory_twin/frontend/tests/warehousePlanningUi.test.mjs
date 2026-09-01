@@ -8,18 +8,28 @@ const sceneSource = readFileSync(new URL("../src/industrialScene.ts", import.met
 const cssSource = readFileSync(new URL("../src/warehouseTwin.css", import.meta.url), "utf8");
 
 test("ordinary area planning exposes a current-area-only point editing workflow", () => {
-  assert.match(source, />拖动并保存现场货位</);
+  assert.doesNotMatch(source, />拖动并保存现场货位</);
   assert.match(source, />保存并固定/);
   assert.match(source, />取消点位调整/);
+  assert.match(source, /只有点击区域空白处才选择区域/);
   assert.match(source, /location\?\.area_code !== locationPointEditAreaCode/);
   assert.match(source, /draggablePalletIds=\{warehouseMoveModeActive \? movablePalletIds : locationPointEditPalletIds\}/);
 });
 
-test("point save warns about occupied locations and keeps inventory outside the write scope", () => {
-  assert.match(source, /占用货位请先按现场实际/);
+test("point save is the single explicit action and keeps inventory outside the write scope", () => {
+  assert.match(source, /有货货位请先按现场实际核对/);
   assert.match(source, /保存会同步权威排位，但不改库存、栈板绑定或数量/);
-  assert.match(source, /确认保存并固定/);
-  assert.match(source, /其中 \$\{occupiedDraftCount\} 个为占用货位/);
+  assert.doesNotMatch(source, /确认保存并固定/);
+  assert.doesNotMatch(source, /occupiedDraftCount/);
+});
+
+test("area planning gives a clicked location priority over its enclosing area", () => {
+  assert.match(editorSource, /const preferredPlanningPallet = palletEditingOnly/);
+  assert.match(editorSource, /candidate\.userData\.entityKind === "pallet" && candidate\.userData\.draggable/);
+  assert.match(editorSource, /preferredPlanningPallet \|\| preferredPlanningFeature \|\| roots\[0\]/);
+  assert.match(source, /if \(!locationEditMode\) return/);
+  assert.match(source, /setLocationPointEditAreaCode\(location\.area_code\)/);
+  assert.match(source, /palletEditingOnly=\{locationEditMode \|\| warehouseMoveModeActive\}/);
 });
 
 test("published ground positions use the dedicated atomic save contract", () => {

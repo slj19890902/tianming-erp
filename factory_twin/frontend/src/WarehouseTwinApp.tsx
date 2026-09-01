@@ -2608,11 +2608,13 @@ export function WarehouseTwinApp() {
       .filter((entry): entry is [number, number] => Number.isInteger(entry[1]))
       .map(([locationId, version]) => [locationId, Number(version)])
   );
-  const locationPointEditPalletIds = locationPointEditAreaCode
+  const locationPointEditPalletIds = locationEditMode
     ? visualLocations
-      .filter((item) => item.floor_code === floorCode && item.area_code === locationPointEditAreaCode && item.position_status === "mapped")
+      .filter((item) => item.floor_code === floorCode
+        && item.position_status === "mapped"
+        && (!locationPointEditAreaCode || item.area_code === locationPointEditAreaCode))
       .map((item) => `erp-location-${item.location_id}`)
-    : undefined;
+    : [];
   const locationPointDraftCount = locationPointEditAreaCode
     ? Object.values(locationDrafts).filter((draft) => dashboard?.locations.some(
       (location) => location.location_id === draft.location_id && location.floor_code === floorCode && location.area_code === locationPointEditAreaCode
@@ -3304,7 +3306,7 @@ export function WarehouseTwinApp() {
   };
 
   const moveLocationDraft = (palletId: string, xMm: number, yMm: number) => {
-    if (!locationEditMode || (!advancedAreaMaintenanceOpen && !locationPointEditAreaCode)) return;
+    if (!locationEditMode) return;
     const locationId = Number(palletId.replace("erp-location-", ""));
     const location = visualLocations.find((item) => item.location_id === locationId);
     if (locationPointEditAreaCode && location?.area_code !== locationPointEditAreaCode) {
@@ -3315,6 +3317,10 @@ export function WarehouseTwinApp() {
     if (!location || !zone || location.position_status !== "mapped") {
       setLocationEditMessage("该库位尚无已确认布局，不能用拖动伪造坐标。");
       return;
+    }
+    if (!advancedAreaMaintenanceOpen && !locationPointEditAreaCode) {
+      setLocationPointEditAreaCode(location.area_code);
+      setSwapSourceLocationId(null);
     }
     const geometry = locationLayoutGeometry(zone, location, xMm, yMm);
     if (!geometry) {
@@ -3575,25 +3581,6 @@ export function WarehouseTwinApp() {
     }
   };
 
-  const beginSelectedAreaLocationPointEdit = () => {
-    if (!selectedAreaCode || !selectedAreaHasPublishedBinding || !selectedAreaLocationCount) {
-      setLocationEditMessage("请先选择已启用且已有正式货位的区域。");
-      return;
-    }
-    const unrelatedDrafts = Object.values(locationDrafts).filter((draft) => {
-      const location = dashboard?.locations.find((item) => item.location_id === draft.location_id);
-      return location?.floor_code !== floorCode || location?.area_code !== selectedAreaCode;
-    });
-    if (unrelatedDrafts.length) {
-      setLocationEditMessage("还有其他区域的位置草稿；请先在高级维护中保存或取消，避免混入本次单区调整。");
-      return;
-    }
-    setAdvancedAreaMaintenanceOpen(false);
-    setLocationPointEditAreaCode(selectedAreaCode);
-    setSwapSourceLocationId(null);
-    setLocationEditMessage(`已进入 ${selectedAreaCode} 区点位调整：只可拖动本区货位。占用货位请先按现场实际摆放核对；保存只更新地图点位，不移动库存、栈板或货物。`);
-  };
-
   const cancelLocationPointEditing = () => {
     if (!locationPointEditAreaCode) return;
     const cancelledAreaCode = locationPointEditAreaCode;
@@ -3674,12 +3661,6 @@ export function WarehouseTwinApp() {
     if (conflictingDrafts.length) {
       setLocationEditMessage(`有 ${conflictingDrafts.length} 个货位仍与柱子重叠，已阻止保存；请先在二维地图中拖离柱子。`);
       return;
-    }
-    if (locationPointEditAreaCode) {
-      const occupiedDraftCount = drafts.filter((draft) => dashboard?.locations.some(
-        (location) => location.location_id === draft.location_id && location.occupancy_status === "occupied"
-      )).length;
-      if (!window.confirm(`确认保存并固定 ${locationPointEditAreaCode} 区 ${drafts.length} 个货位点位吗？\n\n其中 ${occupiedDraftCount} 个为占用货位，请确认已按现场实际位置调整。保存只更新地图点位，不移动库存、栈板或货物。`)) return;
     }
     setLocationEditBusy(true);
     setLocationEditMessage("");
@@ -5341,7 +5322,7 @@ export function WarehouseTwinApp() {
           highlightFeatureIds={searchHighlightFeatureIds}
           highlightedPalletIds={mapHighlightPalletIds}
           focusTarget={cameraFocusTarget}
-          palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}
+          palletEditingOnly={locationEditMode || warehouseMoveModeActive}
           rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}
           featureEditingEnabled={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"}
           mapPanLocked={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"}
@@ -5787,10 +5768,8 @@ export function WarehouseTwinApp() {
                 {locationPointEditAreaCode === selectedAreaCode ? <div className="actions">
                   <button type="button" className="save" disabled={locationEditBusy || !locationPointDraftCount} onClick={saveLocationDrafts}>保存并固定{locationPointDraftCount ? ` ${locationPointDraftCount}` : ""}</button>
                   <button type="button" disabled={locationEditBusy} onClick={cancelLocationPointEditing}>取消点位调整</button>
-                </div> : <div className="actions">
-                  <button type="button" className="save" disabled={locationEditBusy || !selectedAreaLocationCount} onClick={beginSelectedAreaLocationPointEdit}>拖动并保存现场货位</button>
-                </div>}
-                <p>{locationPointEditAreaCode === selectedAreaCode ? "请直接在二维地图拖到现场实际位置，可主动留出通行、货物外伸和操作间距；红色冲突必须先拖离。保存会同步权威排位，但不改库存、栈板绑定或数量。" : "点击后直接拖动空货位或有货货位；系统不再强制把栈板紧贴均匀排布。保存后查货、移货、盘点和手机版统一读取现场位置。"}</p>
+                </div> : null}
+                <p>{locationPointEditAreaCode === selectedAreaCode ? "请直接在二维地图拖到现场实际位置；有货货位请先按现场实际核对，并主动留出通行、货物外伸和操作间距。红色冲突必须先拖离。保存会同步权威排位，但不改库存、栈板绑定或数量。" : "直接按住货位拖动，系统会自动进入当前区域的保存状态；只有点击区域空白处才选择区域。系统不再强制把栈板紧贴均匀排布，保存后查货、移货、盘点和手机版统一读取现场位置。"}</p>
               </div>}
               {legacyRackBindingPreview?.groups.length ? <div className="twin-location-readonly-note">
                 <b>旧货位对应当前货架</b>

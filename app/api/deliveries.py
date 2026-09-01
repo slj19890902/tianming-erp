@@ -4043,12 +4043,23 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         customer.id: customer
         for customer in db.scalars(select(Customer).where(Customer.id.in_(customer_ids))).all()
     } if customer_ids else {}
-    receipts = {
-        receipt.delivery_id: receipt
-        for receipt in db.scalars(
-            select(ReturnReceipt).where(ReturnReceipt.delivery_id.in_(delivery_ids))
-        ).all()
-    } if delivery_ids else {}
+    receipts: dict[int, ReturnReceipt] = {}
+    receipt_item_quantities_by_delivery_item: dict[int, int] = {}
+    if delivery_ids:
+        for receipt, receipt_item in db.execute(
+            select(ReturnReceipt, ReturnReceiptItem)
+            .outerjoin(
+                ReturnReceiptItem,
+                ReturnReceiptItem.return_receipt_id == ReturnReceipt.id,
+            )
+            .where(ReturnReceipt.delivery_id.in_(delivery_ids))
+            .order_by(ReturnReceipt.delivery_id, ReturnReceiptItem.id)
+        ).all():
+            receipts[int(receipt.delivery_id)] = receipt
+            if receipt.status == "confirmed" and receipt_item is not None:
+                receipt_item_quantities_by_delivery_item[
+                    int(receipt_item.delivery_item_id)
+                ] = int(receipt_item.actual_received_quantity or 0)
     item_rows = _delivery_item_rows(db, delivery_ids)
     rows_by_delivery: dict[int, list[dict]] = {}
     for row in item_rows:
@@ -4485,6 +4496,9 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         "deliveries": deliveries,
         "customers": customers,
         "receipts": receipts,
+        "receipt_item_quantities_by_delivery_item": (
+            receipt_item_quantities_by_delivery_item
+        ),
         "rows_by_delivery": rows_by_delivery,
         "orders": orders,
         "order_items": order_items,
@@ -4603,6 +4617,9 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
             "customers": {},
             "receipts": {},
             "item_counts": {},
+            "delivered_quantities": {},
+            "receipt_actual_quantities": {},
+            "receipt_actual_item_counts": {},
             "actual_goods_quantities": {},
             "pick_tasks": {},
         }
@@ -4622,14 +4639,31 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
     } if customer_ids else {}
 
     receipts: dict[int, ReturnReceipt] = {}
-    for receipt in db.scalars(
-        select(ReturnReceipt)
+    receipt_actual_quantities: dict[int, int] = {}
+    receipt_actual_item_counts: dict[int, int] = {}
+    for receipt, receipt_item in db.execute(
+        select(ReturnReceipt, ReturnReceiptItem)
+        .outerjoin(
+            ReturnReceiptItem,
+            ReturnReceiptItem.return_receipt_id == ReturnReceipt.id,
+        )
         .where(ReturnReceipt.delivery_id.in_(delivery_ids))
-        .order_by(ReturnReceipt.delivery_id, ReturnReceipt.id)
+        .order_by(ReturnReceipt.delivery_id, ReturnReceiptItem.id)
     ).all():
-        receipts[int(receipt.delivery_id)] = receipt
+        delivery_id = int(receipt.delivery_id)
+        receipts[delivery_id] = receipt
+        if receipt.status == "confirmed":
+            receipt_actual_quantities.setdefault(delivery_id, 0)
+            receipt_actual_item_counts.setdefault(delivery_id, 0)
+            if receipt_item is None:
+                continue
+            receipt_actual_quantities[delivery_id] += int(
+                receipt_item.actual_received_quantity or 0
+            )
+            receipt_actual_item_counts[delivery_id] += 1
 
     item_counts: dict[int, int] = {}
+    delivered_quantities: dict[int, int] = {}
     actual_goods_quantities: dict[int, int] = {}
     for delivery_id, item_count, delivered_quantity in db.execute(
         select(
@@ -4642,6 +4676,7 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
     ).all():
         normalized_id = int(delivery_id)
         item_counts[normalized_id] = int(item_count or 0)
+        delivered_quantities[normalized_id] = int(delivered_quantity or 0)
         actual_goods_quantities[normalized_id] = int(delivered_quantity or 0)
 
     # Ordinary deliveries need no further work.  Composite orders are rare but
@@ -4716,6 +4751,9 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
         "customers": customers,
         "receipts": receipts,
         "item_counts": item_counts,
+        "delivered_quantities": delivered_quantities,
+        "receipt_actual_quantities": receipt_actual_quantities,
+        "receipt_actual_item_counts": receipt_actual_item_counts,
         "actual_goods_quantities": actual_goods_quantities,
         "pick_tasks": pick_tasks,
     }
@@ -4951,6 +4989,21 @@ def _delivery_summary_response(delivery_id: int, *, context: dict) -> dict:
         raise HTTPException(status_code=404, detail="送货单不存在")
     customer = context["customers"].get(delivery.customer_id)
     return_receipt = context["receipts"].get(delivery_id)
+    original_delivered_quantity = context["delivered_quantities"].get(
+        delivery_id, 0
+    )
+    has_confirmed_receipt_quantity = bool(
+        return_receipt
+        and return_receipt.status == "confirmed"
+        and delivery_id in context["receipt_actual_quantities"]
+        and context["receipt_actual_item_counts"].get(delivery_id, 0)
+        == context["item_counts"].get(delivery_id, 0)
+    )
+    display_quantity = (
+        context["receipt_actual_quantities"][delivery_id]
+        if has_confirmed_receipt_quantity
+        else original_delivered_quantity
+    )
     return {
         "id": delivery.id,
         "delivery_number": delivery.delivery_number,
@@ -4976,6 +5029,12 @@ def _delivery_summary_response(delivery_id: int, *, context: dict) -> dict:
         "total_quantity": delivery.total_quantity,
         "total_actual_goods_quantity": context["actual_goods_quantities"].get(
             delivery_id, 0
+        ),
+        "original_delivered_quantity": original_delivered_quantity,
+        "display_quantity": display_quantity,
+        "quantity_difference": display_quantity - original_delivered_quantity,
+        "quantity_source": (
+            "actual_received" if has_confirmed_receipt_quantity else "delivered"
         ),
         "item_count": context["item_counts"].get(delivery_id, 0),
         "dispatched_at": (
@@ -5065,6 +5124,20 @@ def _delivery_response(
         if list_context is not None
         else db.scalar(select(ReturnReceipt).where(ReturnReceipt.delivery_id == delivery_id))
     )
+    receipt_item_quantities_by_delivery_item = (
+        list_context["receipt_item_quantities_by_delivery_item"]
+        if list_context is not None
+        else {
+            int(row.delivery_item_id): int(row.actual_received_quantity or 0)
+            for row in db.scalars(
+                select(ReturnReceiptItem).where(
+                    ReturnReceiptItem.return_receipt_id == return_receipt.id
+                )
+            ).all()
+        }
+        if return_receipt and return_receipt.status == "confirmed"
+        else {}
+    )
     items = (
         list_context["rows_by_delivery"].get(delivery_id, [])
         if list_context is not None
@@ -5115,6 +5188,14 @@ def _delivery_response(
         )
     )
     delivery_item_ids = [int(row["id"]) for row in items]
+    has_complete_confirmed_receipt = bool(
+        return_receipt
+        and return_receipt.status == "confirmed"
+        and all(
+            delivery_item_id in receipt_item_quantities_by_delivery_item
+            for delivery_item_id in delivery_item_ids
+        )
+    )
     inventory_backed_delivery_item_ids = (
         set(list_context["inventory_backed_delivery_item_ids"])
         if list_context is not None
@@ -5140,6 +5221,8 @@ def _delivery_response(
     )
     response_items: list[dict] = []
     total_actual_goods_quantity = 0
+    original_delivered_quantity = 0
+    display_quantity = 0
     for row in items:
         mapping = dict(row)
         current_product_fulfillment_mode = mapping.pop(
@@ -5227,6 +5310,19 @@ def _delivery_response(
             int(line["quantity"] or 0) for line in actual_goods_lines
         )
         total_actual_goods_quantity += actual_goods_quantity
+        item_original_quantity = int(mapping["delivered_quantity"] or 0)
+        item_has_confirmed_receipt_quantity = bool(
+            has_complete_confirmed_receipt
+            and int(mapping["id"])
+            in receipt_item_quantities_by_delivery_item
+        )
+        item_display_quantity = (
+            receipt_item_quantities_by_delivery_item[int(mapping["id"])]
+            if item_has_confirmed_receipt_quantity
+            else item_original_quantity
+        )
+        original_delivered_quantity += item_original_quantity
+        display_quantity += item_display_quantity
         response_items.append(
             {
                 **dict(mapping),
@@ -5236,6 +5332,16 @@ def _delivery_response(
                     internal_remarks,
                 ),
                 "actual_delivery_quantity": mapping["delivered_quantity"],
+                "original_delivered_quantity": item_original_quantity,
+                "display_quantity": item_display_quantity,
+                "quantity_difference": (
+                    item_display_quantity - item_original_quantity
+                ),
+                "quantity_source": (
+                    "actual_received"
+                    if item_has_confirmed_receipt_quantity
+                    else "delivered"
+                ),
                 "order_number": (
                     "无订单库存"
                     if is_unordered
@@ -5313,6 +5419,14 @@ def _delivery_response(
         "status": delivery.status,
         "total_quantity": delivery.total_quantity,
         "total_actual_goods_quantity": total_actual_goods_quantity,
+        "original_delivered_quantity": original_delivered_quantity,
+        "display_quantity": display_quantity,
+        "quantity_difference": display_quantity - original_delivered_quantity,
+        "quantity_source": (
+            "actual_received"
+            if has_complete_confirmed_receipt
+            else "delivered"
+        ),
         "dispatched_at": (
             utc_naive_to_api(delivery.dispatched_at)
             if delivery.dispatched_at

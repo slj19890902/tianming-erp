@@ -23,7 +23,7 @@ def delivery_filter_app(tmp_path: Path):
     from app.models.access_control import UserCustomerScope, UserPermissionOverride
     from app.models.customer import Customer
     from app.models.delivery import Delivery, DeliveryItem
-    from app.models.finance import ReturnReceipt
+    from app.models.finance import ReturnReceipt, ReturnReceiptItem
     from app.models.order import Order, OrderItem
     from app.models.product import Product
     from app.models.user import User
@@ -88,8 +88,7 @@ def delivery_filter_app(tmp_path: Path):
         ]
         session.add_all(deliveries)
         session.flush()
-        session.add_all(
-            [
+        delivery_items = [
                 DeliveryItem(delivery_id=deliveries[0].id, order_item_id=items[0].id, delivered_quantity=10),
                 DeliveryItem(delivery_id=deliveries[1].id, order_item_id=items[0].id, delivered_quantity=10),
                 DeliveryItem(delivery_id=deliveries[2].id, order_item_id=items[1].id, delivered_quantity=20),
@@ -105,8 +104,27 @@ def delivery_filter_app(tmp_path: Path):
                     price_source="product_default",
                     delivered_quantity=3,
                 ),
-                ReturnReceipt(delivery_id=deliveries[0].id, actual_received_date=date(2026, 7, 11), status="confirmed"),
-                ReturnReceipt(delivery_id=deliveries[2].id, actual_received_date=date(2026, 7, 13), status="cancelled"),
+        ]
+        session.add_all(delivery_items)
+        session.flush()
+        receipts = [
+            ReturnReceipt(delivery_id=deliveries[0].id, actual_received_date=date(2026, 7, 11), status="confirmed"),
+            ReturnReceipt(delivery_id=deliveries[2].id, actual_received_date=date(2026, 7, 13), status="cancelled"),
+        ]
+        session.add_all(receipts)
+        session.flush()
+        session.add_all(
+            [
+                ReturnReceiptItem(
+                    return_receipt_id=receipts[0].id,
+                    delivery_item_id=delivery_items[0].id,
+                    actual_received_quantity=8,
+                ),
+                ReturnReceiptItem(
+                    return_receipt_id=receipts[1].id,
+                    delivery_item_id=delivery_items[2].id,
+                    actual_received_quantity=15,
+                ),
             ]
         )
         session.commit()
@@ -115,6 +133,7 @@ def delivery_filter_app(tmp_path: Path):
     app.include_router(auth_router, prefix="/api/auth")
     app.include_router(dashboard_router, prefix="/api/dashboard")
     app.include_router(deliveries_router, prefix="/api/deliveries")
+    app.state.delivery_filter_session_factory = session_factory
 
     def override_get_db() -> Generator[Session, None, None]:
         with session_factory() as session:
@@ -170,6 +189,92 @@ def test_return_statuses_and_existing_status_parameter_remain_compatible(deliver
         assert _numbers(client.get("/api/deliveries", params={"status": "dispatched", "return_status": "waiting_receipt"})) == ["MJ-0001"]
         assert _numbers(client.get("/api/deliveries", params=[("return_status", "confirmed"), ("return_status", "cancelled")])) == ["MJ-0001", "TH-0001"]
         assert _numbers(client.get("/api/deliveries", params={"status": "pending"})) == ["TH-0002"]
+
+
+def test_effective_receipt_quantity_is_projected_without_overwriting_delivery_fact(
+    delivery_filter_app,
+) -> None:
+    with TestClient(delivery_filter_app) as client:
+        _login(client, "admin")
+        summary = client.get(
+            "/api/deliveries",
+            params={"view": "summary", "statuses": "dispatched"},
+        )
+        assert summary.status_code == 200, summary.text
+        rows = {row["delivery_number"]: row for row in summary.json()["items"]}
+        assert rows["TH-0001"]["original_delivered_quantity"] == 10
+        assert rows["TH-0001"]["display_quantity"] == 8
+        assert rows["TH-0001"]["quantity_difference"] == -2
+        assert rows["TH-0001"]["quantity_source"] == "actual_received"
+        assert rows["MJ-0001"]["original_delivered_quantity"] == 20
+        assert rows["MJ-0001"]["display_quantity"] == 20
+        assert rows["MJ-0001"]["quantity_difference"] == 0
+        assert rows["MJ-0001"]["quantity_source"] == "delivered"
+
+        confirmed_detail = client.get(f"/api/deliveries/{rows['TH-0001']['id']}")
+        assert confirmed_detail.status_code == 200, confirmed_detail.text
+        confirmed_payload = confirmed_detail.json()
+        assert confirmed_payload["original_delivered_quantity"] == 10
+        assert confirmed_payload["display_quantity"] == 8
+        assert confirmed_payload["quantity_difference"] == -2
+        assert confirmed_payload["quantity_source"] == "actual_received"
+        assert confirmed_payload["items"][0]["delivered_quantity"] == 10
+        assert confirmed_payload["items"][0]["original_delivered_quantity"] == 10
+        assert confirmed_payload["items"][0]["display_quantity"] == 8
+        assert confirmed_payload["items"][0]["quantity_difference"] == -2
+        assert confirmed_payload["items"][0]["quantity_source"] == "actual_received"
+
+        cancelled_detail = client.get(f"/api/deliveries/{rows['MJ-0001']['id']}")
+        assert cancelled_detail.status_code == 200, cancelled_detail.text
+        cancelled_payload = cancelled_detail.json()
+        assert cancelled_payload["display_quantity"] == 20
+        assert cancelled_payload["quantity_source"] == "delivered"
+        assert cancelled_payload["items"][0]["display_quantity"] == 20
+        assert cancelled_payload["items"][0]["quantity_source"] == "delivered"
+
+
+def test_receipt_quantity_update_and_cancellation_refresh_the_projection(
+    delivery_filter_app,
+) -> None:
+    from app.models.finance import ReturnReceipt, ReturnReceiptItem
+
+    session_factory = delivery_filter_app.state.delivery_filter_session_factory
+    with TestClient(delivery_filter_app) as client:
+        _login(client, "admin")
+        confirmed = client.get(
+            "/api/deliveries",
+            params={"view": "summary", "delivery_no": "TH-0001"},
+        ).json()["items"][0]
+        assert confirmed["display_quantity"] == 8
+
+        with session_factory() as session:
+            receipt = session.get(ReturnReceipt, confirmed["return_receipt_id"])
+            receipt_item = session.query(ReturnReceiptItem).filter_by(
+                return_receipt_id=receipt.id
+            ).one()
+            receipt_item.actual_received_quantity = 9
+            session.commit()
+
+        updated = client.get(
+            "/api/deliveries",
+            params={"view": "summary", "delivery_no": "TH-0001"},
+        ).json()["items"][0]
+        assert updated["display_quantity"] == 9
+        assert updated["quantity_difference"] == -1
+        assert updated["original_delivered_quantity"] == 10
+
+        with session_factory() as session:
+            receipt = session.get(ReturnReceipt, confirmed["return_receipt_id"])
+            receipt.status = "cancelled"
+            session.commit()
+
+        cancelled = client.get(
+            "/api/deliveries",
+            params={"view": "summary", "delivery_no": "TH-0001"},
+        ).json()["items"][0]
+        assert cancelled["display_quantity"] == 10
+        assert cancelled["quantity_difference"] == 0
+        assert cancelled["quantity_source"] == "delivered"
 
 
 def test_dashboard_pending_receipt_matches_cancelled_receipt_drilldown(

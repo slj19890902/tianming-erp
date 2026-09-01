@@ -4682,7 +4682,7 @@
                     <td>{{ row.customer_name }}</td>
                     <td>{{ row.delivery_date }}<div v-if="row.is_historical_backfill" class="status blue" style="margin-top:4px">历史补录</div><div v-if="row.created_at" class="muted">ERP录入 {{ formatDateTime(row.created_at) }}</div></td>
                     <td>{{ row.vehicle_number || "-" }}</td>
-                    <td>{{ deliveryActualGoodsQuantity(row) }}</td>
+                    <td>{{ deliveryDisplayQuantity(row) }}</td>
                     <td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
                     <td><button class="btn small delivery-list-detail-toggle" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${row.item_count ?? (row.items || []).length}）` }}</button></td>
@@ -4724,7 +4724,7 @@
                                 <td><span :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_code')}"><strong>{{ item.product_code || "未登记" }}</strong><span v-if="deliverySearchItemFieldMatched(row,item,'product_code')" class="delivery-search-hit-label">命中存货编码</span></span></td>
                                 <td><span :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_name')}">{{ item.product_name || "未登记" }}<span v-if="deliverySearchItemFieldMatched(row,item,'product_name')" class="delivery-search-hit-label">命中产品名称</span></span><div v-if="item.customer_po && item.customer_po !== '无订单库存'" :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'customer_po')}" style="margin-top:4px">客户订单号：{{ item.customer_po }}<span v-if="deliverySearchItemFieldMatched(row,item,'customer_po')" class="delivery-search-hit-label">命中客户订单号</span></div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td>
                                 <td>{{ item.specification || "未登记" }}</td>
-                                <td class="delivery-detail-quantity"><strong>{{ item.delivered_quantity }}</strong></td>
+                                <td class="delivery-detail-quantity"><strong>{{ item.display_quantity ?? item.delivered_quantity }}</strong><div v-if="item.quantity_source === 'actual_received'" class="muted" style="font-size:11px">实际签收 {{ item.display_quantity }}｜原送货 {{ item.original_delivered_quantity }}｜差异 {{ signedQuantity(item.quantity_difference) }}</div></td>
                               </tr>
                               <tr v-for="component in deliverySavedComponentLines(item)" :key="component.component_snapshot_id || component.snapshot_id || component.id || component.component_code || component.product_code">
                                 <td>{{ component.component_code || component.product_code || "-" }}</td>
@@ -13445,6 +13445,15 @@
               );
               return total + parentQuantity + componentQuantity;
             }, 0);
+          },
+          deliveryDisplayQuantity(delivery) {
+            const displayQuantity = Number(delivery?.display_quantity);
+            if (Number.isFinite(displayQuantity)) return displayQuantity;
+            return this.deliveryActualGoodsQuantity(delivery);
+          },
+          signedQuantity(value) {
+            const quantity = Number(value || 0);
+            return quantity > 0 ? `+${quantity}` : String(quantity);
           },
           inventoryCandidatePayload(line, component) {
             const product = line._inventory_product || line;

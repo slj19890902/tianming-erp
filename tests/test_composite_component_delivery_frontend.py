@@ -56,10 +56,11 @@ def test_delivery_payload_keeps_component_quantities_server_derived() -> None:
     assert "component_lines: it.component_lines || []" in source
 
 
-def test_delivery_list_counts_and_displays_actual_component_goods() -> None:
+def test_delivery_list_keeps_component_goods_detail_but_uses_document_quantity() -> None:
     source = _index_source()
 
-    assert "deliveryActualGoodsQuantity(row)" in source
+    assert "deliveryDisplayQuantity(row)" in source
+    assert "deliveryActualGoodsQuantity(delivery)" in source
     assert "deliverySavedComponentLines(item)" in source
     assert '<span class="status blue">套内子件</span>' in source
     assert "component.quantity ?? component.planned_delivery_quantity ?? component.delivered_quantity ?? 0" in source

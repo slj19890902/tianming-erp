@@ -692,6 +692,7 @@ def _dispatched_delivery_order_item_ids(
             .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
             .where(
                 DeliveryItem.order_item_id.in_(normalized),
+                DeliveryItem.is_current.is_(True),
                 Delivery.status == "dispatched",
             )
             .distinct()
@@ -6237,6 +6238,7 @@ def _completion_rows(
                 .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
                 .where(
                     DeliveryItem.order_item_id == OrderItem.id,
+                    DeliveryItem.is_current.is_(True),
                     Delivery.status == "dispatched",
                 )
             ),
@@ -6328,6 +6330,7 @@ def _production_completion_total(
                 .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
                 .where(
                     DeliveryItem.order_item_id == OrderItem.id,
+                    DeliveryItem.is_current.is_(True),
                     Delivery.status == "dispatched",
                 )
             ),

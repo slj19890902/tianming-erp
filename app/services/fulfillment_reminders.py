@@ -899,7 +899,10 @@ def reminder_product_options(
             select(func.coalesce(DeliveryItem.product_id, OrderItem.product_id))
             .select_from(DeliveryItem)
             .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
-            .where(DeliveryItem.delivery_id == delivery_id)
+            .where(
+                DeliveryItem.delivery_id == delivery_id,
+                DeliveryItem.is_current.is_(True),
+            )
         ).all()
         if product_id is not None
     }

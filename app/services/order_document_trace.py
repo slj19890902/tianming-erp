@@ -724,7 +724,10 @@ def build_order_item_document_trace(
         delivery_rows = db.execute(
             select(DeliveryItem, Delivery)
             .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
-            .where(DeliveryItem.order_item_id == item.id)
+            .where(
+                DeliveryItem.order_item_id == item.id,
+                DeliveryItem.is_current.is_(True),
+            )
             .order_by(Delivery.created_at, DeliveryItem.id)
         ).all()
         delivery_item_ids = [delivery_item.id for delivery_item, _ in delivery_rows]

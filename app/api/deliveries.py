@@ -771,6 +771,18 @@ class DeliveryUpdate(BaseModel):
         return self
 
 
+class DeliveryRevisionUpdate(DeliveryUpdate):
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_revision_request(self):
+        if self.historical_backfill:
+            raise ValueError("已发货送货单受控编辑不能切换为历史补录")
+        self.idempotency_key = self.idempotency_key.strip()
+        return self
+
+
 class DeliveryDateCorrection(BaseModel):
     actual_delivery_date: date
     expected_version: int = Field(gt=0)
@@ -3190,7 +3202,10 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
             Product.id
             == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
         )
-        .where(DeliveryItem.delivery_id.in_(delivery_ids))
+        .where(
+            DeliveryItem.delivery_id.in_(delivery_ids),
+            DeliveryItem.is_current.is_(True),
+        )
         .order_by(DeliveryItem.delivery_id, DeliveryItem.id)
     ).all()
     result: list[dict] = []
@@ -4671,7 +4686,10 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
             func.count(DeliveryItem.id),
             func.coalesce(func.sum(DeliveryItem.delivered_quantity), 0),
         )
-        .where(DeliveryItem.delivery_id.in_(delivery_ids))
+        .where(
+            DeliveryItem.delivery_id.in_(delivery_ids),
+            DeliveryItem.is_current.is_(True),
+        )
         .group_by(DeliveryItem.delivery_id)
     ).all():
         normalized_id = int(delivery_id)
@@ -4702,6 +4720,7 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
         .outerjoin(Product, Product.id == OrderItem.product_id)
         .where(
             DeliveryItem.delivery_id.in_(delivery_ids),
+            DeliveryItem.is_current.is_(True),
             DeliveryItem.order_item_id.in_(
                 select(SalesOrderItemBomComponent.sales_order_item_id).distinct()
             ),
@@ -5554,9 +5573,9 @@ def _delivery_deletion_facts(
 
     item_ids = list(
         db.scalars(
-            select(DeliveryItem.id).where(
-                DeliveryItem.delivery_id == delivery.id
-            )
+            # Deletion safety must include superseded revisions because their
+            # immutable receipt/inventory facts still belong to this document.
+            select(DeliveryItem.id).where(DeliveryItem.delivery_id == delivery.id)
         ).all()
     )
     inventory_allocations = (
@@ -5670,6 +5689,7 @@ def _build_pick_task(
         select(DeliveryItem)
         .where(
             DeliveryItem.delivery_id == delivery.id,
+            DeliveryItem.is_current.is_(True),
         )
         .order_by(DeliveryItem.id)
     ).all()
@@ -6476,7 +6496,8 @@ def apply_delivery_pick_task(
         delivery.total_quantity = int(
             db.scalar(
                 select(func.coalesce(func.sum(DeliveryItem.delivered_quantity), 0)).where(
-                    DeliveryItem.delivery_id == delivery.id
+                    DeliveryItem.delivery_id == delivery.id,
+                    DeliveryItem.is_current.is_(True),
                 )
             )
             or 0
@@ -8230,6 +8251,7 @@ def list_deliveries(
             )
             .where(
                 DeliveryItem.delivery_id == Delivery.id,
+                DeliveryItem.is_current.is_(True),
                 or_(
                     func.lower(Order.order_number).like(pattern),
                     func.lower(Order.customer_po).like(pattern),
@@ -8303,6 +8325,7 @@ def list_deliveries(
                 )
                 .where(
                     DeliveryItem.delivery_id == Delivery.id,
+                    DeliveryItem.is_current.is_(True),
                     *item_filters,
                 )
             )
@@ -8580,11 +8603,13 @@ def create_delivery(
         raise
 
 
-@router.put("/{delivery_id}/dispatch")
-def dispatch_delivery(
+def _dispatch_delivery(
     delivery_id: int,
-    db: Session = Depends(get_db),
-    user: User = Depends(can_operate),
+    *,
+    db: Session,
+    user: User,
+    commit: bool = True,
+    write_audit: bool = True,
 ) -> dict:
     delivery = _delivery_for_user(db, delivery_id, user)
     dispatched_at = _utc_now()
@@ -8602,7 +8627,10 @@ def dispatch_delivery(
                 db.scalars(
                     select(OrderItem.order_id)
                     .join(DeliveryItem, DeliveryItem.order_item_id == OrderItem.id)
-                    .where(DeliveryItem.delivery_id == delivery_id)
+                    .where(
+                        DeliveryItem.delivery_id == delivery_id,
+                        DeliveryItem.is_current.is_(True),
+                    )
                     .distinct()
                     .order_by(OrderItem.order_id)
                 ).all()
@@ -8655,7 +8683,10 @@ def dispatch_delivery(
 
         lines = db.scalars(
             select(DeliveryItem)
-            .where(DeliveryItem.delivery_id == delivery_id)
+            .where(
+                DeliveryItem.delivery_id == delivery_id,
+                DeliveryItem.is_current.is_(True),
+            )
             .order_by(DeliveryItem.id)
         ).all()
         if not lines:
@@ -8724,24 +8755,25 @@ def dispatch_delivery(
             if pick_task is not None:
                 pick_task.status = "dispatched"
                 pick_task.dispatched_at = dispatched_at
-            _write_audit(
-                db,
-                user=user,
-                action="DISPATCH",
-                resource="Delivery",
-                entity_id=delivery_id,
-                details={
-                    "source_mode": "unordered_finished",
-                    "dispatched_at": dispatched_at,
-                    "item_count": len(lines),
-                    "total_quantity": sum(
-                        int(line.delivered_quantity or 0) for line in lines
-                    ),
-                    "released_pallet_ids": released_pallet_ids,
-                },
-                description="确认无订单客户专用成品正式发货",
-            )
-            db.commit()
+            if write_audit:
+                _write_audit(
+                    db,
+                    user=user,
+                    action="DISPATCH",
+                    resource="Delivery",
+                    entity_id=delivery_id,
+                    details={
+                        "source_mode": "unordered_finished",
+                        "dispatched_at": dispatched_at,
+                        "item_count": len(lines),
+                        "total_quantity": sum(
+                            int(line.delivered_quantity or 0) for line in lines
+                        ),
+                        "released_pallet_ids": released_pallet_ids,
+                    },
+                    description="确认无订单客户专用成品正式发货",
+                )
+            db.commit() if commit else db.flush()
             return _delivery_response(db, delivery_id)
         current_order_ids = set(
             db.scalars(
@@ -8949,38 +8981,39 @@ def dispatch_delivery(
         if pick_task is not None:
             pick_task.status = "dispatched"
             pick_task.dispatched_at = dispatched_at
-        _write_audit(
-            db,
-            user=user,
-            action="DISPATCH",
-            resource="Delivery",
-            entity_id=delivery_id,
-            details={
-                "dispatched_at": dispatched_at,
-                "item_count": len(lines),
-                "source_mode": delivery.source_mode,
-                "unordered_item_count": len(unordered_lines),
-                "released_pallet_ids": released_pallet_ids,
-                "over_delivery_quantity": sum(
-                    int(line.over_delivery_quantity or 0) for line in lines
-                ),
-                "over_delivery_items": [
-                    {
-                        "delivery_item_id": line.id,
-                        "order_item_id": line.order_item_id,
-                        "ordered_quantity_snapshot": line.ordered_quantity_snapshot,
-                        "actual_delivery_quantity": line.delivered_quantity,
-                        "over_delivery_quantity": line.over_delivery_quantity,
-                        "confirmed_by": line.over_delivery_confirmed_by,
-                        "reason": line.over_delivery_reason,
-                    }
-                    for line in lines
-                    if int(line.over_delivery_quantity or 0) > 0
-                ],
-            },
-            description="确认送货单发货",
-        )
-        db.commit()
+        if write_audit:
+            _write_audit(
+                db,
+                user=user,
+                action="DISPATCH",
+                resource="Delivery",
+                entity_id=delivery_id,
+                details={
+                    "dispatched_at": dispatched_at,
+                    "item_count": len(lines),
+                    "source_mode": delivery.source_mode,
+                    "unordered_item_count": len(unordered_lines),
+                    "released_pallet_ids": released_pallet_ids,
+                    "over_delivery_quantity": sum(
+                        int(line.over_delivery_quantity or 0) for line in lines
+                    ),
+                    "over_delivery_items": [
+                        {
+                            "delivery_item_id": line.id,
+                            "order_item_id": line.order_item_id,
+                            "ordered_quantity_snapshot": line.ordered_quantity_snapshot,
+                            "actual_delivery_quantity": line.delivered_quantity,
+                            "over_delivery_quantity": line.over_delivery_quantity,
+                            "confirmed_by": line.over_delivery_confirmed_by,
+                            "reason": line.over_delivery_reason,
+                        }
+                        for line in lines
+                        if int(line.over_delivery_quantity or 0) > 0
+                    ],
+                },
+                description="确认送货单发货",
+            )
+        db.commit() if commit else db.flush()
         return _delivery_response(db, delivery_id)
     except HTTPException:
         db.rollback()
@@ -8999,12 +9032,23 @@ def dispatch_delivery(
         raise
 
 
-@router.put("/{delivery_id}")
-def update_delivery(
+@router.put("/{delivery_id}/dispatch")
+def dispatch_delivery(
     delivery_id: int,
-    payload: DeliveryUpdate,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
+) -> dict:
+    return _dispatch_delivery(delivery_id, db=db, user=user)
+
+
+def _update_delivery(
+    delivery_id: int,
+    payload: DeliveryUpdate,
+    *,
+    db: Session,
+    user: User,
+    commit: bool = True,
+    revision_mode: bool = False,
 ) -> dict:
     existing_delivery = _delivery_for_user(db, delivery_id, user)
     historical_backfill = bool(existing_delivery.is_historical_backfill)
@@ -9037,6 +9081,28 @@ def update_delivery(
             actual_delivery_date=target_delivery_date,
             order_item_ids=[int(line.order_item_id) for line in payload.items],
         )
+    elif revision_mode:
+        target_delivery_date = payload.delivery_date or existing_delivery.delivery_date
+        if target_delivery_date != existing_delivery.delivery_date:
+            _require_historical_delivery_permissions(user)
+            order_item_ids = [
+                int(line.order_item_id)
+                for line in payload.items
+                if line.source_type == "order" and line.order_item_id is not None
+            ]
+            if len(order_item_ids) != len(payload.items):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "送货来源包含无订单库存，无法证明订单日期下限，"
+                        "禁止在本次编辑中改写实际送货日期"
+                    ),
+                )
+            _validate_historical_delivery_date(
+                db,
+                actual_delivery_date=target_delivery_date,
+                order_item_ids=order_item_ids,
+            )
     else:
         target_delivery_date = existing_delivery.delivery_date
         if (
@@ -9053,17 +9119,18 @@ def update_delivery(
         "historical_delivery_update",
         {"delivery_id": delivery_id, **payload.model_dump(exclude={"idempotency_key"})},
     )
-    replay, replay_record = _delivery_idempotency_replay(
-        db,
-        idempotency_key=payload.idempotency_key,
-        request_hash=request_hash,
-        action="historical_delivery_update",
-        actor=user,
-    )
-    if replay is not None:
-        assert replay_record is not None
-        _delivery_for_user(db, replay_record.resource_id, user)
-        return replay
+    if not revision_mode:
+        replay, replay_record = _delivery_idempotency_replay(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action="historical_delivery_update",
+            actor=user,
+        )
+        if replay is not None:
+            assert replay_record is not None
+            _delivery_for_user(db, replay_record.resource_id, user)
+            return replay
     try:
         _validate_delivery_source_contract(payload.source_mode, payload.items)
     except ValueError as error:
@@ -9107,7 +9174,7 @@ def update_delivery(
                     "message": "送货单版本已变化，请刷新后重试",
                 },
             )
-        if payload.source_mode != delivery.source_mode:
+        if payload.source_mode != delivery.source_mode and not revision_mode:
             raise HTTPException(
                 status_code=409,
                 detail="送货单保存后不能切换订单待送与无订单库存来源",
@@ -9151,7 +9218,8 @@ def update_delivery(
             )
         if delivery.source_mode in {"unordered_finished", "mixed"}:
             delivery_item_ids = select(DeliveryItem.id).where(
-                DeliveryItem.delivery_id == delivery_id
+                DeliveryItem.delivery_id == delivery_id,
+                DeliveryItem.is_current.is_(True),
             )
             db.execute(
                 delete(UnorderedFinishedDeliveryAllocation).where(
@@ -9161,9 +9229,13 @@ def update_delivery(
                 )
             )
         db.execute(
-            delete(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)
+            delete(DeliveryItem).where(
+                DeliveryItem.delivery_id == delivery_id,
+                DeliveryItem.is_current.is_(True),
+            )
         )
         db.flush()
+        delivery.source_mode = payload.source_mode
         if built_unordered:
             _store_unordered_finished_items(
                 db,
@@ -9203,33 +9275,284 @@ def update_delivery(
             delivery.vehicle_number = payload.vehicle_number.strip() or None
         delivery.total_quantity = total_quantity
         delivery.version = current_version + 1
+        if not revision_mode:
+            _write_audit(
+                db,
+                user=user,
+                action="UPDATE",
+                resource="Delivery",
+                entity_id=delivery.id,
+                details={
+                    "delivery_number": delivery.delivery_number,
+                    "source_mode": delivery.source_mode,
+                    "item_count": len(payload.items),
+                    "total_quantity": total_quantity,
+                    "is_historical_backfill": historical_backfill,
+                    "actual_delivery_date": delivery.delivery_date,
+                    "before_version": current_version,
+                    "after_version": delivery.version,
+                },
+                description="编辑待发货送货单",
+            )
+        response = _delivery_response(db, delivery.id)
+        response["warnings"] = warnings
+        if not revision_mode:
+            _record_delivery_idempotency(
+                db,
+                idempotency_key=payload.idempotency_key,
+                request_hash=request_hash,
+                action="historical_delivery_update",
+                actor=user,
+                delivery_id=delivery.id,
+                response=response,
+            )
+        db.commit() if commit else db.flush()
+        return response
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as error:
+        db.rollback()
+        if not revision_mode:
+            replay, replay_record = _delivery_idempotency_replay(
+                db,
+                idempotency_key=payload.idempotency_key,
+                request_hash=request_hash,
+                action="historical_delivery_update",
+                actor=user,
+            )
+            if replay is not None:
+                assert replay_record is not None
+                _delivery_for_user(db, replay_record.resource_id, user)
+                return replay
+        raise HTTPException(status_code=409, detail="送货单数据冲突") from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.put("/{delivery_id}")
+def update_delivery(
+    delivery_id: int,
+    payload: DeliveryUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    return _update_delivery(delivery_id, payload, db=db, user=user)
+
+
+@router.put("/{delivery_id}/revision")
+def revise_dispatched_delivery(
+    delivery_id: int,
+    payload: DeliveryRevisionUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """Atomically replace the active revision without rewriting dispatch history."""
+
+    request_hash = _delivery_request_hash(
+        "delivery_revision_update",
+        {
+            "delivery_id": delivery_id,
+            **payload.model_dump(exclude={"idempotency_key"}),
+        },
+    )
+    replay, replay_record = _delivery_idempotency_replay(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action="delivery_revision_update",
+        actor=user,
+    )
+    if replay is not None:
+        assert replay_record is not None
+        _delivery_for_user(db, replay_record.resource_id, user)
+        return replay
+
+    delivery = _delivery_for_user(db, delivery_id, user)
+    try:
+        claimed = db.execute(
+            update(Delivery)
+            .where(
+                Delivery.id == delivery_id,
+                Delivery.status == "dispatched",
+                Delivery.version == payload.expected_version,
+            )
+            .values(version=Delivery.version)
+        )
+        if claimed.rowcount != 1:
+            current = db.execute(
+                select(Delivery.status, Delivery.version).where(
+                    Delivery.id == delivery_id
+                )
+            ).one_or_none()
+            if current is None:
+                raise HTTPException(status_code=404, detail="送货单不存在")
+            if current.status == "voided":
+                raise HTTPException(status_code=409, detail="送货单已作废，不能编辑")
+            if current.status != "dispatched":
+                raise HTTPException(
+                    status_code=409,
+                    detail="只有已发货且待回单的送货单可以受控编辑",
+                )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "delivery_version_conflict",
+                    "message": "送货单版本已变化，请刷新后重试",
+                },
+            )
+
+        receipt = db.scalar(
+            select(ReturnReceipt).where(ReturnReceipt.delivery_id == delivery_id)
+        )
+        if receipt is not None and receipt.status != "cancelled":
+            raise HTTPException(
+                status_code=409,
+                detail="送货单已有有效回单或待确认回单，不能直接编辑",
+            )
+        block_reason = _delivery_finance_chain_block_reason(db, delivery_id)
+        if block_reason:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "delivery_revision_finance_locked",
+                    "message": block_reason,
+                },
+            )
+        try:
+            _validate_delivery_source_contract(payload.source_mode, payload.items)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        old_lines = db.scalars(
+            select(DeliveryItem)
+            .where(
+                DeliveryItem.delivery_id == delivery_id,
+                DeliveryItem.is_current.is_(True),
+            )
+            .order_by(DeliveryItem.id)
+        ).all()
+        if not old_lines:
+            raise HTTPException(status_code=409, detail="送货单当前明细为空，不能受控编辑")
+        old_revision = max(int(line.revision_number or 1) for line in old_lines)
+        before = {
+            "version": int(delivery.version or 1),
+            "source_mode": delivery.source_mode,
+            "delivery_date": delivery.delivery_date,
+            "vehicle_number": delivery.vehicle_number,
+            "total_quantity": int(delivery.total_quantity or 0),
+            "dispatched_at": delivery.dispatched_at,
+            "dispatched_by": delivery.dispatched_by,
+            "printed_at": delivery.printed_at,
+            "items": [
+                {
+                    "delivery_item_id": line.id,
+                    "source_type": line.source_type,
+                    "order_item_id": line.order_item_id,
+                    "product_id": line.product_id,
+                    "quantity": int(line.delivered_quantity or 0),
+                    "revision_number": int(line.revision_number or 1),
+                }
+                for line in old_lines
+            ],
+        }
+        original_dispatched_at = delivery.dispatched_at
+        original_dispatched_by = delivery.dispatched_by
+
+        _cancel_delivery(
+            delivery_id,
+            db=db,
+            user=user,
+            commit=False,
+            revision_mode=True,
+        )
+        for line in old_lines:
+            line.is_current = False
+        db.flush()
+
+        _update_delivery(
+            delivery_id,
+            payload,
+            db=db,
+            user=user,
+            commit=False,
+            revision_mode=True,
+        )
+        next_revision = old_revision + 1
+        new_lines = db.scalars(
+            select(DeliveryItem)
+            .where(
+                DeliveryItem.delivery_id == delivery_id,
+                DeliveryItem.is_current.is_(True),
+            )
+            .order_by(DeliveryItem.id)
+        ).all()
+        for line in new_lines:
+            line.revision_number = next_revision
+        db.flush()
+
+        _dispatch_delivery(
+            delivery_id,
+            db=db,
+            user=user,
+            commit=False,
+            write_audit=False,
+        )
+        delivery = _delivery_or_404(db, delivery_id)
+        delivery.dispatched_at = original_dispatched_at
+        delivery.dispatched_by = original_dispatched_by
+        delivery.printed_at = None
+        delivery.printed_by = None
+        db.flush()
+
+        after = {
+            "version": int(delivery.version or 1),
+            "source_mode": delivery.source_mode,
+            "delivery_date": delivery.delivery_date,
+            "vehicle_number": delivery.vehicle_number,
+            "total_quantity": int(delivery.total_quantity or 0),
+            "items": [
+                {
+                    "delivery_item_id": line.id,
+                    "source_type": line.source_type,
+                    "order_item_id": line.order_item_id,
+                    "product_id": line.product_id,
+                    "quantity": int(line.delivered_quantity or 0),
+                    "revision_number": int(line.revision_number or 1),
+                }
+                for line in new_lines
+            ],
+        }
         _write_audit(
             db,
             user=user,
-            action="UPDATE",
+            action="REVISE_DISPATCHED_DELIVERY",
             resource="Delivery",
-            entity_id=delivery.id,
+            entity_id=delivery_id,
             details={
                 "delivery_number": delivery.delivery_number,
-                "source_mode": delivery.source_mode,
-                "item_count": len(payload.items),
-                "total_quantity": total_quantity,
-                "is_historical_backfill": historical_backfill,
-                "actual_delivery_date": delivery.delivery_date,
-                "before_version": current_version,
-                "after_version": delivery.version,
+                "before": before,
+                "after": after,
+                "reprint_required": True,
             },
-            description="编辑待发货送货单",
+            description="受控编辑已发货待回单送货单并保留原明细修订历史",
         )
-        response = _delivery_response(db, delivery.id)
-        response["warnings"] = warnings
+        response = _delivery_response(db, delivery_id)
+        response["warnings"] = [
+            {
+                "code": "delivery_reprint_required",
+                "message": "送货单内容已修改，请补打最新版",
+            }
+        ]
+        response["reprint_required"] = True
         _record_delivery_idempotency(
             db,
             idempotency_key=payload.idempotency_key,
             request_hash=request_hash,
-            action="historical_delivery_update",
+            action="delivery_revision_update",
             actor=user,
-            delivery_id=delivery.id,
+            delivery_id=delivery_id,
             response=response,
         )
         db.commit()
@@ -9243,14 +9566,14 @@ def update_delivery(
             db,
             idempotency_key=payload.idempotency_key,
             request_hash=request_hash,
-            action="historical_delivery_update",
+            action="delivery_revision_update",
             actor=user,
         )
         if replay is not None:
             assert replay_record is not None
             _delivery_for_user(db, replay_record.resource_id, user)
             return replay
-        raise HTTPException(status_code=409, detail="送货单数据冲突") from error
+        raise HTTPException(status_code=409, detail="送货单修订数据冲突") from error
     except Exception:
         db.rollback()
         raise
@@ -9270,7 +9593,10 @@ def correct_delivery_actual_date(
     order_item_ids = list(
         db.scalars(
             select(DeliveryItem.order_item_id)
-            .where(DeliveryItem.delivery_id == delivery.id)
+            .where(
+                DeliveryItem.delivery_id == delivery.id,
+                DeliveryItem.is_current.is_(True),
+            )
             .order_by(DeliveryItem.id)
         ).all()
     )
@@ -9836,7 +10162,8 @@ def delete_delivery(
         )
         if delivery.source_mode in {"unordered_finished", "mixed"}:
             delivery_item_ids = select(DeliveryItem.id).where(
-                DeliveryItem.delivery_id == delivery.id
+                DeliveryItem.delivery_id == delivery.id,
+                DeliveryItem.is_current.is_(True),
             )
             db.execute(
                 delete(UnorderedFinishedDeliveryAllocation).where(
@@ -9870,11 +10197,13 @@ def delete_delivery(
         raise
 
 
-@router.put("/{delivery_id}/cancel")
-def cancel_delivery(
+def _cancel_delivery(
     delivery_id: int,
-    db: Session = Depends(get_db),
-    user: User = Depends(can_operate),
+    *,
+    db: Session,
+    user: User,
+    commit: bool = True,
+    revision_mode: bool = False,
 ) -> dict:
     from app.models.finance import ReturnReceipt, ReturnReceiptItem, StatementItem
 
@@ -9943,7 +10272,10 @@ def cancel_delivery(
             )
         lines = db.scalars(
             select(DeliveryItem)
-            .where(DeliveryItem.delivery_id == delivery_id)
+            .where(
+                DeliveryItem.delivery_id == delivery_id,
+                DeliveryItem.is_current.is_(True),
+            )
             .order_by(DeliveryItem.id)
         ).all()
         order_lines = [line for line in lines if line.source_type == "order"]
@@ -9968,32 +10300,34 @@ def cancel_delivery(
             # document.  Archive it immediately instead of presenting a
             # misleading editable pending draft that cannot safely reuse those
             # allocations.
-            delivery.status = "voided"
-            delivery.voided_by = user.id
-            delivery.voided_at = cancelled_at
+            if not revision_mode:
+                delivery.status = "voided"
+                delivery.voided_by = user.id
+                delivery.voided_at = cancelled_at
             _discard_delivery_pick_task(
                 db,
                 delivery_id=delivery_id,
                 user=user,
                 reason="unordered_finished_delivery_dispatch_cancelled",
             )
-            _write_audit(
-                db,
-                user=user,
-                action="CANCEL_DISPATCH",
-                resource="Delivery",
-                entity_id=delivery_id,
-                details={
-                    "source_mode": "unordered_finished",
-                    "delivery_number": delivery.delivery_number,
-                    "item_count": len(lines),
-                    "restored_quantity": delivery.total_quantity,
-                    "disposition": "voided_after_dispatch_cancel",
-                    "restored_pallet_ids": restored_pallet_ids,
-                },
-                description="取消无订单成品送货、退回原库存批次并归档",
-            )
-            db.commit()
+            if not revision_mode:
+                _write_audit(
+                    db,
+                    user=user,
+                    action="CANCEL_DISPATCH",
+                    resource="Delivery",
+                    entity_id=delivery_id,
+                    details={
+                        "source_mode": "unordered_finished",
+                        "delivery_number": delivery.delivery_number,
+                        "item_count": len(lines),
+                        "restored_quantity": delivery.total_quantity,
+                        "disposition": "voided_after_dispatch_cancel",
+                        "restored_pallet_ids": restored_pallet_ids,
+                    },
+                    description="取消无订单成品送货、退回原库存批次并归档",
+                )
+            db.commit() if commit else db.flush()
             return _delivery_response(db, delivery_id)
         affected_order_ids: set[int] = set()
         for line in order_lines:
@@ -10059,35 +10393,36 @@ def cancel_delivery(
             user=user,
             reason="delivery_dispatch_cancelled",
         )
-        if unordered_lines:
+        if unordered_lines and not revision_mode:
             # Mixed documents contain immutable unordered-lot reversal history.
             # Archive the whole document after both source branches are reversed.
             delivery.status = "voided"
             delivery.voided_by = user.id
             delivery.voided_at = cancelled_at
-        _write_audit(
-            db,
-            user=user,
-            action="CANCEL_DISPATCH",
-            resource="Delivery",
-            entity_id=delivery_id,
-            details={
-                "delivery_number": delivery.delivery_number,
-                "item_count": len(lines),
-                "restored_quantity": delivery.total_quantity,
-                "source_mode": delivery.source_mode,
-                "restored_pallet_ids": restored_pallet_ids,
-                "disposition": (
-                    "voided_after_dispatch_cancel" if unordered_lines else "pending"
+        if not revision_mode:
+            _write_audit(
+                db,
+                user=user,
+                action="CANCEL_DISPATCH",
+                resource="Delivery",
+                entity_id=delivery_id,
+                details={
+                    "delivery_number": delivery.delivery_number,
+                    "item_count": len(lines),
+                    "restored_quantity": delivery.total_quantity,
+                    "source_mode": delivery.source_mode,
+                    "restored_pallet_ids": restored_pallet_ids,
+                    "disposition": (
+                        "voided_after_dispatch_cancel" if unordered_lines else "pending"
+                    ),
+                },
+                description=(
+                    "取消混合送货、回滚订单已送数量、退回原库存批次并归档"
+                    if unordered_lines
+                    else "取消送货单发货并回滚已送数量"
                 ),
-            },
-            description=(
-                "取消混合送货、回滚订单已送数量、退回原库存批次并归档"
-                if unordered_lines
-                else "取消送货单发货并回滚已送数量"
-            ),
-        )
-        db.commit()
+            )
+        db.commit() if commit else db.flush()
         return _delivery_response(db, delivery_id)
     except HTTPException:
         db.rollback()
@@ -10104,6 +10439,15 @@ def cancel_delivery(
     except Exception:
         db.rollback()
         raise
+
+
+@router.put("/{delivery_id}/cancel")
+def cancel_delivery(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    return _cancel_delivery(delivery_id, db=db, user=user)
 
 
 @router.put("/{delivery_id}/printed")
@@ -10291,7 +10635,10 @@ def get_delivery_print_data(
             Product.id
             == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
         )
-        .where(DeliveryItem.delivery_id == delivery_id)
+        .where(
+            DeliveryItem.delivery_id == delivery_id,
+            DeliveryItem.is_current.is_(True),
+        )
         .order_by(DeliveryItem.id)
     ).all()
     internal_remarks = _tianhua_internal_remarks_by_delivery_item(

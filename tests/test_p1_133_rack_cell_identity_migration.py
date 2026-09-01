@@ -151,6 +151,7 @@ def test_rack_cell_identity_model_declares_the_same_partial_unique_index() -> No
 
 
 def test_rack_cell_identity_upgrade_downgrade_upgrade_is_zero_backfill(
+    current_alembic_head: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -161,7 +162,14 @@ def test_rack_cell_identity_upgrade_downgrade_upgrade_is_zero_backfill(
     ]
     config = _prepare_parent_schema(monkeypatch, database, rows)
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [TARGET_REVISION]
+    assert script.get_heads() == [current_alembic_head]
+    assert TARGET_REVISION in {
+        row.revision
+        for row in script.walk_revisions(
+            base=TARGET_REVISION,
+            head=current_alembic_head,
+        )
+    }
     assert script.get_revision(TARGET_REVISION).down_revision == PARENT_REVISION
 
     with sqlite3.connect(database) as connection:

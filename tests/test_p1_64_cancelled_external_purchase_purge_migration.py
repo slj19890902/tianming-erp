@@ -6,13 +6,13 @@ import sqlite3
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PARENT = "aaa35v8x9z24"
 TARGET = "bbb36v8x9z25"
-INTEGRATION_HEAD = "iv57v8x9z46"
 MIGRATION = (
     ROOT
     / "alembic"
@@ -36,7 +36,11 @@ def test_p1_64_migration_is_unique_linear_ancestor(current_alembic_head: str) ->
     spec.loader.exec_module(module)
     assert module.revision == TARGET
     assert module.down_revision == PARENT
-    assert current_alembic_head == INTEGRATION_HEAD
+    script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
+    assert TARGET in {
+        row.revision
+        for row in script.walk_revisions(base=TARGET, head=current_alembic_head)
+    }
 
 
 def test_p1_64_round_trip_replaces_only_delete_guards(

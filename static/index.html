@@ -679,6 +679,21 @@
       .finance-cost-grid .wide { grid-column:span 2; }
       .finance-cost-summary { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px; }
       .finance-cost-summary .finance-report-card { min-height:72px; }
+      .finance-processing-panel { margin-bottom:10px;padding:10px 12px;overflow:visible; }
+      .finance-processing-head { display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px; }
+      .finance-processing-groups { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
+      .finance-processing-group { min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:8px; }
+      .finance-processing-group-title { display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;font-size:12px;font-weight:700;color:var(--text-secondary); }
+      .finance-processing-grid { display:grid;grid-template-columns:repeat(4,minmax(88px,1fr));gap:6px;align-items:end; }
+      .finance-processing-grid .field { min-width:0;margin:0; }
+      .finance-processing-grid .field label { margin-bottom:3px;font-size:11px;white-space:nowrap; }
+      .finance-processing-grid .input,
+      .finance-processing-grid .select { min-width:0;width:100%;height:32px;padding:5px 7px;font-size:12px; }
+      .finance-processing-status { display:inline-flex;align-items:center;min-height:24px;padding:2px 8px;border-radius:999px;background:#e8f4f2;color:var(--primary);font-size:11px;font-weight:700;white-space:nowrap; }
+      .finance-processing-profile-tools { display:grid;grid-template-columns:minmax(180px,1fr) auto;gap:6px;align-items:end;margin-bottom:6px; }
+      .finance-processing-profile-edit { margin-bottom:8px;padding:8px;border:1px solid var(--line);border-radius:8px;background:#f8fbfa; }
+      .finance-processing-table th,
+      .finance-processing-table td { padding:7px 9px;font-size:12px; }
       .finance-month-workbench { margin-bottom:10px; }
       .finance-month-actions { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px; }
       .finance-month-action { min-width:0;min-height:96px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff;text-align:left;cursor:pointer;color:var(--text); }
@@ -689,8 +704,8 @@
       .finance-cost-legacy { margin-top:10px; }
       .finance-cost-legacy > summary { cursor:pointer;padding:12px 14px;font-weight:700;color:var(--text-secondary); }
       .finance-cost-legacy > .finance-cost-legacy-body { border-top:1px solid var(--line); }
-      @media (max-width: 1180px) { .finance-cost-grid{grid-template-columns:repeat(3,minmax(0,1fr))} }
-      @media (max-width: 980px) { .finance-overview-grid{grid-template-columns:1fr}.payable-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-cost-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-cost-summary{grid-template-columns:1fr}.finance-month-actions{grid-template-columns:repeat(2,minmax(0,1fr))} }
+      @media (max-width: 1180px) { .finance-cost-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.finance-processing-groups{grid-template-columns:1fr} }
+      @media (max-width: 980px) { .finance-overview-grid{grid-template-columns:1fr}.payable-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-cost-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-cost-summary{grid-template-columns:1fr}.finance-month-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-processing-grid{grid-template-columns:repeat(2,minmax(0,1fr))} }
       .table-wrap { overflow: auto; max-height: calc(100vh - 220px); }
       table { width: 100%; border-collapse: collapse; white-space: nowrap; }
       th, td { padding: 10px 16px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; }
@@ -4917,7 +4932,7 @@
                 <input v-if="canViewFinanceCosts" ref="financeCostFileInput" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" @change="onFinanceCostFileSelected" />
                 <div v-if="canViewFinanceCosts" class="panel finance-filter-panel" style="margin-bottom:10px">
                   <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
-                    <div><div class="section-title">月度成本费用</div><div class="muted">代替日常 Excel 汇总；先录入草稿，复核后再确认。</div></div>
+                    <div><div class="section-title" style="display:flex;align-items:center;gap:6px">月度成本费用 <button v-if="canViewFinanceCosts" class="btn small" type="button" :disabled="financeProcessingState.settingsLoading || financeProcessingState.profilesLoading" @click="toggleFinanceProcessingPanel">{{ financeProcessingOpen ? '收起参数' : '加工参数' }}</button></div><div class="muted">先草稿，后确认。</div></div>
                     <div class="toolbar-group">
                       <button class="btn" :disabled="financeCostState.loading" @click="loadFinanceCosts">刷新</button>
                       <button v-if="canExportFinanceCosts" class="btn" :disabled="financeCostState.exporting" @click="downloadFinanceCostTemplate">下载模板</button>
@@ -4946,8 +4961,91 @@
                   <div v-if="financeCostMeta.warning" class="muted" style="margin-top:8px">{{ financeCostMeta.warning }}</div>
                 </div>
 
+                <div v-if="canViewFinanceCosts && financeProcessingOpen" class="panel finance-processing-panel">
+                  <div class="finance-processing-head">
+                    <div class="section-title">加工参数</div>
+                    <div class="toolbar-group">
+                      <span class="finance-processing-status">{{ financeProcessingWorkerCostText }}</span>
+                      <button v-if="canManageFinanceCosts" class="btn small primary" type="button" :disabled="financeProcessingState.settingsSaving || financeProcessingState.settingsLoading" @click="saveFinanceProcessingSettings">{{ financeProcessingState.settingsSaving ? '保存中…' : (financeProcessingSettingsAttempt.outcomeUncertain ? '原编号重试' : '保存参数') }}</button>
+                    </div>
+                  </div>
+                  <div v-if="financeProcessingState.settingsError" class="notice danger" style="margin-bottom:8px">参数读取失败：{{ financeProcessingState.settingsError }}</div>
+                  <div v-if="financeProcessingSettingsAttempt.outcomeUncertain" class="notice warning" style="margin-bottom:8px">保存待核对，请原编号重试。</div>
+                  <div v-if="financeProcessingState.settingsLoading" class="empty" style="padding:18px">正在读取参数…</div>
+                  <div v-else class="finance-processing-groups">
+                    <div class="finance-processing-group">
+                      <div class="finance-processing-group-title"><span>人工</span><span class="muted">元 / 月</span></div>
+                      <div class="finance-processing-grid">
+                        <div class="field"><label>日工时</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.working_hours_per_day" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>月工日</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.working_days_per_month" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>人均月薪</label><input class="input" type="number" min="0" step="0.01" title="生产人员固定月薪平均值" v-model="financeProcessingSettings.average_worker_monthly_salary" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>人均社保</label><input class="input" type="number" min="0" step="0.01" title="生产人员公司承担社保的月平均值" v-model="financeProcessingSettings.average_worker_monthly_social_cost" :disabled="!canManageFinanceCosts" /></div>
+                      </div>
+                    </div>
+                    <div class="finance-processing-group">
+                      <div class="finance-processing-group-title"><span>印刷</span><span class="muted">张 / 分</span></div>
+                      <div class="finance-processing-grid">
+                        <div class="field"><label>默认机</label><select class="select" v-model="financeProcessingSettings.default_printer" :disabled="!canManageFinanceCosts"><option v-for="item in financeProcessingDefaultPrinterModes" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
+                        <div class="field"><label>新机常速</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.new_printer_normal_sheets_per_minute" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>新机峰值</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.new_printer_max_sheets_per_minute" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>旧机常速</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.old_printer_normal_sheets_per_minute" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>旧机峰值</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.old_printer_max_sheets_per_minute" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>换版 / 分</label><input class="input" type="number" min="0" step="0.01" v-model="financeProcessingSettings.printing_setup_minutes" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>人数</label><input class="input" type="number" min="1" step="1" v-model="financeProcessingSettings.printing_crew_size" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>色 / 次</label><input class="input" type="number" min="1" step="1" v-model="financeProcessingSettings.colors_per_pass" :disabled="!canManageFinanceCosts" /></div>
+                      </div>
+                    </div>
+                    <div class="finance-processing-group">
+                      <div class="finance-processing-group-title"><span>模切</span><span class="muted">件 / 分</span></div>
+                      <div class="finance-processing-grid">
+                        <div class="field"><label>换模 / 分</label><input class="input" type="number" min="0" step="0.01" v-model="financeProcessingSettings.die_setup_minutes" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>小模常速</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.small_die_normal_pieces_per_minute" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>小模峰值</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.small_die_max_pieces_per_minute" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>小模人数</label><input class="input" type="number" min="1" step="1" v-model="financeProcessingSettings.small_die_crew_size" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>复杂人数</label><input class="input" type="number" min="1" step="1" v-model="financeProcessingSettings.small_complex_die_crew_size" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>大模速度</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.large_die_pieces_per_minute" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>大模人数</label><input class="input" type="number" min="1" step="1" v-model="financeProcessingSettings.large_die_crew_size" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>超大秒 / 件</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.oversize_die_seconds_per_piece" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>超大人数</label><input class="input" type="number" min="1" step="1" v-model="financeProcessingSettings.oversize_die_crew_size" :disabled="!canManageFinanceCosts" /></div>
+                      </div>
+                    </div>
+                    <div class="finance-processing-group">
+                      <div class="finance-processing-group-title"><span>组装</span><span class="muted">件 / 秒</span></div>
+                      <div class="finance-processing-grid">
+                        <div class="field"><label>常速</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.joining_normal_pieces_per_second" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>峰值</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.joining_max_pieces_per_second" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>双拼秒 / 件</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeProcessingSettings.double_splice_seconds_per_piece" :disabled="!canManageFinanceCosts" /></div>
+                        <div class="field"><label>人数</label><input class="input" type="number" min="1" step="1" v-model="financeProcessingSettings.joining_crew_size" :disabled="!canManageFinanceCosts" /></div>
+                      </div>
+                    </div>
+                    <div class="finance-processing-group" style="grid-column:1/-1">
+                      <div class="finance-processing-group-title"><span>产品例外</span><span class="muted">{{ financeProcessingProfileTotal }} 项</span></div>
+                      <div class="finance-processing-profile-tools"><input class="input" v-model.trim="financeProcessingSearch" placeholder="客户 / 存货编码" @keyup.enter="loadFinanceProcessingProfiles" /><button class="btn small" type="button" :disabled="financeProcessingState.profilesLoading" @click="loadFinanceProcessingProfiles">{{ financeProcessingState.profilesLoading ? '查询中…' : '查询' }}</button></div>
+                      <div v-if="financeProcessingState.profilesError" class="notice danger" style="margin-bottom:6px">例外读取失败：{{ financeProcessingState.profilesError }}</div>
+                      <div v-if="financeProcessingProfileAttempt.outcomeUncertain" class="notice warning" style="margin-bottom:6px">{{ financeProcessingProfileAttempt.action === 'delete' ? '恢复待核对，请原编号重试。' : '保存待核对，请原编号重试。' }}</div>
+                      <div v-if="financeProcessingProfileForm.product_id" class="finance-processing-profile-edit">
+                        <div class="finance-processing-group-title"><span>{{ financeProcessingProfileForm.customer_name }} · {{ financeProcessingProfileForm.customer_material_code || '-' }}</span><span class="toolbar-group"><button v-if="financeProcessingProfileForm.is_override" class="btn small danger" type="button" :disabled="financeProcessingState.profileSaving || financeProcessingState.profileDeleting || (financeProcessingProfileAttempt.outcomeUncertain && financeProcessingProfileAttempt.action === 'save')" @click="deleteFinanceProcessingProfile">{{ financeProcessingState.profileDeleting ? '恢复中…' : (financeProcessingProfileAttempt.outcomeUncertain && financeProcessingProfileAttempt.action === 'delete' ? '原编号重试' : '恢复默认') }}</button><button class="btn small" type="button" :disabled="financeProcessingState.profileSaving || financeProcessingState.profileDeleting" @click="resetFinanceProcessingProfile">取消</button></span></div>
+                        <div class="finance-processing-grid">
+                          <div class="field"><label>印刷机</label><select class="select" v-model="financeProcessingProfileForm.printer_mode"><option v-for="item in financeProcessingPrinterModes" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
+                          <div class="field"><label>模切档</label><select class="select" v-model="financeProcessingProfileForm.die_cut_mode"><option v-for="item in financeProcessingDieModes" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
+                          <div class="field"><label>人数</label><input class="input" type="number" min="0" step="1" v-model="financeProcessingProfileForm.assembly_workers" @input="calculateFinanceAssemblyWorkerDays" /></div>
+                          <div class="field"><label>天数</label><input class="input" type="number" min="0" step="0.01" v-model="financeProcessingProfileForm.assembly_days" @input="calculateFinanceAssemblyWorkerDays" /></div>
+                          <div class="field"><label>完成数</label><input class="input" type="number" min="1" step="1" v-model="financeProcessingProfileForm.assembly_output" @input="calculateFinanceAssemblyWorkerDays" /></div>
+                          <div class="field"><label>工日 / 千套</label><input class="input" type="number" min="0" step="0.0001" v-model="financeProcessingProfileForm.assembly_worker_days_per_1000" @input="clearFinanceAssemblyConversionInputs" /></div>
+                          <div class="field"><button class="btn small primary" style="width:100%" type="button" :disabled="financeProcessingState.profileSaving || financeProcessingState.profileDeleting || (financeProcessingProfileAttempt.outcomeUncertain && financeProcessingProfileAttempt.action === 'delete')" @click="saveFinanceProcessingProfile">{{ financeProcessingState.profileSaving ? '保存中…' : (financeProcessingProfileAttempt.outcomeUncertain && financeProcessingProfileAttempt.action === 'save' ? '原编号重试' : '保存例外') }}</button></div>
+                        </div>
+                      </div>
+                      <div v-if="financeProcessingState.profilesLoading" class="empty" style="padding:14px">正在查询…</div>
+                      <div v-else class="table-wrap" style="max-height:240px"><table class="finance-processing-table"><thead><tr><th>客户 / 存货编码</th><th>产品</th><th>印刷</th><th>模切</th><th>组装工日 / 千套</th><th>操作</th></tr></thead><tbody>
+                        <tr v-for="row in financeProcessingProfiles" :key="row.product_id"><td><strong>{{ row.customer_name || '-' }}</strong><div class="muted">{{ row.customer_material_code || row.product_code || '-' }}</div></td><td>{{ row.product_name || '-' }}</td><td>{{ financeProcessingOptionText(financeProcessingPrinterModes,row.printer_mode) }}</td><td>{{ financeProcessingOptionText(financeProcessingDieModes,row.die_cut_mode) }}</td><td>{{ row.assembly_worker_days_per_1000 ?? '默认' }}</td><td><button v-if="canManageFinanceCosts" class="btn small" type="button" @click="editFinanceProcessingProfile(row)">编辑</button></td></tr>
+                        <tr v-if="!financeProcessingProfiles.length"><td colspan="6" class="empty" style="padding:16px">暂无匹配产品。</td></tr>
+                      </tbody></table></div>
+                    </div>
+                  </div>
+                </div>
+
                 <div v-if="canViewFinanceCosts && canManageFinanceCosts" class="panel" style="margin-bottom:10px">
-                  <div class="toolbar"><div><div class="section-title">{{ financeCostForm.id ? '编辑费用草稿' : '记一笔费用' }}</div><div class="muted">金额按 Excel 原数保存，不自动转换为正式会计凭证。</div></div><button v-if="financeCostForm.id" class="btn small" @click="resetFinanceCostForm">取消编辑</button></div>
+                  <div class="toolbar"><div class="section-title">{{ financeCostForm.id ? '编辑费用草稿' : '记一笔费用' }}</div><button v-if="financeCostForm.id" class="btn small" @click="resetFinanceCostForm">取消编辑</button></div>
                   <div v-if="financeCostSaveAttempt.outcomeUncertain" class="notice warning">上次保存结果暂不确定。请保持内容不变并点击“按原编号重试”，系统会安全核对，不会重复记账。</div>
                   <div class="finance-cost-grid">
                     <div class="field"><label>类别</label><select class="select" v-model="financeCostForm.cost_category" @change="applyFinanceCostCategoryDefault"><option v-for="item in financeCostMeta.categories" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
@@ -7628,7 +7726,7 @@
                       <div class="muted">{{ item.material_gross_scope_label }}</div>
                     </div>
                     <button v-if="item.estimated_total_cost_snapshot_version" class="btn small" type="button" @click="openEstimatedCost(orderDetail,item)">调整预计成本</button>
-                    <details><summary>查看材料成本依据与预计总成本</summary><div><strong>{{ orderMaterialCostSummary(item) }}</strong> · {{ item.material_cost_history_label }}</div><div class="muted">{{ item.material_cost_scope_label || '材料成本（未计生产损耗和加工费）' }}</div><div v-for="(component,index) in item.material_cost_components || []" :key="`${item.id}-cost-${index}`">{{ orderMaterialCostComponentText(component) }}</div><div v-if="item.estimated_cost_breakdown">损耗材料 ¥ {{ money(item.estimated_cost_breakdown.loss_material_total_cost) }} · 加工 ¥ {{ money(item.estimated_cost_breakdown.processing_total_cost) }} · 一次性费用 ¥ {{ money(item.estimated_cost_breakdown.one_time_fee_total) }}</div><div v-for="missing in item.material_cost_missing_items || []" :key="missing" class="missing">材料待补：{{ missing }}</div><div v-for="missing in item.estimated_cost_missing_items || []" :key="`estimated-${missing}`" class="missing">成本待补：{{ missing }}</div><div class="muted">损耗 {{ Number(item.estimated_loss_rate || 0) * 100 }}% · {{ item.estimated_total_cost_scope_label || '预计成本，非实际成本' }}</div></details>
+                    <details><summary>查看材料成本依据与预计总成本</summary><div><strong>{{ orderMaterialCostSummary(item) }}</strong> · {{ item.material_cost_history_label }}</div><div class="muted">{{ item.material_cost_scope_label || '材料成本（未计生产损耗和加工费）' }}</div><div v-for="(component,index) in item.material_cost_components || []" :key="`${item.id}-cost-${index}`">{{ orderMaterialCostComponentText(component) }}</div><div v-if="item.estimated_cost_breakdown">损耗材料 ¥ {{ money(item.estimated_cost_breakdown.loss_material_total_cost) }} · 加工 {{ orderProcessingCostText(item.estimated_cost_breakdown.processing_total_cost) }} · 加工单价 {{ orderProcessingCostText(item.estimated_cost_breakdown.processing_unit_cost) }} · 一次性费用 ¥ {{ money(item.estimated_cost_breakdown.one_time_fee_total) }}</div><div v-for="missing in item.material_cost_missing_items || []" :key="missing" class="missing">材料待补：{{ missing }}</div><div v-for="missing in item.estimated_cost_missing_items || []" :key="`estimated-${missing}`" class="missing">成本待补：{{ missing }}</div><div class="muted">损耗 {{ Number(item.estimated_loss_rate || 0) * 100 }}% · {{ item.estimated_total_cost_scope_label || '预计成本，非实际成本' }}</div></details>
                   </div>
                 </td>
                 <td>{{ orderSpecificationText(item.snapshot_spec) }}</td>
@@ -9183,6 +9281,27 @@
         suggested_quantity:null, cadence:"one_time", remind_on:"",
         product_id:null,
       });
+      const blankFinanceProcessingSettings = () => ({
+        version:0,
+        working_hours_per_day:"", working_days_per_month:"", default_printer:"",
+        new_printer_normal_sheets_per_minute:"", new_printer_max_sheets_per_minute:"",
+        old_printer_normal_sheets_per_minute:"", old_printer_max_sheets_per_minute:"",
+        printing_setup_minutes:"", printing_crew_size:"", colors_per_pass:"",
+        die_setup_minutes:"", small_die_normal_pieces_per_minute:"", small_die_max_pieces_per_minute:"",
+        small_die_crew_size:"", small_complex_die_crew_size:"",
+        large_die_pieces_per_minute:"", large_die_crew_size:"",
+        oversize_die_seconds_per_piece:"", oversize_die_crew_size:"",
+        joining_normal_pieces_per_second:"", joining_max_pieces_per_second:"",
+        double_splice_seconds_per_piece:"", joining_crew_size:"",
+        average_worker_monthly_salary:"", average_worker_monthly_social_cost:"",
+        worker_day_cost:null, status:"", worker_day_cost_status:"",
+      });
+      const blankFinanceProcessingProfile = () => ({
+        product_id:null, customer_name:"", customer_material_code:"", product_name:"",
+        printer_mode:"auto", die_cut_mode:"auto", assembly_worker_days_per_1000:"",
+        assembly_workers:"", assembly_days:"", assembly_output:"",
+        version:0, is_override:false,
+      });
       let quotationLineKey = 0;
       const blankQuotationLine = () => ({
         _key: ++quotationLineKey,
@@ -9502,6 +9621,16 @@
             financeCostSaveAttempt: { signature:"", idempotencyKey:"", outcomeUncertain:false },
             financeCostTransitionAttempts: {},
             financeCostForm: { id:null, version:null, cost_month:month(), document_date:today(), cost_center_id:null, cost_category:"production_wages", allocation_basis:"unallocated", description:"", counterparty_name:"", document_number:"", source_reference:"", amount:"", tax_amount:"0.00", note:"" },
+            financeProcessingOpen:false,
+            financeProcessingState:{settingsLoading:false,settingsSaving:false,profilesLoading:false,profileSaving:false,profileDeleting:false,settingsError:"",profilesError:"",loaded:false},
+            financeProcessingSettings:blankFinanceProcessingSettings(),
+            financeProcessingProfiles:[], financeProcessingProfileTotal:0, financeProcessingSearch:"",
+            financeProcessingProfileForm:blankFinanceProcessingProfile(),
+            financeProcessingSettingsAttempt:{signature:"",idempotencyKey:"",outcomeUncertain:false},
+            financeProcessingProfileAttempt:{signature:"",idempotencyKey:"",outcomeUncertain:false,action:""},
+            financeProcessingDefaultPrinterModes:[{value:"new",label:"新印刷机"},{value:"old",label:"旧印刷机"}],
+            financeProcessingPrinterModes:[{value:"auto",label:"按默认"},{value:"new",label:"新印刷机"},{value:"old",label:"旧印刷机"},{value:"none",label:"不印刷"}],
+            financeProcessingDieModes:[{value:"auto",label:"按默认"},{value:"none",label:"不模切"},{value:"small_normal",label:"小模切"},{value:"small_complex",label:"小复杂"},{value:"large",label:"大模切"},{value:"oversize",label:"超大模切"}],
             financePayables: [], financePayableSuppliers: [], financePayableState:{loading:false,saving:false,error:""},
             financePayableForm:{supplier_id:null,counterparty_name:"",category:"material",document_number:"",document_date:today(),due_date:"",amount:"",note:""},
             statementDisputeForm:{reason:"",target_month:"",remove:{},add:{}}, statementDisputeCandidates:[], statementDisputeState:{loading:false,saving:false,error:""},
@@ -10222,6 +10351,12 @@
           canExportFinanceCosts() { return this.canViewFinanceCosts && this.hasPermission("finance.cost.export"); },
           financeCostActiveCenters() { return (this.financeCostMeta.centers || []).filter(row=>row.is_active); },
           financeCostPrimaryBlocker() { return (this.financeCostSummary.blockers || [])[0]?.message || ""; },
+          financeProcessingWorkerCostText() {
+            const value = this.financeProcessingSettings.worker_day_cost;
+            if (value !== null && value !== undefined && value !== "") return `日人工 ¥ ${this.money(value)}`;
+            const status = this.financeProcessingSettings.worker_day_cost_status || this.financeProcessingSettings.status;
+            return status === "calculated" ? "日人工已算" : "人工待补";
+          },
           canAdjustReconciliationPeriod() { return this.hasPermission("finance.return_receipt.period.adjust"); },
           canManageCustomerCharges() { return this.hasPermission("finance.customer_charge.manage"); },
           canConfirmCustomerCharges() { return this.hasPermission("finance.customer_charge.confirm"); },
@@ -11857,6 +11992,10 @@
               return `材料总成本 ¥${this.money(item.estimated_material_total_cost)}`;
             }
             return item?.material_cost_status_label || "材料成本待完善";
+          },
+          orderProcessingCostText(value) {
+            if (value === null || value === undefined || value === "") return "待完善";
+            return `¥ ${this.money(value)}`;
           },
           orderMaterialCostComponentText(component) {
             const dims = `${component?.report_length_mm || "-"}×${component?.report_width_mm || "-"}`;
@@ -13891,6 +14030,18 @@
             this.financeCostState = {loading:false,saving:false,importing:false,exporting:false,error:""};
             this.financeCostSaveAttempt = {signature:"",idempotencyKey:"",outcomeUncertain:false};
             this.financeCostTransitionAttempts = {};
+            this.financeProcessingOpen = false;
+            this.financeProcessingState = {settingsLoading:false,settingsSaving:false,profilesLoading:false,profileSaving:false,profileDeleting:false,settingsError:"",profilesError:"",loaded:false};
+            this.financeProcessingSettings = blankFinanceProcessingSettings();
+            this.financeProcessingProfiles = [];
+            this.financeProcessingProfileTotal = 0;
+            this.financeProcessingSearch = "";
+            this.financeProcessingProfileForm = blankFinanceProcessingProfile();
+            this.financeProcessingSettingsAttempt = {signature:"",idempotencyKey:"",outcomeUncertain:false};
+            this.financeProcessingProfileAttempt = {signature:"",idempotencyKey:"",outcomeUncertain:false,action:""};
+            this.financeProcessingDefaultPrinterModes = [{value:"new",label:"新印刷机"},{value:"old",label:"旧印刷机"}];
+            this.financeProcessingPrinterModes = [{value:"auto",label:"按默认"},{value:"new",label:"新印刷机"},{value:"old",label:"旧印刷机"},{value:"none",label:"不印刷"}];
+            this.financeProcessingDieModes = [{value:"auto",label:"按默认"},{value:"none",label:"不模切"},{value:"small_normal",label:"小模切"},{value:"small_complex",label:"小复杂"},{value:"large",label:"大模切"},{value:"oversize",label:"超大模切"}];
             this.pages.financeCosts = 1;
             this.resetFinanceCostForm();
             this.cancelOrderGroupDetailRequests?.();
@@ -20547,6 +20698,266 @@
                 if (authGeneration === this.authGeneration && userId === (this.user?.id ?? null)) this.financeOverviewState.exporting = false;
                 this.finishLatestRequest(requestKey,controller);
               }
+            }
+          },
+          financeProcessingOptionText(options,value) {
+            const normalized = String(value || "auto");
+            return (options || []).find(row=>String(row.value)===normalized)?.label || normalized;
+          },
+          normalizeFinanceProcessingModeOptions(items,fallback) {
+            if (!Array.isArray(items) || !items.length) return fallback;
+            const normalized = items
+              .filter(row=>row && row.value !== null && row.value !== undefined)
+              .map(row=>({value:String(row.value),label:String(row.label || row.value)}));
+            return normalized.length ? normalized : fallback;
+          },
+          async toggleFinanceProcessingPanel() {
+            if (!this.canViewFinanceCosts) return false;
+            this.financeProcessingOpen = !this.financeProcessingOpen;
+            if (!this.financeProcessingOpen) return true;
+            return Promise.all([
+              this.loadFinanceProcessingSettings(),
+              this.loadFinanceProcessingProfiles(),
+            ]);
+          },
+          async loadFinanceProcessingSettings() {
+            if (!this.canViewFinanceCosts) return false;
+            const requestKey = "finance:processing:settings";
+            const controller = this.beginLatestRequest(requestKey);
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.financeProcessingState.settingsLoading = true;
+            this.financeProcessingState.settingsError = "";
+            try {
+              const {data} = await axios.get("/api/finance/processing-settings",{signal:controller.signal});
+              if (!this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
+              const source = data?.settings && typeof data.settings === "object" ? data.settings : (data || {});
+              const blank = blankFinanceProcessingSettings();
+              const next = {...blank};
+              for (const key of Object.keys(blank)) {
+                const value = source[key] ?? data?.[key];
+                if (value !== undefined && value !== null) next[key] = value;
+              }
+              next.version = Number(source.version ?? data?.version ?? 0);
+              next.average_worker_monthly_salary = source.average_worker_monthly_salary ?? data?.average_worker_monthly_salary ?? "";
+              next.average_worker_monthly_social_cost = source.average_worker_monthly_social_cost ?? data?.average_worker_monthly_social_cost ?? "";
+              next.worker_day_cost = data?.worker_day_cost ?? source.worker_day_cost ?? null;
+              next.worker_day_cost_status = data?.worker_day_cost_status ?? source.worker_day_cost_status ?? "";
+              next.status = data?.status ?? source.status ?? "";
+              this.financeProcessingSettings = next;
+              const defaultPrinterModes = this.normalizeFinanceProcessingModeOptions(data?.default_printer_modes,this.financeProcessingDefaultPrinterModes).filter(row=>["new","old"].includes(row.value));
+              if (defaultPrinterModes.length) this.financeProcessingDefaultPrinterModes = defaultPrinterModes;
+              this.financeProcessingDieModes = this.normalizeFinanceProcessingModeOptions(data?.die_cut_modes,this.financeProcessingDieModes);
+              this.financeProcessingSettingsAttempt = {signature:"",idempotencyKey:"",outcomeUncertain:false};
+              this.financeProcessingState.loaded = true;
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || !this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
+              this.financeProcessingState.settingsError = this.errorMessage(error);
+              return false;
+            } finally {
+              if (this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) this.financeProcessingState.settingsLoading = false;
+              this.finishLatestRequest(requestKey,controller);
+            }
+          },
+          async saveFinanceProcessingSettings() {
+            if (!this.canManageFinanceCosts || this.financeProcessingState.settingsSaving) return false;
+            const form = this.financeProcessingSettings;
+            const decimalFields = [
+              "working_hours_per_day","working_days_per_month",
+              "new_printer_normal_sheets_per_minute","new_printer_max_sheets_per_minute",
+              "old_printer_normal_sheets_per_minute","old_printer_max_sheets_per_minute",
+              "printing_setup_minutes","die_setup_minutes",
+              "small_die_normal_pieces_per_minute","small_die_max_pieces_per_minute",
+              "large_die_pieces_per_minute","oversize_die_seconds_per_piece",
+              "joining_normal_pieces_per_second","joining_max_pieces_per_second","double_splice_seconds_per_piece",
+            ];
+            const integerFields = ["printing_crew_size","colors_per_pass","small_die_crew_size","small_complex_die_crew_size","large_die_crew_size","oversize_die_crew_size","joining_crew_size"];
+            if (!form.default_printer || [...decimalFields,...integerFields].some(key=>String(form[key] ?? "").trim()==="")) {
+              this.showToast("请补齐加工参数",true); return false;
+            }
+            const payload = {default_printer:String(form.default_printer)};
+            for (const key of decimalFields) payload[key] = String(form[key]);
+            for (const key of integerFields) payload[key] = Number(form[key]);
+            const salaryText = String(form.average_worker_monthly_salary ?? "").trim();
+            payload.average_worker_monthly_salary = salaryText && Number(salaryText) > 0 ? salaryText : null;
+            payload.average_worker_monthly_social_cost = String(form.average_worker_monthly_social_cost ?? "").trim() || "0";
+            payload.expected_version = Number(form.version || 0);
+            const signature = JSON.stringify(payload);
+            if (this.financeProcessingSettingsAttempt.signature !== signature || !this.financeProcessingSettingsAttempt.idempotencyKey) {
+              this.financeProcessingSettingsAttempt = {signature,idempotencyKey:createIdempotencyKey(),outcomeUncertain:false};
+            }
+            payload.idempotency_key = this.financeProcessingSettingsAttempt.idempotencyKey;
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.financeProcessingState.settingsSaving = true;
+            try {
+              await axios.put("/api/finance/processing-settings",payload);
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              await this.loadFinanceProcessingSettings();
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              this.showToast("加工参数已保存");
+              return true;
+            } catch (error) {
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              const outcomeUncertain = !error?.response || Number(error?.response?.status || 0) >= 500;
+              this.financeProcessingSettingsAttempt = {...this.financeProcessingSettingsAttempt,outcomeUncertain};
+              this.showToast(outcomeUncertain ? "保存待核对，请原编号重试" : this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (authGeneration === this.authGeneration && userId === (this.user?.id ?? null)) this.financeProcessingState.settingsSaving = false;
+            }
+          },
+          async loadFinanceProcessingProfiles() {
+            if (!this.canViewFinanceCosts) return false;
+            const requestKey = "finance:processing:profiles";
+            const controller = this.beginLatestRequest(requestKey);
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.financeProcessingState.profilesLoading = true;
+            this.financeProcessingState.profilesError = "";
+            try {
+              const {data} = await axios.get("/api/finance/product-processing-profiles",{params:{search:String(this.financeProcessingSearch || "").trim() || undefined,page:1,page_size:50},signal:controller.signal});
+              if (!this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
+              this.financeProcessingProfiles = (data?.items || data?.profiles || []).map(row=>({
+                ...row,
+                customer_material_code:row.customer_material_code || row.product_code || "",
+                printer_mode:row.printer_mode || "auto",
+                die_cut_mode:row.die_cut_mode || "auto",
+                version:Number(row.version || 0),
+              }));
+              this.financeProcessingProfileTotal = Number(data?.total ?? this.financeProcessingProfiles.length);
+              this.financeProcessingPrinterModes = this.normalizeFinanceProcessingModeOptions(data?.printer_modes,this.financeProcessingPrinterModes);
+              this.financeProcessingDieModes = this.normalizeFinanceProcessingModeOptions(data?.die_cut_modes,this.financeProcessingDieModes);
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error) || !this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
+              this.financeProcessingProfiles = [];
+              this.financeProcessingProfileTotal = 0;
+              this.financeProcessingState.profilesError = this.errorMessage(error);
+              return false;
+            } finally {
+              if (this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) this.financeProcessingState.profilesLoading = false;
+              this.finishLatestRequest(requestKey,controller);
+            }
+          },
+          editFinanceProcessingProfile(row) {
+            if (!row?.product_id) return false;
+            this.financeProcessingProfileForm = {
+              ...blankFinanceProcessingProfile(),
+              product_id:Number(row.product_id), customer_name:row.customer_name || "",
+              customer_material_code:row.customer_material_code || row.product_code || "", product_name:row.product_name || "",
+              printer_mode:row.printer_mode || "auto", die_cut_mode:row.die_cut_mode || "auto",
+              assembly_worker_days_per_1000:row.assembly_worker_days_per_1000 ?? "",
+              assembly_workers:row.assembly_workers ?? "", assembly_days:row.assembly_days ?? "",
+              assembly_output:row.assembly_output_quantity ?? "",
+              version:Number(row.version || 0), is_override:row.is_override === true,
+            };
+            this.financeProcessingProfileAttempt = {signature:"",idempotencyKey:"",outcomeUncertain:false,action:""};
+            return true;
+          },
+          resetFinanceProcessingProfile() {
+            this.financeProcessingProfileForm = blankFinanceProcessingProfile();
+            this.financeProcessingProfileAttempt = {signature:"",idempotencyKey:"",outcomeUncertain:false,action:""};
+          },
+          calculateFinanceAssemblyWorkerDays() {
+            const form = this.financeProcessingProfileForm;
+            const workers = Number(form.assembly_workers);
+            const days = Number(form.assembly_days);
+            const output = Number(form.assembly_output);
+            if (Number.isFinite(workers) && workers > 0 && Number.isFinite(days) && days > 0 && Number.isFinite(output) && output > 0) {
+              form.assembly_worker_days_per_1000 = ((workers * days * 1000) / output).toFixed(4);
+            }
+          },
+          clearFinanceAssemblyConversionInputs() {
+            this.financeProcessingProfileForm.assembly_workers = "";
+            this.financeProcessingProfileForm.assembly_days = "";
+            this.financeProcessingProfileForm.assembly_output = "";
+          },
+          async saveFinanceProcessingProfile() {
+            if (!this.canManageFinanceCosts || this.financeProcessingState.profileSaving || this.financeProcessingState.profileDeleting) return false;
+            const form = this.financeProcessingProfileForm;
+            if (!form.product_id) { this.showToast("请先选择产品",true); return false; }
+            const workerDaysText = String(form.assembly_worker_days_per_1000 ?? "").trim();
+            if (workerDaysText && (!Number.isFinite(Number(workerDaysText)) || Number(workerDaysText) < 0)) {
+              this.showToast("组装工日无效",true); return false;
+            }
+            const assemblyTexts = [form.assembly_workers,form.assembly_days,form.assembly_output].map(value=>String(value ?? "").trim());
+            const hasAssemblyConversion = assemblyTexts.some(Boolean);
+            const assemblyWorkers = Number(form.assembly_workers);
+            const assemblyDays = Number(form.assembly_days);
+            const assemblyOutput = Number(form.assembly_output);
+            const hasCompleteAssemblyConversion = Number.isFinite(assemblyWorkers) && assemblyWorkers > 0 && Number.isFinite(assemblyDays) && assemblyDays > 0 && Number.isFinite(assemblyOutput) && assemblyOutput > 0;
+            if (hasAssemblyConversion && !hasCompleteAssemblyConversion) {
+              this.showToast("组装换算请填完整",true); return false;
+            }
+            const payload = {
+              printer_mode:String(form.printer_mode || "auto"),
+              die_cut_mode:String(form.die_cut_mode || "auto"),
+              assembly_worker_days_per_1000:workerDaysText && Number(workerDaysText) > 0 ? workerDaysText : null,
+              expected_version:Number(form.version || 0),
+            };
+            if (hasCompleteAssemblyConversion) {
+              payload.assembly_workers = assemblyWorkers;
+              payload.assembly_days = String(form.assembly_days);
+              payload.assembly_output_quantity = assemblyOutput;
+            }
+            const signature = JSON.stringify({product_id:Number(form.product_id),payload});
+            if (this.financeProcessingProfileAttempt.signature !== signature || !this.financeProcessingProfileAttempt.idempotencyKey) {
+              this.financeProcessingProfileAttempt = {signature,idempotencyKey:createIdempotencyKey(),outcomeUncertain:false,action:"save"};
+            }
+            payload.idempotency_key = this.financeProcessingProfileAttempt.idempotencyKey;
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.financeProcessingState.profileSaving = true;
+            try {
+              await axios.put(`/api/finance/product-processing-profiles/${Number(form.product_id)}`,payload);
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              this.resetFinanceProcessingProfile();
+              await this.loadFinanceProcessingProfiles();
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              this.showToast("产品例外已保存");
+              return true;
+            } catch (error) {
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              const outcomeUncertain = !error?.response || Number(error?.response?.status || 0) >= 500;
+              this.financeProcessingProfileAttempt = {...this.financeProcessingProfileAttempt,outcomeUncertain};
+              this.showToast(outcomeUncertain ? "保存待核对，请原编号重试" : this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (authGeneration === this.authGeneration && userId === (this.user?.id ?? null)) this.financeProcessingState.profileSaving = false;
+            }
+          },
+          async deleteFinanceProcessingProfile() {
+            if (!this.canManageFinanceCosts || this.financeProcessingState.profileSaving || this.financeProcessingState.profileDeleting) return false;
+            const form = this.financeProcessingProfileForm;
+            if (!form.product_id || !form.is_override) return false;
+            if (!confirm("恢复产品默认加工参数？")) return false;
+            const basePayload = {expected_version:Number(form.version || 0)};
+            const signature = JSON.stringify({action:"delete",product_id:Number(form.product_id),payload:basePayload});
+            if (this.financeProcessingProfileAttempt.signature !== signature || !this.financeProcessingProfileAttempt.idempotencyKey) {
+              this.financeProcessingProfileAttempt = {signature,idempotencyKey:createIdempotencyKey(),outcomeUncertain:false,action:"delete"};
+            }
+            const payload = {...basePayload,idempotency_key:this.financeProcessingProfileAttempt.idempotencyKey};
+            const authGeneration = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            this.financeProcessingState.profileDeleting = true;
+            try {
+              await axios.delete(`/api/finance/product-processing-profiles/${Number(form.product_id)}`,{data:payload});
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              this.resetFinanceProcessingProfile();
+              await this.loadFinanceProcessingProfiles();
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              this.showToast("已恢复默认");
+              return true;
+            } catch (error) {
+              if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return false;
+              const outcomeUncertain = !error?.response || Number(error?.response?.status || 0) >= 500;
+              this.financeProcessingProfileAttempt = {...this.financeProcessingProfileAttempt,outcomeUncertain,action:"delete"};
+              this.showToast(outcomeUncertain ? "恢复待核对，请原编号重试" : this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (authGeneration === this.authGeneration && userId === (this.user?.id ?? null)) this.financeProcessingState.profileDeleting = false;
             }
           },
           financeCostStatusAmount(status) {

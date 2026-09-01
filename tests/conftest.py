@@ -23,6 +23,24 @@ _TEST_ROOT: Path | None = None
 _PROTECTED_BEFORE: dict[Path, tuple[bool, int | None, int | None, str | None]] = {}
 
 
+def _install_processing_settings_test_seed() -> None:
+    """Make metadata-only test databases match the migrated production shape."""
+    from sqlalchemy import event
+
+    from app.models.processing_cost import ProcessingCostSettings
+
+    table = ProcessingCostSettings.__table__
+    if event.contains(table, "after_create", _seed_processing_settings_for_tests):
+        return
+    event.listen(table, "after_create", _seed_processing_settings_for_tests)
+
+
+def _seed_processing_settings_for_tests(_target, connection, **_kwargs) -> None:
+    from app.models.processing_cost import ProcessingCostSettings
+
+    connection.execute(ProcessingCostSettings.__table__.insert().values(id=1))
+
+
 def _primary_worktree_root() -> Path:
     """Resolve the main worktree without invoking Git or mutating either tree."""
     dot_git = PROJECT_ROOT / ".git"
@@ -105,6 +123,7 @@ def pytest_configure(config: pytest.Config) -> None:
     os.environ["ERP_SECRET_KEY_FILE"] = str(_TEST_ROOT / "session_secret.key")
     os.environ["ERP_SECRET_KEY"] = "pytest-isolated-only"
     os.environ["ERP_ENVIRONMENT"] = "test"
+    _install_processing_settings_test_seed()
 
     _PROTECTED_BEFORE.clear()
     _PROTECTED_BEFORE.update(

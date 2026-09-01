@@ -19,7 +19,6 @@ VERSIONS = ROOT / "alembic" / "versions"
 BASE_REVISION = "ww31v8x9z20"
 P1_81_REVISION = "xx32v8x9z21"
 P1_81_INTEGRATION_ANCESTOR = "de39v8x9z28"
-CURRENT_INTEGRATION_HEAD = "iv57v8x9z46"
 P1_81_TABLES = {
     "purchase_receipt_facts",
     "incoming_receipt_purpose_allocations",
@@ -192,12 +191,14 @@ def test_migration_is_linear_and_declares_immutable_conserved_facts() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [CURRENT_INTEGRATION_HEAD]
+    heads = script.get_heads()
+    assert len(heads) == 1
+    current_integration_head = heads[0]
     integration_chain = {
         revision.revision
         for revision in script.walk_revisions(
             base=P1_81_REVISION,
-            head=CURRENT_INTEGRATION_HEAD,
+            head=current_integration_head,
         )
     }
     assert P1_81_INTEGRATION_ANCESTOR in integration_chain

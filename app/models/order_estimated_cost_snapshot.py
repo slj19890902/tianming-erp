@@ -54,10 +54,14 @@ class SalesOrderItemEstimatedCostSnapshot(Base):
     processing_category: Mapped[str | None] = mapped_column(String(30), nullable=True)
     printing_color_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     processing_batch_cost: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
-    processing_unit_cost: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    processing_unit_cost: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6), nullable=True
+    )
     extra_color_unit_cost: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     loss_material_total_cost: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
-    processing_total_cost: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    processing_total_cost: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 2), nullable=True
+    )
     one_time_fee_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     known_estimated_subtotal: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     estimated_unit_total_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)

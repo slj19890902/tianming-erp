@@ -5,7 +5,6 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Event
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -59,10 +58,12 @@ def test_new_order_freezes_complete_estimate_and_adjustment_is_versioned(
         item = created.json()["items"][0]
         assert item["estimated_total_cost_status"] == "calculated"
         assert Decimal(item["estimated_loss_rate"]) == Decimal("0.030000")
-        assert Decimal(item["estimated_order_total_cost"]) == Decimal("132.40")
+        assert Decimal(item["estimated_order_total_cost"]) == Decimal("110.89")
         breakdown = item["estimated_cost_breakdown"]
         assert breakdown["loss_components"][0]["added_loss_sheet_quantity"] == 6
-        assert Decimal(breakdown["processing_total_cost"]) == Decimal("50.00")
+        assert Decimal(breakdown["processing_total_cost"]) == Decimal("28.49")
+        assert breakdown["standard_processing"]["printing"]["passes"] == 1
+        assert breakdown["standard_processing"]["settings_version"] == 1
         item_id = item["id"]
 
         changed = client.post(
@@ -79,7 +80,7 @@ def test_new_order_freezes_complete_estimate_and_adjustment_is_versioned(
         assert changed.status_code == 200, changed.text
         changed_body = changed.json()
         assert changed_body["estimated_total_cost_snapshot_version"] == 2
-        assert Decimal(changed_body["estimated_order_total_cost"]) == Decimal("149.00")
+        assert Decimal(changed_body["estimated_order_total_cost"]) == Decimal("127.49")
         assert changed_body["estimated_cost_breakdown"]["loss_components"][0]["added_loss_sheet_quantity"] == 10
 
         repeated = client.post(
@@ -131,39 +132,30 @@ def test_incomplete_material_or_unknown_processing_never_becomes_zero_complete(
     assert item["estimated_cost_missing_items"]
 
 
-def test_processing_defaults_cover_die_cut_and_external_only_assembly() -> None:
-    from app.services.order_estimated_cost_snapshot import _processing_rule
+def test_processing_defaults_cover_known_die_cut_and_no_process_product(
+    order_api_app,
+) -> None:
+    from app.models.product import Product
+    from app.services.processing_cost import estimate_standard_processing_cost
 
-    class FakeSession:
-        def scalar(self, _statement):
-            return 1
+    _app, session_factory = order_api_app
+    with session_factory() as session:
+        die_product = session.get(Product, 1)
+        die_product.box_style = "模切内盒"
+        die_product.box_category = "die_cut"
+        die_result = estimate_standard_processing_cost(
+            session, product=die_product, quantity=100
+        )
+        assert die_result["die_cut"]["die_cut_mode"] == "small_normal"
+        assert die_result["die_cut"]["crew_size"] == 2
 
-    die_item = SimpleNamespace(
-        id=1,
-        product=SimpleNamespace(box_style="模切内盒"),
-    )
-    category, batch, unit, missing = _processing_rule(
-        FakeSession(), die_item, None
-    )
-    assert (category, batch, unit, missing) == (
-        "die_cut",
-        Decimal("30"),
-        Decimal("0.15"),
-        [],
-    )
-    external_item = SimpleNamespace(
-        id=2,
-        product=SimpleNamespace(box_style=None),
-    )
-    category, batch, unit, missing = _processing_rule(
-        FakeSession(), external_item, None
-    )
-    assert (category, batch, unit, missing) == (
-        "external_assembly",
-        Decimal("10"),
-        Decimal("0.03"),
-        [],
-    )
+        no_process_product = session.get(Product, 2)
+        no_process_result = estimate_standard_processing_cost(
+            session, product=no_process_product, quantity=100
+        )
+        assert no_process_result["printing"]["printer_mode"] == "none"
+        assert no_process_result["die_cut"]["die_cut_mode"] == "none"
+        assert no_process_result["joining"]["joining_mode"] == "none"
 
 
 def test_all_order_writers_freeze_estimate_and_ui_marks_it_non_actual() -> None:

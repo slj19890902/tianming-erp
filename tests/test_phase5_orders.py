@@ -25,6 +25,7 @@ def order_api_app(tmp_path: Path, seed_supplier_master):
     from app.models.customer import Customer
     from app.models.material import Material
     from app.models.product import Product
+    from app.models.processing_cost import ProcessingCostSettings
     from app.models.user import User
 
     engine = create_sqlite_engine(tmp_path / "orders.sqlite3")
@@ -88,6 +89,9 @@ def order_api_app(tmp_path: Path, seed_supplier_master):
                 ),
             ]
         )
+        processing_settings = session.get(ProcessingCostSettings, 1)
+        assert processing_settings is not None
+        processing_settings.average_worker_monthly_salary = Decimal("5000.00")
         session.commit()
 
     app = FastAPI()

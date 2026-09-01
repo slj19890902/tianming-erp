@@ -47,8 +47,9 @@ def test_warehouse_primary_navigation_has_exactly_four_daily_entries() -> None:
 
 
 def test_finance_navigation_and_statement_rows_keep_low_frequency_actions_folded() -> None:
-    nav_start = FINANCE.index('<div class="page-head finance-page-head">')
-    nav_end = FINANCE.index('<template v-if="financeView===\'current\'">', nav_start)
+    page_head_start = FINANCE.index('<div class="page-head finance-page-head">')
+    nav_start = FINANCE.index('<div class="toolbar-group">', page_head_start)
+    nav_end = FINANCE.index("</div>", nav_start)
     nav = FINANCE[nav_start:nav_end]
     assert nav.count("<button") == 4
     assert nav.count("<summary") == 0

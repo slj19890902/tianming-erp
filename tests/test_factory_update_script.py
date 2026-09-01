@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.222"
-    assert APP_VERSION_NAME == "区域规划完整货位显示与直接拖动"
+    assert APP_VERSION == "v0.22.223"
+    assert APP_VERSION_NAME == "可调标准工时与加工成本"
     assert APP_BUILD_DATE == "2026-09-01"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,12 +49,22 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "全部地堆货位" in item and "淡绿色货位框" in item for item in current_release)
-    assert any("本次更新｜" in item and "点击货位" in item and "区域空白处" in item for item in current_release)
-    assert any("本次更新｜" in item and "一次保存" in item and "不改变库存" in item for item in current_release)
-    assert any("本次更新｜" in item and "轻量逻辑位置" in item and "不冒充实物栈板" in item for item in current_release)
-    assert any("本次更新｜" in item and "iy60v8x9z49" in item and "无数据库迁移" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.222" in item and "iy60v8x9z49" in item for item in current_release)
+    assert any("本次更新｜" in item and "生产参数" in item and "四档模切" in item for item in current_release)
+    assert any("本次更新｜" in item and "生产月薪" in item and "司机工资" in item for item in current_release)
+    assert any("本次更新｜" in item and "大型与超大型模切" in item and "2人" in item for item in current_release)
+    assert any("本次更新｜" in item and "工资未维护" in item and "不按0元" in item for item in current_release)
+    assert any("本次更新｜" in item and "iz61v8x9z50" in item and "不回填历史订单" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.223" in item and "iz61v8x9z50" in item for item in current_release)
+    prior_release_222 = [item for item in APP_CHANGELOG if item.startswith("v0.22.222：")]
+    assert any("本次更新｜" in item and "全部地堆货位" in item and "淡绿色货位框" in item for item in prior_release_222)
+    assert any("本次更新｜" in item and "点击货位" in item and "区域空白处" in item for item in prior_release_222)
+    assert any("本次更新｜" in item and "一次保存" in item and "不改变库存" in item for item in prior_release_222)
+    assert any("本次更新｜" in item and "轻量逻辑位置" in item and "不冒充实物栈板" in item for item in prior_release_222)
+    assert any("本次更新｜" in item and "iy60v8x9z49" in item and "无数据库迁移" in item for item in prior_release_222)
+    assert any("如何验证｜" in item and "v0.22.222" in item and "iy60v8x9z49" in item for item in prior_release_222)
+    prior_release_221 = [item for item in APP_CHANGELOG if item.startswith("v0.22.221：")]
+    assert any("本次更新｜" in item and "实际采购价" in item and "送货消耗" in item for item in prior_release_221)
+    assert any("如何验证｜" in item and "v0.22.221" in item and "iy60v8x9z49" in item for item in prior_release_221)
     prior_release_220 = [item for item in APP_CHANGELOG if item.startswith("v0.22.220：")]
     assert any("本次更新｜" in item and "四个工作区" in item and "不增加收款录入" in item for item in prior_release_220)
     assert any("本次更新｜" in item and "三个现场动作" in item and "同一张实测地图" in item for item in prior_release_220)

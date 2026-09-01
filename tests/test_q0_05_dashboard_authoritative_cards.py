@@ -51,6 +51,7 @@ def test_finance_cards_use_current_month_balances_instead_of_status(
                     settled_amount=Decimal("25.00"),
                     total_gross_profit=Decimal("0.00"),
                     status="settled",
+                    confirmation_status="confirmed",
                 ),
                 Statement(
                     statement_number="ST-Q005-2",
@@ -61,6 +62,7 @@ def test_finance_cards_use_current_month_balances_instead_of_status(
                     settled_amount=Decimal("50.00"),
                     total_gross_profit=Decimal("0.00"),
                     status="unsettled",
+                    confirmation_status="confirmed",
                 ),
                 Statement(
                     statement_number="ST-Q005-3",
@@ -71,6 +73,7 @@ def test_finance_cards_use_current_month_balances_instead_of_status(
                     settled_amount=Decimal("5.00"),
                     total_gross_profit=Decimal("0.00"),
                     status="settled",
+                    confirmation_status="confirmed",
                 ),
             ]
         )

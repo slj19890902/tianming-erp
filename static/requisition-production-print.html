@@ -60,6 +60,12 @@
     .printing-block { margin:.8mm 0; padding:.8mm 0; border-top:.28mm solid #999; border-bottom:.28mm solid #999; }
     .printing-block-title { margin:.4mm 0; font-size:7.5pt; font-weight:800; overflow-wrap:anywhere; }
     .printing-plate-line { white-space:normal; overflow-wrap:anywhere; }
+    .printing-stack { min-width:0; }
+    .printing-plates-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1mm; margin:.7mm 0; }
+    .printing-plate-card { min-width:0; padding:.7mm .9mm; border:.28mm solid #777; border-radius:1.2mm; font-size:6.8pt; line-height:1.16; overflow-wrap:anywhere; }
+    .printing-plate-card > span { display:block; color:#444; font-size:6.2pt; }
+    .printing-plate-card > strong { display:block; margin:.2mm 0; font-size:7.5pt; }
+    .printing-plate-card > small { display:block; margin-top:.2mm; color:#333; font-size:5.9pt; line-height:1.12; }
     .process-detail-stack { display:grid; gap:1mm; margin-top:1.4mm; }
     .mold-focus { border:.55mm solid #111; border-radius:2mm; padding:1.3mm 2mm; }
     .mold-focus-title { display:flex; justify-content:space-between; gap:2mm; font-size:7.5pt; font-weight:800; }
@@ -72,35 +78,43 @@
     .receipt-facts { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:1mm; margin:1.5mm 0; padding:1.2mm 1.5mm; border:.45mm solid #111; }
     .receipt-fact span { display:block; color:#444; font-size:6.5pt; }
     .receipt-fact strong { display:block; margin-top:.4mm; font-size:8.5pt; overflow-wrap:anywhere; }
+    .supporting-grid { display:grid; grid-template-columns:1fr; gap:1mm; }
+    .supporting-stack { min-width:0; }
     .foot { display:flex; justify-content:space-between; align-items:flex-end; gap:3mm; margin-top:1.2mm; color:#444; font-size:6.5pt; }
     .safe-only { display:none !important; }
     body.customer-safe .internal-only { display:none !important; }
     body.customer-safe .safe-only { display:inline !important; }
-    .task-card.printing-heavy { padding:2.2mm 1.5mm 1.5mm; }
+    .task-card.printing-heavy { padding:1.5mm 1.5mm 1.2mm; }
     .task-card.printing-heavy .card-head { gap:2mm; padding-bottom:.8mm; }
     .task-card.printing-heavy .brand { font-size:6.8pt; }
-    .task-card.printing-heavy h1 { margin-top:.3mm; font-size:12.5pt; }
-    .task-card.printing-heavy .product-qr { width:16.5mm; min-height:16.5mm; font-size:5.2pt; }
+    .task-card.printing-heavy h1 { margin-top:.2mm; font-size:11.5pt; }
+    .task-card.printing-heavy .product-qr { width:16.5mm; min-height:16.5mm; font-size:5.8pt; }
     .task-card.printing-heavy .product-qr img { width:16mm; height:16mm; }
-    .task-card.printing-heavy .headline-metrics { gap:1mm; margin:1mm 0; }
-    .task-card.printing-heavy .headline-metric { padding:.7mm 1.1mm; }
+    .task-card.printing-heavy .headline-metrics { gap:.8mm; margin:.6mm 0; }
+    .task-card.printing-heavy .headline-metric { padding:.5mm .8mm; }
     .task-card.printing-heavy .headline-metric span,
-    .task-card.printing-heavy .field-label { font-size:6pt; }
-    .task-card.printing-heavy .headline-metric strong { margin-top:.2mm; font-size:9pt; line-height:1.05; }
+    .task-card.printing-heavy .field-label { font-size:6.2pt; }
+    .task-card.printing-heavy .headline-metric strong { margin-top:.15mm; font-size:8.4pt; line-height:1.04; }
     .task-card.printing-heavy .headline-metric strong.fit-long { font-size:7.8pt; }
-    .task-card.printing-heavy .headline-metric strong.fit-very-long { font-size:6.8pt; }
-    .task-card.printing-heavy .product-strip { gap:1.5mm; padding:.6mm 0 .8mm; }
-    .task-card.printing-heavy .order-facts { gap:.6mm; margin:.5mm 0; }
-    .task-card.printing-heavy .order-fact { padding:.35mm .6mm; }
-    .task-card.printing-heavy .order-fact span { font-size:5.5pt; }
+    .task-card.printing-heavy .headline-metric strong.fit-very-long { font-size:7pt; }
+    .task-card.printing-heavy .product-strip { gap:1.2mm; padding:.4mm 0 .5mm; }
+    .task-card.printing-heavy .order-facts { gap:.5mm; margin:.4mm 0; }
+    .task-card.printing-heavy .order-fact { padding:.3mm .5mm; }
+    .task-card.printing-heavy .order-fact span { font-size:6.1pt; }
     .task-card.printing-heavy .order-fact strong { margin-top:.1mm; font-size:6.7pt; }
-    .task-card.printing-heavy .field-value { margin-top:.2mm; font-size:7.8pt; }
+    .task-card.printing-heavy .field-value { margin-top:.15mm; font-size:7.4pt; }
     .task-card.printing-heavy .production-key-value,
     .task-card.printing-heavy .detail-row.production-key-fact .value { font-size:9.5pt; }
-    .task-card.printing-heavy .process-title { margin:.7mm 0 .3mm; font-size:6.3pt; }
+    .task-card.printing-heavy .process-title { margin:.45mm 0 .25mm; font-size:6.3pt; }
     .task-card.printing-heavy .process-route { gap:.7mm; }
-    .task-card.printing-heavy .process-route li { padding:.5mm .8mm; border-radius:2mm; font-size:6.6pt; }
-    .task-card.printing-heavy .process-detail-stack { gap:.35mm; margin-top:.5mm; }
+    .task-card.printing-heavy .process-route li { padding:.35mm .7mm; border-radius:2mm; font-size:6.6pt; }
+    .task-card.printing-heavy .process-detail-stack { grid-template-columns:minmax(0,.88fr) minmax(0,2.12fr); gap:.6mm; margin-top:.45mm; align-items:start; }
+    .task-card.printing-heavy .process-detail-stack > .mold-focus { grid-column:1; grid-row:1; }
+    .task-card.printing-heavy .process-detail-stack > .printing-stack { grid-column:2; grid-row:1 / span 2; }
+    .task-card.printing-heavy .process-detail-stack > .joining-block { grid-column:1; grid-row:2; }
+    .task-card.printing-heavy .process-detail-stack:not(.has-printing) > * { grid-column:1 / -1; grid-row:auto; }
+    .task-card.printing-heavy .process-detail-stack:not(.has-mold) > .printing-stack,
+    .task-card.printing-heavy .process-detail-stack:not(.has-mold) > .joining-block { grid-column:1 / -1; grid-row:auto; }
     .task-card.printing-heavy .mold-focus { padding:.6mm 1mm; border-width:.35mm; }
     .task-card.printing-heavy .mold-focus-title { font-size:6.2pt; }
     .task-card.printing-heavy .mold-focus-row { gap:1mm; margin-top:.25mm; }
@@ -108,16 +122,22 @@
     .task-card.printing-heavy .mold-focus-location { font-size:8pt; }
     .task-card.printing-heavy .mold-focus-note { margin-top:.25mm; font-size:5.8pt; line-height:1.1; }
     .task-card.printing-heavy .printing-block,
-    .task-card.printing-heavy .joining-block { margin:.2mm 0; padding:.2mm 0; }
+    .task-card.printing-heavy .joining-block { margin:.15mm 0; padding:.15mm 0; }
     .task-card.printing-heavy .printing-block-title { margin:.1mm 0; font-size:6.2pt; }
-    .task-card.printing-heavy .detail-grid { grid-template-columns:1fr; margin-top:.7mm; min-height:18mm; }
-    .task-card.printing-heavy .detail-list { padding:.7mm 1mm; }
-    .task-card.printing-heavy .detail-row { grid-template-columns:20mm 1fr; gap:1mm; padding:.2mm 0; font-size:6.4pt; line-height:1.12; }
+    .task-card.printing-heavy .printing-plates-grid { gap:.5mm; margin:.35mm 0; }
+    .task-card.printing-heavy .printing-plate-card { padding:.35mm .5mm; font-size:6.2pt; line-height:1.08; }
+    .task-card.printing-heavy .printing-plate-card > span,
+    .task-card.printing-heavy .printing-plate-card > small { font-size:5.8pt; }
+    .task-card.printing-heavy .printing-plate-card > strong { margin:.08mm 0; font-size:6.6pt; }
+    .task-card.printing-heavy .supporting-grid { grid-template-columns:minmax(0,.78fr) minmax(0,1.72fr); gap:.6mm; margin-top:.45mm; align-items:start; }
+    .task-card.printing-heavy .detail-grid { grid-template-columns:1fr; margin-top:0; min-height:0; }
+    .task-card.printing-heavy .detail-list { padding:.5mm .8mm; }
+    .task-card.printing-heavy .detail-row { grid-template-columns:19mm 1fr; gap:.7mm; padding:.12mm 0; font-size:6.4pt; line-height:1.1; }
     .task-card.printing-heavy .warning { margin-top:.5mm; padding:.4mm .8mm; font-size:6.2pt; }
-    .task-card.printing-heavy .foot { margin-top:.4mm; font-size:5.6pt; }
-    .task-card.actual-card .receipt-facts { gap:.7mm; margin:.7mm 0; padding:.6mm .8mm; }
-    .task-card.actual-card .receipt-fact span { font-size:5.6pt; }
-    .task-card.actual-card .receipt-fact strong { margin-top:.15mm; font-size:7pt; line-height:1.1; }
+    .task-card.printing-heavy .foot { margin-top:.3mm; font-size:5.9pt; }
+    .task-card.actual-card .receipt-facts { gap:.6mm; margin:.45mm 0; padding:.4mm .6mm; }
+    .task-card.actual-card .receipt-fact span { font-size:6pt; }
+    .task-card.actual-card .receipt-fact strong { margin-top:.1mm; font-size:6.7pt; line-height:1.06; }
     @page { size:A4 portrait; margin:0; }
     @media print {
       body { background:#fff; }
@@ -248,7 +268,7 @@
       }
 
       function processHtml(card) {
-        return `<div class="process-title">工艺路线</div><ol class="process-route">${processSteps(card).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>`;
+        return `<div data-capacity-label="工艺路线"><div class="process-title">工艺路线</div><ol class="process-route">${processSteps(card).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol></div>`;
       }
 
       function detailRow(label, value, extraClass = "") {
@@ -263,6 +283,7 @@
           ? `${titlePrefix}${component.component_label || component.product_code || `组件${componentIndex + 1}`} · 印刷`
           : `${titlePrefix}印刷`;
         const rows = [];
+        let plateCards = "";
         if (component.printing_plate_mode !== "plate") {
           rows.push(detailRow("印刷情况", content));
           if (component.printing_colors_frozen === false) {
@@ -277,27 +298,30 @@
         } else {
           const plates = Array.isArray(component.printing_plates) ? component.printing_plates : [];
           rows.push(detailRow("印刷情况", component.printing_situation || `挂板印刷（${plates.length}色）`));
-          plates.forEach((plate, index) => {
-            rows.push(detailRow(
-              `第${index + 1}色`,
-              `颜色：${plate.color_name || "未冻结"}｜挂板编号：${plate.plate_code || "未冻结"}｜挂板内容：${plate.plate_name || "未冻结"}`,
-              "printing-plate-line",
-            ));
-            if (plate.current_location) rows.push(detailRow(`第${index + 1}色当前位置`, plate.current_location, "internal-only"));
-          });
+          plateCards = plates.length ? `<div class="printing-plates-grid">${plates.map((plate, index) => `
+            <div class="printing-plate-card printing-plate-line">
+              <span>第${index + 1}色</span>
+              <strong>颜色：${escapeHtml(plate.color_name || "未冻结")}</strong>
+              <div>挂板编号：${escapeHtml(plate.plate_code || "未冻结")}</div>
+              <div>挂板内容：${escapeHtml(plate.plate_name || "未冻结")}</div>
+              ${plate.current_location ? `<small class="internal-only">当前位置：${escapeHtml(plate.current_location)}</small>` : ""}
+            </div>`).join("")}</div>` : "";
           if (!plates.length) rows.push(detailRow("挂板快照", "历史挂板明细未冻结"));
-          rows.push(detailRow("对版值", numberText(component.plate_alignment_value_mm), "internal-only"));
-          rows.push(detailRow("挂版值", numberText(component.plate_mount_value_mm), "internal-only"));
           const machine = [component.machine_set_length_mm, component.machine_set_width_mm, component.machine_set_height_mm]
             .map(numberText).join(" × ");
-          rows.push(detailRow("机器设定", `${machine} mm`, "internal-only"));
+          rows.push(detailRow(
+            "设备参数",
+            `对版值 ${numberText(component.plate_alignment_value_mm)} mm｜挂版值 ${numberText(component.plate_mount_value_mm)} mm｜机器设定 ${machine} mm`,
+            "internal-only printing-machine-line",
+          ));
         }
-        return `<section class="printing-block"><div class="printing-block-title">${escapeHtml(title)}</div>${rows.join("")}</section>`;
+        return `<section class="printing-block"><div class="printing-block-title">${escapeHtml(title)}</div>${rows.join("")}${plateCards}</section>`;
       }
 
       function printingHtml(card) {
         const components = Array.isArray(card.components) ? card.components : [];
-        return components.map((component, index) => printingComponentHtml(component, index, components.length)).filter(Boolean).join("");
+        const blocks = components.map((component, index) => printingComponentHtml(component, index, components.length)).filter(Boolean).join("");
+        return blocks ? `<div class="printing-stack">${blocks}</div>` : "";
       }
 
       function printingComplexity(card) {
@@ -369,7 +393,7 @@
           ? `${numberText(card.actual_board_length_mm)} × ${numberText(card.actual_board_width_mm)} mm`
           : "与计划冻结规格一致";
         const trace = [card.inventory_lot_number, card.employee_location_name || card.current_address_name || card.warehouse_location].filter(Boolean).join(" / ") || "实收明细已留痕";
-        return `<section class="receipt-facts internal-only">
+        return `<section class="receipt-facts internal-only" data-capacity-label="实收到料与垛位追溯">
           <div class="receipt-fact"><span>实收单 / 版本</span><strong>${escapeHtml(card.receipt_number || "-")} / ${escapeHtml(card.paper_phase_label || "实收版")}</strong></div>
           <div class="receipt-fact"><span>本次实收</span><strong>${escapeHtml(numberText(card.received_sheet_quantity))} 张</strong></div>
           <div class="receipt-fact"><span>本批最多生产</span><strong>${escapeHtml(numberText(card.production_capacity_quantity))} ${escapeHtml(card.layout_kind === "liner" ? "张" : "只")}</strong></div>
@@ -404,7 +428,7 @@
           ["计划生产", `${numberText(card.planned_finished_quantity)} ${quantityUnit}`],
           ["采购张数", `${numberText(card.requisition_quantity)} 张`],
         ];
-        return `<div class="order-facts">${rows.map(([label, value]) => `<div class="order-fact"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}</div>`;
+        return `<div class="order-facts" data-capacity-label="订单与生产数量">${rows.map(([label, value]) => `<div class="order-fact"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}</div>`;
       }
 
       function productionNotesHtml(card) {
@@ -442,7 +466,11 @@
       }
 
       function processDetailsHtml(card) {
-        return `<div class="process-detail-stack">${moldHtml(card)}${printingHtml(card)}${joiningHtml(card)}</div>`;
+        const mold = moldHtml(card);
+        const printing = printingHtml(card);
+        const joining = joiningHtml(card);
+        const stateClasses = `${mold ? " has-mold" : ""}${printing ? " has-printing" : ""}${joining ? " has-joining" : ""}`;
+        return `<div class="process-detail-stack${stateClasses}" data-capacity-label="模具、印刷与结合工艺">${mold}${printing}${joining}</div>`;
       }
 
       function productQrHtml(card) {
@@ -471,8 +499,8 @@
         const actualClass = actualPhase ? " actual-card" : "";
         const safeNote = '<span class="safe-only">客户随货版 · 已隐藏内部任务及资产定位信息</span>';
         return `<section class="task-card half-card${denseClass}${printingClass}${actualClass}" data-layout="${escapeHtml(card.layout_kind || "carton")}">
-          <header class="card-head"><div><div class="brand">TM 天明包装 · ${escapeHtml(card.paper_phase_label || "待来料计划版")}</div><h1>${escapeHtml(titleFor(card))}</h1></div>${productQrHtml(card)}</header>
-          <div class="headline-metrics">
+          <header class="card-head" data-capacity-label="任务标题与二维码"><div><div class="brand">TM 天明包装 · ${escapeHtml(card.paper_phase_label || "待来料计划版")}</div><h1>${escapeHtml(titleFor(card))}</h1></div>${productQrHtml(card)}</header>
+          <div class="headline-metrics" data-capacity-label="客户、存货编码与产品名称">
             <div class="headline-metric customer-metric"><span>客户</span>${headlineValueHtml(card.customer_name, "customer")}</div>
             <div class="headline-metric code-metric"><span>存货编码</span>${headlineValueHtml(card.product_code, "code")}</div>
             <div class="headline-metric name-metric"><span>产品名称</span>${headlineValueHtml(card.product_name, "name")}</div>
@@ -482,11 +510,11 @@
           ${receiptFactsHtml(card)}
           ${processHtml(card)}
           ${processDetailsHtml(card)}
-          <div class="detail-grid"><div class="detail-list">${detailHtml(card)}</div></div>
-          ${productionNotesHtml(card)}
-          ${fulfillmentReminderHtml(card)}
-          ${warnings}
-          <footer class="foot internal-only"><span>报料单 ${escapeHtml(card.supplier_order_number || packageData.supplier_order_number || "-")} · 纸面版本 ${escapeHtml(String(card.paper_version_key || packageData.plan_fingerprint || "").slice(-20))}</span><span>生成 ${escapeHtml(card.received_at || packageData.created_at || "-")}</span></footer>
+          <div class="supporting-grid" data-capacity-label="材料、注意事项与回单交代">
+            <div class="detail-grid"><div class="detail-list">${detailHtml(card)}</div></div>
+            <div class="supporting-stack">${productionNotesHtml(card)}${fulfillmentReminderHtml(card)}${warnings}</div>
+          </div>
+          <footer class="foot internal-only" data-capacity-label="报料追溯页脚"><span>报料单 ${escapeHtml(card.supplier_order_number || packageData.supplier_order_number || "-")} · 纸面版本 ${escapeHtml(String(card.paper_version_key || packageData.plan_fingerprint || "").slice(-20))}</span><span>生成 ${escapeHtml(card.received_at || packageData.created_at || "-")}</span></footer>
           <footer class="foot safe-only">${safeNote}<span>尺寸单位：mm</span></footer>
         </section>`;
       }
@@ -539,6 +567,21 @@
         if (images.some((image) => !image.complete || !image.naturalWidth)) throw new Error("产品二维码图片尚未完整加载，请重试");
       }
 
+      function capacityOverflowSource(card) {
+        const sections = Array.from(card.querySelectorAll("[data-capacity-label]"));
+        if (!sections.length) return "未识别的超长内容";
+        const measured = sections.map((element) => {
+          const height = element.getBoundingClientRect().height;
+          const ownOverflow = Math.max(0, element.scrollHeight - element.clientHeight);
+          const textLength = Array.from((element.textContent || "").trim()).length;
+          return {
+            label:element.dataset.capacityLabel || "未识别的超长内容",
+            score:ownOverflow * 20 + height + Math.min(textLength, 400) * .08,
+          };
+        }).sort((left, right) => right.score - left.score);
+        return measured[0].label;
+      }
+
       async function render(packageData) {
         const layouts = printPageLayouts(packageData.cards || []);
         pagesHost.innerHTML = layouts.map((layout, index) =>
@@ -563,9 +606,10 @@
         });
         if (overflowingCards.length) {
           overflowingCards.forEach((card) => card.classList.add("layout-overflow"));
+          const overflowSources = Array.from(new Set(overflowingCards.map(capacityOverflowSource)));
           message.hidden = false;
           message.className = "message error";
-          message.textContent = "任务内容超过页面容量，已停止打印。请核对过长工艺说明或拆分报料。";
+          message.textContent = `任务内容超过页面容量，已停止打印。半张 A4 主要占用：${overflowSources.join("、")}。请精简对应内容或拆分报料。`;
           printButton.disabled = true;
           return;
         }

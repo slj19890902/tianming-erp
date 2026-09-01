@@ -31,7 +31,7 @@ def test_replenishment_form_always_saves_a_draft_before_stocking() -> None:
     assert "stockLocationsForType(line.target_inventory_type)" not in INDEX
     assert "defaultStockLocation" not in INDEX
     assert "三楼左区已发布原料或半成品货位" in INDEX
-    assert "三楼左区已发布成品货位" in INDEX
+    assert "三楼右区 F34 优先、F12 兜底临时周转" in INDEX
     assert "item.location_id = null" in INDEX
     assert 'v-model="line.target_inventory_type" disabled' in INDEX
     assert '<option value="finished">成品</option>' not in INDEX

@@ -38,7 +38,7 @@ from app.services.requisition_quantities import (
 from app.services.warehouse_inventory import (
     SEMI_FINISHED_FLUTES_BY_LAYER,
     WarehouseInventoryError,
-    automatic_floor3_left_finished_location,
+    automatic_floor3_finished_turnover_location,
     automatic_raw_material_staging_location,
     manual_finished_in,
     manual_semi_finished_in,
@@ -982,7 +982,7 @@ def receive_replenishment_item(
         ):
             raise StockReplenishmentError(
                 "库存预警到料只能进入客户通用纸板备料；"
-                "只有衬板可按直接成品进入三楼左区成品货位。"
+                "只有衬板可按直接成品进入三楼右区 F34/F12 临时周转位置。"
             )
     if item.target_inventory_type == "semi_finished":
         try:
@@ -1000,7 +1000,7 @@ def receive_replenishment_item(
         finished_product = db.get(Product, item.product_id) if item.product_id else None
         if finished_product is not None and box_type_code(finished_product.box_style) == "liner":
             try:
-                destination = automatic_floor3_left_finished_location(db)
+                destination = automatic_floor3_finished_turnover_location(db)
             except WarehouseInventoryError as error:
                 raise StockReplenishmentError(str(error), error.status_code) from error
         else:

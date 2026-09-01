@@ -8061,7 +8061,7 @@
                   <details :open="stockReplenishmentForm.source_type!=='stock_warning' || !line.draft_ready" :class="{'stock-warning-advanced':stockReplenishmentForm.source_type==='stock_warning'}">
                     <summary v-if="stockReplenishmentForm.source_type==='stock_warning'">查看详细参数</summary>
                     <div class="stock-replenishment-line-grid">
-                    <div class="field stock-span-2"><label>到料去向</label><select class="select" v-model="line.target_inventory_type" disabled><option value="semi_finished">三楼左区客户通用备料</option><option value="finished">三楼左区成品区</option></select></div>
+                    <div class="field stock-span-2"><label>到料去向</label><select class="select" v-model="line.target_inventory_type" disabled><option value="semi_finished">三楼左区客户通用备料</option><option value="finished">三楼右区 F34/F12 临时周转</option></select></div>
                     <div class="field stock-span-3"><label>客户</label><select class="select" v-model.number="line.customer_id" @change="onStockCustomerChanged(line)"><option :value="null">请选择客户</option><option v-for="c in activeCustomerOptions" :key="c.id" :value="c.id">{{ c.name }}</option></select></div>
                     <div class="field stock-span-4"><label>参考产品（选填）</label><search-select v-model="line.reference_product_id" :options="stockProductSelectOptions(line.customer_id)" label-key="_label" value-key="id" :placeholder="line.customer_id ? '搜索存货编码或产品名称' : '请先选择客户'" :allow-empty="true" :disabled="!line.customer_id" @search="searchStockProducts(line.customer_id,$event)" @change="applyStockProduct(line)"></search-select></div>
                     <div class="field stock-span-3"><label>内部名称（选填）</label><input class="input" maxlength="200" v-model.trim="line.internal_name" /></div>
@@ -8073,7 +8073,7 @@
                     <div class="field stock-span-2"><label>压线类型</label><select class="select" v-model="line.crease_type" @change="onStockCreaseTypeChanged(line)"><option :value="null">未指定</option><option value="压线">压线</option><option value="净料">净</option><option value="毛片">毛</option></select></div>
                     <div class="field stock-span-6"><label>压线尺寸</label><div v-if="line.crease_type==='压线'" class="stock-crease-inputs"><label>上摇盖<input class="input" type="number" min="0" v-model.number="line.crease_left_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>高<input class="input" type="number" min="1" v-model.number="line.crease_middle_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>下摇盖<input class="input" type="number" min="0" v-model.number="line.crease_right_mm" @input="syncStockReportWidthFromCrease(line)" /></label></div><div v-else>{{ line.crease_type || '无需压线分段' }}</div></div>
                     <div v-if="stockCreaseMismatch(line)" class="status orange stock-span-full" style="white-space:normal">{{ stockCreaseMismatch(line) }}</div>
-                    <div class="field stock-span-4"><label>到厂去向</label><div>{{ line.target_inventory_type==='finished' ? '三楼左区已发布成品货位' : '三楼左区已发布原料或半成品货位' }}</div></div>
+                    <div class="field stock-span-4"><label>到厂去向</label><div>{{ line.target_inventory_type==='finished' ? '三楼右区 F34 优先、F12 兜底临时周转' : '三楼左区已发布原料或半成品货位' }}</div></div>
                     <div class="field stock-span-4"><label>库存预警</label><button class="btn" type="button" @click="saveStockPolicyFromLine(line)">保存为预警模板</button></div>
                     </div>
                   </details>

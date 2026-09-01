@@ -474,6 +474,36 @@ def _ensure_finished_projection_postcondition(
         # policy/ground-plan lifecycle; adding a second occupancy projection
         # would recreate the dual-source bug this gate removes.
         return current_pallet
+    if _current_map_temporary_finished_anchor_issue(location, context) is None:
+        active_occupancy = db.scalar(
+            select(WarehouseGroundOccupancy.id)
+            .join(
+                WarehouseGroundOccupancySlot,
+                WarehouseGroundOccupancySlot.occupancy_id
+                == WarehouseGroundOccupancy.id,
+            )
+            .where(
+                WarehouseGroundOccupancySlot.location_id == int(location.id),
+                WarehouseGroundOccupancySlot.status == "active",
+                WarehouseGroundOccupancy.status == "active",
+            )
+            .limit(1)
+        )
+        if active_occupancy is not None:
+            raise WarehouseInventoryError(
+                "临时周转锚点不能同时存在虚构地堆占用，请先核对空间事实",
+                409,
+            )
+        if not current_pallet.needs_relocation:
+            raise WarehouseInventoryError(
+                "临时周转栈板必须标记待归位，当前空间事实不完整",
+                409,
+            )
+        # F34/F12 are owner-confirmed temporary corridor anchors.  They own a
+        # real location and pallet but deliberately have no measured 1200x1000
+        # ground slot.  Creating a fake ground occupancy here would turn a
+        # temporary corridor into invented long-term capacity.
+        return current_pallet
     if not isinstance(ground_layout, dict):
         raise WarehouseInventoryError(
             "地堆成品位置缺少当前发布排位，不能形成真实空间占用",
@@ -866,6 +896,11 @@ CURRENT_MAP_LEFT_RAW_SEMI_AREA_CODES = frozenset(
 )
 CURRENT_MAP_LEFT_FINISHED_AREA_CODES = frozenset(
     {"FG-004", "FG-005", "FG-006", "FG-007", "FG-008", "FG-009"}
+)
+CURRENT_MAP_TEMPORARY_FINISHED_AREA_CODES = ("F34", "F12")
+CURRENT_MAP_TEMPORARY_FINISHED_LOCATION_CODES = tuple(
+    [*(f"F34-P{number:02d}" for number in range(1, 4))]
+    + [*(f"F12-P{number:02d}" for number in range(1, 9))]
 )
 RAW_MATERIAL_STAGING_STORAGE_TYPES = frozenset(
     {"ground", "temporary_aisle", "rack"}
@@ -1378,6 +1413,122 @@ def automatic_floor3_left_finished_location(db: Session) -> WarehouseLocation:
             409,
         )
     return candidates[0]
+
+
+def _current_map_temporary_finished_anchor_issue(
+    location: WarehouseLocation,
+    context: dict[str, object | None],
+) -> str | None:
+    layout = context.get("layout")
+    policy = context.get("policy")
+    if (
+        int(location.warehouse_floor or 0) != 3
+        or str(location.area_code or "").strip().upper()
+        not in CURRENT_MAP_TEMPORARY_FINISHED_AREA_CODES
+        or location.location_code
+        not in CURRENT_MAP_TEMPORARY_FINISHED_LOCATION_CODES
+        or str(location.source_version or "").strip().upper() != "CURRENT_MAP"
+        or location.storage_type != "temporary_aisle"
+        or not location.is_temporary
+        or location.address_kind != "functional"
+        or not isinstance(layout, Floor3LocationLayout)
+        or layout.layout_kind != "logical_anchor"
+        or not isinstance(policy, WarehouseAreaStoragePolicy)
+        or policy.status != "published"
+        or context.get("ground_layout") is not None
+    ):
+        return "该位置不是已发布的 F34/F12 临时周转锚点"
+    return None
+
+
+def automatic_floor3_finished_turnover_location(
+    db: Session,
+) -> WarehouseLocation:
+    """Claim the first empty F34/F12 temporary anchor for a liner receipt."""
+
+    rows = list(
+        db.scalars(
+            select(WarehouseLocation)
+            .where(
+                WarehouseLocation.is_active.is_(True),
+                WarehouseLocation.warehouse_floor == 3,
+                WarehouseLocation.warehouse_type.in_(("finished", "shared")),
+                WarehouseLocation.area_code.in_(
+                    CURRENT_MAP_TEMPORARY_FINISHED_AREA_CODES
+                ),
+                WarehouseLocation.location_code.in_(
+                    CURRENT_MAP_TEMPORARY_FINISHED_LOCATION_CODES
+                ),
+            )
+            .order_by(
+                case((WarehouseLocation.area_code == "F34", 0), else_=1),
+                WarehouseLocation.location_code,
+                WarehouseLocation.id,
+            )
+        ).all()
+    )
+    contexts = load_warehouse_location_projection_contexts(db, rows)
+    for row in rows:
+        context = contexts.get(int(row.id), {})
+        if _current_map_temporary_finished_anchor_issue(row, context) is not None:
+            continue
+        layout = context.get("layout")
+        assert isinstance(layout, Floor3LocationLayout)
+        issue = operational_location_issue(
+            db,
+            row,
+            warehouse_types={"finished", "shared"},
+            pallet_storage_only=True,
+            require_published=True,
+            require_map_geometry=True,
+            required_inventory_type="finished",
+            require_empty=True,
+            projection_context=context,
+        )
+        if issue is not None:
+            continue
+        try:
+            claimed = claim_active_placed_location(
+                db,
+                int(row.id),
+                expected_layout_version=int(layout.version),
+            )
+        except OperationalError as error:
+            raise WarehouseInventoryError(
+                "F34/F12 临时周转位置正在被其他入库或地图操作使用，请稍后重试",
+                409,
+            ) from error
+        if not claimed:
+            continue
+        refreshed = db.get(WarehouseLocation, int(row.id), populate_existing=True)
+        if refreshed is None:
+            continue
+        refreshed_context = load_warehouse_location_projection_contexts(
+            db, [refreshed]
+        ).get(int(refreshed.id), {})
+        if (
+            _current_map_temporary_finished_anchor_issue(
+                refreshed, refreshed_context
+            )
+            is None
+            and operational_location_issue(
+                db,
+                refreshed,
+                warehouse_types={"finished", "shared"},
+                pallet_storage_only=True,
+                require_published=True,
+                require_map_geometry=True,
+                required_inventory_type="finished",
+                require_empty=True,
+                projection_context=refreshed_context,
+            )
+            is None
+        ):
+            return refreshed
+    raise WarehouseInventoryError(
+        "三楼右区 F34/F12 临时周转位置已满或尚未启用；请先将现有栈板归位后再收料。",
+        409,
+    )
 
 
 def _location(

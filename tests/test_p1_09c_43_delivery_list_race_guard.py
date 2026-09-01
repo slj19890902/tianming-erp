@@ -41,6 +41,8 @@ global.axios = {{ get(url, config) {{ return new Promise((resolve, reject) => re
 const vm = {{
   pages:{{deliveries:1}}, pageSize:25,
   deliveryListFilters:{{customer_id:1,delivery_no:"OLD",status:"pending",product_code:""}},
+  deliveryDetailedFilters:{{customer_po:"",product_code:"",product_name:""}},
+  deliveryListPageSize() {{ return 10; }},
   deliveryListState:{{initialLoading:false,refreshing:false,error:"",loaded:false,request_token:0}},
   deliveries:[], deliveriesTotal:0,
   errorMessage(error) {{ return error?.message || String(error); }},

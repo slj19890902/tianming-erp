@@ -37,6 +37,7 @@ WAREHOUSE_MOVEMENT_SOURCE = (
 WAREHOUSE_DASHBOARD_SOURCE = (
     ROOT / "app" / "services" / "warehouse_twin_dashboard.py"
 ).read_text(encoding="utf-8")
+ERP_SHELL_SOURCE = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 
 
 def _layout_asset(path: Path) -> Path:
@@ -226,6 +227,14 @@ def test_warehouse_frontend_treats_4f_as_an_operational_map_floor() -> None:
     assert 'floorCode === "4F"' in EDITOR_CANVAS_SOURCE
     assert 'calibration?.status === "aligned"' in EDITOR_CANVAS_SOURCE
     assert 'calibration?.applied === true' in EDITOR_CANVAS_SOURCE
+
+
+def test_erp_shell_exposes_and_tracks_4f_as_a_warehouse_floor() -> None:
+    assert "@click=\"selectWarehouseFloor('4F')\">4F 成品仓库" in ERP_SHELL_SOURCE
+    assert '["1F", "3F", "4F"].includes(requestedFloor)' in ERP_SHELL_SOURCE
+    assert '["1F", "3F", "4F"].includes(floor)' in ERP_SHELL_SOURCE
+    assert '["1F", "3F", "4F"].includes(payload.floor_code)' in ERP_SHELL_SOURCE
+    assert '!["1F", "3F", "4F"].includes(floorCode)' in ERP_SHELL_SOURCE
 
 
 def test_warehouse_operations_and_map_resource_queries_allow_4f() -> None:

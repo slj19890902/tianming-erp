@@ -2954,6 +2954,7 @@
             <div v-if="activePage==='warehouse'" class="warehouse-top-shortcuts" role="group" aria-label="仓库楼层与台账">
               <button type="button" :class="{active:warehouseTwinFloor==='1F'}" @click="selectWarehouseFloor('1F')">1F 生产车间</button>
               <button type="button" :class="{active:warehouseTwinFloor==='3F'}" @click="selectWarehouseFloor('3F')">3F 成品仓库</button>
+              <button type="button" :class="{active:warehouseTwinFloor==='4F'}" @click="selectWarehouseFloor('4F')">4F 成品仓库</button>
               <a href="/warehouse-ledger.html?tab=finished">库存台账</a>
             </div>
             <span class="top-user-name">{{ user.real_name || user.username }}</span>
@@ -14552,7 +14553,8 @@
               this.showToast("当前账号没有访问仓库地图的权限", true);
               return;
             }
-            const normalized = String(floorCode || "3F").toUpperCase() === "1F" ? "1F" : "3F";
+            const requestedFloor = String(floorCode || "3F").toUpperCase();
+            const normalized = ["1F", "3F", "4F"].includes(requestedFloor) ? requestedFloor : "3F";
             this.warehouseTwinFloor = normalized;
             this.ensureWarehouseFrame(`/warehouse.html?embedded=1&floor=${normalized}&view=2d`);
             this.activePage = "warehouse";
@@ -14725,7 +14727,7 @@
               this.warehouseFrameUrl = target;
               try {
                 const floor = new URL(target, window.location.origin).searchParams.get("floor");
-                if (floor === "1F" || floor === "3F") this.warehouseTwinFloor = floor;
+                if (["1F", "3F", "4F"].includes(floor)) this.warehouseTwinFloor = floor;
               } catch (_) {}
             } else if (!this.warehouseFrameUrl) {
               this.warehouseFrameUrl = "/warehouse.html?embedded=1&floor=3F&view=2d";
@@ -14742,7 +14744,7 @@
             if (!frameWindow || event.source !== frameWindow) return;
             const payload = event.data || {};
             if (payload.source !== "tianming-warehouse" || payload.type !== "warehouse-state") return;
-            if (payload.floor_code === "1F" || payload.floor_code === "3F") this.warehouseTwinFloor = payload.floor_code;
+            if (["1F", "3F", "4F"].includes(payload.floor_code)) this.warehouseTwinFloor = payload.floor_code;
             this.warehouseTwinMetrics = {
               active_lots: Math.max(0, Number(payload.active_lots || 0)),
               occupied_locations: Math.max(0, Number(payload.occupied_locations || 0)),
@@ -14753,7 +14755,7 @@
             };
           },
           selectWarehouseFloor(floorCode) {
-            if (floorCode !== "1F" && floorCode !== "3F") return;
+            if (!["1F", "3F", "4F"].includes(floorCode)) return;
             this.warehouseTwinFloor = floorCode;
             this.ensureWarehouseFrame();
             this.$nextTick(() => {

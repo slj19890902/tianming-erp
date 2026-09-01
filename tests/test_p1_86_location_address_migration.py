@@ -16,7 +16,6 @@ BASE_REVISION = "xx32v8x9z21"
 P1_86_REVISION = "bb36v8x9z25"
 P1_87_REVISION = "cc37v8x9z26"
 P1_86_INTEGRATION_ANCESTOR = "dd38v8x9z27"
-CURRENT_INTEGRATION_HEAD = "iv57v8x9z46"
 P1_86_TABLES = {
     "warehouse_location_aliases",
     "warehouse_location_address_mutations",
@@ -99,7 +98,9 @@ def test_revision_is_linear_from_latest_formal_head() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [CURRENT_INTEGRATION_HEAD]
+    heads = script.get_heads()
+    assert len(heads) == 1
+    current_integration_head = heads[0]
     revision = script.get_revision(P1_86_REVISION)
     assert revision is not None
     assert revision.down_revision == BASE_REVISION
@@ -113,7 +114,7 @@ def test_revision_is_linear_from_latest_formal_head() -> None:
         row.revision
         for row in script.walk_revisions(
             base=P1_86_REVISION,
-            head=CURRENT_INTEGRATION_HEAD,
+            head=current_integration_head,
         )
     }
     assert {

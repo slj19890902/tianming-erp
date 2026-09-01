@@ -162,6 +162,10 @@ from app.models.finance_cost import (  # noqa: E402,F401
     FinanceCostCenter,
     FinanceCostPoolEntry,
 )
+from app.models.processing_cost import (  # noqa: E402,F401
+    ProcessingCostSettings,
+    ProductProcessingProfile,
+)
 from app.models.material_cost import (  # noqa: E402,F401
     FinanceDeliveryMaterialCostFact,
 )

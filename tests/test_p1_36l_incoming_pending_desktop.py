@@ -440,6 +440,8 @@ global.pinyinSearchTextCache=new Map();
 global.today=()=>"2026-08-13";
 global.plusDays=()=>"2026-08-20";
 global.blankReceiptReminderEditor=()=>({{}});
+global.blankFinanceProcessingSettings=()=>({{}});
+global.blankFinanceProcessingProfile=()=>({{}});
 const vm={{
   loginAttemptSequence:1,pageLoadSequence:1,loading:true,pageCacheUpdatedAt:{{incoming:1,"incoming:external-packaging":2}},
   orderGroupDetails:{{}},orderGroupDetailLoading:{{}},orderGroupDetailErrors:{{}},
@@ -457,7 +459,7 @@ const vm={{
   incomingReceiptLocationsLoading:true,incomingReceiptLocationsError:"old",
   externalIncomingPending:[{{id:3}}],externalIncomingDrafts:{{x:1}},externalIncomingLoading:true,
   externalIncomingError:"old",externalIncomingFilter:"secret",externalIncomingLoaded:true,externalIncomingSavingId:3,
-  cancelOrderGroupDetailRequests(){{}},
+  resetFinanceCostForm(){{}},cancelOrderGroupDetailRequests(){{}},
 }};
 new FunctionCtor({json.dumps(reset, ensure_ascii=False)}).call(vm);
 if(vm.incomingPending.length||vm.incomingPendingTotal||Object.keys(vm.incomingSelected).length)throw new Error("pending last-good survived session reset");

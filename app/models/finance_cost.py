@@ -80,8 +80,8 @@ class FinanceCostPoolEntry(Base):
             "cost_category IN ("
             "'outsourcing','inbound_freight',"
             "'production_wages','factory_utilities','factory_rent','maintenance',"
-            "'delivery_freight','sales_expense','administrative_wages',"
-            "'administrative_expense','finance_expense','tax_fee','other')",
+            "'delivery_freight','driver_wages','sales_expense','administrative_wages',"
+            "'administrative_expense','finance_expense','finance_wages','tax_fee','other')",
             name="ck_finance_cost_pool_entries_category",
         ),
         CheckConstraint(

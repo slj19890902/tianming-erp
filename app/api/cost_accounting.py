@@ -62,7 +62,7 @@ COST_CATEGORIES: dict[str, dict[str, str]] = {
         "default_center": "PROD",
     },
     "production_wages": {
-        "label": "生产工资",
+        "label": "生产工资/社保",
         "accounting_class": "manufacturing",
         "default_center": "PROD",
     },
@@ -86,6 +86,11 @@ COST_CATEGORIES: dict[str, dict[str, str]] = {
         "accounting_class": "selling",
         "default_center": "WH_DELIVERY",
     },
+    "driver_wages": {
+        "label": "司机工资",
+        "accounting_class": "selling",
+        "default_center": "WH_DELIVERY",
+    },
     "sales_expense": {
         "label": "销售费用",
         "accounting_class": "selling",
@@ -103,6 +108,11 @@ COST_CATEGORIES: dict[str, dict[str, str]] = {
     },
     "finance_expense": {
         "label": "财务费用",
+        "accounting_class": "finance",
+        "default_center": "FINANCE",
+    },
+    "finance_wages": {
+        "label": "财务工资",
         "accounting_class": "finance",
         "default_center": "FINANCE",
     },

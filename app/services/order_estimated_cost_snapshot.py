@@ -11,13 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.models.order import OrderItem
 from app.models.order_estimated_cost_snapshot import SalesOrderItemEstimatedCostSnapshot
-from app.models.order_external_packaging import SalesOrderItemExternalComponent
 from app.models.order_material_cost_snapshot import SalesOrderItemMaterialCostSnapshot
-from app.services.box_type_rules import box_type_code
 from app.services.order_material_cost_snapshot import get_latest_order_item_material_cost_snapshot
+from app.services.processing_cost import estimate_order_item_processing_cost
 
 
-RULE_VERSION = "p1-28c1-estimated-v1"
+RULE_VERSION = "p1-131-estimated-v2"
 PRECISION_VERSION = "p1-28c1-decimal-v1"
 MONEY = Decimal("0.01")
 UNIT = Decimal("0.000001")
@@ -93,47 +92,6 @@ def _parameters(latest: SalesOrderItemEstimatedCostSnapshot | None, values: Mapp
     }
 
 
-def _printing_color_count(item: OrderItem) -> tuple[int | None, str | None]:
-    content = str(item.product.print_content or "").strip() if item.product else ""
-    if not content or content in {"无", "否", "无印刷", "不印刷"}:
-        return 0, None
-    if "单色" in content:
-        return 1, None
-    if "双色" in content:
-        return 2, None
-    if "三色" in content:
-        return 3, None
-    return None, "印刷颜色数量待确认，未计额外颜色费"
-
-
-def _processing_rule(
-    db: Session,
-    item: OrderItem,
-    material: SalesOrderItemMaterialCostSnapshot | None,
-) -> tuple[str | None, Decimal, Decimal, list[str]]:
-    if getattr(item, "supply_mode_snapshot", None) == "external_purchase":
-        return "external_purchase", Decimal("0"), Decimal("0"), []
-    code = box_type_code(item.product.box_style if item.product else None)
-    if code == "a1_0201":
-        return "a1", Decimal("20"), Decimal("0.13"), []
-    if code in {"die_cut_inner_box", "die_cut_partition", "divider"}:
-        return "die_cut", Decimal("30"), Decimal("0.15"), []
-    external_count = int(
-        db.scalar(
-            select(func.count()).select_from(SalesOrderItemExternalComponent).where(
-                SalesOrderItemExternalComponent.sales_order_item_id == item.id
-            )
-        )
-        or 0
-    )
-    material_components = (
-        json.loads(material.components_json or "[]") if material is not None else []
-    )
-    if external_count and not material_components:
-        return "external_assembly", Decimal("10"), Decimal("0.03"), []
-    return None, Decimal("0"), Decimal("0"), ["该箱型加工费规则待完善"]
-
-
 def _loss_cost(material: SalesOrderItemMaterialCostSnapshot | None, rate: Decimal) -> tuple[Decimal, list[dict[str, Any]]]:
     rows = json.loads(material.components_json or "[]") if material is not None else []
     total = Decimal("0")
@@ -182,29 +140,54 @@ def freeze_order_item_estimated_cost(
     )
     params = _parameters(latest, parameters)
     quantity = max(int(item.quantity or 0), 1)
-    category, batch_cost, unit_cost, missing = _processing_rule(db, item, material)
-    color_count, color_missing = _printing_color_count(item)
-    if color_missing:
-        missing.append(color_missing)
-    extra_color_unit = (
-        Decimal(max(color_count - 1, 0)) * Decimal("0.02")
-        if color_count is not None
-        else Decimal("0")
-    )
+    standard_processing = estimate_order_item_processing_cost(db, item)
+    printing = standard_processing["printing"]
+    die_cut = standard_processing["die_cut"]
+    joining = standard_processing["joining"]
+    extra_assembly = standard_processing["extra_assembly"]
+    active_modes = {
+        printing["printer_mode"],
+        die_cut["die_cut_mode"],
+        joining["joining_mode"],
+        extra_assembly["assembly_mode"],
+    }
+    if active_modes == {"none"}:
+        category = (
+            "external_purchase"
+            if getattr(item, "supply_mode_snapshot", None) == "external_purchase"
+            else "none"
+        )
+    else:
+        category = "standard_labor"
+    batch_cost = Decimal("0")
+    extra_color_unit = Decimal("0")
+    processing_cost_value = standard_processing["estimated_processing_cost"]
     processing_total = (
-        batch_cost + (unit_cost + extra_color_unit) * Decimal(quantity)
-    ).quantize(MONEY, rounding=ROUND_HALF_UP)
+        Decimal(str(processing_cost_value)).quantize(MONEY, rounding=ROUND_HALF_UP)
+        if processing_cost_value is not None
+        else None
+    )
+    unit_cost = (
+        (processing_total / Decimal(quantity)).quantize(UNIT, rounding=ROUND_HALF_UP)
+        if processing_cost_value is not None
+        else None
+    )
+    color_count = printing["color_count"]
+    missing = list(standard_processing["missing_items"])
     loss_total, loss_rows = _loss_cost(material, params["loss_rate"])
     material_known = Decimal(str(material.known_material_subtotal or 0)) if material else Decimal("0")
     material_status = material.calculation_status if material else "missing"
     if material_status != "calculated":
         missing.extend(json.loads(material.missing_items_json or "[]") if material else ["材料成本快照缺失"])
-    if category == "external_assembly" and material_status != "calculated":
-        missing.append("外购件采购成本未纳入本版预计总成本")
     missing = list(dict.fromkeys(str(value) for value in missing if str(value).strip()))
     one_time = sum((params[key] for key in ONE_TIME_FEE_KEYS), Decimal("0")).quantize(MONEY)
-    known = (material_known + loss_total + processing_total + one_time).quantize(MONEY, rounding=ROUND_HALF_UP)
-    complete = material_status == "calculated" and category is not None and color_count is not None and not missing
+    known_processing = processing_total or Decimal("0")
+    known = (material_known + loss_total + known_processing + one_time).quantize(MONEY, rounding=ROUND_HALF_UP)
+    complete = (
+        material_status == "calculated"
+        and standard_processing["calculation_status"] == "calculated"
+        and not missing
+    )
     status = "calculated" if complete else "partial" if known > 0 else "missing"
     total = known if complete else None
     per_unit = (total / Decimal(quantity)).quantize(UNIT, rounding=ROUND_HALF_UP) if total is not None else None
@@ -216,10 +199,15 @@ def freeze_order_item_estimated_cost(
         "loss_material_total_cost": str(loss_total),
         "processing_category": category,
         "processing_batch_cost": str(batch_cost.quantize(MONEY)),
-        "processing_unit_cost": str(unit_cost.quantize(UNIT)),
+        "processing_unit_cost": (
+            str(unit_cost.quantize(UNIT)) if unit_cost is not None else None
+        ),
         "printing_color_count": color_count,
         "extra_color_unit_cost": str(extra_color_unit.quantize(UNIT)),
-        "processing_total_cost": str(processing_total),
+        "processing_total_cost": (
+            str(processing_total) if processing_total is not None else None
+        ),
+        "standard_processing": standard_processing,
         "one_time_fees": {key: str(params[key]) for key in ONE_TIME_FEE_KEYS},
         "one_time_fee_total": str(one_time),
         "tax_rate_reference": "0.13",
@@ -234,7 +222,9 @@ def freeze_order_item_estimated_cost(
         "processing_category": category,
         "printing_color_count": color_count,
         "loss_material_total_cost": str(loss_total),
-        "processing_total_cost": str(processing_total),
+        "processing_total_cost": (
+            str(processing_total) if processing_total is not None else None
+        ),
         "one_time_fee_total": str(one_time),
         "known_estimated_subtotal": str(known),
         "estimated_unit_total_cost": str(per_unit) if per_unit is not None else None,

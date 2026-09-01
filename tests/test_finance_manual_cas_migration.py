@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "hu56v8x9z45"
 DOWN_REVISION = "ht55v8x9z44"
-INTEGRATION_HEAD = "iw58v8x9z47"
 CONFIRMATION_TRIGGERS = {
     "trg_finance_statements_confirmation_insert",
     "trg_finance_statements_confirmation_update",
@@ -30,8 +29,14 @@ def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"))
 
 
-def test_manual_finance_mutation_revision_is_the_only_linear_head() -> None:
-    assert ScriptDirectory.from_config(_config()).get_heads() == [INTEGRATION_HEAD]
+def test_manual_finance_mutation_revision_is_on_the_only_linear_head(
+    current_alembic_head: str,
+) -> None:
+    script = ScriptDirectory.from_config(_config())
+    assert script.get_heads() == [current_alembic_head]
+    assert REVISION in {
+        row.revision for row in script.walk_revisions(base=REVISION, head=current_alembic_head)
+    }
 
 
 def test_manual_finance_mutation_migration_roundtrip_and_fact_guard(

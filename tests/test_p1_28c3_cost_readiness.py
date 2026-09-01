@@ -151,7 +151,8 @@ def test_cost_readiness_is_read_only_current_and_permissioned(
         }
         assert "estimated_order_total_cost" not in body["items"][0]
         category_codes = {row["code"] for row in body["categories"]}
-        assert {"report_dimensions", "supplier_material", "processing_rule"} <= category_codes
+        assert {"report_dimensions", "supplier_material"} <= category_codes
+        assert "processing_rule" not in category_codes
         limited = client.get("/api/orders/cost-readiness", params={"limit": 1})
         assert limited.status_code == 200, limited.text
         assert limited.json()["total_items"] == 2

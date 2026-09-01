@@ -64,6 +64,18 @@ def p1_131_cost_app(tmp_path: Path):
                     center_type="unallocated",
                     is_active=True,
                 ),
+                FinanceCostCenter(
+                    code="WH_DELIVERY",
+                    name="仓储配送",
+                    center_type="warehouse_delivery",
+                    is_active=True,
+                ),
+                FinanceCostCenter(
+                    code="FINANCE",
+                    name="财务",
+                    center_type="finance",
+                    is_active=True,
+                ),
             ]
         )
         db.commit()
@@ -105,6 +117,62 @@ def _entry_payload(*, key: str, amount: str = "0.30", description: str = "生产
         "note": "财务复核后确认",
         "idempotency_key": key,
     }
+
+
+def test_wage_categories_keep_production_driver_finance_and_admin_boundaries(
+    p1_131_cost_app,
+) -> None:
+    app, _factory = p1_131_cost_app
+    with TestClient(app) as client:
+        _login(client)
+        metadata = client.get("/api/finance/cost-pool/metadata")
+        assert metadata.status_code == 200, metadata.text
+        categories = {
+            row["value"]: row for row in metadata.json()["categories"]
+        }
+        assert categories["production_wages"] == {
+            "value": "production_wages",
+            "label": "生产工资/社保",
+            "accounting_class": "manufacturing",
+            "default_center": "PROD",
+        }
+        assert categories["driver_wages"]["accounting_class"] == "selling"
+        assert categories["driver_wages"]["default_center"] == "WH_DELIVERY"
+        assert categories["finance_wages"]["accounting_class"] == "finance"
+        assert categories["finance_wages"]["default_center"] == "FINANCE"
+        assert categories["administrative_wages"]["accounting_class"] == "administrative"
+        assert "warehouse_wages" not in categories
+        centers = {row["code"]: row["id"] for row in metadata.json()["centers"]}
+
+        driver_payload = _entry_payload(
+            key="p1131-driver-wages-001", description="司机工资"
+        )
+        driver_payload.update(
+            cost_center_id=centers["WH_DELIVERY"],
+            cost_category="driver_wages",
+        )
+        driver = client.post("/api/finance/cost-pool", json=driver_payload)
+        assert driver.status_code == 201, driver.text
+        assert driver.json()["accounting_class"] == "selling"
+
+        finance_payload = _entry_payload(
+            key="p1131-finance-wages-001", description="财务工资"
+        )
+        finance_payload.update(
+            cost_center_id=centers["FINANCE"],
+            cost_category="finance_wages",
+        )
+        finance = client.post("/api/finance/cost-pool", json=finance_payload)
+        assert finance.status_code == 201, finance.text
+        assert finance.json()["accounting_class"] == "finance"
+
+        wrong_center = dict(driver_payload)
+        wrong_center.update(
+            idempotency_key="p1131-driver-wages-wrong-center",
+            cost_center_id=centers["PROD"],
+        )
+        rejected = client.post("/api/finance/cost-pool", json=wrong_center)
+        assert rejected.status_code == 409
 
 
 def test_cost_pool_decimal_idempotency_version_and_missing_cost_blocker(

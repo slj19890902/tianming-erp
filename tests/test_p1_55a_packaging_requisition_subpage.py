@@ -317,6 +317,8 @@ global.latestRequestControllers=new Map();
 global.searchDebounceTimers=new Map();global.pageSearchGenerations=new Map();global.pinyinSearchTextCache=new Map();
 global.today=()=>"2026-08-14";global.plusDays=()=>"2026-08-21";
 global.blankReceiptReminderEditor=()=>({{}});
+global.blankFinanceProcessingSettings=()=>({{}});
+global.blankFinanceProcessingProfile=()=>({{}});
 global.axios={{get:async()=>{{throw Object.assign(new Error("forbidden"),{{response:{{status:403}}}});}}}};
 const vm={{
   authGeneration:5,user:{{id:22}},activePage:"requisition",requisitionWorkspace:"external-packaging",
@@ -329,7 +331,7 @@ const vm={{
   beginLatestRequest(key){{const controller=new AbortController();latestRequestControllers.set(key,controller);return controller;}},
   finishLatestRequest(key,controller){{if(latestRequestControllers.get(key)===controller)latestRequestControllers.delete(key);}},
   isCancelledRequest(){{return false;}},errorMessage(error){{return error.message;}},markPageCache(){{}},
-  cancelOrderGroupDetailRequests(){{}},resetModalA11ySession(options){{if(options?.discardModal)this.modal=null;}},
+  resetFinanceCostForm(){{}},cancelOrderGroupDetailRequests(){{}},resetModalA11ySession(options){{if(options?.discardModal)this.modal=null;}},
 }};
 vm.resetPagePerformanceState=new FunctionCtor({json.dumps(reset, ensure_ascii=False)}).bind(vm);
 vm.externalPurchaseRoutingRequestIsCurrent=new FunctionCtor("controller","authGeneration","userId",{json.dumps(current, ensure_ascii=False)}).bind(vm);

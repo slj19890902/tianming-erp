@@ -2739,6 +2739,7 @@ def _assert_no_later_dispatched_deliveries(
             .where(
                 DeliveryItem.order_item_id == source_item.order_item_id,
                 DeliveryItem.delivery_id != source_item.delivery_id,
+                DeliveryItem.is_current.is_(True),
                 Delivery.status == "dispatched",
                 Delivery.dispatched_at.is_not(None),
                 Delivery.dispatched_at >= receipt.created_at,
@@ -3189,7 +3190,10 @@ def create_return_receipt(
         delivery = db.get(Delivery, payload.delivery_id)
         delivery_items = db.scalars(
             select(DeliveryItem)
-            .where(DeliveryItem.delivery_id == delivery.id)
+            .where(
+                DeliveryItem.delivery_id == delivery.id,
+                DeliveryItem.is_current.is_(True),
+            )
             .order_by(DeliveryItem.id)
         ).all()
         requested = {line.delivery_item_id: line for line in payload.items}
@@ -3457,7 +3461,10 @@ def update_return_receipt(
         raise HTTPException(status_code=409, detail="回单已进入对账，禁止修改")
     delivery_items = db.scalars(
         select(DeliveryItem)
-        .where(DeliveryItem.delivery_id == receipt.delivery_id)
+        .where(
+            DeliveryItem.delivery_id == receipt.delivery_id,
+            DeliveryItem.is_current.is_(True),
+        )
         .order_by(DeliveryItem.id)
     ).all()
     requested = {line.delivery_item_id: line for line in payload.items}

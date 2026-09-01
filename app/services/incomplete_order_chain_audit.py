@@ -385,6 +385,7 @@ def _delivery_rows(db: Session, item_ids: Sequence[int]) -> tuple[dict[int, list
             .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
             .where(
                 DeliveryItem.order_item_id.in_(chunk),
+                DeliveryItem.is_current.is_(True),
                 Delivery.status == "dispatched",
                 DeliveryItem.source_type == "order",
             )

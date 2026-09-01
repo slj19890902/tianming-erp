@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -138,6 +139,10 @@ class Delivery(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="DeliveryItem.id",
+        primaryjoin=(
+            "and_(Delivery.id == DeliveryItem.delivery_id, "
+            "DeliveryItem.is_current.is_(True))"
+        ),
     )
 
 
@@ -162,12 +167,26 @@ class DeliveryItem(Base):
             "AND price_source IS NOT NULL)",
             name="ck_sales_delivery_items_source_reference",
         ),
-        UniqueConstraint(
+        Index(
+            "uq_sales_delivery_items_current_order_item",
             "delivery_id",
             "order_item_id",
-            name="uq_sales_delivery_items_order_item",
+            unique=True,
+            sqlite_where=text("is_current = 1 AND order_item_id IS NOT NULL"),
+            postgresql_where=text(
+                "is_current = true AND order_item_id IS NOT NULL"
+            ),
+        ),
+        CheckConstraint(
+            "revision_number >= 1",
+            name="ck_sales_delivery_items_revision_number",
         ),
         Index("ix_sales_delivery_items_delivery_id", "delivery_id"),
+        Index(
+            "ix_sales_delivery_items_delivery_current",
+            "delivery_id",
+            "is_current",
+        ),
         Index("ix_sales_delivery_items_order_item_id", "order_item_id"),
         Index("ix_sales_delivery_items_product_id", "product_id"),
     )
@@ -181,6 +200,18 @@ class DeliveryItem(Base):
         String(30),
         default="order",
         server_default="order",
+        nullable=False,
+    )
+    revision_number: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
+    is_current: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="1",
         nullable=False,
     )
     order_item_id: Mapped[int | None] = mapped_column(

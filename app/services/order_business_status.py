@@ -343,6 +343,7 @@ def build_order_business_statuses(
                 .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
                 .where(
                     DeliveryItem.order_item_id.in_(item_id_chunk),
+                    DeliveryItem.is_current.is_(True),
                     Delivery.status == "dispatched",
                 )
             ):

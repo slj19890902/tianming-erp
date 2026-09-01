@@ -1944,6 +1944,7 @@ def _completion_dates_by_item(
             .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
             .where(
                 DeliveryItem.order_item_id.in_(item_ids),
+                DeliveryItem.is_current.is_(True),
                 Delivery.status == "dispatched",
             )
             .group_by(DeliveryItem.order_item_id)

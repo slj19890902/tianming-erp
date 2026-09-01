@@ -517,6 +517,7 @@ def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
             .join(Customer, Customer.id == Delivery.customer_id)
             .where(
                 Delivery.status == "dispatched",
+                DeliveryItem.is_current.is_(True),
                 Delivery.delivery_date >= month_start,
                 Delivery.delivery_date < next_month_start,
             )

@@ -278,7 +278,10 @@ def build_delivery_packaging_label_package(
     delivery_items = list(
         db.scalars(
             select(DeliveryItem)
-            .where(DeliveryItem.delivery_id == delivery.id)
+            .where(
+                DeliveryItem.delivery_id == delivery.id,
+                DeliveryItem.is_current.is_(True),
+            )
             .order_by(DeliveryItem.id)
         ).all()
     )

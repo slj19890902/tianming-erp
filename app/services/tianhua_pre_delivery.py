@@ -195,7 +195,7 @@ def preprocess_row(
     else:
         reason=f"数量差 {abs(pending-row.image_qty)}，按综合评分匹配"
     data.update(product_id=p.id,product_name=p.product_name,order_item_id=oi.id,order_id=o.id,order_number=o.order_number,customer_order_no=o.customer_po,match_reason=reason,match_score=score,candidate_count=candidate_count,system_pending_qty=available,available_qty=available)
-    dup=db.execute(select(Delivery.delivery_number,Delivery.delivery_date).join(DeliveryItem,DeliveryItem.delivery_id==Delivery.id).join(OrderItem,OrderItem.id==DeliveryItem.order_item_id).where(Delivery.customer_id==o.customer_id,Delivery.status=="dispatched",Delivery.delivery_date>=beijing_today()-timedelta(days=7),OrderItem.product_id==p.id,DeliveryItem.delivered_quantity==row.image_qty).limit(1)).one_or_none()
+    dup=db.execute(select(Delivery.delivery_number,Delivery.delivery_date).join(DeliveryItem,DeliveryItem.delivery_id==Delivery.id).join(OrderItem,OrderItem.id==DeliveryItem.order_item_id).where(Delivery.customer_id==o.customer_id,Delivery.status=="dispatched",DeliveryItem.is_current.is_(True),Delivery.delivery_date>=beijing_today()-timedelta(days=7),OrderItem.product_id==p.id,DeliveryItem.delivered_quantity==row.image_qty).limit(1)).one_or_none()
     multi_warning=f"该存货编码存在 {candidate_count} 个未送订单，请核对匹配订单号。" if candidate_count>1 else ""
     if available<row.image_qty: data.update(status="stock_shortage",warning=f"当前可送数量 {available}，小于图片数量 {row.image_qty}；订单可能尚未入库或库存不足。")
     elif dup: data.update(status="duplicate_warning",warning=f"相同编码和数量最近 7 天已送过：{dup.delivery_number}（{dup.delivery_date}）。")
@@ -276,7 +276,10 @@ def _delivery_total(db: Session, delivery_id: int) -> int:
     return int(
         db.scalar(
             select(func.coalesce(func.sum(DeliveryItem.delivered_quantity), 0))
-            .where(DeliveryItem.delivery_id == delivery_id)
+            .where(
+                DeliveryItem.delivery_id == delivery_id,
+                DeliveryItem.is_current.is_(True),
+            )
         )
         or 0
     )
@@ -339,7 +342,10 @@ def ensure_draft_delivery(
     existing = {
         value.order_item_id: value
         for value in db.scalars(
-            select(DeliveryItem).where(DeliveryItem.delivery_id == delivery.id)
+            select(DeliveryItem).where(
+                DeliveryItem.delivery_id == delivery.id,
+                DeliveryItem.is_current.is_(True),
+            )
         ).all()
     }
     wanted_ids: set[int] = set()
@@ -381,7 +387,10 @@ def ensure_draft_delivery(
         wanted_ids.add(delivery_item.id)
 
     for delivery_item in db.scalars(
-        select(DeliveryItem).where(DeliveryItem.delivery_id == delivery.id)
+        select(DeliveryItem).where(
+            DeliveryItem.delivery_id == delivery.id,
+            DeliveryItem.is_current.is_(True),
+        )
     ).all():
         if delivery_item.id not in wanted_ids:
             db.delete(delivery_item)

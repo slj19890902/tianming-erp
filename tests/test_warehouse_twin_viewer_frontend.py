@@ -300,8 +300,9 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert 'max_pallet_capacity: capacity' in SOURCE
     assert 'setPlanningPublishedRevision(result.published_revision)' in SOURCE
     assert "原有高级维护草稿已保留，没有随本次确认发布" in SOURCE
-    assert 'palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}' in SOURCE
-    assert "拖动并保存现场货位" in SOURCE
+    assert 'palletEditingOnly={locationEditMode || warehouseMoveModeActive}' in SOURCE
+    assert "拖动并保存现场货位" not in SOURCE
+    assert "只有点击区域空白处才选择区域" in SOURCE
     assert "系统不再强制把栈板紧贴均匀排布" in SOURCE
     assert "主动留出通行、货物外伸和操作间距" in SOURCE
     assert "逻辑货位点（非实尺度）" in SOURCE
@@ -314,6 +315,21 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert '<aside className="twin-inspector">' in SOURCE
     assert "twin-stage-footer" not in SOURCE
     assert "twin-system-footer" not in SOURCE
+
+
+def test_area_planning_prioritizes_a_location_hit_and_saves_its_direct_drag() -> None:
+    pointer_down = CANVAS.split("const onPointerDown", 1)[1].split("const processPointerMove", 1)[0]
+    move_location = SOURCE.split("const moveLocationDraft", 1)[1].split("const lotMoveSource", 1)[0]
+    save_locations = SOURCE.split("const saveLocationDrafts", 1)[1].split("const exchangeLocationDraft", 1)[0]
+
+    assert 'const preferredPlanningPallet = palletEditingOnly' in pointer_down
+    assert '? roots.find(' in pointer_down
+    assert 'candidate.userData.entityKind === "pallet" && candidate.userData.draggable' in pointer_down
+    assert 'const root = preferredPlanningPallet || preferredPlanningFeature || roots[0] || null;' in pointer_down
+    assert 'if (!locationEditMode) return;' in move_location
+    assert 'setLocationPointEditAreaCode(location.area_code);' in move_location
+    assert 'palletEditingOnly={locationEditMode || warehouseMoveModeActive}' in SOURCE
+    assert 'window.confirm(`确认保存并固定' not in save_locations
 
 
 def test_area_confirmation_keeps_the_current_planning_revision_for_the_next_zone() -> None:
@@ -400,7 +416,7 @@ def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> Non
     assert "available_actions" in SOURCE
     assert "系统按区域自动生成内部唯一编码" in SOURCE
     assert "/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable" in SOURCE
-    assert 'palletEditingOnly={(locationEditMode && (advancedAreaMaintenanceOpen || Boolean(locationPointEditAreaCode))) || warehouseMoveModeActive}' in SOURCE
+    assert 'palletEditingOnly={locationEditMode || warehouseMoveModeActive}' in SOURCE
     assert "draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : locationPointEditPalletIds}" in SOURCE
     assert 'readOnly={!locationEditMode && !warehouseMoveModeActive}' in SOURCE
     assert 'rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}' in SOURCE

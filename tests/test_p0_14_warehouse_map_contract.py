@@ -101,7 +101,7 @@ def test_normal_move_submit_is_one_request_and_cancel_is_zero_request() -> None:
     submit_move = _between(
         APP_SOURCE,
         "  const confirmMoveDrafts = async () => {",
-        "  const beginSelectedAreaLocationPointEdit =",
+        "  const cancelLocationPointEditing =",
     )
     assert "window.confirm" not in submit_move
     assert submit_move.count("await mutateJson(") == 1

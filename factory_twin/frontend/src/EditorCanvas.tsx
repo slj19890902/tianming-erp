@@ -1172,10 +1172,13 @@ export function EditorCanvas({
       const roots = raycaster.intersectObjects(interactive, !warehouseTheme)
         .map((intersection) => entityNode(intersection.object))
         .filter((candidate): candidate is THREE.Object3D => Boolean(candidate));
+      const preferredPlanningPallet = palletEditingOnly
+        ? roots.find((candidate) => candidate.userData.entityKind === "pallet" && candidate.userData.draggable)
+        : null;
       const preferredPlanningFeature = featureEditingEnabled && !rackEditingEnabled
         ? roots.find((candidate) => candidate.userData.entityKind === "feature" && candidate.userData.draggable)
         : null;
-      const root = preferredPlanningFeature || roots[0] || null;
+      const root = preferredPlanningPallet || preferredPlanningFeature || roots[0] || null;
       if (!root) {
         pendingCanvasAction = {
           kind: "clear-selection",

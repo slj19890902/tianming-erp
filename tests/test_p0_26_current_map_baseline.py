@@ -4,6 +4,8 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
+import pytest
+
 from app.models.warehouse_inventory import WarehouseArea, WarehouseFloor, WarehouseLocation
 from app.services.warehouse_current_map_baseline import _pack_slots
 from app.services.warehouse_location_address import published_measured_map_readiness
@@ -76,6 +78,18 @@ def test_measured_ground_pack_never_exceeds_zone_and_uses_standard_pallets() -> 
     assert {(slot["width"], slot["depth"]) for slot in slots} == {(1000, 1200)}
     assert max(slot["x"] + slot["width"] for slot in slots) <= 24229.0
     assert max(slot["y"] + slot["depth"] for slot in slots) <= -5681.5
+
+
+def test_measured_ground_pack_percentages_round_trip_without_vertical_mirroring() -> None:
+    min_x, min_y, width, height = (16679.0, -5042.0, 2550.0, 15000.0)
+    slots = _pack_slots((min_x, min_y, width, height), 28)
+    for slot in slots:
+        restored_x = min_x + slot["left_pct"] / 100 * width
+        restored_y = min_y + height - (
+            slot["top_pct"] + slot["height_pct"]
+        ) / 100 * height
+        assert restored_x == pytest.approx(slot["x"], abs=0.02)
+        assert restored_y == pytest.approx(slot["y"], abs=0.02)
 
 
 def test_current_map_functional_location_is_mapped_without_becoming_pallet_slot() -> None:

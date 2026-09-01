@@ -14,7 +14,8 @@ test("ordinary area planning exposes a current-area-only point editing workflow"
   assert.match(source, />取消点位调整/);
   assert.match(source, /只有点击区域空白处才选择区域/);
   assert.match(source, /location\?\.area_code !== locationPointEditAreaCode/);
-  assert.match(source, /draggablePalletIds=\{warehouseMoveModeActive \? movablePalletIds : locationPointEditPalletIds\}/);
+  assert.match(source, /draggablePalletIds=\{warehouseMoveModeActive \? movablePalletIds : layoutMapToolsOpen \? \[\] : locationPointEditPalletIds\}/);
+  assert.match(source, /mergePublishedFeatureGeometry/);
 });
 
 test("point save is the single explicit action and keeps inventory outside the write scope", () => {
@@ -28,16 +29,16 @@ test("area planning gives a clicked location priority over its enclosing area", 
   assert.match(editorSource, /const preferredPlanningPallet = palletEditingOnly/);
   assert.match(editorSource, /candidate\.userData\.entityKind === "pallet" && candidate\.userData\.draggable/);
   assert.match(editorSource, /preferredPlanningPallet \|\| preferredPlanningFeature \|\| roots\[0\]/);
-  assert.match(source, /if \(!locationEditMode\) return/);
+  assert.match(source, /if \(!locationEditMode \|\| layoutMapToolsOpen\) return/);
   assert.match(source, /setLocationPointEditAreaCode\(location\.area_code\)/);
   assert.match(source, /palletEditingOnly=\{locationEditMode \|\| warehouseMoveModeActive\}/);
 });
 
-test("area planning shows every empty ground location with a full green slot footprint", () => {
+test("area planning shows every ground location with a full colored slot footprint", () => {
   assert.match(source, /layout\?\.id,\s*locationEditMode/);
   assert.match(source, /区域规划会按已发布容量显示全部正式货位/);
   assert.match(source, /绿色为空货位，蓝色为有货货位/);
-  assert.match(inventorySource, /renderEmptyPlanningSlots && isEmptyGroundLocation/);
+  assert.match(inventorySource, /renderEmptyPlanningSlots && isGroundLocation/);
   assert.match(inventorySource, /planning_slot_width_mm: isPlanningLocationSlot \? standard\.width_mm/);
   assert.match(inventorySource, /planning_slot_depth_mm: isPlanningLocationSlot \? standard\.depth_mm/);
   assert.match(sceneSource, /pallet\.is_planning_location_slot/);
@@ -109,14 +110,14 @@ test("planning dimensions save the latest input and adjustment locks map panning
 
 test("planning exits to lookup and map geometry tools open only on demand", () => {
   assert.match(source, /setMapMode\("lookup"\);[\s\S]*setSearchPanelOpen\(true\)/);
-  assert.match(source, />调整地图<\/button>/);
+  assert.match(source, /\{layoutMapToolsOpen \? "完成地图调整" : "调整地图"\}<\/button>/);
   assert.match(source, /setLayoutMapToolsOpen\(\(current\) => !current\)/);
   assert.match(source, /mapMode === "planning" && locationEditMode && canEditLocations && layoutMapToolsOpen && <section className="twin-layout-map-tools">/);
-  assert.match(source, /featureEditingEnabled=\{locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"\}/);
+  assert.match(source, /featureEditingEnabled=\{locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"\}/);
   assert.match(source, /layoutDrawKind = locationEditMode && layoutMapToolsOpen && layoutMapTool !== "adjust"/);
 });
 
-test("planning can drag published zones while map panning stays locked", () => {
+test("planning moves empty zones but locks boundaries that own formal locations", () => {
   assert.match(editorSource, /planningFeatureEditable[\s\S]*\["zone", "aisle"\]\.includes\(feature\.feature_kind\)/);
   assert.doesNotMatch(
     editorSource.slice(editorSource.indexOf("const planningFeatureEditable"), editorSource.indexOf("group.userData =", editorSource.indexOf("const planningFeatureEditable"))),
@@ -125,6 +126,19 @@ test("planning can drag published zones while map panning stays locked", () => {
   assert.match(source, /mapPanLocked=\{locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"\}/);
   assert.match(source, /rackEditingEnabled=\{locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen\}/);
   assert.match(editorSource, /preferredPlanningFeature[\s\S]*candidate\.userData\.entityKind === "feature" && candidate\.userData\.draggable/);
+  assert.match(source, /featureHasMappedGroundLocations/);
+  assert.match(source, /区域边界已锁定，不能带着货位一起移动或缩放/);
+  assert.match(source, /disabled=\{spatialEditBusy \|\| selectedAreaBoundaryLocked\}/);
+});
+
+test("map adjustment and location placement are mutually exclusive", () => {
+  assert.match(source, /const locationProjectionFeatures = useMemo/);
+  assert.match(source, /\(\) => mergePublishedFeatureGeometry\(features, planningPublishedFeatures\)/);
+  assert.match(source, /setLayoutMapToolsOpen\(false\)/);
+  assert.match(source, /layoutMapToolsOpen \? \[\] : locationPointEditPalletIds/);
+  assert.match(source, /!locationPointEditAreaCode && layoutMapTool === "adjust"/);
+  assert.match(source, /activeLocationDraftCount > 0/);
+  assert.match(source, /if \(layoutMapToolsOpen\)/);
 });
 
 test("warehouse racks use exact footprint picking and only horizontal or vertical direction", () => {

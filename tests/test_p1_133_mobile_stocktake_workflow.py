@@ -33,6 +33,70 @@ WAREHOUSE_SERVICE = (
 ).read_text(encoding="utf-8")
 
 
+def test_mobile_map_uses_area_bounds_and_readable_location_colors() -> None:
+    from app.api.mobile_erp import _mobile_area_display_bounds
+
+    features = [
+        {
+            "id": "zone-d1",
+            "feature_kind": "zone",
+            "erp_area_code": "D1",
+            "points": [[16679, -5042], [19229, -5042], [19229, 9958], [16679, 9958]],
+        },
+        {
+            "id": "aisle-d1",
+            "feature_kind": "aisle",
+            "points": [[15000, -6000], [21000, -6000]],
+        },
+    ]
+    assert _mobile_area_display_bounds(features, area_code="D1") == {
+        "min_x": 16679.0,
+        "min_y": -5042.0,
+        "max_x": 19229.0,
+        "max_y": 9958.0,
+    }
+    assert "compactWarehouseLocation" in MOBILE_ERP
+    assert "short_location_label" in MOBILE_ERP
+    assert "warehouse-map-location.has-goods { background: #dbeafe" in MOBILE_ERP
+    assert "warehouse-map-location.not-disclosed" in MOBILE_ERP
+    assert "warehouse-map-location.deep-link { outline: 4px solid #7e22ce" in MOBILE_ERP
+    assert "stage.style.height" in MOBILE_ERP
+    assert "document.addEventListener(\"visibilitychange\"" in MOBILE_ERP
+    assert "window.addEventListener(\"pageshow\"" in MOBILE_ERP
+
+
+def test_mobile_short_location_label_keeps_row_and_slot_unique() -> None:
+    from app.api.mobile_erp import _mobile_short_location_label
+
+    first = type("Location", (), {"ground_row_no": 1, "slot_no": 3, "location_code": "3F-D01-P01-03"})()
+    second = type("Location", (), {"ground_row_no": 2, "slot_no": 3, "location_code": "3F-D01-P02-03"})()
+    canonical = {"employee_location_name": "三楼 D1区·第1排·3号位"}
+    first_label = _mobile_short_location_label(first, canonical=canonical, area_code="D01")
+    second_label = _mobile_short_location_label(second, canonical=canonical, area_code="D01")
+    assert first_label == "D1·1排·3号位"
+    assert second_label == "D1·2排·3号位"
+    assert first_label != second_label
+
+    rack_location = type(
+        "RackLocation",
+        (),
+        {"ground_row_no": None, "slot_no": 1, "location_code": "RACK-CELL"},
+    )()
+    rack_one = _mobile_short_location_label(
+        rack_location,
+        canonical={"rack_display_name": "R01", "level_no": 1, "slot_no": 1},
+        area_code="M01",
+    )
+    rack_two = _mobile_short_location_label(
+        rack_location,
+        canonical={"rack_display_name": "R02", "level_no": 1, "slot_no": 1},
+        area_code="M01",
+    )
+    assert rack_one == "R01·1层·1格"
+    assert rack_two == "R02·1层·1格"
+    assert rack_one != rack_two
+
+
 def _inventory_state(factory) -> list[tuple[object, ...]]:
     with factory() as db:
         return list(

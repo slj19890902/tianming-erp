@@ -4558,7 +4558,7 @@ export function WarehouseTwinApp() {
         popup.close();
         return;
       }
-      popup.location.replace(`/warehouse-rack-level-label.html?print_job_id=${encodeURIComponent(result.id)}`);
+      popup.location.replace(`/static/warehouse-rack-level-label.html?print_job_id=${encodeURIComponent(result.id)}`);
       setLocationEditMessage(`已登记 ${result.area_name} · ${result.rack_name} 的 ${result.level_count} 张 80×40 层标签。`);
     } catch (reason) {
       popup.close();
@@ -5896,7 +5896,7 @@ export function WarehouseTwinApp() {
           <button type="button" disabled={stocktakeBatchBusy} onClick={() => removeStocktakeDraftItem(item.client_item_id)}>撤销</button>
         </article>)}</div>
         <div className="twin-move-draft-actions"><button type="button" disabled={!stocktakeDrafts.length || stocktakeBatchBusy} onClick={cancelStocktakeDrafts}>取消全部草稿</button><button type="button" className="confirm" disabled={!stocktakeDrafts.length || stocktakeBatchBusy} onClick={confirmStocktakeDrafts}>{stocktakeBatchBusy ? "正在一次提交…" : `一次确认 ${stocktakeDrafts.length || ""} 条`}</button></div>
-        {stocktakeLastResult.length > 0 && <div className="twin-stocktake-label-results"><b>本次新增已入账，可贴标签</b>{stocktakeLastResult.map((item) => <span key={`stocktake-label-${item.lot_id}`}><button type="button" onClick={() => window.open(`/location-label.html?location_id=${encodeURIComponent(item.location_id)}`, "_blank", "noopener")}>打印位置标签</button>{item.inventory_type === "finished" && <button type="button" onClick={() => window.open(`/static/finished-goods-label.html?lot_id=${encodeURIComponent(item.lot_id)}&version=${encodeURIComponent(item.version_after)}`, "_blank", "noopener")}>打印产品标签</button>}</span>)}</div>}
+        {stocktakeLastResult.length > 0 && <div className="twin-stocktake-label-results"><b>本次新增已入账，可贴标签</b>{stocktakeLastResult.map((item) => <span key={`stocktake-label-${item.lot_id}`}><button type="button" onClick={() => window.open(`/static/location-label.html?location_id=${encodeURIComponent(item.location_id)}`, "_blank", "noopener")}>打印位置标签</button>{item.inventory_type === "finished" && <button type="button" onClick={() => window.open(`/static/finished-goods-label.html?lot_id=${encodeURIComponent(item.lot_id)}&version=${encodeURIComponent(item.version_after)}`, "_blank", "noopener")}>打印产品标签</button>}</span>)}</div>}
       </> : moveAction === "merge" ? <>
         <div className="twin-move-draft-heading"><b>{mergeSources.length ? `已选 ${mergeSources.length} 块` : "请选择货位"}</b></div>
         <div className="twin-move-draft-list twin-merge-draft-line">{mergeSources.map((item) => <article className={mergeTarget?.pallet_id === item.pallet_id ? "merge-target" : ""} key={item.client_item_id || item.pallet_id}>

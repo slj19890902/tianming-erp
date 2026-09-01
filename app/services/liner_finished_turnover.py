@@ -124,6 +124,17 @@ _STRUCTURAL_LOCATION_REFERENCE_TABLES = frozenset(
     }
 )
 
+# These rows are immutable provenance facts.  The current-map migration moved
+# the pallets away from F12 while deliberately preserving their original
+# movement and completion locations.  They must participate in the snapshot
+# fingerprint, but they do not mean that an anchor is currently occupied.
+_PREEXISTING_HISTORICAL_LOCATION_REFERENCE_TABLES = frozenset(
+    {
+        "inventory_location_movements",
+        "production_completions",
+    }
+)
+
 
 def _reference_rows(
     connection: sa.Connection,
@@ -270,9 +281,15 @@ def _preflight(connection: sa.Connection) -> list[dict[str, Any]] | None:
                 "P0-33 preflight failed: F34/F12 map, policy, capacity, or anchor facts drifted."
             )
     references = _reference_rows(connection, [int(row["id"]) for row in rows])
-    if any(references.values()):
+    blocking_references = {
+        table_name: table_rows
+        for table_name, table_rows in references.items()
+        if table_rows
+        and table_name not in _PREEXISTING_HISTORICAL_LOCATION_REFERENCE_TABLES
+    }
+    if blocking_references:
         raise RuntimeError(
-            "P0-33 preflight failed: F34/F12 already have inventory or business references."
+            "P0-33 preflight failed: F34/F12 already have current inventory or business references."
         )
     return rows
 

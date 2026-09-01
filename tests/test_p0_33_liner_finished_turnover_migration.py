@@ -221,6 +221,88 @@ def test_formal_profile_activates_exact_anchors_and_roundtrips(
     assert _health(database) == ("ok", [])
 
 
+def test_preexisting_location_history_is_preserved_and_does_not_fake_occupancy(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "p0-33-preexisting-history.sqlite3"
+    config = _config(monkeypatch, database)
+    command.upgrade(config, PARENT)
+    _seed_formal_profile(database)
+
+    engine = create_engine(f"sqlite:///{database}")
+    with engine.begin() as connection:
+        location_id = connection.scalar(
+            text("SELECT id FROM warehouse_locations WHERE location_code='F12-P01'")
+        )
+        pallet_id = connection.execute(
+            text(
+                "INSERT INTO inventory_pallets "
+                "(pallet_code,location_id,location_occupancy_key,status,is_current,"
+                "needs_relocation,version) "
+                "VALUES ('P0-33-PREEXISTING-HISTORY',NULL,'PRIMARY','closed',0,0,2)"
+            )
+        ).lastrowid
+        movement_id = connection.execute(
+            text(
+                "INSERT INTO inventory_location_movements "
+                "(pallet_id,from_location_id,to_location_id,movement_type,remarks) "
+                "VALUES (:pallet_id,:location_id,NULL,'move','历史栈板已迁出F12')"
+            ),
+            {"pallet_id": pallet_id, "location_id": location_id},
+        ).lastrowid
+    engine.dispose()
+
+    command.upgrade(config, TARGET)
+    engine = create_engine(f"sqlite:///{database}")
+    with engine.connect() as connection:
+        assert connection.scalar(
+            text("SELECT is_active FROM warehouse_locations WHERE id=:location_id"),
+            {"location_id": location_id},
+        ) == 1
+        assert connection.scalar(
+            text(
+                "SELECT COUNT(*) FROM inventory_location_movements "
+                "WHERE id=:movement_id AND from_location_id=:location_id"
+            ),
+            {"movement_id": movement_id, "location_id": location_id},
+        ) == 1
+    engine.dispose()
+
+    command.downgrade(config, PARENT)
+    assert _health(database) == ("ok", [])
+
+
+def test_nonhistorical_pallet_reference_still_blocks_activation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "p0-33-current-occupancy.sqlite3"
+    config = _config(monkeypatch, database)
+    command.upgrade(config, PARENT)
+    _seed_formal_profile(database)
+
+    engine = create_engine(f"sqlite:///{database}")
+    with engine.begin() as connection:
+        location_id = connection.scalar(
+            text("SELECT id FROM warehouse_locations WHERE location_code='F34-P01'")
+        )
+        connection.execute(
+            text(
+                "INSERT INTO inventory_pallets "
+                "(pallet_code,location_id,location_occupancy_key,status,is_current,"
+                "needs_relocation,version) "
+                "VALUES ('P0-33-BLOCKING-PALLET',:location_id,'PRIMARY','closed',0,0,1)"
+            ),
+            {"location_id": location_id},
+        )
+    engine.dispose()
+
+    with pytest.raises(RuntimeError, match="current inventory or business references"):
+        command.upgrade(config, TARGET)
+    assert _health(database) == ("ok", [])
+
+
 def test_downgrade_refuses_historical_business_reference(
     monkeypatch,
     tmp_path: Path,

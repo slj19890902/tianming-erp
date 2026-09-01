@@ -1057,6 +1057,7 @@ def delete_warehouse_twin_feature(
     expected_revision: str,
     expected_version: int,
     operation_key: str,
+    archive_empty_children: bool = False,
     path: Path | None = None,
 ) -> LayoutMutation:
     def mutate(floor: dict[str, Any]) -> dict[str, Any]:
@@ -1066,17 +1067,33 @@ def delete_warehouse_twin_feature(
             raise WarehouseTwinLayoutEditError("只有区域和通道可以从规划草稿删除")
         label = "区域" if feature_kind == "zone" else "通道"
         _ensure_version(feature, expected_version, label)
-        if feature.get("is_locked"):
+        if feature.get("is_locked") and not archive_empty_children:
             raise WarehouseTwinLayoutEditConflictError(
                 f"{label}已确认并锁定，必须先解除锁定"
             )
-        if feature_kind == "zone" and any(
-            rack.get("area_feature_id") == feature_id
+        owned_racks = [
+            rack
             for rack in floor.get("racks") or []
-        ):
+            if rack.get("area_feature_id") == feature_id
+        ]
+        if feature_kind == "zone" and owned_racks and not archive_empty_children:
             raise WarehouseTwinLayoutEditConflictError(
                 "区域内仍有货架，请先处理货架后再删除区域"
             )
+        if archive_empty_children and owned_racks:
+            retained_racks = [
+                item
+                for item in floor.get("racks") or []
+                if item.get("area_feature_id") != feature_id
+            ]
+            for rack in owned_racks:
+                retired_rack = dict(rack)
+                retired_rack["retired_at"] = _utc_iso()
+                retired_rack["retired_reason"] = (
+                    "正式空区域受控归档；库存、正式库位和历史身份未改变"
+                )
+                floor.setdefault("retired_racks", []).append(retired_rack)
+            floor["racks"] = retained_racks
         floor["features"] = [
             item
             for item in floor.get("features") or []
@@ -1088,7 +1105,7 @@ def delete_warehouse_twin_feature(
             "管理员从二维规划草稿删除；正式区域、库存、库位和正式地图未改变"
         )
         floor.setdefault("retired_features", []).append(retired)
-        return {
+        result = {
             "id": feature_id,
             "feature_code": feature.get("feature_code"),
             "feature_kind": feature_kind,
@@ -1096,6 +1113,9 @@ def delete_warehouse_twin_feature(
             "inventory_changed": False,
             "published_map_changed": False,
         }
+        if archive_empty_children:
+            result["archived_child_rack_count"] = len(owned_racks)
+        return result
 
     return _apply_mutation(
         floor_code,

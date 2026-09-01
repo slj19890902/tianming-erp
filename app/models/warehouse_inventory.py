@@ -38,6 +38,7 @@ WAREHOUSE_CONSTRUCTION_STATUSES = (
     "layout_building",
     "layout_complete",
     "enabled",
+    "archived",
 )
 
 WAREHOUSE_CAPACITY_REVIEW_STATUSES = (
@@ -109,7 +110,7 @@ class WarehouseArea(Base):
         CheckConstraint(
             "construction_status IN "
             "('not_started','ledger_building','ledger_complete',"
-            "'layout_building','layout_complete','enabled')",
+            "'layout_building','layout_complete','enabled','archived')",
             name="ck_warehouse_areas_construction_status",
         ),
         CheckConstraint(
@@ -224,8 +225,16 @@ class WarehouseAreaStoragePolicy(Base):
             name="ck_warehouse_area_storage_policies_layout",
         ),
         CheckConstraint(
-            "status IN ('draft','published')",
+            "status IN ('draft','published','archived')",
             name="ck_warehouse_area_storage_policies_status",
+        ),
+        CheckConstraint(
+            "status <> 'archived' OR (archived_at IS NOT NULL "
+            "AND archived_by IS NOT NULL "
+            "AND length(trim(archive_operation_key)) > 0 "
+            "AND length(archive_request_hash) = 64 "
+            "AND length(trim(archive_feature_snapshot_json)) > 0)",
+            name="ck_warehouse_area_storage_policies_archive_facts",
         ),
         CheckConstraint(
             "version > 0",
@@ -239,6 +248,10 @@ class WarehouseAreaStoragePolicy(Base):
         Index(
             "ix_warehouse_area_storage_policies_status",
             "status",
+        ),
+        UniqueConstraint(
+            "archive_operation_key",
+            name="uq_warehouse_area_storage_policies_archive_idem",
         ),
     )
 
@@ -258,6 +271,19 @@ class WarehouseAreaStoragePolicy(Base):
         Integer, default=1, server_default="1", nullable=False
     )
     updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    archived_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    archive_operation_key: Mapped[str | None] = mapped_column(
+        String(120), nullable=True
+    )
+    archive_request_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    archive_feature_snapshot_json: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
     )

@@ -69,6 +69,7 @@ interface Props {
   onMoveRack: (id: string, xMm: number, yMm: number) => void;
   onMovePallet: (id: string, xMm: number, yMm: number) => void;
   onMoveFeature: (id: string, deltaXmm: number, deltaYmm: number) => void;
+  onFeatureContextMenu?: (id: string, clientX: number, clientY: number) => void;
   onDropAsset: (templateId: string, xMm: number, yMm: number) => void;
   onDropRack: (rack: Record<string, unknown>, xMm: number, yMm: number) => void;
   onDropPallet: (pallet: Record<string, unknown>, xMm: number, yMm: number) => void;
@@ -391,6 +392,7 @@ export function EditorCanvas({
   onMoveRack,
   onMovePallet,
   onMoveFeature,
+  onFeatureContextMenu,
   onDropAsset,
   onDropRack,
   onDropPallet,
@@ -410,10 +412,10 @@ export function EditorCanvas({
   const selectedRef = useRef<SelectedEntity>(selected);
   const focusTargetRef = useRef<CanvasFocusTarget | null>(focusTarget);
   const lastFocusKeyRef = useRef("");
-  const handlersRef = useRef({ onSelect, onMoveEquipment, onMoveRack, onMovePallet, onMoveFeature, onDropAsset, onDropRack, onDropPallet, onDrawPoint, onMeasurePoint });
+  const handlersRef = useRef({ onSelect, onMoveEquipment, onMoveRack, onMovePallet, onMoveFeature, onFeatureContextMenu, onDropAsset, onDropRack, onDropPallet, onDrawPoint, onMeasurePoint });
   selectedRef.current = selected;
   focusTargetRef.current = focusTarget;
-  handlersRef.current = { onSelect, onMoveEquipment, onMoveRack, onMovePallet, onMoveFeature, onDropAsset, onDropRack, onDropPallet, onDrawPoint, onMeasurePoint };
+  handlersRef.current = { onSelect, onMoveEquipment, onMoveRack, onMovePallet, onMoveFeature, onFeatureContextMenu, onDropAsset, onDropRack, onDropPallet, onDrawPoint, onMeasurePoint };
   const cameraStateRef = useRef<{
     position: [number, number, number];
     target: [number, number, number];
@@ -1222,6 +1224,18 @@ export function EditorCanvas({
         renderer.domElement.setPointerCapture(event.pointerId);
       }
     };
+    const onContextMenu = (event: MouseEvent) => {
+      if (!featureEditingEnabled || !handlersRef.current.onFeatureContextMenu) return;
+      setPointer(event);
+      const featureRoot = raycaster.intersectObjects(interactive, !warehouseTheme)
+        .map((intersection) => entityNode(intersection.object))
+        .find((candidate) => candidate?.userData.entityKind === "feature");
+      if (!featureRoot) return;
+      event.preventDefault();
+      const id = String(featureRoot.userData.entityId);
+      handlersRef.current.onSelect({ kind: "feature", id });
+      handlersRef.current.onFeatureContextMenu(id, event.clientX, event.clientY);
+    };
     const processPointerMove = (event: { clientX: number; clientY: number }) => {
       if (pendingCanvasAction && Math.hypot(event.clientX - pendingCanvasAction.startX, event.clientY - pendingCanvasAction.startY) > 4) {
         pendingCanvasAction.moved = true;
@@ -1370,6 +1384,7 @@ export function EditorCanvas({
       else if (palletJson) handlersRef.current.onDropPallet(JSON.parse(palletJson), xMm, yMm);
     };
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    renderer.domElement.addEventListener("contextmenu", onContextMenu);
     renderer.domElement.addEventListener("pointermove", onPointerMove);
     renderer.domElement.addEventListener("pointerup", onPointerUp);
     renderer.domElement.addEventListener("pointercancel", onPointerCancel);
@@ -1445,6 +1460,7 @@ export function EditorCanvas({
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
       renderer.domElement.removeEventListener("pointerup", onPointerUp);
       renderer.domElement.removeEventListener("pointercancel", onPointerCancel);
+      renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       if (!readOnly) {
         renderer.domElement.removeEventListener("dragover", onDragOver);
         renderer.domElement.removeEventListener("drop", onDrop);

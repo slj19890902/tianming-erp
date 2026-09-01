@@ -164,7 +164,10 @@ test("rack focus keeps the map visible beside an ERP styled elevation", () => {
 
 test("planning uses one contextual delete action for selected zones or aisles", () => {
   assert.match(source, /deleteSelectedLayoutFeature/);
-  assert.match(source, /\/features\/\$\{selectedLayoutFeature\.id\}\?expected_revision=/);
+  assert.match(source, /deleteSelectedLayoutFeature = \(\) => deleteLayoutFeature\(selectedLayoutFeature\)/);
+  assert.match(source, /\/features\/\$\{feature\.id\}\?\$\{query\.toString\(\)\}/);
+  assert.match(source, /className="twin-feature-context-menu"/);
+  assert.match(source, /onFeatureContextMenu=\{locationEditMode/);
   assert.match(source, /selectedLayoutFeature\.feature_kind === "aisle" \? "删除通道" : "删除区域"/);
   assert.doesNotMatch(source, />新增区域<\/button>/);
   assert.doesNotMatch(source, />新增通道<\/button>/);

@@ -5471,7 +5471,7 @@ def test_simple_planning_uses_one_contextual_map_operation_workflow() -> None:
     assert 'onBlur={saveSelectedZoneGeometry}' in TWIN_SOURCE
     assert 'zoneGeometryDraftsRef.current[selectedAreaFeature.id]' in TWIN_SOURCE
     assert 'deleteSelectedLayoutFeature' in TWIN_SOURCE
-    assert '/features/${selectedLayoutFeature.id}?expected_revision=' in TWIN_SOURCE
+    assert '/features/${feature.id}?${query.toString()}' in TWIN_SOURCE
     assert 'mapPanLocked={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"}' in TWIN_SOURCE
     assert 'aria-label="货架方向"' in TWIN_SOURCE
     assert 'saveRackDraftImmediately' in TWIN_SOURCE

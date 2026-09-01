@@ -1569,14 +1569,16 @@ def overlay_formal_area_bindings(
         .options(selectinload(WarehouseAreaStoragePolicy.area))
         .where(WarehouseArea.floor_id == floor.id)
     )
-    if not include_draft:
-        policy_query = policy_query.where(
-            WarehouseAreaStoragePolicy.status == "published"
-        )
-    policies = list(
-        db.scalars(
-            policy_query
-        ).all()
+    all_policies = list(db.scalars(policy_query).all())
+    archived_feature_ids = {
+        str(policy.map_feature_id)
+        for policy in all_policies
+        if policy.status == "archived"
+    }
+    policies = (
+        all_policies
+        if include_draft
+        else [policy for policy in all_policies if policy.status == "published"]
     )
     area_rows = list(
         db.scalars(
@@ -1601,12 +1603,21 @@ def overlay_formal_area_bindings(
     features: list[dict] = []
     for raw in floor_layout.get("features") or []:
         feature = dict(raw)
+        if str(feature.get("id") or "") in archived_feature_ids:
+            # The measured geometry remains in the immutable/current source and
+            # in the archive snapshot, but an archived business area must not
+            # re-enter operational maps or a fresh planning draft.
+            continue
         policy = by_feature.get(str(feature.get("id") or ""))
         if policy is not None:
             policy_types = json.loads(policy.allowed_inventory_types_json)
             feature["formal_area_id"] = policy.area.id
             feature["formal_floor_id"] = policy.area.floor_id
             feature["formal_policy_status"] = policy.status
+            feature["formal_policy_version"] = policy.version
+            feature["formal_published_map_revision"] = (
+                policy.published_map_revision
+            )
             if include_draft:
                 feature.setdefault("erp_area_code", policy.area.area_code)
                 feature.setdefault("allowed_inventory_types", policy_types)

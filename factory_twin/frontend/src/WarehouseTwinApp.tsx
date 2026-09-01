@@ -100,6 +100,8 @@ type TwinFeature = LayoutFeature & {
   employee_area_name?: string | null;
   formal_binding_status?: string | null;
   formal_policy_status?: "draft" | "published" | null;
+  formal_policy_version?: number | null;
+  formal_published_map_revision?: string | null;
   formal_construction_status?: string | null;
   planned_pallet_capacity?: number | null;
   capacity_review_status?: string | null;
@@ -1661,6 +1663,11 @@ export function WarehouseTwinApp() {
   };
   const [layoutMapToolsOpen, setLayoutMapToolsOpen] = useState(false);
   const [layoutMapTool, setLayoutMapTool] = useState<"adjust" | "zone" | "aisle">("adjust");
+  const [featureContextMenu, setFeatureContextMenu] = useState<{
+    featureId: string;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
   const [layoutDrawPoints, setLayoutDrawPoints] = useState<number[][]>([]);
   const [newAisleWidth, setNewAisleWidth] = useState("");
   const [newAisleDirection, setNewAisleDirection] = useState<"one_way" | "two_way">("two_way");
@@ -1763,7 +1770,22 @@ export function WarehouseTwinApp() {
     setLayoutMapTool("adjust");
     setLayoutDrawPoints([]);
     setNewAisleWidth("");
+    setFeatureContextMenu(null);
   }, [floorCode, locationEditMode]);
+
+  useEffect(() => {
+    if (!featureContextMenu) return;
+    const closeMenu = () => setFeatureContextMenu(null);
+    const closeMenuOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    window.addEventListener("pointerdown", closeMenu);
+    window.addEventListener("keydown", closeMenuOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("keydown", closeMenuOnEscape);
+    };
+  }, [featureContextMenu]);
 
   const refreshDashboard = useCallback(async () => {
     const params = new URLSearchParams({
@@ -5138,47 +5160,72 @@ export function WarehouseTwinApp() {
     }
   };
 
-  const deleteSelectedLayoutFeature = async () => {
-    if (!layout || !selectedLayoutFeature || spatialEditBusy) return;
-    if (!["zone", "aisle"].includes(selectedLayoutFeature.feature_kind)) return;
-    const label = selectedLayoutFeature.feature_kind === "aisle" ? "通道" : "区域";
+  const deleteLayoutFeature = async (feature: TwinFeature | undefined) => {
+    if (!layout || !feature || spatialEditBusy) return;
+    if (!["zone", "aisle"].includes(feature.feature_kind)) return;
+    const label = feature.feature_kind === "aisle" ? "通道" : "区域";
+    const archivesFormalArea = feature.formal_policy_status === "published";
+    const confirmation = archivesFormalArea
+      ? `确认归档正式区域“${feature.name || feature.feature_code}”吗？\n\n系统会再次检查库存、栈板、资产、任务和当前配置；只有完全空闲才会归档。稳定区域、货位和历史流水都会保留。`
+      : `确认从规划草稿删除${label}“${feature.name || feature.feature_code}”吗？\n\n已绑定正式区域、仍有关联货架或已锁定的对象会被系统阻止；库存、库位和已发布地图不会改变。`;
     if (!window.confirm(
-      `确认从规划草稿删除${label}“${selectedLayoutFeature.name || selectedLayoutFeature.feature_code}”吗？\n\n` +
-      "已绑定正式区域、仍有关联货架或已锁定的对象会被系统阻止；库存、库位和已发布地图不会改变。"
+      confirmation
     )) return;
     setSpatialEditBusy(true);
+    setFeatureContextMenu(null);
     try {
       const key = operationKey("feature-delete");
+      const query = new URLSearchParams({
+        expected_revision: layout.source_sha256,
+        expected_version: String(feature.version),
+        operation_key: key,
+      });
+      if (archivesFormalArea) {
+        if (!feature.formal_policy_version || !feature.formal_published_map_revision) {
+          throw new Error("正式区域版本不完整，请刷新地图后重试。");
+        }
+        query.set("expected_policy_version", String(feature.formal_policy_version));
+        query.set("expected_published_revision", feature.formal_published_map_revision);
+      }
       const response = await mutateJson<LayoutMutationResponse<{ id: string; feature_kind: "zone" | "aisle"; deleted: boolean }>>(
-        `/api/warehouse/twin-layout/floors/${floorCode}/features/${selectedLayoutFeature.id}?expected_revision=${encodeURIComponent(layout.source_sha256)}&expected_version=${selectedLayoutFeature.version}&operation_key=${encodeURIComponent(key)}`,
+        `/api/warehouse/twin-layout/floors/${floorCode}/features/${feature.id}?${query.toString()}`,
         "DELETE"
       );
       if (!response) return;
       setLayout((current) => current ? {
         ...current,
         source_sha256: response.revision,
-        features: current.features.filter((item) => item.id !== selectedLayoutFeature.id),
+        features: current.features.filter((item) => item.id !== feature.id),
       } : current);
       rememberServerDraft(response.revision);
       replaceZoneGeometryDrafts((current) => {
         const next = { ...current };
-        delete next[selectedLayoutFeature.id];
+        delete next[feature.id];
         return next;
       });
       setZonePolicyDrafts((current) => {
         const next = { ...current };
-        delete next[selectedLayoutFeature.id];
+        delete next[feature.id];
         return next;
       });
       setSelected(null);
       setLocationEditMessage(
-        `${label}已从规划草稿删除；库存、正式库位和已发布地图均未改变。`
+        archivesFormalArea
+          ? `${label}已受控归档；空位置已停用，库存数量和历史流水均未改变。`
+          : `${label}已从规划草稿删除；库存、正式库位和已发布地图均未改变。`
       );
     } catch (reason) {
       setLocationEditMessage(`删除${label}失败：${(reason as Error).message}`);
     } finally {
       setSpatialEditBusy(false);
     }
+  };
+  const deleteSelectedLayoutFeature = () => deleteLayoutFeature(selectedLayoutFeature);
+  const openFeatureContextMenu = (featureId: string, clientX: number, clientY: number) => {
+    if (!locationEditMode || !layoutMapToolsOpen || layoutMapTool !== "adjust") return;
+    const feature = features.find((item) => item.id === featureId);
+    if (!feature || feature.feature_kind !== "zone") return;
+    setFeatureContextMenu({ featureId, clientX, clientY });
   };
 
   const handleLayoutDrawPoint = (xMm: number, yMm: number) => {
@@ -5422,6 +5469,7 @@ export function WarehouseTwinApp() {
           onMoveRack={moveRackDraft}
           onMovePallet={warehouseMoveModeActive ? draftMoveFromDrag : moveLocationDraft}
           onMoveFeature={moveAreaBoundaryDraft}
+          onFeatureContextMenu={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust" ? openFeatureContextMenu : undefined}
           onDropAsset={noop}
           onDropRack={noop}
           onDropPallet={noop}
@@ -5441,6 +5489,19 @@ export function WarehouseTwinApp() {
           visualTheme="warehouse"
           showInternalCodes={mapMode === "planning" && canEditLocations}
           />}
+          {featureContextMenu && (() => {
+            const feature = features.find((item) => item.id === featureContextMenu.featureId);
+            return feature ? <div
+              className="twin-feature-context-menu"
+              role="menu"
+              aria-label={`${feature.name || feature.feature_code}区域操作`}
+              style={{ left: featureContextMenu.clientX, top: featureContextMenu.clientY }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <button type="button" role="menuitem" disabled={spatialEditBusy} onClick={() => void deleteLayoutFeature(feature)}>删除区域</button>
+              <small>{feature.formal_policy_status === "published" ? "仅空闲正式区域可归档" : "从当前规划草稿删除"}</small>
+            </div> : null;
+          })()}
           {focusedRack && <div className="twin-rack-map-callout"><span>地图所选</span><b>{moldRackEmployeeName(focusedRack)}</b></div>}
         </div>
         {focusedRack?.mold_rack_code ? <MoldRackElevation
@@ -5509,6 +5570,7 @@ export function WarehouseTwinApp() {
             <label><span>地图操作</span><select aria-label="地图操作" value={layoutMapTool} disabled={spatialEditBusy} onChange={(event) => {
               const next = event.target.value as typeof layoutMapTool;
               setLayoutMapTool(next);
+              setFeatureContextMenu(null);
               setLayoutDrawPoints([]);
               setLocationEditMessage(next === "adjust"
                 ? "拖动区域或通道；尺寸和方向自动保存草稿。"
@@ -5530,7 +5592,7 @@ export function WarehouseTwinApp() {
             }} onBlur={saveSelectedZoneGeometry} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>)}</div>
           </div>}
           {layoutMapTool === "adjust" && selectedAisle && <div className="twin-selected-aisle"><b>{selectedAisle.name || "通道"}</b><span>{selectedAisle.width_mm} mm · {selectedAisle.direction === "one_way" ? "单向" : "双向"}</span><small>拖动即可调整位置。</small></div>}
-          {layoutMapTool === "adjust" && selectedLayoutFeature && ["zone", "aisle"].includes(selectedLayoutFeature.feature_kind) && <button type="button" className="twin-layout-delete" disabled={spatialEditBusy || selectedLayoutFeature.is_locked} onClick={deleteSelectedLayoutFeature}>{selectedLayoutFeature.feature_kind === "aisle" ? "删除通道" : "删除区域"}</button>}
+          {layoutMapTool === "adjust" && selectedLayoutFeature && ["zone", "aisle"].includes(selectedLayoutFeature.feature_kind) && <button type="button" className="twin-layout-delete" disabled={spatialEditBusy || (selectedLayoutFeature.is_locked && selectedLayoutFeature.formal_policy_status !== "published")} onClick={deleteSelectedLayoutFeature}>{selectedLayoutFeature.feature_kind === "aisle" ? "删除通道" : "删除区域"}</button>}
           {layoutMapTool === "adjust" && selectedRackEditDraft && <label className="twin-rack-direction"><span>货架方向</span><select aria-label="货架方向" value={selectedRackEditDraft.rotation_deg % 180 === 0 ? 0 : 90} disabled={spatialEditBusy} onChange={(event) => {
             const next = { ...selectedRackEditDraft, rotation_deg: Number(event.target.value) as Rack["rotation_deg"] };
             setRackDrafts((current) => ({ ...current, [selectedRackEditDraft.id]: next }));

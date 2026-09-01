@@ -27,6 +27,24 @@ def test_processing_parameters_use_one_compact_readable_entry() -> None:
     assert "金额按 Excel 原数保存，不自动转换为正式会计凭证" not in payables
 
 
+def test_processing_parameters_follow_shared_erp_typography_and_large_mode() -> None:
+    assert '<div class="finance-processing-title">加工参数</div>' in INDEX
+    assert '<span class="status blue finance-processing-status">' in INDEX
+
+    compact_css_start = INDEX.index(".finance-processing-panel {")
+    compact_css_end = INDEX.index(".finance-month-workbench {", compact_css_start)
+    compact_css = INDEX[compact_css_start:compact_css_end]
+
+    assert "height:32px" not in compact_css
+    assert "font-size:11px" not in compact_css
+    assert "font-size:12px" not in compact_css
+    assert ".finance-processing-grid .field label" not in compact_css
+    assert ".finance-processing-grid .input" in compact_css
+    assert "min-width:0;width:100%" in compact_css
+    assert ".ui-large .finance-processing-title," in INDEX
+    assert ".ui-large .finance-processing-group-title { font-size: 16px; }" in INDEX
+
+
 def test_default_printer_and_product_override_modes_are_not_mixed() -> None:
     assert 'v-for="item in financeProcessingDefaultPrinterModes"' in INDEX
     assert 'financeProcessingDefaultPrinterModes:[{value:"new"' in INDEX

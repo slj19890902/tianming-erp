@@ -155,8 +155,8 @@ def test_order_pages_use_display_material_instead_of_raw_snapshot_material() -> 
     assert "orderDetail.items" in INDEX
 
 
-def test_products_page_defaults_to_25_rows() -> None:
-    assert "pageSize: 25" in INDEX
+def test_products_page_uses_shared_desktop_capacity() -> None:
+    assert "pageSize: DESKTOP_LIST_PAGE_SIZE_STANDARD" in INDEX
 
 
 def test_go_live_docs_hide_old_system_name_for_daily_usage() -> None:

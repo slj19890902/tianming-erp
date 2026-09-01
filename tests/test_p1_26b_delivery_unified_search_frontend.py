@@ -33,25 +33,34 @@ def test_delivery_page_has_one_compact_keyword_search() -> None:
         assert removed not in page
 
 
-def test_filterbar_keeps_dates_statuses_actions_and_pager_in_order() -> None:
+def test_filterbar_keeps_compact_search_and_pager_while_details_are_explicit() -> None:
     page = _delivery_page()
     start = page.index('<div class="list-filterbar delivery-list-filterbar">')
-    end = page.index("</div>", start)
+    end = page.index('<div v-if="deliveryListState.initialLoading"', start)
     toolbar = page[start:end]
-    markers = [
+    compact_markers = [
         "deliveryListFilters.keyword",
+        ">查询<",
+        "deliveryListFilterVisible=!deliveryListFilterVisible",
+        '<pager :page="pages.deliveries"',
+    ]
+    compact_positions = [toolbar.index(marker) for marker in compact_markers]
+    assert compact_positions == sorted(compact_positions)
+
+    advanced_start = toolbar.index('v-if="deliveryListFilterVisible" class="delivery-advanced-filters"')
+    advanced = toolbar[advanced_start:]
+    advanced_markers = [
         "deliveryListFilters.date_from",
         "deliveryListFilters.date_to",
         "deliveryListFilters.status",
         "deliveryListFilters.return_status",
-        ">查询<",
-        ">清空<",
-        '<pager :page="pages.deliveries"',
+        ">清空筛选<",
     ]
-    positions = [toolbar.index(marker) for marker in markers]
+    positions = [advanced.index(marker) for marker in advanced_markers]
     assert positions == sorted(positions)
     assert ':filter-count="deliveryListFilterCount"' in toolbar
     assert "pages.deliveries=$event; loadDeliveries()" in toolbar
+    assert "deliveryListFilterVisible:false" in INDEX
 
 
 def test_filter_model_and_desktop_layout_use_unified_contract() -> None:

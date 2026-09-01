@@ -1,7 +1,7 @@
 """preserve dispatched delivery item revisions
 
 Revision ID: jc64v8x9z53
-Revises: iz61v8x9z50
+Revises: jb63v8x9z52
 Create Date: 2026-09-01
 
 Existing rows remain the current revision.  Future controlled edits may retain
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 
 
 revision = "jc64v8x9z53"
-down_revision = "iz61v8x9z50"
+down_revision = "jb63v8x9z52"
 branch_labels = None
 depends_on = None
 

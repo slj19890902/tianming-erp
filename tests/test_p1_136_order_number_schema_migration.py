@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PARENT_REVISION = "ja62v8x9z51"
 TARGET_REVISION = "jb63v8x9z52"
+CURRENT_HEAD = "jc64v8x9z53"
 EXPECTED_ORDER_INDEXES = {
     "ix_sales_orders_customer_po": ("customer_po",),
     "ix_sales_orders_customer_po_group": ("customer_id", "customer_po"),
@@ -236,12 +237,12 @@ def test_empty_database_full_chain_creates_order_number_contract_and_accepts_orm
 
     command.upgrade(config, "head")
     with sqlite3.connect(database) as connection:
-        _assert_health(connection, TARGET_REVISION)
+        _assert_health(connection, CURRENT_HEAD)
         _assert_schema(connection)
 
     _seed_numbered_order(database, add_sequence_row=True)
     with sqlite3.connect(database) as connection:
-        _assert_health(connection, TARGET_REVISION)
+        _assert_health(connection, CURRENT_HEAD)
         assert connection.execute(
             "SELECT item_order_number, item_sequence FROM sales_order_items"
         ).fetchone() == ("TM20260901001-003", 3)

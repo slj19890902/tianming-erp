@@ -542,6 +542,58 @@ export function findPalletColumnConflicts(
   pallets,
   structures = [],
   features = [],
+  clearanceMm = 0
+) {
+  const columnBounds = [];
+  for (const structure of structures) {
+    if (structure.kind !== "column") continue;
+    const geometry = structure.geometry || {};
+    if (geometry.type === "circle" && Number.isFinite(Number(geometry.x_mm)) && Number.isFinite(Number(geometry.y_mm)) && Number(geometry.radius_mm) > 0) {
+      const radius = Number(geometry.radius_mm);
+      columnBounds.push({
+        column_id: structure.id,
+        minX: Number(geometry.x_mm) - radius,
+        maxX: Number(geometry.x_mm) + radius,
+        minY: Number(geometry.y_mm) - radius,
+        maxY: Number(geometry.y_mm) + radius
+      });
+    } else if (geometry.type === "polyline" && geometry.points?.length >= 3) {
+      const xs = geometry.points.map((point) => Number(point[0])).filter(Number.isFinite);
+      const ys = geometry.points.map((point) => Number(point[1])).filter(Number.isFinite);
+      if (xs.length && ys.length) columnBounds.push({ column_id: structure.id, minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) });
+    }
+  }
+  for (const feature of features) {
+    if (feature.feature_kind !== "structure" || feature.subtype !== "custom_column") continue;
+    for (let index = 0; index < (feature.points?.length || 0) - 1; index += 1) {
+      const bounds = segmentBounds(feature.points[index], feature.points[index + 1], feature.width_mm);
+      if (bounds) columnBounds.push({ column_id: feature.id, ...bounds });
+    }
+  }
+  const conflicts = [];
+  const seen = new Set();
+  for (const pallet of pallets) {
+    if (pallet?.visual_kind === "location_anchor" || pallet?.is_logical_anchor) continue;
+    const candidate = palletBounds(pallet, clearanceMm);
+    for (const column of columnBounds) {
+      if (!boundsOverlap(candidate, column)) continue;
+      const key = `${pallet.id}:${column.column_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      conflicts.push({ pallet_id: pallet.id, column_id: column.column_id });
+    }
+  }
+  return conflicts;
+}
+
+export function uniquePalletConflictCount(conflicts = []) {
+  return new Set(conflicts.map((item) => String(item?.pallet_id || "")).filter(Boolean)).size;
+}
+
+export function findPalletPlanningConflicts(
+  pallets,
+  structures = [],
+  features = [],
   clearanceMm = 0,
   placements = [],
   racks = []

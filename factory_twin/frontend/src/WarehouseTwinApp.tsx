@@ -19,6 +19,7 @@ import {
   expandAreaInventory,
   filterAreaInventory,
   findPalletColumnConflicts,
+  findPalletPlanningConflicts,
   inventoryAgeLabel,
   inventoryAgeTone,
   inventoryHasPhysicalQuantity,
@@ -33,6 +34,7 @@ import {
   searchHighlightAreaCodes,
   standardPalletDisplayIssue,
   standardPalletContractsMatch,
+  uniquePalletConflictCount,
   warehouseSearchFloorSummaries,
   warehouseSearchLocationSummaries,
   warehouseSearchProductKey,
@@ -2080,32 +2082,50 @@ export function WarehouseTwinApp() {
     ),
     [locationProjectionFeatures, visualLocations, floorCode, standardPallet, layout?.id, locationEditMode]
   );
-  const collisionLocationPallets = useMemo(
-    () => locationEditMode
-      ? mappedLocationPallets.filter((item) => item.is_planning_location_slot)
-      : mappedLocationPallets,
-    [locationEditMode, mappedLocationPallets]
+  const planningCollisionPallets = useMemo(
+    () => mappedLocationPallets.filter((item) => item.is_planning_location_slot),
+    [mappedLocationPallets]
   );
-  const palletColumnConflicts = useMemo(
+  const operationalColumnConflicts = useMemo(
     () => layout ? findPalletColumnConflicts(
-      collisionLocationPallets,
+      mappedLocationPallets,
+      locationCollisionStructures,
+      locationProjectionFeatures,
+      0
+    ) : [],
+    [mappedLocationPallets, locationCollisionStructures, locationProjectionFeatures, layout]
+  );
+  const planningGeometryConflicts = useMemo(
+    () => locationEditMode && layout ? findPalletPlanningConflicts(
+      planningCollisionPallets,
       locationCollisionStructures,
       locationProjectionFeatures,
       0,
       locationCollisionPlacements,
       locationCollisionRacks
     ) : [],
-    [collisionLocationPallets, locationCollisionStructures, locationProjectionFeatures, locationCollisionPlacements, locationCollisionRacks, layout]
+    [locationEditMode, planningCollisionPallets, locationCollisionStructures, locationProjectionFeatures, locationCollisionPlacements, locationCollisionRacks, layout]
   );
-  const palletColumnConflictIds = useMemo(
-    () => new Set(palletColumnConflicts.map((item) => item.pallet_id)),
-    [palletColumnConflicts]
+  const displayedLocationConflicts = locationEditMode
+    ? planningGeometryConflicts
+    : operationalColumnConflicts;
+  const operationalColumnConflictIds = useMemo(
+    () => new Set(operationalColumnConflicts.map((item) => item.pallet_id)),
+    [operationalColumnConflicts]
+  );
+  const displayedLocationConflictIds = useMemo(
+    () => new Set(displayedLocationConflicts.map((item) => item.pallet_id)),
+    [displayedLocationConflicts]
   );
   const columnConflictLocationIds = useMemo(
-    () => palletColumnConflicts
+    () => operationalColumnConflicts
       .map((item) => Number(item.pallet_id.replace("erp-location-", "")))
       .filter((locationId) => Number.isFinite(locationId) && locationId > 0),
-    [palletColumnConflicts]
+    [operationalColumnConflicts]
+  );
+  const operationalColumnConflictCount = useMemo(
+    () => uniquePalletConflictCount(operationalColumnConflicts),
+    [operationalColumnConflicts]
   );
   const moveReservedTargetIds = useMemo(
     () => moveDrafts
@@ -2319,7 +2339,7 @@ export function WarehouseTwinApp() {
       pallets: groundCandidatePallets,
       violations: [
         ...layout.violations,
-        ...palletColumnConflicts.map((item) => ({
+        ...displayedLocationConflicts.map((item) => ({
           id: `location-column-${item.pallet_id}-${item.column_id}`,
           severity: "error" as const,
           rule_code: "LOCATION_OVERLAPS_COLUMN",
@@ -2331,7 +2351,7 @@ export function WarehouseTwinApp() {
         }))
       ]
     } : null,
-    [layout, locationEditMode, layoutMapToolsOpen, locationProjectionFeatures, zoneGeometryDrafts, rackDrafts, groundCandidatePallets, palletColumnConflicts, floorCode]
+    [layout, locationEditMode, layoutMapToolsOpen, locationProjectionFeatures, zoneGeometryDrafts, rackDrafts, groundCandidatePallets, displayedLocationConflicts, floorCode]
   );
   const searchProductGroups = useMemo(
     () => groupSearchProducts(searchResponse?.items || []),
@@ -2571,7 +2591,7 @@ export function WarehouseTwinApp() {
       ? selectedLocationLookupItems
       : selectedLocationLookupItems.slice(0, 4);
   const selectedLocationHasColumnConflict = Boolean(
-    selectedLocation && palletColumnConflictIds.has(`erp-location-${selectedLocation.location_id}`)
+    selectedLocation && operationalColumnConflictIds.has(`erp-location-${selectedLocation.location_id}`)
   );
   const selectedLocationStocktakeBlockReason = !selectedLocation
     ? "请先在地图选择正式货位。"
@@ -2650,14 +2670,14 @@ export function WarehouseTwinApp() {
     selectedAreaLocations.map((item) => `erp-location-${item.location_id}`)
   );
   const selectedAreaConflictCount = new Set(
-    palletColumnConflicts
+    planningGeometryConflicts
       .filter((item) => selectedAreaLocationIds.has(item.pallet_id))
       .map((item) => item.pallet_id)
   ).size;
   const stocktakeAreaTargetLocations = selectedAreaLocations
     .filter((location) => (
       !locationDrafts[location.location_id]
-      && !palletColumnConflictIds.has(`erp-location-${location.location_id}`)
+      && !operationalColumnConflictIds.has(`erp-location-${location.location_id}`)
       && !stocktakeLocationBlockReason(location)
     ))
     .sort((left, right) => employeeLocationName(left).localeCompare(
@@ -3424,12 +3444,12 @@ export function WarehouseTwinApp() {
     setSelected({ kind: "pallet", id: palletId });
     const currentPallet = mappedLocationPallets.find((item) => item.id === palletId);
     const prospectivePallets = currentPallet
-      ? collisionLocationPallets.map((item) => item.id === palletId
+      ? planningCollisionPallets.map((item) => item.id === palletId
         ? { ...item, x_mm: xMm, y_mm: yMm }
         : item)
       : [];
     const hitsColumn = currentPallet && layout
-      ? findPalletColumnConflicts(
+      ? findPalletPlanningConflicts(
         prospectivePallets,
         locationCollisionStructures,
         locationProjectionFeatures,
@@ -3766,7 +3786,7 @@ export function WarehouseTwinApp() {
     const draftAreaCodes = new Set(drafts.map((draft) => dashboard?.locations.find(
       (location) => location.location_id === draft.location_id
     )?.area_code).filter(Boolean));
-    const conflictingAreaLocationIds = new Set(palletColumnConflicts.filter((item) => {
+    const conflictingAreaLocationIds = new Set(planningGeometryConflicts.filter((item) => {
       const locationId = Number(item.pallet_id.replace("erp-location-", ""));
       const areaCode = dashboard?.locations.find((location) => location.location_id === locationId)?.area_code;
       return Boolean(areaCode && draftAreaCodes.has(areaCode));
@@ -5341,7 +5361,7 @@ export function WarehouseTwinApp() {
       mapped_locations: mappedLocationPallets.length,
       unlocated_finished: unlocatedFinishedCount,
       unmatched_observations: unmatchedInventoryObservationCount,
-      column_conflicts: palletColumnConflicts.length,
+      column_conflicts: operationalColumnConflictCount,
     }, window.location.origin);
   }, [
     embedded,
@@ -5351,7 +5371,7 @@ export function WarehouseTwinApp() {
     mappedLocationPallets.length,
     unlocatedFinishedCount,
     unmatchedInventoryObservationCount,
-    palletColumnConflicts.length,
+    operationalColumnConflictCount,
   ]);
 
   useEffect(() => {
@@ -5834,7 +5854,7 @@ export function WarehouseTwinApp() {
             </button>;
           })}
           {mapMode === "lookup" && selectedLocationLookupItems.length > 4 && <button type="button" className="twin-detail-toggle" aria-expanded={locationItemsExpanded} onClick={() => setLocationItemsExpanded((current) => !current)}>{locationItemsExpanded ? "收起货物" : `查看全部 ${selectedLocationLookupItems.length} 条非组合货物`}</button>}
-          {palletColumnConflictIds.has(`erp-location-${selectedLocation.location_id}`) && <p className="twin-location-column-warning">该货位越界，或与其他货位、柱子、通道、设备、货架、禁放区冲突，请在二维地图中拖到安全位置后再保存。</p>}
+          {displayedLocationConflictIds.has(`erp-location-${selectedLocation.location_id}`) && <p className="twin-location-column-warning">{locationEditMode ? "该货位越界，或与其他货位、柱子、通道、设备、货架、禁放区冲突，请在二维地图中拖到安全位置后再保存。" : "该货位与固定柱子冲突，请进入区域规划核对现场位置。"}</p>}
           <button type="button" className="twin-detail-toggle secondary" aria-expanded={locationDetailOpen} onClick={() => setLocationDetailOpen((current) => !current)}>{locationDetailOpen ? "收起位置与栈板详情" : "位置与栈板详情"}</button>
           {locationDetailOpen && <div className="twin-location-secondary">
             <h3>{selectedLocation.location_name}</h3>

@@ -7,6 +7,7 @@ import {
   employeeLocationName,
   expandAreaInventory,
   findPalletColumnConflicts,
+  findPalletPlanningConflicts,
   filterAreaInventory,
   inventoryAgeLabel,
   inventoryAgeTone,
@@ -22,6 +23,7 @@ import {
   searchHighlightAreaCodes,
   standardPalletDisplayIssue,
   standardPalletContractsMatch,
+  uniquePalletConflictCount,
   warehouseSearchFloorSummaries,
   warehouseSearchLocationSummaries,
   warehouseSearchProductKey,
@@ -810,6 +812,70 @@ test("mapped pallet locations detect column overlap without moving either object
   assert.equal(columns[0].points[0][0], -325);
 });
 
+test("operational column count keeps the formal eight-location baseline", () => {
+  const pallets = Array.from({ length: 8 }, (_, index) => ({
+    id: `erp-location-${index + 1}`,
+    zone_id: "zone-formal",
+    x_mm: index * 3000,
+    y_mm: 1000,
+    width_mm: 1200,
+    depth_mm: 1000,
+    rotation_deg: 0
+  }));
+  const columns = pallets.map((pallet, index) => ({
+    id: `column-formal-${index + 1}`,
+    feature_kind: "structure",
+    subtype: "custom_column",
+    points: [[pallet.x_mm - 100, pallet.y_mm], [pallet.x_mm + 100, pallet.y_mm]],
+    width_mm: 200
+  }));
+  const aisle = {
+    id: "aisle-planning-only",
+    feature_kind: "aisle",
+    points: [[-1000, 1000], [22000, 1000]],
+    width_mm: 200
+  };
+
+  const operational = findPalletColumnConflicts(pallets, [], [...columns, aisle]);
+  const planning = findPalletPlanningConflicts(pallets, [], [...columns, aisle]);
+
+  assert.equal(operational.length, 8);
+  assert.equal(uniquePalletConflictCount(operational), 8);
+  assert.equal(uniquePalletConflictCount([...operational, operational[0]]), 8);
+  assert.equal(planning.filter((item) => item.column_id === aisle.id).length, 8);
+  assert.ok(planning.length > operational.length);
+});
+
+test("operational conflicts isolate planning-only geometry categories", () => {
+  const pallets = [
+    { id: "erp-location-101", zone_id: "zone-safe", x_mm: 1000, y_mm: 1000, width_mm: 1200, depth_mm: 1000, rotation_deg: 0 },
+    { id: "erp-location-102", zone_id: "zone-safe", x_mm: 1500, y_mm: 1000, width_mm: 1200, depth_mm: 1000, rotation_deg: 0 },
+    { id: "erp-location-103", zone_id: "zone-edge", x_mm: 6150, y_mm: 1000, width_mm: 1200, depth_mm: 1000, rotation_deg: 0 }
+  ];
+  const features = [
+    { id: "zone-safe", feature_kind: "zone", points: [[0, 0], [5000, 0], [5000, 3000], [0, 3000]] },
+    { id: "zone-edge", feature_kind: "zone", points: [[6000, 0], [9000, 0], [9000, 3000], [6000, 3000]] },
+    { id: "aisle-planning", feature_kind: "aisle", points: [[1000, 0], [1000, 3000]], width_mm: 100 },
+    { id: "no-go-planning", feature_kind: "no_go", points: [[1300, 800], [1700, 800], [1700, 1200], [1300, 1200]] }
+  ];
+
+  assert.deepEqual(findPalletColumnConflicts(pallets, [], features), []);
+
+  const planningCategories = new Set(
+    findPalletPlanningConflicts(pallets, [], features).map((item) => (
+      item.column_id.startsWith("location:")
+        ? "location"
+        : item.column_id.startsWith("zone-boundary:")
+          ? "zone-boundary"
+          : item.column_id
+    ))
+  );
+  assert.ok(planningCategories.has("location"));
+  assert.ok(planningCategories.has("zone-boundary"));
+  assert.ok(planningCategories.has("aisle-planning"));
+  assert.ok(planningCategories.has("no-go-planning"));
+});
+
 test("empty planning slots use their visible pallet footprint for column conflicts", () => {
   const planningSlot = {
     id: "erp-location-151",
@@ -831,7 +897,7 @@ test("empty planning slots use their visible pallet footprint for column conflic
     points: [[-325, 0], [325, 0]],
     width_mm: 700
   }];
-  assert.deepEqual(findPalletColumnConflicts([planningSlot], [], columns), [
+  assert.deepEqual(findPalletPlanningConflicts([planningSlot], [], columns), [
     { pallet_id: "erp-location-151", column_id: "column-d1" }
   ]);
 });
@@ -851,13 +917,13 @@ test("planning conflict preview includes aisles before the authoritative save", 
     points: [[2000, 0], [2000, 6000]],
     width_mm: 800
   };
-  assert.deepEqual(findPalletColumnConflicts([pallet], [], [aisle]), [
+  assert.deepEqual(findPalletPlanningConflicts([pallet], [], [aisle]), [
     { pallet_id: "erp-location-153", column_id: "aisle-d1" }
   ]);
 });
 
 test("planning conflict preview marks both overlapping locations in the same area", () => {
-  const conflicts = findPalletColumnConflicts([
+  const conflicts = findPalletPlanningConflicts([
     {
       id: "erp-location-1",
       zone_id: "zone-d1",
@@ -914,13 +980,13 @@ test("percentage quantisation does not merge edge-touching D1 locations", () => 
     x_mm: 1799.9994
   };
   assert.deepEqual(
-    findPalletColumnConflicts([first, quantisedTouch], [], [zone]),
+    findPalletPlanningConflicts([first, quantisedTouch], [], [zone]),
     []
   );
 
   const realOverlap = { ...quantisedTouch, x_mm: 1799.9 };
   assert.deepEqual(
-    findPalletColumnConflicts([first, realOverlap], [], [zone]),
+    findPalletPlanningConflicts([first, realOverlap], [], [zone]),
     [
       { pallet_id: "erp-location-151", column_id: "location:erp-location-152" },
       { pallet_id: "erp-location-152", column_id: "location:erp-location-151" }
@@ -963,7 +1029,7 @@ test("planning conflict preview rejects zone overflow and confirmed equipment", 
   };
 
   assert.deepEqual(
-    findPalletColumnConflicts([outOfBounds, besideEquipment], [], [zone], 0, [equipment]),
+    findPalletPlanningConflicts([outOfBounds, besideEquipment], [], [zone], 0, [equipment]),
     [
       { pallet_id: "erp-location-11", column_id: "zone-boundary:zone-d1" },
       { pallet_id: "erp-location-12", column_id: "equipment-1" }

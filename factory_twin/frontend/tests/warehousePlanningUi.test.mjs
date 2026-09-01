@@ -45,6 +45,17 @@ test("area planning shows every ground location with a full colored slot footpri
   assert.match(sceneSource, /new THREE\.EdgesGeometry\(geometry\)/);
 });
 
+test("operational column conflicts stay separate from planning geometry hints", () => {
+  assert.match(source, /const operationalColumnConflicts = useMemo\([\s\S]*findPalletColumnConflicts\(/);
+  assert.match(source, /const planningGeometryConflicts = useMemo\([\s\S]*locationEditMode && layout \? findPalletPlanningConflicts\(/);
+  assert.match(source, /const displayedLocationConflicts = locationEditMode\s*\? planningGeometryConflicts\s*:\s*operationalColumnConflicts/);
+  assert.match(source, /!operationalColumnConflictIds\.has\(`erp-location-\$\{location\.location_id\}`\)/);
+  assert.match(source, /column_conflicts: operationalColumnConflictCount/);
+  assert.match(source, /uniquePalletConflictCount\(operationalColumnConflicts\)/);
+  assert.match(source, /findPalletPlanningConflicts\([\s\S]*prospectivePallets/);
+  assert.match(source, /const conflictingAreaLocationIds = new Set\(planningGeometryConflicts\.filter/);
+});
+
 test("published ground positions use the dedicated atomic save contract", () => {
   assert.match(source, /available_actions\.includes\("published_layout"\)/);
   assert.match(source, /ground-layout\/floors\/\$\{encodeURIComponent\(floorCode\)\}\/areas\/\$\{encodeURIComponent\(areaCode\)\}\/published-positions/);

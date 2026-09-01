@@ -15,8 +15,8 @@ def test_floor3_compass_relabels_drawing_north_as_real_east_without_rotating_geo
     assert 'floorCode === "4F"' in EDITOR_CANVAS
     assert 'calibration?.status === "aligned"' in EDITOR_CANVAS
     assert 'calibration?.applied === true' in EDITOR_CANVAS
-    assert 'realEastCompass ? "E" : "N"' in EDITOR_CANVAS
-    assert 'realEastCompass ? "现实东向" : "图纸北向"' in EDITOR_CANVAS
+    assert 'floor4CalibratingCompass ? "3F" : floor4SharedCompass ? "3F" : realEastCompass ? "E" : "N"' in EDITOR_CANVAS
+    assert 'floor4CalibratingCompass ? "对齐3F" : floor4SharedCompass ? "与3F同向" : realEastCompass ? "现实东向" : "图纸北向"' in EDITOR_CANVAS
     assert "const bounds = layout.bounds_mm" in EDITOR_CANVAS
     assert "new THREE.Vector3(xMm - centerX, elevation, -(yMm - centerY))" in EDITOR_CANVAS
     assert "drawingToRealPoint" not in EDITOR_CANVAS

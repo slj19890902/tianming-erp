@@ -21,6 +21,7 @@ from app.models.warehouse_inventory import (
 )
 from app.services.location_candidates import (
     claim_active_placed_location,
+    has_space_ledger,
     load_warehouse_location_projection_contexts,
     list_operational_locations,
     operational_location_issue,
@@ -132,6 +133,7 @@ def _get_countable_location(db: Session, location_id: int) -> WarehouseLocation:
         db,
         location,
         warehouse_types={"finished", "shared"},
+        require_published=has_space_ledger(db),
     )
     if issue:
         error_code = (
@@ -182,6 +184,19 @@ def list_locations(db: Session) -> list[dict[str, object]]:
         db,
         warehouse_types={"finished", "shared"},
     )
+    if has_space_ledger(db):
+        candidates = [
+            row
+            for row in candidates
+            if operational_location_issue(
+                db,
+                row.location,
+                warehouse_types={"finished", "shared"},
+                require_published=True,
+                projection_context=row.projection_context,
+            )
+            is None
+        ]
     candidate_by_id = {row.location.id: row for row in candidates}
     if not candidate_by_id:
         return []

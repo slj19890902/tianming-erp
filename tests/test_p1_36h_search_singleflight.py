@@ -125,6 +125,7 @@ async function drainTimers() {{
     marks: [], invalidations: [], toasts: [],
     invalidatePageCache(page) {{ this.invalidations.push(page); }},
     markPageCache(page) {{ this.marks.push(page); }},
+    resetSingleScreenExpansion: () => {{}},
     isCancelledRequest: () => false,
     errorMessage: error => String(error?.message || error),
     showToast(message) {{ this.toasts.push(String(message)); }},

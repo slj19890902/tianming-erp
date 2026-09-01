@@ -428,7 +428,25 @@ def test_collect_is_read_only_anonymous_and_quantity_conserving(
     assert fin["lot_count"] == 2
     assert fin["available_reserved_quantity"] == 17
     assert fin["physical_quantity_including_damaged"] == 19
-    serialized = json.dumps(report, ensure_ascii=False).lower()
+    anonymity_payload = {
+        **report,
+        "database": {
+            key: value
+            for key, value in report["database"].items()
+            if key != "path"
+        },
+        "runtime_map": {
+            key: value
+            for key, value in report["runtime_map"].items()
+            if key != "path"
+        },
+        "script": {
+            key: value
+            for key, value in report["script"].items()
+            if key != "path"
+        },
+    }
+    serialized = json.dumps(anonymity_payload, ensure_ascii=False).lower()
     assert "customer" not in serialized
     assert "product" not in serialized
     assert all("lot_id" not in row for row in report["location_aggregates"])

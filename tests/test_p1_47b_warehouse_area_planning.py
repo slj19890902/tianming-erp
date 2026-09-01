@@ -4016,6 +4016,92 @@ def test_one_step_confirmation_preserves_unrelated_advanced_draft(
         engine.dispose()
 
 
+def test_one_step_confirmation_publishes_a_zone_created_only_in_the_active_draft(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding="utf-8"))
+    floor = document["floors"]["3F"]
+    floor["features"][0]["points"] = [
+        [0, 0], [4_000, 0], [4_000, 10_000], [0, 10_000]
+    ]
+    floor["features"][0]["area_mm2"] = 40_000_000
+    floor["features"][0].pop("erp_area_code", None)
+    floor["revision"] = _floor_revision(floor)
+    published.write_text(
+        json.dumps(document, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(
+        warehouse_api,
+        "list_production_projection_mappings",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        "load_warehouse_twin_floor",
+        lambda floor_code: json.loads(runtime.read_text(encoding="utf-8"))[
+            "floors"
+        ][floor_code.upper()],
+    )
+    published_revision = _revision(published)
+    created = editor.create_warehouse_twin_feature(
+        "3F",
+        expected_revision=published_revision,
+        operation_key="p1-134-create-draft-only-zone",
+        feature_kind="zone",
+        points=[[6_000, 0], [10_000, 0], [10_000, 10_000], [6_000, 10_000]],
+    )
+    assert created.applied is True
+    assert draft.is_file()
+    assert all(
+        item.get("id") != created.value["id"]
+        for item in document["floors"]["3F"]["features"]
+    )
+
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-47b-admin"))
+            assert admin is not None
+            result = warehouse_api.confirm_twin_zone_area(
+                "3F",
+                created.value["id"],
+                _confirm_area_payload(
+                    revision=created.floor_revision,
+                    published_revision=published_revision,
+                    operation_key="p1-134-confirm-draft-only-zone",
+                    capacity=6,
+                    area_code="X2",
+                    area_name="三楼 X2 成品区",
+                ),
+                _request(),
+                db,
+                admin,
+            )
+
+            assert result["status"] == "published"
+            assert result["advanced_draft_preserved"] is False
+            assert result["area"]["area_code"] == "X2"
+            assert result["created_location_count"] == 6
+            assert db.scalar(select(func.count(WarehouseArea.id))) == 1
+            assert db.scalar(select(func.count(WarehouseLocation.id))) == 6
+
+        live = json.loads(runtime.read_text(encoding="utf-8"))
+        published_zone = next(
+            item
+            for item in live["floors"]["3F"]["features"]
+            if item.get("id") == created.value["id"]
+        )
+        assert published_zone["points"] == created.value["points"]
+        assert published_zone["erp_area_code"] == "X2"
+        assert not draft.exists()
+    finally:
+        engine.dispose()
+
+
 def test_one_step_confirmation_preserves_same_floor_rack_draft(
     tmp_path: Path,
     monkeypatch,
@@ -5472,7 +5558,7 @@ def test_simple_planning_uses_one_contextual_map_operation_workflow() -> None:
     assert 'zoneGeometryDraftsRef.current[selectedAreaFeature.id]' in TWIN_SOURCE
     assert 'deleteSelectedLayoutFeature' in TWIN_SOURCE
     assert '/features/${selectedLayoutFeature.id}?expected_revision=' in TWIN_SOURCE
-    assert 'mapPanLocked={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"}' in TWIN_SOURCE
+    assert 'mapPanLocked={floor4CalibrationMode || (locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust")}' in TWIN_SOURCE
     assert 'aria-label="货架方向"' in TWIN_SOURCE
     assert 'saveRackDraftImmediately' in TWIN_SOURCE
     assert '>新增区域</button>' not in TWIN_SOURCE

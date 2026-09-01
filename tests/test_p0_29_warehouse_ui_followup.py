@@ -11,8 +11,11 @@ CANVAS = (ROOT / "factory_twin" / "frontend" / "src" / "EditorCanvas.tsx").read_
 
 def test_warehouse_navigation_is_integrated_into_the_erp_topbar() -> None:
     assert 'class="warehouse-top-shortcuts"' in INDEX
-    assert "selectWarehouseFloor('1F')" in INDEX
-    assert "selectWarehouseFloor('3F')" in INDEX
+    for floor_code in ("1F", "3F", "4F"):
+        assert f'@click="selectWarehouseFloor(\'{floor_code}\')"' in INDEX
+    assert '{code:"1F",label:"生产车间"}' in INDEX
+    assert '{code:"3F",label:"成品仓库"}' in INDEX
+    assert '{code:"4F",label:"成品仓库"}' in INDEX
     assert 'ref="warehouseFrame"' in INDEX
     assert 'source: "tianming-erp-shell"' in INDEX
     assert "新增或编辑生产模具，请进入模具档案" not in INDEX

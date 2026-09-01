@@ -4588,13 +4588,15 @@
               <div class="production-compact-command-bar">
                 <div class="toolbar-group production-tab-strip">
                   <h2>生产与成品</h2>
+                  <button :class="['btn',{primary:productionTab==='pending'}]" :disabled="productionBusy" @click="productionTab='pending'; loadProductionPage(1)">待生产 {{ productionPendingTotal }}</button>
                   <button :class="['btn',{primary:productionTab==='history'}]" :disabled="productionBusy" @click="productionTab='history'; loadProductionHistory()">完工历史 {{ productionHistoryTotal }}</button>
                   <button :class="['btn',{primary:productionTab==='placement'}]" :disabled="productionBusy" @click="productionTab='placement'; loadProductionPlacement()">待送成品归位 {{ productionPlacementTotal }}</button>
                 </div>
                 <div v-if="productionTab==='pending'" class="production-tab-actions">
                   <pager :page="pages.productionPending" :total="productionPendingTotal" :page-size="productionPendingPageSize()" :always="true" :compact="true" @change="loadProductionPage($event)"></pager>
                   <button v-if="productionTab==='pending' && productionLabelMaintenanceEntryVisible()" class="btn small" :disabled="productionBusy" @click="openProductionLabelMaintenance">标签异常 / 维护<span v-if="productionLabelMaintenanceAnomalyCount()">（{{ productionLabelMaintenanceAnomalyCount() }}）</span></button>
-                  <button class="btn" :disabled="productionBusy || productionPendingLoading" @click="loadProduction">{{ productionPendingLoading ? '读取中…' : '刷新' }}</button>
+                  <button v-if="canProductionExecute" class="btn success" :disabled="productionBusy || !productionSelectedCount()" @click="batchConfirmProduction">{{ productionBusy ? '正在入库…' : '确认入库（' + productionSelectedCount() + '）' }}</button>
+                  <button class="btn" :disabled="productionBusy || productionPendingLoading" @click="loadProductionPage(pages.productionPending || 1)">{{ productionPendingLoading ? '读取中…' : '刷新' }}</button>
                 </div>
                 <div v-else-if="productionTab==='history'" class="production-tab-actions">
                   <button class="btn" type="button" :aria-expanded="productionHistoryFilterVisible" @click="productionHistoryFilterVisible=!productionHistoryFilterVisible">{{ productionHistoryFilterVisible ? '收起筛选' : '筛选查找' }}</button>
@@ -4639,7 +4641,7 @@
 	                    <td style="white-space:normal"><div class="production-quantity-summary"><div>订单 <strong>{{ row.order_quantity ?? 0 }}</strong>{{ productionOutputUnit(row) }}｜已到纸板 <strong>{{ row.material_received_quantity ?? 0 }}</strong>张</div><div>本次做 <strong>{{ row.planned_output_quantity ?? 0 }}</strong>{{ productionOutputUnit(row) }}<span v-if="productionCuttingModeLabel(row)" class="muted">｜{{ productionCuttingModeLabel(row) }}</span></div><div v-if="row.receipt_purpose_managed" class="status blue" style="display:block;margin-top:5px">已自动形成 {{ row.actual_output_quantity ?? 0 }}{{ productionOutputUnit(row) }}</div></div></td>
 	                    <td style="white-space:normal"><div v-if="row?.completion_actionable === false" class="status blue" style="display:block;white-space:normal">{{ row.completion_block_message || '该任务由收料用途自动推进，不能手工重复完工。' }}</div><template v-else><div class="production-input-line"><label class="muted">用纸板</label><input class="input" type="number" min="1" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">做成品</label><input class="input" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></template></td>
 	                    <td style="white-space:normal"><div>用于订单 <strong>{{ productionOrderCoverage(row) }}</strong></div><div :class="productionSurplusQuantity(row)>0?'status orange':'muted'" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }}</div></td>
-	                    <td v-if="canProductionExecute" class="production-destination-cell" style="white-space:normal"><div v-if="row.completion_actionable === false"><div class="muted">成品由收料流水自动进入真实成品库位；不能重复完工。</div><button v-if="canDelivery && pageAllowed('deliveries') && receiptManagedDeliveryQuantity(row) > 0" type="button" class="btn small primary" style="margin-top:6px" :disabled="productionBusy || row._delivery_opening" @click="openReceiptManagedDelivery(row)">{{ row._delivery_opening ? '正在打开…' : `订单内送货（${receiptManagedDeliveryQuantity(row)}）` }}</button><div v-else-if="!canDelivery || !pageAllowed('deliveries')" class="muted" style="margin-top:6px">请由有送货权限的账号开送货单</div><div v-else class="muted" style="margin-top:6px">当前没有可送的已自动成品</div></div><template v-else><select class="select" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">订单内直接待送</option><option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option></select><div v-if="productionNeedsLocation(row)" class="production-location-picker" style="margin-top:4px"><div v-if="productionLocationsLoading" class="muted">正在读取可用库位…</div><div v-else-if="productionLocationsError" class="status orange" style="display:block">{{ productionLocationsError }} <button class="btn small" @click="ensureProductionLocations({force:true})">重试</button></div><template v-else><select class="select" v-model.number="row.location_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'location_floor_number','location_area_code','location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloorsForRow(row)" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.location_area_code" :disabled="productionBusy || !row.location_floor_number" @change="onProductionAreaChange(row,'location_floor_number','location_area_code','location_id')"><option value="">{{ row.location_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForRow(row,row.location_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.location_id" :disabled="productionBusy || !row.location_area_code" @change="onProductionLocationSelection(row)"><option :value="null">{{ row.location_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForRowArea(row,row.location_floor_number,row.location_area_code)" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></template></div><div v-if="row.completion_mode==='direct'" class="muted" style="margin-top:4px">{{ productionPreferredAreaHint(row) || '系统自动选择真实空成品位置' }}</div><div v-else-if="productionPreferredAreaHint(row)" class="muted" style="margin-top:4px">{{ productionPreferredAreaHint(row) }}</div><div v-if="row.completion_mode==='stock' && productionPreferredAreaIds(row).length && !productionLocationsForRow(row).length" class="status orange" style="display:block;margin-top:6px">指定区域暂无空位；不会改放其他区域</div><div v-else-if="productionSurplusQuantity(row)>0" class="muted" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }} 个，随整批入库</div><div v-if="row._direct_submitting" class="status blue" style="display:block;margin-top:6px">正在确认…</div><div v-else-if="productionSelected[row.id]" class="status blue" style="display:block;margin-top:6px">已选入库；点顶部“批量确认入库”</div><div v-else-if="row.completion_mode==='stock' && productionLocationsForRow(row).length" class="status orange" style="display:block;margin-top:6px">请选择入库位置</div></template></td>
+	                    <td v-if="canProductionExecute" class="production-destination-cell" style="white-space:normal"><div v-if="row.completion_actionable === false"><div class="muted">成品由收料流水自动进入真实成品库位；不能重复完工。</div><button v-if="canDelivery && pageAllowed('deliveries') && receiptManagedDeliveryQuantity(row) > 0" type="button" class="btn small primary" style="margin-top:6px" :disabled="productionBusy || row._delivery_opening" @click="openReceiptManagedDelivery(row)">{{ row._delivery_opening ? '正在打开…' : `订单内送货（${receiptManagedDeliveryQuantity(row)}）` }}</button><div v-else-if="!canDelivery || !pageAllowed('deliveries')" class="muted" style="margin-top:6px">请由有送货权限的账号开送货单</div><div v-else class="muted" style="margin-top:6px">当前没有可送的已自动成品</div></div><template v-else><select class="select" v-model="row.completion_mode" :disabled="productionBusy" @change="ensureProductionMode(row)"><option value="">请选择完工去向</option><option value="direct">订单内直接待送</option><option value="stock" :disabled="!canWarehouseExecute">合格品全部入库</option></select><div v-if="productionNeedsLocation(row)" class="production-location-picker" style="margin-top:4px"><div v-if="productionLocationsLoading" class="muted">正在读取可用库位…</div><div v-else-if="productionLocationsError" class="status orange" style="display:block">{{ productionLocationsError }} <button class="btn small" @click="ensureProductionLocations({force:true})">重试</button></div><template v-else><select class="select" v-model.number="row.location_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'location_floor_number','location_area_code','location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloorsForRow(row)" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.location_area_code" :disabled="productionBusy || !row.location_floor_number" @change="onProductionAreaChange(row,'location_floor_number','location_area_code','location_id')"><option value="">{{ row.location_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForRow(row,row.location_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.location_id" :disabled="productionBusy || !row.location_area_code" @change="onProductionLocationSelection(row)"><option :value="null">{{ row.location_area_code ? '再选库位' : '请先选择区域' }}</option><option v-for="location in productionLocationsForRowArea(row,row.location_floor_number,row.location_area_code)" :key="location.id" :value="location.id" :disabled="productionLocationUsedByOther(location.id,row)">{{ inventoryLocation(location) }}｜{{ location.is_temporary ? '临时' : '固定' }}</option></select></template></div><div v-if="row.completion_mode==='direct'" class="muted" style="margin-top:4px">{{ productionPreferredAreaHint(row) || '系统自动选择真实空成品位置' }}</div><div v-else-if="productionPreferredAreaHint(row)" class="muted" style="margin-top:4px">{{ productionPreferredAreaHint(row) }}</div><div v-if="row.completion_mode==='stock' && productionPreferredAreaIds(row).length && !productionLocationsForRow(row).length" class="status orange" style="display:block;margin-top:6px">指定区域暂无空位；不会改放其他区域</div><div v-else-if="productionSurplusQuantity(row)>0" class="muted" style="margin-top:4px">多出 {{ productionSurplusQuantity(row) }} 个，随整批入库</div><div v-if="row._direct_submitting" class="status blue" style="display:block;margin-top:6px">正在确认…</div><div v-else-if="productionSelected[row.id]" class="status blue" style="display:block;margin-top:6px">已选入库；点顶部“确认入库”</div><div v-else-if="row.completion_mode==='stock' && productionLocationsForRow(row).length" class="status orange" style="display:block;margin-top:6px">请选择入库位置</div></template></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -9480,7 +9482,7 @@
             incomingNextStepGuide: {visible:false, count:0, pendingBalance:false},
             productionNextStepGuide: {visible:false, mode:"", count:0, locations:""},
             pageCacheUpdatedAt: {},
-            warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F",
+            warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F", warehouseTwinFloors: [{code:"1F",label:"生产车间"},{code:"3F",label:"成品仓库"},{code:"4F",label:"成品仓库"}],
             warehouseTwinMetrics: {active_lots:0,occupied_locations:0,mapped_locations:0,unlocated_finished:0,unmatched_observations:0,column_conflicts:0},
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             overview: { cards: [], todos: [], summary: {} }, warehouseCapacitySummary:null, overviewError: "", overviewLoading: false, dashboardDetailsVisible:false,
@@ -14770,13 +14772,17 @@
           async openWarehouseMap() {
             return this.openWarehouseFloor("3F");
           },
+          isWarehouseTwinFloorCode(floorCode) {
+            const normalized = String(floorCode || "").toUpperCase();
+            return this.warehouseTwinFloors.some(item => item.code === normalized);
+          },
           async openWarehouseFloor(floorCode) {
             if (!this.pageAllowed("warehouse")) {
               this.showToast("当前账号没有访问仓库地图的权限", true);
               return;
             }
-            const requestedFloor = String(floorCode || "3F").toUpperCase();
-            const normalized = ["1F", "3F", "4F"].includes(requestedFloor) ? requestedFloor : "3F";
+            const requested = String(floorCode || "3F").toUpperCase();
+            const normalized = this.isWarehouseTwinFloorCode(requested) ? requested : "3F";
             this.warehouseTwinFloor = normalized;
             this.ensureWarehouseFrame(`/warehouse.html?embedded=1&floor=${normalized}&view=2d`);
             this.activePage = "warehouse";
@@ -14797,7 +14803,7 @@
               return this.go("incoming");
             }
             if (key === "pending_production" || entry?.type === "待生产") {
-              this.productionTab = "history";
+              this.productionTab = "pending";
               this.invalidatePageCache("production");
               return this.go("production");
             }
@@ -14949,7 +14955,7 @@
               this.warehouseFrameUrl = target;
               try {
                 const floor = new URL(target, window.location.origin).searchParams.get("floor");
-                if (["1F", "3F", "4F"].includes(floor)) this.warehouseTwinFloor = floor;
+                if (this.isWarehouseTwinFloorCode(floor)) this.warehouseTwinFloor = floor;
               } catch (_) {}
             } else if (!this.warehouseFrameUrl) {
               this.warehouseFrameUrl = "/warehouse.html?embedded=1&floor=3F&view=2d";
@@ -14966,7 +14972,7 @@
             if (!frameWindow || event.source !== frameWindow) return;
             const payload = event.data || {};
             if (payload.source !== "tianming-warehouse" || payload.type !== "warehouse-state") return;
-            if (["1F", "3F", "4F"].includes(payload.floor_code)) this.warehouseTwinFloor = payload.floor_code;
+            if (this.isWarehouseTwinFloorCode(payload.floor_code)) this.warehouseTwinFloor = payload.floor_code;
             this.warehouseTwinMetrics = {
               active_lots: Math.max(0, Number(payload.active_lots || 0)),
               occupied_locations: Math.max(0, Number(payload.occupied_locations || 0)),
@@ -14977,15 +14983,16 @@
             };
           },
           selectWarehouseFloor(floorCode) {
-            if (!["1F", "3F", "4F"].includes(floorCode)) return;
-            this.warehouseTwinFloor = floorCode;
+            const normalized = String(floorCode || "").toUpperCase();
+            if (!this.isWarehouseTwinFloorCode(normalized)) return;
+            this.warehouseTwinFloor = normalized;
             this.ensureWarehouseFrame();
             this.$nextTick(() => {
               this.$refs.warehouseFrame?.contentWindow?.postMessage({
                 source: "tianming-erp-shell",
                 type: "warehouse-command",
                 command: "set-floor",
-                floor_code: floorCode,
+                floor_code: normalized,
               }, window.location.origin);
             });
           },
@@ -18375,6 +18382,13 @@
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
           async loadProduction() {
+            if (this.productionTab === "pending") {
+              const [, pendingResult] = await Promise.all([
+                this.loadCustomerOptions(),
+                this.loadProductionPage(this.pages.productionPending || 1),
+              ]);
+              return pendingResult;
+            }
             if (this.productionTab === "placement") return this.loadProductionPlacement();
             const [, historyResult] = await Promise.all([
               this.loadCustomerOptions(),

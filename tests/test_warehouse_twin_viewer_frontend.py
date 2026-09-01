@@ -326,7 +326,7 @@ def test_area_planning_prioritizes_a_location_hit_and_saves_its_direct_drag() ->
     assert '? roots.find(' in pointer_down
     assert 'candidate.userData.entityKind === "pallet" && candidate.userData.draggable' in pointer_down
     assert 'const root = preferredPlanningPallet || preferredPlanningFeature || roots[0] || null;' in pointer_down
-    assert 'if (!locationEditMode) return;' in move_location
+    assert 'if (!locationEditMode || layoutMapToolsOpen) return;' in move_location
     assert 'setLocationPointEditAreaCode(location.area_code);' in move_location
     assert 'palletEditingOnly={locationEditMode || warehouseMoveModeActive}' in SOURCE
     assert 'window.confirm(`确认保存并固定' not in save_locations
@@ -417,10 +417,10 @@ def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> Non
     assert "系统按区域自动生成内部唯一编码" in SOURCE
     assert "/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable" in SOURCE
     assert 'palletEditingOnly={locationEditMode || warehouseMoveModeActive}' in SOURCE
-    assert "draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : locationPointEditPalletIds}" in SOURCE
+    assert "draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : layoutMapToolsOpen ? [] : locationPointEditPalletIds}" in SOURCE
     assert 'readOnly={!locationEditMode && !warehouseMoveModeActive}' in SOURCE
     assert 'rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}' in SOURCE
-    assert 'featureEditingEnabled={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"}' in SOURCE
+    assert 'featureEditingEnabled={locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"}' in SOURCE
     assert "选择区域或设备" not in SOURCE
 
 
@@ -592,8 +592,8 @@ def test_phase2c10_keeps_location_clicks_lightweight_and_focuses_search_hits() -
 def test_phase2c10_flags_column_conflicts_and_blocks_conflicting_layout_drafts() -> None:
     assert "findPalletColumnConflicts" in SOURCE
     assert 'rule_code: "LOCATION_OVERLAPS_COLUMN"' in SOURCE
-    assert "货位与固定柱子重叠" in SOURCE
-    assert "已阻止保存" in SOURCE
+    assert "货位越界，或与其他货位、柱子、通道、设备、货架、禁放区冲突" in SOURCE
+    assert "已阻止整区保存" in SOURCE
     assert "柱子冲突" in SOURCE
     assert "EMPTY_CANVAS_POINTS" in SOURCE
 

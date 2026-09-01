@@ -241,6 +241,7 @@ const context={{
   customers:[],customerForm:null,canManageInvoiceProfiles:false,canEditCustomers:true,
   customerInvoiceState:{{}},
   loadCustomerQuotePreferences(){{}},blankCustomerQuotePreferenceDraft(){{return {{}}}},
+  resetCustomerFinishedStorage(){{}},loadCustomerFinishedStorage(){{}},
   beginMasterEdit(){{}},ensureCustomerQuotePreferenceOptions(){{}},
 }};
 openCustomer.call(context,{{id:3,customer_number:3,phone:raw,statement_cycle_start_day:20}});

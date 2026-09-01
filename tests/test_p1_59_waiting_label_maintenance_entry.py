@@ -21,6 +21,11 @@ def test_production_first_screen_has_only_a_compact_conditional_maintenance_entr
         "async loadProduction()",
         "async openProductionLabelMaintenance()",
     )
+    pending_load = _slice(
+        load,
+        'if (this.productionTab === "pending") {',
+        'if (this.productionTab === "placement")',
+    )
 
     assert "标签异常 / 维护" in production
     assert "productionLabelMaintenanceEntryVisible()" in production
@@ -30,7 +35,8 @@ def test_production_first_screen_has_only_a_compact_conditional_maintenance_entr
     assert "loadProductionWaitingLabelPage" not in load
     assert "this.loadProductionHistory()" in load
     assert "this.loadProductionPlacement()" in load
-    assert "loadProductionPage(" not in load
+    assert "this.loadProductionPage(this.pages.productionPending || 1)" in pending_load
+    assert load.count("loadProductionPage(") == 1
     assert 'status:"waiting_material"' not in load
 
 

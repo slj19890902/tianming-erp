@@ -37,7 +37,8 @@ def test_production_cold_entry_requests_only_current_action_queues() -> None:
     production = _block("async loadProductionPage", "async ensureProductionLocations")
 
     assert 'params: { status: "pending", page, page_size: this.productionPendingPageSize() }' in production
-    assert "this.loadProductionPage(this.pages.productionPending || 1)" not in cold_load
+    assert 'if (this.productionTab === "pending") {' in cold_load
+    assert "this.loadProductionPage(this.pages.productionPending || 1)" in cold_load
     assert 'if (this.productionTab === "placement") return this.loadProductionPlacement();' in cold_load
     assert "this.loadProductionHistory()," in cold_load
     assert "this.loadProductionPlacement()," in cold_load

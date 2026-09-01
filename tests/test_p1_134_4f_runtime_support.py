@@ -227,14 +227,59 @@ def test_warehouse_frontend_treats_4f_as_an_operational_map_floor() -> None:
     assert 'floorCode === "4F"' in EDITOR_CANVAS_SOURCE
     assert 'calibration?.status === "aligned"' in EDITOR_CANVAS_SOURCE
     assert 'calibration?.applied === true' in EDITOR_CANVAS_SOURCE
+    assert 'layout.alignment_status === "aligned"' in EDITOR_CANVAS_SOURCE
+    assert "layout.alignment_applied === true" in EDITOR_CANVAS_SOURCE
+    assert "已与 3F 货梯对齐" in WAREHOUSE_TWIN_SOURCE
+    assert 'name: floor4Aligned ? "四楼实测成品仓库（已与3F货梯对齐）" : raw.name' in WAREHOUSE_TWIN_SOURCE
+    assert "metadata: raw.metadata" in WAREHOUSE_TWIN_SOURCE
+    assert "alignment_status: raw.alignment_status" in WAREHOUSE_TWIN_SOURCE
+
+
+def test_simple_area_planner_collects_the_name_without_opening_advanced_tools() -> None:
+    planner = WAREHOUSE_TWIN_SOURCE[
+        WAREHOUSE_TWIN_SOURCE.index('className="twin-zone-simple-planner"') :
+        WAREHOUSE_TWIN_SOURCE.index('className="twin-location-point-planner"')
+    ]
+
+    assert '<span>区域名称</span><input maxLength={100}' in planner
+    assert "value={formalAreaNameDraft}" in planner
+    assert "setFormalAreaNameDraft(event.target.value)" in planner
+    assert 'placeholder="例如 4F 新振成品区"' in planner
+
+
+def test_empty_area_one_step_confirmation_does_not_repeat_a_native_dialog() -> None:
+    section = WAREHOUSE_TWIN_SOURCE[
+        WAREHOUSE_TWIN_SOURCE.index("const confirmSelectedAreaOnce") :
+        WAREHOUSE_TWIN_SOURCE.index("const saveLayoutFeatureGeometry")
+    ]
+
+    assert "window.confirm" not in section
+    assert 'setLocationEditMessage("正在确认并启用区域…")' in section
+    assert "confirmed: true" in section
+
+
+def test_production_keeps_one_compact_pending_entry_and_refreshes_the_queue() -> None:
+    desktop = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert desktop.count(">待生产 {{ productionPendingTotal }}</button>") == 1
+    assert "productionTab='pending'; loadProductionPage(1)" in desktop
+    assert '@click="loadProductionPage(pages.productionPending || 1)"' in desktop
+    assert desktop.count('@click="batchConfirmProduction"') == 1
+    assert "点顶部“确认入库”" in desktop
+    assert 'if (this.productionTab === "pending") {' in desktop
+    assert 'this.productionTab = "pending";' in desktop
 
 
 def test_erp_shell_exposes_and_tracks_4f_as_a_warehouse_floor() -> None:
     assert "@click=\"selectWarehouseFloor('4F')\">4F 成品仓库" in ERP_SHELL_SOURCE
-    assert '["1F", "3F", "4F"].includes(requestedFloor)' in ERP_SHELL_SOURCE
-    assert '["1F", "3F", "4F"].includes(floor)' in ERP_SHELL_SOURCE
-    assert '["1F", "3F", "4F"].includes(payload.floor_code)' in ERP_SHELL_SOURCE
-    assert '!["1F", "3F", "4F"].includes(floorCode)' in ERP_SHELL_SOURCE
+    assert (
+        'warehouseTwinFloors: [{code:"1F",label:"生产车间"},'
+        '{code:"3F",label:"成品仓库"},{code:"4F",label:"成品仓库"}]'
+        in ERP_SHELL_SOURCE
+    )
+    assert "isWarehouseTwinFloorCode(floorCode)" in ERP_SHELL_SOURCE
+    assert ERP_SHELL_SOURCE.count("this.isWarehouseTwinFloorCode(") >= 4
+    assert '["1F", "3F", "4F"].includes(' not in ERP_SHELL_SOURCE
 
 
 def test_warehouse_operations_and_map_resource_queries_allow_4f() -> None:

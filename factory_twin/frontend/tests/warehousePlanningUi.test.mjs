@@ -103,9 +103,34 @@ test("planning dimensions save the latest input and adjustment locks map panning
   assert.match(source, /const \[layoutMapToolsOpen, setLayoutMapToolsOpen\] = useState\(false\)/);
   assert.match(source, /const zoneGeometryDraftsRef = useRef<Record<string, number\[\]\[\]>>\(\{\}\)/);
   assert.match(source, /zoneGeometryDraftsRef\.current\[selectedAreaFeature\.id\]/);
-  assert.match(source, /mapPanLocked=\{locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"\}/);
+  assert.match(source, /mapPanLocked=\{floor4CalibrationMode \|\| \(locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"\)\}/);
   assert.match(editorSource, /mapPanLocked\?: boolean/);
   assert.match(editorSource, /controls\.enablePan = !mapPanLocked/);
+});
+
+test("aligned floor 4 keeps one compact three-point recalibration action", () => {
+  const beginCalibration = source.slice(
+    source.indexOf("const beginFloor4Calibration"),
+    source.indexOf("const cancelFloor4Calibration")
+  );
+  const calibrationAction = source.slice(
+    source.indexOf('{canEditLocations && floorCode === "4F"'),
+    source.indexOf("{canEditLocations && staleLayoutDraft")
+  );
+  assert.doesNotMatch(beginCalibration, /floor4CalibrationApplied\) return/);
+  assert.doesNotMatch(calibrationAction, /disabled=\{[^}]*floor4CalibrationApplied/);
+  assert.match(calibrationAction, /重新标定货梯\/朝向/);
+  assert.match(beginCalibration, /setLayers\(\(current\) => \(\{ \.\.\.current, structures: true \}\)\)/);
+  assert.match(beginCalibration, /replaceZoneGeometryDrafts\(\{\}\)/);
+  assert.match(source, /货梯标定 0\/3：请点击 A · 货梯第一角/);
+  assert.match(source, /已记录 A；请点击 C · 货梯对角/);
+  assert.match(source, /已记录 C；请点击 B · 货梯邻角/);
+  assert.match(source, /mapPanLocked=\{[^}]*floor4CalibrationMode/);
+  assert.match(editorSource, /calibrationMode[\s\S]*layout\.floor_code\.toUpperCase\(\) === "4F"[\s\S]*feature\.feature_code === "LIFT-002"/);
+  assert.match(source, /四楼实测成品仓库（重新校正中）/);
+  assert.match(source, /按 A \/ C \/ B 点选 · 地图已锁定/);
+  assert.match(editorSource, /floor4CalibratingCompass \? "对齐3F"/);
+  assert.match(source, /已取消货梯标定，4F 草稿没有改变/);
 });
 
 test("planning exits to lookup and map geometry tools open only on demand", () => {
@@ -123,7 +148,7 @@ test("planning moves empty zones but locks boundaries that own formal locations"
     editorSource.slice(editorSource.indexOf("const planningFeatureEditable"), editorSource.indexOf("group.userData =", editorSource.indexOf("const planningFeatureEditable"))),
     /feature\.is_locked/
   );
-  assert.match(source, /mapPanLocked=\{locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"\}/);
+  assert.match(source, /mapPanLocked=\{floor4CalibrationMode \|\| \(locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"\)\}/);
   assert.match(source, /rackEditingEnabled=\{locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen\}/);
   assert.match(editorSource, /preferredPlanningFeature[\s\S]*candidate\.userData\.entityKind === "feature" && candidate\.userData\.draggable/);
   assert.match(source, /featureHasMappedGroundLocations/);

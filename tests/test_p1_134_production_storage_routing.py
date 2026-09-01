@@ -25,6 +25,7 @@ from app.models.warehouse_inventory import (
 )
 from app.services.production_workflow import ProductionWorkflowError
 from tests.test_n029_production_service import _complete, _login, production_app
+from tests.test_phase11_requisition import requisition_app
 from tests.test_p1_134_customer_finished_storage import (
     customer_finished_storage_app,
 )
@@ -784,3 +785,96 @@ def test_preferred_4f_ground_plan_completes_as_preferred_not_legacy_fin(
             )
         )
         assert occupancy is not None
+
+
+def test_pending_receipt_preview_uses_customer_preferred_4f_area(
+    requisition_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.order import Order, OrderItem
+    from tests.test_p1_81_receipt_purpose_flow import (
+        _create_frozen_sources,
+        _login as _login_requisition,
+        _seed_material_and_staging,
+        _use_p181_published_map_identity,
+    )
+
+    app, factory = requisition_app
+    _use_p181_published_map_identity(monkeypatch)
+    _seed_material_and_staging(factory)
+
+    map_revision = "p1-134-receipt-preview-4f"
+    map_feature_id = "ZONE-P134-RECEIPT-PREVIEW-4F"
+    _patch_floor_identity(
+        monkeypatch,
+        floor_number=4,
+        revision=map_revision,
+        features={map_feature_id: "RECEIPT-4F"},
+    )
+
+    with TestClient(app) as client:
+        _login_requisition(client, "admin")
+        source = _create_frozen_sources(
+            client,
+            factory,
+            order_quantity=20,
+            purchase_total=20,
+            order_purpose=20,
+            stock_purpose=0,
+        )[0]
+
+        with factory() as db:
+            item = db.get(OrderItem, 1)
+            assert item is not None
+            order = db.get(Order, item.order_id)
+            assert order is not None
+            actor_id = int(db.scalar(select(User.id).where(User.username == "admin")))
+            preferred_area, _preferred_location = _seed_formal_location(
+                db,
+                floor_number=4,
+                area_code="RECEIPT-4F",
+                location_code="P134-4F-RECEIPT-L001",
+                map_revision=map_revision,
+                map_feature_id=map_feature_id,
+                storage_type="ground",
+                actor_id=actor_id,
+                with_ground_plan=True,
+            )
+            _set_preferences(
+                db,
+                customer_id=int(order.customer_id),
+                area_ids=(int(preferred_area.id),),
+            )
+            db.commit()
+
+        preferred = client.get("/api/incoming/pending")
+        assert preferred.status_code == 200, preferred.text
+        preferred_row = next(
+            item
+            for item in preferred.json()["items"]
+            if str(item["item_id"]) == source.route_key
+        )
+        assert preferred_row["finished_location_ready"] is True
+        assert "四楼" in preferred_row["finished_location_name"]
+        assert "RECEIPT-4F" in preferred_row["finished_location_name"]
+
+        with factory() as db:
+            order_item = db.get(OrderItem, 1)
+            assert order_item is not None
+            order = db.get(Order, order_item.order_id)
+            assert order is not None
+            _set_preferences(
+                db,
+                customer_id=int(order.customer_id),
+                area_ids=(),
+            )
+            db.commit()
+
+        legacy = client.get("/api/incoming/pending")
+        assert legacy.status_code == 200, legacy.text
+        legacy_row = next(
+            item
+            for item in legacy.json()["items"]
+            if str(item["item_id"]) == source.route_key
+        )
+        assert "FIN-001-1" in legacy_row["finished_location_name"]

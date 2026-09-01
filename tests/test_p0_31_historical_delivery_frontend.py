@@ -22,7 +22,10 @@ def test_historical_delivery_is_explicit_and_keeps_normal_flow_compact() -> None
 
 
 def test_actual_date_correction_and_reconciliation_month_are_separate() -> None:
-    assert "更正实际日期" in INDEX
+    # The compact delivery list now exposes date correction through the shared
+    # dispatched-document editor instead of adding another row-level button.
+    assert "编辑待回单送货单" in INDEX
+    assert "deliveryForm.editing_status==='dispatched'" in INDEX
     assert "/actual-date`" in INDEX
     assert "ERP录入时间不会改变" in INDEX
     assert "对账归属月份" in INDEX

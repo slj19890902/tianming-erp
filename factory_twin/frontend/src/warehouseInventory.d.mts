@@ -226,6 +226,15 @@ export function findPalletColumnConflicts(
   racks?: import("./types").Rack[]
 ): Array<{ pallet_id: string; column_id: string }>;
 
+export function zoneLayoutFrame(points: number[][]): {
+  anchor: number[];
+  right: number[];
+  down: number[];
+  width: number;
+  height: number;
+  rotation_deg: number;
+} | null;
+
 export function locationLayoutGeometry(
   zone: { points: number[][] },
   location: InventoryProjectionLocation,

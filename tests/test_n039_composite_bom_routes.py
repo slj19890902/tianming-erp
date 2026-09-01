@@ -18,8 +18,11 @@ def test_order_routes_snapshot_components_and_record_quantity_adjustments() -> N
 
 def test_delivery_routes_use_component_kit_capacity_and_atomic_allocations() -> None:
     remaining_source = inspect.getsource(deliveries._delivery_remaining_quantity)
-    dispatch_source = inspect.getsource(deliveries.dispatch_delivery)
-    cancel_source = inspect.getsource(deliveries.cancel_delivery)
+    # Public routes intentionally delegate to the shared transactional helpers so
+    # dispatch/cancel can also be reused by the revision workflow.  Keep this
+    # structural contract focused on the helpers that own the atomic work.
+    dispatch_source = inspect.getsource(deliveries._dispatch_delivery)
+    cancel_source = inspect.getsource(deliveries._cancel_delivery)
     inventory_source = inspect.getsource(
         deliveries._composite_inventory_sources_for_order_item
     )

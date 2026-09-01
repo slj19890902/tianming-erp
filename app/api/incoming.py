@@ -586,7 +586,6 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
         if order_item_id is not None:
             allocations_by_order_item.setdefault(order_item_id, []).append(allocation)
 
-    requires_finished_projection = False
     requires_reserve_projection = False
     for row in rows:
         supplier_id = row.get("supplier_order_item_id")
@@ -624,16 +623,9 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
             0,
         )
         proposed_quantity = max(int(row.get("incoming_quantity") or 0), 0)
-        if proposed_quantity > 0:
-            requires_finished_projection = True
         if proposed_quantity > remaining_order:
             requires_reserve_projection = True
 
-    finished_projection = (
-        receipt_auto_finished_location_projection(db)
-        if requires_finished_projection
-        else {"ready": True, "location_name": None, "issue": None}
-    )
     reserve_projection: dict[str, object | None] = {
         "ready": True,
         "location_name": None,
@@ -664,6 +656,16 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
                 "location_name": None,
                 "issue": str(error),
             }
+
+    default_finished_projection: dict[str, object | None] = {
+        "ready": True,
+        "location_name": None,
+        "capacity_warning": None,
+        "issue": None,
+    }
+    finished_projection_by_customer: dict[
+        int | None, dict[str, object]
+    ] = {}
 
     for row in rows:
         supplier_id = row.get("supplier_order_item_id")
@@ -745,6 +747,23 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
         finished_disposition_finished_after = receipt_purpose_finished_capacity(
             db, item_snapshots, finished_disposition_sheets
         )
+        finished_output_increases = (
+            finished_disposition_finished_after > finished_before
+        )
+        finished_projection: dict[str, object | None] = default_finished_projection
+        if finished_output_increases:
+            raw_customer_id = row.get("customer_id")
+            customer_id = (
+                int(raw_customer_id) if raw_customer_id is not None else None
+            )
+            if customer_id not in finished_projection_by_customer:
+                finished_projection_by_customer[customer_id] = (
+                    receipt_auto_finished_location_projection(
+                        db,
+                        customer_id=customer_id,
+                    )
+                )
+            finished_projection = finished_projection_by_customer[customer_id]
         finished_after = reserve_disposition_finished_after
         fact = latest_fact_by_snapshot.get(int(snapshot.id))
         variance = latest_variance_by_snapshot.get(int(snapshot.id))

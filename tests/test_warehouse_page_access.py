@@ -199,8 +199,13 @@ def test_warehouse_filters_do_not_send_empty_integer_query_values() -> None:
 
 
 def test_existing_home_and_incoming_pages_remain_served() -> None:
-    home, incoming, mold_mobile, mold_label = request_pages(
-        "/", "/incoming.html", "/mobile/mold-lookup", "/mold-label.html"
+    home, incoming, mold_mobile, mold_label, location_label, rack_level_label = request_pages(
+        "/",
+        "/incoming.html",
+        "/mobile/mold-lookup",
+        "/mold-label.html",
+        "/location-label.html?location_id=1",
+        "/warehouse-rack-level-label.html?print_job_id=1",
     )
     assert home["status"] == 200
     assert incoming["status"] == 200
@@ -209,3 +214,7 @@ def test_existing_home_and_incoming_pages_remain_served() -> None:
     assert "模具位置查询 - 天明ERP" in mold_mobile["text"]
     assert mold_label["status"] == 200
     assert "模具标签 - 天明ERP" in mold_label["text"]
+    assert location_label["status"] == 200
+    assert "仓库位置标签 - 天明ERP" in location_label["text"]
+    assert rack_level_label["status"] == 200
+    assert "货架层标签 - 天明ERP" in rack_level_label["text"]

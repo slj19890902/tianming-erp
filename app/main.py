@@ -516,6 +516,33 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/location-label.html" for route in application.routes):
+        location_label_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "location-label.html"
+        )
+        application.add_api_route(
+            "/location-label.html",
+            lambda: FileResponse(location_label_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(
+        route.path == "/warehouse-rack-level-label.html"
+        for route in application.routes
+    ):
+        rack_level_label_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "warehouse-rack-level-label.html"
+        )
+        application.add_api_route(
+            "/warehouse-rack-level-label.html",
+            lambda: FileResponse(rack_level_label_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
     if not any(route.path == "/warehouse-ledger.html" for route in application.routes):
         warehouse_ledger_path = (
             Path(__file__).resolve().parents[1]

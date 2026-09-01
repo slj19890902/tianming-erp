@@ -1319,6 +1319,7 @@ test("stocktake location gates reject unsupported floors and dispatch while pres
   };
   assert.equal(stocktakeLocationBlockReason(ground), null);
   assert.equal(stocktakeAddBlockReason(ground, "finished"), null);
+  assert.equal(stocktakeAddBlockReason({ ...ground, location_code: "4F-A1-01", floor_code: "4F" }, "finished"), null);
   assert.equal(stocktakeLocationBlockReason({ ...ground, floor_code: "1F" }), null);
   assert.equal(stocktakeLocationBlockReason({ ...ground, source_version: "CURRENT_MAP" }), null);
   assert.equal(stocktakeLocationBlockReason({ ...ground, source_version: "CURRENT_MAP", floor_code: "1F" }), null);

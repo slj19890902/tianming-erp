@@ -19,6 +19,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.customer_finished_storage_preference import (
+        CustomerFinishedStoragePreference,
+    )
     from app.models.customer_quote_preference import CustomerQuotePreference
     from app.models.product import Product
     from app.models.invoice_task import CustomerInvoiceProfile
@@ -109,6 +112,13 @@ class Customer(Base):
     quote_preferences: Mapped[list["CustomerQuotePreference"]] = relationship(
         back_populates="customer",
         passive_deletes=True,
+    )
+    finished_storage_preferences: Mapped[
+        list["CustomerFinishedStoragePreference"]
+    ] = relationship(
+        back_populates="customer",
+        passive_deletes=True,
+        order_by="CustomerFinishedStoragePreference.priority",
     )
     invoice_profile: Mapped["CustomerInvoiceProfile | None"] = relationship(
         back_populates="customer",

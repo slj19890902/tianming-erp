@@ -36,6 +36,13 @@ from app.services.customer_quote_pricing import (
     estimate_a1_unit_price,
     resolve_customer_square_price,
 )
+from app.services.customer_finished_storage import (
+    MAX_PREFERRED_FINISHED_STORAGE_AREAS,
+    CustomerFinishedStoragePreferenceError,
+    finished_storage_preference_payload,
+    ordered_preferred_area_ids,
+    replace_preferred_areas,
+)
 from app.services.flute_mapping import normalize_flute_type, validate_flute_consistency
 from app.services.supplier_master import SupplierLookupError, resolve_supplier
 
@@ -123,6 +130,14 @@ class CustomerUpdatePreviewPayload(CustomerPayload):
 
 class CustomerStatusPayload(CustomerMutationPayload):
     is_active: bool
+
+
+class CustomerFinishedStoragePreferenceUpdatePayload(BaseModel):
+    expected_version: int = Field(ge=1)
+    area_ids: list[int] = Field(
+        default_factory=list,
+        max_length=MAX_PREFERRED_FINISHED_STORAGE_AREAS,
+    )
 
 
 class CustomerQuotePreferenceCreatePayload(BaseModel):
@@ -321,6 +336,71 @@ def get_customer(
 ) -> CustomerResponse:
     require_customer_access(customer_id, current_user=user, db=db)
     return CustomerResponse.model_validate(_customer_or_404(db, customer_id))
+
+
+@router.get("/{customer_id}/finished-storage-preferences")
+def get_customer_finished_storage_preferences(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    require_customer_access(customer_id, current_user=user, db=db)
+    customer = _customer_or_404(db, customer_id)
+    return finished_storage_preference_payload(db, customer)
+
+
+@router.put("/{customer_id}/finished-storage-preferences")
+def update_customer_finished_storage_preferences(
+    customer_id: int,
+    payload: CustomerFinishedStoragePreferenceUpdatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_write),
+) -> dict:
+    require_customer_access(customer_id, current_user=user, db=db)
+    customer = _customer_or_404(db, customer_id)
+    before = ordered_preferred_area_ids(db, customer_id)
+    try:
+        changed = replace_preferred_areas(
+            db,
+            customer=customer,
+            area_ids=payload.area_ids,
+            expected_version=payload.expected_version,
+            user=user,
+        )
+        if changed:
+            audit_master_change(
+                db,
+                user=user,
+                action="UPDATE",
+                resource="CustomerFinishedStoragePreference",
+                resource_id=customer.id,
+                details={
+                    "before_area_ids": before,
+                    "after_area_ids": list(payload.area_ids),
+                    "customer_version": int(customer.version),
+                },
+            )
+        db.commit()
+    except CustomerFinishedStoragePreferenceError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"code": error.code, "message": error.message},
+        ) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CUSTOMER_FINISHED_STORAGE_CONFLICT",
+                "message": "客户成品区域已被其他操作更新，请刷新后重试",
+            },
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(customer)
+    return finished_storage_preference_payload(db, customer)
 
 
 @router.get("/{customer_id}/quote-preferences")

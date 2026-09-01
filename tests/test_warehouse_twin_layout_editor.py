@@ -534,6 +534,37 @@ def test_refresh_export_preserves_operator_racks_and_zone_policy(tmp_path: Path)
     assert floor["features"][0]["allowed_inventory_types"] == ["finished"]
 
 
+def test_refresh_export_keeps_operator_owned_floor4_when_editor_db_has_only_1f_3f(
+    tmp_path: Path,
+) -> None:
+    existing = tmp_path / "twin.json"
+    floor4 = {
+        "floor_code": "4F",
+        "layout_id": "floor4-scan-plan",
+        "revision": "floor4-planning-revision",
+        "calibration": {"status": "pending_site_calibration"},
+        "features": [],
+    }
+    existing.write_text(
+        json.dumps(
+            {"schema_version": 1, "floors": {"4F": floor4}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    refreshed = {
+        "schema_version": 1,
+        "floors": {
+            "1F": {"layout_id": "one", "features": [], "revision": "one"},
+            "3F": {"layout_id": "three", "features": [], "revision": "three"},
+        },
+    }
+
+    result = preserve_operator_layout_edits(refreshed, existing)
+
+    assert result["floors"]["4F"] == floor4
+
+
 def test_checked_in_f1_uses_two_combined_independently_editable_racks() -> None:
     payload = json.loads((ROOT / "static" / "factory_maps" / "twin_layout_v1.json").read_text(encoding="utf-8"))
     three = payload["floors"]["3F"]

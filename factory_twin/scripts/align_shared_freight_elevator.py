@@ -1,9 +1,10 @@
-"""Unify the confirmed shared 1F/3F freight elevator on the 3F geometry.
+"""Align the shared 1F/4F freight elevators to authoritative 3F geometry.
 
-The measured 3F elevator is authoritative. ``--apply`` changes only the 1F
-candidate elevator after writing a verified SQLite backup and full JSON
-snapshots of both floors. It never moves either floor, its column grid, walls,
-equipment, zones, aisles, racks or pallets, and it never touches ERP data.
+The measured 3F elevator is authoritative. ``--apply`` changes only explicitly
+selected 1F and/or 4F follower elevators after writing a verified SQLite backup
+and full JSON snapshots of every involved floor. It never moves a floor, its
+column grid, walls, equipment, zones, aisles, racks or pallets, and it never
+touches ERP data.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ except ImportError:
 
 DEFAULT_ONE_FLOOR_LAYOUT = "756bcfa7-74d8-48f2-ba64-a4a23c9984ae"
 DEFAULT_THREE_FLOOR_LAYOUT = "edfd9fd4-f013-41cf-b491-cd9d5dce6f52"
+FOLLOWER_FLOOR_CODES = frozenset({"1F", "4F"})
 CONFIRMATION = "ALIGN_SHARED_LIFT_TO_3F_CANDIDATE"
 GEOMETRY_FIELDS = (
     "feature_code", "name", "points", "width_mm", "elevation_mm",
@@ -63,25 +65,36 @@ def _footprint(feature: dict[str, Any]) -> dict[str, float]:
     }
 
 
-def build_plan(one: dict[str, Any], three: dict[str, Any]) -> dict[str, Any]:
-    if one.get("floor_code") != "1F" or three.get("floor_code") != "3F":
-        raise RuntimeError("layout floor codes must be 1F and 3F")
-    follower = _lift(one)
-    authority = _lift(three)
+def build_plan(follower_layout: dict[str, Any], authority_layout: dict[str, Any]) -> dict[str, Any]:
+    follower_floor = str(follower_layout.get("floor_code") or "").upper()
+    authority_floor = str(authority_layout.get("floor_code") or "").upper()
+    if follower_floor not in FOLLOWER_FLOOR_CODES or authority_floor != "3F":
+        raise RuntimeError("authority floor must be 3F and follower floor must be 1F or 4F")
+    if follower_layout.get("id") == authority_layout.get("id"):
+        raise RuntimeError("authority and follower layouts must be different")
+    follower = _lift(follower_layout)
+    authority = _lift(authority_layout)
     duplicate = next(
         (
-            feature for feature in one.get("features", [])
+            feature for feature in follower_layout.get("features", [])
             if feature["id"] != follower["id"]
-            and feature.get("feature_code") == authority["feature_code"]
+            and str(feature.get("feature_code") or "").upper()
+            == str(authority["feature_code"]).upper()
         ),
         None,
     )
     if duplicate is not None:
         raise RuntimeError(
-            f"1F already contains another {authority['feature_code']} feature: {duplicate['id']}"
+            f"{follower_floor} already contains another {authority['feature_code']} feature: {duplicate['id']}"
         )
-    if follower.get("status") == "confirmed" and follower["feature_code"] != authority["feature_code"]:
-        raise RuntimeError("confirmed 1F elevator cannot be silently renumbered")
+    if (
+        follower.get("status") == "confirmed"
+        and str(follower["feature_code"]).upper()
+        != str(authority["feature_code"]).upper()
+    ):
+        raise RuntimeError(
+            f"confirmed {follower_floor} elevator cannot be silently renumbered"
+        )
 
     desired = {field: authority[field] for field in GEOMETRY_FIELDS}
     changes = {
@@ -90,9 +103,11 @@ def build_plan(one: dict[str, Any], three: dict[str, Any]) -> dict[str, Any]:
     }
     before_center = _center(follower)
     authority_center = _center(authority)
-    return {
-        "one_floor_layout_id": one["id"],
-        "three_floor_layout_id": three["id"],
+    plan = {
+        "follower_floor_layout_id": follower_layout["id"],
+        "authority_layout_id": authority_layout["id"],
+        "three_floor_layout_id": authority_layout["id"],
+        "follower_floor": follower_floor,
         "authority_floor": "3F",
         "authority_feature_id": authority["id"],
         "authority_code": authority["feature_code"],
@@ -104,15 +119,24 @@ def build_plan(one: dict[str, Any], three: dict[str, Any]) -> dict[str, Any]:
             "new_code": authority["feature_code"],
             "center_distance_before_mm": round(math.dist(before_center, authority_center), 3),
             "center_distance_after_mm": 0,
-            "one_floor_footprint_before": _footprint(follower),
+            "follower_footprint_before": _footprint(follower),
             "shared_footprint_after": _footprint(authority),
-            "one_floor_other_feature_updates": 0,
+            "follower_other_feature_updates": 0,
             "three_floor_updates": 0,
             "equipment_moves": 0,
             "column_moves": 0,
             "erp_writes": 0,
         },
     }
+    if follower_floor == "1F":
+        # Preserve the established report fields consumed by the original 1F
+        # runbook while exposing floor-neutral fields for the new 4F follower.
+        plan["one_floor_layout_id"] = follower_layout["id"]
+        plan["summary"]["one_floor_footprint_before"] = plan["summary"][
+            "follower_footprint_before"
+        ]
+        plan["summary"]["one_floor_other_feature_updates"] = 0
+    return plan
 
 
 def _verified_sqlite_backup(database: Path, backup: Path) -> dict[str, Any]:
@@ -153,24 +177,36 @@ def _restore_payload(before: dict[str, Any], version: int) -> dict[str, Any]:
 
 
 def _public_plan(plan: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "one_floor_layout_id": plan["one_floor_layout_id"],
+    result = {
+        "follower_floor_layout_id": plan["follower_floor_layout_id"],
         "three_floor_layout_id": plan["three_floor_layout_id"],
+        "follower_floor": plan["follower_floor"],
         "authority_floor": plan["authority_floor"],
         "authority_code": plan["authority_code"],
         "changed_fields": sorted(plan["payload"]),
         "summary": plan["summary"],
     }
+    if "one_floor_layout_id" in plan:
+        result["one_floor_layout_id"] = plan["one_floor_layout_id"]
+    return result
 
 
-def _geometry_matches(one: dict[str, Any], three: dict[str, Any]) -> bool:
-    one_lift, three_lift = _lift(one), _lift(three)
-    return all(one_lift.get(field) == three_lift.get(field) for field in GEOMETRY_FIELDS)
+def _geometry_matches(follower: dict[str, Any], authority: dict[str, Any]) -> bool:
+    follower_lift, authority_lift = _lift(follower), _lift(authority)
+    return all(
+        follower_lift.get(field) == authority_lift.get(field)
+        for field in GEOMETRY_FIELDS
+    )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--one-floor-layout", default=DEFAULT_ONE_FLOOR_LAYOUT)
+    parser.add_argument(
+        "--four-floor-layout",
+        default="",
+        help="optional 4F follower layout id; omitted keeps the established 1F-only run",
+    )
     parser.add_argument("--three-floor-layout", default=DEFAULT_THREE_FLOOR_LAYOUT)
     parser.add_argument("--api-base", default="http://127.0.0.1:8092/api")
     parser.add_argument("--editor-token", default="local-mvp-token")
@@ -182,38 +218,72 @@ def main() -> int:
     database = args.database.resolve()
     if not database.is_file():
         raise FileNotFoundError(database)
-    one = _request(f"{args.api_base}/layouts/{args.one_floor_layout}")
-    three = _request(f"{args.api_base}/layouts/{args.three_floor_layout}")
-    plan = build_plan(one, three)
-    report = {**_public_plan(plan), "applied": False}
-    if args.apply and plan["summary"]["needs_update"]:
+    authority = _request(f"{args.api_base}/layouts/{args.three_floor_layout}")
+    follower_layout_ids = [args.one_floor_layout]
+    if args.four_floor_layout:
+        follower_layout_ids.append(args.four_floor_layout)
+    if len(follower_layout_ids) != len(set(follower_layout_ids)):
+        raise RuntimeError("follower layout ids must be unique")
+    followers = [
+        _request(f"{args.api_base}/layouts/{layout_id}")
+        for layout_id in follower_layout_ids
+    ]
+    plans = [build_plan(follower, authority) for follower in followers]
+    report: dict[str, Any] = {
+        **_public_plan(plans[0]),
+        "followers": [_public_plan(plan) for plan in plans],
+        "applied": False,
+    }
+    changed_plans = [plan for plan in plans if plan["summary"]["needs_update"]]
+    if args.apply and changed_plans:
         if args.confirmation != CONFIRMATION:
             raise RuntimeError(f"explicit confirmation {CONFIRMATION!r} is required")
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         args.backup_dir.mkdir(parents=True, exist_ok=True)
         database_backup = args.backup_dir / f"before-shared-lift-alignment-{stamp}.sqlite3"
-        one_snapshot = args.backup_dir / f"1f-before-shared-lift-alignment-{stamp}.json"
         three_snapshot = args.backup_dir / f"3f-authority-shared-lift-{stamp}.json"
         backup_verification = _verified_sqlite_backup(database, database_backup)
-        one_snapshot.write_text(json.dumps(one, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        three_snapshot.write_text(json.dumps(three, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        updated: dict[str, Any] | None = None
-        try:
-            follower = plan["follower_feature"]
-            updated = _request(
-                f"{args.api_base}/features/{follower['id']}",
-                "PATCH",
-                args.editor_token,
-                {"version": follower["version"], **plan["payload"]},
+        three_snapshot.write_text(
+            json.dumps(authority, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        follower_snapshots: dict[str, str] = {}
+        for follower in followers:
+            floor_code = str(follower["floor_code"]).lower()
+            snapshot = args.backup_dir / (
+                f"{floor_code}-before-shared-lift-alignment-{stamp}.json"
             )
-            one_after = _request(f"{args.api_base}/layouts/{args.one_floor_layout}")
-            three_after = _request(f"{args.api_base}/layouts/{args.three_floor_layout}")
-            if three_after != three:
+            snapshot.write_text(
+                json.dumps(follower, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            follower_snapshots[str(follower["floor_code"])] = str(snapshot.resolve())
+        updated_followers: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        try:
+            for plan in changed_plans:
+                follower_feature = plan["follower_feature"]
+                updated = _request(
+                    f"{args.api_base}/features/{follower_feature['id']}",
+                    "PATCH",
+                    args.editor_token,
+                    {"version": follower_feature["version"], **plan["payload"]},
+                )
+                updated_followers.append((plan, updated))
+            authority_after = _request(
+                f"{args.api_base}/layouts/{args.three_floor_layout}"
+            )
+            if authority_after != authority:
                 raise RuntimeError("authoritative 3F layout changed during shared-lift alignment")
-            if not _geometry_matches(one_after, three_after):
-                raise RuntimeError("1F and 3F freight-elevator geometry did not converge exactly")
+            for plan in plans:
+                follower_after = _request(
+                    f"{args.api_base}/layouts/{plan['follower_floor_layout_id']}"
+                )
+                if not _geometry_matches(follower_after, authority_after):
+                    raise RuntimeError(
+                        f"{plan['follower_floor']} and 3F freight-elevator geometry did not converge exactly"
+                    )
         except Exception:
-            if updated is not None:
+            for plan, updated in reversed(updated_followers):
                 _request(
                     f"{args.api_base}/features/{updated['id']}",
                     "PATCH",
@@ -223,15 +293,28 @@ def main() -> int:
             raise
         report.update({
             "applied": True,
-            "updated_feature_id": updated["id"],
-            "updated_version": updated["version"],
+            "updated_followers": [
+                {
+                    "floor_code": plan["follower_floor"],
+                    "feature_id": updated["id"],
+                    "version": updated["version"],
+                }
+                for plan, updated in updated_followers
+            ],
             "database_backup": str(database_backup.resolve()),
-            "one_floor_snapshot": str(one_snapshot.resolve()),
+            "follower_snapshots": follower_snapshots,
             "three_floor_snapshot": str(three_snapshot.resolve()),
             "backup_verification": backup_verification,
             "source_quick_check": _source_quick_check(database),
             "exact_geometry_match": True,
         })
+        if len(updated_followers) == 1 and updated_followers[0][0]["follower_floor"] == "1F":
+            # Preserve the original one-floor report contract for existing
+            # factory runbooks that do not request a 4F follower.
+            _, updated = updated_followers[0]
+            report["updated_feature_id"] = updated["id"]
+            report["updated_version"] = updated["version"]
+            report["one_floor_snapshot"] = follower_snapshots["1F"]
         report_path = args.backup_dir / f"shared-lift-alignment-report-{stamp}.json"
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         report["report"] = str(report_path.resolve())

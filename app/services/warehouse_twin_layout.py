@@ -95,7 +95,7 @@ def load_warehouse_twin_floor(
     path: Path | None = None,
 ) -> dict:
     normalized = str(floor_code or "").strip().upper()
-    if normalized not in {"1F", "3F"}:
+    if normalized not in {"1F", "3F", "4F"}:
         raise WarehouseTwinLayoutNotFoundError(f"尚未配置 {normalized or floor_code} 数字孪生平面")
     target = resolve_warehouse_twin_layout_path(path)
     if not target.is_file():

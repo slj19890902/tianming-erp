@@ -90,7 +90,7 @@ class CompletionBatchItem(BaseModel):
     @model_validator(mode="after")
     def validate_disposition_target(self):
         if self.disposition == "stock" and self.location_id is None:
-            raise ValueError("库存完工必须选择三楼成品库位")
+            raise ValueError("库存完工必须选择成品库位")
         if self.disposition == "direct" and self.location_id is None and any(
             value is not None for value in (self.pallet_id, self.pallet_code)
         ):

@@ -279,12 +279,12 @@ def _supported_formal_location(
         (location.source_version == "V11" and location.warehouse_floor == 3)
         or (
             location.source_version in {"TWIN_V1", "CURRENT_MAP"}
-            and location.warehouse_floor in {1, 3}
+            and location.warehouse_floor in {1, 3, 4}
         )
     )
     if not supported:
         raise WarehouseStocktakeBatchError(
-            "盘点调整只允许一楼或三楼已接入的正式地图库位", 409
+            "盘点调整只允许一楼、三楼或四楼已接入的正式地图库位", 409
         )
     warehouse_types = (
         {"finished", "shared"}
@@ -460,7 +460,7 @@ def stocktake_decrease_issues(
             )
             or (
                 blockers.source_version in {"TWIN_V1", "CURRENT_MAP"}
-                and blockers.warehouse_floor in {1, 3}
+                and blockers.warehouse_floor in {1, 3, 4}
             )
         ):
             issues[lot_id] = "库存不在已接入的正式盘点货位"

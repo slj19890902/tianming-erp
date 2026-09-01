@@ -42,6 +42,9 @@ from app.api.master_data_common import audit_master_change, clean_code
 from app.models.user import User
 from app.models.audit import OperationLog
 from app.models.customer import Customer
+from app.models.customer_finished_storage_preference import (
+    CustomerFinishedStoragePreference,
+)
 from app.models.delivery import Delivery, DeliveryPickTask
 from app.models.mold_tool import (
     MoldLabelLayoutRevision,
@@ -156,6 +159,7 @@ from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditNotFoundError,
     WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK,
     begin_warehouse_twin_one_step_publish,
+    calibrate_floor4_freight_elevator,
     create_warehouse_twin_feature,
     create_warehouse_twin_rack,
     delete_warehouse_twin_feature,
@@ -7462,12 +7466,24 @@ def _twin_finished_target_location(
     location = db.get(WarehouseLocation, location_id)
     if location is None:
         raise HTTPException(status_code=404, detail="目标货位不存在")
-    if location.warehouse_floor not in {1, 3}:
-        raise HTTPException(status_code=409, detail="只能选择一楼或三楼地图中的正式货位")
+    if location.warehouse_floor not in {1, 3, 4}:
+        raise HTTPException(status_code=409, detail="只能选择一楼、三楼或四楼地图中的正式货位")
+    # 4F is imported as a planning-only scan.  It must not become an inventory
+    # destination merely because a stale/manual ledger row happens to be
+    # active and marked ``placed``.  Requiring the published projection here
+    # keeps every caller below fail-closed until site calibration and the
+    # normal map/area publication workflow have both completed.  Keep the
+    # existing 1F/3F compatibility path unchanged.
+    require_floor4_publication = location.warehouse_floor == 4
     issue = operational_location_issue(
         db,
         location,
         warehouse_types={"finished", "shared"},
+        require_published=require_floor4_publication,
+        require_map_geometry=require_floor4_publication,
+        required_inventory_type=(
+            "finished" if require_floor4_publication else None
+        ),
     )
     if issue:
         raise HTTPException(status_code=409, detail=f"目标货位不可用：{issue}")
@@ -9587,6 +9603,13 @@ class TwinLayoutDraftValidatePayload(BaseModel):
     expected_revision: str = Field(min_length=1, max_length=64)
 
 
+class TwinFloor4FreightElevatorCalibrationPayload(BaseModel):
+    expected_revision: str = Field(min_length=1, max_length=64)
+    operation_key: str = Field(min_length=8, max_length=120)
+    source_points: list[tuple[float, float]] = Field(min_length=3, max_length=3)
+    confirmed: Literal[True]
+
+
 class LegacyRackBindingSelection(BaseModel):
     binding_key: str = Field(min_length=3, max_length=120)
     map_rack_id: str = Field(min_length=1, max_length=80)
@@ -9936,6 +9959,54 @@ def validate_twin_layout_draft(
         return {**result.value, "applied": result.applied}
 
 
+@router.post("/twin-layout/floors/{floor_code}/draft/calibrate-freight-elevator")
+def calibrate_twin_floor4_freight_elevator(
+    floor_code: str,
+    payload: TwinFloor4FreightElevatorCalibrationPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    draft_snapshot = snapshot_warehouse_twin_layout_draft()
+    result = None
+    try:
+        result = calibrate_floor4_freight_elevator(
+            floor_code,
+            expected_revision=payload.expected_revision,
+            operation_key=payload.operation_key,
+            source_points=payload.source_points,
+        )
+        _twin_layout_asset_log(
+            db,
+            request=request,
+            user=user,
+            action="TWIN_LAYOUT_FLOOR4_CALIBRATE",
+            entity_type="twin_layout_calibration",
+            entity_id="4F:LIFT-002",
+            description="管理员完成四楼三点货梯标定",
+            details={
+                "floor_code": floor_code.strip().upper(),
+                "revision": result.floor_revision,
+                "applied": result.applied,
+                **result.value,
+            },
+        )
+        db.commit()
+    except WarehouseTwinLayoutEditError as error:
+        db.rollback()
+        if result is not None and result.applied:
+            restore_warehouse_twin_layout_draft(draft_snapshot)
+        _handle_twin_layout_edit_error(error)
+    except Exception:
+        db.rollback()
+        if result is not None and result.applied:
+            restore_warehouse_twin_layout_draft(draft_snapshot)
+        raise
+    return {
+        "item": result.value,
+        "revision": result.floor_revision,
+        "applied": result.applied,
+    }
 def _map_feature_points_match(
     published_feature: Mapping,
     draft_feature: Mapping,
@@ -10084,6 +10155,18 @@ def _formal_area_publish_blockers(
             .options(selectinload(WarehouseArea.storage_policy))
         ).all()
     )
+    customer_preferred_area_ids = {
+        int(area_id)
+        for area_id in db.scalars(
+            select(CustomerFinishedStoragePreference.warehouse_area_id)
+            .join(
+                WarehouseArea,
+                WarehouseArea.id
+                == CustomerFinishedStoragePreference.warehouse_area_id,
+            )
+            .where(WarehouseArea.floor_id == floor.id)
+        ).all()
+    }
     blockers: list[str] = _formal_location_zone_geometry_blockers(
         db,
         normalized,
@@ -10109,6 +10192,18 @@ def _formal_area_publish_blockers(
             if area.storage_policy.map_feature_id != feature_id:
                 blockers.append(f"{area_code} 正式区域已绑定其他地图区域")
                 continue
+        requested_type_set = {
+            str(value).strip()
+            for value in feature.get("allowed_inventory_types") or []
+        }
+        if (
+            area is not None
+            and int(area.id) in customer_preferred_area_ids
+            and "finished" not in requested_type_set
+        ):
+            blockers.append(
+                f"{area_code} 区仍是客户默认成品区域，区域策略必须保留成品用途"
+            )
         if area is None:
             orphaned = db.scalar(
                 select(WarehouseLocation.id).where(
@@ -11407,6 +11502,26 @@ def _update_twin_zone_storage_policy_locked(
                 detail="该区域编号已有未纳入正式区域台账的历史库位，请先完成治理核对",
             )
     formal_policy = formal_area.storage_policy if formal_area is not None else None
+    if (
+        formal_area is not None
+        and "finished" not in set(payload.allowed_inventory_types)
+        and db.scalar(
+            select(CustomerFinishedStoragePreference.id)
+            .where(
+                CustomerFinishedStoragePreference.warehouse_area_id
+                == formal_area.id
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{formal_area.area_code} 区仍是客户默认成品区域，"
+                "请先在客户资料中移除后再取消成品用途"
+            ),
+        )
     formal_types = (
         policy_inventory_types(formal_policy) if formal_policy is not None else []
     )
@@ -12752,7 +12867,7 @@ def get_warehouse_capacity_summary(
         db.scalars(
             select(WarehouseFloor)
             .options(selectinload(WarehouseFloor.areas))
-            .where(WarehouseFloor.floor_number.in_((1, 3)))
+            .where(WarehouseFloor.floor_number.in_((1, 3, 4)))
             .order_by(WarehouseFloor.floor_number)
         ).all()
     )
@@ -12772,7 +12887,7 @@ def get_warehouse_capacity_summary(
                 InventoryPallet.status == "active",
                 pallet_has_physical_goods_condition(InventoryPallet.id),
                 _formal_inventory_location_condition(),
-                WarehouseLocation.warehouse_floor.in_((1, 3)),
+                WarehouseLocation.warehouse_floor.in_((1, 3, 4)),
             )
             .group_by(WarehouseLocation.warehouse_floor)
         ).all()
@@ -12928,7 +13043,7 @@ def get_warehouse_capacity_forecast(
         db.scalars(
             select(WarehouseFloor)
             .options(selectinload(WarehouseFloor.areas))
-            .where(WarehouseFloor.floor_number.in_((1, 3)))
+            .where(WarehouseFloor.floor_number.in_((1, 3, 4)))
             .order_by(WarehouseFloor.floor_number)
         ).all()
     )
@@ -12974,8 +13089,11 @@ def save_warehouse_capacity_forecast_plan(
     floor = None
     if payload.floor_id is not None:
         floor = db.get(WarehouseFloor, payload.floor_id)
-        if floor is None or floor.floor_number not in {1, 3}:
-            raise HTTPException(status_code=422, detail="容量预测只允许选择已建档的一楼或三楼")
+        if floor is None or floor.floor_number not in {1, 3, 4}:
+            raise HTTPException(
+                status_code=422,
+                detail="容量预测只允许选择已建档的一楼、三楼或四楼",
+            )
     scope_key = _capacity_forecast_scope_key(payload.effect, payload.floor_id)
     request_payload = payload.model_dump(mode="json", exclude={"operation_key"})
     request_hash = _capacity_forecast_request_hash(request_payload)
@@ -13222,7 +13340,7 @@ def _twin_reference_area_resources(keyword: str) -> list[dict]:
     needle = keyword.casefold()
     subtype_labels = {"mold": "模具", "printing_plate": "印刷版 模板"}
     resources: list[dict] = []
-    for floor_code in ("1F", "3F"):
+    for floor_code in ("1F", "3F", "4F"):
         try:
             floor = load_warehouse_twin_floor(floor_code)
         except WarehouseTwinLayoutNotFoundError:
@@ -13655,6 +13773,25 @@ def update_warehouse_floor(
     if row is None:
         raise HTTPException(status_code=404, detail="楼层不存在")
     if (
+        row.construction_status == "enabled"
+        and payload.construction_status != "enabled"
+        and db.scalar(
+            select(CustomerFinishedStoragePreference.id)
+            .join(
+                WarehouseArea,
+                WarehouseArea.id
+                == CustomerFinishedStoragePreference.warehouse_area_id,
+            )
+            .where(WarehouseArea.floor_id == row.id)
+            .limit(1)
+        )
+        is not None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该楼层仍是客户默认成品区域，请先在客户资料中移除后再停用。",
+        )
+    if (
         (row.floor_code != payload.floor_code or row.floor_number != payload.floor_number)
         and db.scalar(
             select(WarehouseArea.id)
@@ -13762,6 +13899,19 @@ def update_warehouse_area(
     floor = db.get(WarehouseFloor, payload.floor_id)
     if floor is None:
         raise HTTPException(status_code=404, detail="楼层不存在")
+    is_customer_preferred = db.scalar(
+        select(CustomerFinishedStoragePreference.id)
+        .where(CustomerFinishedStoragePreference.warehouse_area_id == row.id)
+        .limit(1)
+    ) is not None
+    if is_customer_preferred and (
+        payload.construction_status != "enabled"
+        or floor.construction_status != "enabled"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该区域仍是客户默认成品区域，请先在客户资料中移除后再停用或迁入未启用楼层。",
+        )
     before_capacity = {
         "planned_pallet_capacity": row.planned_pallet_capacity,
         "capacity_review_status": row.capacity_review_status,
@@ -14021,12 +14171,27 @@ def _location_label_dict(
     image = qrcode.make(lookup_url)
     buffer = BytesIO()
     image.save(buffer, format="PNG")
+    print_address_code = row.location_code
+    if (
+        row.address_kind == "rack_slot"
+        and row.warehouse_floor
+        and row.area_code
+        and row.rack_code
+        and row.level_no
+        and row.slot_no
+    ):
+        print_address_code = (
+            f"{int(row.warehouse_floor)}F-{str(row.area_code).strip().upper()}-"
+            f"{str(row.rack_code).strip().upper()}-"
+            f"{int(row.level_no)}-{int(row.slot_no)}"
+        )
     return {
         **_location_dict(row, projection_context),
         "floor_text": floor_text,
         "area_text": area_text,
         "area_master_name": area.area_name if area is not None else None,
         "display_path": readable_location,
+        "print_address_code": print_address_code,
         "layout_version": row.floor3_layout.version if row.floor3_layout else None,
         "lookup_url": lookup_url,
         "qr_data_url": (
@@ -14036,10 +14201,269 @@ def _location_label_dict(
     }
 
 
+@router.get("/location-label-workbench")
+def get_location_label_workbench(
+    floor_code: str | None = Query(default=None, min_length=2, max_length=12),
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+) -> dict:
+    """List printable rack cells projected from the current published map.
+
+    Retired, draft-only, temporary, unplaced and historical-alias locations are
+    deliberately absent.  This keeps the low-frequency print workbench on the
+    same spatial baseline as the operational map without deleting audit facts.
+    """
+
+    normalized_floor = str(floor_code or "").strip().upper()
+    requested_floor_codes = ["1F", "3F", "4F"]
+    if normalized_floor:
+        match = re.fullmatch(r"(\d{1,2})F", normalized_floor)
+        if match is None:
+            raise HTTPException(status_code=422, detail="楼层筛选格式无效")
+        requested_floor_codes = [normalized_floor]
+
+    formal_floors = list(
+        db.scalars(
+            select(WarehouseFloor)
+            .options(
+                selectinload(WarehouseFloor.areas).selectinload(
+                    WarehouseArea.storage_policy
+                )
+            )
+            .where(func.upper(WarehouseFloor.floor_code).in_(requested_floor_codes))
+        ).unique()
+    )
+    formal_floors_by_code = {
+        str(row.floor_code or "").strip().upper(): row for row in formal_floors
+    }
+    formal_areas_by_feature: dict[str, WarehouseArea] = {}
+    formal_areas_by_code: dict[tuple[str, str], WarehouseArea] = {}
+    for formal_floor in formal_floors:
+        current_floor_code = str(formal_floor.floor_code or "").strip().upper()
+        for area in formal_floor.areas:
+            formal_areas_by_code[(current_floor_code, area.area_code.upper())] = area
+            policy = area.storage_policy
+            feature_id = (
+                str(policy.map_feature_id or "").strip() if policy is not None else ""
+            )
+            if feature_id and policy.status == "published":
+                formal_areas_by_feature[feature_id] = area
+
+    floors_by_code: dict[str, dict] = {}
+    racks_by_id: dict[str, dict] = {}
+    for current_floor_code in requested_floor_codes:
+        try:
+            layout = load_warehouse_twin_floor(current_floor_code)
+        except WarehouseTwinLayoutNotFoundError:
+            continue
+        floor_model = formal_floors_by_code.get(current_floor_code)
+        current_floor = {
+            "floor_code": current_floor_code,
+            "floor_name": (
+                str(floor_model.floor_name or "").strip()
+                if floor_model is not None
+                else str(layout.get("name") or current_floor_code).strip()
+            ),
+            "areas_by_key": {},
+        }
+        floors_by_code[current_floor_code] = current_floor
+        zone_features = {
+            str(item.get("id") or "").strip(): item
+            for item in layout.get("features") or []
+            if item.get("feature_kind") == "zone"
+            and str(item.get("id") or "").strip()
+        }
+        zone_features_by_area: dict[str, list[dict]] = {}
+        for feature in zone_features.values():
+            feature_area_code = str(feature.get("erp_area_code") or "").strip().upper()
+            if feature_area_code:
+                zone_features_by_area.setdefault(feature_area_code, []).append(feature)
+
+        for rack in layout.get("racks") or []:
+            rack_id = str(rack.get("id") or "").strip()
+            if not rack_id:
+                continue
+            map_feature_id = str(rack.get("area_feature_id") or "").strip()
+            map_feature = zone_features.get(map_feature_id)
+            formal_area = formal_areas_by_feature.get(map_feature_id)
+            area_code = str(rack.get("area_code") or "").strip().upper()
+            if not area_code and map_feature is not None:
+                area_code = str(map_feature.get("erp_area_code") or "").strip().upper()
+            if formal_area is None and area_code:
+                formal_area = formal_areas_by_code.get(
+                    (current_floor_code, area_code)
+                )
+            if formal_area is not None:
+                area_code = formal_area.area_code.upper()
+                policy = formal_area.storage_policy
+                if not map_feature_id and policy is not None and policy.status == "published":
+                    map_feature_id = str(policy.map_feature_id or "").strip()
+                    map_feature = zone_features.get(map_feature_id)
+            if not map_feature_id and area_code:
+                candidates = zone_features_by_area.get(area_code, [])
+                if len(candidates) == 1:
+                    map_feature = candidates[0]
+                    map_feature_id = str(map_feature.get("id") or "").strip()
+
+            area_key = map_feature_id or (f"area:{area_code}" if area_code else "unassigned")
+            area_entry = current_floor["areas_by_key"].setdefault(
+                area_key,
+                {
+                    "area_id": formal_area.id if formal_area is not None else None,
+                    "area_code": area_code or "未归区",
+                    "area_name": (
+                        employee_area_name(
+                            formal_area,
+                            area_code=area_code,
+                            floor_number=(
+                                floor_model.floor_number
+                                if floor_model is not None
+                                else int(current_floor_code[:-1])
+                            ),
+                        )
+                        if formal_area is not None
+                        else str(
+                            (map_feature or {}).get("name")
+                            or (f"{area_code} 地图区域" if area_code else "地图未归区货架")
+                        ).strip()
+                    ),
+                    "map_feature_id": map_feature_id or None,
+                    "published_map_revision": str(layout.get("revision") or "").strip(),
+                    "racks_by_id": {},
+                },
+            )
+            try:
+                level_count = max(int(rack.get("levels") or 0), 0)
+            except (TypeError, ValueError):
+                level_count = 0
+            raw_counts = rack.get("level_cell_counts")
+            planned_cell_count = 0
+            if isinstance(raw_counts, list) and len(raw_counts) == level_count:
+                try:
+                    planned_cell_count = sum(max(int(value), 0) for value in raw_counts)
+                except (TypeError, ValueError):
+                    planned_cell_count = 0
+            rack_entry = {
+                "map_rack_id": rack_id,
+                "rack_code": "",
+                "rack_name": str(rack.get("name") or "未命名货架").strip(),
+                "level_count": level_count,
+                "planned_cell_count": planned_cell_count,
+                "locations": [],
+            }
+            area_entry["racks_by_id"][rack_id] = rack_entry
+            racks_by_id[rack_id] = rack_entry
+
+    query = select(WarehouseLocation).where(
+        _formal_inventory_location_condition(),
+        WarehouseLocation.is_active.is_(True),
+        WarehouseLocation.is_temporary.is_(False),
+        WarehouseLocation.placement_status == "placed",
+        WarehouseLocation.address_kind == "rack_slot",
+        WarehouseLocation.map_rack_id.is_not(None),
+        WarehouseLocation.rack_code.is_not(None),
+        WarehouseLocation.level_no.is_not(None),
+        WarehouseLocation.slot_no.is_not(None),
+    )
+    if normalized_floor:
+        query = query.where(WarehouseLocation.warehouse_floor == int(match.group(1)))
+    rows = list(
+        db.scalars(
+            query.order_by(
+                WarehouseLocation.warehouse_floor,
+                WarehouseLocation.area_code,
+                WarehouseLocation.rack_code,
+                WarehouseLocation.level_no,
+                WarehouseLocation.slot_no,
+                WarehouseLocation.id,
+            )
+        ).all()
+    )
+    projection_contexts = load_warehouse_location_projection_contexts(db, rows)
+    location_count = 0
+
+    for row in rows:
+        rack_id = str(row.map_rack_id or "").strip()
+        current_rack = racks_by_id.get(rack_id)
+        if current_rack is None:
+            # A location bound to a rack that is no longer on the published map
+            # remains auditable, but is not offered as a current printable rack.
+            continue
+        context = projection_contexts.get(int(row.id), {})
+        try:
+            _require_printable_location_label(row, context)
+        except HTTPException:
+            continue
+        payload = _location_dict(row, context)
+        current_rack["rack_code"] = str(row.rack_code or "").strip().upper()
+        print_address_code = (
+            f"{int(row.warehouse_floor or 0)}F-{str(row.area_code or '').strip().upper()}-"
+            f"{str(row.rack_code or '').strip().upper()}-"
+            f"{int(row.level_no or 0)}-{int(row.slot_no or 0)}"
+        )
+        current_rack["locations"].append(
+            {
+                "location_id": int(row.id),
+                "level_no": int(row.level_no or 0),
+                "slot_no": int(row.slot_no or 0),
+                "print_address_code": print_address_code,
+                "location_name": payload.get("employee_location_name"),
+            }
+        )
+        location_count += 1
+
+    floors: list[dict] = []
+    rack_count = 0
+    for current_floor in floors_by_code.values():
+        areas: list[dict] = []
+        for current_area in current_floor.pop("areas_by_key").values():
+            racks: list[dict] = []
+            for current_rack in current_area.pop("racks_by_id").values():
+                current_rack["locations"].sort(
+                    key=lambda item: (item["level_no"], item["slot_no"], item["location_id"])
+                )
+                current_rack["location_ids"] = [
+                    item["location_id"] for item in current_rack["locations"]
+                ]
+                current_rack["level_count"] = max(
+                    int(current_rack.get("level_count") or 0),
+                    max(
+                        (item["level_no"] for item in current_rack["locations"]),
+                        default=0,
+                    ),
+                )
+                current_rack["cell_count"] = len(current_rack["locations"])
+                current_rack["label_ready"] = bool(current_rack["locations"])
+                current_rack["setup_status"] = (
+                    "ready"
+                    if current_rack["locations"]
+                    else (
+                        "binding_pending"
+                        if int(current_rack.get("planned_cell_count") or 0) > 0
+                        else "cell_plan_pending"
+                    )
+                )
+                racks.append(current_rack)
+                rack_count += 1
+            racks.sort(key=lambda item: (str(item["rack_name"]), str(item["map_rack_id"])))
+            current_area["racks"] = racks
+            areas.append(current_area)
+        areas.sort(key=lambda item: (str(item["area_code"]), str(item["area_name"])))
+        current_floor["areas"] = areas
+        floors.append(current_floor)
+    floors.sort(key=lambda item: str(item["floor_code"]))
+    return {
+        "floors": floors,
+        "rack_count": rack_count,
+        "location_count": location_count,
+        "source": "current_published_measured_map",
+    }
+
+
 @router.get("/locations/labels")
 def get_location_labels(
     request: Request,
-    location_ids: str = Query(min_length=1, max_length=1200),
+    location_ids: str = Query(min_length=1, max_length=8000),
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
@@ -14047,8 +14471,8 @@ def get_location_labels(
     if not raw_ids or any(not part.isdigit() or int(part) <= 0 for part in raw_ids):
         raise HTTPException(status_code=422, detail="位置批量标签参数无效")
     ordered_ids = list(dict.fromkeys(int(part) for part in raw_ids))
-    if len(ordered_ids) > 100:
-        raise HTTPException(status_code=422, detail="一次最多打印 100 个位置")
+    if len(ordered_ids) > 500:
+        raise HTTPException(status_code=422, detail="一次最多打印 500 个位置")
     rows = db.scalars(
         select(WarehouseLocation)
         .options(
@@ -15900,7 +16324,7 @@ def get_mold_tool_detail(
 
 @router.get("/molds/by-map-area")
 def list_mold_tools_by_map_area(
-    floor_code: Literal["1F", "3F"] = Query(default="1F"),
+    floor_code: Literal["1F", "3F", "4F"] = Query(default="1F"),
     feature_code: str = Query(min_length=1, max_length=100),
     q: str | None = Query(default=None, max_length=150),
     page: int = Query(default=1, ge=1),
@@ -16004,7 +16428,7 @@ def list_mold_tools_by_map_area(
 
 @router.get("/molds/by-map-rack")
 def list_mold_tools_by_map_rack(
-    floor_code: Literal["1F", "3F"] = Query(default="1F"),
+    floor_code: Literal["1F", "3F", "4F"] = Query(default="1F"),
     rack_id: str = Query(min_length=1, max_length=100),
     q: str | None = Query(default=None, max_length=150),
     db: Session = Depends(get_db),

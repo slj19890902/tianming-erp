@@ -11,8 +11,12 @@ EDITOR_CANVAS = (
 
 
 def test_floor3_compass_relabels_drawing_north_as_real_east_without_rotating_geometry():
-    assert '["1F","3F"].includes(layout.floor_code.toUpperCase()) ? "E" : "N"' in EDITOR_CANVAS
-    assert '["1F","3F"].includes(layout.floor_code.toUpperCase()) ? "现实东向" : "图纸北向"' in EDITOR_CANVAS
+    assert '["1F", "3F"].includes(floorCode)' in EDITOR_CANVAS
+    assert 'floorCode === "4F"' in EDITOR_CANVAS
+    assert 'calibration?.status === "aligned"' in EDITOR_CANVAS
+    assert 'calibration?.applied === true' in EDITOR_CANVAS
+    assert 'realEastCompass ? "E" : "N"' in EDITOR_CANVAS
+    assert 'realEastCompass ? "现实东向" : "图纸北向"' in EDITOR_CANVAS
     assert "const bounds = layout.bounds_mm" in EDITOR_CANVAS
     assert "new THREE.Vector3(xMm - centerX, elevation, -(yMm - centerY))" in EDITOR_CANVAS
     assert "drawingToRealPoint" not in EDITOR_CANVAS

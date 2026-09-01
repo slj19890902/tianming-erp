@@ -1407,7 +1407,14 @@ def _location(
             raise WarehouseInventoryError(
                 "V11 货位楼层无效，不能办理成品入库", 409
             )
-    require_published_location = has_space_ledger(db)
+    # 4F starts life as a scan-only planning floor.  Even a stale/manual
+    # ``placed`` row must not become an inventory destination before the 4F
+    # map and area policy are formally published.  Existing 1F/3F legacy
+    # compatibility remains unchanged when no space ledger exists.
+    require_published_location = (
+        has_space_ledger(db)
+        or getattr(location, "warehouse_floor", None) == 4
+    )
     if inventory_type == "finished":
         if getattr(location, "placement_status", None) == "unplaced":
             raise WarehouseInventoryError(

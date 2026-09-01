@@ -12613,6 +12613,517 @@
           "previous_revision": "e5f192ba605185db"
         }
       ]
+    },
+    "4F": {
+      "layout_id": "707de041-5671-504a-8b78-d56983ccda1d",
+      "name": "四楼扫描规划图（待现场三点标定）",
+      "floor_code": "4F",
+      "operational_status": "planning_only",
+      "source_name": "My New Project - 4th Floor.dxf",
+      "source_sha256": "2824218ca929ae1640f431a93ca345d32665212ac2635a520b2deaa348d4fae8",
+      "source_units": "m",
+      "coordinate_units": "mm",
+      "bounds_mm": {
+        "min_x": -7326.0,
+        "min_y": -12661.0,
+        "max_x": 10605.0,
+        "max_y": 1400.0
+      },
+      "structures": [
+        {
+          "id": "DXF-8D4",
+          "source_handle": "8D4",
+          "kind": "wall",
+          "layer": "walls",
+          "locked": true,
+          "source_readonly": true,
+          "geometry": {
+            "type": "polyline",
+            "closed": true,
+            "points": [
+              [
+                1058.0,
+                847.0
+              ],
+              [
+                666.0,
+                847.0
+              ],
+              [
+                666.0,
+                -2666.0
+              ],
+              [
+                -340.0,
+                -2666.0
+              ],
+              [
+                -252.0,
+                -2353.0
+              ],
+              [
+                -1137.0,
+                -2353.0
+              ],
+              [
+                -1137.0,
+                -1987.0
+              ],
+              [
+                -3120.0,
+                -1987.0
+              ],
+              [
+                -3120.0,
+                -2302.0
+              ],
+              [
+                -3479.0,
+                -2302.0
+              ],
+              [
+                -3479.0,
+                -2813.0
+              ],
+              [
+                -7076.0,
+                -2813.0
+              ],
+              [
+                -7076.0,
+                -6665.0
+              ],
+              [
+                -443.0,
+                -6340.0
+              ],
+              [
+                -443.0,
+                -6027.0
+              ],
+              [
+                403.0,
+                -6006.0
+              ],
+              [
+                404.0,
+                -6497.0
+              ],
+              [
+                817.0,
+                -6496.0
+              ],
+              [
+                817.0,
+                -6617.0
+              ],
+              [
+                405.0,
+                -6618.0
+              ],
+              [
+                420.0,
+                -12005.0
+              ],
+              [
+                845.0,
+                -12005.0
+              ],
+              [
+                845.0,
+                -12661.0
+              ],
+              [
+                595.0,
+                -12661.0
+              ],
+              [
+                595.0,
+                -12255.0
+              ],
+              [
+                171.0,
+                -12255.0
+              ],
+              [
+                154.0,
+                -6263.0
+              ],
+              [
+                -193.0,
+                -6271.0
+              ],
+              [
+                -193.0,
+                -6579.0
+              ],
+              [
+                -7326.0,
+                -6928.0
+              ],
+              [
+                -7326.0,
+                -2563.0
+              ],
+              [
+                -3729.0,
+                -2563.0
+              ],
+              [
+                -3729.0,
+                -2052.0
+              ],
+              [
+                -3370.0,
+                -2052.0
+              ],
+              [
+                -3370.0,
+                -1737.0
+              ],
+              [
+                -887.0,
+                -1737.0
+              ],
+              [
+                -887.0,
+                -2103.0
+              ],
+              [
+                78.0,
+                -2103.0
+              ],
+              [
+                -10.0,
+                -2416.0
+              ],
+              [
+                416.0,
+                -2416.0
+              ],
+              [
+                416.0,
+                1097.0
+              ],
+              [
+                808.0,
+                1097.0
+              ],
+              [
+                808.0,
+                1400.0
+              ],
+              [
+                1058.0,
+                1400.0
+              ]
+            ]
+          }
+        },
+        {
+          "id": "DXF-8D5",
+          "source_handle": "8D5",
+          "kind": "wall",
+          "layer": "walls",
+          "locked": true,
+          "source_readonly": true,
+          "geometry": {
+            "type": "polyline",
+            "closed": true,
+            "points": [
+              [
+                10605.0,
+                -12661.0
+              ],
+              [
+                9039.0,
+                -12661.0
+              ],
+              [
+                9039.0,
+                -12411.0
+              ],
+              [
+                10355.0,
+                -12411.0
+              ],
+              [
+                10355.0,
+                1150.0
+              ],
+              [
+                7554.0,
+                1150.0
+              ],
+              [
+                7554.0,
+                1400.0
+              ],
+              [
+                10605.0,
+                1400.0
+              ]
+            ]
+          }
+        },
+        {
+          "id": "DXF-8D8",
+          "source_handle": "8D8",
+          "kind": "window",
+          "layer": "windows",
+          "locked": false,
+          "source_readonly": true,
+          "geometry": {
+            "type": "insert",
+            "x_mm": 4306.39,
+            "y_mm": 1210.61,
+            "rotation_deg": 0.0,
+            "block_name": "W-0-1",
+            "points": [
+              [
+                1058.63,
+                1210.61
+              ],
+              [
+                7554.15,
+                1210.61
+              ]
+            ],
+            "opening_width_mm": 6495.52
+          }
+        },
+        {
+          "id": "DXF-8D9",
+          "source_handle": "8D9",
+          "kind": "window",
+          "layer": "windows",
+          "locked": false,
+          "source_readonly": true,
+          "geometry": {
+            "type": "insert",
+            "x_mm": 4942.455,
+            "y_mm": -12471.11,
+            "rotation_deg": -180.0,
+            "block_name": "W-0-0",
+            "points": [
+              [
+                9039.57,
+                -12471.11
+              ],
+              [
+                845.34,
+                -12471.11
+              ]
+            ],
+            "opening_width_mm": 8194.23
+          }
+        },
+        {
+          "id": "DXF-8DA",
+          "source_handle": "8DA",
+          "kind": "unknown",
+          "layer": "roomitems",
+          "locked": false,
+          "source_readonly": true,
+          "geometry": {
+            "type": "insert",
+            "x_mm": 1541.3,
+            "y_mm": -5652.74,
+            "rotation_deg": -179.978,
+            "block_name": "F-0-0",
+            "points": [
+              [
+                2067.787,
+                -5643.742
+              ],
+              [
+                1014.807,
+                -5644.145
+              ]
+            ],
+            "opening_width_mm": 1052.98
+          }
+        },
+        {
+          "id": "DXF-8DB",
+          "source_handle": "8DB",
+          "kind": "unknown",
+          "layer": "roomitems",
+          "locked": false,
+          "source_readonly": true,
+          "geometry": {
+            "type": "insert",
+            "x_mm": 7383.92,
+            "y_mm": -110.34,
+            "rotation_deg": -359.978,
+            "block_name": "F-0-1",
+            "points": [
+              [
+                6949.6,
+                -122.42
+              ],
+              [
+                7818.25,
+                -122.085
+              ]
+            ],
+            "opening_width_mm": 868.65
+          }
+        },
+        {
+          "id": "DXF-8DC",
+          "source_handle": "8DC",
+          "kind": "unknown",
+          "layer": "roomitems",
+          "locked": false,
+          "source_readonly": true,
+          "geometry": {
+            "type": "insert",
+            "x_mm": 1250.49,
+            "y_mm": -1884.57,
+            "rotation_deg": -359.978,
+            "block_name": "F-0-2",
+            "points": [
+              [
+                710.412,
+                -1902.409
+              ],
+              [
+                1790.582,
+                -1901.993
+              ]
+            ],
+            "opening_width_mm": 1080.17
+          }
+        },
+        {
+          "id": "DXF-8DD",
+          "source_handle": "8DD",
+          "kind": "unknown",
+          "layer": "roomitems",
+          "locked": false,
+          "source_readonly": true,
+          "geometry": {
+            "type": "insert",
+            "x_mm": 1188.13,
+            "y_mm": -11292.83,
+            "rotation_deg": -179.978,
+            "block_name": "F-0-3",
+            "points": [
+              [
+                1724.379,
+                -11276.687
+              ],
+              [
+                651.869,
+                -11277.097
+              ]
+            ],
+            "opening_width_mm": 1072.51
+          }
+        }
+      ],
+      "features": [],
+      "placements": [],
+      "racks": [],
+      "pallets": [],
+      "assets": [],
+      "warnings": [
+        "有 4 个实体无法可靠分类，已作为灰色参考线保留。",
+        "有 2 个非 MVP 几何实体未导入。",
+        "四楼当前仅为扫描规划资产；完成现场三点标定前不得作为正式位置或库存地图。",
+        "3F/LIFT-002 仅作为坐标权威引用；本资产未生成四楼货梯几何。",
+        "本资产未生成区域、货架、栈板、库存或正式库位。"
+      ],
+      "erp_area_codes": [],
+      "pallets_inventory_linked": false,
+      "layout_edit_receipts": [],
+      "provenance": {
+        "asset_kind": "scanned_planning_asset",
+        "source_file_name": "My New Project - 4th Floor.dxf",
+        "source_sha256": "2824218ca929ae1640f431a93ca345d32665212ac2635a520b2deaa348d4fae8",
+        "metric_units": {
+          "source": "m",
+          "coordinates": "mm"
+        },
+        "parser": "factory_twin.backend.dxf_parser.parse_layout_dxf",
+        "parser_backend": "ezdxf.iterdxf",
+        "entity_counts": {
+          "INSERT": 6,
+          "LWPOLYLINE": 2,
+          "TEXT": 2
+        },
+        "layer_counts": {
+          "roomitems": 4,
+          "texts": 2,
+          "walls": 2,
+          "windows": 2
+        },
+        "structures_policy": "source_readonly_scan_only"
+      },
+      "canonical_authority": {
+        "floor_code": "3F",
+        "feature_code": "LIFT-002",
+        "authority_status": "confirmed_manual_locked",
+        "reference_only": true,
+        "materialized_on_4f": false,
+        "geometry": {
+          "points": [
+            [
+              -4614.0,
+              -1605.0
+            ],
+            [
+              -2614.0,
+              -1585.0
+            ]
+          ],
+          "width_mm": 3000.0
+        }
+      },
+      "calibration": {
+        "status": "requires_site_points",
+        "method": "three_point_rigid_2d",
+        "required_site_points": 3,
+        "source_points": [],
+        "target_points": [
+          {
+            "point_code": "LIFT-002-CORNER-A",
+            "point_mm": [
+              -4628.999,
+              -105.075
+            ],
+            "role": "first_diagonal_lift_footprint_corner"
+          },
+          {
+            "point_code": "LIFT-002-CORNER-C",
+            "point_mm": [
+              -2599.001,
+              -3084.925
+            ],
+            "role": "opposite_diagonal_lift_footprint_corner"
+          },
+          {
+            "point_code": "LIFT-002-CORNER-B",
+            "point_mm": [
+              -2628.999,
+              -85.075
+            ],
+            "role": "non_collinear_lift_footprint_corner"
+          }
+        ],
+        "scale": 1.0,
+        "mirror": false,
+        "rotation_deg": null,
+        "translation_mm": null,
+        "applied": false,
+        "constraints": {
+          "scale_locked": true,
+          "mirror_allowed": false,
+          "site_confirmation_required": true
+        }
+      },
+      "revision": "cf167fb0ec4aa7e6"
     }
   },
   "site_layout_receipt": {

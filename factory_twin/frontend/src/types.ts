@@ -251,4 +251,14 @@ export interface Layout extends LayoutSummary {
   features: LayoutFeature[];
   violations: Violation[];
   rule_defaults: Record<string, number>;
+  metadata?: {
+    calibration?: {
+      status?: string;
+      applied?: boolean;
+    };
+  };
+  calibration?: {
+    status?: string;
+    applied?: boolean;
+  };
 }

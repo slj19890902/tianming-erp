@@ -1302,7 +1302,10 @@ def build_warehouse_twin_dashboard(
         location_rows.append(payload)
 
     floor_summaries = []
-    for floor_number in (1, 3):
+    dashboard_floor_numbers = [1, 3]
+    if 4 in floor_records or any(row["floor_number"] == 4 for row in location_rows):
+        dashboard_floor_numbers.append(4)
+    for floor_number in dashboard_floor_numbers:
         floor = floor_records.get(floor_number)
         floor_locations = [
             row for row in location_rows if row["floor_number"] == floor_number

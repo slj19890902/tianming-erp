@@ -60,6 +60,45 @@ def test_already_aligned_shared_lift_is_idempotent() -> None:
     assert plan["summary"]["center_distance_before_mm"] == 0
 
 
+def test_4f_uses_the_same_authoritative_3f_lift_geometry() -> None:
+    four_lift = _feature("four-lift", "LIFT-004", [[100, 200], [100, 2200]], 1800)
+    three_lift = _feature("three-lift", "LIFT-002", [[-4614, -1605], [-2614, -1585]], 3000)
+
+    plan = build_plan(_layout("4F", four_lift), _layout("3F", three_lift))
+
+    assert plan["follower_floor"] == "4F"
+    assert plan["authority_floor"] == "3F"
+    assert plan["payload"]["feature_code"] == "LIFT-002"
+    assert plan["payload"]["points"] == three_lift["points"]
+    assert plan["payload"]["width_mm"] == three_lift["width_mm"]
+    assert plan["summary"]["center_distance_after_mm"] == 0
+    assert plan["summary"]["follower_other_feature_updates"] == 0
+    assert plan["summary"]["three_floor_updates"] == 0
+
+
+def test_only_1f_or_4f_can_follow_the_3f_authority() -> None:
+    lift = _feature("lift", "LIFT-002", [[0, 0], [2000, 0]], 3000)
+
+    with pytest.raises(RuntimeError, match="authority floor must be 3F"):
+        build_plan(_layout("2F", lift), _layout("3F", lift))
+    with pytest.raises(RuntimeError, match="authority floor must be 3F"):
+        build_plan(_layout("4F", lift), _layout("1F", lift))
+
+
+def test_confirmed_4f_lift_cannot_be_silently_renumbered() -> None:
+    four_lift = _feature(
+        "four-lift",
+        "LIFT-004",
+        [[0, 0], [0, 2000]],
+        2000,
+        status="confirmed",
+    )
+    three_lift = _feature("three-lift", "LIFT-002", [[10, 10], [2010, 10]], 3000)
+
+    with pytest.raises(RuntimeError, match="confirmed 4F elevator"):
+        build_plan(_layout("4F", four_lift), _layout("3F", three_lift))
+
+
 def test_duplicate_target_code_on_1f_fails_closed() -> None:
     one_lift = _feature("one-lift", "LIFT-003", [[0, 0], [0, 2000]], 2000)
     three_lift = _feature("three-lift", "LIFT-002", [[10, 10], [2010, 10]], 3000)

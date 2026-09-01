@@ -31,7 +31,7 @@ export function stocktakeLocationBlockReason(location) {
   const floorCode = String(location.floor_code || "");
   const sourceVersion = String(location.source_version || "");
   const supportedSource = ["TWIN_V1", "CURRENT_MAP"].includes(sourceVersion)
-    ? ["1F", "3F"].includes(floorCode)
+    ? ["1F", "3F", "4F"].includes(floorCode)
     : sourceVersion === "V11" && floorCode === "3F";
   if (!supportedSource) {
     return "该货位尚未接入可盘点的正式地图。";

@@ -600,7 +600,8 @@ def test_stage_c_frontends_use_floor_area_location_without_extra_migration() -> 
         "transfer_floor_number",
         "productionLocationFloors",
         "productionAreasForFloor",
-        "productionLocationsForArea(row.location_floor_number,row.location_area_code)",
+        "productionLocationsForRowArea(row,row.location_floor_number,row.location_area_code)",
+        "productionLocationsForArea(floorNumber, areaCode)",
     ):
         assert marker in INDEX_HTML
     for marker in (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -211,8 +212,15 @@ def build_export(connection: sqlite3.Connection) -> dict:
         revision_source = json.dumps(floor, ensure_ascii=False, sort_keys=True).encode("utf-8")
         floor["revision"] = sha256(revision_source).hexdigest()[:16]
         floors[floor_code] = floor
-    if set(floors) != {"1F", "3F"}:
-        raise RuntimeError(f"必须同时导出 1F 和 3F，当前为 {sorted(floors)}")
+    required_floors = {"1F", "3F"}
+    supported_floors = {"1F", "3F", "4F"}
+    if not required_floors.issubset(floors) or not set(floors).issubset(
+        supported_floors
+    ):
+        raise RuntimeError(
+            "必须同时导出 1F 和 3F，且只允许附带 4F；"
+            f"当前为 {sorted(floors)}"
+        )
     return {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -257,6 +265,15 @@ def preserve_operator_layout_edits(payload: dict, existing_path: Path) -> dict:
         floor.pop("revision", None)
         revision_source = json.dumps(floor, ensure_ascii=False, sort_keys=True).encode("utf-8")
         floor["revision"] = sha256(revision_source).hexdigest()[:16]
+    # 4F begins as an operator-owned scan/calibration plan and may not yet
+    # exist in the older editor database.  A routine 1F/3F refresh must never
+    # erase or rewrite that floor in the checked-in runtime asset.
+    existing_floor4 = (existing.get("floors") or {}).get("4F")
+    if (
+        "4F" not in (payload.get("floors") or {})
+        and isinstance(existing_floor4, dict)
+    ):
+        payload.setdefault("floors", {})["4F"] = deepcopy(existing_floor4)
     return payload
 
 

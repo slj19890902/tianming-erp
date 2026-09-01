@@ -296,6 +296,155 @@ def test_rack_level_print_is_admin_only_idempotent_and_snapshot_based(
         ) == 9
 
 
+def test_location_label_workbench_only_returns_current_map_rack_cells(
+    rack_factory,
+    monkeypatch,
+) -> None:
+    from app.api import warehouse as warehouse_api
+    from app.api.auth import router as auth_router
+    from app.services import location_candidates
+
+    with rack_factory() as db:
+        sync_published_rack_cells(
+            db,
+            floor_layout=_layout(counts=[2, 2]),
+            operator_id=1,
+        )
+        db.commit()
+
+    monkeypatch.setattr(
+        location_candidates,
+        "load_warehouse_twin_published_floor_identity",
+        lambda _floor_number: {
+            "revision": "rack-rev-1",
+            "zones_by_id": {"zone-fin-001": "FIN-001"},
+        },
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        "load_warehouse_twin_floor",
+        lambda floor_code: (
+            _layout(counts=[2, 2])
+            if floor_code == "3F"
+            else (_ for _ in ()).throw(
+                warehouse_api.WarehouseTwinLayoutNotFoundError("未配置")
+            )
+        ),
+    )
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(warehouse_api.router, prefix="/api/warehouse")
+
+    def override_get_db():
+        with rack_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as client:
+        login = client.post(
+            "/api/auth/login",
+            json={"username": "p1-123-admin", "password": "123456"},
+        )
+        assert login.status_code == 200, login.text
+        response = client.get("/api/warehouse/location-label-workbench")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["source"] == "current_published_measured_map"
+        assert payload["rack_count"] == 1
+        assert payload["location_count"] == 4
+        rack = payload["floors"][0]["areas"][0]["racks"][0]
+        assert rack["location_ids"]
+        assert [
+            item["print_address_code"] for item in rack["locations"]
+        ] == [
+            "3F-FIN-001-A-1-1",
+            "3F-FIN-001-A-1-2",
+            "3F-FIN-001-A-2-1",
+            "3F-FIN-001-A-2-2",
+        ]
+        labels = client.get(
+            "/api/warehouse/locations/labels",
+            params={"location_ids": ",".join(map(str, rack["location_ids"]))},
+        )
+        assert labels.status_code == 200, labels.text
+        assert [item["print_address_code"] for item in labels.json()["items"]] == [
+            "3F-FIN-001-A-1-1",
+            "3F-FIN-001-A-1-2",
+            "3F-FIN-001-A-2-1",
+            "3F-FIN-001-A-2-2",
+        ]
+
+
+def test_location_label_workbench_keeps_map_rack_visible_before_legacy_binding(
+    rack_factory,
+    monkeypatch,
+) -> None:
+    from app.api import warehouse as warehouse_api
+    from app.api.auth import router as auth_router
+
+    with rack_factory() as db:
+        floor = db.scalar(select(WarehouseFloor).where(WarehouseFloor.floor_code == "3F"))
+        area = db.scalar(select(WarehouseArea).where(WarehouseArea.area_code == "FIN-001"))
+        db.add(
+            WarehouseLocation(
+                location_code="FIN-001-LEGACY-01",
+                location_name="旧版文字层格",
+                warehouse_type="finished",
+                is_active=True,
+                warehouse_floor=floor.floor_number,
+                area_code=area.area_code,
+                storage_type="rack",
+                level_no=1,
+                slot_no=1,
+                is_temporary=False,
+                source_version="CURRENT_MAP",
+                placement_status="placed",
+                address_kind="rack_slot",
+                address_area_id=area.id,
+                rack_code="A",
+                map_rack_id=None,
+            )
+        )
+        db.commit()
+
+    monkeypatch.setattr(
+        warehouse_api,
+        "load_warehouse_twin_floor",
+        lambda floor_code: (
+            _layout(counts=[2, 2])
+            if floor_code == "3F"
+            else (_ for _ in ()).throw(
+                warehouse_api.WarehouseTwinLayoutNotFoundError("未配置")
+            )
+        ),
+    )
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(warehouse_api.router, prefix="/api/warehouse")
+
+    def override_get_db():
+        with rack_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as client:
+        login = client.post(
+            "/api/auth/login",
+            json={"username": "p1-123-admin", "password": "123456"},
+        )
+        assert login.status_code == 200, login.text
+        response = client.get("/api/warehouse/location-label-workbench")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["rack_count"] == 1
+        assert payload["location_count"] == 0
+        rack = payload["floors"][0]["areas"][0]["racks"][0]
+        assert rack["map_rack_id"] == "rack-fin-001-01"
+        assert rack["location_ids"] == []
+        assert rack["label_ready"] is False
+        assert rack["setup_status"] == "binding_pending"
+
+
 def test_region_planning_ui_and_label_page_are_explicit() -> None:
     source = (ROOT / "factory_twin/frontend/src/WarehouseTwinApp.tsx").read_text(
         encoding="utf-8"
@@ -308,6 +457,7 @@ def test_region_planning_ui_and_label_page_are_explicit() -> None:
     for floor in ("2F", "4F", "5F"):
         assert f'<b>{floor}</b>' in source
     assert "规划中" in source
-    assert "rack_level_80x40_v1" in source
+    assert "rack_level_80x40_v1" not in source
+    assert "打印正式层标签" not in source
     assert "@page{size:80mm 40mm;margin:0}" in label
     assert "内部" not in label

@@ -31,6 +31,8 @@ ALLOWED_INVENTORY_TYPES = {
 }
 ALLOWED_STORAGE_LAYOUTS = {"rack", "pallet_ground", "mixed", "functional"}
 ALLOWED_ACCESS_SIDES = {"north", "south", "east", "west", "both"}
+FLOOR4_CALIBRATION_MAX_RESIDUAL_MM = 50.0
+FLOOR4_CALIBRATION_RMSE_MM = 30.0
 _LAYOUT_EDIT_LOCK = RLock()
 WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK = _LAYOUT_EDIT_LOCK
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -615,7 +617,7 @@ def _mark_draft_changed(document: dict[str, Any], floor_code: str) -> None:
 
 def _normalize_floor_code(floor_code: str) -> str:
     normalized = str(floor_code or "").strip().upper()
-    if normalized not in {"1F", "3F"}:
+    if normalized not in {"1F", "3F", "4F"}:
         raise WarehouseTwinLayoutEditNotFoundError(
             f"尚未配置 {normalized or floor_code} 数字孪生平面"
         )
@@ -699,6 +701,381 @@ def _apply_mutation(
         if path is None:
             _mark_draft_changed(document, normalized)
         _write_document(target, document)
+        return LayoutMutation(
+            value=result,
+            floor_revision=str(floor["revision"]),
+            applied=True,
+        )
+
+
+def _calibration_point(value: Any, *, label: str) -> tuple[float, float]:
+    if isinstance(value, dict):
+        value = value.get("point_mm") or value.get("point") or value.get("coordinates")
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise WarehouseTwinLayoutEditError(f"{label}必须是二维坐标")
+    try:
+        point = (float(value[0]), float(value[1]))
+    except (TypeError, ValueError) as error:
+        raise WarehouseTwinLayoutEditError(f"{label}必须是有效数值坐标") from error
+    if not all(math.isfinite(item) and abs(item) <= 10_000_000 for item in point):
+        raise WarehouseTwinLayoutEditError(f"{label}超出允许范围")
+    return point
+
+
+def _three_calibration_points(values: Any, *, label: str) -> list[tuple[float, float]]:
+    if not isinstance(values, list) or len(values) != 3:
+        raise WarehouseTwinLayoutEditError(f"{label}必须正好包含三个点")
+    return [
+        _calibration_point(value, label=f"{label}第{index + 1}点")
+        for index, value in enumerate(values)
+    ]
+
+
+def _signed_triangle_area2(points: list[tuple[float, float]]) -> float:
+    (ax, ay), (bx, by), (cx, cy) = points
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+
+
+def _fit_floor4_rigid_transform(
+    source_points: list[tuple[float, float]],
+    target_points: list[tuple[float, float]],
+) -> dict[str, Any]:
+    source_area2 = _signed_triangle_area2(source_points)
+    target_area2 = _signed_triangle_area2(target_points)
+    if abs(source_area2) <= 1.0 or abs(target_area2) <= 1.0:
+        raise WarehouseTwinLayoutEditError("三点标定不能共线或过于接近")
+    if source_area2 * target_area2 < 0:
+        raise WarehouseTwinLayoutEditError("三点顺序形成镜像，请按现场标定点顺序重新点选")
+
+    source_center = (
+        sum(point[0] for point in source_points) / 3.0,
+        sum(point[1] for point in source_points) / 3.0,
+    )
+    target_center = (
+        sum(point[0] for point in target_points) / 3.0,
+        sum(point[1] for point in target_points) / 3.0,
+    )
+    covariance_cos = 0.0
+    covariance_sin = 0.0
+    for source, target in zip(source_points, target_points, strict=True):
+        sx, sy = source[0] - source_center[0], source[1] - source_center[1]
+        tx, ty = target[0] - target_center[0], target[1] - target_center[1]
+        covariance_cos += sx * tx + sy * ty
+        covariance_sin += sx * ty - sy * tx
+    if math.hypot(covariance_cos, covariance_sin) <= 1e-9:
+        raise WarehouseTwinLayoutEditError("三点标定无法得到稳定旋转角度")
+    rotation_rad = math.atan2(covariance_sin, covariance_cos)
+    cos_value = math.cos(rotation_rad)
+    sin_value = math.sin(rotation_rad)
+    translation = (
+        target_center[0]
+        - (cos_value * source_center[0] - sin_value * source_center[1]),
+        target_center[1]
+        - (sin_value * source_center[0] + cos_value * source_center[1]),
+    )
+
+    def apply(point: tuple[float, float]) -> tuple[float, float]:
+        return (
+            cos_value * point[0] - sin_value * point[1] + translation[0],
+            sin_value * point[0] + cos_value * point[1] + translation[1],
+        )
+
+    residuals = [
+        math.hypot(transformed[0] - target[0], transformed[1] - target[1])
+        for transformed, target in (
+            (apply(source), target)
+            for source, target in zip(source_points, target_points, strict=True)
+        )
+    ]
+    maximum = max(residuals)
+    rmse = math.sqrt(sum(value * value for value in residuals) / len(residuals))
+    if maximum > FLOOR4_CALIBRATION_MAX_RESIDUAL_MM or rmse > FLOOR4_CALIBRATION_RMSE_MM:
+        raise WarehouseTwinLayoutEditError(
+            f"三点标定误差过大（最大 {maximum:.1f} mm，均方根 {rmse:.1f} mm），请重新点选"
+        )
+    return {
+        "rotation_rad": rotation_rad,
+        "rotation_deg": math.degrees(rotation_rad),
+        "translation_mm": translation,
+        "residuals_mm": residuals,
+        "max_residual_mm": maximum,
+        "rmse_residual_mm": rmse,
+        "apply": apply,
+    }
+
+
+def _rounded_point(point: tuple[float, float]) -> list[float]:
+    return [round(point[0], 3), round(point[1], 3)]
+
+
+def _transform_floor4_geometry_item(
+    item: dict[str, Any], *, transform: dict[str, Any]
+) -> None:
+    apply = transform["apply"]
+    points = item.get("points")
+    if isinstance(points, list):
+        converted: list[list[float]] = []
+        for index, point in enumerate(points):
+            converted.append(
+                _rounded_point(_calibration_point(point, label=f"几何点{index + 1}"))
+            )
+        item["points"] = [_rounded_point(apply(tuple(point))) for point in converted]
+    if "x_mm" in item or "y_mm" in item:
+        if "x_mm" not in item or "y_mm" not in item:
+            raise WarehouseTwinLayoutEditError("地图对象坐标必须同时包含 x_mm 和 y_mm")
+        point = _calibration_point(
+            [item.get("x_mm"), item.get("y_mm")], label="地图对象坐标"
+        )
+        x_value, y_value = apply(point)
+        item["x_mm"] = round(x_value, 3)
+        item["y_mm"] = round(y_value, 3)
+    if isinstance(item.get("rotation_deg"), (int, float)):
+        item["rotation_deg"] = round(
+            (float(item["rotation_deg"]) + float(transform["rotation_deg"])) % 360,
+            6,
+        )
+    geometry = item.get("geometry")
+    if isinstance(geometry, dict):
+        _transform_floor4_geometry_item(geometry, transform=transform)
+
+
+def _transform_floor4_bounds(floor: dict[str, Any], *, transform: dict[str, Any]) -> None:
+    bounds = floor.get("bounds_mm")
+    if not isinstance(bounds, dict):
+        return
+    try:
+        corners = [
+            (float(bounds["min_x"]), float(bounds["min_y"])),
+            (float(bounds["min_x"]), float(bounds["max_y"])),
+            (float(bounds["max_x"]), float(bounds["min_y"])),
+            (float(bounds["max_x"]), float(bounds["max_y"])),
+        ]
+    except (KeyError, TypeError, ValueError) as error:
+        raise WarehouseTwinLayoutEditError("4F 地图边界格式无效") from error
+    transformed = [transform["apply"](point) for point in corners]
+    floor["bounds_mm"] = {
+        "min_x": round(min(point[0] for point in transformed), 3),
+        "min_y": round(min(point[1] for point in transformed), 3),
+        "max_x": round(max(point[0] for point in transformed), 3),
+        "max_y": round(max(point[1] for point in transformed), 3),
+    }
+
+
+def _authoritative_freight_elevator(document: dict[str, Any]) -> dict[str, Any]:
+    floor = (document.get("floors") or {}).get("3F")
+    if not isinstance(floor, dict):
+        raise WarehouseTwinLayoutEditError("正式地图缺少 3F 货梯权威对象")
+    matches = [
+        item
+        for item in floor.get("features") or []
+        if isinstance(item, dict) and item.get("feature_code") == "LIFT-002"
+    ]
+    if len(matches) != 1:
+        raise WarehouseTwinLayoutEditError("3F 必须且只能存在一个权威货梯 LIFT-002")
+    authority = matches[0]
+    if not authority.get("is_locked"):
+        raise WarehouseTwinLayoutEditError("3F 权威货梯 LIFT-002 未锁定，拒绝标定")
+    authority_points = authority.get("points")
+    if not isinstance(authority_points, list) or len(authority_points) != 2:
+        raise WarehouseTwinLayoutEditError("3F 权威货梯 LIFT-002 几何无效")
+    for index, point in enumerate(authority_points):
+        _calibration_point(point, label=f"3F 权威货梯端点{index + 1}")
+    return authority
+
+
+def _canonical_freight_elevator_target_points(
+    authority: dict[str, Any],
+) -> list[list[float]]:
+    start, end = [
+        _calibration_point(point, label=f"3F 权威货梯端点{index + 1}")
+        for index, point in enumerate(authority.get("points") or [])
+    ]
+    try:
+        width = float(authority.get("width_mm"))
+    except (TypeError, ValueError) as error:
+        raise WarehouseTwinLayoutEditError("3F 权威货梯 LIFT-002 宽度无效") from error
+    if not math.isfinite(width) or width <= 0:
+        raise WarehouseTwinLayoutEditError("3F 权威货梯 LIFT-002 宽度无效")
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    length = math.hypot(dx, dy)
+    if length <= 1.0:
+        raise WarehouseTwinLayoutEditError("3F 权威货梯 LIFT-002 几何无效")
+    offset = (-dy * width / (2.0 * length), dx * width / (2.0 * length))
+    return [
+        _rounded_point((start[0] + offset[0], start[1] + offset[1])),
+        _rounded_point((end[0] - offset[0], end[1] - offset[1])),
+        _rounded_point((end[0] + offset[0], end[1] + offset[1])),
+    ]
+
+
+def calibrate_floor4_freight_elevator(
+    floor_code: str,
+    *,
+    expected_revision: str,
+    operation_key: str,
+    source_points: list[list[float] | tuple[float, float]],
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> LayoutMutation:
+    normalized = _normalize_floor_code(floor_code)
+    if normalized != "4F":
+        raise WarehouseTwinLayoutEditError("三点货梯标定仅允许用于 4F 规划草稿")
+    normalized_key = str(operation_key or "").strip()
+    if len(normalized_key) < 8 or len(normalized_key) > 120:
+        raise WarehouseTwinLayoutEditError("布局操作键长度必须为 8 至 120 个字符")
+    published_source = _published_layout_paths(published_path).source
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    action = "floor4.freight_elevator.calibrate"
+    with _LAYOUT_EDIT_LOCK:
+        published = _read_document(published_source)
+        authority = deepcopy(_authoritative_freight_elevator(published))
+        document = _active_draft_document_unlocked(
+            published_path=published_source,
+            draft_path=draft_target,
+            create=True,
+        )
+        assert document is not None
+        floor = document["floors"].get("4F")
+        if not isinstance(floor, dict):
+            raise WarehouseTwinLayoutEditNotFoundError("数字孪生平面缺少 4F")
+        receipt = _find_receipt(floor, normalized_key, action)
+        if receipt is not None:
+            return LayoutMutation(
+                value=dict(receipt.get("result") or {}),
+                floor_revision=str(floor.get("revision") or ""),
+                applied=False,
+            )
+        if str(floor.get("revision") or "") != str(expected_revision or ""):
+            raise WarehouseTwinLayoutEditConflictError("布局已被其他操作更新，请刷新后重试")
+        if floor.get("operational_status") != "planning_only":
+            raise WarehouseTwinLayoutEditError("4F 不是仅规划草稿，拒绝重新标定")
+        existing_metadata = floor.get("metadata")
+        existing_calibration = (
+            existing_metadata.get("calibration", {})
+            if isinstance(existing_metadata, dict)
+            else {}
+        )
+        if existing_calibration.get("applied") is True:
+            raise WarehouseTwinLayoutEditConflictError("4F 已完成标定，不能重复变换地图")
+        if any(
+            isinstance(item, dict) and item.get("feature_code") == "LIFT-002"
+            for item in floor.get("features") or []
+        ):
+            raise WarehouseTwinLayoutEditConflictError("4F 已存在货梯 LIFT-002，拒绝重复物化")
+
+        metadata = floor.get("metadata") if isinstance(floor.get("metadata"), dict) else {}
+        legacy_calibration = (
+            floor.get("calibration") if isinstance(floor.get("calibration"), dict) else {}
+        )
+        normalized_source = _three_calibration_points(
+            list(source_points), label="4F 现场源点"
+        )
+        normalized_target = _three_calibration_points(
+            _canonical_freight_elevator_target_points(authority), label="4F 标准目标点"
+        )
+        transform = _fit_floor4_rigid_transform(normalized_source, normalized_target)
+
+        protected = {
+            code: deepcopy(document["floors"].get(code)) for code in ("1F", "3F")
+        }
+        for collection_name in (
+            "structures",
+            "features",
+            "placements",
+            "racks",
+            "pallets",
+            "assets",
+        ):
+            collection = floor.get(collection_name)
+            if collection is None:
+                continue
+            if not isinstance(collection, list) or not all(
+                isinstance(item, dict) for item in collection
+            ):
+                raise WarehouseTwinLayoutEditError(f"4F {collection_name} 几何列表无效")
+            for item in collection:
+                _transform_floor4_geometry_item(item, transform=transform)
+        _transform_floor4_bounds(floor, transform=transform)
+
+        lift = deepcopy(authority)
+        lift["id"] = "LIFT-002-4F-CANONICAL"
+        lift["layout_id"] = floor.get("layout_id")
+        lift["is_locked"] = True
+        lift["status"] = "confirmed"
+        lift["version"] = 1
+        floor.setdefault("features", []).append(lift)
+        now = _utc_iso()
+        calibration_result = {
+            "status": "aligned",
+            "applied": True,
+            "method": "three_point_rigid_2d",
+            "scale": 1.0,
+            "mirror": False,
+            "source_points": [_rounded_point(point) for point in normalized_source],
+            "canonical_target_points": [_rounded_point(point) for point in normalized_target],
+            "rotation_deg": round(float(transform["rotation_deg"]), 9),
+            "translation_mm": _rounded_point(transform["translation_mm"]),
+            "residuals_mm": [round(value, 6) for value in transform["residuals_mm"]],
+            "max_residual_mm": round(float(transform["max_residual_mm"]), 6),
+            "rmse_residual_mm": round(float(transform["rmse_residual_mm"]), 6),
+            "thresholds_mm": {
+                "max_residual": FLOOR4_CALIBRATION_MAX_RESIDUAL_MM,
+                "rmse": FLOOR4_CALIBRATION_RMSE_MM,
+            },
+            "audit": {
+                "operation_key": normalized_key,
+                "applied_at": now,
+                "source_floor_code": "4F",
+                "authority_floor_code": "3F",
+                "authority_feature_code": "LIFT-002",
+                "authority_feature_id": authority.get("id"),
+                "authority_floor_revision": (published.get("floors") or {})
+                .get("3F", {})
+                .get("revision"),
+            },
+        }
+        metadata["calibration"] = calibration_result
+        floor["metadata"] = metadata
+        floor["calibration"] = {
+            **legacy_calibration,
+            **calibration_result,
+            "target_points": calibration_result["canonical_target_points"],
+        }
+        canonical_authority = (
+            floor.get("canonical_authority")
+            if isinstance(floor.get("canonical_authority"), dict)
+            else {}
+        )
+        canonical_authority.update(
+            {
+                "floor_code": "3F",
+                "feature_code": "LIFT-002",
+                "feature_id": authority.get("id"),
+                "materialized_on_4f": True,
+                "status": "applied",
+            }
+        )
+        floor["canonical_authority"] = canonical_authority
+        floor["alignment_status"] = "aligned"
+        floor["alignment_applied"] = True
+        if any(document["floors"].get(code) != protected[code] for code in ("1F", "3F")):
+            raise WarehouseTwinLayoutEditError("标定越过 4F 边界，已拒绝保存")
+
+        result = {
+            "calibration": deepcopy(calibration_result),
+            "freight_elevator": deepcopy(lift),
+        }
+        _remember_receipt(
+            floor,
+            operation_key=normalized_key,
+            action=action,
+            result=result,
+        )
+        floor["layout_edited_at"] = now
+        floor["revision"] = _floor_revision(floor)
+        document["generated_at"] = now
+        _mark_draft_changed(document, "4F")
+        _write_document(draft_target, document)
         return LayoutMutation(
             value=result,
             floor_revision=str(floor["revision"]),
@@ -1406,7 +1783,120 @@ def _duplicate_values(items: list[dict[str, Any]], key: str) -> list[str]:
     return sorted(duplicates)
 
 
-def _validate_document_for_publish(document: dict[str, Any]) -> tuple[list[str], list[str]]:
+def _floor4_calibration_publish_blockers(document: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    try:
+        authority = _authoritative_freight_elevator(document)
+    except WarehouseTwinLayoutEditError as error:
+        return [str(error)]
+    floor = (document.get("floors") or {}).get("4F")
+    if not isinstance(floor, dict):
+        return ["正式地图缺少 4F"]
+    metadata = floor.get("metadata")
+    calibration = metadata.get("calibration") if isinstance(metadata, dict) else None
+    if not isinstance(calibration, dict):
+        return ["4F 缺少三点货梯标定证据"]
+    if calibration.get("status") != "aligned" or calibration.get("applied") is not True:
+        blockers.append("4F 尚未完成三点货梯标定")
+    try:
+        fixed_rigid_contract = (
+            calibration.get("method") == "three_point_rigid_2d"
+            and float(calibration.get("scale")) == 1.0
+            and calibration.get("mirror") is False
+        )
+    except (TypeError, ValueError):
+        fixed_rigid_contract = False
+    if not fixed_rigid_contract:
+        blockers.append("4F 标定方法必须为不缩放、不镜像的二维刚体拟合")
+    floor3 = (document.get("floors") or {}).get("3F")
+    authority_floor_revision = (
+        str(floor3.get("revision") or "") if isinstance(floor3, dict) else ""
+    )
+    audit = calibration.get("audit")
+    if not isinstance(audit, dict) or not all(
+        str(audit.get(key) or "").strip()
+        for key in ("operation_key", "applied_at")
+    ):
+        blockers.append("4F 标定审计证据不完整")
+    elif (
+        audit.get("source_floor_code") != "4F"
+        or audit.get("authority_floor_code") != "3F"
+        or audit.get("authority_feature_code") != "LIFT-002"
+        or audit.get("authority_feature_id") != authority.get("id")
+        or audit.get("authority_floor_revision") != authority_floor_revision
+    ):
+        blockers.append("4F 标定审计证据与当前 3F 权威对象不一致")
+    try:
+        expected_targets = _canonical_freight_elevator_target_points(authority)
+        if calibration.get("canonical_target_points") != expected_targets:
+            blockers.append("4F 标定目标点与当前 3F 权威货梯几何不一致")
+        fitted = _fit_floor4_rigid_transform(
+            _three_calibration_points(
+                calibration.get("source_points"), label="4F 标定源点"
+            ),
+            _three_calibration_points(
+                expected_targets, label="4F 标定目标点"
+            ),
+        )
+        if float(calibration.get("rotation_deg")) != round(
+            float(fitted["rotation_deg"]), 9
+        ):
+            blockers.append("4F 标定旋转证据与三点拟合不一致")
+        if calibration.get("translation_mm") != _rounded_point(
+            fitted["translation_mm"]
+        ):
+            blockers.append("4F 标定位移证据与三点拟合不一致")
+        expected_residuals = [round(value, 6) for value in fitted["residuals_mm"]]
+        if calibration.get("residuals_mm") != expected_residuals:
+            blockers.append("4F 标定逐点残差证据与三点拟合不一致")
+        if calibration.get("max_residual_mm") != round(
+            float(fitted["max_residual_mm"]), 6
+        ):
+            blockers.append("4F 标定最大残差证据与三点拟合不一致")
+        if calibration.get("rmse_residual_mm") != round(
+            float(fitted["rmse_residual_mm"]), 6
+        ):
+            blockers.append("4F 标定均方根残差证据与三点拟合不一致")
+        if calibration.get("thresholds_mm") != {
+            "max_residual": FLOOR4_CALIBRATION_MAX_RESIDUAL_MM,
+            "rmse": FLOOR4_CALIBRATION_RMSE_MM,
+        }:
+            blockers.append("4F 标定发布阈值证据与系统固定阈值不一致")
+    except (TypeError, ValueError, WarehouseTwinLayoutEditError) as error:
+        blockers.append(f"4F 标定证据无效：{error}")
+
+    lifts = [
+        item
+        for item in floor.get("features") or []
+        if isinstance(item, dict) and item.get("feature_code") == "LIFT-002"
+    ]
+    if len(lifts) != 1:
+        blockers.append("4F 必须且只能物化一个货梯 LIFT-002")
+    else:
+        lift = lifts[0]
+        ignored = {"id", "layout_id", "version"}
+        authority_contract = {
+            key: value for key, value in authority.items() if key not in ignored
+        }
+        lift_contract = {key: lift.get(key) for key in authority_contract}
+        if lift_contract != authority_contract:
+            blockers.append("4F 货梯 LIFT-002 与 3F 权威对象不一致")
+        if lift.get("is_locked") is not True:
+            blockers.append("4F 货梯 LIFT-002 未锁定")
+    canonical = floor.get("canonical_authority")
+    if (
+        not isinstance(canonical, dict)
+        or canonical.get("feature_code") != "LIFT-002"
+        or canonical.get("materialized_on_4f") is not True
+        or canonical.get("status") != "applied"
+    ):
+        blockers.append("4F 货梯权威物化状态不完整")
+    return blockers
+
+
+def _validate_document_for_publish(
+    document: dict[str, Any], *, publish_floor_code: str | None = None
+) -> tuple[list[str], list[str]]:
     blockers: list[str] = []
     warnings: list[str] = []
     floors = document.get("floors")
@@ -1478,6 +1968,9 @@ def _validate_document_for_publish(document: dict[str, Any]) -> tuple[list[str],
             if isinstance(counts, list) and counts and not any(int(value) for value in counts):
                 warnings.append(f"{code} 货架 {rack_label} 尚未分格")
 
+    if publish_floor_code is None or str(publish_floor_code).upper() == "4F":
+        if "4F" in floors:
+            blockers.extend(_floor4_calibration_publish_blockers(document))
     return blockers, warnings
 
 
@@ -1621,7 +2114,9 @@ def validate_warehouse_twin_layout_draft(
         # neither be published nor block this floor's workflow.
         candidate = deepcopy(published)
         candidate["floors"][normalized] = deepcopy(floor)
-        blockers, warnings = _validate_document_for_publish(candidate)
+        blockers, warnings = _validate_document_for_publish(
+            candidate, publish_floor_code=normalized
+        )
         warnings = list(dict.fromkeys([*warnings, *(additional_warnings or [])]))
         meta = draft["draft_meta"]
         now = _utc_iso()
@@ -1748,7 +2243,9 @@ def publish_warehouse_twin_layout_draft(
         candidate = deepcopy(published)
         candidate["floors"][normalized] = deepcopy(draft_floor)
         candidate["generated_at"] = draft.get("generated_at") or _utc_iso()
-        blockers, warnings = _validate_document_for_publish(candidate)
+        blockers, warnings = _validate_document_for_publish(
+            candidate, publish_floor_code=normalized
+        )
         warnings = list(dict.fromkeys([*warnings, *(additional_warnings or [])]))
         if blockers:
             raise WarehouseTwinLayoutEditError("布局草稿校验未通过：" + "；".join(blockers[:5]))
@@ -1767,7 +2264,9 @@ def publish_warehouse_twin_layout_draft(
         try:
             _write_document(published_target, candidate)
             written = _read_document(published_target)
-            written_blockers, _written_warnings = _validate_document_for_publish(written)
+            written_blockers, _written_warnings = _validate_document_for_publish(
+                written, publish_floor_code=normalized
+            )
             if written != candidate or written_blockers:
                 raise WarehouseTwinLayoutEditError("运行地图发布后内容校验失败")
             if published_source != published_target and _path_sha256(published_source) != old_sha256:

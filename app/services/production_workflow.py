@@ -71,6 +71,10 @@ from app.services.composite_bom_workflow import (
     is_composite_order_item,
     kit_availability,
 )
+from app.services.customer_finished_storage import (
+    ordered_preferred_area_ids,
+    preferred_area_summaries_by_customer_ids,
+)
 from app.services.location_candidates import (
     claim_active_placed_location,
     has_space_ledger,
@@ -1469,10 +1473,34 @@ def _production_stock_location(
                 and allowed_existing_pallet_id != pallet.id
             )
         ):
-            raise ProductionWorkflowError("所选三楼库位已占用，请选择空位", 409)
+            raise ProductionWorkflowError("所选成品库位已占用，请选择空位", 409)
     elif pallet_id is not None:
-        raise ProductionWorkflowError("指定栈板不在所选三楼库位", 409)
+        raise ProductionWorkflowError("指定栈板不在所选成品库位", 409)
     return location
+
+
+def _ensure_customer_finished_storage_location(
+    db: Session,
+    *,
+    customer_id: int,
+    location: WarehouseLocation,
+) -> None:
+    """Keep manual stock completion inside an explicitly configured route."""
+
+    preferred_area_ids = ordered_preferred_area_ids(db, int(customer_id))
+    if not preferred_area_ids:
+        return
+    context = load_warehouse_location_projection_contexts(db, [location]).get(
+        int(location.id)
+    )
+    area = (context or {}).get("area")
+    if not isinstance(area, WarehouseArea) or int(area.id) not in set(
+        preferred_area_ids
+    ):
+        raise ProductionWorkflowError(
+            "该客户已指定默认成品区域，请选择指定区域内的空位；系统不会改放其他区域",
+            409,
+        )
 
 
 @dataclass(frozen=True)
@@ -1484,13 +1512,127 @@ class ReceiptAutoFinishedGroundTarget:
     capacity_warning: str | None
     area: WarehouseArea | None = None
     floor: WarehouseFloor | None = None
-    target_kind: Literal["fin_ground_plan", "floor3_v11"] = "fin_ground_plan"
+    target_kind: Literal[
+        "fin_ground_plan", "floor3_v11", "preferred_location"
+    ] = "fin_ground_plan"
     runtime_map_revision: str | None = None
     area_sequence: int | None = None
 
     @property
     def uses_ground_plan(self) -> bool:
         return self.plan is not None and self.slot is not None
+
+
+def _preferred_finished_location_targets(
+    db: Session,
+    *,
+    area_ids: Sequence[int],
+) -> list[ReceiptAutoFinishedGroundTarget]:
+    """Return only real, empty locations in the customer's ordered areas.
+
+    Customer preferences are a strict routing boundary for new finished goods:
+    when present, the automatic path must not silently fall back to FIN or a
+    different floor.  Existing stock is never moved by this read.
+    """
+
+    normalized_area_ids = [int(area_id) for area_id in area_ids]
+    if not normalized_area_ids:
+        return []
+    rank = {area_id: index for index, area_id in enumerate(normalized_area_ids)}
+    candidates = [
+        row
+        for row in list_operational_locations(
+            db,
+            warehouse_types={"finished", "shared"},
+            empty_only=True,
+        )
+        if row.area is not None and int(row.area.id) in rank
+    ]
+    if not candidates:
+        return []
+
+    location_ids = [int(row.location.id) for row in candidates]
+    plan_rows = list(
+        db.execute(
+            select(WarehouseGroundLayoutPlan, WarehouseGroundLayoutSlot)
+            .join(
+                WarehouseGroundLayoutSlot,
+                WarehouseGroundLayoutSlot.plan_id == WarehouseGroundLayoutPlan.id,
+            )
+            .where(
+                WarehouseGroundLayoutPlan.status == "published",
+                WarehouseGroundLayoutSlot.location_id.in_(location_ids),
+            )
+            .options(
+                selectinload(WarehouseGroundLayoutPlan.area).selectinload(
+                    WarehouseArea.storage_policy
+                ),
+                selectinload(WarehouseGroundLayoutPlan.area).selectinload(
+                    WarehouseArea.floor
+                ),
+            )
+        ).all()
+    )
+    plan_by_location = {
+        int(slot.location_id): (plan, slot)
+        for plan, slot in plan_rows
+        if plan.published_map_revision
+        and plan.area.storage_policy is not None
+        and plan.area.storage_policy.status == "published"
+        and plan.area.storage_policy.published_map_revision
+        == plan.published_map_revision
+    }
+    candidates.sort(
+        key=lambda row: (
+            rank[int(row.area.id)],
+            int(row.location.sort_order or 0),
+            str(row.location.location_code or ""),
+            int(row.location.id),
+        )
+    )
+    targets: list[ReceiptAutoFinishedGroundTarget] = []
+    for candidate in candidates:
+        location = candidate.location
+        layout = location.floor3_layout
+        if layout is None:
+            continue
+        issue = operational_location_issue(
+            db,
+            location,
+            warehouse_types={"finished", "shared"},
+            require_published=True,
+            require_map_geometry=True,
+            required_inventory_type="finished",
+            require_empty=True,
+            projection_context=candidate.projection_context,
+        )
+        if issue:
+            continue
+        plan, slot = plan_by_location.get(int(location.id), (None, None))
+        targets.append(
+            ReceiptAutoFinishedGroundTarget(
+                plan=plan,
+                slot=slot,
+                location=location,
+                layout_version=int(layout.version),
+                capacity_warning=None,
+                area=candidate.area,
+                floor=candidate.floor,
+                # A customer preference remains the routing authority even
+                # when the chosen location also belongs to a ground plan.
+                # Treating that overlap as the generic FIN path would reject
+                # valid preferred areas on floors other than 1F/3F later in
+                # completion validation.
+                target_kind="preferred_location",
+                area_sequence=(
+                    int(candidate.projection_context["area_sequence"])
+                    if candidate.projection_context
+                    and candidate.projection_context.get("area_sequence")
+                    else None
+                ),
+            )
+        )
+    return targets
 
 
 def _receipt_floor3_runtime_identity() -> tuple[str, dict[str, str]]:
@@ -1590,7 +1732,25 @@ def _receipt_floor3_v11_operational_issue(
 
 def _receipt_auto_finished_ground_targets(
     db: Session,
+    *,
+    customer_id: int | None = None,
 ) -> list[ReceiptAutoFinishedGroundTarget]:
+    preferred_area_ids = (
+        ordered_preferred_area_ids(db, int(customer_id))
+        if customer_id is not None
+        else []
+    )
+    if preferred_area_ids:
+        targets = _preferred_finished_location_targets(
+            db,
+            area_ids=preferred_area_ids,
+        )
+        if targets:
+            return targets
+        raise ProductionWorkflowError(
+            "该客户指定的成品存放区域当前没有可用空位；系统不会改放一楼，请先腾空或调整客户区域",
+            409,
+        )
     plans = list(
         db.scalars(
             select(WarehouseGroundLayoutPlan)
@@ -1845,16 +2005,28 @@ def _receipt_auto_finished_ground_target(
     *,
     claim: bool,
     excluded_location_ids: set[int] | None = None,
+    customer_id: int | None = None,
 ) -> ReceiptAutoFinishedGroundTarget:
     excluded = excluded_location_ids or set()
+    has_customer_preferences = bool(
+        customer_id is not None
+        and ordered_preferred_area_ids(db, int(customer_id))
+    )
     targets = [
         target
-        for target in _receipt_auto_finished_ground_targets(db)
+        for target in _receipt_auto_finished_ground_targets(
+            db,
+            customer_id=customer_id,
+        )
         if int(target.location.id) not in excluded
     ]
     if not targets:
         raise ProductionWorkflowError(
-            "同一完工批次没有足够的已发布 FIN-001～003 空地堆位置，请先腾空或发布新的真实位置",
+            (
+                "同一完工批次在该客户指定区域内没有足够空位；系统不会改放一楼，请先腾空或调整客户区域"
+                if has_customer_preferences
+                else "同一完工批次没有足够的已发布 FIN-001～003 空地堆位置，请先腾空或发布新的真实位置"
+            ),
             409,
         )
     if not claim:
@@ -1922,18 +2094,26 @@ def _receipt_auto_finished_ground_target(
                 db,
                 target.location,
                 warehouse_types={"finished", "shared"},
-                pallet_storage_only=True,
+                pallet_storage_only=(target.target_kind != "preferred_location"),
                 require_published=True,
                 require_map_geometry=True,
                 required_inventory_type="finished",
                 require_empty=True,
-                capacity_source_location_id=target.location.id,
+                capacity_source_location_id=(
+                    None
+                    if target.target_kind == "preferred_location"
+                    else target.location.id
+                ),
                 projection_context=projection_context,
             )
         if issue is None:
             return target
     raise ProductionWorkflowError(
-        "可用成品位置刚刚发生变化，请刷新后重新确认收料",
+        (
+            "该客户指定区域的可用位置刚刚发生变化，请刷新后重试；系统不会改放一楼"
+            if has_customer_preferences
+            else "可用成品位置刚刚发生变化，请刷新后重新确认收料"
+        ),
         409,
     )
 
@@ -2022,6 +2202,7 @@ def _production_direct_finished_target(
     db: Session,
     *,
     excluded_location_ids: set[int] | None = None,
+    customer_id: int | None = None,
 ) -> tuple[WarehouseLocation, ReceiptAutoFinishedGroundTarget | None]:
     """Choose the only legal destination for a new direct-delivery completion.
 
@@ -2036,6 +2217,7 @@ def _production_direct_finished_target(
             db,
             claim=True,
             excluded_location_ids=excluded_location_ids,
+            customer_id=customer_id,
         )
         return target.location, target
     return _production_direct_staging_location(db), None
@@ -2867,6 +3049,11 @@ def _stock_completion_lot(
                 and not finished_ground_target.uses_ground_plan
                 and int(target_location.warehouse_floor or 0) == 3
                 and target_location.source_version == "V11"
+            ) or (
+                finished_ground_target.target_kind == "preferred_location"
+                and finished_ground_target.area is not None
+                and int(finished_ground_target.area.id)
+                in ordered_preferred_area_ids(db, int(order.customer_id))
             )
             if (
                 target_location.id != location_id_override
@@ -2992,7 +3179,7 @@ def _validate_commands(commands: Sequence[CompletionCommand]) -> None:
         ):
             raise ProductionWorkflowError("直接送货完工不能填写库存货位或栈板")
         if command.disposition == "stock" and command.location_id is None:
-            raise ProductionWorkflowError("库存完工必须选择三楼成品库位")
+            raise ProductionWorkflowError("库存完工必须选择成品库位")
 
 
 def _replay_completion_batch(
@@ -3318,6 +3505,7 @@ def complete_production_batch(
             stored_disposition = "stock"
             resolved_pallet_id = command.pallet_id
             allowed_existing_pallet_id = None
+            existing_location_id = None
             if (
                 is_component_task
                 and (item.composite_fulfillment_mode_snapshot or "component_delivery")
@@ -3351,6 +3539,16 @@ def complete_production_batch(
                 pallet_id=resolved_pallet_id,
                 allowed_existing_pallet_id=allowed_existing_pallet_id,
             )
+            # A historical parent-delivery component must remain beside its
+            # already stored siblings.  Every new/manual placement otherwise
+            # follows the customer's configured area boundary just like the
+            # automatic direct path.
+            if existing_location_id is None:
+                _ensure_customer_finished_storage_location(
+                    db,
+                    customer_id=int(order.customer_id),
+                    location=location,
+                )
         else:
             if (
                 is_component_task
@@ -3363,7 +3561,7 @@ def complete_production_batch(
                 )
             if command.location_id is not None:
                 raise ProductionWorkflowError(
-                    "直接待送整批自动进入一楼待送区，请刷新页面后重试",
+                    "直接待送整批由系统自动选择真实成品位置，请刷新页面后重试",
                     409,
                 )
             direct_quantity = actual_output
@@ -3372,6 +3570,7 @@ def complete_production_batch(
             location, direct_ground_target = _production_direct_finished_target(
                 db,
                 excluded_location_ids=claimed_direct_location_ids,
+                customer_id=order.customer_id,
             )
             if direct_ground_target is not None:
                 claimed_direct_location_ids.add(int(location.id))
@@ -3471,7 +3670,7 @@ def complete_production_batch(
                     "production_completion" if is_direct_staging else "production_surplus"
                 ),
                 movement_reason=(
-                    "生产完工整批进入已发布 FIN 待送位置"
+                    "生产完工整批进入系统选择的真实成品位置"
                     if is_direct_staging
                     else "生产完工入库"
                 ),
@@ -3675,6 +3874,11 @@ def transfer_direct_completion_to_stock(
         capacity_source_location_id=(
             int(lot.warehouse_location_id) if lot is not None else None
         ),
+    )
+    _ensure_customer_finished_storage_location(
+        db,
+        customer_id=int(order.customer_id),
+        location=target_location,
     )
     if lot is not None:
         direct_pallet_item = lot.pallet_item
@@ -4595,7 +4799,11 @@ def post_automatic_receipt_completion(
             raise ProductionWorkflowError("自动完工幂等事实不完整", 409)
         return replay.completions[0]
 
-    ground_target = _receipt_auto_finished_ground_target(db, claim=True)
+    ground_target = _receipt_auto_finished_ground_target(
+        db,
+        claim=True,
+        customer_id=order.customer_id,
+    )
     location = ground_target.location
     existing_posted = db.scalar(
         select(ProductionCompletion.id)
@@ -5659,6 +5867,30 @@ def _receipt_managed_completion_block(
     )
 
 
+def _annotate_customer_finished_storage_preferences(
+    db: Session,
+    rows: Sequence[dict[str, object]],
+) -> None:
+    """Attach one shared customer routing projection to employee task rows."""
+
+    customer_ids = {
+        int(row["customer_id"])
+        for row in rows
+        if row.get("customer_id") is not None
+    }
+    preferred_by_customer = preferred_area_summaries_by_customer_ids(
+        db,
+        customer_ids,
+    )
+    for row in rows:
+        customer_id = int(row["customer_id"])
+        areas = preferred_by_customer.get(customer_id, [])
+        row["preferred_finished_storage_area_ids"] = [
+            int(area["area_id"]) for area in areas
+        ]
+        row["preferred_finished_storage_areas"] = areas
+
+
 def list_production_tasks(
     db: Session,
     *,
@@ -5919,6 +6151,7 @@ def list_production_tasks(
                 summary,
                 automatic_output=automatic_output,
             )
+    _annotate_customer_finished_storage_preferences(db, result)
     _annotate_printing_plate_current_locations(db, result)
     return result
 
@@ -6687,6 +6920,7 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                 ),
             }
         )
+    _annotate_customer_finished_storage_preferences(db, result)
     _annotate_printing_plate_current_locations(db, result)
     return result
 

@@ -380,7 +380,7 @@
         customer_po: component.customer_po ?? parentItem.customer_po ?? "",
         product_code: component.product_code ?? component.component_code ?? "",
         product_name: component.product_name ?? component.component_name ?? "未命名组件",
-        specification: component.specification ?? parentItem.specification ?? "规格未登记",
+        specification: component.specification ?? parentItem.specification ?? "",
         unit: component.unit || parentItem.unit || "PCS",
         quantity: component.quantity
           ?? component.planned_delivery_quantity
@@ -452,7 +452,7 @@
       getField(sheet, "itemRows").innerHTML = entries.map((entry) => {
         const item = entry.item;
         const productName = String(item.product_name || "").trim() || "产品名称未登记";
-        const specification = String(item.specification || "").trim() || "规格未登记";
+        const specification = String(item.specification || "").trim();
         const customerRemark = String(item.remarks || "").trim();
         const tableRemark = customerRemark.length > 12 ? "详见备注说明" : customerRemark;
         const longNameClass = productName.length > 28 ? " long-name" : "";

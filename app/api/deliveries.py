@@ -5273,7 +5273,6 @@ def _delivery_response(
         )
         mapping["specification"] = (
             str(mapping.get("specification") or "").strip()
-            or "规格未登记"
         )
         is_unordered = mapping.get("source_type") == "unordered_finished"
         order_item = (
@@ -10681,7 +10680,7 @@ def get_delivery_print_data(
             length_mm=row.product_length_mm,
             width_mm=row.product_width_mm,
             height_mm=row.product_height_mm,
-        ) or "规格未登记"
+        ) or ""
         is_unordered = row.source_type == "unordered_finished"
         order_item = (
             db.get(OrderItem, row.order_item_id)

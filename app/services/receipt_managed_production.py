@@ -427,6 +427,19 @@ def receipt_purpose_summaries_by_order_item_ids(
             )
         ).all()
     } if completion_ids else {}
+    receipt_auto_completions_by_item: dict[int, list[ProductionCompletion]] = {}
+    for completion in db.scalars(
+        select(ProductionCompletion)
+        .where(
+            ProductionCompletion.order_item_id.in_(normalized_ids),
+            ProductionCompletion.status == "posted",
+            ProductionCompletion.origin == "receipt_auto",
+        )
+        .order_by(ProductionCompletion.id)
+    ).all():
+        receipt_auto_completions_by_item.setdefault(
+            int(completion.order_item_id), []
+        ).append(completion)
     semi_credits_by_item_component: dict[tuple[int, str], int] = {}
     for requirement, credited in db.execute(
         select(
@@ -651,6 +664,27 @@ def receipt_purpose_summaries_by_order_item_ids(
                 == minimum_capacity
                 and int(row["remaining_order_sheet_qty"]) > 0
             )
+        posted_auto_completions = receipt_auto_completions_by_item.get(
+            order_item_id, []
+        )
+        if posted_auto_completions:
+            posted_output = sum(
+                max(int(row.actual_output_quantity or 0), 0)
+                for row in posted_auto_completions
+            )
+            posted_order_reserved = sum(
+                max(int(row.order_reserved_quantity or 0), 0)
+                for row in posted_auto_completions
+            )
+            posted_surplus = sum(
+                max(int(row.surplus_finished_quantity or 0), 0)
+                for row in posted_auto_completions
+            )
+            if posted_order_reserved + posted_surplus != posted_output:
+                summary["projection_inconsistent"] = True
+            summary["automatic_finished_output_qty"] = posted_output
+            summary["automatic_order_reserved_quantity"] = posted_order_reserved
+            summary["automatic_surplus_finished_quantity"] = posted_surplus
         automatic_output = int(summary["automatic_finished_output_qty"])
         currently_unposted = max(theoretical_capacity - automatic_output, 0)
         automatic_output_exceeds_capacity = automatic_output > theoretical_capacity

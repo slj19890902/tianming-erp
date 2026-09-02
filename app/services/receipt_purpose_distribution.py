@@ -20,6 +20,7 @@ from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.material import Material
 from app.models.order import OrderItem
 from app.models.product_bom import RequisitionItemBomSource
+from app.models.production import ProductionCompletion
 from app.models.purchase_receipt import (
     IncomingReceiptPurposeAllocation,
     IncomingReceiptPurposeReversal,
@@ -1212,13 +1213,23 @@ def post_receipt_purpose_allocation(
     after_sheets = dict(before_sheets)
     after_sheets[snapshot.id] = after_sheets.get(snapshot.id, 0) + order_delta
     semi_piece_credits = _semi_piece_credits_by_component(db, order_item_id)
-    # Posted allocation output is the immutable prior production fact.  On the
-    # first receipt, the already-reserved semi pieces have not yet produced any
-    # boxes, so using material capacity as the "before" value would suppress the
-    # very increment that must consume those pieces.
-    finished_before = sum(
-        max(int(row.finished_output_qty_delta or 0), 0)
-        for row in active_item_allocations
+    # Posted receipt-auto completions are the authoritative prior output.  This
+    # also covers a controlled supplemental completion used to repair an older
+    # allocation whose original code under-counted reserved semi pieces.
+    finished_before = int(
+        db.scalar(
+            select(
+                func.coalesce(
+                    func.sum(ProductionCompletion.actual_output_quantity),
+                    0,
+                )
+            ).where(
+                ProductionCompletion.order_item_id == order_item_id,
+                ProductionCompletion.status == "posted",
+                ProductionCompletion.origin == "receipt_auto",
+            )
+        )
+        or 0
     )
     finished_after = _finished_capacity(
         db,

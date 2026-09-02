@@ -501,6 +501,21 @@ def test_p1_140_migration_is_linear_and_round_trips_isolated_sqlite(
     assert script.get_heads() == [TARGET_REVISION]
     command.stamp(config, TARGET_REVISION)
 
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER trg_p1_140_parent_batch_reference
+            BEFORE INSERT ON external_packaging_purchase_purge_authorizations
+            FOR EACH ROW WHEN NOT EXISTS (
+                SELECT 1 FROM external_packaging_purchase_batches
+                WHERE id = NEW.batch_id
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'batch does not exist');
+            END
+            """
+        )
+
     def assert_health(revision: str) -> None:
         with sqlite3.connect(database) as connection:
             connection.execute("PRAGMA foreign_keys = ON")
@@ -511,6 +526,10 @@ def test_p1_140_migration_is_linear_and_round_trips_isolated_sqlite(
                 "ok",
             )
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+            assert connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type='trigger' AND name='trg_p1_140_parent_batch_reference'"
+            ).fetchone() == (1,)
 
     assert_health(TARGET_REVISION)
     command.downgrade(config, PARENT_REVISION)

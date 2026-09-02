@@ -500,6 +500,23 @@ def test_p1_140_migration_is_linear_and_round_trips_isolated_sqlite(
     assert script.get_revision(TARGET_REVISION).down_revision == PARENT_REVISION
     assert script.get_heads() == [TARGET_REVISION]
     command.stamp(config, TARGET_REVISION)
+    # The formal database has this P1-64 cross-table guard.  SQLite recreates
+    # batch-altered tables through a temporary name, so keep the guard in this
+    # fixture to prove the migration drops and restores it around both passes.
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER trg_external_packaging_purchase_purge_authorizations_safe_insert
+            BEFORE INSERT ON external_packaging_purchase_purge_authorizations
+            FOR EACH ROW WHEN NOT EXISTS (
+                SELECT 1 FROM external_packaging_purchase_batches b
+                WHERE b.id = NEW.batch_id
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'external purchase batch is not fully cancelled and unreceived');
+            END
+            """
+        )
 
     def assert_health(revision: str) -> None:
         with sqlite3.connect(database) as connection:
@@ -556,6 +573,10 @@ def test_p1_140_migration_is_linear_and_round_trips_isolated_sqlite(
             "converted_finished_quantity",
             "loose_remainder_quantity_after",
         } <= receipt_columns
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+            "AND name='trg_external_packaging_purchase_purge_authorizations_safe_insert'"
+        ).fetchone() == (1,)
 
     command.downgrade(config, PARENT_REVISION)
     assert_health(PARENT_REVISION)

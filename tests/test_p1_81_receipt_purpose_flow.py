@@ -336,6 +336,118 @@ def _seed_material_and_staging(session_factory) -> int:
         return material.id
 
 
+def _seed_order_semi_reservation(
+    session_factory,
+    *,
+    credited_piece_quantity: int,
+    pieces_per_box: int,
+) -> None:
+    from datetime import date
+
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryReservation,
+        OrderItemSemiRequirement,
+        SemiFinishedInventoryDetail,
+        SemiFinishedLotAllowedProduct,
+        WarehouseLocation,
+    )
+
+    with session_factory() as session:
+        item = session.get(OrderItem, 1)
+        assert item is not None
+        order = session.get(Order, item.order_id)
+        product = session.get(Product, item.product_id)
+        location = session.scalar(
+            select(WarehouseLocation).where(
+                WarehouseLocation.location_code == "P181-RAW-STAGE"
+            )
+        )
+        assert order is not None and product is not None and location is not None
+        requirement = OrderItemSemiRequirement(
+            order_item_id=item.id,
+            customer_id=order.customer_id,
+            component_type="whole",
+            board_length_mm=800,
+            board_width_mm=200,
+            material_code_snapshot="KAKAK",
+            normalized_material_code="KAKAK",
+            flute_type="AB",
+            pieces_per_box=pieces_per_box,
+            stock_yield_per_sheet=1,
+            required_piece_quantity=int(item.quantity) * pieces_per_box,
+        )
+        session.add(requirement)
+        session.flush()
+        lot = InventoryLot(
+            lot_number="P181-DOUBLE-SEMI-LOT",
+            inventory_type="semi_finished",
+            warehouse_location_id=location.id,
+            quantity_available=0,
+            quantity_reserved=credited_piece_quantity,
+            quantity_consumed=0,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit="sheets",
+            status="active",
+            source_type="manual",
+            stock_date=date(2026, 9, 2),
+            last_movement_at=datetime.now(),
+            version=1,
+        )
+        session.add(lot)
+        session.flush()
+        session.add(
+            SemiFinishedInventoryDetail(
+                inventory_lot_id=lot.id,
+                owner_customer_id=order.customer_id,
+                owner_customer_name_snapshot="P1-143 匿名客户",
+                material_code_snapshot="KAKAK",
+                normalized_material_code="KAKAK",
+                layer_count=5,
+                flute_type="AB",
+                board_length_mm=800,
+                board_width_mm=200,
+                component_type="whole",
+                pieces_per_box=pieces_per_box,
+                stock_yield_per_sheet=1,
+                sheet_type="raw_board",
+            )
+        )
+        session.add(
+            SemiFinishedLotAllowedProduct(
+                inventory_lot_id=lot.id,
+                product_id=product.id,
+                confirmed_at=datetime.now(),
+            )
+        )
+        session.add(
+            InventoryReservation(
+                reservation_number="P181-DOUBLE-SEMI-RES",
+                inventory_lot_id=lot.id,
+                reservation_type="semi_order",
+                order_id=order.id,
+                order_item_id=item.id,
+                semi_requirement_id=requirement.id,
+                reserved_stock_quantity=credited_piece_quantity,
+                credited_requirement_quantity=credited_piece_quantity,
+                yield_factor=1,
+                consumed_stock_quantity=0,
+                released_stock_quantity=0,
+                consumed_requirement_quantity=0,
+                released_requirement_quantity=0,
+                status="active",
+                reservation_group_key="P181-DOUBLE-SEMI-GROUP",
+                reservation_group_requested_quantity=credited_piece_quantity,
+                idempotency_key="p181-double-semi-reservation",
+                reserved_at=datetime.now(),
+            )
+        )
+        session.commit()
+
+
 def _create_frozen_sources(
     client: TestClient,
     session_factory,
@@ -347,6 +459,8 @@ def _create_frozen_sources(
     cutting_mode: str = "一开一",
     composite: bool = False,
     composite_reserve_purpose: int = 0,
+    pieces_per_box: int = 1,
+    semi_reserved_piece_quantity: int = 0,
 ) -> list[FrozenSource]:
     from app.models.order import OrderItem
     from app.models.product import Product
@@ -359,8 +473,20 @@ def _create_frozen_sources(
         session_factory,
         quantity=order_quantity,
         cutting_mode=cutting_mode,
-        pieces_per_box=1,
+        pieces_per_box=pieces_per_box,
     )
+    if pieces_per_box > 1:
+        with session_factory() as session:
+            item = session.get(OrderItem, 1)
+            assert item is not None
+            item.snapshot_splice_mode = "double"
+            session.commit()
+    if semi_reserved_piece_quantity > 0:
+        _seed_order_semi_reservation(
+            session_factory,
+            credited_piece_quantity=semi_reserved_piece_quantity,
+            pieces_per_box=pieces_per_box,
+        )
     if composite:
         with session_factory() as session:
             item = session.get(OrderItem, 1)
@@ -1215,6 +1341,129 @@ def test_frozen_500_600_receipts_split_450_580_600_and_block_duplicate_overrecei
         assert all(row.internal_name for row in reserve_details)
     assert _posted_finished_quantity(session_factory) == 500
     assert _active_semi_quantity(session_factory) == 100
+
+
+def test_double_splice_receipt_combines_reserved_semi_pieces_for_delivery(
+    requisition_app,
+) -> None:
+    from app.models.production import ProductionCompletion, ProductionTask
+    from app.models.warehouse_inventory import InventoryReservation
+    from app.services.production_workflow import (
+        receipt_auto_deliverable_quantity_by_item_ids,
+    )
+
+    app, session_factory = requisition_app
+    _seed_material_and_staging(session_factory)
+    with TestClient(app) as client:
+        _login(client, "admin")
+        source = _create_frozen_sources(
+            client,
+            session_factory,
+            order_quantity=100,
+            purchase_total=100,
+            order_purpose=100,
+            stock_purpose=0,
+            pieces_per_box=2,
+            semi_reserved_piece_quantity=100,
+        )[0]
+        with session_factory() as session:
+            from app.models.supplier_requisition_order import (
+                PurchasePurposeSourceSnapshot,
+            )
+
+            snapshot = session.get(
+                PurchasePurposeSourceSnapshot,
+                source.purpose_snapshot_id,
+            )
+            assert snapshot is not None
+            assert snapshot.source_required_piece_qty_snapshot == 200
+            assert snapshot.source_semi_reserved_piece_qty_snapshot == 100
+            assert snapshot.source_effective_piece_qty_snapshot == 100
+            assert snapshot.order_purpose_sheet_qty == 100
+
+        frozen = _freeze_receipt_fact(
+            client,
+            source,
+            idempotency_key="p1143-double-splice-price",
+        )
+        assert frozen.status_code == 200, frozen.text
+        received = _receive(
+            client,
+            source,
+            frozen.json(),
+            quantity=100,
+            idempotency_key="p1143-double-splice-receive",
+        )
+        assert received.status_code == 200, received.text
+        replayed = _receive(
+            client,
+            source,
+            frozen.json(),
+            quantity=100,
+            idempotency_key="p1143-double-splice-receive",
+        )
+        assert replayed.status_code == 200, replayed.text
+
+    with session_factory() as session:
+        completions = list(
+            session.scalars(
+                select(ProductionCompletion).where(
+                    ProductionCompletion.order_item_id == 1,
+                    ProductionCompletion.status == "posted",
+                    ProductionCompletion.origin == "receipt_auto",
+                )
+            )
+        )
+        assert len(completions) == 1
+        assert int(completions[0].actual_output_quantity) == 100
+        assert int(completions[0].order_reserved_quantity) == 100
+        reservation = session.scalar(
+            select(InventoryReservation).where(
+                InventoryReservation.order_item_id == 1,
+                InventoryReservation.reservation_type == "semi_order",
+            )
+        )
+        assert reservation is not None
+        assert int(reservation.consumed_stock_quantity) == 100
+        assert int(reservation.consumed_requirement_quantity) == 100
+        task = session.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == 1,
+                ProductionTask.sales_order_item_bom_component_id.is_(None),
+            )
+        )
+        assert task is not None
+        assert task.status == "completed"
+        assert int(task.finished_coverage_snapshot) == 100
+        assert receipt_auto_deliverable_quantity_by_item_ids(session, [1])[1] == 100
+        from app.services.receipt_managed_production import (
+            receipt_purpose_summaries_by_order_item_ids,
+        )
+
+        summary = receipt_purpose_summaries_by_order_item_ids(session, [1])[1]
+        assert summary["current_theoretical_finished_capacity_qty"] == 100
+        assert summary["currently_unposted_finished_capacity_qty"] == 0
+        assert summary["projection_inconsistent"] is False
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        reverted = client.put(
+            f"/api/incoming/receipt-items/{received.json()['receipt_item_id']}/revert",
+            json={},
+        )
+        assert reverted.status_code == 200, reverted.text
+
+    with session_factory() as session:
+        reservation = session.scalar(
+            select(InventoryReservation).where(
+                InventoryReservation.order_item_id == 1,
+                InventoryReservation.reservation_type == "semi_order",
+            )
+        )
+        assert reservation is not None
+        assert int(reservation.consumed_stock_quantity) == 0
+        assert int(reservation.consumed_requirement_quantity) == 0
+        assert receipt_auto_deliverable_quantity_by_item_ids(session, [1]).get(1, 0) == 0
 
 
 def test_received_and_history_project_purpose_reversal_with_cost_permission(

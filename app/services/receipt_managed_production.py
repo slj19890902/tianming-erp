@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal, ROUND_DOWN
 from typing import Any, Sequence
 
-from sqlalchemy import exists, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.order import Order, OrderItem
@@ -22,6 +22,7 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
+from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
 
 
 def _finished_quantity(value: Decimal) -> int:
@@ -426,6 +427,45 @@ def receipt_purpose_summaries_by_order_item_ids(
             )
         ).all()
     } if completion_ids else {}
+    semi_credits_by_item_component: dict[tuple[int, str], int] = {}
+    for requirement, credited in db.execute(
+        select(
+            OrderItemSemiRequirement,
+            func.coalesce(
+                func.sum(
+                    InventoryReservation.credited_requirement_quantity
+                    - InventoryReservation.released_requirement_quantity
+                ),
+                0,
+            ),
+        )
+        .join(
+            InventoryReservation,
+            InventoryReservation.semi_requirement_id == OrderItemSemiRequirement.id,
+        )
+        .where(
+            OrderItemSemiRequirement.order_item_id.in_(normalized_ids),
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status != "cancelled",
+        )
+        .group_by(OrderItemSemiRequirement.id)
+    ).all():
+        component_type = str(requirement.component_type or "whole").strip().lower()
+        component_type = (
+            component_type
+            if component_type in {"whole", "cover", "base"}
+            else "whole"
+        )
+        component_key = (
+            f"bom:{int(requirement.sales_order_item_bom_component_id)}:{component_type}"
+            if requirement.sales_order_item_bom_component_id is not None
+            else component_type
+        )
+        key = (int(requirement.order_item_id), component_key)
+        semi_credits_by_item_component[key] = (
+            semi_credits_by_item_component.get(key, 0)
+            + max(int(credited or 0), 0)
+        )
     managed_snapshot_ids = active_source_snapshot_ids | set(allocations_by_snapshot)
     managed_conflict_snapshot_ids = active_conflict_snapshot_ids | (
         set(allocations_by_snapshot) & set(conflict_candidates_by_snapshot_id)
@@ -465,9 +505,15 @@ def receipt_purpose_summaries_by_order_item_ids(
                 "reserve_received_sheet_qty": 0,
                 "planned_capacity": Decimal("0"),
                 "received_capacity": Decimal("0"),
+                "pieces_per_finished": 1,
+                "semi_reserved_piece_qty": 0,
             },
         )
         pieces_per_finished = max(int(snapshot.pieces_per_finished_snapshot or 1), 1)
+        state["pieces_per_finished"] = max(
+            int(state["pieces_per_finished"]),
+            pieces_per_finished,
+        )
         yield_per_sheet = max(int(snapshot.yield_per_sheet_snapshot or 1), 1)
         received_order_sheets = 0
         for allocation in allocations_by_snapshot.get(snapshot_id, []):
@@ -543,6 +589,17 @@ def receipt_purpose_summaries_by_order_item_ids(
         received_capacities: list[int] = []
         planned_capacities: list[int] = []
         for state in states:
+            pieces_per_finished = max(int(state.pop("pieces_per_finished")), 1)
+            semi_reserved_pieces = semi_credits_by_item_component.get(
+                (order_item_id, str(state["component_key"])),
+                0,
+            )
+            state["semi_reserved_piece_qty"] = semi_reserved_pieces
+            semi_capacity = Decimal(semi_reserved_pieces) / Decimal(
+                pieces_per_finished
+            )
+            state["received_capacity"] += semi_capacity
+            state["planned_capacity"] += semi_capacity
             received_capacity = _finished_quantity(state.pop("received_capacity"))
             planned_capacity = _finished_quantity(state.pop("planned_capacity"))
             received_capacities.append(received_capacity)

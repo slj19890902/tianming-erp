@@ -15,6 +15,7 @@ from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
+    Floor3LocationLayout,
     InventoryLot,
     InventoryMovement,
     InventoryReservation,
@@ -2520,7 +2521,18 @@ def reverse_semi_finished_consumption(
     )
     if location_id is None:
         raise WarehouseInventoryError("半成品预占关联库位不存在", 409)
-    _claim_inventory_destination(db, int(location_id))
+    layout_version = db.scalar(
+        select(Floor3LocationLayout.version).where(
+            Floor3LocationLayout.location_id == int(location_id)
+        )
+    )
+    _claim_inventory_destination(
+        db,
+        int(location_id),
+        expected_layout_version=(
+            int(layout_version) if layout_version is not None else None
+        ),
+    )
     with db.begin_nested():
         reservation = db.get(InventoryReservation, reservation_id)
         if reservation is None:

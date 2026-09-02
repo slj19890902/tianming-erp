@@ -36,6 +36,8 @@ from app.models.supplier_requisition_order import (
 from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryMovement,
+    InventoryReservation,
+    OrderItemSemiRequirement,
     WarehouseArea,
     WarehouseFloor,
     WarehouseLocation,
@@ -374,17 +376,31 @@ def _finished_capacity(
     db: Session,
     snapshots: list[PurchasePurposeSourceSnapshot],
     order_sheet_deltas: dict[int, int],
+    *,
+    semi_piece_credits_by_component: dict[str, int] | None = None,
 ) -> int:
     by_component: dict[str, Decimal] = {}
+    pieces_per_finished_by_component: dict[str, int] = {}
     for snapshot in snapshots:
         key = _component_key(db, snapshot)
         sheets = max(int(order_sheet_deltas.get(snapshot.id, 0)), 0)
         pieces_per_finished = max(int(snapshot.pieces_per_finished_snapshot or 1), 1)
+        pieces_per_finished_by_component[key] = max(
+            pieces_per_finished_by_component.get(key, 1),
+            pieces_per_finished,
+        )
         capacity = (
             Decimal(sheets * int(snapshot.yield_per_sheet_snapshot or 1))
             / Decimal(pieces_per_finished)
         )
         by_component[key] = by_component.get(key, Decimal("0")) + capacity
+    for key, credited_pieces in (semi_piece_credits_by_component or {}).items():
+        if key not in by_component:
+            continue
+        pieces_per_finished = pieces_per_finished_by_component.get(key, 1)
+        by_component[key] += Decimal(max(int(credited_pieces or 0), 0)) / Decimal(
+            pieces_per_finished
+        )
     if not by_component:
         return 0
     has_required_components = (
@@ -393,6 +409,48 @@ def _finished_capacity(
     )
     value = min(by_component.values()) if has_required_components else sum(by_component.values())
     return int(value.to_integral_value(rounding=ROUND_DOWN))
+
+
+def _semi_piece_credits_by_component(
+    db: Session,
+    order_item_id: int,
+) -> dict[str, int]:
+    """Return live order-reserved material pieces, including already consumed ones.
+
+    The purchase snapshot subtracts these pieces from the supplier quantity.  They
+    therefore remain part of the order's cumulative production capacity when the
+    purchased balance is received; omitting them halves a double-splice order.
+    """
+
+    rows = db.execute(
+        select(OrderItemSemiRequirement, InventoryReservation)
+        .join(
+            InventoryReservation,
+            InventoryReservation.semi_requirement_id == OrderItemSemiRequirement.id,
+        )
+        .where(
+            OrderItemSemiRequirement.order_item_id == int(order_item_id),
+            InventoryReservation.reservation_type == "semi_order",
+            InventoryReservation.status != "cancelled",
+        )
+        .order_by(OrderItemSemiRequirement.id, InventoryReservation.id)
+    ).all()
+    credits: dict[str, int] = {}
+    for requirement, reservation in rows:
+        component = str(requirement.component_type or "whole").strip().lower()
+        component = component if component in {"whole", "cover", "base"} else "whole"
+        key = (
+            f"bom:{int(requirement.sales_order_item_bom_component_id)}:{component}"
+            if requirement.sales_order_item_bom_component_id is not None
+            else component
+        )
+        active_credit = max(
+            int(reservation.credited_requirement_quantity or 0)
+            - int(reservation.released_requirement_quantity or 0),
+            0,
+        )
+        credits[key] = credits.get(key, 0) + active_credit
+    return credits
 
 
 def receipt_purpose_finished_capacity(
@@ -1153,8 +1211,21 @@ def post_receipt_purpose_allocation(
         )
     after_sheets = dict(before_sheets)
     after_sheets[snapshot.id] = after_sheets.get(snapshot.id, 0) + order_delta
-    finished_before = _finished_capacity(db, snapshots, before_sheets)
-    finished_after = _finished_capacity(db, snapshots, after_sheets)
+    semi_piece_credits = _semi_piece_credits_by_component(db, order_item_id)
+    # Posted allocation output is the immutable prior production fact.  On the
+    # first receipt, the already-reserved semi pieces have not yet produced any
+    # boxes, so using material capacity as the "before" value would suppress the
+    # very increment that must consume those pieces.
+    finished_before = sum(
+        max(int(row.finished_output_qty_delta or 0), 0)
+        for row in active_item_allocations
+    )
+    finished_after = _finished_capacity(
+        db,
+        snapshots,
+        after_sheets,
+        semi_piece_credits_by_component=semi_piece_credits,
+    )
     finished_delta = finished_after - finished_before
     if finished_delta < 0:
         raise ReceiptPurposeFlowError(

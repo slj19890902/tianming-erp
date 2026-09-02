@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.233"
-    assert APP_VERSION_NAME == "外购包材备库与半张A4生产任务卡"
+    assert APP_VERSION == "v0.22.234"
+    assert APP_VERSION_NAME == "双拼库存抵扣自动完工数量修复"
     assert APP_BUILD_DATE == "2026-09-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,11 +49,14 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "外购包材" in item and "不会伪造客户订单号" in item for item in current_release)
-    assert any("本次更新｜" in item and "采购比例" in item and "散件" in item for item in current_release)
-    assert any("本次更新｜" in item and "半张 A4" in item and "二维码" in item for item in current_release)
-    assert any("本次更新｜" in item and "新增外购备库来源迁移" in item and "不自动补建" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.233" in item and "ji68v8x9z57" in item for item in current_release)
+    assert any("本次更新｜" in item and "双拼纸箱" in item and "两部分材料" in item for item in current_release)
+    assert any("本次更新｜" in item and "Z.001.000082" in item and "100箱" in item for item in current_release)
+    assert any("本次更新｜" in item and "重复收料" in item and "受控撤销收料" in item for item in current_release)
+    assert any("本次更新｜" in item and "不静默改写历史业务事实" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.234" in item and "ji68v8x9z57" in item for item in current_release)
+    prior_release_233 = [item for item in APP_CHANGELOG if item.startswith("v0.22.233：")]
+    assert any("本次更新｜" in item and "外购包材" in item and "不会伪造客户订单号" in item for item in prior_release_233)
+    assert any("如何验证｜" in item and "v0.22.233" in item and "ji68v8x9z57" in item for item in prior_release_233)
     prior_release_232 = [item for item in APP_CHANGELOG if item.startswith("v0.22.232：")]
     assert any("本次更新｜" in item and "BOM齐套数" in item and "组件件数" in item for item in prior_release_232)
     assert any("本次更新｜" in item and "Z.001.000205" in item and "1300套" in item for item in prior_release_232)

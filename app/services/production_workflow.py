@@ -4871,6 +4871,17 @@ def post_automatic_receipt_completion(
     )
     db.add(completion)
     db.flush()
+    _consume_completion_semi_reservations(
+        db,
+        completion=completion,
+        task=task,
+        item=item,
+        # ``after`` is cumulative finished capacity.  The helper consumes only
+        # the still-live semi reservation balance, so retries and later partial
+        # receipts cannot consume the same inventory twice.
+        planned_quantity=after,
+        operator_id=operator_id,
+    )
     command = CompletionCommand(
         task_id=task.id,
         expected_version=max(int(task.version or 1), 1),
@@ -5068,6 +5079,11 @@ def reverse_automatic_receipt_completion(
                 )
             )
         db.flush()
+    reversed_semi_ids = _reverse_completion_semi_consumption(
+        db,
+        completion=completion,
+        operator_id=operator_id,
+    )
     now = utc_now_naive()
     completion.status = "reversed"
     completion.reversed_by = operator_id
@@ -5103,7 +5119,7 @@ def reverse_automatic_receipt_completion(
         completion=completion,
         transfer=None,
         inventory_lot_id=lot_id,
-        reversed_semi_movement_ids=(),
+        reversed_semi_movement_ids=reversed_semi_ids,
     )
 
 

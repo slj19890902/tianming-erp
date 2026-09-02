@@ -1754,6 +1754,10 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.237：本次更新｜{item}" for item in _V022237_CHANGES),
+    *(f"v0.22.237：如何验证｜{item}" for item in _V022237_VERIFICATION_STEPS),
+    *(f"v0.22.236：本次更新｜{item}" for item in _V022236_CHANGES),
+    *(f"v0.22.236：如何验证｜{item}" for item in _V022236_VERIFICATION_STEPS),
     *(f"v0.22.235：本次更新｜{item}" for item in _V022235_CHANGES),
     *(f"v0.22.235：如何验证｜{item}" for item in _V022235_VERIFICATION_STEPS),
     *(f"v0.22.234：本次更新｜{item}" for item in _V022234_CHANGES),

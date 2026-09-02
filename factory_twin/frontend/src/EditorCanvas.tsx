@@ -1535,10 +1535,9 @@ export function EditorCanvas({
   }, [highlightFeatureIds, highlightedPalletIds]);
 
   const realEastCompass = usesRealEastCompass(layout);
-  const floor4SharedCompass = layout.floor_code.toUpperCase() === "4F" && realEastCompass;
   const floor4CalibratingCompass = layout.floor_code.toUpperCase() === "4F" && calibrationMode;
-  const compassCode = floor4CalibratingCompass ? "3F" : floor4SharedCompass ? "3F" : realEastCompass ? "E" : "N";
-  const compassLabel = floor4CalibratingCompass ? "对齐3F" : floor4SharedCompass ? "与3F同向" : realEastCompass ? "现实东向" : "图纸北向";
+  const compassCode = floor4CalibratingCompass ? "3F" : realEastCompass ? "E" : "N";
+  const compassLabel = floor4CalibratingCompass ? "对齐3F" : realEastCompass ? "现实东向" : "图纸北向";
   return <div className={`editor-canvas ${visualTheme === "warehouse" ? "warehouse-theme" : ""} ${effectiveDrawMode || measureMode ? "drawing" : ""}`} ref={containerRef}>
     <div className="canvas-mount" ref={canvasMountRef} />
     <div className="map-compass" aria-label={compassLabel}><span ref={northArrowRef}>↑</span><b>{compassCode}</b><small>{compassLabel}</small></div>

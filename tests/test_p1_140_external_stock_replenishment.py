@@ -498,7 +498,8 @@ def test_p1_140_migration_is_linear_and_round_trips_isolated_sqlite(
     config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
     assert script.get_revision(TARGET_REVISION).down_revision == PARENT_REVISION
-    assert script.get_heads() == [TARGET_REVISION]
+    # Later migrations may extend this revision; the repository must stay single-head.
+    assert len(script.get_heads()) == 1
     command.stamp(config, TARGET_REVISION)
 
     with sqlite3.connect(database) as connection:

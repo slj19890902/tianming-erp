@@ -10,8 +10,8 @@ from alembic.script import ScriptDirectory
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PREVIOUS = "jh67v8x9z56"
-TARGET = "ji68v8x9z57"
+PREVIOUS = "ji68v8x9z57"
+TARGET = "jk69v8x9z58"
 TABLES = (
     "supplier_monthly_payments",
     "supplier_monthly_invoices",

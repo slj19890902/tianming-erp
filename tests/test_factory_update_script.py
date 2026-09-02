@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.234"
-    assert APP_VERSION_NAME == "双拼库存抵扣自动完工数量修复"
+    assert APP_VERSION == "v0.22.235"
+    assert APP_VERSION_NAME == "供应商20日月结应付对账"
     assert APP_BUILD_DATE == "2026-09-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,11 +49,14 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "双拼纸箱" in item and "两部分材料" in item for item in current_release)
-    assert any("本次更新｜" in item and "Z.001.000082" in item and "100箱" in item for item in current_release)
-    assert any("本次更新｜" in item and "重复收料" in item and "受控撤销收料" in item for item in current_release)
-    assert any("本次更新｜" in item and "不静默改写历史业务事实" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.234" in item and "ji68v8x9z57" in item for item in current_release)
+    assert any("本次更新｜" in item and "纸板" in item and "外购包材" in item for item in current_release)
+    assert any("本次更新｜" in item and "供应商账单金额" in item and "差额" in item for item in current_release)
+    assert any("本次更新｜" in item and "多张发票" in item and "部分付款" in item for item in current_release)
+    assert any("本次更新｜" in item and "实收不能撤销" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.235" in item and "jk69v8x9z58" in item for item in current_release)
+    prior_release_234 = [item for item in APP_CHANGELOG if item.startswith("v0.22.234：")]
+    assert any("本次更新｜" in item and "双拼纸箱" in item and "两部分材料" in item for item in prior_release_234)
+    assert any("如何验证｜" in item and "v0.22.234" in item and "ji68v8x9z57" in item for item in prior_release_234)
     prior_release_233 = [item for item in APP_CHANGELOG if item.startswith("v0.22.233：")]
     assert any("本次更新｜" in item and "外购包材" in item and "不会伪造客户订单号" in item for item in prior_release_233)
     assert any("如何验证｜" in item and "v0.22.233" in item and "ji68v8x9z57" in item for item in prior_release_233)

@@ -1,7 +1,7 @@
 """add supplier 20th monthly settlement facts
 
-Revision ID: ji68v8x9z57
-Revises: jh67v8x9z56
+Revision ID: jk69v8x9z58
+Revises: ji68v8x9z57
 Create Date: 2026-09-02
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "ji68v8x9z57"
-down_revision = "jh67v8x9z56"
+revision = "jk69v8x9z58"
+down_revision = "ji68v8x9z57"
 branch_labels = None
 depends_on = None
 

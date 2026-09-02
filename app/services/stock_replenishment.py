@@ -15,7 +15,7 @@ from app.core.time_contract import (
 from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.order import OrderItem
 from app.models.product import Product
-from app.models.product_bom import SalesOrderItemBomComponent
+from app.models.product_bom import ProductBomComponent, SalesOrderItemBomComponent
 from app.models.stock_replenishment import (
     InventoryStockPolicy,
     StockReplenishmentOrder,
@@ -163,7 +163,109 @@ def product_replenishment_defaults(product: Product) -> dict:
     return values
 
 
-def product_replenishment_signature(product: Product) -> tuple | None:
+def virtual_composite_replenishment_components(
+    db: Session,
+    *,
+    product: Product,
+) -> dict | None:
+    """Resolve the physical products behind one virtual composite parent.
+
+    A virtual parent represents a sellable set and intentionally has no board
+    size or material of its own.  Stock-warning replenishment must therefore
+    validate and order its required BOM components instead of treating the
+    parent as one physical common box.
+    """
+
+    if not (product.is_composite and product.is_virtual_composite_parent):
+        return None
+    relations = list(
+        db.scalars(
+            select(ProductBomComponent)
+            .options(
+                selectinload(ProductBomComponent.component_product).selectinload(
+                    Product.material
+                )
+            )
+            .where(
+                ProductBomComponent.parent_product_id == product.id,
+                ProductBomComponent.is_required.is_(True),
+            )
+            .order_by(
+                ProductBomComponent.display_order,
+                ProductBomComponent.id,
+            )
+        ).all()
+    )
+    missing: list[str] = []
+    components: list[dict] = []
+    if not relations:
+        missing.append("必需BOM组件")
+    for relation in relations:
+        component = relation.component_product
+        label = (
+            component.product_name
+            if component is not None
+            else relation.internal_component_code
+        )
+        if component is None or component.deleted_at is not None or not component.is_active:
+            missing.append(f"{label}：组件已停用或不存在")
+            continue
+        if component.customer_id != product.customer_id:
+            missing.append(f"{label}：组件客户不一致")
+            continue
+        if component.is_composite and component.is_virtual_composite_parent:
+            missing.append(f"{label}：不支持嵌套组合组件")
+            continue
+        quantity_per_set = int(relation.quantity_per_set or 0)
+        if (
+            quantity_per_set <= 0
+            or relation.quantity_per_set != quantity_per_set
+        ):
+            missing.append(f"{label}：每套组件数量无效")
+            continue
+        defaults = product_replenishment_defaults(component)
+        missing.extend(
+            f"{label}：{field}" for field in defaults["missing_fields"]
+        )
+        output_per_sheet = max(int(defaults.get("output_per_sheet") or 1), 1)
+        if relation.is_die_cut and relation.mold_max_yield_per_sheet is not None:
+            mold_yield = int(relation.mold_max_yield_per_sheet)
+            if output_per_sheet > mold_yield:
+                missing.append(f"{label}：默认开料出数超过模具最大出数")
+            elif output_per_sheet == 1:
+                output_per_sheet = mold_yield
+        components.append(
+            {
+                "relation": relation,
+                "product": component,
+                "quantity_per_set": quantity_per_set,
+                "defaults": defaults,
+                "output_per_sheet": output_per_sheet,
+            }
+        )
+    supplier_names = sorted(
+        {
+            str(row["defaults"].get("material_supplier_name") or "").strip()
+            for row in components
+            if str(row["defaults"].get("material_supplier_name") or "").strip()
+        }
+    )
+    if len(supplier_names) > 1:
+        missing.append("BOM组件分属多个供应商，请分开报料")
+    return {
+        "draft_ready": not missing and len(components) == len(relations),
+        "missing_fields": missing,
+        "components": components,
+        "supplier_names": supplier_names,
+        "supplier_name": supplier_names[0] if len(supplier_names) == 1 else None,
+    }
+
+
+def product_replenishment_signature(
+    product: Product,
+    *,
+    output_per_sheet: int | None = None,
+) -> tuple | None:
     """Build the physical paperboard signature used for optional grouping."""
     defaults = product_replenishment_defaults(product)
     if not defaults["draft_ready"]:
@@ -183,7 +285,7 @@ def product_replenishment_signature(product: Product) -> tuple | None:
         int(defaults["report_width_mm"]),
         defaults["crease_type"] or "",
         *crease_segments,
-        int(defaults["output_per_sheet"]),
+        int(output_per_sheet or defaults["output_per_sheet"]),
         int(defaults["pieces_per_box"]),
     )
 
@@ -613,10 +715,71 @@ def customer_board_preparation_coverage(
     db: Session,
     *,
     product: Product,
+    output_per_sheet: int | None = None,
 ) -> dict[str, int]:
     """Return available and already-ordered board sheets without calling them finished stock."""
 
+    composite = virtual_composite_replenishment_components(
+        db,
+        product=product,
+    )
+    if composite is not None:
+        empty = {
+            "customer_board_preparation_available_sheet_quantity": 0,
+            "customer_board_preparation_finished_capacity": 0,
+            "customer_board_preparation_auto_cover_capacity": 0,
+            "incoming_board_preparation_sheet_quantity": 0,
+            "incoming_board_preparation_finished_capacity": 0,
+            "incoming_board_preparation_auto_cover_capacity": 0,
+        }
+        if not composite["draft_ready"] or not composite["components"]:
+            return empty
+        component_coverages = [
+            (
+                row,
+                customer_board_preparation_coverage(
+                    db,
+                    product=row["product"],
+                    output_per_sheet=int(row["output_per_sheet"]),
+                ),
+            )
+            for row in composite["components"]
+        ]
+
+        def complete_set_capacity(key: str) -> int:
+            return min(
+                int(coverage[key]) // int(row["quantity_per_set"])
+                for row, coverage in component_coverages
+            )
+
+        return {
+            "customer_board_preparation_available_sheet_quantity": sum(
+                int(coverage["customer_board_preparation_available_sheet_quantity"])
+                for _row, coverage in component_coverages
+            ),
+            "customer_board_preparation_finished_capacity": complete_set_capacity(
+                "customer_board_preparation_finished_capacity"
+            ),
+            "customer_board_preparation_auto_cover_capacity": complete_set_capacity(
+                "customer_board_preparation_auto_cover_capacity"
+            ),
+            "incoming_board_preparation_sheet_quantity": sum(
+                int(coverage["incoming_board_preparation_sheet_quantity"])
+                for _row, coverage in component_coverages
+            ),
+            "incoming_board_preparation_finished_capacity": complete_set_capacity(
+                "incoming_board_preparation_finished_capacity"
+            ),
+            "incoming_board_preparation_auto_cover_capacity": complete_set_capacity(
+                "incoming_board_preparation_auto_cover_capacity"
+            ),
+        }
+
     defaults = product_replenishment_defaults(product)
+    effective_output_per_sheet = max(
+        int(output_per_sheet or defaults["output_per_sheet"] or 1),
+        1,
+    )
     available_sheets = 0
     available_finished_capacity = 0
     available_auto_cover_capacity = 0
@@ -635,7 +798,7 @@ def customer_board_preparation_coverage(
             flute_type=str(defaults["flute_type"]),
             component_type="whole",
             pieces_per_box=int(defaults["pieces_per_box"]),
-            stock_yield_per_sheet=int(defaults["output_per_sheet"]),
+            stock_yield_per_sheet=effective_output_per_sheet,
         )
         for row in candidates:
             detail = row.lot.semi_finished_detail
@@ -682,7 +845,10 @@ def customer_board_preparation_coverage(
             ):
                 available_auto_cover_capacity += capacity
 
-    signature = product_replenishment_signature(product)
+    signature = product_replenishment_signature(
+        product,
+        output_per_sheet=effective_output_per_sheet,
+    )
     incoming_sheets = 0
     incoming_finished_capacity = 0
     incoming_auto_cover_capacity = 0
@@ -741,6 +907,72 @@ def customer_board_preparation_coverage(
         "incoming_board_preparation_auto_cover_capacity": (
             incoming_auto_cover_capacity
         ),
+    }
+
+
+def virtual_composite_replenishment_demand_plan(
+    db: Session,
+    *,
+    product: Product,
+    finished_quantity: int,
+) -> dict | None:
+    """Build component-level board demand for a virtual finished set."""
+
+    resolved = virtual_composite_replenishment_components(
+        db,
+        product=product,
+    )
+    if resolved is None:
+        return None
+    parent_sets = max(int(finished_quantity or 0), 0)
+    component_demands: list[dict] = []
+    total_sheets = 0
+    parent_sets_still_needing_board = 0
+    for row in resolved["components"]:
+        relation = row["relation"]
+        component = row["product"]
+        defaults = row["defaults"]
+        quantity_per_set = int(row["quantity_per_set"])
+        coverage = customer_board_preparation_coverage(
+            db,
+            product=component,
+            output_per_sheet=int(row["output_per_sheet"]),
+        )
+        required_pieces = parent_sets * quantity_per_set
+        covered_pieces = (
+            int(coverage["customer_board_preparation_auto_cover_capacity"])
+            + int(coverage["incoming_board_preparation_auto_cover_capacity"])
+        )
+        outstanding_pieces = max(required_pieces - covered_pieces, 0)
+        output_per_sheet = int(row["output_per_sheet"])
+        net_sheets = ceil(outstanding_pieces / output_per_sheet)
+        spare_sheets = (
+            int(relation.spare_sheet_quantity or 0) if net_sheets > 0 else 0
+        )
+        sheet_quantity = net_sheets + spare_sheets
+        total_sheets += sheet_quantity
+        parent_sets_still_needing_board = max(
+            parent_sets_still_needing_board,
+            ceil(outstanding_pieces / quantity_per_set),
+        )
+        component_demands.append(
+            {
+                **row,
+                "coverage": coverage,
+                "required_piece_quantity": required_pieces,
+                "covered_piece_quantity": covered_pieces,
+                "suggested_component_piece_quantity": outstanding_pieces,
+                "net_sheet_quantity": net_sheets,
+                "spare_sheet_quantity": spare_sheets,
+                "sheet_quantity": sheet_quantity,
+            }
+        )
+    return {
+        **resolved,
+        "parent_set_quantity": parent_sets,
+        "suggested_parent_set_quantity": parent_sets_still_needing_board,
+        "suggested_sheet_quantity": total_sheets,
+        "component_demands": component_demands,
     }
 
 
@@ -830,15 +1062,33 @@ def stock_policy_dict(
         - external_purchase_incoming_quantity,
         0,
     )
-    output_per_sheet = (
-        int(product_replenishment_defaults(policy.product)["output_per_sheet"])
+    composite_plan = (
+        virtual_composite_replenishment_demand_plan(
+            db,
+            product=policy.product,
+            finished_quantity=suggested_finished_quantity,
+        )
         if policy.product is not None
-        else 1
+        else None
     )
-    suggested_new_requisition_sheet_quantity = ceil(
-        suggested_new_requisition_finished_quantity
-        / max(output_per_sheet, 1)
-    )
+    if composite_plan is not None:
+        output_per_sheet = 1
+        suggested_new_requisition_finished_quantity = int(
+            composite_plan["suggested_parent_set_quantity"]
+        )
+        suggested_new_requisition_sheet_quantity = int(
+            composite_plan["suggested_sheet_quantity"]
+        )
+    else:
+        output_per_sheet = (
+            int(product_replenishment_defaults(policy.product)["output_per_sheet"])
+            if policy.product is not None
+            else 1
+        )
+        suggested_new_requisition_sheet_quantity = ceil(
+            suggested_new_requisition_finished_quantity
+            / max(output_per_sheet, 1)
+        )
     replenishment_state = (
         "purchase_needed"
         if suggested_new_requisition_sheet_quantity > 0
@@ -898,6 +1148,12 @@ def stock_policy_dict(
         ),
         "external_purchase_incoming_quantity": (
             external_purchase_incoming_quantity
+        ),
+        "is_virtual_composite_parent": composite_plan is not None,
+        "bom_component_count": (
+            len(composite_plan["components"])
+            if composite_plan is not None
+            else 0
         ),
         "replenishment_state": replenishment_state,
         "default_location": (

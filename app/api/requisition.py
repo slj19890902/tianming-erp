@@ -51,6 +51,7 @@ from app.models.product import Product
 from app.models.production import ProductionCompletion, ProductionTask
 from app.models.production_label_print import ProductionPackagingLabelPrintJob
 from app.models.product_bom import (
+    ProductBomComponent,
     RequisitionItemBomSource,
     SalesOrderItemBomComponent,
     SalesOrderItemBomDemandAdjustment,
@@ -113,6 +114,7 @@ from app.services.stock_replenishment import (
     stock_replenishment_order,
     theoretical_requisition_quantity,
     validate_stock_policy,
+    virtual_composite_replenishment_demand_plan,
 )
 from app.services.external_packaging_stock_replenishment import (
     create_external_stock_replenishment_purchase,
@@ -14727,6 +14729,109 @@ def stock_policy_replenishment_draft(
             "missing_fields": product_defaults["missing_fields"],
         }
 
+    composite_plan = virtual_composite_replenishment_demand_plan(
+        db,
+        product=product,
+        finished_quantity=int(summary["suggested_replenishment_quantity"] or 0),
+    )
+    if composite_plan is not None:
+        component_items: list[dict] = []
+        compatible_board_products: list[dict] = []
+        for demand in composite_plan["component_demands"]:
+            component = demand["product"]
+            component_defaults = demand["defaults"]
+            compatible_board_products.append(
+                {
+                    "product_id": component.id,
+                    "product_code": component.product_code,
+                    "product_name": component.product_name,
+                }
+            )
+            if int(demand["sheet_quantity"] or 0) <= 0:
+                continue
+            crease_type = component_defaults["crease_type"]
+            sheet_type = (
+                "creased_sheet"
+                if crease_type == "压线"
+                else "net_sheet"
+                if crease_type == "净料"
+                else "raw_board"
+            )
+            component_items.append(
+                {
+                    "stock_policy_id": policy.id,
+                    "target_inventory_type": "semi_finished",
+                    "product_id": component.id,
+                    "reference_product_id": component.id,
+                    "customer_id": component.customer_id,
+                    "product_code": component.product_code,
+                    "product_name": component.product_name,
+                    "material_id": component_defaults["material_id"],
+                    "material_code": component_defaults["material_code"],
+                    "material_supplier_name": component_defaults[
+                        "material_supplier_name"
+                    ],
+                    "layer_count": component_defaults["layer_count"],
+                    "flute_type": component_defaults["flute_type"],
+                    "report_length_mm": component_defaults["report_length_mm"],
+                    "report_width_mm": component_defaults["report_width_mm"],
+                    "crease_type": crease_type,
+                    "crease_left_mm": component_defaults["crease_left_mm"],
+                    "crease_middle_mm": component_defaults["crease_middle_mm"],
+                    "crease_right_mm": component_defaults["crease_right_mm"],
+                    "sheet_type": sheet_type,
+                    "component_type": "whole",
+                    "pieces_per_box": component_defaults["pieces_per_box"],
+                    "stock_yield_per_sheet": int(demand["output_per_sheet"]),
+                    "quantity": int(demand["sheet_quantity"]),
+                    "suggested_finished_quantity": int(
+                        demand["suggested_component_piece_quantity"]
+                    ),
+                    "location_id": None,
+                    "remark": policy.remark,
+                    "cutting_mode": component_defaults["cutting_mode"],
+                    "output_per_sheet": int(demand["output_per_sheet"]),
+                    "theoretical_requisition_quantity": int(
+                        demand["sheet_quantity"]
+                    ),
+                    "customer_board_preparation_available_sheet_quantity": int(
+                        demand["coverage"][
+                            "customer_board_preparation_available_sheet_quantity"
+                        ]
+                    ),
+                    "incoming_board_preparation_sheet_quantity": int(
+                        demand["coverage"][
+                            "incoming_board_preparation_sheet_quantity"
+                        ]
+                    ),
+                    "draft_ready": component_defaults["draft_ready"],
+                    "missing_fields": component_defaults["missing_fields"],
+                    "compatible_product_ids": [component.id],
+                    "compatible_product_codes": [component.product_code],
+                    "bom_parent_product_id": product.id,
+                    "bom_parent_product_name": product.product_name,
+                    "bom_parent_set_quantity": int(
+                        composite_plan["parent_set_quantity"]
+                    ),
+                    "bom_quantity_per_set": int(demand["quantity_per_set"]),
+                }
+            )
+        return {
+            "source_type": "stock_warning",
+            "supplier_name": (
+                composite_plan["supplier_name"] or policy.supplier_name
+            ),
+            "customer_id": policy.customer_id,
+            "stock_now": False,
+            "draft_ready": composite_plan["draft_ready"],
+            "missing_fields": composite_plan["missing_fields"],
+            "items": component_items,
+            "compatible_products": [],
+            "compatible_board_products": compatible_board_products,
+            "policy_summary": summary,
+            "is_virtual_composite_parent": True,
+        }
+
     primary_item = draft_item(policy, summary, product)
     signature = product_replenishment_signature(product)
     compatible_board_products = [
@@ -14927,6 +15032,36 @@ def _build_replenishment_item(
     product = db.get(Product, reference_product_id) if reference_product_id else None
     if reference_product_id and (product is None or product.deleted_at is not None):
         raise StockReplenishmentError("补库明细产品不存在。", 404)
+    policy_product = (
+        db.get(Product, policy.product_id)
+        if policy is not None and policy.product_id is not None
+        else None
+    )
+    if (
+        source_type == "stock_warning"
+        and policy_product is not None
+        and policy_product.is_composite
+        and policy_product.is_virtual_composite_parent
+        and payload.target_inventory_type == "semi_finished"
+        and reference_product_id is not None
+        and not bool(
+            db.scalar(
+                select(
+                    exists().where(
+                        ProductBomComponent.parent_product_id
+                        == policy_product.id,
+                        ProductBomComponent.component_product_id
+                        == reference_product_id,
+                        ProductBomComponent.is_required.is_(True),
+                    )
+                )
+            )
+        )
+    ):
+        raise StockReplenishmentError(
+            "组合成品库存预警只能报该成品的必需BOM组件。",
+            409,
+        )
     customer_id = _coalesce(
         payload.customer_id,
         policy.customer_id if policy else (product.customer_id if product else None),
@@ -15307,6 +15442,42 @@ def create_stock_replenishment_order(
             for item in payload.items
         ]
         if payload.source_type == "stock_warning":
+            composite_plans: dict[int, dict] = {}
+            for policy_id in {
+                int(item.stock_policy_id)
+                for item in items
+                if item.stock_policy_id is not None
+            }:
+                item_policy = db.get(InventoryStockPolicy, policy_id)
+                policy_product = (
+                    db.get(Product, item_policy.product_id)
+                    if item_policy is not None and item_policy.product_id is not None
+                    else None
+                )
+                if (
+                    item_policy is None
+                    or policy_product is None
+                    or not policy_product.is_composite
+                    or not policy_product.is_virtual_composite_parent
+                ):
+                    continue
+                policy_summary = stock_policy_dict(db, item_policy)
+                plan = virtual_composite_replenishment_demand_plan(
+                    db,
+                    product=policy_product,
+                    finished_quantity=int(
+                        policy_summary["suggested_replenishment_quantity"] or 0
+                    ),
+                )
+                if plan is None or not plan["draft_ready"]:
+                    details = "、".join(
+                        (plan or {}).get("missing_fields", [])
+                    ) or "必需BOM组件不可用"
+                    raise StockReplenishmentError(
+                        f"组合成品BOM报料资料已变化：{details}，请刷新后重新生成草稿。",
+                        409,
+                    )
+                composite_plans[policy_id] = plan
             for item in items:
                 # 衬板是已定义的直接成品；_build 已校验只有 liner
                 # 参考产品可走 finished，不应再被纸板备料完整性拦截。
@@ -15343,6 +15514,29 @@ def create_stock_replenishment_order(
                             f"“{item.product_name_snapshot}”的常用箱资料不完整，"
                             "请先补全后重新生成草稿。"
                         )
+                    expected_output_per_sheet = defaults["output_per_sheet"]
+                    composite_plan = composite_plans.get(
+                        int(item.stock_policy_id)
+                        if item.stock_policy_id is not None
+                        else -1
+                    )
+                    if composite_plan is not None:
+                        component_demand = next(
+                            (
+                                row
+                                for row in composite_plan["component_demands"]
+                                if row["product"].id == product.id
+                            ),
+                            None,
+                        )
+                        if component_demand is None:
+                            raise StockReplenishmentError(
+                                "组合成品BOM组件已变化，请刷新后重新生成草稿。",
+                                409,
+                            )
+                        expected_output_per_sheet = int(
+                            component_demand["output_per_sheet"]
+                        )
                     expected = {
                         "customer_id": product.customer_id,
                         "material_id": defaults["material_id"],
@@ -15365,7 +15559,7 @@ def create_stock_replenishment_order(
                             else "raw_board"
                         ),
                         "pieces_per_box": defaults["pieces_per_box"],
-                        "stock_yield_per_sheet": defaults["output_per_sheet"],
+                        "stock_yield_per_sheet": expected_output_per_sheet,
                     }
                     actual = {
                         "customer_id": item.customer_id,
@@ -15387,6 +15581,39 @@ def create_stock_replenishment_order(
                         raise StockReplenishmentError(
                             f"“{item.product_name_snapshot}”的纸板备料参数"
                             "必须与常用箱主数据一致，请刷新后重新生成草稿。"
+                        )
+            for policy_id, plan in composite_plans.items():
+                expected_demands = {
+                    int(row["product"].id): row
+                    for row in plan["component_demands"]
+                    if int(row["sheet_quantity"] or 0) > 0
+                }
+                actual_rows = [
+                    item
+                    for item in items
+                    if item.stock_policy_id == policy_id
+                ]
+                actual_product_ids = [
+                    int(item.reference_product_id)
+                    for item in actual_rows
+                    if item.reference_product_id is not None
+                ]
+                if (
+                    len(actual_product_ids) != len(set(actual_product_ids))
+                    or set(actual_product_ids) != set(expected_demands)
+                ):
+                    raise StockReplenishmentError(
+                        "组合成品BOM必需组件不完整或已变化，请刷新后重新生成全部组件草稿。",
+                        409,
+                    )
+                for item in actual_rows:
+                    demand = expected_demands[int(item.reference_product_id)]
+                    minimum_sheets = int(demand["sheet_quantity"])
+                    if int(item.quantity or 0) < minimum_sheets:
+                        raise StockReplenishmentError(
+                            f"“{item.product_name_snapshot}”本次至少需报"
+                            f"{minimum_sheets}张；可多报但不能少于BOM需求。",
+                            409,
                         )
         material_suppliers = {
             material.supplier_name.strip()

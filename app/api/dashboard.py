@@ -42,6 +42,7 @@ from app.services.stock_replenishment import (
     product_replenishment_defaults,
     product_replenishment_signature,
     stock_policy_dict,
+    virtual_composite_replenishment_components,
 )
 from app.services.external_packaging_purchase import ExternalPurchaseContractError
 from app.services.external_packaging_stock_replenishment import external_stock_draft
@@ -405,6 +406,19 @@ def _common_box_low_stock_warnings(
         if product is None:
             continue
         defaults = product_replenishment_defaults(product)
+        composite_defaults = virtual_composite_replenishment_components(
+            db,
+            product=product,
+        )
+        if composite_defaults is not None:
+            defaults = {
+                **defaults,
+                "material_supplier_name": (
+                    composite_defaults["supplier_name"] or policy.supplier_name
+                ),
+                "draft_ready": composite_defaults["draft_ready"],
+                "missing_fields": composite_defaults["missing_fields"],
+            }
         external_defaults: dict = {}
         if product.supply_mode == "external_purchase":
             try:

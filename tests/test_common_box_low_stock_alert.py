@@ -588,6 +588,245 @@ def test_composite_parent_warehouse_total_uses_complete_sets_not_component_piece
         assert summary["physical_unconsumed_quantity"] == 1300
 
 
+def test_virtual_composite_stock_warning_drafts_required_bom_boards(
+    tmp_path: Path,
+) -> None:
+    from decimal import Decimal
+
+    from app.api.auth import router as auth_router
+    from app.api.deps import get_db
+    from app.api.requisition import router as requisition_router
+    from app.models.material import Material
+    from app.models.product import Product
+    from app.models.product_bom import ProductBomComponent
+    from app.models.stock_replenishment import (
+        InventoryStockPolicy,
+        StockReplenishmentOrderItem,
+    )
+    from app.services.stock_replenishment import stock_policy_dict
+
+    _engine, factory, ids = _factory(tmp_path)
+    with factory() as db:
+        material = Material(
+            code="R616R",
+            supplier_name="匿名纸板供应商",
+            layer_count=5,
+            flute_type="AB",
+            is_active=True,
+        )
+        db.add(material)
+        db.flush()
+        parent = Product(
+            customer_id=ids["customer_a"],
+            product_code="Z.001.000205",
+            customer_material_code="Z.001.000205",
+            product_name="30入装格挡",
+            box_category="normal",
+            is_composite=True,
+            is_virtual_composite_parent=True,
+            is_active=True,
+        )
+        long_piece = Product(
+            customer_id=ids["customer_a"],
+            product_code="Z.001.000205",
+            customer_material_code="Z.001.000205-L",
+            product_name="30入装格挡长片15片",
+            box_style="模切内盒",
+            box_category="normal",
+            material_id=material.id,
+            layer_count=5,
+            flute_type="AB",
+            report_length_mm=1159,
+            report_width_mm=428,
+            crease_type="净料",
+            default_cutting_mode="一开四",
+            is_internal_component=True,
+            is_active=True,
+        )
+        short_piece = Product(
+            customer_id=ids["customer_a"],
+            product_code="Z.001.000205",
+            customer_material_code="Z.001.000205-S",
+            product_name="30入装格挡短片20片",
+            box_style="模切内盒",
+            box_category="normal",
+            material_id=material.id,
+            layer_count=5,
+            flute_type="AB",
+            report_length_mm=798,
+            report_width_mm=428,
+            crease_type="净料",
+            default_cutting_mode="一开四",
+            is_internal_component=True,
+            is_active=True,
+        )
+        db.add_all([parent, long_piece, short_piece])
+        db.flush()
+        db.add_all(
+            [
+                ProductBomComponent(
+                    parent_product_id=parent.id,
+                    component_product_id=long_piece.id,
+                    quantity_per_set=Decimal("3"),
+                    display_order=1,
+                    internal_component_code="00205-L",
+                    is_die_cut=False,
+                    spare_sheet_quantity=0,
+                    display_mode="internal_only",
+                    is_required=True,
+                ),
+                ProductBomComponent(
+                    parent_product_id=parent.id,
+                    component_product_id=short_piece.id,
+                    quantity_per_set=Decimal("4"),
+                    display_order=2,
+                    internal_component_code="00205-S",
+                    is_die_cut=False,
+                    spare_sheet_quantity=0,
+                    display_mode="internal_only",
+                    is_required=True,
+                ),
+            ]
+        )
+        policy = InventoryStockPolicy(
+            policy_name="00205组合成品预警",
+            target_inventory_type="finished",
+            product_id=parent.id,
+            customer_id=parent.customer_id,
+            warning_quantity=100,
+            target_quantity=500,
+            active=True,
+            created_by=ids["admin"],
+            updated_by=ids["admin"],
+        )
+        db.add(policy)
+        db.commit()
+        policy_id = policy.id
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(requisition_router, prefix="/api/requisition")
+
+    def override_get_db() -> Generator[Session, None, None]:
+        with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "123456"},
+        ).status_code == 200
+        draft_response = client.get(
+            f"/api/requisition/stock-policies/{policy_id}/replenishment-draft"
+        )
+        assert draft_response.status_code == 200, draft_response.text
+        draft = draft_response.json()
+        assert draft["draft_ready"] is True
+        assert draft["missing_fields"] == []
+        assert draft["is_virtual_composite_parent"] is True
+        assert draft["policy_summary"][
+            "suggested_new_requisition_finished_quantity"
+        ] == 500
+        assert draft["policy_summary"][
+            "suggested_new_requisition_sheet_quantity"
+        ] == 875
+        assert [line["suggested_finished_quantity"] for line in draft["items"]] == [
+            1500,
+            2000,
+        ]
+        assert [line["quantity"] for line in draft["items"]] == [375, 500]
+        assert [line["bom_quantity_per_set"] for line in draft["items"]] == [3, 4]
+        assert all(line["material_code"] == "R616R" for line in draft["items"])
+        assert all(line["layer_count"] == 5 for line in draft["items"])
+        assert all(line["flute_type"] == "AB" for line in draft["items"])
+
+        payload_items = []
+        for line in draft["items"]:
+            payload_items.append(
+                {
+                    **line,
+                    "reference_product_id": line["product_id"],
+                    "product_id": None,
+                }
+            )
+        tampered = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "stock_warning",
+                "idempotency_key": "virtual-composite-warning-tampered",
+                "supplier_name": draft["supplier_name"],
+                "customer_id": draft["customer_id"],
+                "stock_now": False,
+                "items": [
+                    {
+                        **payload_items[0],
+                        "reference_product_id": ids["product_a"],
+                    }
+                ],
+            },
+        )
+        assert tampered.status_code == 409
+        assert "只能报该成品的必需BOM组件" in tampered.text
+        incomplete = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "stock_warning",
+                "idempotency_key": "virtual-composite-warning-incomplete",
+                "supplier_name": draft["supplier_name"],
+                "customer_id": draft["customer_id"],
+                "stock_now": False,
+                "items": payload_items[:1],
+            },
+        )
+        assert incomplete.status_code == 409
+        assert "BOM必需组件不完整" in incomplete.text
+        underreported_items = [dict(row) for row in payload_items]
+        underreported_items[0]["quantity"] = 374
+        underreported = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "stock_warning",
+                "idempotency_key": "virtual-composite-warning-underreported",
+                "supplier_name": draft["supplier_name"],
+                "customer_id": draft["customer_id"],
+                "stock_now": False,
+                "items": underreported_items,
+            },
+        )
+        assert underreported.status_code == 409
+        assert "至少需报375张" in underreported.text
+        saved = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "stock_warning",
+                "idempotency_key": "virtual-composite-warning-draft",
+                "supplier_name": draft["supplier_name"],
+                "customer_id": draft["customer_id"],
+                "stock_now": False,
+                "items": payload_items,
+            },
+        )
+        assert saved.status_code == 201, saved.text
+
+    with factory() as db:
+        saved_items = list(
+            db.scalars(
+                select(StockReplenishmentOrderItem)
+                .where(StockReplenishmentOrderItem.stock_policy_id == policy_id)
+                .order_by(StockReplenishmentOrderItem.id)
+            ).all()
+        )
+        assert [row.quantity for row in saved_items] == [375, 500]
+        policy = db.get(InventoryStockPolicy, policy_id)
+        assert policy is not None
+        summary = stock_policy_dict(db, policy)
+        assert summary["incoming_board_preparation_sheet_quantity"] == 875
+        assert summary["incoming_board_preparation_auto_cover_capacity"] == 500
+        assert summary["suggested_new_requisition_finished_quantity"] == 0
+        assert summary["suggested_new_requisition_sheet_quantity"] == 0
+
+
 def test_dashboard_warning_is_read_only_permissioned_and_customer_scoped(
     tmp_path: Path,
 ) -> None:
@@ -1872,6 +2111,10 @@ def test_frontend_exposes_read_only_alert_and_two_number_setup() -> None:
     assert "openLowStockLocations(item)" in source
     assert "同客户、同材质和同报料尺寸的其他款" in source
     assert "stockWarningTheoreticalSheets(line)" in source
+    assert "const lines = (data.items || []).filter" in source
+    assert "for (const line of lines)" in source
+    assert "已按BOM生成 ${lines.length} 条组件报料明细" in source
+    assert "组合成品：{{ line.bom_parent_product_name }}" in source
     assert "客户专用纸板备料" in source
     assert "stockWarningExtraSheets(line)" in source
     assert "本次报料张数（可多报）" in source

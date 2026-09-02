@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.238"
-    assert APP_VERSION_NAME == "财务简化固定支出与承兑转付"
+    assert APP_VERSION == "v0.22.239"
+    assert APP_VERSION_NAME == "YL组合成品BOM预警报料修复"
     assert APP_BUILD_DATE == "2026-09-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,11 +49,17 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "材料采购" in item and "人员工资" in item for item in current_release)
-    assert any("本次更新｜" in item and "380000" in item and "固定月供" in item for item in current_release)
-    assert any("本次更新｜" in item and "纸板" in item and "差异明细" in item for item in current_release)
-    assert any("本次更新｜" in item and "承兑" in item and "非现金" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.238" in item and "jl70v8x9z59" in item for item in current_release)
+    assert any("本次更新｜" in item and "虚拟父件" in item and "BOM组件" in item for item in current_release)
+    assert any("本次更新｜" in item and "每套用量" in item and "一开多" in item for item in current_release)
+    assert any("本次更新｜" in item and "分别抵扣" in item and "重复采购" in item for item in current_release)
+    assert any("本次更新｜" in item and "必需BOM组件" in item and "幂等" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.239" in item and "jl70v8x9z59" in item for item in current_release)
+    prior_release_238 = [item for item in APP_CHANGELOG if item.startswith("v0.22.238：")]
+    assert any("本次更新｜" in item and "材料采购" in item and "人员工资" in item for item in prior_release_238)
+    assert any("本次更新｜" in item and "380000" in item and "固定月供" in item for item in prior_release_238)
+    assert any("本次更新｜" in item and "纸板" in item and "差异明细" in item for item in prior_release_238)
+    assert any("本次更新｜" in item and "承兑" in item and "非现金" in item for item in prior_release_238)
+    assert any("如何验证｜" in item and "v0.22.238" in item and "jl70v8x9z59" in item for item in prior_release_238)
     prior_release_236 = [item for item in APP_CHANGELOG if item.startswith("v0.22.236：")]
     assert any("本次更新｜" in item and "历史双拼单" in item and "受控补充自动完工" in item for item in prior_release_236)
     assert any("本次更新｜" in item and "全部已过账" in item and "待送数量" in item for item in prior_release_236)

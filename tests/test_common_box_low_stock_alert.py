@@ -702,6 +702,7 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
         db.add(policy)
         db.commit()
         policy_id = policy.id
+        short_piece_id = short_piece.id
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
@@ -740,6 +741,39 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
         assert all(line["material_code"] == "R616R" for line in draft["items"])
         assert all(line["layer_count"] == 5 for line in draft["items"])
         assert all(line["flute_type"] == "AB" for line in draft["items"])
+
+        with factory() as db:
+            short_product = db.get(Product, short_piece_id)
+            assert short_product is not None
+            short_product.report_width_mm = None
+            db.commit()
+        incomplete_master_draft = client.get(
+            f"/api/requisition/stock-policies/{policy_id}/replenishment-draft"
+        )
+        assert incomplete_master_draft.status_code == 200
+        assert incomplete_master_draft.json()["draft_ready"] is False
+        assert any(
+            "短片20片：报料宽" in field
+            for field in incomplete_master_draft.json()["missing_fields"]
+        )
+        stale_master_save = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "stock_warning",
+                "idempotency_key": "virtual-composite-warning-stale-master",
+                "supplier_name": draft["supplier_name"],
+                "customer_id": draft["customer_id"],
+                "stock_now": False,
+                "items": draft["items"],
+            },
+        )
+        assert stale_master_save.status_code == 409
+        assert "BOM报料资料已变化" in stale_master_save.text
+        with factory() as db:
+            short_product = db.get(Product, short_piece_id)
+            assert short_product is not None
+            short_product.report_width_mm = 428
+            db.commit()
 
         payload_items = []
         for line in draft["items"]:
@@ -2115,6 +2149,7 @@ def test_frontend_exposes_read_only_alert_and_two_number_setup() -> None:
     assert "for (const line of lines)" in source
     assert "已按BOM生成 ${lines.length} 条组件报料明细" in source
     assert "组合成品：{{ line.bom_parent_product_name }}" in source
+    assert "按 {{ item.bom_component_count }} 项BOM组件分别报料" in source
     assert "客户专用纸板备料" in source
     assert "stockWarningExtraSheets(line)" in source
     assert "本次报料张数（可多报）" in source

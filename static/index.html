@@ -3165,7 +3165,7 @@
                         <div v-for="item in group.items" :key="item.policy_id" class="low-stock-detail">
                           <div>
                             <div><strong class="low-stock-detail-code">{{ item.product_code || "无编码" }}</strong>｜{{ item.product_name }}</div>
-                            <div v-if="item.procurement_mode==='external_purchase'" class="muted">外购包材｜按常用箱采购规格、默认供应商和当前正式报价</div><div v-else class="muted">{{ item.material_code || "材质未完善" }}｜{{ item.report_length_mm || "-" }} × {{ item.report_width_mm || "-" }} mm｜{{ item.flute_type || "-" }}楞</div>
+                            <div v-if="item.procurement_mode==='external_purchase'" class="muted">外购包材｜按常用箱采购规格、默认供应商和当前正式报价</div><div v-else-if="item.is_virtual_composite_parent" class="muted">组合成品｜按 {{ item.bom_component_count }} 项BOM组件分别报料</div><div v-else class="muted">{{ item.material_code || "材质未完善" }}｜{{ item.report_length_mm || "-" }} × {{ item.report_width_mm || "-" }} mm｜{{ item.flute_type || "-" }}楞</div>
                             <span v-if="item.same_spec_warning_count" class="status blue">另有 {{ item.same_spec_warning_count }} 款同规格也在预警</span>
                             <span v-if="!item.draft_ready" class="status orange">常用箱缺：{{ (item.missing_fields || []).join("、") }}</span>
                           </div>

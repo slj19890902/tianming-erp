@@ -7935,7 +7935,7 @@
                     <td><select class="input" v-model.number="row.selected_candidate_id"><option v-for="candidate in row.candidates" :key="candidate.id" :value="candidate.id" :disabled="!!candidate.blocked_reason">{{ externalPackagingCandidateText(candidate) }}{{ candidate.blocked_reason ? `（${candidate.blocked_reason}）` : '' }}</option></select></td>
                     <td>
                       <template v-if="selectedExternalPurchaseCandidate(row)?.price"><strong>{{ selectedExternalPurchaseCandidate(row).price.currency }} {{ selectedExternalPurchaseCandidate(row).price.unit_price }} / {{ selectedExternalPurchaseCandidate(row).price.quote_unit }}</strong><div v-if="selectedExternalPurchaseCandidate(row).price.purchase_unit_price" class="sensitive-price">按客户定长换算：{{ selectedExternalPurchaseCandidate(row).price.purchase_unit_price }} 元/{{ selectedExternalPurchaseCandidate(row).price.purchase_unit }}</div><div class="muted">价格版本 {{ selectedExternalPurchaseCandidate(row).price.version_number }}；{{ selectedExternalPurchaseCandidate(row).price.tax_mode==='tax_inclusive' ? '含税' : '未税' }}</div><div v-if="selectedExternalPurchaseCandidate(row).suggested_quantity_warning" class="status orange" style="margin-top:4px;white-space:normal">{{ selectedExternalPurchaseCandidate(row).suggested_quantity_warning }}，可修改数量后提交</div></template>
-                      <div v-else><span class="status red">{{ selectedExternalPurchaseCandidate(row)?.blocked_reason || '缺少有效价格' }}</span><button v-if="externalPurchaseCandidateNeedsPrice(row)" class="btn small" style="margin-top:6px" @click="openExternalPurchasePriceMaintenance(row)">去维护正式报价</button></div>
+                      <div v-else><span class="status red">{{ selectedExternalPurchaseCandidate(row)?.blocked_reason || '缺少有效价格' }}</span><button v-if="externalPurchaseCandidateNeedsPrice(row)" class="btn small" style="margin-top:6px" @click="openExternalPurchasePriceMaintenance(row)">去维护正式报价</button><button v-if="externalPurchaseCandidateNeedsRefresh(row)" class="btn small primary" style="margin-top:6px" :disabled="externalPurchase.refreshingCandidates" @click="refreshExternalPurchaseCandidates">{{ externalPurchase.refreshingCandidates ? '正在读取当前供应商…' : '改用当前供应商与报价' }}</button></div>
                     </td>
                   </tr>
                 </tbody></table></div>
@@ -9699,7 +9699,7 @@
             costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
             orderDetail:null, orderCustomerCharges:[], customerChargeForm:{visible:false,id:null,version:null,charge_type:"mold",display_name:"",quantity:1,unit:"项",unit_price:"",amount:"",price_tax_mode:"",tax_rate:"",tax_project_name:"",tax_classification_code:"",note:"",saving:false}, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
-            externalPurchase:{loading:false,saving:false,cancelSaving:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,history:[],cancelReason:"采购内容或数量需要重新核对",idempotencyKey:""},
+            externalPurchase:{loading:false,saving:false,cancelSaving:false,refreshingCandidates:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,history:[],cancelReason:"采购内容或数量需要重新核对",idempotencyKey:""},
             externalPurchaseView:"pending", externalPurchaseRouting:[], externalPurchaseRoutingLoading:false, externalPurchaseRoutingError:"", externalPurchaseRoutingFilter:"", externalPurchaseRoutingLoaded:false,
             externalPurchaseHistory:[], externalPurchaseHistoryTotal:0, externalPurchaseHistoryLoading:false, externalPurchaseHistoryError:"", externalPurchaseHistoryFilter:"", externalPurchaseHistoryLoaded:false,
             orderItemSaveState:{saving:false,committed:false,outcomeUncertain:false,result:null},
@@ -10383,7 +10383,7 @@
           },
           canViewCosts() { return this.hasPermission("cost.view"); },
           externalPurchaseConfirmBlocked() {
-            if (this.externalPurchase.loading || this.externalPurchase.saving || !this.externalPurchase.items.length) return true;
+            if (this.externalPurchase.loading || this.externalPurchase.saving || this.externalPurchase.refreshingCandidates || !this.externalPurchase.items.length) return true;
             return this.externalPurchase.items.some(row => {
               const candidate = this.selectedExternalPurchaseCandidate(row);
               const quantity = Number(row.purchase_quantity);
@@ -24211,6 +24211,11 @@
             return !!candidate?.external_product_id
               && String(candidate.blocked_reason || "").includes("有效价格");
           },
+          externalPurchaseCandidateNeedsRefresh(row) {
+            if (this.externalPurchase.status !== "pending") return false;
+            const candidate = this.selectedExternalPurchaseCandidate(row);
+            return String(candidate?.blocked_reason || "").includes("停用");
+          },
           async openExternalPurchasePriceMaintenance(row) {
             const candidate = this.selectedExternalPurchaseCandidate(row);
             if (!candidate?.external_product_id || !this.canAdmin || !this.canViewCosts) return false;
@@ -24250,7 +24255,7 @@
             const orderId = Number(order?.id || 0);
             if (!orderId || !this.canAdmin || !this.canViewCosts) return;
             const orderLabel = this.displayOrderNumber(order);
-            this.externalPurchase = {loading:true,saving:false,cancelSaving:false,error:"",submitError:"",status:"",orderId,orderLabel,items:[],confirmation:null,history:[],cancelReason:"采购内容或数量需要重新核对",idempotencyKey:createIdempotencyKey()};
+            this.externalPurchase = {loading:true,saving:false,cancelSaving:false,refreshingCandidates:false,error:"",submitError:"",status:"",orderId,orderLabel,items:[],confirmation:null,history:[],cancelReason:"采购内容或数量需要重新核对",idempotencyKey:createIdempotencyKey()};
             this.modal = {type:"externalPurchase",title:`外购包装采购核对 · ${orderLabel}`};
             if (modalA11ySessionActive) this.focusAccessibleModal();
             try {
@@ -24267,6 +24272,32 @@
               this.externalPurchase.error = this.errorMessage(error);
             } finally {
               this.externalPurchase.loading = false;
+            }
+          },
+          async refreshExternalPurchaseCandidates() {
+            const orderId = Number(this.externalPurchase.orderId || 0);
+            if (!orderId || this.externalPurchase.refreshingCandidates) return false;
+            this.externalPurchase.refreshingCandidates = true;
+            this.externalPurchase.submitError = "";
+            try {
+              const {data} = await axios.post(`/api/orders/${orderId}/external-packaging-purchase/refresh-candidates`);
+              const preview = data.preview || {};
+              this.externalPurchase.status = preview.status || "pending";
+              this.externalPurchase.confirmation = preview.confirmation || null;
+              this.externalPurchase.history = preview.history || [];
+              this.externalPurchase.items = (preview.items || []).map(row => ({
+                ...row,
+                selected_candidate_id:Number(row.default_candidate_id || row.candidates?.find(candidate => !candidate.blocked_reason)?.id || 0),
+                purchase_quantity:row.suggested_purchase_quantity,
+              }));
+              this.externalPurchase.idempotencyKey = createIdempotencyKey();
+              this.showToast("已改用常用箱当前供应商与报价，旧候选记录已保留");
+              return true;
+            } catch (error) {
+              this.externalPurchase.submitError = this.errorMessage(error);
+              return false;
+            } finally {
+              this.externalPurchase.refreshingCandidates = false;
             }
           },
           async confirmExternalPurchase() {

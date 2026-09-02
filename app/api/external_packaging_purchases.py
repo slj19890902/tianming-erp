@@ -26,6 +26,7 @@ from app.services.external_packaging_purchase import (
     confirm_external_purchase,
     list_external_purchase_history_rows,
     list_external_purchase_routing_rows,
+    refresh_pending_external_purchase_candidates,
     serialize_external_purchase_batch,
     get_external_purchase_summary,
 )
@@ -237,6 +238,63 @@ def get_external_packaging_purchase_preview(
         return build_external_purchase_preview(db, order_id)
     except ExternalPurchaseContractError as error:
         raise _translate(error) from error
+
+
+@router.post("/orders/{order_id}/external-packaging-purchase/refresh-candidates")
+def refresh_external_packaging_purchase_candidates(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+    _cost_user: User = Depends(can_cost),
+) -> dict[str, Any]:
+    try:
+        order = db.get(Order, order_id)
+        if order is None:
+            raise HTTPException(status_code=404, detail="订单不存在")
+        result = refresh_pending_external_purchase_candidates(
+            db,
+            order_id=order_id,
+        )
+        append_audit_event(
+            db,
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="external_packaging_purchase",
+            action_code="external_packaging.purchase.candidates.refresh",
+            resource="SalesOrderItemExternalComponentCandidate",
+            legacy_action="REFRESH_PURCHASE_CANDIDATES",
+            actor=user,
+            entity_type="sales_order",
+            entity_id=order.id,
+            object_ref=order.order_number,
+            customer_id=order.customer_id,
+            description="待确认外购包材改用常用箱当前供应商候选",
+            details={
+                "sales_order_id": order.id,
+                **result,
+                "order_snapshot_preserved": True,
+                "price_values_redacted": True,
+            },
+        )
+        db.commit()
+        db.expire_all()
+        return {
+            **result,
+            "preview": build_external_purchase_preview(db, order_id),
+        }
+    except ExternalPurchaseContractError as error:
+        db.rollback()
+        raise _translate(error) from error
+    except HTTPException:
+        db.rollback()
+        raise
+    except (IntegrityError, OperationalError) as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="供应商候选正在被其他操作处理，请刷新后重试",
+        ) from error
 
 
 @router.get("/external-packaging-purchases/{purchase_order_id}/print")

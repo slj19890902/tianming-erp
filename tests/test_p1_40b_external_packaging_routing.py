@@ -285,6 +285,174 @@ def test_direct_external_order_freezes_routes_skips_production_and_confirms(
         ).status_code == 403
 
 
+def test_pending_direct_purchase_can_refresh_renamed_supplier_replacement(
+    routing_app: FastAPI,
+) -> None:
+    from app.models.external_packaging_price import ExternalPackagingPriceVersion
+    from app.models.order import OrderItem
+    from app.models.order_external_packaging import (
+        SalesOrderItemExternalComponent,
+        SalesOrderItemExternalComponentCandidate,
+    )
+    from app.models.product import Product
+    from app.models.supplier import ExternalPackagingProduct
+    from app.services.supplier_master import normalize_supplier_identity
+
+    ids = routing_app.state.fixture
+    with TestClient(routing_app) as client:
+        _login(client, "p1-40a-admin")
+        payload = _honeycomb_payload(ids)
+        payload["product_code"] = "EXT-RENAMED-SUPPLIER"
+        payload["customer_material_code"] = "EXT-RENAMED-SUPPLIER"
+        created_product = client.post("/api/master/products", json=payload)
+        assert created_product.status_code == 201, created_product.text
+        product_id = created_product.json()["id"]
+
+        order_payload = _order_payload_for(product_id, ids["customer_a"])
+        order_payload["customer_po"] = "P1-REFRESH-SUPPLIER-001"
+        created_order = client.post("/api/orders", json=order_payload)
+        assert created_order.status_code == 201, created_order.text
+        order_id = created_order.json()["id"]
+
+        with routing_app.state.factory() as db:
+            old_product = db.get(ExternalPackagingProduct, ids["HC-GENERAL"])
+            common_box = db.get(Product, product_id)
+            assert old_product is not None and common_box is not None
+            supplier = old_product.supplier
+            supplier.standard_name = "匿名诺尔特包装材料有限公司"
+            supplier.normalized_name = normalize_supplier_identity(supplier.standard_name)
+            supplier.display_name = "诺尔特"
+            supplier.version += 1
+            old_product.is_active = False
+            old_product.version += 1
+            replacement = ExternalPackagingProduct(
+                supplier_id=supplier.id,
+                customer_scope_id=old_product.customer_scope_id,
+                category_code=old_product.category_code,
+                supplier_product_code="TM-HC-NET",
+                normalized_supplier_product_code="TM-HC-NET",
+                product_name="诺尔特蜂窝纸板",
+                purchase_unit=old_product.purchase_unit,
+                specification_summary=old_product.specification_summary,
+                specification_json=old_product.specification_json,
+                is_active=True,
+                version=1,
+            )
+            db.add(replacement)
+            db.flush()
+            common_box.external_packaging_candidate_snapshot_json = json.dumps(
+                [
+                    {
+                        "external_product_id": replacement.id,
+                        "external_product_version": replacement.version,
+                        "is_default": True,
+                        "supplier_id": supplier.id,
+                        "supplier_name": supplier.display_name,
+                        "supplier_product_code": replacement.supplier_product_code,
+                        "product_name": replacement.product_name,
+                        "purchase_unit": replacement.purchase_unit,
+                        "customer_scope_id": replacement.customer_scope_id,
+                    }
+                ],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            common_box.version += 1
+            db.commit()
+            replacement_id = replacement.id
+
+        _seed_price(
+            routing_app,
+            replacement_id,
+            quote_unit="片",
+            unit_price="1.18",
+        )
+
+        blocked = client.get(
+            f"/api/orders/{order_id}/external-packaging-purchase"
+        )
+        assert blocked.status_code == 200, blocked.text
+        blocked_candidate = blocked.json()["items"][0]["candidates"][0]
+        assert blocked_candidate["external_product_id"] == ids["HC-GENERAL"]
+        assert "停用" in blocked_candidate["blocked_reason"]
+
+        refreshed = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/refresh-candidates"
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        preview = refreshed.json()["preview"]
+        assert preview["status"] == "pending"
+        row = preview["items"][0]
+        selected = next(
+            candidate
+            for candidate in row["candidates"]
+            if candidate["id"] == row["default_candidate_id"]
+        )
+        assert selected["external_product_id"] == replacement_id
+        assert selected["supplier_name"] == "诺尔特"
+        assert selected["supplier_product_code"] == "TM-HC-NET"
+        assert selected["blocked_reason"] is None
+        assert selected["price"]["unit_price"] == "1.18"
+
+        repeated_refresh = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/refresh-candidates"
+        )
+        assert repeated_refresh.status_code == 200, repeated_refresh.text
+        assert repeated_refresh.json()["appended_candidates"] == 0
+        preview = repeated_refresh.json()["preview"]
+        assert sum(
+            candidate["external_product_id"] == replacement_id
+            for candidate in preview["items"][0]["candidates"]
+        ) == 1
+
+        confirmed = client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/confirm",
+            json={
+                "idempotency_key": "p1-refresh-supplier-confirm",
+                "lines": [
+                    {
+                        "order_component_id": item["order_component_id"],
+                        "candidate_id": item["default_candidate_id"],
+                        "purchase_quantity": item["suggested_purchase_quantity"],
+                    }
+                    for item in preview["items"]
+                ],
+            },
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        assert confirmed.json()["confirmation"]["purchase_orders"][0][
+            "supplier_name"
+        ] == "诺尔特"
+
+    with routing_app.state.factory() as db:
+        item = db.scalar(select(OrderItem).where(OrderItem.order_id == order_id))
+        assert item is not None
+        component = db.scalar(
+            select(SalesOrderItemExternalComponent).where(
+                SalesOrderItemExternalComponent.sales_order_item_id == item.id
+            )
+        )
+        assert component is not None
+        candidates = db.scalars(
+            select(SalesOrderItemExternalComponentCandidate).where(
+                SalesOrderItemExternalComponentCandidate.order_component_id
+                == component.id
+            )
+        ).all()
+        assert {row.external_product_id_snapshot for row in candidates} == {
+            ids["HC-GENERAL"],
+            replacement_id,
+        }
+        assert sum(bool(row.is_default) for row in candidates) == 1
+        assert db.scalar(select(func.count()).select_from(ExternalPackagingPriceVersion)) >= 1
+
+    with TestClient(routing_app) as scoped_client:
+        _login(scoped_client, "p1-40b-scoped")
+        assert scoped_client.post(
+            f"/api/orders/{order_id}/external-packaging-purchase/refresh-candidates"
+        ).status_code == 403
+
+
 def test_order_uses_common_box_ratio_and_legacy_product_without_default_is_blocked(
     routing_app: FastAPI,
 ) -> None:

@@ -17,7 +17,7 @@
 | 正式运行地图 | SHA-256 `8a9b9c86a83a3fd563a9bb4771a8ccd4dc3a8823b05b5c28dafe1f1e055fac69`，3F revision `3994317ae14a7f18` |
 | 受保护草稿 | SHA-256 `6a3c3a40105af00209fa719217e03978f6fd8b6194345c4c83845d1bf80c20cb`；只作存在性保护，不参与权威换算 |
 | 审计时代码基线 | `origin/factory-current-baseline@6ffb5136ea6587f6a950d62ab7cefce4ff9294bb` / `v0.22.242` |
-| 最终候选代码基线 | `origin/factory-current-baseline@4a89b2c6b02a99be0f52fdc1e14001df2c78f6b8` / `v0.22.245`，Alembic head `jm71v8x9z60`；要求的 `25f479c65511687860e732f92aa3a617660da7d1` / `v0.22.237` 在祖先链 |
+| 最终候选代码基线 | `origin/factory-current-baseline@67c3bf95ce58dda956a0d895423cade2abe2a58d` / `v0.22.246`，Alembic head `jm71v8x9z60`；要求的 `25f479c65511687860e732f92aa3a617660da7d1` / `v0.22.237` 在祖先链 |
 
 ## scope v2 复核结果
 

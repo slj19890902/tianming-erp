@@ -372,6 +372,18 @@ class SupplierMonthlyPayment(Base):
     __tablename__ = "supplier_monthly_payments"
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_supplier_monthly_payments_amount"),
+        CheckConstraint(
+            "payment_method IN ('bank','acceptance')",
+            name="ck_supplier_monthly_payments_method",
+        ),
+        CheckConstraint(
+            "(payment_method = 'bank' AND acceptance_note_id IS NULL) OR "
+            "(payment_method = 'acceptance' AND acceptance_note_id IS NOT NULL)",
+            name="ck_supplier_monthly_payments_acceptance_link",
+        ),
+        UniqueConstraint(
+            "acceptance_note_id", name="uq_supplier_monthly_payments_acceptance"
+        ),
         Index("ix_supplier_monthly_payments_statement", "statement_id"),
     )
 
@@ -382,6 +394,12 @@ class SupplierMonthlyPayment(Base):
     )
     payment_date: Mapped[date] = mapped_column(Date, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    payment_method: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="bank", server_default="bank"
+    )
+    acceptance_note_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_acceptance_notes.id", ondelete="RESTRICT"), nullable=True
+    )
     reference: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True

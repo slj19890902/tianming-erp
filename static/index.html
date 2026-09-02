@@ -5033,16 +5033,60 @@
                       <div><span v-if="row.supplier_statement_amount != null">供应商账单 ¥{{ money(row.supplier_statement_amount) }}；差异 ¥{{ money(row.difference_amount) }}</span><span v-else class="muted">尚未登记供应商账单。</span></div>
                       <div class="toolbar-group"><button v-if="row.status==='draft' && canFinance" class="btn success" :disabled="supplierSettlementBusy(row) || row.supplier_statement_amount==null" @click="confirmSupplierSettlement(row)">确认应付</button><button v-if="row.can_reopen && canFinance" class="btn danger" :disabled="supplierSettlementBusy(row)" @click="reopenSupplierSettlement(row)">受控重开</button></div>
                     </div>
+                    <div v-for="adjustment in row.adjustments" :key="adjustment.id" class="muted" style="padding:3px 0">{{ supplierSettlementAdjustmentText(adjustment.difference_type) }} · {{ adjustment.amount>0?'+':'' }}¥{{ money(adjustment.amount) }}<span v-if="adjustment.statement_line_id"> · 收料行 #{{ adjustment.statement_line_id }}</span><span v-if="adjustment.note"> · {{ adjustment.note }}</span></div>
                     <template v-if="['confirmed_pending_invoice','invoiced_pending_payment','partial_payment','paid'].includes(row.status)">
                       <div v-if="canFinance" class="form-grid" style="padding:8px 0"><div class="field"><label>发票号码</label><input class="input" v-model.trim="row._invoiceNumber" /></div><div class="field"><label>发票日期</label><input class="input" type="date" v-model="row._invoiceDate" /></div><div class="field"><label>收到日期</label><input class="input" type="date" v-model="row._invoiceReceivedDate" /></div><div class="field"><label>发票总额</label><input class="input" type="number" step="0.01" min="0" v-model="row._invoiceTotal" /></div><div class="field"><label>分配本期</label><input class="input" type="number" step="0.01" min="0" v-model="row._invoiceAllocated" /></div><div class="field"><label>其中税额</label><input class="input" type="number" step="0.01" min="0" v-model="row._invoiceTax" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="addSupplierInvoice(row)">登记发票</button></div></div>
                       <div v-for="invoice in row.invoices" :key="invoice.id" class="toolbar" style="border-top:1px solid #e5e7eb;padding:6px 0"><span>{{ invoice.invoice_number }} · {{ invoice.invoice_date }} · 本期 ¥{{ money(invoice.allocated_amount) }}（税 ¥{{ money(invoice.tax_amount) }}）</span><span class="toolbar-group"><a v-if="invoice.attachment_url" class="btn small" :href="invoice.attachment_url" target="_blank">查看原件</a><button v-if="canFinance && !invoice.attachment_url" class="btn small" :disabled="supplierSettlementState.action==='upload'" @click="chooseSupplierInvoicePdf(row,invoice)">上传 PDF 原件</button></span></div>
-                      <div v-if="canFinance && row.status!=='paid'" class="form-grid" style="padding:8px 0"><div class="field"><label>付款日期</label><input class="input" type="date" v-model="row._paymentDate" /></div><div class="field"><label>本次付款</label><input class="input" type="number" step="0.01" min="0" v-model="row._paymentAmount" /></div><div class="field"><label>银行流水 / 备注</label><input class="input" v-model.trim="row._paymentReference" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="addSupplierPayment(row)">登记付款</button></div></div>
+                      <div v-if="canFinance && row.status!=='paid'" class="form-grid" style="padding:8px 0"><div class="field"><label>银行付款日期</label><input class="input" type="date" v-model="row._paymentDate" /></div><div class="field"><label>银行付款金额</label><input class="input" type="number" step="0.01" min="0" v-model="row._paymentAmount" /></div><div class="field"><label>银行流水 / 备注</label><input class="input" v-model.trim="row._paymentReference" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="addSupplierPayment(row)">登记付款（银行）</button></div></div>
+                      <div v-for="payment in row.payments" :key="payment.id" class="muted" style="padding:3px 0">{{ payment.payment_date }} · {{ payment.payment_method_label || '银行付款' }} · ¥{{ money(payment.amount) }}<span v-if="payment.reference"> · {{ payment.reference }}</span></div>
                     </template>
                   </details>
                 </div>
                 <div v-if="canViewFinanceCosts" class="panel finance-filter-panel" style="margin-bottom:10px">
                   <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
-                    <div><div class="section-title" style="display:flex;align-items:center;gap:6px">月度成本费用 <button v-if="canViewFinanceCosts" class="btn small" type="button" :disabled="financeProcessingState.settingsLoading || financeProcessingState.profilesLoading" @click="toggleFinanceProcessingPanel">{{ financeProcessingOpen ? '收起参数' : '加工参数' }}</button></div><div class="muted">先草稿，后确认。</div></div>
+                    <div><div class="section-title">每月只看四类支出</div><div class="muted">材料自动归集；工资、房租和月供只配置一次；水电按表数与发票；所有自动项先生成草稿。</div></div>
+                    <div class="toolbar-group"><div class="field" style="width:150px"><label>费用月份</label><input class="input" type="month" v-model="financeCostMonth" @change="onFinanceCostMonthChange" /></div><button class="btn" :disabled="simpleFinanceState.loading" @click="loadSimpleFinance">刷新</button><button v-if="canManageFinanceCosts" class="btn" :disabled="!!simpleFinanceState.action" @click="generateFinanceRecurringDrafts">{{ simpleFinanceState.action==='generate' ? '生成中…' : '生成本月固定草稿' }}</button><button v-if="canExportFinanceCosts" class="btn primary" @click="exportFinanceMaterialReconciliation">导出材料核票</button></div>
+                  </div>
+                  <div class="finance-cost-summary" style="margin-top:10px">
+                    <div class="finance-report-card"><span class="muted">材料采购</span><strong class="cost-sensitive">¥ {{ money(simpleFinanceSummary.primary_groups?.material?.erp_amount || 0) }}</strong><span class="muted">纸板 {{ money(simpleFinanceSummary.primary_groups?.material?.paperboard_amount || 0) }} · 外购包材 {{ money(simpleFinanceSummary.primary_groups?.material?.external_packaging_amount || 0) }}</span><span :class="['status',Number(simpleFinanceSummary.primary_groups?.material?.invoice_difference_amount||0)===0?'green':'orange']">发票差 ¥{{ money(simpleFinanceSummary.primary_groups?.material?.invoice_difference_amount || 0) }}</span></div>
+                    <div class="finance-report-card"><span class="muted">人员工资</span><strong class="cost-sensitive">¥ {{ money(simpleFinanceGroupAmount('personnel')) }}</strong><span class="muted">在岗 {{ simpleFinanceSummary.active_employee_count || 0 }} 人 · 草稿 {{ money(simpleFinanceSummary.primary_groups?.personnel?.draft_amount || 0) }}</span></div>
+                    <div class="finance-report-card"><span class="muted">运费</span><strong class="cost-sensitive">¥ {{ money(simpleFinanceGroupAmount('freight')) }}</strong><span class="muted">来料与送货运费合并显示</span></div>
+                    <div class="finance-report-card"><span class="muted">固定 / 经营费用</span><strong class="cost-sensitive">¥ {{ money(simpleFinanceGroupAmount('fixed_operating')) }}</strong><span class="muted">房租、水电、车贷及经营费用</span></div>
+                  </div>
+                  <div v-if="simpleFinanceState.error" class="notice danger" style="margin-top:8px">{{ simpleFinanceState.error }}</div>
+                  <div v-else class="muted" style="margin-top:8px">在手承兑 {{ simpleFinanceSummary.held_acceptance_count || 0 }} 张，合计 ¥{{ money(simpleFinanceSummary.held_acceptance_amount || 0) }}。承兑背书单独记，不冒充银行现金。</div>
+                  <details v-if="simpleFinanceSummary.primary_groups?.material?.differences?.length" style="margin-top:8px"><summary class="status orange" style="cursor:pointer">查看材料账单 / 发票差异具体位置（{{ simpleFinanceSummary.primary_groups.material.differences.length }} 家）</summary><div v-for="row in simpleFinanceSummary.primary_groups.material.differences" :key="row.statement_id" class="notice warning" style="margin-top:6px"><strong>{{ row.supplier_name }} · {{ row.statement_number }}</strong>　账单差 ¥{{ money(row.statement_difference_amount) }}　发票差 ¥{{ money(row.invoice_difference_amount) }}<div v-for="item in row.adjustments" :key="item.id" class="muted">{{ supplierSettlementAdjustmentText(item.difference_type) }} {{ item.amount>0?'+':'' }}¥{{ money(item.amount) }}<span v-if="item.statement_line_id"> · 收料行 #{{ item.statement_line_id }}</span><span v-if="item.note"> · {{ item.note }}</span></div></div></details>
+
+                  <details style="margin-top:10px"><summary style="cursor:pointer"><strong>工资、房租和固定月供（只配置一次）</strong> · {{ financeRecurringRules.length }} 条规则</summary>
+                    <div v-if="canManageFinanceCosts" class="finance-cost-grid" style="margin-top:10px">
+                      <div class="field"><label>规则类型</label><select class="select" v-model="financeRecurringForm.rule_type" @change="applyFinanceRecurringTypeDefaults"><option value="employee_wage">人员工资</option><option value="annual_rent">年度房租</option><option value="fixed_monthly">固定月供 / 车贷</option></select></div>
+                      <div class="field"><label>{{ financeRecurringForm.rule_type==='employee_wage' ? '员工姓名' : '费用名称' }}</label><input class="input" v-model.trim="financeRecurringForm.name" :placeholder="financeRecurringForm.rule_type==='employee_wage'?'例如：张师傅':financeRecurringForm.rule_type==='annual_rent'?'厂房房租':'车辆月供'" /></div>
+                      <div v-if="financeRecurringForm.rule_type==='employee_wage'" class="field"><label>岗位（只作明细）</label><input class="input" v-model.trim="financeRecurringForm.role_name" /></div>
+                      <div class="field"><label>成本中心</label><select class="select" v-model.number="financeRecurringForm.cost_center_id"><option v-for="item in simpleFinanceMeta.centers" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
+                      <template v-if="financeRecurringForm.rule_type==='employee_wage'"><div class="field"><label>基本工资</label><input class="input" type="number" min="0" step="0.01" v-model="financeRecurringForm.base_amount" /></div><div class="field"><label>津贴</label><input class="input" type="number" min="0" step="0.01" v-model="financeRecurringForm.allowance_amount" /></div><div class="field"><label>公司社保</label><input class="input" type="number" min="0" step="0.01" v-model="financeRecurringForm.employer_social_amount" /></div><div class="field"><label>固定扣款</label><input class="input" type="number" min="0" step="0.01" v-model="financeRecurringForm.deduction_amount" /></div></template>
+                      <div v-else-if="financeRecurringForm.rule_type==='annual_rent'" class="field"><label>年度总额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeRecurringForm.annual_amount" /><span class="muted">默认 380000，末月自动消化尾差</span></div>
+                      <div v-else class="field"><label>每月金额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeRecurringForm.monthly_amount" /></div>
+                      <div class="field"><label>开始月份</label><input class="input" type="month" v-model="financeRecurringForm.start_month" /></div><div class="field"><label>结束月份（可空）</label><input class="input" type="month" v-model="financeRecurringForm.end_month" /></div><div class="field"><label>每月记账日</label><input class="input" type="number" min="1" max="28" v-model="financeRecurringForm.due_day" /></div><div class="field"><label><input type="checkbox" v-model="financeRecurringForm.is_active" /> 当前启用</label></div>
+                    </div>
+                    <div v-if="canManageFinanceCosts" class="toolbar-group" style="justify-content:flex-end;margin:8px 0"><button class="btn" @click="resetFinanceRecurringForm">清空</button><button class="btn primary" :disabled="simpleFinanceState.saving" @click="saveFinanceRecurringRule">{{ financeRecurringForm.id ? '保存规则' : '新增规则' }}</button></div>
+                    <div class="table-wrap"><table><thead><tr><th>类型</th><th>人员 / 费用</th><th>组成 / 金额</th><th>期间</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in financeRecurringRules" :key="row.id"><td>{{ row.rule_type_label }}</td><td><strong>{{ row.name }}</strong><div class="muted">{{ row.role_name || '-' }}</div></td><td><template v-if="row.rule_type==='employee_wage'">基本 {{ money(row.base_amount) }} + 津贴 {{ money(row.allowance_amount) }} + 社保 {{ money(row.employer_social_amount) }} - 扣款 {{ money(row.deduction_amount) }}</template><template v-else-if="row.rule_type==='annual_rent'">年 ¥{{ money(row.annual_amount) }}</template><template v-else>月 ¥{{ money(row.monthly_amount) }}</template></td><td>{{ row.start_month }} 至 {{ row.end_month || '持续' }}</td><td><span :class="['status',row.is_active?'green':'gray']">{{ row.is_active ? '启用' : '停用' }}</span></td><td><button v-if="canManageFinanceCosts" class="btn small" @click="editFinanceRecurringRule(row)">编辑</button></td></tr><tr v-if="!financeRecurringRules.length"><td colspan="6" class="empty">尚未配置固定费用。</td></tr></tbody></table></div>
+                  </details>
+
+                  <details style="margin-top:10px"><summary style="cursor:pointer"><strong>水电表数、发票与付款</strong></summary>
+                    <div class="finance-cost-grid" style="margin-top:10px"><div class="field"><label>类型</label><select class="select" v-model="financeUtilityForm.utility_type" @change="applyFinanceUtilityType"><option value="electricity">电费</option><option value="water">水费</option></select></div><div class="field"><label>上月表数</label><input class="input" type="number" min="0" step="0.001" v-model="financeUtilityForm.previous_reading" /></div><div class="field"><label>本月表数</label><input class="input" type="number" min="0" step="0.001" v-model="financeUtilityForm.current_reading" /></div><div class="field"><label>单价</label><input class="input" type="number" min="0" step="0.0001" v-model="financeUtilityForm.unit_price" /></div><div class="field"><label>发票号（可空）</label><input class="input" v-model.trim="financeUtilityForm.invoice_number" /></div><div class="field"><label>发票日期</label><input class="input" type="date" v-model="financeUtilityForm.invoice_date" /></div><div class="field"><label>发票金额（优先）</label><input class="input" type="number" min="0" step="0.01" v-model="financeUtilityForm.invoice_amount" /></div><div class="field"><label>已付金额</label><input class="input" type="number" min="0" step="0.01" v-model="financeUtilityForm.paid_amount" /></div><div class="field"><label>付款日期</label><input class="input" type="date" v-model="financeUtilityForm.payment_date" /></div><div class="field"><label>&nbsp;</label><button v-if="canManageFinanceCosts" class="btn primary" :disabled="simpleFinanceState.saving" @click="saveFinanceUtilityReading">保存本月水电</button></div></div>
+                    <div v-for="row in financeUtilityReadings" :key="row.id" class="muted">{{ row.utility_type_label }}：{{ row.previous_reading }} → {{ row.current_reading }}，用量 {{ row.usage_quantity }}，计算 ¥{{ money(row.calculated_amount) }}，发票 {{ row.invoice_amount==null ? '待补' : `¥${money(row.invoice_amount)}` }}<span v-if="row.difference_amount!=null">，差异 ¥{{ money(row.difference_amount) }}</span></div>
+                  </details>
+
+                  <details style="margin-top:10px"><summary style="cursor:pointer"><strong>客户承兑与供应商背书</strong> · 在手 {{ simpleFinanceSummary.held_acceptance_count || 0 }} 张</summary>
+                    <div v-if="canFinance" class="finance-cost-grid" style="margin-top:10px"><div class="field"><label>承兑号码</label><input class="input" v-model.trim="financeAcceptanceForm.bill_number" /></div><div class="field"><label>客户</label><select class="select" v-model.number="financeAcceptanceForm.customer_id"><option :value="null">请选择</option><option v-for="item in simpleFinanceMeta.customers" :key="item.id" :value="item.id">{{ item.short_name }}</option></select></div><div class="field"><label>票面金额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeAcceptanceForm.amount" /></div><div class="field"><label>收到日期</label><input class="input" type="date" v-model="financeAcceptanceForm.received_date" /></div><div class="field"><label>到期日期</label><input class="input" type="date" v-model="financeAcceptanceForm.maturity_date" /></div><div class="field"><label>备注</label><input class="input" v-model.trim="financeAcceptanceForm.note" /></div><div class="field"><label>&nbsp;</label><button class="btn primary" :disabled="simpleFinanceState.saving" @click="saveFinanceAcceptance">登记在手承兑</button></div></div>
+                    <div class="table-wrap"><table><thead><tr><th>客户 / 承兑号</th><th>金额</th><th>收到 / 到期</th><th>状态</th><th>供应商月结 / 操作</th></tr></thead><tbody><tr v-for="row in financeAcceptances" :key="row.id"><td><strong>{{ row.customer_name }}</strong><div class="muted">{{ row.bill_number }}</div></td><td class="sensitive-price">¥ {{ money(row.amount) }}</td><td>{{ row.received_date }} / {{ row.maturity_date }}</td><td><span :class="['status',row.status==='held'?'orange':row.status==='endorsed'?'blue':row.status==='matured'?'green':'gray']">{{ row.status_label }}</span><div v-if="row.supplier_name" class="muted">{{ row.supplier_name }}</div></td><td><div v-if="row.status==='held'" class="toolbar-group"><select class="select" style="max-width:310px" v-model.number="row._statementId"><option :value="null">选择供应商月结</option><option v-for="item in simpleFinanceMeta.supplier_statements" :key="item.id" :value="item.id">{{ item.supplier_name }} · {{ item.statement_number }} · 可付 {{ money(item.invoice_available_amount) }}</option></select><button v-if="canFinance" class="btn small primary" :disabled="!!simpleFinanceState.action" @click="endorseFinanceAcceptance(row)">背书抵付</button><button v-if="canFinance" class="btn small" :disabled="!!simpleFinanceState.action" @click="transitionFinanceAcceptance(row,'matured')">到期</button><button v-if="canFinance" class="btn small danger" :disabled="!!simpleFinanceState.action" @click="transitionFinanceAcceptance(row,'returned')">退回</button></div><span v-else class="muted">{{ row.supplier_statement_id ? `已关联月结 #${row.supplier_statement_id}` : '-' }}</span></td></tr><tr v-if="!financeAcceptances.length"><td colspan="5" class="empty">尚无承兑记录。</td></tr></tbody></table></div>
+                  </details>
+                </div>
+                <details v-if="canViewFinanceCosts" class="panel finance-filter-panel" style="margin-bottom:10px">
+                  <summary style="cursor:pointer"><strong>费用明细与高级筛选</strong>　<span class="muted">日常只需处理上方四类支出；这里用于查看历史细类、导入和导出。</span></summary>
+                  <div style="margin-top:10px">
+                  <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
+                    <div><div class="section-title" style="display:flex;align-items:center;gap:6px">月度成本费用明细 <button v-if="canViewFinanceCosts" class="btn small" type="button" :disabled="financeProcessingState.settingsLoading || financeProcessingState.profilesLoading" @click="toggleFinanceProcessingPanel">{{ financeProcessingOpen ? '收起参数' : '加工参数' }}</button></div><div class="muted">先草稿，后确认；旧细分类保留只读筛查。</div></div>
                     <div class="toolbar-group">
                       <button class="btn" :disabled="financeCostState.loading" @click="loadFinanceCosts">刷新</button>
                       <button v-if="canExportFinanceCosts" class="btn" :disabled="financeCostState.exporting" @click="downloadFinanceCostTemplate">下载模板</button>
@@ -5069,7 +5113,8 @@
                     <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>送货日期</th><th>送货单</th><th>客户</th><th>数量</th><th>缺口</th></tr></thead><tbody><tr v-for="row in financeCostSummary.material_cost.missing_details" :key="row.delivery_item_id"><td>{{ row.delivery_date }}</td><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivered_quantity }}</td><td>{{ row.reason }}</td></tr></tbody></table></div>
                   </details>
                   <div v-if="financeCostMeta.warning" class="muted" style="margin-top:8px">{{ financeCostMeta.warning }}</div>
-                </div>
+                  </div>
+                </details>
 
                 <div v-if="canViewFinanceCosts && financeProcessingOpen" class="panel finance-processing-panel">
                   <div class="finance-processing-head">
@@ -5160,7 +5205,7 @@
                   <div class="toolbar"><div class="section-title">{{ financeCostForm.id ? '编辑费用草稿' : '记一笔费用' }}</div><button v-if="financeCostForm.id" class="btn small" @click="resetFinanceCostForm">取消编辑</button></div>
                   <div v-if="financeCostSaveAttempt.outcomeUncertain" class="notice warning">上次保存结果暂不确定。请保持内容不变并点击“按原编号重试”，系统会安全核对，不会重复记账。</div>
                   <div class="finance-cost-grid">
-                    <div class="field"><label>类别</label><select class="select" v-model="financeCostForm.cost_category" @change="applyFinanceCostCategoryDefault"><option v-for="item in financeCostMeta.categories" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
+                    <div class="field"><label>类别</label><select class="select" v-model="financeCostForm.cost_category" @change="applyFinanceCostCategoryDefault"><option v-for="item in financeCostMeta.input_categories" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
                     <div class="field"><label>成本中心</label><select class="select" v-model.number="financeCostForm.cost_center_id"><option v-for="item in financeCostActiveCenters" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
                     <div class="field"><label>日期</label><input class="input" type="date" v-model="financeCostForm.document_date" /></div>
                     <div class="field"><label>金额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeCostForm.amount" /></div>
@@ -9771,7 +9816,7 @@
             financeReportState: { loading:false, error:"", loaded:false },
             financeCostMonth: month(),
             financeCostFilters: { status:"", category:"", center_id:"" },
-            financeCostMeta: { categories:[], accounting_classes:[], allocation_bases:[], centers:[], warning:"" },
+            financeCostMeta: { categories:[], input_categories:[], accounting_classes:[], allocation_bases:[], centers:[], warning:"" },
             financeCostSummary: { status_totals:{}, confirmed_total:"0.00", by_accounting_class:[], by_category:[], by_center:[], material_cost:{actual_material_cost:"0.00",covered_delivery_lines:0,total_delivery_lines:0,missing_details:[]}, close_ready:false, blockers:[], note:"" },
             financeCostItems: [], financeCostTotal: 0,
             financeCostState: { loading:false, saving:false, importing:false, exporting:false, error:"" },
@@ -9792,6 +9837,13 @@
             supplierSettlements:[], supplierSettlementIssues:[],
             supplierSettlementState:{loading:false,action:"",statementId:null,error:"",periodStart:"",periodEnd:"",generateKey:"",autoGeneratedMonth:"",uploadStatementId:null,uploadInvoiceId:null},
             supplierSettlementAttempts:{},
+            simpleFinanceMeta:{primary_groups:[],rule_types:[],centers:[],customers:[],supplier_statements:[],note:""},
+            simpleFinanceSummary:{primary_groups:{material:{},personnel:{},freight:{},fixed_operating:{}},active_employee_count:0,held_acceptance_count:0,held_acceptance_amount:"0.00",note:""},
+            financeRecurringRules:[], financeUtilityReadings:[], financeUtilityRecommended:{water:"",electricity:""}, financeAcceptances:[],
+            simpleFinanceState:{loading:false,saving:false,action:"",error:""},
+            financeRecurringForm:{id:null,version:null,rule_type:"employee_wage",name:"",role_name:"",cost_center_id:null,start_month:`${month().slice(0,4)}-01`,end_month:"",base_amount:"",allowance_amount:"",employer_social_amount:"",deduction_amount:"",annual_amount:"380000",monthly_amount:"",due_day:20,note:"",is_active:true},
+            financeUtilityForm:{id:null,version:null,utility_type:"electricity",cost_center_id:null,previous_reading:"",current_reading:"",unit_price:"",invoice_number:"",invoice_date:"",invoice_amount:"",paid_amount:"",payment_date:"",note:""},
+            financeAcceptanceForm:{bill_number:"",customer_id:null,amount:"",received_date:today(),maturity_date:"",note:""},
             financePayables: [], financePayableSuppliers: [], financePayableState:{loading:false,saving:false,error:""},
             financePayableForm:{supplier_id:null,counterparty_name:"",category:"material",document_number:"",document_date:today(),due_date:"",amount:"",note:""},
             statementDisputeForm:{reason:"",target_month:"",remove:{},add:{}}, statementDisputeCandidates:[], statementDisputeState:{loading:false,saving:false,error:""},
@@ -11080,9 +11132,9 @@
           },
           payableCategoryOptions() {
             return [
-              {value:"material",label:"纸板/材料"},{value:"outsourcing",label:"外协加工"},
+              {value:"material",label:"模具 / 油墨 / 其他材料"},
               {value:"freight",label:"运费"},{value:"utilities",label:"水电能耗"},
-              {value:"rent",label:"房租"},{value:"wages",label:"工资"},
+              {value:"rent",label:"房租"},{value:"wages",label:"人员工资"},
               {value:"maintenance",label:"维修保养"},{value:"tax_fee",label:"税费"},
               {value:"other",label:"其他支出"},
             ];
@@ -14336,7 +14388,7 @@
             this.financeCostItems = [];
             this.financeCostTotal = 0;
             this.financeCostSummary = {status_totals:{},confirmed_total:"0.00",by_accounting_class:[],by_category:[],by_center:[],material_cost:{actual_material_cost:"0.00",covered_delivery_lines:0,total_delivery_lines:0,missing_details:[]},close_ready:false,blockers:[],note:""};
-            this.financeCostMeta = {categories:[],accounting_classes:[],allocation_bases:[],centers:[],warning:""};
+            this.financeCostMeta = {categories:[],input_categories:[],accounting_classes:[],allocation_bases:[],centers:[],warning:""};
             this.financeCostState = {loading:false,saving:false,importing:false,exporting:false,error:""};
             this.financeCostSaveAttempt = {signature:"",idempotencyKey:"",outcomeUncertain:false};
             this.financeCostTransitionAttempts = {};
@@ -14352,6 +14404,13 @@
             this.financeProcessingDefaultPrinterModes = [{value:"new",label:"新印刷机"},{value:"old",label:"旧印刷机"}];
             this.financeProcessingPrinterModes = [{value:"auto",label:"按默认"},{value:"new",label:"新印刷机"},{value:"old",label:"旧印刷机"},{value:"none",label:"不印刷"}];
             this.financeProcessingDieModes = [{value:"auto",label:"按默认"},{value:"none",label:"不模切"},{value:"small_normal",label:"小模切"},{value:"small_complex",label:"小复杂"},{value:"large",label:"大模切"},{value:"oversize",label:"超大模切"}];
+            this.simpleFinanceMeta = {primary_groups:[],rule_types:[],centers:[],customers:[],supplier_statements:[],note:""};
+            this.simpleFinanceSummary = {primary_groups:{material:{},personnel:{},freight:{},fixed_operating:{}},active_employee_count:0,held_acceptance_count:0,held_acceptance_amount:"0.00",note:""};
+            this.financeRecurringRules = [];
+            this.financeUtilityReadings = [];
+            this.financeUtilityRecommended = {water:"",electricity:""};
+            this.financeAcceptances = [];
+            this.simpleFinanceState = {loading:false,saving:false,action:"",error:""};
             this.pages.financeCosts = 1;
             this.resetFinanceCostForm();
             this.cancelOrderGroupDetailRequests?.();
@@ -20930,7 +20989,7 @@
             if (this.financeView === "payables") {
               const payableRequest = this.loadFinancePayables({authGeneration:requestAuthGeneration,userId:requestUserId});
               if (!this.canViewFinanceCosts) return payableRequest;
-              return Promise.all([this.loadFinanceCosts(),this.loadSupplierSettlements(),payableRequest]);
+              return Promise.all([this.loadFinanceCosts(),this.loadSupplierSettlements(),this.loadSimpleFinance(),payableRequest]);
             }
             if (this.financeView === "invoice_tasks") {
               return this.loadInvoiceTasks({authGeneration:requestAuthGeneration,userId:requestUserId});
@@ -21418,14 +21477,14 @@
           async onFinanceCostMonthChange() {
             if (!this.financeCostForm.id) this.financeCostForm.cost_month = this.financeCostMonth || month();
             this.pages.financeCosts = 1;
-            return this.loadFinanceCosts();
+            return Promise.all([this.loadFinanceCosts(),this.loadSimpleFinance()]);
           },
           async reloadFinanceCosts() {
             this.pages.financeCosts = 1;
             return this.loadFinanceCosts();
           },
           applyFinanceCostCategoryDefault() {
-            const category = (this.financeCostMeta.categories || []).find(row=>row.value===this.financeCostForm.cost_category);
+            const category = (this.financeCostMeta.input_categories || this.financeCostMeta.categories || []).find(row=>row.value===this.financeCostForm.cost_category);
             const center = (this.financeCostMeta.centers || []).find(row=>row.is_active && row.code===category?.default_center);
             if (center) this.financeCostForm.cost_center_id = center.id;
           },
@@ -21460,6 +21519,7 @@
               if (!this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) return false;
               this.financeCostMeta = {
                 categories:metadata.data.categories || [], accounting_classes:metadata.data.accounting_classes || [],
+                input_categories:metadata.data.input_categories || metadata.data.categories || [],
                 allocation_bases:metadata.data.allocation_bases || [], centers:metadata.data.centers || [],
                 warning:metadata.data.warning || "",
               };
@@ -21652,11 +21712,130 @@
               this.finishLatestRequest(requestKey,controller);
             }
           },
+          simpleFinanceGroupAmount(key) {
+            const row = this.simpleFinanceSummary?.primary_groups?.[key] || {};
+            return Number(row.confirmed_amount || 0) + Number(row.draft_amount || 0);
+          },
+          async loadSimpleFinance() {
+            if (!this.canViewFinanceCosts) return false;
+            const requestKey = "finance:simple";
+            const controller = this.beginLatestRequest(requestKey);
+            this.simpleFinanceState.loading = true;
+            this.simpleFinanceState.error = "";
+            try {
+              const params = {month:this.financeCostMonth || month()};
+              const [metadata,summary,rules,utilities,acceptances] = await Promise.all([
+                axios.get("/api/finance/simple-finance/metadata",{signal:controller.signal}),
+                axios.get("/api/finance/simple-finance/summary",{params,signal:controller.signal}),
+                axios.get("/api/finance/simple-finance/recurring-rules",{signal:controller.signal}),
+                axios.get("/api/finance/simple-finance/utility-readings",{params,signal:controller.signal}),
+                axios.get("/api/finance/simple-finance/acceptances",{signal:controller.signal}),
+              ]);
+              if (latestRequestControllers.get(requestKey)!==controller) return false;
+              this.simpleFinanceMeta = metadata.data || this.simpleFinanceMeta;
+              this.simpleFinanceSummary = summary.data || this.simpleFinanceSummary;
+              this.financeRecurringRules = rules.data.items || [];
+              this.financeUtilityReadings = utilities.data.items || [];
+              this.financeUtilityRecommended = utilities.data.recommended_previous_readings || {};
+              this.financeAcceptances = (acceptances.data.items || []).map(row=>({...row,_statementId:null}));
+              if (!this.financeRecurringForm.id) this.applyFinanceRecurringTypeDefaults();
+              this.applyFinanceUtilityType();
+              return true;
+            } catch(error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey)===controller) this.simpleFinanceState.error=this.errorMessage(error);
+              return false;
+            } finally {
+              if (latestRequestControllers.get(requestKey)===controller) {
+                this.simpleFinanceState.loading=false;
+                this.finishLatestRequest(requestKey,controller);
+              }
+            }
+          },
+          applyFinanceRecurringTypeDefaults() {
+            const code = this.financeRecurringForm.rule_type === "fixed_monthly" ? "FINANCE" : "PROD";
+            const center = (this.simpleFinanceMeta.centers || []).find(row=>row.code===code);
+            if (center) this.financeRecurringForm.cost_center_id=Number(center.id);
+            if (this.financeRecurringForm.rule_type === "annual_rent" && !Number(this.financeRecurringForm.annual_amount||0)) this.financeRecurringForm.annual_amount="380000";
+          },
+          resetFinanceRecurringForm() {
+            this.financeRecurringForm={id:null,version:null,rule_type:"employee_wage",name:"",role_name:"",cost_center_id:null,start_month:`${(this.financeCostMonth||month()).slice(0,4)}-01`,end_month:"",base_amount:"",allowance_amount:"",employer_social_amount:"",deduction_amount:"",annual_amount:"380000",monthly_amount:"",due_day:20,note:"",is_active:true};
+            this.applyFinanceRecurringTypeDefaults();
+          },
+          editFinanceRecurringRule(row) {
+            this.financeRecurringForm={id:row.id,version:row.version,rule_type:row.rule_type,name:row.name||"",role_name:row.role_name||"",cost_center_id:Number(row.cost_center_id),start_month:row.start_month,end_month:row.end_month||"",base_amount:String(row.base_amount||""),allowance_amount:String(row.allowance_amount||""),employer_social_amount:String(row.employer_social_amount||""),deduction_amount:String(row.deduction_amount||""),annual_amount:String(row.annual_amount||""),monthly_amount:String(row.monthly_amount||""),due_day:Number(row.due_day||20),note:row.note||"",is_active:row.is_active!==false};
+          },
+          async saveFinanceRecurringRule() {
+            const form=this.financeRecurringForm;
+            if (!form.name || !form.start_month || !form.cost_center_id) { this.showToast("请填写名称、开始月份和成本中心",true); return false; }
+            const payload={rule_type:form.rule_type,name:String(form.name).trim(),role_name:String(form.role_name||"").trim()||null,cost_center_id:Number(form.cost_center_id),start_month:form.start_month,end_month:form.end_month||null,base_amount:String(form.base_amount||0),allowance_amount:String(form.allowance_amount||0),employer_social_amount:String(form.employer_social_amount||0),deduction_amount:String(form.deduction_amount||0),annual_amount:String(form.annual_amount||0),monthly_amount:String(form.monthly_amount||0),due_day:Number(form.due_day||20),note:String(form.note||"").trim()||null,is_active:!!form.is_active,idempotency_key:createIdempotencyKey()};
+            this.simpleFinanceState.saving=true;
+            try {
+              if (form.id) await axios.put(`/api/finance/simple-finance/recurring-rules/${form.id}`,{...payload,expected_version:Number(form.version)});
+              else await axios.post("/api/finance/simple-finance/recurring-rules",payload);
+              this.resetFinanceRecurringForm(); await this.loadSimpleFinance(); this.showToast("固定费用规则已保存"); return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.simpleFinanceState.saving=false; }
+          },
+          async generateFinanceRecurringDrafts() {
+            if (!this.canManageFinanceCosts || this.simpleFinanceState.action) return false;
+            this.simpleFinanceState.action="generate";
+            try {
+              const {data}=await axios.post("/api/finance/simple-finance/recurring-generate",{month:this.financeCostMonth||month(),idempotency_key:createIdempotencyKey()});
+              await Promise.all([this.loadSimpleFinance(),this.loadFinanceCosts()]);
+              this.showToast(`已生成 ${data.created_count||0} 条、更新 ${data.updated_count||0} 条草稿；在岗 ${data.active_employee_count||0} 人`); return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.simpleFinanceState.action=""; }
+          },
+          applyFinanceUtilityType() {
+            const current=(this.financeUtilityReadings||[]).find(row=>row.utility_type===this.financeUtilityForm.utility_type);
+            const center=(this.simpleFinanceMeta.centers||[]).find(row=>row.code==="PROD");
+            if (current) this.financeUtilityForm={id:current.id,version:current.version,utility_type:current.utility_type,cost_center_id:Number(current.cost_center_id),previous_reading:String(current.previous_reading),current_reading:String(current.current_reading),unit_price:String(current.unit_price),invoice_number:current.invoice_number||"",invoice_date:current.invoice_date||"",invoice_amount:current.invoice_amount==null?"":String(current.invoice_amount),paid_amount:String(current.paid_amount||""),payment_date:current.payment_date||"",note:current.note||""};
+            else this.financeUtilityForm={id:null,version:null,utility_type:this.financeUtilityForm.utility_type,cost_center_id:center?Number(center.id):null,previous_reading:String(this.financeUtilityRecommended?.[this.financeUtilityForm.utility_type]||""),current_reading:"",unit_price:"",invoice_number:"",invoice_date:"",invoice_amount:"",paid_amount:"",payment_date:"",note:""};
+          },
+          async saveFinanceUtilityReading() {
+            const form=this.financeUtilityForm;
+            if (!form.cost_center_id || form.previous_reading==="" || form.current_reading==="" || form.unit_price==="") { this.showToast("请填写上月表数、本月表数和单价",true); return false; }
+            const payload={cost_month:this.financeCostMonth||month(),utility_type:form.utility_type,cost_center_id:Number(form.cost_center_id),previous_reading:String(form.previous_reading),current_reading:String(form.current_reading),unit_price:String(form.unit_price),invoice_number:String(form.invoice_number||"").trim()||null,invoice_date:form.invoice_date||null,invoice_amount:form.invoice_amount===""?null:String(form.invoice_amount),paid_amount:String(form.paid_amount||0),payment_date:form.payment_date||null,note:String(form.note||"").trim()||null,expected_version:form.version?Number(form.version):null,idempotency_key:createIdempotencyKey()};
+            this.simpleFinanceState.saving=true;
+            try { await axios.post("/api/finance/simple-finance/utility-readings",payload); await Promise.all([this.loadSimpleFinance(),this.loadFinanceCosts()]); this.showToast("水电表数与账单已保存为费用草稿"); return true; }
+            catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.simpleFinanceState.saving=false; }
+          },
+          async saveFinanceAcceptance() {
+            const form=this.financeAcceptanceForm;
+            if (!form.bill_number || !form.customer_id || !(Number(form.amount)>0) || !form.received_date || !form.maturity_date) { this.showToast("请完整填写承兑号、客户、金额、收到日和到期日",true); return false; }
+            this.simpleFinanceState.saving=true;
+            try { await axios.post("/api/finance/simple-finance/acceptances",{bill_number:String(form.bill_number).trim(),customer_id:Number(form.customer_id),customer_statement_id:null,amount:String(form.amount),received_date:form.received_date,maturity_date:form.maturity_date,note:String(form.note||"").trim()||null,idempotency_key:createIdempotencyKey()}); this.financeAcceptanceForm={bill_number:"",customer_id:null,amount:"",received_date:today(),maturity_date:"",note:""}; await this.loadSimpleFinance(); this.showToast("客户承兑已登记为在手票据"); return true; }
+            catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.simpleFinanceState.saving=false; }
+          },
+          async endorseFinanceAcceptance(row) {
+            const statement=(this.simpleFinanceMeta.supplier_statements||[]).find(item=>Number(item.id)===Number(row._statementId));
+            if (!statement) { this.showToast("请选择要抵付的供应商月结",true); return false; }
+            if (!confirm(`确认将承兑 ${row.bill_number}（¥${this.money(row.amount)}）背书给 ${statement.supplier_name} 吗？该笔会记为承兑抵付，不是银行现金。`)) return false;
+            this.simpleFinanceState.action=`endorse:${row.id}`;
+            try { await axios.post(`/api/finance/simple-finance/acceptances/${row.id}/endorse`,{expected_version:Number(row.version),supplier_statement_id:Number(row._statementId),endorsement_date:today(),idempotency_key:createIdempotencyKey()}); await Promise.all([this.loadSimpleFinance(),this.loadSupplierSettlements(false)]); this.showToast("承兑已背书抵付供应商月结"); return true; }
+            catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.simpleFinanceState.action=""; }
+          },
+          async transitionFinanceAcceptance(row,action) {
+            this.simpleFinanceState.action=`${action}:${row.id}`;
+            try { await axios.post(`/api/finance/simple-finance/acceptances/${row.id}/transition`,{expected_version:Number(row.version),action,idempotency_key:createIdempotencyKey()}); await this.loadSimpleFinance(); this.showToast("承兑状态已更新"); return true; }
+            catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.simpleFinanceState.action=""; }
+          },
+          async exportFinanceMaterialReconciliation() {
+            try { const response=await axios.get("/api/finance/simple-finance/material-export",{params:{month:this.financeCostMonth||month()},responseType:"blob"}); this.saveFinanceCostWorkbook(response,`供应商材料核票_${this.financeCostMonth||month()}.xlsx`); this.showToast("纸板与外购包材核票表已导出"); }
+            catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
           payableCategoryText(value) {
-            return this.payableCategoryOptions.find(row=>row.value===value)?.label || value || "其他";
+            return this.payableCategoryOptions.find(row=>row.value===value)?.label || ({outsourcing:"历史外协加工"})[value] || value || "其他";
           },
           payableStatusText(value) {
             return ({draft:"草稿",confirmed:"待付款",paid:"已付",voided:"已作废"})[value] || value;
+          },
+          supplierSettlementAdjustmentText(value) {
+            return ({price:"价格差异",quantity:"数量差异",tax_rounding:"税额尾差",other:"其他调整"})[value] || value;
           },
           supplierSettlementStatusText(value) {
             return ({draft:"待核对",difference:"有差异",confirmed_pending_invoice:"待收发票",invoiced_pending_payment:"待付款",partial_payment:"部分付款",paid:"已付清",voided:"已作废"})[value] || value;

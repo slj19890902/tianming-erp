@@ -176,6 +176,19 @@ PAYABLE_STATUS_LABELS = {
     "voided": "已作废",
 }
 
+SIMPLE_COST_INPUT_CATEGORIES = (
+    "production_wages",
+    "inbound_freight",
+    "delivery_freight",
+    "factory_utilities",
+    "factory_rent",
+    "finance_expense",
+    "administrative_expense",
+    "maintenance",
+    "sales_expense",
+    "other",
+)
+
 can_finance_view = PermissionChecker("finance.view")
 can_cost_view = PermissionChecker("cost.view")
 can_cost_manage = PermissionChecker("finance.cost.manage")
@@ -613,6 +626,20 @@ def cost_pool_metadata(
         "categories": [
             {"value": code, **metadata} for code, metadata in COST_CATEGORIES.items()
         ],
+        "input_categories": [
+            {
+                "value": code,
+                **COST_CATEGORIES[code],
+                "label": (
+                    "人员工资"
+                    if code == "production_wages"
+                    else "固定月供 / 车贷"
+                    if code == "finance_expense"
+                    else COST_CATEGORIES[code]["label"]
+                ),
+            }
+            for code in SIMPLE_COST_INPUT_CATEGORIES
+        ],
         "accounting_classes": [
             {"value": code, "label": label}
             for code, label in ACCOUNTING_CLASS_LABELS.items()
@@ -622,7 +649,7 @@ def cost_pool_metadata(
             for code, label in ALLOCATION_BASIS_LABELS.items()
         ],
         "centers": [_center_response(row) for row in centers],
-        "warning": "本页只归集工资和经营费用；实际材料销货成本必须由采购收料与库存消耗来源链生成。",
+        "warning": "新记账只保留人员工资、运费和固定/经营费用；旧细分类仅作历史显示。纸板与外购包材由供应商月结自动归集。",
     }
 
 

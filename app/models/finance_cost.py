@@ -95,7 +95,8 @@ class FinanceCostPoolEntry(Base):
             name="ck_finance_cost_pool_entries_allocation_basis",
         ),
         CheckConstraint(
-            "source_type IN ('manual','excel_import','finance_payable')",
+            "source_type IN ('manual','excel_import','finance_payable',"
+            "'recurring_rule','utility_reading')",
             name="ck_finance_cost_pool_entries_source_type",
         ),
         CheckConstraint(

@@ -172,6 +172,11 @@ from app.models.finance_cost import (  # noqa: E402,F401
     FinanceCostCenter,
     FinanceCostPoolEntry,
 )
+from app.models.finance_simplified import (  # noqa: E402,F401
+    FinanceAcceptanceNote,
+    FinanceRecurringRule,
+    FinanceUtilityReading,
+)
 from app.models.processing_cost import (  # noqa: E402,F401
     ProcessingCostSettings,
     ProductProcessingProfile,

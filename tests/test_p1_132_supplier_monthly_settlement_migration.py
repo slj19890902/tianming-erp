@@ -19,6 +19,11 @@ TABLES = (
     "supplier_monthly_statement_lines",
     "supplier_monthly_statements",
 )
+DESCENDANT_TABLES = (
+    "finance_utility_readings",
+    "finance_acceptance_notes",
+    "finance_recurring_rules",
+)
 
 
 def _config(monkeypatch: pytest.MonkeyPatch, database: Path) -> Config:
@@ -41,6 +46,8 @@ def _parent_schema(monkeypatch: pytest.MonkeyPatch, database: Path) -> Config:
         connection.execute(
             "DROP TRIGGER IF EXISTS trg_supplier_statement_receipt_reverse_guard"
         )
+        for table in DESCENDANT_TABLES:
+            connection.execute(f"DROP TABLE {table}")
         for table in TABLES:
             connection.execute(f"DROP TABLE {table}")
         connection.commit()
@@ -65,7 +72,7 @@ def test_supplier_settlement_migration_is_linear_and_round_trips(
     config = _parent_schema(monkeypatch, database)
     script = ScriptDirectory.from_config(config)
     assert script.get_revision(TARGET).down_revision == PREVIOUS
-    assert script.get_heads() == [TARGET]
+    assert len(script.get_heads()) == 1
 
     command.upgrade(config, TARGET)
     with sqlite3.connect(database) as connection:
@@ -104,10 +111,11 @@ def test_empty_database_full_chain_and_candidate_round_trip(
 ) -> None:
     database = tmp_path / "p1-132-full-chain.sqlite3"
     config = _config(monkeypatch, database)
+    head = ScriptDirectory.from_config(config).get_heads()[0]
 
     command.upgrade(config, "head")
     with sqlite3.connect(database) as connection:
-        _health(connection, TARGET)
+        _health(connection, head)
 
     command.downgrade(config, PREVIOUS)
     with sqlite3.connect(database) as connection:
@@ -115,7 +123,7 @@ def test_empty_database_full_chain_and_candidate_round_trip(
 
     command.upgrade(config, "head")
     with sqlite3.connect(database) as connection:
-        _health(connection, TARGET)
+        _health(connection, head)
 
 
 def test_confirmed_statement_blocks_receipt_reversal_and_downgrade(

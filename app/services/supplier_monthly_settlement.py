@@ -767,6 +767,9 @@ def _payment_response(row: SupplierMonthlyPayment) -> dict[str, Any]:
         "id": row.id,
         "payment_date": row.payment_date,
         "amount": row.amount,
+        "payment_method": row.payment_method,
+        "payment_method_label": "承兑背书" if row.payment_method == "acceptance" else "银行付款",
+        "acceptance_note_id": row.acceptance_note_id,
         "reference": row.reference,
         "created_at": row.created_at,
     }
@@ -1188,6 +1191,8 @@ def add_payment(
     payment_date: date,
     amount: Decimal,
     reference: str | None,
+    payment_method: str = "bank",
+    acceptance_note_id: int | None = None,
     user: User,
 ) -> tuple[SupplierMonthlyStatement, SupplierMonthlyPayment]:
     row = _editable_statement(
@@ -1201,6 +1206,17 @@ def add_payment(
     if normalized_amount <= 0:
         raise SupplierSettlementError(
             "SUPPLIER_PAYMENT_AMOUNT_INVALID", "付款金额必须大于 0", 422
+        )
+    normalized_method = str(payment_method or "bank").strip()
+    if normalized_method not in {"bank", "acceptance"}:
+        raise SupplierSettlementError(
+            "SUPPLIER_PAYMENT_METHOD_INVALID", "付款方式无效", 422
+        )
+    if (normalized_method == "acceptance") != (acceptance_note_id is not None):
+        raise SupplierSettlementError(
+            "SUPPLIER_PAYMENT_ACCEPTANCE_LINK_INVALID",
+            "承兑背书付款必须关联承兑票据，银行付款不能关联承兑票据",
+            422,
         )
     confirmed = _money(row.confirmed_amount)
     invoiced = _money(
@@ -1237,6 +1253,8 @@ def add_payment(
         statement_id=row.id,
         payment_date=payment_date,
         amount=normalized_amount,
+        payment_method=normalized_method,
+        acceptance_note_id=acceptance_note_id,
         reference=str(reference or "").strip() or None,
         created_by=user.id,
     )

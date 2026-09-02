@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.229"
-    assert APP_VERSION_NAME == "已报料跨单标签与外购供应商报价修复"
+    assert APP_VERSION == "v0.22.230"
+    assert APP_VERSION_NAME == "思迈尔MK005实收片料楞型修复"
     assert APP_BUILD_DATE == "2026-09-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,13 +49,17 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "多张供应商报料单" in item and "一次打印对话框" in item for item in current_release)
-    assert any("本次更新｜" in item and "整批明确阻止" in item and "不再静默跳过" in item for item in current_release)
-    assert any("本次更新｜" in item and "不可变打印作业" in item and "幂等" in item for item in current_release)
-    assert any("本次更新｜" in item and "当前启用供应商" in item and "有效报价" in item for item in current_release)
-    assert any("本次更新｜" in item and "无数据库迁移" in item and "已确认采购" in item for item in current_release)
-    assert any("如何验证｜" in item and "诺尔特" in item and "1.97元" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.229" in item and "jh67v8x9z56" in item for item in current_release)
+    assert any("本次更新｜" in item and "MK005" in item and "AB/BE适用范围" in item for item in current_release)
+    assert any("本次更新｜" in item and "订单用途200张" in item and "片料备库" in item for item in current_release)
+    assert any("本次更新｜" in item and "数据库门禁没有放宽" in item for item in current_release)
+    assert any("本次更新｜" in item and "幂等" in item and "事务" in item for item in current_release)
+    assert any("本次更新｜" in item and "无数据库迁移" in item and "不代替员工确认" in item for item in current_release)
+    assert any("如何验证｜" in item and "实收302张" in item and "片料备库" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.230" in item and "jh67v8x9z56" in item for item in current_release)
+    prior_release_229 = [item for item in APP_CHANGELOG if item.startswith("v0.22.229：")]
+    assert any("本次更新｜" in item and "多张供应商报料单" in item and "一次打印对话框" in item for item in prior_release_229)
+    assert any("本次更新｜" in item and "当前启用供应商" in item and "有效报价" in item for item in prior_release_229)
+    assert any("如何验证｜" in item and "v0.22.229" in item and "jh67v8x9z56" in item for item in prior_release_229)
     prior_release_228 = [item for item in APP_CHANGELOG if item.startswith("v0.22.228：")]
     assert any("本次更新｜" in item and "E / 现实东向" in item and "三楼" in item for item in prior_release_228)
     assert any("本次更新｜" in item and "3F / 对齐3F" in item and "完成标定后" in item for item in prior_release_228)

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.228"
-APP_VERSION_NAME = "4F查货现实东向"
+APP_VERSION = "v0.22.229"
+APP_VERSION_NAME = "已报料跨单标签完整打印"
 APP_BUILD_DATE = "2026-09-02"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -1490,19 +1490,34 @@ _V022227_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认版本为v0.22.227、数据库revision仍为唯一head jh67v8x9z56。",
 ]
 
-APP_CHANGES = [
+_V022228_CHANGES = [
     "四楼完成货梯标定后，查货视图的指南针改为显示“E / 现实东向”，与三楼的现实朝向口径一致。",
     "四楼正在重新标定时仍显示“3F / 对齐3F”，完成标定后才切换为现实东向提示，避免混淆操作阶段。",
     "本次只修正朝向提示，不旋转地图，不修改四楼草稿、货梯标定、实测尺寸、区域、货位、容量或库存位置。",
     "本版无数据库迁移，不新增、移动、拆分、合并或改写任何正式库存及历史业务事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022228_VERIFICATION_STEPS = [
     "进入仓库→4F→查货，确认已完成货梯标定的四楼指南针显示“E / 现实东向”。",
     "进入仓库→3F→查货，确认仍显示“E / 现实东向”，四楼与三楼使用同一现实朝向口径。",
     "进入4F重新标定货梯/朝向，确认选择点位期间显示“3F / 对齐3F”；取消后原草稿和标定数据保持不变。",
     "核对4F墙体、区域、货位与保存前位置完全一致，确认本次没有旋转、缩放或发布地图草稿。",
     "进入系统备份→系统版本，确认版本为v0.22.228、数据库revision仍为唯一head jh67v8x9z56。",
+]
+
+APP_CHANGES = [
+    "已报料跨多张供应商报料单选择产品标签时，汇总到同一个标签页并只打开一次打印对话框。",
+    "任一所选产品没有有效标签配置或当前标签计划时，整批明确阻止并显示存货编码和处理路径，不再静默跳过。",
+    "每张报料单仍分别冻结不可变打印作业；批量创建与实际打印确认使用同一事务，继续保留权限、客户范围、幂等和审计门禁。",
+    "本版无数据库迁移，不修改常用箱、订单、报料、来料、生产、库存、送货或历史打印事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "在已报料全选聚晟达最新两张报料单的产品标签，确认系统只打开一个标签页。",
+    "保留61479851R1F标签未启用状态，确认整批被明确阻止且不生成打印作业；再到常用箱填写每张数量、启用并成功保存，按提示刷新任务标签计划。",
+    "重新选择两张报料单，确认7款逐行出现，每款系统计划与本次张数可见，总标签张数等于各款合计，并且只打开一次打印对话框。",
+    "确认打印后回读两张报料单各自的作业均为printed，来源单据、张数和布局冻结一致；重复同一请求应复用凭证。",
+    "进入系统备份→系统版本，确认版本为v0.22.229、数据库revision仍为唯一head jh67v8x9z56。",
 ]
 
 
@@ -1596,6 +1611,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.228：本次更新｜{item}" for item in _V022228_CHANGES),
+    *(f"v0.22.228：如何验证｜{item}" for item in _V022228_VERIFICATION_STEPS),
     *(f"v0.22.227：本次更新｜{item}" for item in _V022227_CHANGES),
     *(f"v0.22.227：如何验证｜{item}" for item in _V022227_VERIFICATION_STEPS),
     *(f"v0.22.226：本次更新｜{item}" for item in _V022226_CHANGES),

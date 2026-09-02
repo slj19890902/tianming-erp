@@ -36,6 +36,8 @@ ALLOWED_STORAGE_LAYOUTS = {"rack", "pallet_ground", "mixed", "functional"}
 ALLOWED_ACCESS_SIDES = {"north", "south", "east", "west", "both"}
 FLOOR4_CALIBRATION_MAX_RESIDUAL_MM = 50.0
 FLOOR4_CALIBRATION_RMSE_MM = 30.0
+FLOOR4_DOORWAY_MIN_EDGE_MM = 300.0
+FLOOR4_DOORWAY_MAX_EDGE_MM = 20_000.0
 FLOOR4_CANONICAL_FREIGHT_ELEVATOR_ID = "LIFT-002-4F-CANONICAL"
 FLOOR4_SPATIAL_BOUNDS_POLYGON_KEY = "spatial_bounds_polygon_mm"
 FLOOR4_STALE_CALIBRATION_NAME_MARKERS = (
@@ -899,6 +901,153 @@ def _fit_floor4_rigid_transform(
     }
 
 
+def _fit_floor4_doorway_transform(
+    source_points: list[tuple[float, float]],
+    target_points: list[tuple[float, float]],
+) -> dict[str, Any]:
+    """Align a floor by doorway midpoint and heading without resizing it.
+
+    Source points are doorway endpoint 1, doorway endpoint 2 and one point on
+    the opposite/internal side.  Target points use the equivalent A, B and C
+    corners of the 3F authority.  Width/depth are deliberately not fitted:
+    each floor keeps its measured freight-elevator footprint.
+    """
+
+    source_start, source_end, source_inside = source_points
+    target_start, target_end, target_inside = target_points
+
+    def basis(
+        start: tuple[float, float],
+        end: tuple[float, float],
+        inside: tuple[float, float],
+        *,
+        label: str,
+    ) -> dict[str, Any]:
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        edge = math.hypot(dx, dy)
+        if edge < FLOOR4_DOORWAY_MIN_EDGE_MM:
+            raise WarehouseTwinLayoutEditError(f"{label}门口两端距离过近")
+        if edge > FLOOR4_DOORWAY_MAX_EDGE_MM:
+            raise WarehouseTwinLayoutEditError(f"{label}门口宽度超出允许范围")
+        unit = (dx / edge, dy / edge)
+        midpoint = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+        interior = (inside[0] - midpoint[0], inside[1] - midpoint[1])
+        along = interior[0] * unit[0] + interior[1] * unit[1]
+        perpendicular = (
+            interior[0] - along * unit[0],
+            interior[1] - along * unit[1],
+        )
+        depth = math.hypot(*perpendicular)
+        if depth < FLOOR4_DOORWAY_MIN_EDGE_MM:
+            raise WarehouseTwinLayoutEditError(
+                f"{label}内侧方向点与门口近乎共线，请点货梯内侧后沿"
+            )
+        if depth > FLOOR4_DOORWAY_MAX_EDGE_MM:
+            raise WarehouseTwinLayoutEditError(f"{label}进深超出允许范围")
+        normal = (perpendicular[0] / depth, perpendicular[1] / depth)
+        return {
+            "start": start,
+            "end": end,
+            "midpoint": midpoint,
+            "unit": unit,
+            "normal": normal,
+            "edge_mm": edge,
+            "depth_mm": depth,
+            "inside_along_offset_mm": along,
+        }
+
+    source = basis(
+        source_start, source_end, source_inside, label="4F 实测货梯"
+    )
+    target = basis(
+        target_start, target_end, target_inside, label="3F 权威货梯"
+    )
+    source_cross = (
+        source["unit"][0] * source["normal"][1]
+        - source["unit"][1] * source["normal"][0]
+    )
+    target_cross = (
+        target["unit"][0] * target["normal"][1]
+        - target["unit"][1] * target["normal"][0]
+    )
+    source_heading = source["unit"]
+    if source_cross * target_cross < 0:
+        source_heading = (-source_heading[0], -source_heading[1])
+    rotation_rad = math.atan2(
+        source_heading[0] * target["unit"][1]
+        - source_heading[1] * target["unit"][0],
+        source_heading[0] * target["unit"][0]
+        + source_heading[1] * target["unit"][1],
+    )
+    cos_value = math.cos(rotation_rad)
+    sin_value = math.sin(rotation_rad)
+    rotated_midpoint = (
+        cos_value * source["midpoint"][0]
+        - sin_value * source["midpoint"][1],
+        sin_value * source["midpoint"][0]
+        + cos_value * source["midpoint"][1],
+    )
+    translation = (
+        target["midpoint"][0] - rotated_midpoint[0],
+        target["midpoint"][1] - rotated_midpoint[1],
+    )
+
+    def apply(point: tuple[float, float]) -> tuple[float, float]:
+        return (
+            cos_value * point[0] - sin_value * point[1] + translation[0],
+            sin_value * point[0] + cos_value * point[1] + translation[1],
+        )
+
+    source_back_offset = (
+        source["normal"][0] * source["depth_mm"],
+        source["normal"][1] * source["depth_mm"],
+    )
+    source_footprint = [
+        source_start,
+        source_end,
+        (
+            source_end[0] + source_back_offset[0],
+            source_end[1] + source_back_offset[1],
+        ),
+        (
+            source_start[0] + source_back_offset[0],
+            source_start[1] + source_back_offset[1],
+        ),
+    ]
+    transformed_footprint = [apply(point) for point in source_footprint]
+    transformed_normal = (
+        cos_value * source["normal"][0] - sin_value * source["normal"][1],
+        sin_value * source["normal"][0] + cos_value * source["normal"][1],
+    )
+    heading_dot = max(
+        -1.0,
+        min(
+            1.0,
+            transformed_normal[0] * target["normal"][0]
+            + transformed_normal[1] * target["normal"][1],
+        ),
+    )
+    heading_residual_deg = math.degrees(math.acos(heading_dot))
+    return {
+        "rotation_rad": rotation_rad,
+        "rotation_deg": math.degrees(rotation_rad),
+        "translation_mm": translation,
+        "residuals_mm": [0.0, 0.0, 0.0],
+        "max_residual_mm": 0.0,
+        "rmse_residual_mm": 0.0,
+        "anchor_residual_mm": 0.0,
+        "heading_residual_deg": heading_residual_deg,
+        "door_width_mm": source["edge_mm"],
+        "depth_mm": source["depth_mm"],
+        "inside_along_offset_mm": source["inside_along_offset_mm"],
+        "authority_door_width_mm": target["edge_mm"],
+        "authority_depth_mm": target["depth_mm"],
+        "source_footprint": source_footprint,
+        "transformed_footprint": transformed_footprint,
+        "apply": apply,
+    }
+
+
 def _rounded_point(point: tuple[float, float]) -> list[float]:
     return [round(point[0], 3), round(point[1], 3)]
 
@@ -1084,12 +1233,70 @@ def _canonical_freight_elevator_target_points(
     ]
 
 
+def _doorway_target_points(authority: dict[str, Any]) -> list[list[float]]:
+    corner_a, corner_c, corner_b = _canonical_freight_elevator_target_points(
+        authority
+    )
+    return [corner_a, corner_b, corner_c]
+
+
+def _floor4_measured_lift(
+    authority: dict[str, Any],
+    *,
+    floor_layout_id: Any,
+    transform: dict[str, Any],
+    version: int,
+) -> dict[str, Any]:
+    footprint = [
+        _rounded_point(point) for point in transform["transformed_footprint"]
+    ]
+    door_start, door_end, back_end, back_start = footprint
+    centerline_start = (
+        (door_start[0] + back_start[0]) / 2.0,
+        (door_start[1] + back_start[1]) / 2.0,
+    )
+    centerline_end = (
+        (door_end[0] + back_end[0]) / 2.0,
+        (door_end[1] + back_end[1]) / 2.0,
+    )
+    lift = deepcopy(authority)
+    lift.update(
+        {
+            "id": FLOOR4_CANONICAL_FREIGHT_ELEVATOR_ID,
+            "layout_id": floor_layout_id,
+            "name": "货梯（4F实测，跨楼层定位）",
+            "points": [
+                _rounded_point(centerline_start),
+                _rounded_point(centerline_end),
+            ],
+            "width_mm": round(float(transform["depth_mm"]), 3),
+            "area_mm2": round(
+                float(transform["door_width_mm"])
+                * float(transform["depth_mm"]),
+                3,
+            ),
+            "source": "site_doorway_calibration",
+            "status": "confirmed",
+            "is_locked": True,
+            "version": version,
+            "measured_footprint_points": footprint,
+            "measured_door_width_mm": round(
+                float(transform["door_width_mm"]), 3
+            ),
+            "measured_depth_mm": round(float(transform["depth_mm"]), 3),
+            "cross_floor_authority_feature_id": authority.get("id"),
+        }
+    )
+    return lift
+
+
 def calibrate_floor4_freight_elevator(
     floor_code: str,
     *,
     expected_revision: str,
     operation_key: str,
     source_points: list[list[float] | tuple[float, float]],
+    calibration_mode: str = "corner_rigid",
     published_path: Path | None = None,
     draft_path: Path | None = None,
 ) -> LayoutMutation:
@@ -1102,6 +1309,9 @@ def calibrate_floor4_freight_elevator(
     normalized_source = _three_calibration_points(
         list(source_points), label="4F 现场源点"
     )
+    normalized_mode = str(calibration_mode or "corner_rigid").strip().lower()
+    if normalized_mode not in {"corner_rigid", "doorway_heading"}:
+        raise WarehouseTwinLayoutEditError("不支持的4F货梯标定方式")
     published_source = _published_layout_paths(published_path).source
     draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
     action = "floor4.freight_elevator.calibrate"
@@ -1123,7 +1333,7 @@ def calibrate_floor4_freight_elevator(
             receipt_calibration = receipt_result.get("calibration") or {}
             if receipt_calibration.get("source_points") != [
                 _rounded_point(point) for point in normalized_source
-            ]:
+            ] or receipt_calibration.get("input_mode", "corner_rigid") != normalized_mode:
                 raise WarehouseTwinLayoutEditConflictError(
                     "该操作键已用于不同的三点标定请求"
                 )
@@ -1198,9 +1408,16 @@ def calibrate_floor4_freight_elevator(
             floor.get("calibration") if isinstance(floor.get("calibration"), dict) else {}
         )
         normalized_target = _three_calibration_points(
-            _canonical_freight_elevator_target_points(authority), label="4F 标准目标点"
+            _doorway_target_points(authority)
+            if normalized_mode == "doorway_heading"
+            else _canonical_freight_elevator_target_points(authority),
+            label="4F 标准目标点",
         )
-        transform = _fit_floor4_rigid_transform(normalized_source, normalized_target)
+        transform = (
+            _fit_floor4_doorway_transform(normalized_source, normalized_target)
+            if normalized_mode == "doorway_heading"
+            else _fit_floor4_rigid_transform(normalized_source, normalized_target)
+        )
 
         protected = {
             code: deepcopy(document["floors"].get(code)) for code in ("1F", "3F")
@@ -1230,12 +1447,22 @@ def calibrate_floor4_freight_elevator(
                 _transform_floor4_geometry_item(item, transform=transform)
         _transform_floor4_bounds(floor, transform=transform)
 
-        lift = deepcopy(authority)
-        lift["id"] = FLOOR4_CANONICAL_FREIGHT_ELEVATOR_ID
-        lift["layout_id"] = floor.get("layout_id")
-        lift["is_locked"] = True
-        lift["status"] = "confirmed"
-        lift["version"] = previous_lift_version + 1
+        lift = (
+            _floor4_measured_lift(
+                authority,
+                floor_layout_id=floor.get("layout_id"),
+                transform=transform,
+                version=previous_lift_version + 1,
+            )
+            if normalized_mode == "doorway_heading"
+            else deepcopy(authority)
+        )
+        if normalized_mode != "doorway_heading":
+            lift["id"] = FLOOR4_CANONICAL_FREIGHT_ELEVATOR_ID
+            lift["layout_id"] = floor.get("layout_id")
+            lift["is_locked"] = True
+            lift["status"] = "confirmed"
+            lift["version"] = previous_lift_version + 1
         floor.setdefault("features", []).append(lift)
         now = _utc_iso()
         audit = {
@@ -1267,7 +1494,12 @@ def calibrate_floor4_freight_elevator(
         calibration_result = {
             "status": "aligned",
             "applied": True,
-            "method": "three_point_rigid_2d",
+            "method": (
+                "doorway_heading_rigid_2d"
+                if normalized_mode == "doorway_heading"
+                else "three_point_rigid_2d"
+            ),
+            "input_mode": normalized_mode,
             "source_coordinate_basis": "current_floor4_geometry",
             "scale": 1.0,
             "mirror": False,
@@ -1284,6 +1516,41 @@ def calibrate_floor4_freight_elevator(
             },
             "audit": audit,
         }
+        if normalized_mode == "doorway_heading":
+            calibration_result.update(
+                {
+                    "source_footprint_points": [
+                        _rounded_point(point)
+                        for point in transform["source_footprint"]
+                    ],
+                    "transformed_footprint_points": [
+                        _rounded_point(point)
+                        for point in transform["transformed_footprint"]
+                    ],
+                    "measured_door_width_mm": round(
+                        float(transform["door_width_mm"]), 3
+                    ),
+                    "measured_depth_mm": round(
+                        float(transform["depth_mm"]), 3
+                    ),
+                    "authority_door_width_mm": round(
+                        float(transform["authority_door_width_mm"]), 3
+                    ),
+                    "authority_depth_mm": round(
+                        float(transform["authority_depth_mm"]), 3
+                    ),
+                    "inside_along_offset_mm": round(
+                        float(transform["inside_along_offset_mm"]), 3
+                    ),
+                    "anchor_residual_mm": round(
+                        float(transform["anchor_residual_mm"]), 6
+                    ),
+                    "heading_residual_deg": round(
+                        float(transform["heading_residual_deg"]), 9
+                    ),
+                    "dimension_policy": "floor_specific_measured_footprint",
+                }
+            )
         if recalibrating:
             recalibration_history = metadata.get("recalibration_history") or []
             if not isinstance(recalibration_history, list) or not all(
@@ -1320,6 +1587,11 @@ def calibrate_floor4_freight_elevator(
                 "feature_id": authority.get("id"),
                 "materialized_on_4f": True,
                 "status": "applied",
+                "geometry_policy": (
+                    "floor_specific_measured_footprint"
+                    if normalized_mode == "doorway_heading"
+                    else "authority_geometry_copy"
+                ),
             }
         )
         floor["canonical_authority"] = canonical_authority
@@ -2167,9 +2439,11 @@ def _floor4_calibration_publish_blockers(document: dict[str, Any]) -> list[str]:
         return ["4F 缺少三点货梯标定证据"]
     if calibration.get("status") != "aligned" or calibration.get("applied") is not True:
         blockers.append("4F 尚未完成三点货梯标定")
+    method = str(calibration.get("method") or "")
+    fitted: dict[str, Any] | None = None
     try:
         fixed_rigid_contract = (
-            calibration.get("method") == "three_point_rigid_2d"
+            method in {"three_point_rigid_2d", "doorway_heading_rigid_2d"}
             and float(calibration.get("scale")) == 1.0
             and calibration.get("mirror") is False
         )
@@ -2196,16 +2470,23 @@ def _floor4_calibration_publish_blockers(document: dict[str, Any]) -> list[str]:
     ):
         blockers.append("4F 标定审计证据与当前 3F 权威对象不一致")
     try:
-        expected_targets = _canonical_freight_elevator_target_points(authority)
+        expected_targets = (
+            _doorway_target_points(authority)
+            if method == "doorway_heading_rigid_2d"
+            else _canonical_freight_elevator_target_points(authority)
+        )
         if calibration.get("canonical_target_points") != expected_targets:
             blockers.append("4F 标定目标点与当前 3F 权威货梯几何不一致")
-        fitted = _fit_floor4_rigid_transform(
-            _three_calibration_points(
-                calibration.get("source_points"), label="4F 标定源点"
-            ),
-            _three_calibration_points(
-                expected_targets, label="4F 标定目标点"
-            ),
+        source_points = _three_calibration_points(
+            calibration.get("source_points"), label="4F 标定源点"
+        )
+        target_points = _three_calibration_points(
+            expected_targets, label="4F 标定目标点"
+        )
+        fitted = (
+            _fit_floor4_doorway_transform(source_points, target_points)
+            if method == "doorway_heading_rigid_2d"
+            else _fit_floor4_rigid_transform(source_points, target_points)
         )
         if float(calibration.get("rotation_deg")) != round(
             float(fitted["rotation_deg"]), 9
@@ -2231,6 +2512,39 @@ def _floor4_calibration_publish_blockers(document: dict[str, Any]) -> list[str]:
             "rmse": FLOOR4_CALIBRATION_RMSE_MM,
         }:
             blockers.append("4F 标定发布阈值证据与系统固定阈值不一致")
+        if method == "doorway_heading_rigid_2d" and fitted is not None:
+            doorway_evidence = {
+                "source_footprint_points": [
+                    _rounded_point(point) for point in fitted["source_footprint"]
+                ],
+                "transformed_footprint_points": [
+                    _rounded_point(point)
+                    for point in fitted["transformed_footprint"]
+                ],
+                "measured_door_width_mm": round(
+                    float(fitted["door_width_mm"]), 3
+                ),
+                "measured_depth_mm": round(float(fitted["depth_mm"]), 3),
+                "authority_door_width_mm": round(
+                    float(fitted["authority_door_width_mm"]), 3
+                ),
+                "authority_depth_mm": round(
+                    float(fitted["authority_depth_mm"]), 3
+                ),
+                "inside_along_offset_mm": round(
+                    float(fitted["inside_along_offset_mm"]), 3
+                ),
+                "anchor_residual_mm": round(
+                    float(fitted["anchor_residual_mm"]), 6
+                ),
+                "heading_residual_deg": round(
+                    float(fitted["heading_residual_deg"]), 9
+                ),
+                "dimension_policy": "floor_specific_measured_footprint",
+            }
+            for key, expected_value in doorway_evidence.items():
+                if calibration.get(key) != expected_value:
+                    blockers.append(f"4F 货梯门口标定证据 {key} 不一致")
     except (TypeError, ValueError, WarehouseTwinLayoutEditError) as error:
         blockers.append(f"4F 标定证据无效：{error}")
 
@@ -2243,13 +2557,43 @@ def _floor4_calibration_publish_blockers(document: dict[str, Any]) -> list[str]:
         blockers.append("4F 必须且只能物化一个货梯 LIFT-002")
     else:
         lift = lifts[0]
-        ignored = {"id", "layout_id", "version"}
-        authority_contract = {
-            key: value for key, value in authority.items() if key not in ignored
-        }
-        lift_contract = {key: lift.get(key) for key in authority_contract}
-        if lift_contract != authority_contract:
-            blockers.append("4F 货梯 LIFT-002 与 3F 权威对象不一致")
+        if method == "doorway_heading_rigid_2d" and fitted is not None:
+            try:
+                expected_lift = _floor4_measured_lift(
+                    authority,
+                    floor_layout_id=floor.get("layout_id"),
+                    transform=fitted,
+                    version=int(lift.get("version") or 0),
+                )
+                measured_keys = {
+                    "id",
+                    "layout_id",
+                    "feature_code",
+                    "feature_kind",
+                    "subtype",
+                    "points",
+                    "width_mm",
+                    "area_mm2",
+                    "source",
+                    "status",
+                    "is_locked",
+                    "measured_footprint_points",
+                    "measured_door_width_mm",
+                    "measured_depth_mm",
+                    "cross_floor_authority_feature_id",
+                }
+                if any(lift.get(key) != expected_lift.get(key) for key in measured_keys):
+                    blockers.append("4F 货梯 LIFT-002 与本层实测门口几何不一致")
+            except (TypeError, ValueError, WarehouseTwinLayoutEditError) as error:
+                blockers.append(f"4F 货梯 LIFT-002 实测几何无效：{error}")
+        elif method != "doorway_heading_rigid_2d":
+            ignored = {"id", "layout_id", "version"}
+            authority_contract = {
+                key: value for key, value in authority.items() if key not in ignored
+            }
+            lift_contract = {key: lift.get(key) for key in authority_contract}
+            if lift_contract != authority_contract:
+                blockers.append("4F 货梯 LIFT-002 与 3F 权威对象不一致")
         if lift.get("is_locked") is not True:
             blockers.append("4F 货梯 LIFT-002 未锁定")
     canonical = floor.get("canonical_authority")
@@ -2260,6 +2604,12 @@ def _floor4_calibration_publish_blockers(document: dict[str, Any]) -> list[str]:
         or canonical.get("status") != "applied"
     ):
         blockers.append("4F 货梯权威物化状态不完整")
+    elif canonical.get("geometry_policy") != (
+        "floor_specific_measured_footprint"
+        if method == "doorway_heading_rigid_2d"
+        else "authority_geometry_copy"
+    ):
+        blockers.append("4F 货梯权威几何策略与标定方式不一致")
     return blockers
 
 

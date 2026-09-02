@@ -139,6 +139,8 @@ interface Floor4CalibrationMutationResponse {
       applied: true;
       max_residual_mm: number;
       rmse_residual_mm: number;
+      measured_door_width_mm?: number;
+      measured_depth_mm?: number;
     };
   };
   revision: string;
@@ -5279,7 +5281,7 @@ export function WarehouseTwinApp() {
     setFloor4CalibrationPoints([]);
     setFloor4CalibrationOperationKey(operationKey("floor4-calibration"));
     setFloor4CalibrationMode(true);
-    setLocationEditMessage("货梯标定 0/3：请点击 A · 货梯第一角；三点将同时校正位置和朝向。");
+    setLocationEditMessage("货梯标定 0/3：请点击货梯门口第一端。");
   };
 
   const cancelFloor4Calibration = () => {
@@ -5292,7 +5294,7 @@ export function WarehouseTwinApp() {
   const submitFloor4Calibration = async (points: number[][]) => {
     if (!layout || floorCode !== "4F" || points.length !== 3 || spatialEditBusy) return;
     setSpatialEditBusy(true);
-    setLocationEditMessage("货梯标定 3/3：正在核对角度与误差…");
+    setLocationEditMessage("货梯标定 3/3：正在核对门口、进深与朝向…");
     try {
       const response = await mutateJson<Floor4CalibrationMutationResponse>(
         "/api/warehouse/twin-layout/floors/4F/draft/calibrate-freight-elevator",
@@ -5301,6 +5303,7 @@ export function WarehouseTwinApp() {
           expected_revision: layout.source_sha256,
           operation_key: floor4CalibrationOperationKey,
           source_points: points,
+          calibration_mode: "doorway_heading",
           confirmed: true
         }
       );
@@ -5309,11 +5312,15 @@ export function WarehouseTwinApp() {
       setFloor4CalibrationApplied(true);
       setFloor4CalibrationMode(false);
       setFloor4CalibrationPoints([]);
+      const measuredWidth = response.item.calibration.measured_door_width_mm;
+      const measuredDepth = response.item.calibration.measured_depth_mm;
       setLocationEditMessage(
-        `货梯位置与朝向标定完成；最大误差 ${response.item.calibration.max_residual_mm.toFixed(1)} mm，已保存到 4F 草稿。`
+        measuredWidth && measuredDepth
+          ? `货梯位置与朝向标定完成；四楼实测约 ${(measuredWidth / 1000).toFixed(2)} × ${(measuredDepth / 1000).toFixed(2)} m，已保存到 4F 草稿。`
+          : "货梯位置与朝向标定完成，已保存到 4F 草稿。"
       );
     } catch (reason) {
-      setLocationEditMessage(`货梯标定失败：${(reason as Error).message}。三点已保留，可重试或取消。`);
+      setLocationEditMessage(`货梯标定失败：${(reason as Error).message}。三点已保留供核对；请点“重新选点”后重选，或取消。`);
     } finally {
       setSpatialEditBusy(false);
     }
@@ -5325,10 +5332,10 @@ export function WarehouseTwinApp() {
       const next = [...floor4CalibrationPoints, [xMm, yMm]];
       setFloor4CalibrationPoints(next);
       const nextPrompt = next.length === 1
-        ? "已记录 A；请点击 C · 货梯对角。"
+        ? "已记录门口第一端；请点击门口另一端。"
         : next.length === 2
-          ? "已记录 C；请点击 B · 货梯邻角。"
-          : "A / C / B 已记录，正在提交…";
+          ? "已记录门口宽度；请点击货梯内侧后沿，最好点后沿中点。"
+          : "门口两端与内侧方向已记录，正在提交…";
       setLocationEditMessage(`货梯标定 ${next.length}/3：${nextPrompt}`);
       if (next.length === 3) void submitFloor4Calibration(next);
       return;
@@ -5475,11 +5482,9 @@ export function WarehouseTwinApp() {
             type="button"
             className={floor4CalibrationMode ? "active" : ""}
             disabled={spatialEditBusy || Boolean(locationPointEditAreaCode)}
-            title={floor4CalibrationApplied && !floor4CalibrationMode ? "重新按 A 第一角、C 对角、B 邻角校正货梯位置和朝向" : "按 A 第一角、C 对角、B 邻角的顺序点选"}
-            onClick={floor4CalibrationMode && floor4CalibrationPoints.length === 3
-              ? () => void submitFloor4Calibration(floor4CalibrationPoints)
-              : beginFloor4Calibration}
-          >{floor4CalibrationMode ? floor4CalibrationPoints.length === 3 ? "重试标定" : `标定货梯 ${floor4CalibrationPoints.length}/3` : floor4CalibrationApplied ? "重新标定货梯/朝向" : "标定货梯/朝向"}</button>
+            title={floor4CalibrationApplied && !floor4CalibrationMode ? "重新按门口两端和内侧后沿校正货梯位置和朝向" : "依次点选门口两端和货梯内侧后沿"}
+            onClick={beginFloor4Calibration}
+          >{floor4CalibrationMode ? floor4CalibrationPoints.length === 3 ? "重新选点" : `标定货梯 ${floor4CalibrationPoints.length}/3` : floor4CalibrationApplied ? "重新标定货梯/朝向" : "标定货梯/朝向"}</button>
           {floor4CalibrationMode && <button type="button" disabled={spatialEditBusy} onClick={cancelFloor4Calibration}>取消</button>}
         </>}
         {canEditLocations && staleLayoutDraft && <button type="button" className="warning" disabled={spatialEditBusy} onClick={rebuildStaleLayoutDraft}>放弃旧草稿并重新规划</button>}
@@ -5567,7 +5572,7 @@ export function WarehouseTwinApp() {
 
       <div className={`twin-stage ${focusedRack ? "rack-focused" : ""}`}>
         <div className="twin-map-pane">
-          <div className="twin-stage-heading"><div><small>{floorCode} · 实测布局</small><b>{floor4CalibrationMode ? "四楼实测成品仓库（重新校正中）" : layout?.name || floorTitle}</b></div><span>{floor4CalibrationMode ? "按 A / C / B 点选 · 地图已锁定" : locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust" ? "地图调整：只拖区域或通道" : locationEditMode ? "货位摆放：拖货位；点空白选区域" : viewMode === "2d" ? "按住左键平移 · 滚轮缩放" : "左键平移 · 右键旋转 · 滚轮缩放"}</span></div>
+          <div className="twin-stage-heading"><div><small>{floorCode} · 实测布局</small><b>{floor4CalibrationMode ? "四楼实测成品仓库（重新校正中）" : layout?.name || floorTitle}</b></div><span>{floor4CalibrationMode ? "按门口两端和内侧后沿点选 · 地图已锁定" : locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust" ? "地图调整：只拖区域或通道" : locationEditMode ? "货位摆放：拖货位；点空白选区域" : viewMode === "2d" ? "按住左键平移 · 滚轮缩放" : "左键平移 · 右键旋转 · 滚轮缩放"}</span></div>
           {loading && <div className="twin-loading">正在加载实测布局…</div>}
           {error && <div className="twin-error"><b>地图加载失败</b><span>{error}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
           {standardPalletError && <div className="twin-error"><b>栈板尺寸读取失败</b><span>{standardPalletError}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
@@ -5583,7 +5588,7 @@ export function WarehouseTwinApp() {
           palletSnapThresholdMm={0}
           drawMode={layoutDrawKind}
           drawPoints={floor4CalibrationMode ? floor4CalibrationPoints : layoutDrawPoints}
-          drawPointLabels={floor4CalibrationMode ? ["A", "C", "B"] : []}
+          drawPointLabels={floor4CalibrationMode ? ["门1", "门2", "内"] : []}
           calibrationMode={floor4CalibrationMode}
           measureMode={false}
           measurePoints={EMPTY_CANVAS_POINTS}

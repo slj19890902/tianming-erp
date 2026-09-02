@@ -9729,6 +9729,7 @@ class TwinFloor4FreightElevatorCalibrationPayload(BaseModel):
     expected_revision: str = Field(min_length=1, max_length=64)
     operation_key: str = Field(min_length=8, max_length=120)
     source_points: list[tuple[float, float]] = Field(min_length=3, max_length=3)
+    calibration_mode: Literal["corner_rigid", "doorway_heading"] = "corner_rigid"
     confirmed: Literal[True]
 
 
@@ -10133,6 +10134,7 @@ def calibrate_twin_floor4_freight_elevator(
                 expected_revision=payload.expected_revision,
                 operation_key=payload.operation_key,
                 source_points=payload.source_points,
+                calibration_mode=payload.calibration_mode,
             )
             if result.applied:
                 recalibrated = result.value.get("recalibrated") is True

@@ -133,13 +133,14 @@ test("aligned floor 4 keeps one compact three-point recalibration action", () =>
   assert.match(calibrationAction, /重新标定货梯\/朝向/);
   assert.match(beginCalibration, /setLayers\(\(current\) => \(\{ \.\.\.current, structures: true \}\)\)/);
   assert.match(beginCalibration, /replaceZoneGeometryDrafts\(\{\}\)/);
-  assert.match(source, /货梯标定 0\/3：请点击 A · 货梯第一角/);
-  assert.match(source, /已记录 A；请点击 C · 货梯对角/);
-  assert.match(source, /已记录 C；请点击 B · 货梯邻角/);
+  assert.match(source, /货梯标定 0\/3：请点击货梯门口第一端/);
+  assert.match(source, /已记录门口第一端；请点击门口另一端/);
+  assert.match(source, /已记录门口宽度；请点击货梯内侧后沿/);
+  assert.match(source, /calibration_mode: "doorway_heading"/);
   assert.match(source, /mapPanLocked=\{[^}]*floor4CalibrationMode/);
   assert.match(editorSource, /calibrationMode[\s\S]*layout\.floor_code\.toUpperCase\(\) === "4F"[\s\S]*feature\.feature_code === "LIFT-002"/);
   assert.match(source, /四楼实测成品仓库（重新校正中）/);
-  assert.match(source, /按 A \/ C \/ B 点选 · 地图已锁定/);
+  assert.match(source, /按门口两端和内侧后沿点选 · 地图已锁定/);
   assert.match(editorSource, /floor4CalibratingCompass \? "对齐3F"/);
   assert.match(source, /已取消货梯标定，4F 草稿没有改变/);
 });

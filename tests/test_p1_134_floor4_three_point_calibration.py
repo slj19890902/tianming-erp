@@ -19,6 +19,7 @@ WAREHOUSE_FRONTEND = (
 WAREHOUSE_API = (ROOT / "app" / "api" / "warehouse.py").read_text(encoding="utf-8")
 CANONICAL_TARGET_POINTS = [[0.0, 1500.0], [2000.0, -1500.0], [2000.0, 1500.0]]
 ROTATED_SOURCE_POINTS = [[1500.0, 0.0], [-1500.0, -2000.0], [1500.0, -2000.0]]
+DOORWAY_SOURCE_POINTS = [[0.0, 0.0], [1200.0, 0.0], [600.0, -1800.0]]
 
 
 def _feature_3f() -> dict:
@@ -155,6 +156,78 @@ def test_floor4_three_point_calibration_rotates_all_geometry_and_preserves_1f_3f
     )
     assert repeated.applied is False
     assert repeated.floor_revision == result.floor_revision
+
+
+def test_floor4_doorway_calibration_preserves_measured_floor4_dimensions(
+    tmp_path: Path,
+) -> None:
+    published = tmp_path / "published.json"
+    draft = tmp_path / "draft.json"
+    document = _document()
+    protected = deepcopy({code: document["floors"][code] for code in ("1F", "3F")})
+    _write(published, document)
+
+    result = editor.calibrate_floor4_freight_elevator(
+        "4F",
+        expected_revision=document["floors"]["4F"]["revision"],
+        operation_key="floor4-doorway-calibration-001",
+        source_points=DOORWAY_SOURCE_POINTS,
+        calibration_mode="doorway_heading",
+        published_path=published,
+        draft_path=draft,
+    )
+
+    assert result.applied is True
+    saved = json.loads(draft.read_text(encoding="utf-8"))
+    assert {code: saved["floors"][code] for code in ("1F", "3F")} == protected
+    floor4 = saved["floors"]["4F"]
+    calibration = floor4["metadata"]["calibration"]
+    assert calibration["method"] == "doorway_heading_rigid_2d"
+    assert calibration["input_mode"] == "doorway_heading"
+    assert calibration["dimension_policy"] == "floor_specific_measured_footprint"
+    assert calibration["measured_door_width_mm"] == 1200.0
+    assert calibration["measured_depth_mm"] == 1800.0
+    assert calibration["authority_door_width_mm"] == 2000.0
+    assert calibration["authority_depth_mm"] == 3000.0
+    assert calibration["scale"] == 1.0
+    assert calibration["mirror"] is False
+    lift = next(item for item in floor4["features"] if item["feature_code"] == "LIFT-002")
+    assert lift["points"] == [[400.0, 600.0], [1600.0, 600.0]]
+    assert lift["width_mm"] == 1800.0
+    assert lift["area_mm2"] == 2_160_000.0
+    assert lift["measured_door_width_mm"] == 1200.0
+    assert lift["measured_depth_mm"] == 1800.0
+    assert lift["points"] != protected["3F"]["features"][0]["points"]
+    blockers, _ = editor._validate_document_for_publish(
+        saved, publish_floor_code="4F"
+    )
+    assert not [item for item in blockers if item.startswith("4F ")]
+
+
+@pytest.mark.parametrize(
+    ("source_points", "message"),
+    [
+        ([[0, 0], [100, 0], [50, -1000]], "门口两端距离过近"),
+        ([[0, 0], [1200, 0], [600, 100]], "内侧方向点"),
+    ],
+)
+def test_floor4_doorway_calibration_rejects_unusable_site_points(
+    tmp_path: Path, source_points: list[list[int]], message: str
+) -> None:
+    published = tmp_path / "published.json"
+    document = _document()
+    _write(published, document)
+
+    with pytest.raises(editor.WarehouseTwinLayoutEditError, match=message):
+        editor.calibrate_floor4_freight_elevator(
+            "4F",
+            expected_revision=document["floors"]["4F"]["revision"],
+            operation_key=f"doorway-unsafe-{message}",
+            source_points=source_points,
+            calibration_mode="doorway_heading",
+            published_path=published,
+            draft_path=tmp_path / "draft.json",
+        )
 
 
 def test_floor4_recalibration_applies_incremental_rigid_correction_once(
@@ -715,10 +788,11 @@ def test_floor4_calibration_api_and_compact_map_tool_are_wired() -> None:
     assert '"标定货梯/朝向"' in WAREHOUSE_FRONTEND
     assert '"重新标定货梯/朝向"' in WAREHOUSE_FRONTEND
     assert "货梯标定 ${next.length}/3" in WAREHOUSE_FRONTEND
-    assert 'drawPointLabels={floor4CalibrationMode ? ["A", "C", "B"] : []}' in WAREHOUSE_FRONTEND
-    assert "A · 货梯第一角" in WAREHOUSE_FRONTEND
-    assert "C · 货梯对角" in WAREHOUSE_FRONTEND
-    assert "B · 货梯邻角" in WAREHOUSE_FRONTEND
+    assert 'calibration_mode: "doorway_heading"' in WAREHOUSE_FRONTEND
+    assert 'drawPointLabels={floor4CalibrationMode ? ["门1", "门2", "内"] : []}' in WAREHOUSE_FRONTEND
+    assert "请点击货梯门口第一端" in WAREHOUSE_FRONTEND
+    assert "请点击门口另一端" in WAREHOUSE_FRONTEND
+    assert "请点击货梯内侧后沿" in WAREHOUSE_FRONTEND
     editor_canvas = (
         ROOT / "factory_twin" / "frontend" / "src" / "EditorCanvas.tsx"
     ).read_text(encoding="utf-8")

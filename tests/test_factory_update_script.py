@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.226"
-    assert APP_VERSION_NAME == "4F货梯重新标定与现场盘点一致性"
+    assert APP_VERSION == "v0.22.227"
+    assert APP_VERSION_NAME == "4F货梯门口实测比例标定"
     assert APP_BUILD_DATE == "2026-09-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,12 +49,16 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "四楼正式接入" in item and "不会预造现场位置" in item for item in current_release)
-    assert any("本次更新｜" in item and "同一处填写区域名称" in item and "不夹带其他高级草稿" in item for item in current_release)
-    assert any("本次更新｜" in item and "重新校正货梯位置" in item and "与3F同向" in item for item in current_release)
-    assert any("本次更新｜" in item and "新振" in item and "同一正式楼层" in item for item in current_release)
-    assert any("本次更新｜" in item and "jh67v8x9z56" in item and "jg66v8x9z55" in item and "不预设客户" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.226" in item and "jh67v8x9z56" in item for item in current_release)
+    assert any("本次更新｜" in item and "门口两端" in item and "内侧后沿" in item for item in current_release)
+    assert any("本次更新｜" in item and "只作为跨楼层" in item and "禁止缩放" in item for item in current_release)
+    assert any("本次更新｜" in item and "实测宽×深" in item and "重新选点" in item for item in current_release)
+    assert any("本次更新｜" in item and "发布校验" in item and "失败关闭" in item for item in current_release)
+    assert any("本次更新｜" in item and "无数据库迁移" in item and "库存事实" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.227" in item and "jh67v8x9z56" in item for item in current_release)
+    prior_release_226 = [item for item in APP_CHANGELOG if item.startswith("v0.22.226：")]
+    assert any("本次更新｜" in item and "四楼正式接入" in item and "不会预造现场位置" in item for item in prior_release_226)
+    assert any("本次更新｜" in item and "重新校正货梯位置" in item and "与3F同向" in item for item in prior_release_226)
+    assert any("如何验证｜" in item and "v0.22.226" in item and "jh67v8x9z56" in item for item in prior_release_226)
     prior_release_225 = [item for item in APP_CHANGELOG if item.startswith("v0.22.225：")]
     assert any("本次更新｜" in item and "4F实测扫描规划层" in item and "客户成品区域优先级" in item for item in prior_release_225)
     assert any("本次更新｜" in item and "半张A4" in item and "真实容量门禁" in item for item in prior_release_225)

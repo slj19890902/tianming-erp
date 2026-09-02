@@ -19,11 +19,10 @@
     .page { width:210mm; height:297mm; padding:8mm 10mm; background:#fff; box-shadow:0 2px 12px rgba(0,0,0,.16); overflow:hidden; break-after:page; page-break-after:always; }
     .page:last-child { break-after:auto; page-break-after:auto; }
     .batch-page { display:grid; grid-template-rows:140.5mm 140.5mm; }
-    .task-card { min-height:0; padding:4mm 2mm 3mm; overflow:hidden; break-inside:avoid; page-break-inside:avoid; }
+    .task-card { position:relative; min-height:0; padding:4mm 2mm 3mm; overflow:hidden; break-inside:avoid; page-break-inside:avoid; }
     .batch-page .task-card:first-child { border-bottom:.35mm dashed #555; }
     .task-card.blank { visibility:hidden; }
     .task-card.dense { font-size:8px; }
-    .task-card.layout-overflow { overflow:auto; outline:.7mm solid #111; outline-offset:-.7mm; }
     .card-head { display:grid; grid-template-columns:1fr auto; gap:4mm; align-items:start; border-bottom:.55mm solid #111; padding-bottom:1.5mm; }
     .brand { font-size:8pt; font-weight:800; letter-spacing:.3mm; }
     h1 { margin:.8mm 0 0; font-size:15pt; line-height:1.15; letter-spacing:.5mm; }
@@ -138,6 +137,57 @@
     .task-card.actual-card .receipt-facts { gap:.6mm; margin:.45mm 0; padding:.4mm .6mm; }
     .task-card.actual-card .receipt-fact span { font-size:6pt; }
     .task-card.actual-card .receipt-fact strong { margin-top:.1mm; font-size:6.7pt; line-height:1.06; }
+    /* Final half-A4 fallback: long business facts remain visible as a paper
+       summary, while the product QR leads to the complete frozen task record. */
+    .task-card.ultra-compact { padding:.8mm 1mm; }
+    .task-card.ultra-compact .card-head { position:relative; min-height:15.5mm; gap:0; padding:.35mm 17mm .45mm 0; }
+    .task-card.ultra-compact .brand { font-size:5.8pt; letter-spacing:.12mm; }
+    .task-card.ultra-compact h1 { margin:.05mm 0 0; font-size:9.6pt; line-height:1.04; letter-spacing:.1mm; }
+    .task-card.ultra-compact .product-qr { position:absolute; top:.15mm; right:0; width:15.5mm; min-height:15.5mm; }
+    .task-card.ultra-compact .product-qr img { width:15mm; height:15mm; }
+    .task-card.ultra-compact .headline-metrics { gap:.45mm; margin:.35mm 0; }
+    .task-card.ultra-compact .headline-metric { padding:.3mm .5mm; border-radius:1mm; }
+    .task-card.ultra-compact .headline-metric span,
+    .task-card.ultra-compact .field-label { font-size:5.6pt; }
+    .task-card.ultra-compact .headline-metric strong,
+    .task-card.ultra-compact .headline-metric strong.fit-long,
+    .task-card.ultra-compact .headline-metric strong.fit-very-long { margin-top:0; font-size:7pt; line-height:1.02; }
+    .task-card.ultra-compact .product-strip { gap:.6mm; padding:.25mm 0 .3mm; }
+    .task-card.ultra-compact .field-value,
+    .task-card.ultra-compact .production-key-value,
+    .task-card.ultra-compact .detail-row.production-key-fact .value { margin-top:0; font-size:7.2pt; line-height:1.04; }
+    .task-card.ultra-compact .order-facts { gap:.35mm; margin:.25mm 0; }
+    .task-card.ultra-compact .order-fact { padding:.2mm .35mm; border-radius:.7mm; }
+    .task-card.ultra-compact .order-fact span { font-size:5.2pt; }
+    .task-card.ultra-compact .order-fact strong { margin-top:0; font-size:5.8pt; line-height:1.02; }
+    .task-card.ultra-compact .receipt-facts { gap:.35mm; margin:.25mm 0; padding:.25mm .35mm; }
+    .task-card.ultra-compact .receipt-fact span { font-size:5.2pt; }
+    .task-card.ultra-compact .receipt-fact strong { margin-top:0; font-size:5.8pt; line-height:1.02; }
+    .task-card.ultra-compact .process-title { margin:.25mm 0 .12mm; font-size:5.5pt; }
+    .task-card.ultra-compact .process-route { gap:.35mm; }
+    .task-card.ultra-compact .process-route li { padding:.2mm .35mm; border-radius:1mm; font-size:5.7pt; line-height:1.04; }
+    .task-card.ultra-compact .process-detail-stack { grid-template-columns:minmax(0,.8fr) minmax(0,2.2fr); gap:.4mm; margin-top:.25mm; align-items:start; }
+    .task-card.ultra-compact .process-detail-stack > .mold-focus { grid-column:1; grid-row:1; }
+    .task-card.ultra-compact .process-detail-stack > .printing-stack { grid-column:2; grid-row:1 / span 2; }
+    .task-card.ultra-compact .process-detail-stack > .joining-block { grid-column:1; grid-row:2; }
+    .task-card.ultra-compact .process-detail-stack:not(.has-printing) > *,
+    .task-card.ultra-compact .process-detail-stack:not(.has-mold) > .printing-stack,
+    .task-card.ultra-compact .process-detail-stack:not(.has-mold) > .joining-block { grid-column:1 / -1; grid-row:auto; }
+    .task-card.ultra-compact .mold-focus { padding:.35mm .5mm; border-width:.28mm; border-radius:1mm; }
+    .task-card.ultra-compact .mold-focus-title { font-size:5.3pt; }
+    .task-card.ultra-compact .mold-focus-row { gap:.5mm; margin-top:.12mm; }
+    .task-card.ultra-compact .mold-focus-code { font-size:6.8pt; line-height:1.02; }
+    .task-card.ultra-compact .mold-focus-location { font-size:6.1pt; line-height:1.03; }
+    .task-card.ultra-compact .mold-focus-note { margin-top:.12mm; font-size:5pt; line-height:1.03; }
+    .task-card.ultra-compact .printing-block,
+    .task-card.ultra-compact .joining-block { margin:.08mm 0; padding:.08mm 0; }
+    .task-card.ultra-compact .printing-block-title { margin:0; font-size:5.4pt; line-height:1.03; }
+    .task-card.ultra-compact .supporting-grid { grid-template-columns:minmax(0,.8fr) minmax(0,2.2fr); gap:.4mm; margin-top:.25mm; }
+    .task-card.ultra-compact .detail-grid { min-height:0; margin-top:0; border-radius:1mm; }
+    .task-card.ultra-compact .detail-list { padding:.35mm .5mm; }
+    .task-card.ultra-compact .detail-row { grid-template-columns:15mm 1fr; gap:.45mm; padding:.06mm 0; font-size:5.5pt; line-height:1.04; }
+    .task-card.ultra-compact .warning { margin-top:.25mm; padding:.2mm .4mm; border-width:.28mm; font-size:5.3pt; line-height:1.04; }
+    .task-card.ultra-compact .foot { margin-top:.15mm; font-size:5.1pt; line-height:1.02; }
     @page { size:A4 portrait; margin:0; }
     @media print {
       body { background:#fff; }
@@ -209,6 +259,15 @@
       const dateText = (value) => value ? String(value).slice(0, 10) : "-";
       const unique = (values) => Array.from(new Set(values.filter((value) => value !== null && value !== undefined && String(value).trim()).map((value) => String(value).trim())));
       const numberText = (value) => value === null || value === undefined || value === "" ? "-" : String(value).replace(/\.0+$/, "");
+      const paperText = (value, limit = 48) => {
+        const text = String(value ?? "-").trim() || "-";
+        const characters = Array.from(text);
+        return characters.length > limit ? `${characters.slice(0, limit).join("")}…扫码查看` : text;
+      };
+      const paperList = (values, limit, fitLevel) => {
+        const text = textList(values);
+        return fitLevel === "ultra" ? paperText(text, limit) : text;
+      };
 
       function errorMessage(status, payload) {
         const detail = payload && typeof payload === "object" ? payload.detail : null;
@@ -267,8 +326,8 @@
         return steps.length ? steps.slice(0, 6) : ["无需后加工"];
       }
 
-      function processHtml(card) {
-        return `<div data-capacity-label="工艺路线"><div class="process-title">工艺路线</div><ol class="process-route">${processSteps(card).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol></div>`;
+      function processHtml(card, fitLevel = "normal") {
+        return `<div data-capacity-label="工艺路线"><div class="process-title">工艺路线</div><ol class="process-route">${processSteps(card).map((step) => `<li>${escapeHtml(fitLevel === "ultra" ? paperText(step, 10) : step)}</li>`).join("")}</ol></div>`;
       }
 
       function detailRow(label, value, extraClass = "") {
@@ -276,8 +335,10 @@
       }
 
       function printingComponentHtml(component, componentIndex, componentCount) {
+        const fitLevel = arguments[3] || "normal";
         const content = String(component && (component.printing_situation || component.print_content) || "").trim();
         if (!content || ["无印刷", "无", "否", "不印刷"].includes(content)) return "";
+        const compact = fitLevel === "ultra";
         const titlePrefix = component && (component.mold_display_name || component.mold_name || component.mold_code) ? "第 2 工序 · " : "";
         const title = componentCount > 1
           ? `${titlePrefix}${component.component_label || component.product_code || `组件${componentIndex + 1}`} · 印刷`
@@ -285,20 +346,24 @@
         const rows = [];
         let plateCards = "";
         if (component.printing_plate_mode !== "plate") {
-          rows.push(detailRow("印刷情况", content));
+          rows.push(detailRow("印刷情况", compact ? paperText(content, 30) : content));
           if (component.printing_colors_frozen === false) {
             rows.push(detailRow("印刷颜色", "历史颜色未冻结"));
           } else {
             const colors = Array.isArray(component.printing_colors)
               ? component.printing_colors.map((value) => String(value || "").trim()).filter(Boolean)
               : [];
-            rows.push(detailRow("印刷颜色", colors.length ? colors.join("＋") : "颜色待完善"));
+            rows.push(detailRow("印刷颜色", compact ? paperList(colors, 30, fitLevel) : (colors.length ? colors.join("＋") : "颜色待完善")));
           }
           rows.push(detailRow("挂板方式", "不挂板"));
         } else {
           const plates = Array.isArray(component.printing_plates) ? component.printing_plates : [];
-          rows.push(detailRow("印刷情况", component.printing_situation || `挂板印刷（${plates.length}色）`));
-          plateCards = plates.length ? `<div class="printing-plates-grid">${plates.map((plate, index) => `
+          rows.push(detailRow("印刷情况", compact ? paperText(component.printing_situation || `挂板印刷（${plates.length}色）`, 30) : (component.printing_situation || `挂板印刷（${plates.length}色）`)));
+          if (compact && plates.length) {
+            const summary = plates.map((plate, index) => `第${index + 1}色 ${paperText(plate.color_name || "未冻结", 8)} / ${paperText(plate.plate_code || "未冻结", 12)}`).join("；");
+            rows.push(detailRow("挂板", `${paperText(summary, 68)}（明细扫码查看）`));
+          }
+          plateCards = !compact && plates.length ? `<div class="printing-plates-grid">${plates.map((plate, index) => `
             <div class="printing-plate-card printing-plate-line">
               <span>第${index + 1}色</span>
               <strong>颜色：${escapeHtml(plate.color_name || "未冻结")}</strong>
@@ -309,19 +374,33 @@
           if (!plates.length) rows.push(detailRow("挂板快照", "历史挂板明细未冻结"));
           const machine = [component.machine_set_length_mm, component.machine_set_width_mm, component.machine_set_height_mm]
             .map(numberText).join(" × ");
-          rows.push(detailRow(
-            "设备参数",
-            `对版值 ${numberText(component.plate_alignment_value_mm)} mm｜挂版值 ${numberText(component.plate_mount_value_mm)} mm｜机器设定 ${machine} mm`,
-            "internal-only printing-machine-line",
-          ));
+          if (compact) {
+            rows.push(detailRow("设备", `对版 ${numberText(component.plate_alignment_value_mm)}｜挂版 ${numberText(component.plate_mount_value_mm)}｜机设 ${paperText(machine, 20)} mm`, "internal-only printing-machine-line"));
+          } else {
+            rows.push(detailRow(
+              "设备参数",
+              `对版值 ${numberText(component.plate_alignment_value_mm)} mm｜挂版值 ${numberText(component.plate_mount_value_mm)} mm｜机器设定 ${machine} mm`,
+              "internal-only printing-machine-line",
+            ));
+          }
         }
-        return `<section class="printing-block"><div class="printing-block-title">${escapeHtml(title)}</div>${rows.join("")}${plateCards}</section>`;
+        return `<section class="printing-block"><div class="printing-block-title">${escapeHtml(compact ? paperText(title, 22) : title)}</div>${rows.join("")}${plateCards}</section>`;
       }
 
       function printingHtml(card) {
+        const fitLevel = arguments[1] || "normal";
         const components = Array.isArray(card.components) ? card.components : [];
-        const blocks = components.map((component, index) => printingComponentHtml(component, index, components.length)).filter(Boolean).join("");
-        return blocks ? `<div class="printing-stack">${blocks}</div>` : "";
+        const printable = components.filter((component) => {
+          const content = String(component && (component.printing_situation || component.print_content) || "").trim();
+          return content && !["无印刷", "无", "否", "不印刷"].includes(content);
+        });
+        const visible = fitLevel === "ultra" ? printable.slice(0, 2) : printable;
+        const blocks = visible.map((component, index) => printingComponentHtml(component, index, printable.length, fitLevel)).filter(Boolean).join("");
+        if (!blocks) return "";
+        const more = fitLevel === "ultra" && printable.length > visible.length
+          ? `<section class="printing-block"><div class="printing-block-title">其余印刷</div>${detailRow("印刷组件", `另 ${printable.length - visible.length} 项，扫码核对完整挂板信息`)}</section>`
+          : "";
+        return `<div class="printing-stack">${blocks}${more}</div>`;
       }
 
       function printingComplexity(card) {
@@ -353,18 +432,20 @@
       }
 
       function detailHtml(card) {
+        const fitLevel = arguments[1] || "normal";
         const sizes = textList(componentSizes(card));
         const materials = unique((card.components || []).map((line) => line.material_code));
         const flute = unique((card.components || []).map((line) => [line.flute_type, line.layer_count ? `${line.layer_count}层` : null].filter(Boolean).join(" / ")));
         const crease = textList(firstValues(card, "crease_display"));
         const cutting = textList(firstValues(card, "cutting_mode"));
+        const fit = (value, limit = 42) => fitLevel === "ultra" ? paperText(value, limit) : value;
         if (card.layout_kind === "liner") {
           const perBundle = card.production_label_units_per_bundle ? `${card.production_label_units_per_bundle} 张` : "未设置";
           const bundleCount = card.estimated_bundle_count ? `${card.estimated_bundle_count} 捆` : "待核对";
           return [
-            detailRow("成品尺寸", finishedSize(card)),
-            detailRow("材质 / 楞型", `${textList(materials)} / ${textList(flute)}`),
-            detailRow("开料方式", cutting),
+            detailRow("成品尺寸", fit(finishedSize(card))),
+            detailRow("材质 / 楞型", fit(`${textList(materials)} / ${textList(flute)}`)),
+            detailRow("开料方式", fit(cutting)),
             detailRow("总数量", `${card.planned_finished_quantity || 0} 张`),
             detailRow("每捆数量", perBundle),
             detailRow("预计捆数", bundleCount),
@@ -373,53 +454,57 @@
         }
         if (card.layout_kind === "die_cut") {
           return [
-            detailRow("纸板尺寸", sizes),
-            detailRow("材质 / 楞型", `${textList(materials)} / ${textList(flute)}`),
-            detailRow("开料方式", cutting),
-            ...(card.joining_method && card.joining_method.includes("粘贴") ? [] : [detailRow("结合方式", card.joining_method || "无需结合", "production-key-fact")]),
+            detailRow("纸板尺寸", fit(sizes)),
+            detailRow("材质 / 楞型", fit(`${textList(materials)} / ${textList(flute)}`)),
+            detailRow("开料方式", fit(cutting)),
+            ...(card.joining_method && card.joining_method.includes("粘贴") ? [] : [detailRow("结合方式", fit(card.joining_method || "无需结合"), "production-key-fact")]),
           ].join("");
         }
         return [
-          detailRow("纸板尺寸", sizes),
-          detailRow("材质 / 楞型", `${textList(materials)} / ${textList(flute)}`),
-          detailRow("压线尺寸", crease, "production-key-fact"),
-          ...(card.joining_method && card.joining_method.includes("粘贴") ? [] : [detailRow("结合方式", card.joining_method || "无需结合", "production-key-fact")]),
+          detailRow("纸板尺寸", fit(sizes)),
+          detailRow("材质 / 楞型", fit(`${textList(materials)} / ${textList(flute)}`)),
+          detailRow("压线尺寸", fit(crease), "production-key-fact"),
+          ...(card.joining_method && card.joining_method.includes("粘贴") ? [] : [detailRow("结合方式", fit(card.joining_method || "无需结合"), "production-key-fact")]),
         ].join("");
       }
 
-      function receiptFactsHtml(card) {
+      function receiptFactsHtml(card, fitLevel = "normal") {
         if (card.paper_phase !== "actual_receipt") return "";
         const actualSize = card.actual_board_length_mm && card.actual_board_width_mm
           ? `${numberText(card.actual_board_length_mm)} × ${numberText(card.actual_board_width_mm)} mm`
           : "与计划冻结规格一致";
         const trace = [card.inventory_lot_number, card.employee_location_name || card.current_address_name || card.warehouse_location].filter(Boolean).join(" / ") || "实收明细已留痕";
         return `<section class="receipt-facts internal-only" data-capacity-label="实收到料与垛位追溯">
-          <div class="receipt-fact"><span>实收单 / 版本</span><strong>${escapeHtml(card.receipt_number || "-")} / ${escapeHtml(card.paper_phase_label || "实收版")}</strong></div>
+          <div class="receipt-fact"><span>实收单 / 版本</span><strong>${escapeHtml(fitLevel === "ultra" ? paperText(`${card.receipt_number || "-"} / ${card.paper_phase_label || "实收版"}`, 24) : `${card.receipt_number || "-"} / ${card.paper_phase_label || "实收版"}`)}</strong></div>
           <div class="receipt-fact"><span>本次实收</span><strong>${escapeHtml(numberText(card.received_sheet_quantity))} 张</strong></div>
           <div class="receipt-fact"><span>本批最多生产</span><strong>${escapeHtml(numberText(card.production_capacity_quantity))} ${escapeHtml(card.layout_kind === "liner" ? "张" : "只")}</strong></div>
-          <div class="receipt-fact"><span>规格 / 垛位追溯</span><strong>${escapeHtml(actualSize)}｜${escapeHtml(trace)}</strong></div>
+          <div class="receipt-fact"><span>规格 / 垛位追溯</span><strong>${escapeHtml(fitLevel === "ultra" ? paperText(`${actualSize}｜${trace}`, 38) : `${actualSize}｜${trace}`)}</strong></div>
         </section>`;
       }
 
-      function fulfillmentReminderHtml(card) {
+      function fulfillmentReminderHtml(card, fitLevel = "normal") {
         const reminders = Array.isArray(card && card.fulfillment_reminders) ? card.fulfillment_reminders : [];
         if (!reminders.length) return "";
-        const rows = reminders.map((row) => {
+        const compact = fitLevel === "ultra";
+        const visible = compact ? reminders.slice(0, 1) : reminders;
+        const rows = visible.map((row) => {
           const scope = row.scope_type === "product"
             ? `指定常用箱：${row.product_code || "-"} / ${row.product_name || "-"}`
             : "该客户";
           const quantity = row.suggested_quantity ? `｜建议数量 ${row.suggested_quantity}` : "";
+          if (compact) return `<div class="detail-row"><span class="label">${escapeHtml(paperText(scope, 18))}</span><span class="value">${escapeHtml(paperText(row.content || "-", 56))}（扫码查看完整交代）</span></div>`;
           return `<div class="detail-row"><span class="label">${escapeHtml(scope)}</span><span class="value">${escapeHtml(row.content || "-")}<br><small>来源 ${escapeHtml(row.source_delivery_number || "-")}｜回单日 ${escapeHtml(row.source_received_date || "-")}${escapeHtml(quantity)}｜记录人 ${escapeHtml(row.created_by_name || "-")}</small></span></div>`;
         }).join("");
-        return `<section class="printing-block internal-only"><div class="printing-block-title">客户回单交代（仅内部）</div>${rows}</section>`;
+        const more = compact && reminders.length > visible.length ? `<div class="detail-row"><span class="label">其余交代</span><span class="value">另 ${reminders.length - visible.length} 项，扫码查看</span></div>` : "";
+        return `<section class="printing-block internal-only"><div class="printing-block-title">客户回单交代（仅内部）</div>${rows}${more}</section>`;
       }
 
       function drawingReferenceText(card) {
         const drawing = card && card.structure_reference;
-        return drawing && drawing.name ? drawing.name : "未登记 · 扫码查看资料";
+        return drawing && (drawing.name || drawing.url) ? "有图纸，扫码查看" : "未登记";
       }
 
-      function orderFactsHtml(card) {
+      function orderFactsHtml(card, fitLevel = "normal") {
         const quantityUnit = card.layout_kind === "liner" ? "张" : "只";
         const rows = [
           ["客户订单号", textList(card.customer_pos || [])],
@@ -428,17 +513,18 @@
           ["计划生产", `${numberText(card.planned_finished_quantity)} ${quantityUnit}`],
           ["采购张数", `${numberText(card.requisition_quantity)} 张`],
         ];
-        return `<div class="order-facts" data-capacity-label="订单与生产数量">${rows.map(([label, value]) => `<div class="order-fact"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}</div>`;
+        return `<div class="order-facts" data-capacity-label="订单与生产数量">${rows.map(([label, value]) => `<div class="order-fact"><span>${escapeHtml(label)}</span><strong>${escapeHtml(fitLevel === "ultra" ? paperText(value, 20) : value)}</strong></div>`).join("")}</div>`;
       }
 
-      function productionNotesHtml(card) {
+      function productionNotesHtml(card, fitLevel = "normal") {
         const notes = textList(card.production_steps || []);
         if (notes === "-") return "";
-        return `<section class="printing-block"><div class="printing-block-title">特别注意事项</div>${detailRow("生产要求", notes)}</section>`;
+        const compact = fitLevel === "ultra";
+        return `<section class="printing-block"><div class="printing-block-title">特别注意事项</div>${detailRow("生产要求", compact ? `${paperText(notes, 72)}（完整要求扫码查看）` : notes)}</section>`;
       }
 
-      function moldHtml(card) {
-        const rows = [];
+      function moldHtml(card, fitLevel = "normal") {
+        const moldRows = [];
         const seen = new Set();
         (card.components || []).forEach((line) => {
           const name = String(line.mold_display_name || line.mold_name || "").trim();
@@ -447,13 +533,18 @@
           if (seen.has(key)) return;
           seen.add(key);
           const state = line.mold_is_active === false ? " · 已停用，请勿直接领用" : "";
-          rows.push(`<div class="mold-focus-row"><strong class="mold-focus-code">${escapeHtml(name)}</strong><span class="mold-focus-location">${escapeHtml(line.mold_location_display || line.mold_location || "位置待完善")}${escapeHtml(state)}</span></div>`);
+          moldRows.push({ name, location: `${line.mold_location_display || line.mold_location || "位置待完善"}${state}` });
         });
-        if (!rows.length) return "";
-        return `<section class="mold-focus internal-only"><div class="mold-focus-title"><span>第 1 工序 · 模具名称与现场位置</span><span>先核对再领用</span></div>${rows.join("")}<div class="mold-focus-note">扫描模具上的固定二维码，可查看本任务其余信息并登记本次扫码时间；扫码不会自动开工。</div></section>`;
+        if (!moldRows.length) return "";
+        const compact = fitLevel === "ultra";
+        const visible = compact ? moldRows.slice(0, 2) : moldRows;
+        const rows = visible.map((row) => `<div class="mold-focus-row"><strong class="mold-focus-code">${escapeHtml(compact ? paperText(row.name, 16) : row.name)}</strong><span class="mold-focus-location">${escapeHtml(compact ? paperText(row.location, 20) : row.location)}</span></div>`).join("");
+        const more = compact && moldRows.length > visible.length ? `<div class="mold-focus-note">另 ${moldRows.length - visible.length} 副模具，扫码查看</div>` : "";
+        const note = compact ? "先核对模具与位置；完整任务扫码查看。" : "扫描模具上的固定二维码，可查看本任务其余信息并登记本次扫码时间；扫码不会自动开工。";
+        return `<section class="mold-focus internal-only"><div class="mold-focus-title"><span>第 1 工序 · 模具名称与现场位置</span><span>先核对再领用</span></div>${rows}${more}<div class="mold-focus-note">${note}</div></section>`;
       }
 
-      function joiningHtml(card) {
+      function joiningHtml(card, fitLevel = "normal") {
         if (!card.joining_method || !card.joining_method.includes("粘贴")) return "";
         const components = Array.isArray(card.components) ? card.components : [];
         const hasMold = components.some((component) => component && (component.mold_display_name || component.mold_name || component.mold_code));
@@ -462,13 +553,13 @@
           return content && !["无印刷", "无", "否", "不印刷"].includes(content);
         });
         const title = hasMold && hasPrinting ? "第 3 工序 · 粘贴" : "粘贴";
-        return `<section class="joining-block"><div class="printing-block-title">${title}</div>${detailRow("粘贴要求", card.joining_method, "production-key-fact")}</section>`;
+        return `<section class="joining-block"><div class="printing-block-title">${fitLevel === "ultra" ? paperText(title, 18) : title}</div>${detailRow("粘贴要求", fitLevel === "ultra" ? paperText(card.joining_method, 38) : card.joining_method, "production-key-fact")}</section>`;
       }
 
-      function processDetailsHtml(card) {
-        const mold = moldHtml(card);
-        const printing = printingHtml(card);
-        const joining = joiningHtml(card);
+      function processDetailsHtml(card, fitLevel = "normal") {
+        const mold = moldHtml(card, fitLevel);
+        const printing = printingHtml(card, fitLevel);
+        const joining = joiningHtml(card, fitLevel);
         const stateClasses = `${mold ? " has-mold" : ""}${printing ? " has-printing" : ""}${joining ? " has-joining" : ""}`;
         return `<div class="process-detail-stack${stateClasses}" data-capacity-label="模具、印刷与结合工艺">${mold}${printing}${joining}</div>`;
       }
@@ -481,8 +572,10 @@
         return `<div class="product-qr product-qr-missing">${escapeHtml(card.product_qr_unavailable_reason || "无正式产品二维码")}</div>`;
       }
 
-      function headlineValueHtml(value, kind) {
-        const text = String(value || "-");
+      function headlineValueHtml(value, kind, fitLevel = "normal") {
+        const text = fitLevel === "ultra"
+          ? paperText(value, kind === "name" ? 30 : 20)
+          : String(value || "-");
         const length = Array.from(text).length;
         const longAt = kind === "code" ? 13 : kind === "customer" ? 15 : 14;
         const veryLongAt = kind === "code" ? 20 : kind === "customer" ? 24 : 22;
@@ -490,29 +583,31 @@
         return `<strong class="${kind}-value${fitClass}">${escapeHtml(text)}</strong>`;
       }
 
-      function cardHtml(card, packageData) {
+      function cardHtml(card, packageData, fitLevel = "normal", cardKey = "") {
         if (!card) return '<section class="task-card half-card blank" aria-hidden="true"></section>';
-        const warnings = card.review_required ? `<div class="warning">请核对后再打印：${escapeHtml(textList(card.review_messages))}</div>` : "";
+        const compact = fitLevel === "ultra";
+        const warnings = card.review_required ? `<div class="warning">请核对后再打印：${escapeHtml(compact ? `${paperText(textList(card.review_messages), 56)}（完整提示扫码查看）` : textList(card.review_messages))}</div>` : "";
         const denseClass = (card.components || []).length > 3 ? " dense" : "";
         const actualPhase = card.paper_phase === "actual_receipt";
         const printingClass = cardNeedsCompactLayout(card) || actualPhase ? " printing-heavy" : "";
         const actualClass = actualPhase ? " actual-card" : "";
         const safeNote = '<span class="safe-only">客户随货版 · 已隐藏内部任务及资产定位信息</span>';
-        return `<section class="task-card half-card${denseClass}${printingClass}${actualClass}" data-layout="${escapeHtml(card.layout_kind || "carton")}">
+        const fitClass = compact ? " ultra-compact" : "";
+        return `<section class="task-card half-card${denseClass}${printingClass}${actualClass}${fitClass}" data-card-key="${escapeHtml(cardKey)}" data-layout="${escapeHtml(card.layout_kind || "carton")}">
           <header class="card-head" data-capacity-label="任务标题与二维码"><div><div class="brand">TM 天明包装 · ${escapeHtml(card.paper_phase_label || "待来料计划版")}</div><h1>${escapeHtml(titleFor(card))}</h1></div>${productQrHtml(card)}</header>
           <div class="headline-metrics" data-capacity-label="客户、存货编码与产品名称">
-            <div class="headline-metric customer-metric"><span>客户</span>${headlineValueHtml(card.customer_name, "customer")}</div>
-            <div class="headline-metric code-metric"><span>存货编码</span>${headlineValueHtml(card.product_code, "code")}</div>
-            <div class="headline-metric name-metric"><span>产品名称</span>${headlineValueHtml(card.product_name, "name")}</div>
+            <div class="headline-metric customer-metric"><span>客户</span>${headlineValueHtml(card.customer_name, "customer", fitLevel)}</div>
+            <div class="headline-metric code-metric"><span>存货编码</span>${headlineValueHtml(card.product_code, "code", fitLevel)}</div>
+            <div class="headline-metric name-metric"><span>产品名称</span>${headlineValueHtml(card.product_name, "name", fitLevel)}</div>
           </div>
-          <div class="product-strip"><div><span class="field-label">成品内尺寸</span><span class="field-value production-key-value">${escapeHtml(finishedSize(card))}</span></div><div><span class="field-label">图号 / 图纸版本</span><span class="field-value">${escapeHtml(drawingReferenceText(card))}</span></div><div><span class="field-label">交期</span><span class="field-value">${escapeHtml(textList((card.delivery_dates || []).map(dateText)))}</span></div></div>
-          ${orderFactsHtml(card)}
-          ${receiptFactsHtml(card)}
-          ${processHtml(card)}
-          ${processDetailsHtml(card)}
+          <div class="product-strip"><div><span class="field-label">成品内尺寸</span><span class="field-value production-key-value">${escapeHtml(compact ? paperText(finishedSize(card), 36) : finishedSize(card))}</span></div><div><span class="field-label">图纸</span><span class="field-value">${escapeHtml(drawingReferenceText(card))}</span></div><div><span class="field-label">交期</span><span class="field-value">${escapeHtml(compact ? paperList((card.delivery_dates || []).map(dateText), 20, fitLevel) : textList((card.delivery_dates || []).map(dateText)))}</span></div></div>
+          ${orderFactsHtml(card, fitLevel)}
+          ${receiptFactsHtml(card, fitLevel)}
+          ${processHtml(card, fitLevel)}
+          ${processDetailsHtml(card, fitLevel)}
           <div class="supporting-grid" data-capacity-label="材料、注意事项与回单交代">
-            <div class="detail-grid"><div class="detail-list">${detailHtml(card)}</div></div>
-            <div class="supporting-stack">${productionNotesHtml(card)}${fulfillmentReminderHtml(card)}${warnings}</div>
+            <div class="detail-grid"><div class="detail-list">${detailHtml(card, fitLevel)}</div></div>
+            <div class="supporting-stack">${productionNotesHtml(card, fitLevel)}${fulfillmentReminderHtml(card, fitLevel)}${warnings}</div>
           </div>
           <footer class="foot internal-only" data-capacity-label="报料追溯页脚"><span>报料单 ${escapeHtml(card.supplier_order_number || packageData.supplier_order_number || "-")} · 纸面版本 ${escapeHtml(String(card.paper_version_key || packageData.plan_fingerprint || "").slice(-20))}</span><span>生成 ${escapeHtml(card.received_at || packageData.created_at || "-")}</span></footer>
           <footer class="foot safe-only">${safeNote}<span>尺寸单位：mm</span></footer>
@@ -582,11 +677,32 @@
         return measured[0].label;
       }
 
-      async function render(packageData) {
+      function cardKey(card, index) {
+        if (!card) return `blank:${index}`;
+        return String(card.paper_version_key || card.paper_fingerprint || card.source_identity || card.supplier_order_item_id || `card:${index}`);
+      }
+
+      function renderPages(packageData, ultraKeys = new Set()) {
         const layouts = printPageLayouts(packageData.cards || []);
-        pagesHost.innerHTML = layouts.map((layout, index) =>
-          `<article class="page batch-page" data-page="${index + 1}">${cardHtml(layout.top, packageData)}${cardHtml(layout.bottom, packageData)}</article>`
-        ).join("");
+        let cardIndex = 0;
+        pagesHost.innerHTML = layouts.map((layout, index) => {
+          const topKey = cardKey(layout.top, cardIndex++);
+          const bottomKey = layout.bottom ? cardKey(layout.bottom, cardIndex++) : "";
+          return `<article class="page batch-page" data-page="${index + 1}">${cardHtml(layout.top, packageData, ultraKeys.has(topKey) ? "ultra" : "normal", topKey)}${cardHtml(layout.bottom, packageData, ultraKeys.has(bottomKey) ? "ultra" : "normal", bottomKey)}</article>`;
+        }).join("");
+        return layouts;
+      }
+
+      function overflowingCards() {
+        return Array.from(pagesHost.querySelectorAll(".task-card:not(.blank)")).filter((card) => {
+          if (card.scrollHeight > card.clientHeight + 1 || card.scrollWidth > card.clientWidth + 1) return true;
+          const constrained = [card, ...card.querySelectorAll(".detail-grid,.detail-list,.order-facts")];
+          return constrained.slice(1).some((element) => element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1);
+        });
+      }
+
+      async function render(packageData) {
+        let layouts = renderPages(packageData);
         applyProductionLabelActions(packageData);
         await waitForProductQrImages();
         toolbarNote.textContent = receiptBatchMode
@@ -599,19 +715,19 @@
             : `${packageData.paper_phase_label || "实收版"} · 每个生产任务固定半张 A4`)
           : "黑白打印 · 每个生产任务固定半张 A4 · 每页上下两款";
         applyMode();
-        const overflowingCards = Array.from(pagesHost.querySelectorAll(".task-card:not(.blank)")).filter((card) => {
-          if (card.scrollHeight > card.clientHeight + 1 || card.scrollWidth > card.clientWidth + 1) return true;
-          const constrained = [card, ...card.querySelectorAll(".detail-grid,.detail-list,.order-facts")];
-          return constrained.slice(1).some((element) => element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1);
-        });
-        if (overflowingCards.length) {
-          overflowingCards.forEach((card) => card.classList.add("layout-overflow"));
-          const overflowSources = Array.from(new Set(overflowingCards.map(capacityOverflowSource)));
-          message.hidden = false;
-          message.className = "message error";
-          message.textContent = `任务内容超过页面容量，已停止打印。半张 A4 主要占用：${overflowSources.join("、")}。请精简对应内容或拆分报料。`;
-          printButton.disabled = true;
-          return;
+        const initialOverflow = overflowingCards();
+        if (initialOverflow.length) {
+          const ultraKeys = new Set(initialOverflow.map((card) => card.dataset.cardKey).filter(Boolean));
+          layouts = renderPages(packageData, ultraKeys);
+          applyMode();
+          await waitForProductQrImages();
+          const remainingOverflow = overflowingCards();
+          if (remainingOverflow.length) {
+            // This is deliberately non-blocking: every dynamic value is already
+            // capped in the ultra layout, so the print action remains available.
+            remainingOverflow.forEach((card) => card.classList.add("ultra-compact"));
+          }
+          toolbarNote.textContent += ` · 已自动紧凑 ${ultraKeys.size} 项`;
         }
         message.hidden = true;
         printButton.disabled = !layouts.length || packageData.printable === false;

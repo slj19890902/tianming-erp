@@ -1045,7 +1045,7 @@ def build_supplier_requisition_production_package(
         if len(card["components"]) > 6:
             card["review_required"] = True
             card["review_messages"] = _unique_text(
-                [*card["review_messages"], "同码物理组件较多，请核对打印版面"]
+                [*card["review_messages"], "同码物理组件较多，纸面已使用紧凑摘要，请扫码核对完整任务"]
             )
         card["components"].sort(
             key=lambda row: (
@@ -1134,8 +1134,6 @@ def build_supplier_requisition_production_package(
             selection_block_reasons.append("生产任务版本缺失，请先核对任务")
         if card.get("receipt_versions"):
             selection_block_reasons.append("任务已有实收事实，请从对应实收版处理")
-        if len(card.get("components") or []) > 6:
-            selection_block_reasons.append("物理组件超过单张纸面容量")
         card["selection_block_reasons"] = selection_block_reasons
         card["selection_eligible"] = not selection_block_reasons
         card["selection_fingerprint"] = production_print_card_fingerprint(card)
@@ -1150,7 +1148,10 @@ def build_supplier_requisition_production_package(
     review_messages = _unique_text(
         [message for card in cards for message in card["review_messages"]]
     )
-    layout_overflow = any(len(card["components"]) > 6 for card in cards)
+    # The paper renderer has an adaptive, bounded half-A4 summary.  Component
+    # count is still surfaced as a review notice above, but must never make a
+    # valid frozen task unprintable.
+    layout_overflow = False
     used_task_ids = {
         int(component["production_task_id"])
         for card in cards
@@ -1261,7 +1262,7 @@ def build_supplier_requisition_production_package(
         "review_required": bool(review_messages),
         "review_messages": review_messages,
         "layout_overflow": layout_overflow,
-        "printable": not layout_overflow,
+        "printable": True,
         "production_label_task_count": len(current_label_counts),
         "production_label_count": sum(current_label_counts.values()),
         "production_label_refresh_options": label_plan_refresh_options,
@@ -1682,8 +1683,8 @@ def build_receipt_production_print_package(
         "page_count": 1,
         "review_required": bool(card["review_required"]),
         "review_messages": list(card["review_messages"]),
-        "layout_overflow": len(card.get("components", [])) > 6,
-        "printable": len(card.get("components", [])) <= 6,
+        "layout_overflow": False,
+        "printable": True,
         "cards": [card],
         "pages": [
             {"page_number": 1, "top": card, "bottom": None}

@@ -51,6 +51,7 @@ from app.services.purchase_receipt_facts import (
     canonical_purchase_receipt_hash,
     material_calculation_fingerprint,
 )
+from app.services.supplier_material_display import clean_supplier_flute_type
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     automatic_raw_material_staging_location,
@@ -1018,6 +1019,41 @@ def _source_supplier_name(
     return str(header.supplier_name or "").strip() or None if header else None
 
 
+def _physical_receipt_flute_type(
+    db: Session,
+    *,
+    source: SupplierRequisitionOrderItem | RequisitionItem,
+    snapshot: PurchasePurposeSourceSnapshot,
+    order_item: OrderItem,
+    receipt_fact: PurchaseReceiptFact,
+) -> str:
+    """Resolve one physical route flute, not a material applicability list."""
+
+    route_flute: str | None = None
+    if isinstance(source, SupplierRequisitionOrderItem):
+        route_flute = source.flute_type_snapshot
+    elif snapshot.source_bom_requisition_source_id is not None:
+        bom_source = db.get(
+            RequisitionItemBomSource,
+            snapshot.source_bom_requisition_source_id,
+        )
+        component = (
+            bom_source.sales_order_item_bom_component
+            if bom_source is not None
+            else None
+        )
+        route_flute = (
+            component.snapshot_component_flute_type
+            if component is not None
+            else None
+        )
+    route_flute = route_flute or order_item.flute_type
+    return clean_supplier_flute_type(
+        receipt_fact.actual_material_flute_type_snapshot,
+        fallback=route_flute,
+    )
+
+
 def _money(value: Decimal) -> Decimal:
     return value.quantize(MONEY, rounding=ROUND_HALF_UP)
 
@@ -1207,6 +1243,11 @@ def post_receipt_purpose_allocation(
                 require_floor3_left=True,
             )
             order_item = db.get(OrderItem, order_item_id)
+            if order_item is None:
+                raise ReceiptPurposeFlowError(
+                    "PURCHASE_SOURCE_ORDER_ITEM_MISSING",
+                    "正式采购来源关联的订单明细不存在。",
+                )
             reserve_lot = manual_semi_finished_in(
                 db,
                 location_id=location.id,
@@ -1219,10 +1260,12 @@ def post_receipt_purpose_allocation(
                     or order_item.layer_count
                     or 0
                 ),
-                flute_type=str(
-                    fact.actual_material_flute_type_snapshot
-                    or order_item.flute_type
-                    or ""
+                flute_type=_physical_receipt_flute_type(
+                    db,
+                    source=source,
+                    snapshot=snapshot,
+                    order_item=order_item,
+                    receipt_fact=fact,
                 ),
                 board_length_mm=board_length,
                 board_width_mm=board_width,

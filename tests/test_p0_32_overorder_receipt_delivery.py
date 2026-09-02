@@ -228,6 +228,72 @@ def test_reserve_choice_keeps_600_finished_and_duplicate_receipt_is_blocked(
         assert duplicate.json()["detail"]["code"] == "INCOMING_SOURCE_ALREADY_FULLY_RECEIVED"
 
 
+def test_reserve_choice_uses_frozen_route_flute_when_material_lists_supported_flutes(
+    requisition_app,
+) -> None:
+    """A material applicability list is not one physical board flute."""
+
+    from app.models.material import Material
+    from app.models.purchase_receipt import PurchaseReceiptFact
+
+    app, session_factory = requisition_app
+    _include_p0_32_routers(app)
+    _seed_material_and_staging(session_factory)
+    with session_factory() as session:
+        material = session.scalar(select(Material).where(Material.code == "KAKAK"))
+        assert material is not None
+        material.flute_type = "AB/BE"
+        material.version += 1
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        source = _create_frozen_sources(
+            client,
+            session_factory,
+            order_quantity=200,
+            purchase_total=200,
+            order_purpose=200,
+            stock_purpose=0,
+        )[0]
+        frozen = _freeze_receipt_fact(
+            client,
+            source,
+            idempotency_key="p032-supported-flute-price",
+        )
+        assert frozen.status_code == 200, frozen.text
+        receipt_fact = frozen.json()
+        with session_factory() as session:
+            frozen_fact = session.scalar(
+                select(PurchaseReceiptFact).where(
+                    PurchaseReceiptFact.purchase_purpose_source_snapshot_id
+                    == source.purpose_snapshot_id
+                )
+            )
+            assert frozen_fact is not None
+            assert frozen_fact.actual_material_flute_type_snapshot == "AB/BE"
+
+        received = _receive(
+            client,
+            source,
+            receipt_fact,
+            quantity=302,
+            idempotency_key="p032-supported-flute-list",
+            overrides={"surplus_disposition": "semi_finished_reserve"},
+        )
+        assert received.status_code == 200, received.text
+        assert received.json()["purpose_allocation"]["reserve_sheet_delta"] == 102
+        reserve_lot_id = received.json()["purpose_allocation"][
+            "reserve_inventory_lot_id"
+        ]
+        with session_factory() as session:
+            reserve_lot = session.get(InventoryLot, reserve_lot_id)
+            assert reserve_lot is not None
+            assert reserve_lot.semi_finished_detail is not None
+            assert reserve_lot.semi_finished_detail.layer_count == 5
+            assert reserve_lot.semi_finished_detail.flute_type == "AB"
+
+
 def test_actual_quantity_raise_consumes_same_receipt_reserve_and_exposes_602(
     requisition_app,
 ) -> None:

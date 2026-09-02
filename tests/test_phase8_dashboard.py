@@ -5,10 +5,32 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
+
+
+def _freeze_dashboard_business_date(
+    monkeypatch: pytest.MonkeyPatch,
+    business_date: date,
+):
+    from app.api import dashboard as dashboard_api
+
+    class FrozenDashboardDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(
+                business_date.year,
+                business_date.month,
+                business_date.day,
+                8,
+                tzinfo=tz,
+            )
+
+    monkeypatch.setattr(dashboard_api, "datetime", FrozenDashboardDateTime)
+    return dashboard_api
 
 
 def test_dashboard_frontend_loads_real_kpi_endpoint() -> None:
@@ -200,14 +222,21 @@ def test_dashboard_kpi_uses_real_database_aggregates(tmp_path: Path) -> None:
     assert body["today_pending_incoming_tasks"] == 0
 
 
-def test_dashboard_overview_returns_safe_empty_defaults(tmp_path: Path) -> None:
+def test_dashboard_overview_returns_safe_empty_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from app.api.auth import router as auth_router
-    from app.api.dashboard import router as dashboard_router
     from app.api.deps import get_db
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
     from app.models import Base
     from app.models.user import User
+
+    dashboard_api = _freeze_dashboard_business_date(
+        monkeypatch,
+        date(2026, 9, 18),
+    )
 
     engine = create_sqlite_engine(tmp_path / "dashboard-overview.sqlite3")
     Base.metadata.create_all(engine)
@@ -226,7 +255,7 @@ def test_dashboard_overview_returns_safe_empty_defaults(tmp_path: Path) -> None:
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
-    app.include_router(dashboard_router, prefix="/api/dashboard")
+    app.include_router(dashboard_api.router, prefix="/api/dashboard")
 
     def override_get_db() -> Generator[Session, None, None]:
         with factory() as session:
@@ -349,9 +378,11 @@ def test_dashboard_overview_does_not_hide_actionable_future_delivery_orders(tmp_
     assert material_todo["count"] == 3
 
 
-def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> None:
+def test_dashboard_overview_uses_workflow_counts_and_todos(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from app.api.auth import router as auth_router
-    from app.api.dashboard import router as dashboard_router
     from app.api.deps import get_db
     from app.core.database import create_sqlite_engine
     from app.core.security import hash_password
@@ -371,6 +402,11 @@ def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> No
         SupplierRequisitionOrderItem,
     )
     from app.models.user import User
+
+    dashboard_api = _freeze_dashboard_business_date(
+        monkeypatch,
+        date(2026, 9, 18),
+    )
 
     engine = create_sqlite_engine(tmp_path / "dashboard-overview-counts.sqlite3")
     Base.metadata.create_all(engine)
@@ -595,7 +631,7 @@ def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> No
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
-    app.include_router(dashboard_router, prefix="/api/dashboard")
+    app.include_router(dashboard_api.router, prefix="/api/dashboard")
 
     def override_get_db() -> Generator[Session, None, None]:
         with factory() as session:
@@ -639,11 +675,17 @@ def test_dashboard_overview_uses_workflow_counts_and_todos(tmp_path: Path) -> No
     assert pending_material["first_order_no"] == "PO-DASH-001"
 
 
-def test_dashboard_overview_groups_reconciliation_todos_by_customer_and_month(
+@pytest.mark.parametrize(
+    ("business_day", "reminder_visible"),
+    [(17, False), (18, True)],
+)
+def test_dashboard_reconciliation_reminders_start_on_the_eighteenth(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    business_day: int,
+    reminder_visible: bool,
 ) -> None:
     from app.api.auth import router as auth_router
-    from app.api.dashboard import router as dashboard_router
     from app.api.deps import get_db
     from app.api.finance import _statement_period
     from app.core.database import create_sqlite_engine
@@ -659,8 +701,10 @@ def test_dashboard_overview_groups_reconciliation_todos_by_customer_and_month(
     engine = create_sqlite_engine(tmp_path / "dashboard-overview-reconciliation.sqlite3")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
-    statement_month = date.today().strftime("%Y-%m")
+    business_date = date(2026, 9, business_day)
+    statement_month = business_date.strftime("%Y-%m")
     period_start, _period_end = _statement_period(statement_month, 20)
+    dashboard_api = _freeze_dashboard_business_date(monkeypatch, business_date)
     with factory() as session:
         session.add(
             User(
@@ -804,7 +848,7 @@ def test_dashboard_overview_groups_reconciliation_todos_by_customer_and_month(
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
-    app.include_router(dashboard_router, prefix="/api/dashboard")
+    app.include_router(dashboard_api.router, prefix="/api/dashboard")
 
     def override_get_db() -> Generator[Session, None, None]:
         with factory() as session:
@@ -821,6 +865,12 @@ def test_dashboard_overview_groups_reconciliation_todos_by_customer_and_month(
     assert response.status_code == 200
     body = response.json()
     counts = {card["key"]: card["count"] for card in body["cards"]}
+    if not reminder_visible:
+        assert "pending_reconciliation" not in counts
+        assert not [todo for todo in body["todos"] if todo["type"] == "待对账"]
+        assert "pending_reconciliation" not in body["business_status_counts"]
+        return
+
     assert counts["pending_reconciliation"] == 2
     recon_todos = [todo for todo in body["todos"] if todo["type"] == "待对账"]
     assert len(recon_todos) == 2

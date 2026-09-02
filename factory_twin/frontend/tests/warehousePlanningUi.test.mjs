@@ -171,6 +171,10 @@ test("planning moves empty zones but locks boundaries that own formal locations"
 test("map adjustment and location placement are mutually exclusive", () => {
   assert.match(source, /const locationProjectionFeatures = useMemo/);
   assert.match(source, /\(\) => mergePublishedFeatureGeometry\(features, planningPublishedFeatures\)/);
+  assert.match(source, /const planningVisibleFeatures = useMemo/);
+  assert.match(source, /findPalletPlanningConflicts\([\s\S]*planningVisibleFeatures/);
+  assert.match(source, /features: planningVisibleFeatures\.map/);
+  assert.doesNotMatch(source, /locationEditMode && !layoutMapToolsOpen \? locationProjectionFeatures : layout\.features/);
   assert.match(source, /setLayoutMapToolsOpen\(false\)/);
   assert.match(source, /layoutMapToolsOpen \? \[\] : locationPointEditPalletIds/);
   assert.match(source, /!locationPointEditAreaCode && layoutMapTool === "adjust"/);

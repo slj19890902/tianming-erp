@@ -1154,19 +1154,29 @@ def receive_replenishment_item(
     operator_id: int | None,
     receipt_item_id: int,
     source_ref_type: str = "stock_replenishment_receipt",
+    actual_inventory_quantity: int | None = None,
 ) -> InventoryLot:
     """Put one actually received replenishment line into inventory.
 
     Saving the replenishment document never calls this function.  The incoming
     receipt workflow calls it only after the operator confirms an actual
     receipt, so the inventory movement and the receipt fact share one
-    idempotent source.
+    idempotent source. ``quantity`` advances the frozen replenishment plan;
+    ``actual_inventory_quantity`` may be higher for an audited supplier
+    over-receipt while the original plan remains unchanged.
     """
     if order.status == "voided":
         raise StockReplenishmentError("已作废补库单不能收货。", 409)
     remaining = int(item.quantity or 0) - int(item.stocked_quantity or 0)
-    if quantity <= 0:
+    inventory_quantity = (
+        quantity
+        if actual_inventory_quantity is None
+        else int(actual_inventory_quantity)
+    )
+    if inventory_quantity <= 0 or quantity < 0:
         raise StockReplenishmentError("本次实收数量必须大于0。")
+    if inventory_quantity < quantity:
+        raise StockReplenishmentError("实际入库数量不能小于计划到货数量。")
     if quantity > remaining:
         raise StockReplenishmentError(
             "本次实收超过补库单剩余待收数量；请核对后另建补库单处理超收。",
@@ -1263,7 +1273,7 @@ def receive_replenishment_item(
     )
     common = {
         "location_id": destination_location_id,
-        "quantity": quantity,
+        "quantity": inventory_quantity,
         "stock_date": beijing_today(),
         "source_type": "replenishment",
         "remarks": (

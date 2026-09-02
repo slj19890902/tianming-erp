@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -772,10 +772,20 @@ def test_pending_confirmation_is_in_daily_view_and_unfinished_badge(
 
 def test_dashboard_keeps_future_due_accept_short_line_in_finance_chain(
     status_app,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.api import dashboard as dashboard_api
     from app.core.time_contract import beijing_today
     from app.models.delivery import Delivery, DeliveryItem
     from app.models.finance import ReturnReceipt, ReturnReceiptItem
+
+    class FrozenDashboardDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = beijing_today()
+            return cls(current.year, current.month, 18, 8, tzinfo=tz)
+
+    monkeypatch.setattr(dashboard_api, "datetime", FrozenDashboardDateTime)
 
     app, factory = status_app
     with factory() as db:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 import hashlib
 import json
 from types import SimpleNamespace
@@ -132,6 +132,7 @@ def prepare_external_stock_purchase(
     *,
     product: Product,
     finished_quantity: int,
+    purchase_quantity_override: Any | None = None,
 ) -> dict[str, Any]:
     if product.supply_mode != "external_purchase":
         raise ExternalPurchaseContractError("当前常用箱不是纯外购产品")
@@ -167,14 +168,33 @@ def prepare_external_stock_purchase(
         product.external_packaging_default_purchase_quantity_basis,
         label="供应商采购数量基数",
     )
-    purchase_quantity = (
+    recommended_purchase_quantity = (
         Decimal(finished_quantity) * purchase_basis / order_basis
     )
-    if purchase_quantity.quantize(SIX_PLACES) != purchase_quantity:
+    if (
+        recommended_purchase_quantity.quantize(SIX_PLACES)
+        != recommended_purchase_quantity
+    ):
         raise ExternalPurchaseContractError(
             "当前备库数量按常用箱比例换算后超过 6 位小数，请调整目标库存"
         )
-    purchase_quantity = purchase_quantity.quantize(SIX_PLACES)
+    purchase_quantity = (
+        recommended_purchase_quantity.quantize(SIX_PLACES)
+        if purchase_quantity_override is None
+        else _positive_decimal(
+            purchase_quantity_override,
+            label="供应商采购数量",
+        ).quantize(SIX_PLACES)
+    )
+    converted_finished_quantity = int(
+        (purchase_quantity * order_basis / purchase_basis).to_integral_value(
+            rounding=ROUND_FLOOR
+        )
+    )
+    if converted_finished_quantity <= 0:
+        raise ExternalPurchaseContractError(
+            "供应商采购数量按常用箱比例不足 1 个成品，请增加采购数量"
+        )
 
     snapshot = _default_candidate_snapshot(product)
     try:
@@ -263,7 +283,8 @@ def prepare_external_stock_purchase(
         "specification_summary": specification_summary,
         "specification_json": specification_json,
         "purchase_unit": purchase_unit,
-        "finished_quantity": int(finished_quantity),
+        "finished_quantity": converted_finished_quantity,
+        "suggested_finished_quantity": int(finished_quantity),
         "order_basis": order_basis,
         "purchase_basis": purchase_basis,
         "purchase_quantity": purchase_quantity,
@@ -344,23 +365,37 @@ def create_external_stock_replenishment_purchase(
     *,
     policy: InventoryStockPolicy,
     finished_quantity: int,
+    purchase_quantity: Any | None = None,
     order_number: str,
     idempotency_key: str,
     remark: str | None,
     user: User,
 ) -> StockReplenishmentOrder:
+    existing_order = replay_external_stock_replenishment_purchase(
+        db,
+        policy=policy,
+        finished_quantity=finished_quantity,
+        purchase_quantity=purchase_quantity,
+        idempotency_key=idempotency_key,
+    )
+    if existing_order is not None:
+        return existing_order
+
     product = policy.product or db.get(Product, policy.product_id)
     if product is None or product.deleted_at is not None or not product.is_active:
         raise ExternalPurchaseContractError("库存预警关联的外购常用箱不可用")
     prepared = prepare_external_stock_purchase(
-        db, product=product, finished_quantity=finished_quantity
+        db,
+        product=product,
+        finished_quantity=finished_quantity,
+        purchase_quantity_override=purchase_quantity,
     )
     fingerprint = hashlib.sha256(
         json.dumps(
             {
                 "stock_policy_id": int(policy.id),
                 "product_id": int(product.id),
-                "finished_quantity": int(finished_quantity),
+                "finished_quantity": int(prepared["finished_quantity"]),
                 "purchase_quantity": _decimal_text(prepared["purchase_quantity"]),
                 "order_basis": _decimal_text(prepared["order_basis"]),
                 "purchase_basis": _decimal_text(prepared["purchase_basis"]),
@@ -371,24 +406,6 @@ def create_external_stock_replenishment_purchase(
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    existing_batch = db.scalar(
-        select(ExternalPackagingPurchaseBatch).where(
-            ExternalPackagingPurchaseBatch.idempotency_key == idempotency_key
-        )
-    )
-    if existing_batch is not None:
-        if existing_batch.request_fingerprint != fingerprint:
-            raise ExternalPurchaseContractError(
-                "同一提交标识对应的外购备库内容已变化，请刷新后重新操作"
-            )
-        existing_order = db.get(
-            StockReplenishmentOrder,
-            existing_batch.stock_replenishment_order_id,
-        )
-        if existing_order is None:
-            raise ExternalPurchaseContractError("外购备库来源记录不完整")
-        return existing_order
-
     order = StockReplenishmentOrder(
         order_number=order_number,
         supplier_name=(
@@ -415,7 +432,7 @@ def create_external_stock_replenishment_purchase(
         component_type="whole",
         pieces_per_box=1,
         stock_yield_per_sheet=1,
-        quantity=int(finished_quantity),
+        quantity=int(prepared["finished_quantity"]),
         stocked_quantity=0,
         remark=remark,
     )
@@ -497,6 +514,88 @@ def create_external_stock_replenishment_purchase(
     )
     db.flush()
     return order
+
+
+def replay_external_stock_replenishment_purchase(
+    db: Session,
+    *,
+    policy: InventoryStockPolicy,
+    finished_quantity: int,
+    purchase_quantity: Any | None,
+    idempotency_key: str,
+) -> StockReplenishmentOrder | None:
+    """Replay from frozen purchase facts without consulting mutable master data."""
+
+    existing_batch = db.scalar(
+        select(ExternalPackagingPurchaseBatch).where(
+            ExternalPackagingPurchaseBatch.idempotency_key == idempotency_key
+        )
+    )
+    if existing_batch is None:
+        return None
+    if existing_batch.stock_replenishment_order_id is None:
+        raise ExternalPurchaseContractError(
+            "同一提交标识已用于其他外购业务，请关闭后重新操作"
+        )
+    existing_order = db.get(
+        StockReplenishmentOrder,
+        existing_batch.stock_replenishment_order_id,
+    )
+    if existing_order is None:
+        raise ExternalPurchaseContractError("外购备库来源记录不完整")
+    stock_items = list(
+        db.scalars(
+            select(StockReplenishmentOrderItem)
+            .where(
+                StockReplenishmentOrderItem.replenishment_order_id
+                == existing_order.id
+            )
+            .order_by(StockReplenishmentOrderItem.id)
+            .limit(2)
+        ).all()
+    )
+    if len(stock_items) != 1:
+        raise ExternalPurchaseContractError("外购备库来源明细不完整")
+    stock_item = stock_items[0]
+    purchase_items = list(
+        db.scalars(
+            select(ExternalPackagingPurchaseItem)
+            .where(
+                ExternalPackagingPurchaseItem.stock_replenishment_item_id
+                == stock_item.id
+            )
+            .order_by(ExternalPackagingPurchaseItem.id)
+            .limit(2)
+        ).all()
+    )
+    if len(purchase_items) != 1:
+        raise ExternalPurchaseContractError("外购采购冻结明细不完整")
+    purchase_item = purchase_items[0]
+    content_changed = (
+        stock_item.stock_policy_id != policy.id
+        or stock_item.product_id != policy.product_id
+        or purchase_item.customer_product_id_snapshot != policy.product_id
+    )
+    if purchase_quantity is None:
+        content_changed = content_changed or (
+            int(stock_item.quantity) != int(finished_quantity)
+        )
+    else:
+        requested_purchase_quantity = _positive_decimal(
+            purchase_quantity,
+            label="供应商采购数量",
+        ).quantize(SIX_PLACES)
+        frozen_purchase_quantity = Decimal(
+            purchase_item.purchase_quantity
+        ).quantize(SIX_PLACES)
+        content_changed = content_changed or (
+            requested_purchase_quantity != frozen_purchase_quantity
+        )
+    if content_changed:
+        raise ExternalPurchaseContractError(
+            "同一提交标识对应的外购备库内容已变化，请刷新后重新操作"
+        )
+    return existing_order
 
 
 def external_purchase_batch_for_replenishment(

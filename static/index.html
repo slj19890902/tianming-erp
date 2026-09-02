@@ -8189,9 +8189,9 @@
                   <div class="stock-replenishment-line-head"><div><strong>补库明细 {{ index + 1 }}</strong><span class="muted" style="margin-left:10px">{{ line.material_supplier_name || stockReplenishmentForm.supplier_name || '供应商待确认' }}<template v-if="line.procurement_mode!=='external_purchase'">｜{{ line.material_code || '材质待选择' }}</template></span></div><button class="btn small danger" type="button" @click="removeStockReplenishmentLine(index)">删除行</button></div>
                   <div v-if="line.procurement_mode==='external_purchase'" class="stock-warning-summary">
                     <div><strong>{{ line.product_code }}｜{{ line.product_name }}</strong><div class="muted">{{ line.external_specification_summary }}</div><div class="muted">供应商货号 {{ line.external_supplier_product_code }}｜{{ line.external_supplier_product_name }}</div></div>
-                    <div><span class="muted">客户产品备库</span><br><strong>{{ line.quantity }} 个</strong></div>
+                    <div><span class="muted">可形成客户成品</span><br><strong>{{ line.quantity }} 个</strong><div v-if="Number(line.external_purchase_remainder||0)>0" class="muted">另有 {{ line.external_purchase_remainder }} {{ line.external_purchase_unit }}散件</div></div>
                     <div><span class="muted">常用箱比例</span><br><strong>{{ line.external_order_quantity_basis }} : {{ line.external_purchase_quantity_basis }}</strong></div>
-                    <div><span class="muted">供应商采购数量</span><br><strong>{{ line.external_purchase_quantity }} {{ line.external_purchase_unit }}</strong></div>
+                    <div class="field"><label>供应商采购数量（可修改）</label><div class="stock-paired-inputs"><input class="input" type="number" min="0.000001" :step="externalPurchaseQuantityStep(line)" v-model="line.external_purchase_quantity" @input="syncExternalStockPurchaseQuantity(line)" /><span>{{ line.external_purchase_unit }}</span></div></div>
                   </div>
                   <div v-else-if="stockReplenishmentForm.source_type==='stock_warning'" class="stock-warning-summary">
                     <div><strong>{{ line.product_code }}｜{{ line.product_name }}</strong><div class="muted">{{ line.material_code || "材质待完善" }}｜{{ line.report_length_mm || "-" }} × {{ line.report_width_mm || "-" }} mm｜{{ line.flute_type || "-" }}楞｜{{ line.cutting_mode || "一开一" }}</div><div class="muted">客户专用纸板备料，可供：{{ (line.compatible_product_codes || [line.product_code]).join("、") }}</div><span v-if="!line.draft_ready" class="status orange">还缺：{{ (line.missing_fields || []).join("、") }}</span></div>
@@ -18247,6 +18247,24 @@
           stockWarningExtraSheets(line) {
             return Math.max(Number(line.quantity || 0) - this.stockWarningTheoreticalSheets(line), 0);
           },
+          externalPurchaseQuantityStep(line) {
+            return ["根","件","张","令","只","个","套","片","卷","箱"].includes(String(line?.external_purchase_unit || "").trim()) ? "1" : "0.000001";
+          },
+          syncExternalStockPurchaseQuantity(line) {
+            if (!line || line.procurement_mode !== "external_purchase") return;
+            const purchaseQuantity=Number(line.external_purchase_quantity);
+            const orderBasis=Number(line.external_order_quantity_basis);
+            const purchaseBasis=Number(line.external_purchase_quantity_basis);
+            if (!Number.isFinite(purchaseQuantity) || purchaseQuantity<=0 || !Number.isFinite(orderBasis) || orderBasis<=0 || !Number.isFinite(purchaseBasis) || purchaseBasis<=0) {
+              line.quantity=0;
+              line.external_purchase_remainder=0;
+              return;
+            }
+            const finishedQuantity=Math.floor((purchaseQuantity*orderBasis/purchaseBasis)+1e-9);
+            line.quantity=Math.max(finishedQuantity,0);
+            const usedPurchaseQuantity=finishedQuantity*purchaseBasis/orderBasis;
+            line.external_purchase_remainder=Math.max(purchaseQuantity-usedPurchaseQuantity,0).toFixed(6).replace(/0+$/,"").replace(/\.$/,"") || "0";
+          },
           async loadStockProducts(customerId, query="") {
             if (!customerId) return;
             try {
@@ -18399,6 +18417,13 @@
                 const product=(this.stockReplenishmentProducts || []).find(row=>Number(row.id)===Number(line.reference_product_id));
                 if (line.procurement_mode !== "external_purchase" && (!product || product.box_type_code !== "liner")) return `${label}只有衬板或正式外购包材可直接进入成品区`;
                 if (line.procurement_mode === "external_purchase" && (!line.reference_product_id || !line.external_purchase_quantity || !line.external_purchase_unit || !line.external_order_quantity_basis || !line.external_purchase_quantity_basis)) return `${label}外购包材采购资料不完整，请刷新后重试`;
+                if (line.procurement_mode === "external_purchase") {
+                  const purchaseQuantity=Number(line.external_purchase_quantity);
+                  if (!Number.isFinite(purchaseQuantity) || purchaseQuantity<=0) return `${label}供应商采购数量必须大于0`;
+                  if (this.externalPurchaseQuantityStep(line)==="1" && !Number.isInteger(purchaseQuantity)) return `${label}${line.external_purchase_unit}数量必须是整数`;
+                  this.syncExternalStockPurchaseQuantity(line);
+                  if (!Number.isInteger(Number(line.quantity)) || Number(line.quantity)<=0) return `${label}采购数量按常用箱比例不足1个成品`;
+                }
               }
               if (this.stockReplenishmentForm.source_type === "customer_request" && !line.customer_id) return `${label}请选择客户`;
               if (this.stockReplenishmentForm.source_type === "stock_warning") {
@@ -31712,6 +31737,7 @@
                 delete item.missing_fields;
                 delete item.cutting_mode;
                 delete item.output_per_sheet;
+                delete item.external_purchase_remainder;
                 item.reference_product_id = item.reference_product_id || item.product_id || null;
                 item.product_id = null;
                 item.location_id = null;

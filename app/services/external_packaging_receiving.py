@@ -726,7 +726,7 @@ def record_external_purchase_receipt(
             raise ExternalPurchaseContractError(
                 f"“{item.product_name_snapshot}”已经收齐，请刷新"
             )
-        if quantity > remaining:
+        if quantity > remaining and replenishment_order is None:
             raise ExternalPurchaseContractError(
                 f"“{item.product_name_snapshot}”本次最多可收 {_text(remaining)} {item.purchase_unit}"
             )
@@ -750,32 +750,29 @@ def record_external_purchase_receipt(
     db.add(receipt)
     db.flush()
     for item, quantity in normalized:
-        receipt_item = ExternalPackagingReceiptItem(
-            receipt_id=receipt.id,
-            purchase_item_id=item.id,
-            received_quantity=quantity,
-            purchase_unit_snapshot=item.purchase_unit,
-            converted_finished_quantity=0,
-            loose_remainder_quantity_after=Decimal("0"),
-        )
-        db.add(receipt_item)
-        db.flush()
+        converted_quantity = 0
+        remainder = Decimal("0")
+        stock_item: StockReplenishmentOrderItem | None = None
         if replenishment_order is not None:
             stock_item = stock_items[int(item.stock_replenishment_item_id)]
             order_basis = _decimal(item.order_quantity_basis_snapshot)
             purchase_basis = _decimal(item.purchase_quantity_basis_snapshot)
-            cumulative_received = totals.get(item.id, Decimal("0")) + quantity
+            cumulative_before = totals.get(item.id, Decimal("0"))
+            cumulative_received = cumulative_before + quantity
+            completed_before = int(
+                (
+                    cumulative_before * order_basis / purchase_basis
+                ).to_integral_value(rounding=ROUND_FLOOR)
+            )
             completed_after = int(
                 (
                     cumulative_received * order_basis / purchase_basis
                 ).to_integral_value(rounding=ROUND_FLOOR)
             )
-            converted_quantity = completed_after - int(
-                stock_item.stocked_quantity or 0
-            )
+            converted_quantity = completed_after - completed_before
             if converted_quantity < 0:
                 raise ExternalPurchaseContractError(
-                    "外购备库累计换算数量小于已入库数量，已停止收料"
+                    "外购备库累计换算数量异常，已停止收料"
                 )
             remainder = cumulative_received - (
                 Decimal(completed_after) * purchase_basis / order_basis
@@ -784,20 +781,36 @@ def record_external_purchase_receipt(
                 raise ExternalPurchaseContractError(
                     "外购备库散件余量计算异常，已停止收料"
                 )
-            receipt_item.converted_finished_quantity = converted_quantity
-            receipt_item.loose_remainder_quantity_after = remainder.quantize(
-                SIX_PLACES
-            )
+        receipt_item = ExternalPackagingReceiptItem(
+            receipt_id=receipt.id,
+            purchase_item_id=item.id,
+            received_quantity=quantity,
+            purchase_unit_snapshot=item.purchase_unit,
+            converted_finished_quantity=converted_quantity,
+            loose_remainder_quantity_after=remainder.quantize(SIX_PLACES),
+        )
+        db.add(receipt_item)
+        db.flush()
+        if replenishment_order is not None and stock_item is not None:
             if converted_quantity > 0:
+                planned_quantity = min(
+                    converted_quantity,
+                    max(
+                        int(stock_item.quantity or 0)
+                        - int(stock_item.stocked_quantity or 0),
+                        0,
+                    ),
+                )
                 try:
                     receive_replenishment_item(
                         db,
                         order=replenishment_order,
                         item=stock_item,
-                        quantity=converted_quantity,
+                        quantity=planned_quantity,
                         operator_id=user.id,
                         receipt_item_id=receipt_item.id,
                         source_ref_type="external_packaging_receipt_item",
+                        actual_inventory_quantity=converted_quantity,
                     )
                 except StockReplenishmentError as error:
                     raise ExternalPurchaseContractError(

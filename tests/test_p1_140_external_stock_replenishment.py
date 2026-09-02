@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 import sqlite3
@@ -11,7 +11,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from test_p1_40a_packaging_masterdata import _honeycomb_payload, p1_40a_app
 
@@ -220,6 +220,344 @@ def test_external_warning_confirm_creates_no_sales_order_and_is_idempotent(
         assert summary["external_purchase_incoming_quantity"] == 4000
         assert summary["suggested_new_requisition_finished_quantity"] == 0
         assert summary["replenishment_state"] == "already_ordered"
+
+
+def test_external_warning_replay_uses_frozen_purchase_after_supplier_changes(
+    external_stock_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.api.requisition as requisition_api
+    from app.models.external_packaging_purchase import (
+        ExternalPackagingPurchaseBatch,
+        ExternalPackagingPurchaseOrder,
+    )
+    from app.models.stock_replenishment import (
+        InventoryStockPolicy,
+        StockReplenishmentOrder,
+    )
+    from app.models.supplier import Supplier
+
+    policy_id, _product_id = _seed_external_warning(external_stock_app)
+    with TestClient(external_stock_app) as client:
+        _login(client)
+        draft = client.get(
+            f"/api/requisition/stock-policies/{policy_id}/replenishment-draft"
+        ).json()
+        payload = {
+            "source_type": "stock_warning",
+            "idempotency_key": "p0-35-frozen-master-replay",
+            "customer_id": draft["customer_id"],
+            "supplier_name": draft["supplier_name"],
+            "stock_now": False,
+            "items": [draft["items"][0]],
+        }
+        first = client.post(
+            "/api/requisition/stock-replenishment/orders", json=payload
+        )
+        assert first.status_code == 201, first.text
+        order_id = first.json()["id"]
+
+    with external_stock_app.state.factory() as db:
+        purchase_order = db.scalar(select(ExternalPackagingPurchaseOrder))
+        assert purchase_order is not None
+        supplier = db.get(Supplier, purchase_order.supplier_id)
+        policy = db.get(InventoryStockPolicy, policy_id)
+        assert supplier is not None
+        assert policy is not None
+        supplier.is_active = False
+        supplier.version += 1
+        policy.active = False
+        db.commit()
+
+    replay_date = date.today() + timedelta(days=1)
+    monkeypatch.setattr(requisition_api, "beijing_today", lambda: replay_date)
+    with TestClient(external_stock_app) as client:
+        _login(client)
+        repeated = client.post(
+            "/api/requisition/stock-replenishment/orders", json=payload
+        )
+        assert repeated.status_code == 201, repeated.text
+        assert repeated.json()["id"] == order_id
+
+    with external_stock_app.state.factory() as db:
+        assert int(
+            db.scalar(select(func.count(ExternalPackagingPurchaseBatch.id))) or 0
+        ) == 1
+        assert int(
+            db.scalar(select(func.count(StockReplenishmentOrder.id))) or 0
+        ) == 1
+
+
+def test_external_warning_idempotency_key_rejects_changed_procurement_mode(
+    external_stock_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.api.requisition as requisition_api
+    policy_id, _product_id = _seed_external_warning(external_stock_app)
+    with TestClient(external_stock_app) as client:
+        _login(client)
+        draft = client.get(
+            f"/api/requisition/stock-policies/{policy_id}/replenishment-draft"
+        ).json()
+        payload = {
+            "source_type": "stock_warning",
+            "idempotency_key": "p0-35-reject-cross-mode-replay",
+            "customer_id": draft["customer_id"],
+            "supplier_name": draft["supplier_name"],
+            "stock_now": False,
+            "items": [draft["items"][0]],
+        }
+        first = client.post(
+            "/api/requisition/stock-replenishment/orders", json=payload
+        )
+        assert first.status_code == 201, first.text
+
+        replay_date = date.today() + timedelta(days=1)
+        monkeypatch.setattr(requisition_api, "beijing_today", lambda: replay_date)
+        changed_line = dict(payload["items"][0])
+        changed_line.update(
+            {
+                "stock_policy_id": None,
+                "procurement_mode": "internal",
+                "product_id": None,
+                "reference_product_id": None,
+                "external_purchase_quantity": None,
+            }
+        )
+        changed = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={**payload, "items": [changed_line]},
+        )
+        assert changed.status_code == 409, changed.text
+        assert "补库类型已变化" in changed.json()["detail"]
+
+
+def test_external_warning_purchase_quantity_can_override_recommendation(
+    external_stock_app: FastAPI,
+) -> None:
+    from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
+    from app.models.stock_replenishment import StockReplenishmentOrderItem
+
+    policy_id, _product_id = _seed_external_warning(external_stock_app)
+    with TestClient(external_stock_app) as client:
+        _login(client)
+        draft = client.get(
+            f"/api/requisition/stock-policies/{policy_id}/replenishment-draft"
+        ).json()
+        line = draft["items"][0]
+        assert line["external_purchase_quantity"] == "8000"
+        line["external_purchase_quantity"] = "4043"
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "stock_warning",
+                "idempotency_key": "p0-35-edit-external-purchase-quantity",
+                "customer_id": draft["customer_id"],
+                "supplier_name": draft["supplier_name"],
+                "stock_now": False,
+                "items": [line],
+            },
+        )
+        assert created.status_code == 201, created.text
+        body = created.json()
+        assert body["external_purchase_orders"][0]["items"][0][
+            "purchase_quantity"
+        ] == "4043"
+        assert body["items"][0]["quantity"] == 2021
+        line["external_purchase_quantity"] = "4044"
+        conflict = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "stock_warning",
+                "idempotency_key": "p0-35-edit-external-purchase-quantity",
+                "customer_id": draft["customer_id"],
+                "supplier_name": draft["supplier_name"],
+                "stock_now": False,
+                "items": [line],
+            },
+        )
+        assert conflict.status_code == 409, conflict.text
+        assert "同一提交标识" in conflict.json()["detail"]
+
+    with external_stock_app.state.factory() as db:
+        purchase_item = db.scalar(select(ExternalPackagingPurchaseItem))
+        stock_item = db.scalar(select(StockReplenishmentOrderItem))
+        assert purchase_item is not None and stock_item is not None
+        assert Decimal(purchase_item.purchase_quantity) == Decimal("4043")
+        assert stock_item.quantity == 2021
+
+
+def test_external_stock_receipt_inserts_final_conversion_before_immutable_guard(
+    external_stock_app: FastAPI,
+) -> None:
+    from app.models.warehouse_inventory import WarehouseLocation
+
+    policy_id, _product_id = _seed_external_warning(external_stock_app)
+    with external_stock_app.state.factory() as db:
+        db.add(
+            WarehouseLocation(
+                location_code="F1-DISPATCH-01",
+                location_name="一楼成品待送区",
+                warehouse_type="finished",
+                warehouse_floor=1,
+                area_code="DISPATCH",
+                storage_type="temporary_aisle",
+                source_version="P1-25C",
+                placement_status="placed",
+                is_active=True,
+            )
+        )
+        db.commit()
+
+    with TestClient(external_stock_app) as client:
+        _login(client)
+        draft = client.get(
+            f"/api/requisition/stock-policies/{policy_id}/replenishment-draft"
+        ).json()
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "stock_warning",
+                "idempotency_key": "p0-35-immutable-receipt",
+                "customer_id": draft["customer_id"],
+                "supplier_name": draft["supplier_name"],
+                "stock_now": False,
+                "items": [draft["items"][0]],
+            },
+        )
+        assert created.status_code == 201, created.text
+        purchase = created.json()["external_purchase_orders"][0]
+
+        with external_stock_app.state.factory() as db:
+            db.execute(
+                text(
+                    """
+                    CREATE TRIGGER trg_p0_35_external_receipt_item_immutable
+                    BEFORE UPDATE ON external_packaging_receipt_items
+                    FOR EACH ROW
+                    BEGIN
+                        SELECT RAISE(ABORT, 'external_packaging_receipt_items rows are immutable');
+                    END
+                    """
+                )
+            )
+            db.commit()
+
+        received = client.post(
+            f"/api/external-packaging-purchases/{purchase['id']}/receipts",
+            json={
+                "idempotency_key": "p0-35-immutable-receipt-post",
+                "lines": [
+                    {
+                        "purchase_item_id": purchase["items"][0]["id"],
+                        "received_quantity": "8000",
+                    }
+                ],
+            },
+        )
+        assert received.status_code == 200, received.text
+        assert received.json()["receipt"]["items"][0][
+            "converted_finished_quantity"
+        ] == 4000
+
+
+def test_external_stock_over_receipt_preserves_extra_finished_and_loose_units(
+    external_stock_app: FastAPI,
+) -> None:
+    from app.models.external_packaging_purchase import (
+        ExternalPackagingReceipt,
+        ExternalPackagingReceiptItem,
+    )
+    from app.models.stock_replenishment import StockReplenishmentOrderItem
+    from app.models.warehouse_inventory import (
+        FinishedGoodsInventoryDetail,
+        InventoryLot,
+        WarehouseLocation,
+    )
+
+    policy_id, product_id = _seed_external_warning(external_stock_app)
+    with external_stock_app.state.factory() as db:
+        db.add(
+            WarehouseLocation(
+                location_code="F1-DISPATCH-01",
+                location_name="一楼成品待送区",
+                warehouse_type="finished",
+                warehouse_floor=1,
+                area_code="DISPATCH",
+                storage_type="temporary_aisle",
+                source_version="P1-25C",
+                placement_status="placed",
+                is_active=True,
+            )
+        )
+        db.commit()
+
+    with TestClient(external_stock_app) as client:
+        _login(client)
+        draft = client.get(
+            f"/api/requisition/stock-policies/{policy_id}/replenishment-draft"
+        ).json()
+        line = draft["items"][0]
+        line["external_purchase_quantity"] = "4000"
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "stock_warning",
+                "idempotency_key": "p0-35-over-receipt-order",
+                "customer_id": draft["customer_id"],
+                "supplier_name": draft["supplier_name"],
+                "stock_now": False,
+                "items": [line],
+            },
+        )
+        assert created.status_code == 201, created.text
+        purchase = created.json()["external_purchase_orders"][0]
+        assert purchase["items"][0]["purchase_quantity"] == "4000"
+        assert created.json()["items"][0]["quantity"] == 2000
+
+        payload = {
+            "idempotency_key": "p0-35-over-receipt-post",
+            "lines": [
+                {
+                    "purchase_item_id": purchase["items"][0]["id"],
+                    "received_quantity": "4043",
+                }
+            ],
+        }
+        received = client.post(
+            f"/api/external-packaging-purchases/{purchase['id']}/receipts",
+            json=payload,
+        )
+        assert received.status_code == 200, received.text
+        receipt_line = received.json()["receipt"]["items"][0]
+        assert receipt_line["converted_finished_quantity"] == 2021
+        assert receipt_line["loose_remainder_quantity_after"] == "1"
+        repeated = client.post(
+            f"/api/external-packaging-purchases/{purchase['id']}/receipts",
+            json=payload,
+        )
+        assert repeated.status_code == 200, repeated.text
+        assert repeated.json()["created"] is False
+
+    with external_stock_app.state.factory() as db:
+        stock_item = db.scalar(select(StockReplenishmentOrderItem))
+        receipt_item = db.scalar(select(ExternalPackagingReceiptItem))
+        lot = db.scalar(
+            select(InventoryLot)
+            .join(
+                FinishedGoodsInventoryDetail,
+                FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+            )
+            .where(FinishedGoodsInventoryDetail.product_id == product_id)
+        )
+        assert stock_item is not None and receipt_item is not None and lot is not None
+        assert stock_item.quantity == 2000
+        assert stock_item.stocked_quantity == 2000
+        assert int(receipt_item.converted_finished_quantity) == 2021
+        assert Decimal(receipt_item.loose_remainder_quantity_after) == Decimal("1")
+        assert lot.quantity_available == 2021
+        assert int(db.scalar(select(func.count(ExternalPackagingReceipt.id))) or 0) == 1
+        assert int(db.scalar(select(func.count(InventoryLot.id))) or 0) == 1
 
 
 def test_external_warning_purchase_confirmation_requires_admin_cost_authority(
@@ -588,6 +926,13 @@ def test_external_stock_warning_frontend_uses_purchase_units_and_history_actions
     assert "建议外购备库" in html
     assert "常用箱比例" in html
     assert "供应商采购数量" in html
+    assert "供应商采购数量（可修改）" in html
+    assert '@input="syncExternalStockPurchaseQuantity(line)"' in html
+    assert "externalPurchaseQuantityStep(line)" in html
+    assert "const finishedQuantity=Math.floor((purchaseQuantity*orderBasis/purchaseBasis)+1e-9);" in html
+    assert "line.quantity=Math.max(finishedQuantity,0);" in html
+    assert "line.external_purchase_remainder=Math.max(purchaseQuantity-usedPurchaseQuantity,0)" in html
+    assert "delete item.external_purchase_remainder;" in html
     assert "包材采购历史/来料待入库" in html
     assert "/api/external-packaging-purchases/${purchase.id}/cancel" in html
     assert (

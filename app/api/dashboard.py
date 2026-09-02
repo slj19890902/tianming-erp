@@ -52,6 +52,7 @@ from app.services.location_candidates import (
 
 router = APIRouter()
 can_read = PermissionChecker("dashboard.view")
+RECONCILIATION_REMINDER_START_DAY = 18
 
 
 def _money(value) -> Decimal:
@@ -706,6 +707,7 @@ def _authoritative_dashboard_data(
     can_view_orders: bool,
     can_view_deliveries: bool,
     can_view_finance: bool,
+    show_reconciliation_reminder: bool,
 ) -> dict:
     # Import the shared authoritative projections lazily.  The dashboard keeps
     # the exact page eligibility rules and stable identities without building
@@ -778,7 +780,7 @@ def _authoritative_dashboard_data(
             statement_month=statement_month,
             visible_customer_ids=visible_customer_ids,
         )
-        if can_view_finance
+        if can_view_finance and show_reconciliation_reminder
         else []
     )
     statement_rows: list[dict] = []
@@ -1040,6 +1042,9 @@ def dashboard_overview(
     today = now.date()
     month = now.strftime("%Y-%m")
     as_of = now.isoformat()
+    show_reconciliation_reminder = (
+        today.day >= RECONCILIATION_REMINDER_START_DAY
+    )
     visible_customer_ids = (
         None
         if has_unrestricted_customer_access(user, db)
@@ -1067,6 +1072,7 @@ def dashboard_overview(
         can_view_orders=can_view_production,
         can_view_deliveries=can_view_deliveries,
         can_view_finance=can_view_finance,
+        show_reconciliation_reminder=show_reconciliation_reminder,
     )
     metric_permissions = {
         "pending_material": can_view_requisition,
@@ -1074,7 +1080,9 @@ def dashboard_overview(
         "pending_production": can_view_production,
         "pending_delivery": can_view_deliveries,
         "pending_receipt": can_view_deliveries,
-        "pending_reconciliation": can_view_finance,
+        "pending_reconciliation": (
+            can_view_finance and show_reconciliation_reminder
+        ),
         "pending_invoice": can_view_finance,
         "pending_payment": can_view_finance,
     }
@@ -1793,12 +1801,13 @@ def dashboard_overview(
     if can_view_finance:
         visible_business_statuses.update(
             {
-                "pending_reconciliation",
                 "pending_invoice",
                 "pending_payment",
                 "completed",
             }
         )
+        if show_reconciliation_reminder:
+            visible_business_statuses.add("pending_reconciliation")
     result = {
         "cards": cards,
         "todos": todos,

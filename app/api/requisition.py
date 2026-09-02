@@ -40,6 +40,7 @@ from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
+from app.models.external_packaging_purchase import ExternalPackagingPurchaseBatch
 from app.models.customer_material import (
     CustomerMaterialCandidate,
     CustomerMaterialSelectionHistory,
@@ -117,6 +118,7 @@ from app.services.external_packaging_stock_replenishment import (
     create_external_stock_replenishment_purchase,
     external_stock_draft,
     external_stock_purchase_payload,
+    replay_external_stock_replenishment_purchase,
 )
 from app.services.external_packaging_purchase import ExternalPurchaseContractError
 from app.services.supplier_master import (
@@ -15069,6 +15071,21 @@ def create_stock_replenishment_order(
     user: User = Depends(can_operate),
 ) -> dict:
     idempotent_order_number: str | None = None
+    requested_external_purchase = any(
+        str(item.procurement_mode or "").strip() == "external_purchase"
+        or item.external_purchase_quantity is not None
+        or (
+            (item.reference_product_id or item.product_id) is not None
+            and (
+                referenced_product := db.get(
+                    Product, item.reference_product_id or item.product_id
+                )
+            )
+            is not None
+            and referenced_product.supply_mode == "external_purchase"
+        )
+        for item in payload.items
+    )
     try:
         if payload.source_type == "manual_history":
             raise StockReplenishmentError(
@@ -15094,12 +15111,57 @@ def create_stock_replenishment_order(
             idempotent_order_number = (
                 f"{prefix}-{beijing_today():%Y%m%d}-{key_digest}"
             )
-            existing_order = db.scalar(
-                _replenishment_order_query().where(
-                    StockReplenishmentOrder.order_number
-                    == idempotent_order_number
+            existing_batch = db.scalar(
+                select(ExternalPackagingPurchaseBatch).where(
+                    ExternalPackagingPurchaseBatch.idempotency_key
+                    == payload.idempotency_key
                 )
             )
+            historical_orders = list(
+                db.scalars(
+                    _replenishment_order_query()
+                    .where(
+                        or_(
+                            StockReplenishmentOrder.order_number.like(
+                                f"CBW-%-{key_digest}"
+                            ),
+                            StockReplenishmentOrder.order_number.like(
+                                f"CBR-%-{key_digest}"
+                            ),
+                        )
+                    )
+                    .order_by(StockReplenishmentOrder.id)
+                    .limit(2)
+                ).all()
+            )
+            if len(historical_orders) > 1:
+                raise StockReplenishmentError(
+                    "同一防重复标识已关联多张补库单，请联系管理员核对。",
+                    409,
+                )
+            existing_order = historical_orders[0] if historical_orders else None
+            if existing_batch is not None:
+                if existing_batch.stock_replenishment_order_id is None:
+                    raise StockReplenishmentError(
+                        "同一防重复标识已用于其他外购业务，请关闭后重新操作。",
+                        409,
+                    )
+                batch_order = db.scalar(
+                    _replenishment_order_query().where(
+                        StockReplenishmentOrder.id
+                        == existing_batch.stock_replenishment_order_id
+                    )
+                )
+                if batch_order is None:
+                    raise StockReplenishmentError(
+                        "外购备库来源记录不完整，请联系管理员核对。", 409
+                    )
+                if existing_order is not None and existing_order.id != batch_order.id:
+                    raise StockReplenishmentError(
+                        "同一防重复标识的补库来源不一致，请联系管理员核对。",
+                        409,
+                    )
+                existing_order = batch_order
             if existing_order is not None:
                 _require_stock_replenishment_order_access(
                     db,
@@ -15107,9 +15169,48 @@ def create_stock_replenishment_order(
                     user,
                     relationships_loaded=True,
                 )
-                if external_stock_purchase_payload(db, existing_order) is not None:
-                    return _replenishment_order_response(db, existing_order)
-                return replenishment_order_dict(existing_order, db=db)
+                if existing_order.source_type != payload.source_type:
+                    raise StockReplenishmentError(
+                        "同一防重复标识对应的补库来源已变化，请关闭后重新操作。",
+                        409,
+                    )
+                existing_external_purchase = (
+                    external_stock_purchase_payload(db, existing_order) is not None
+                )
+                if existing_external_purchase != requested_external_purchase:
+                    raise StockReplenishmentError(
+                        "同一防重复标识对应的补库类型已变化，请关闭后重新操作。",
+                        409,
+                    )
+                if not existing_external_purchase:
+                    return replenishment_order_dict(existing_order, db=db)
+                if len(payload.items) != 1:
+                    raise StockReplenishmentError(
+                        "外购包材备库必须按单款独立重试。", 409
+                    )
+                replay_item = payload.items[0]
+                replay_policy = (
+                    db.get(InventoryStockPolicy, replay_item.stock_policy_id)
+                    if replay_item.stock_policy_id is not None
+                    else None
+                )
+                if replay_policy is None:
+                    raise StockReplenishmentError(
+                        "同一提交标识对应的外购备库内容已变化，请刷新后重新操作",
+                        409,
+                    )
+                replayed_order = replay_external_stock_replenishment_purchase(
+                    db,
+                    policy=replay_policy,
+                    finished_quantity=int(replay_item.quantity),
+                    purchase_quantity=replay_item.external_purchase_quantity,
+                    idempotency_key=payload.idempotency_key,
+                )
+                if replayed_order is None:
+                    raise StockReplenishmentError(
+                        "外购包材备库重放状态不完整，请刷新后重试。", 409
+                    )
+                return _replenishment_order_response(db, replayed_order)
         external_lines: list[
             tuple[StockReplenishmentItemPayload, Product]
         ] = []
@@ -15124,7 +15225,12 @@ def create_stock_replenishment_order(
             )
             if (
                 referenced_product is not None
-                and referenced_product.supply_mode == "external_purchase"
+                and (
+                    referenced_product.supply_mode == "external_purchase"
+                    or str(raw_item.procurement_mode or "").strip()
+                    == "external_purchase"
+                    or raw_item.external_purchase_quantity is not None
+                )
             ):
                 external_lines.append((raw_item, referenced_product))
         if external_lines:
@@ -15177,6 +15283,7 @@ def create_stock_replenishment_order(
                 db,
                 policy=policy,
                 finished_quantity=int(external_item.quantity),
+                purchase_quantity=external_item.external_purchase_quantity,
                 order_number=idempotent_order_number,
                 idempotency_key=payload.idempotency_key,
                 remark=payload.remark or external_item.remark,
@@ -15343,8 +15450,59 @@ def create_stock_replenishment_order(
                     user,
                     relationships_loaded=True,
                 )
-                if external_stock_purchase_payload(db, existing_order) is not None:
-                    return _replenishment_order_response(db, existing_order)
+                existing_external_purchase = (
+                    external_stock_purchase_payload(db, existing_order) is not None
+                )
+                if existing_external_purchase != requested_external_purchase:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "同一防重复标识对应的补库类型已变化，"
+                            "请关闭后重新操作。"
+                        ),
+                    )
+                if existing_external_purchase:
+                    if len(payload.items) != 1:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="外购包材备库必须按单款独立重试。",
+                        )
+                    external_item = payload.items[0]
+                    policy = (
+                        db.get(
+                            InventoryStockPolicy,
+                            external_item.stock_policy_id,
+                        )
+                        if external_item.stock_policy_id is not None
+                        else None
+                    )
+                    if policy is None:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="外购包材备库草稿已变化，请刷新后重试。",
+                        )
+                    try:
+                        replayed_order = (
+                            replay_external_stock_replenishment_purchase(
+                                db,
+                                policy=policy,
+                                finished_quantity=int(external_item.quantity),
+                                purchase_quantity=(
+                                    external_item.external_purchase_quantity
+                                ),
+                                idempotency_key=payload.idempotency_key or "",
+                            )
+                        )
+                    except ExternalPurchaseContractError as error:
+                        raise HTTPException(
+                            status_code=409, detail=str(error)
+                        ) from error
+                    if replayed_order is None:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="外购包材备库并发写入状态不完整，请刷新后重试。",
+                        )
+                    return _replenishment_order_response(db, replayed_order)
                 return replenishment_order_dict(existing_order, db=db)
         raise
     except HTTPException:

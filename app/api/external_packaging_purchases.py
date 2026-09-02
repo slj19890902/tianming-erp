@@ -228,6 +228,12 @@ def receive_external_packaging_purchase(
             )
         except ExternalPurchaseContractError as error:
             raise _translate(error) from error
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="收料数据发生完整性冲突，请刷新后核对采购数量与实收数量",
+            ) from error
         if created:
             db.rollback()
             raise HTTPException(status_code=409, detail="收料发生并发冲突，请刷新后核对")

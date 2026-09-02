@@ -35,6 +35,7 @@ from app.core.time_contract import (
 )
 from app.models.audit import OperationLog
 from app.models.customer import Customer
+from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
 from app.models.incoming_receipt import IncomingReceiptItem
 from app.models.material import Material
 from app.models.purchase_receipt import (
@@ -1447,10 +1448,24 @@ def _pending_order_item_query(query):
 
 def _stock_replenishment_pending_query(query, *, db: Session, user: User):
     """Apply the authoritative stock-replenishment incoming eligibility."""
+    external_purchase_source = (
+        select(ExternalPackagingPurchaseItem.id)
+        .where(
+            ExternalPackagingPurchaseItem.stock_replenishment_item_id
+            == StockReplenishmentOrderItem.id,
+        )
+        .exists()
+    )
     query = query.where(
         StockReplenishmentOrder.status.in_(("confirmed", "partially_stocked")),
         StockReplenishmentOrderItem.stocked_quantity
         < StockReplenishmentOrderItem.quantity,
+        or_(
+            StockReplenishmentOrderItem.procurement_route_snapshot.is_(None),
+            StockReplenishmentOrderItem.procurement_route_snapshot
+            != "external_packaging",
+        ),
+        ~external_purchase_source,
     )
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:

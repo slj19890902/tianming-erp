@@ -175,6 +175,11 @@ class StockReplenishmentOrderItem(Base):
             name="ck_stock_replenishment_items_target_type",
         ),
         CheckConstraint(
+            "procurement_route_snapshot IS NULL OR "
+            "procurement_route_snapshot IN ('paperboard','external_packaging')",
+            name="ck_stock_replenishment_items_procurement_route",
+        ),
+        CheckConstraint(
             "quantity > 0 AND stocked_quantity >= 0 "
             "AND stocked_quantity <= quantity",
             name="ck_stock_replenishment_items_quantities",
@@ -206,6 +211,9 @@ class StockReplenishmentOrderItem(Base):
         ForeignKey("inventory_stock_policies.id", ondelete="SET NULL"), nullable=True
     )
     target_inventory_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    procurement_route_snapshot: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
     product_id: Mapped[int | None] = mapped_column(
         ForeignKey("products.id", ondelete="RESTRICT"), nullable=True
     )

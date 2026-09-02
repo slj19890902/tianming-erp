@@ -109,6 +109,11 @@ def stock_replenishment_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             code="A416D",
             layer_count=5,
             supplier_name="苏州佳丰",
+            quote_price=Decimal("2.80"),
+            price_unit="元/㎡",
+            purchase_currency="CNY",
+            purchase_tax_included=True,
+            purchase_tax_rate=Decimal("0.13"),
             is_active=True,
         )
         session.add(material)
@@ -1024,6 +1029,36 @@ def test_liner_replenishment_receives_directly_into_floor3_temporary_turnover(
         assert item["product_id"] == liner["id"]
         assert item["reference_product_id"] == liner["id"]
 
+        # The already-created internal replenishment line is the stable routing
+        # fact. A later common-box master change must not divert it into the
+        # external-packaging receipt path.
+        from app.models.product import Product
+
+        with session_factory() as session:
+            product = session.get(Product, liner["id"])
+            assert product is not None
+            product.box_style = "A1"
+            product.supply_mode = "external_purchase"
+            product.external_packaging_category_code = "other_packaging"
+            product.external_packaging_specification_json = "{}"
+            product.external_packaging_specification_summary = (
+                "临时主档切换，仅验证既有内部采购路线不漂移"
+            )
+            product.external_packaging_purchase_unit = "片"
+            product.external_packaging_candidate_snapshot_json = "[]"
+            product.external_packaging_default_order_quantity_basis = None
+            product.external_packaging_default_purchase_quantity_basis = None
+            from app.models.stock_replenishment import StockReplenishmentOrderItem
+
+            frozen_item = session.get(StockReplenishmentOrderItem, item["id"])
+            assert frozen_item is not None
+            assert frozen_item.procurement_route_snapshot == "paperboard"
+            session.commit()
+
+        pending = client.get("/api/incoming/pending")
+        assert pending.status_code == 200, pending.text
+        assert any(row["item_id"] == f"sr{item['id']}" for row in pending.json()["items"])
+
         received = client.put(
             f"/api/incoming/receive/sr{item['id']}",
             json={
@@ -1050,6 +1085,10 @@ def test_liner_replenishment_receives_directly_into_floor3_temporary_turnover(
         assert different_key.status_code == 409, different_key.text
 
     from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.material import Material
+    from app.models.product import Product
+    from app.models.supplier import Supplier
+    from app.models.supplier_settlement import SupplierReceiptSettlementPriceFact
     from app.models.warehouse_inventory import (
         FinishedGoodsInventoryDetail,
         InventoryLot,
@@ -1082,6 +1121,107 @@ def test_liner_replenishment_receives_directly_into_floor3_temporary_turnover(
         assert session.scalar(select(func.count(WarehouseGroundOccupancy.id))) == 0
         assert session.scalar(select(func.count(InventoryLot.id))) == 1
         assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
+        assert session.scalar(
+            select(func.count(SupplierReceiptSettlementPriceFact.id))
+        ) == 1
+
+        from app.services.supplier_monthly_settlement import _scan_paperboard
+
+        before, before_issues = _scan_paperboard(
+            session,
+            start_utc=datetime(2026, 1, 1),
+            end_utc=datetime(2027, 1, 1),
+        )
+        assert before_issues == []
+        assert len(before) == 1
+
+        product = session.get(Product, liner["id"])
+        assert product is not None and product.material_id is not None
+        material = session.get(Material, product.material_id)
+        supplier = session.scalar(
+            select(Supplier).where(Supplier.standard_name == "苏州佳丰")
+        )
+        assert material is not None and supplier is not None
+        product.box_style = "A1"
+        material.quote_price = Decimal("999.0000")
+        supplier.display_name = "主档后改供应商"
+        session.commit()
+
+        after, after_issues = _scan_paperboard(
+            session,
+            start_utc=datetime(2026, 1, 1),
+            end_utc=datetime(2027, 1, 1),
+        )
+        assert after_issues == []
+        assert len(after) == 1
+        assert after[0].supplier_receipt_price_fact_id == before[0].supplier_receipt_price_fact_id
+        assert after[0].supplier_name == before[0].supplier_name
+        assert after[0].material_or_product_snapshot == before[0].material_or_product_snapshot
+        assert after[0].erp_amount == before[0].erp_amount
+
+
+def test_legacy_finished_replenishment_without_frozen_route_fails_before_receipt(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    from app.models.incoming_receipt import IncomingReceipt
+    from app.models.stock_replenishment import (
+        StockReplenishmentOrder,
+        StockReplenishmentOrderItem,
+    )
+    from app.models.supplier_settlement import SupplierReceiptSettlementPriceFact
+    from app.models.warehouse_inventory import InventoryLot
+
+    with session_factory() as session:
+        order = StockReplenishmentOrder(
+            order_number="SR-LEGACY-FINISHED-NO-ROUTE",
+            supplier_name="佳丰",
+            customer_id=1,
+            source_type="customer_request",
+            status="confirmed",
+            created_by=1,
+            confirmed_by=1,
+        )
+        order.items = [
+            StockReplenishmentOrderItem(
+                target_inventory_type="finished",
+                procurement_route_snapshot=None,
+                product_id=1,
+                reference_product_id=1,
+                customer_id=1,
+                product_code_snapshot="21301010",
+                product_name_snapshot="旧非衬板成品补库",
+                quantity=10,
+                location_id=1,
+            )
+        ]
+        session.add(order)
+        session.commit()
+        item_id = int(order.items[0].id)
+
+    with TestClient(app) as client:
+        _login(client)
+        pending = client.get("/api/incoming/pending")
+        assert pending.status_code == 200, pending.text
+        assert any(row["item_id"] == f"sr{item_id}" for row in pending.json()["items"])
+        blocked = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 10,
+                "idempotency_key": "legacy-finished-no-route-must-fail",
+            },
+        )
+        assert blocked.status_code == 409, blocked.text
+        assert blocked.json()["detail"]["code"] == (
+            "STOCK_REPLENISHMENT_PROCUREMENT_ROUTE_MISSING"
+        )
+
+    with session_factory() as session:
+        assert session.scalar(select(func.count(IncomingReceipt.id))) == 0
+        assert session.scalar(select(func.count(InventoryLot.id))) == 0
+        assert session.scalar(
+            select(func.count(SupplierReceiptSettlementPriceFact.id))
+        ) == 0
 
 
 def test_liner_stock_warning_can_create_draft_and_receive_as_finished(
@@ -1672,6 +1812,7 @@ def test_replenishment_auto_stages_material_without_location_choice(
 ) -> None:
     app, session_factory = stock_replenishment_app
     from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.supplier_settlement import SupplierReceiptSettlementPriceFact
     from app.models.warehouse_inventory import (
         InventoryLot,
         InventoryMovement,
@@ -1734,6 +1875,81 @@ def test_replenishment_auto_stages_material_without_location_choice(
         assert session.scalar(select(func.count(InventoryLot.id))) == 1
         assert session.scalar(select(func.count(InventoryMovement.id))) == 1
         assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 1
+        assert session.scalar(
+            select(func.count(SupplierReceiptSettlementPriceFact.id))
+        ) == 1
+
+
+def test_replenishment_missing_price_rolls_back_every_fact_and_same_key_can_retry(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    from app.models.audit import OperationLog
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.material import Material
+    from app.models.supplier_settlement import SupplierReceiptSettlementPriceFact
+    from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json=_customer_replenishment_payload(quantity=11),
+        )
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+
+        with session_factory() as session:
+            material = session.get(Material, 1)
+            assert material is not None
+            material.quote_price = None
+            session.commit()
+            counts_before = {
+                model: int(session.scalar(select(func.count(model.id))) or 0)
+                for model in (
+                    IncomingReceipt,
+                    IncomingReceiptItem,
+                    InventoryLot,
+                    InventoryMovement,
+                    SupplierReceiptSettlementPriceFact,
+                    OperationLog,
+                )
+            }
+
+        payload = {
+            "received_quantity": 11,
+            "idempotency_key": "p0-39-replenishment-price-retry",
+        }
+        blocked = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json=payload,
+        )
+        assert blocked.status_code == 422, blocked.text
+        assert blocked.json()["detail"]["code"] == (
+            "SUPPLIER_RECEIPT_MASTER_PRICE_INVALID"
+        )
+
+        with session_factory() as session:
+            for model, expected in counts_before.items():
+                assert int(session.scalar(select(func.count(model.id))) or 0) == expected
+            material = session.get(Material, 1)
+            assert material is not None
+            material.quote_price = Decimal("2.80")
+            session.commit()
+
+        received = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json=payload,
+        )
+        assert received.status_code == 200, received.text
+
+    with session_factory() as session:
+        assert int(
+            session.scalar(select(func.count(SupplierReceiptSettlementPriceFact.id)))
+            or 0
+        ) == 1
+        assert int(session.scalar(select(func.count(IncomingReceiptItem.id))) or 0) == 1
+        assert int(session.scalar(select(func.count(InventoryLot.id))) or 0) == 1
 
 
 def test_replenishment_rejects_floor3_left_marker_until_map_is_published(

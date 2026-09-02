@@ -24,10 +24,12 @@ TARGET_REVISION = "ji68v8x9z57"
 @pytest.fixture()
 def external_stock_app(p1_40a_app: FastAPI) -> FastAPI:
     from app.api.external_packaging_purchases import router as purchase_router
+    from app.api.incoming import router as incoming_router
     from app.api.requisition import router as requisition_router
 
     p1_40a_app.include_router(requisition_router, prefix="/api/requisition")
     p1_40a_app.include_router(purchase_router, prefix="/api")
+    p1_40a_app.include_router(incoming_router, prefix="/api/incoming")
     return p1_40a_app
 
 
@@ -220,6 +222,86 @@ def test_external_warning_confirm_creates_no_sales_order_and_is_idempotent(
         assert summary["external_purchase_incoming_quantity"] == 4000
         assert summary["suggested_new_requisition_finished_quantity"] == 0
         assert summary["replenishment_state"] == "already_ordered"
+
+
+def test_external_stock_is_hidden_and_blocked_from_generic_incoming(
+    external_stock_app: FastAPI,
+) -> None:
+    from app.models.incoming_receipt import IncomingReceipt
+    from app.models.product import Product
+    from app.models.stock_replenishment import StockReplenishmentOrderItem
+    from app.models.supplier_settlement import SupplierReceiptSettlementPriceFact
+    from app.models.warehouse_inventory import InventoryLot
+    from app.services.supplier_receipt_price_facts import (
+        stock_replenishment_uses_paperboard_price,
+    )
+
+    policy_id, _product_id = _seed_external_warning(external_stock_app)
+    with TestClient(external_stock_app) as client:
+        _login(client)
+        draft = client.get(
+            f"/api/requisition/stock-policies/{policy_id}/replenishment-draft"
+        ).json()
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "stock_warning",
+                "idempotency_key": "p0-39-external-route-order",
+                "customer_id": draft["customer_id"],
+                "supplier_name": draft["supplier_name"],
+                "stock_now": False,
+                "items": [draft["items"][0]],
+            },
+        )
+        assert created.status_code == 201, created.text
+        item_id = int(created.json()["items"][0]["id"])
+
+        with external_stock_app.state.factory() as db:
+            item = db.get(StockReplenishmentOrderItem, item_id)
+            assert item is not None and item.product_id is not None
+            assert item.procurement_route_snapshot == "external_packaging"
+            # Simulate a pre-migration external line: the stable purchase-item
+            # link must remain authoritative even when the new route column is null.
+            item.procurement_route_snapshot = None
+            product = db.get(Product, item.product_id)
+            assert product is not None
+            product.supply_mode = "corrugated_production"
+            product.external_packaging_category_code = None
+            product.external_packaging_specification_json = None
+            product.external_packaging_specification_summary = None
+            product.external_packaging_purchase_unit = None
+            product.external_packaging_candidate_snapshot_json = None
+            product.external_packaging_default_order_quantity_basis = None
+            product.external_packaging_default_purchase_quantity_basis = None
+            db.commit()
+
+        pending = client.get("/api/incoming/pending")
+        assert pending.status_code == 200, pending.text
+        assert all(
+            row["item_id"] != f"sr{item_id}" for row in pending.json()["items"]
+        )
+        blocked = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 4000,
+                "idempotency_key": "p0-39-external-route-block",
+            },
+        )
+        assert blocked.status_code == 409, blocked.text
+        assert blocked.json()["detail"]["code"] == (
+            "EXTERNAL_PURCHASE_RECEIPT_ROUTE_REQUIRED"
+        )
+
+    with external_stock_app.state.factory() as db:
+        item = db.get(StockReplenishmentOrderItem, item_id)
+        assert item is not None
+        assert item.procurement_route_snapshot is None
+        assert stock_replenishment_uses_paperboard_price(db, item) is False
+        assert db.scalar(select(func.count(IncomingReceipt.id))) == 0
+        assert db.scalar(select(func.count(InventoryLot.id))) == 0
+        assert db.scalar(
+            select(func.count(SupplierReceiptSettlementPriceFact.id))
+        ) == 0
 
 
 def test_external_warning_replay_uses_frozen_purchase_after_supplier_changes(

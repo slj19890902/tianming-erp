@@ -45,8 +45,14 @@ from app.services.supplier_monthly_settlement import (
     list_statement_responses,
     reopen_statement,
     review_statement,
+    scan_settlement_candidates,
     settlement_period,
+    settlement_period_utc_bounds,
     statement_response,
+)
+from app.services.supplier_receipt_price_facts import (
+    SupplierReceiptPriceFactError,
+    preview_historical_price_adoptions,
 )
 
 
@@ -262,7 +268,9 @@ def _record_replay(
     )
 
 
-def _translate(error: SupplierSettlementError) -> HTTPException:
+def _translate(
+    error: SupplierSettlementError | SupplierReceiptPriceFactError,
+) -> HTTPException:
     return HTTPException(
         status_code=error.status_code,
         detail={"code": error.code, "message": error.message},
@@ -336,7 +344,7 @@ def _run_mutation(
         )
         db.commit()
         return response
-    except SupplierSettlementError as error:
+    except (SupplierSettlementError, SupplierReceiptPriceFactError) as error:
         db.rollback()
         raise _translate(error) from error
     except IntegrityError as error:
@@ -368,15 +376,34 @@ def list_supplier_settlements(
     _user: User = Depends(company_read),
 ) -> dict[str, Any]:
     selected = settlement_month or default_closed_settlement_month()
-    period_start, period_end = settlement_period(selected)
+    _candidates, issues, period_start, period_end = scan_settlement_candidates(
+        db,
+        settlement_month=selected,
+    )
     return {
         "settlement_month": selected,
         "period_start": period_start,
         "period_end": period_end,
         "default_month": default_closed_settlement_month(),
         "items": list_statement_responses(db, settlement_month=selected),
-        "issues": [],
+        "issues": issues,
     }
+
+
+@router.get("/supplier-settlements/price-adoptions/preview")
+def preview_supplier_receipt_price_adoptions(
+    settlement_month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
+    db: Session = Depends(get_db),
+    _user: User = Depends(company_read),
+) -> dict[str, Any]:
+    selected = settlement_month or default_closed_settlement_month()
+    _start, _end, start_utc, end_utc = settlement_period_utc_bounds(selected)
+    return preview_historical_price_adoptions(
+        db,
+        settlement_month=selected,
+        start_utc=start_utc,
+        end_utc=end_utc,
+    )
 
 
 @router.post("/supplier-settlements/generate")

@@ -16,6 +16,7 @@ from app.core.time_contract import (
     utc_now_naive,
 )
 from app.models.customer import Customer
+from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.purchase_receipt import IncomingReceiptPurposeAllocation
 from app.models.order import Order, OrderItem
@@ -62,6 +63,11 @@ from app.services.stock_replenishment import (
 from app.services.supplier_monthly_settlement import (
     SupplierSettlementError,
     assert_receipt_item_not_in_confirmed_statement,
+)
+from app.services.supplier_receipt_price_facts import (
+    SupplierReceiptPriceFactError,
+    freeze_stock_replenishment_price,
+    stock_replenishment_uses_paperboard_price,
 )
 from app.services.semi_finished_inventory import (
     active_semi_reserved_piece_qty,
@@ -196,6 +202,22 @@ def _stock_target(
         )
     if not allow_closed and int(item.stocked_quantity or 0) >= int(item.quantity or 0):
         raise IncomingReceiptError("该补库明细已经全部入库", 409)
+    if claim_for_receipt and (
+        item.procurement_route_snapshot == "external_packaging"
+        or db.scalar(
+            select(ExternalPackagingPurchaseItem.id)
+            .where(
+                ExternalPackagingPurchaseItem.stock_replenishment_item_id == item.id
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        raise IncomingReceiptError(
+            "外购成品或包材补库必须在外购包材收料入口收料",
+            409,
+            code="EXTERNAL_PURCHASE_RECEIPT_ROUTE_REQUIRED",
+        )
     if claim_for_receipt:
         claim = db.execute(
             update(StockReplenishmentOrder)
@@ -1580,6 +1602,13 @@ def _receive_stock_replenishment_one(
     audit_context: dict[str, object] | None = None,
 ) -> IncomingReceiptItem:
     order, item = _stock_target(db, item_key, claim_for_receipt=True)
+    if not stock_replenishment_uses_paperboard_price(db, item):
+        raise IncomingReceiptError(
+            "该旧成品补库明细缺少已冻结的采购路线，不能从通用纸板收料入口入库；"
+            "请先核对原采购事实后使用正确收料入口",
+            409,
+            code="STOCK_REPLENISHMENT_PROCUREMENT_ROUTE_MISSING",
+        )
     planned = int(item.quantity or 0)
     before = int(
         db.scalar(
@@ -1647,6 +1676,18 @@ def _receive_stock_replenishment_one(
     receipt.items.append(receipt_item)
     db.flush()
     try:
+        settlement_price_fact = freeze_stock_replenishment_price(
+            db,
+            receipt_item=receipt_item,
+            user=user,
+        )
+    except SupplierReceiptPriceFactError as error:
+        raise IncomingReceiptError(
+            error.message,
+            error.status_code,
+            code=error.code,
+        ) from error
+    try:
         lot = receive_replenishment_item(
             db,
             order=order,
@@ -1692,6 +1733,9 @@ def _receive_stock_replenishment_one(
             "cumulative_received_quantity": cumulative,
             "received_inventory_lot_id": lot.id,
             "receipt_location_id": lot.warehouse_location_id,
+            "supplier_receipt_price_fact_id": (
+                settlement_price_fact.id if settlement_price_fact is not None else None
+            ),
         },
     )
     db.flush()

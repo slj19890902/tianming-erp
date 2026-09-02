@@ -162,6 +162,7 @@ from app.models.finance import (  # noqa: E402,F401
 )
 from app.models.finance_payable import FinancePayable  # noqa: E402,F401
 from app.models.supplier_settlement import (  # noqa: E402,F401
+    SupplierReceiptSettlementPriceFact,
     SupplierMonthlyAdjustment,
     SupplierMonthlyInvoice,
     SupplierMonthlyPayment,

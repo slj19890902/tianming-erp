@@ -57,7 +57,7 @@ class ExternalPackagingPricePayload(BaseModel):
     tier_prices: list[TierPricePayload] = Field(default_factory=list, max_length=30)
     shipping_fee_mode: Literal[
         "not_provided", "included", "per_order", "per_unit"
-    ] = "not_provided"
+    ] = "included"
     shipping_fee: Decimal | None = Field(
         default=None, ge=0, max_digits=18, decimal_places=6
     )

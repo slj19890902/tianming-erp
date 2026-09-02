@@ -6,7 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import re
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import (
@@ -31,11 +31,16 @@ from app.models.purchase_receipt import (
 )
 from app.models.requisition import Requisition, RequisitionItem
 from app.models.supplier import Supplier
+from app.models.stock_replenishment import (
+    StockReplenishmentOrder,
+    StockReplenishmentOrderItem,
+)
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
 from app.models.supplier_settlement import (
+    SupplierReceiptSettlementPriceFact,
     SupplierMonthlyAdjustment,
     SupplierMonthlyInvoice,
     SupplierMonthlyPayment,
@@ -48,6 +53,9 @@ from app.services.purchase_receipt_facts import (
     calculate_purchase_sheet_cost_breakdown,
 )
 from app.services.supplier_master import SupplierLookupError, resolve_supplier
+from app.services.supplier_receipt_price_facts import (
+    stock_replenishment_uses_paperboard_price,
+)
 
 
 MONEY = Decimal("0.01")
@@ -79,6 +87,7 @@ class SettlementCandidate:
     source_key: str
     incoming_receipt_item_id: int | None
     external_receipt_item_id: int | None
+    supplier_receipt_price_fact_id: int | None
     purchase_document_number: str
     receipt_number: str
     receipt_date: date
@@ -139,6 +148,14 @@ def _utc_period_bounds(start: date, end: date) -> tuple[datetime, datetime]:
     return start_utc, end_utc
 
 
+def settlement_period_utc_bounds(
+    settlement_month: str,
+) -> tuple[date, date, datetime, datetime]:
+    start, end = settlement_period(settlement_month)
+    start_utc, end_utc = _utc_period_bounds(start, end)
+    return start, end, start_utc, end_utc
+
+
 def _issue(
     *,
     source_type: str,
@@ -146,19 +163,36 @@ def _issue(
     receipt_number: str,
     code: str,
     message: str,
-) -> dict[str, str]:
-    return {
+    supplier_name: str | None = None,
+    purchase_document_number: str | None = None,
+    missing_fields: list[str] | None = None,
+    recommended_action: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "source_type": source_type,
         "source_key": source_key,
         "receipt_number": receipt_number,
         "code": code,
         "message": message,
     }
+    if supplier_name:
+        payload["supplier_name"] = supplier_name
+    if purchase_document_number:
+        payload["purchase_document_number"] = purchase_document_number
+    if missing_fields:
+        payload["missing_fields"] = missing_fields
+    if recommended_action:
+        payload["recommended_action"] = recommended_action
+    return payload
 
 
 def _paperboard_source(
     db: Session, item: IncomingReceiptItem
-) -> tuple[SupplierRequisitionOrderItem | RequisitionItem | None, str, str]:
+) -> tuple[
+    SupplierRequisitionOrderItem | RequisitionItem | StockReplenishmentOrderItem | None,
+    str,
+    str,
+]:
     if item.supplier_order_item_id is not None:
         source = db.get(SupplierRequisitionOrderItem, item.supplier_order_item_id)
         if source is None:
@@ -183,13 +217,31 @@ def _paperboard_source(
             header.requisition_number if header is not None else source.requisition_id
         )
         return source, supplier_name, document_number
+    if item.stock_replenishment_item_id is not None:
+        source = db.get(
+            StockReplenishmentOrderItem, item.stock_replenishment_item_id
+        )
+        if source is None:
+            return None, "", ""
+        header = db.get(StockReplenishmentOrder, source.replenishment_order_id)
+        supplier_name = str(
+            header.supplier_name if header is not None else ""
+        ).strip()
+        document_number = str(
+            header.order_number if header is not None else source.replenishment_order_id
+        )
+        return source, supplier_name, document_number
     return None, "", ""
 
 
 def _paperboard_dimensions(
-    source: SupplierRequisitionOrderItem | RequisitionItem,
+    source: SupplierRequisitionOrderItem
+    | RequisitionItem
+    | StockReplenishmentOrderItem,
 ) -> tuple[Decimal, Decimal]:
     if isinstance(source, SupplierRequisitionOrderItem):
+        length, width = source.report_length_mm, source.report_width_mm
+    elif isinstance(source, StockReplenishmentOrderItem):
         length, width = source.report_length_mm, source.report_width_mm
     else:
         length, width = source.cardboard_len, source.cardboard_width
@@ -208,13 +260,16 @@ def _scan_paperboard(
     *,
     start_utc: datetime,
     end_utc: datetime,
-) -> tuple[list[SettlementCandidate], list[dict[str, str]]]:
+) -> tuple[list[SettlementCandidate], list[dict[str, Any]]]:
+    frozen_start_date = utc_naive_to_beijing_date(start_utc)
+    frozen_end_exclusive = utc_naive_to_beijing_date(end_utc)
     rows = db.execute(
         select(
             IncomingReceiptItem,
             IncomingReceipt,
             IncomingReceiptPurposeAllocation,
             PurchaseReceiptFact,
+            SupplierReceiptSettlementPriceFact,
             IncomingReceiptPurposeReversal.id,
         )
         .join(IncomingReceipt, IncomingReceipt.id == IncomingReceiptItem.receipt_id)
@@ -229,6 +284,11 @@ def _scan_paperboard(
             == IncomingReceiptPurposeAllocation.purchase_receipt_fact_id,
         )
         .outerjoin(
+            SupplierReceiptSettlementPriceFact,
+            SupplierReceiptSettlementPriceFact.incoming_receipt_item_id
+            == IncomingReceiptItem.id,
+        )
+        .outerjoin(
             IncomingReceiptPurposeReversal,
             IncomingReceiptPurposeReversal.incoming_receipt_purpose_allocation_id
             == IncomingReceiptPurposeAllocation.id,
@@ -236,36 +296,77 @@ def _scan_paperboard(
         .where(
             IncomingReceipt.status == "posted",
             IncomingReceiptItem.status == "posted",
-            IncomingReceipt.received_at >= start_utc,
-            IncomingReceipt.received_at < end_utc,
+            or_(
+                and_(
+                    SupplierReceiptSettlementPriceFact.id.is_not(None),
+                    SupplierReceiptSettlementPriceFact.receipt_date_snapshot
+                    >= frozen_start_date,
+                    SupplierReceiptSettlementPriceFact.receipt_date_snapshot
+                    < frozen_end_exclusive,
+                ),
+                and_(
+                    SupplierReceiptSettlementPriceFact.id.is_(None),
+                    IncomingReceipt.received_at >= start_utc,
+                    IncomingReceipt.received_at < end_utc,
+                ),
+            ),
         )
         .order_by(IncomingReceipt.received_at, IncomingReceiptItem.id)
     ).all()
     candidates: list[SettlementCandidate] = []
-    issues: list[dict[str, str]] = []
+    issues: list[dict[str, Any]] = []
     supplier_cache: dict[str, Supplier] = {}
-    for item, receipt, allocation, price_fact, reversal_id in rows:
+    for item, receipt, allocation, price_fact, receipt_price_fact, reversal_id in rows:
         source_key = f"paperboard:{int(item.id)}"
         if reversal_id is not None:
             continue
+        source, source_supplier_name, source_document_number = _paperboard_source(db, item)
         if (
-            allocation is None
-            or allocation.purpose_contract_status_snapshot != "frozen"
-            or price_fact is None
-            or allocation.total_cost is None
+            receipt_price_fact is None
+            and isinstance(source, StockReplenishmentOrderItem)
+            and not stock_replenishment_uses_paperboard_price(db, source)
         ):
+            issues.append(
+                _issue(
+                    source_type="finished_replenishment",
+                    source_key=source_key,
+                    receipt_number=receipt.receipt_number,
+                    code="FINISHED_REPLENISHMENT_PAYABLE_SOURCE_MISSING",
+                    message=(
+                        "成品补库实收没有纸板或外购包材冻结价格来源，"
+                        "未计入供应商月结"
+                    ),
+                    supplier_name=source_supplier_name,
+                    purchase_document_number=source_document_number,
+                    missing_fields=["正式采购价格来源"],
+                    recommended_action="核对该明细是否应通过外购包材采购单收料",
+                )
+            )
+            continue
+        if price_fact is None and receipt_price_fact is None:
+            missing_fields = ["冻结结算价格"]
+            if source is None:
+                missing_fields.append("正式采购来源")
             issues.append(
                 _issue(
                     source_type="paperboard",
                     source_key=source_key,
                     receipt_number=receipt.receipt_number,
                     code="PAPERBOARD_FROZEN_PRICE_MISSING",
-                    message="纸板实收缺少冻结最终价格或用途成本事实，未计入月结草稿",
+                    message=(
+                        "纸板实收缺少冻结结算价格，未计入月结草稿；"
+                        "内部采购用途成本不是供应商应付价格"
+                    ),
+                    supplier_name=source_supplier_name,
+                    purchase_document_number=source_document_number,
+                    missing_fields=missing_fields,
+                    recommended_action=(
+                        "先检查历史缺价采用清单；仅唯一匹配供应商和材质的记录可按老板确认采用"
+                    ),
                 )
             )
             continue
-        source, supplier_name, document_number = _paperboard_source(db, item)
-        if source is None:
+        if receipt_price_fact is None and source is None:
             issues.append(
                 _issue(
                     source_type="paperboard",
@@ -273,20 +374,67 @@ def _scan_paperboard(
                     receipt_number=receipt.receipt_number,
                     code="PAPERBOARD_PURCHASE_SOURCE_MISSING",
                     message="纸板实收缺少正式采购来源，未计入月结草稿",
+                    missing_fields=["正式采购来源"],
+                    recommended_action="核对收料明细关联的供应商采购单或旧报料单",
                 )
             )
             continue
         try:
-            supplier = supplier_cache.get(supplier_name)
-            if supplier is None:
-                supplier = resolve_supplier(db, supplier_name, require_active=False)
-                supplier_cache[supplier_name] = supplier
-            length, width = _paperboard_dimensions(source)
+            if receipt_price_fact is not None:
+                supplier = db.get(Supplier, receipt_price_fact.supplier_id)
+                if supplier is None:
+                    raise SupplierSettlementError(
+                        "PAPERBOARD_SUPPLIER_MISSING",
+                        "结算价格事实关联的供应商主档不存在",
+                    )
+                if (
+                    Decimal(receipt_price_fact.received_quantity_snapshot)
+                    != Decimal(int(item.received_quantity))
+                    or receipt_price_fact.receipt_number_snapshot
+                    != receipt.receipt_number
+                ):
+                    raise SupplierSettlementError(
+                        "PAPERBOARD_RECEIPT_PRICE_FACT_MISMATCH",
+                        "结算价格事实与当前实收数量或收料单号不一致，已停止月结",
+                    )
+                length = Decimal(receipt_price_fact.report_length_mm)
+                width = Decimal(receipt_price_fact.report_width_mm)
+                unit_price = receipt_price_fact.unit_price
+                price_unit = receipt_price_fact.price_unit
+                tax_included = receipt_price_fact.tax_included
+                tax_rate = receipt_price_fact.tax_rate
+                currency = receipt_price_fact.currency
+                material_snapshot = receipt_price_fact.material_code_snapshot
+                document_number = receipt_price_fact.purchase_document_number_snapshot
+                receipt_number = receipt_price_fact.receipt_number_snapshot
+                quantity = Decimal(receipt_price_fact.received_quantity_snapshot)
+                quantity_unit = receipt_price_fact.quantity_unit
+                receipt_date = receipt_price_fact.receipt_date_snapshot
+            else:
+                supplier = supplier_cache.get(source_supplier_name)
+                if supplier is None:
+                    supplier = resolve_supplier(
+                        db, source_supplier_name, require_active=False
+                    )
+                    supplier_cache[source_supplier_name] = supplier
+                assert source is not None and price_fact is not None
+                length, width = _paperboard_dimensions(source)
+                unit_price = price_fact.unit_price
+                price_unit = price_fact.price_unit
+                tax_included = price_fact.tax_included
+                tax_rate = price_fact.tax_rate
+                currency = price_fact.currency
+                material_snapshot = price_fact.actual_material_code_snapshot
+                document_number = source_document_number
+                receipt_number = receipt.receipt_number
+                quantity = Decimal(int(item.received_quantity))
+                quantity_unit = "张"
+                receipt_date = utc_naive_to_beijing_date(receipt.received_at)
             breakdown = calculate_purchase_sheet_cost_breakdown(
-                unit_price=price_fact.unit_price,
-                price_unit=price_fact.price_unit,
-                tax_included=price_fact.tax_included,
-                tax_rate=price_fact.tax_rate,
+                unit_price=unit_price,
+                price_unit=price_unit,
+                tax_included=tax_included,
+                tax_rate=tax_rate,
                 report_length_mm=length,
                 report_width_mm=width,
             )
@@ -298,11 +446,25 @@ def _scan_paperboard(
                     receipt_number=receipt.receipt_number,
                     code=getattr(error, "code", "PAPERBOARD_PRICE_INVALID"),
                     message=str(error),
+                    supplier_name=(
+                        receipt_price_fact.supplier_name_snapshot
+                        if receipt_price_fact is not None
+                        else source_supplier_name
+                    ),
+                    purchase_document_number=(
+                        receipt_price_fact.purchase_document_number_snapshot
+                        if receipt_price_fact is not None
+                        else source_document_number
+                    ),
+                    recommended_action="核对冻结价格事实后重新生成月结草稿",
                 )
             )
             continue
-        quantity = Decimal(int(item.received_quantity))
-        display_name = supplier.display_name or supplier.standard_name
+        display_name = (
+            receipt_price_fact.supplier_name_snapshot
+            if receipt_price_fact is not None
+            else supplier.display_name or supplier.standard_name
+        )
         candidates.append(
             SettlementCandidate(
                 supplier_id=int(supplier.id),
@@ -311,24 +473,27 @@ def _scan_paperboard(
                 source_key=source_key,
                 incoming_receipt_item_id=int(item.id),
                 external_receipt_item_id=None,
+                supplier_receipt_price_fact_id=(
+                    int(receipt_price_fact.id) if receipt_price_fact is not None else None
+                ),
                 purchase_document_number=document_number,
-                receipt_number=receipt.receipt_number,
-                receipt_date=utc_naive_to_beijing_date(receipt.received_at),
+                receipt_number=receipt_number,
+                receipt_date=receipt_date,
                 category_label="瓦楞纸板",
                 specification_snapshot=(
                     f"{_plain_decimal(length)}×{_plain_decimal(width)}mm"
                 ),
-                material_or_product_snapshot=price_fact.actual_material_code_snapshot,
+                material_or_product_snapshot=material_snapshot,
                 received_quantity=quantity,
-                quantity_unit="张",
-                frozen_unit_price=_six(price_fact.unit_price),
-                price_unit=price_fact.price_unit,
-                currency=price_fact.currency,
+                quantity_unit=quantity_unit,
+                frozen_unit_price=_six(unit_price),
+                price_unit=price_unit,
+                currency=currency,
                 tax_basis=(
-                    "tax_inclusive" if price_fact.tax_included else "tax_exclusive"
+                    "tax_inclusive" if tax_included else "tax_exclusive"
                 ),
-                tax_rate=_six(price_fact.tax_rate),
-                erp_amount=_money(allocation.total_cost),
+                tax_rate=_six(tax_rate),
+                erp_amount=_money(breakdown.gross_per_sheet * quantity),
                 tax_amount=_money(breakdown.tax_per_sheet * quantity),
                 source_link=f"/incoming.html?receipt_item_id={int(item.id)}",
             )
@@ -362,7 +527,7 @@ def _scan_external_packaging(
     *,
     start_utc: datetime,
     end_utc: datetime,
-) -> tuple[list[SettlementCandidate], list[dict[str, str]]]:
+) -> tuple[list[SettlementCandidate], list[dict[str, Any]]]:
     rows = db.execute(
         select(
             ExternalPackagingReceiptItem,
@@ -400,7 +565,7 @@ def _scan_external_packaging(
         )
     ).all()
     candidates: list[SettlementCandidate] = []
-    issues: list[dict[str, str]] = []
+    issues: list[dict[str, Any]] = []
     for receipt_item, receipt, purchase_item, purchase in rows:
         source_key = f"external_packaging:{int(receipt_item.id)}"
         supplier = db.get(Supplier, purchase.supplier_id)
@@ -420,11 +585,12 @@ def _scan_external_packaging(
         candidates.append(
             SettlementCandidate(
                 supplier_id=int(supplier.id),
-                supplier_name=purchase.supplier_name_snapshot,
+                supplier_name=(supplier.display_name or supplier.standard_name),
                 source_type="external_packaging",
                 source_key=source_key,
                 incoming_receipt_item_id=None,
                 external_receipt_item_id=int(receipt_item.id),
+                supplier_receipt_price_fact_id=None,
                 purchase_document_number=purchase.purchase_number,
                 receipt_number=receipt.receipt_number,
                 receipt_date=utc_naive_to_beijing_date(receipt.received_at),
@@ -450,9 +616,8 @@ def _scan_external_packaging(
 
 def scan_settlement_candidates(
     db: Session, *, settlement_month: str
-) -> tuple[list[SettlementCandidate], list[dict[str, str]], date, date]:
-    start, end = settlement_period(settlement_month)
-    start_utc, end_utc = _utc_period_bounds(start, end)
+) -> tuple[list[SettlementCandidate], list[dict[str, Any]], date, date]:
+    start, end, start_utc, end_utc = settlement_period_utc_bounds(settlement_month)
     paperboard, paperboard_issues = _scan_paperboard(
         db, start_utc=start_utc, end_utc=end_utc
     )
@@ -651,6 +816,9 @@ def generate_or_refresh_settlements(
                 source_key=candidate.source_key,
                 incoming_receipt_item_id=candidate.incoming_receipt_item_id,
                 external_receipt_item_id=candidate.external_receipt_item_id,
+                supplier_receipt_price_fact_id=(
+                    candidate.supplier_receipt_price_fact_id
+                ),
                 purchase_document_number=candidate.purchase_document_number,
                 receipt_number=candidate.receipt_number,
                 receipt_date=candidate.receipt_date,
@@ -709,6 +877,17 @@ def _line_response(row: SupplierMonthlyStatementLine) -> dict[str, Any]:
         "id": row.id,
         "source_type": row.source_type,
         "source_key": row.source_key,
+        "supplier_receipt_price_fact_id": row.supplier_receipt_price_fact_id,
+        "price_fact_origin": (
+            row.supplier_receipt_price_fact.fact_origin
+            if row.supplier_receipt_price_fact is not None
+            else "native_receipt_fact"
+        ),
+        "price_fact_adoption_reason": (
+            row.supplier_receipt_price_fact.adoption_reason
+            if row.supplier_receipt_price_fact is not None
+            else None
+        ),
         "purchase_document_number": row.purchase_document_number,
         "receipt_number": row.receipt_number,
         "receipt_date": row.receipt_date,

@@ -5059,16 +5059,25 @@
                       <div class="field" style="width:150px"><label>月结月份</label><input class="input" type="month" v-model="supplierSettlementMonth" @change="loadSupplierSettlements" /></div>
                       <button class="btn" :disabled="supplierSettlementState.loading" @click="loadSupplierSettlements">刷新</button>
                       <button v-if="canFinance" class="btn primary" :disabled="!!supplierSettlementState.action" @click="generateSupplierSettlements(false)">{{ supplierSettlementState.action==='generate' ? '归集中…' : '生成 / 刷新草稿' }}</button>
+                      <button v-if="['admin','boss'].includes(user?.role) && supplierSettlementIssues.some(item=>item.code==='PAPERBOARD_FROZEN_PRICE_MISSING')" class="btn" :disabled="supplierPriceAdoption.loading || !!supplierSettlementState.action" @click="previewSupplierPriceAdoptions">{{ supplierPriceAdoption.loading ? '检查中…' : '检查历史缺价' }}</button>
                     </div>
                   </div>
                   <div class="muted">当前周期：{{ supplierSettlementState.periodStart || '-' }} 至 {{ supplierSettlementState.periodEnd || '-' }}。未冻结最终价格或供应商主档异常的实收不会猜价，会列为待处理。</div>
                   <div v-if="supplierSettlementState.error" class="notice warning" style="margin-top:8px">{{ supplierSettlementState.error }}</div>
-                  <div v-for="issue in supplierSettlementIssues" :key="`${issue.source_key}-${issue.code}`" class="notice warning" style="margin-top:8px">{{ issue.receipt_number || issue.source_key }}：{{ issue.message }}</div>
+                  <div v-for="issue in supplierSettlementIssues" :key="`${issue.source_key}-${issue.code}`" class="notice warning" style="margin-top:8px"><strong>{{ issue.supplier_name || '供应商待核对' }} · {{ issue.receipt_number || issue.source_key }}</strong><span v-if="issue.purchase_document_number"> · {{ issue.purchase_document_number }}</span>：{{ issue.message }}<div v-if="issue.missing_fields?.length" class="muted">缺少：{{ issue.missing_fields.join('、') }}</div><div v-if="issue.recommended_action" class="muted">处理：{{ issue.recommended_action }}</div></div>
+                  <details v-if="supplierPriceAdoption.previewMonth===supplierSettlementMonth" class="panel" style="margin-top:8px" open>
+                    <summary style="cursor:pointer"><strong>历史缺价 dry-run 清单</strong> · 可唯一匹配 {{ supplierPriceAdoption.eligible.length }} 条 · 待人工核对 {{ supplierPriceAdoption.rejected.length }} 条</summary>
+                    <div class="muted" style="margin:8px 0">本页面只读，不会采用或修改历史价格。正式采用必须由工厂 Codex 导出并核对逐行 CSV/JSON 计划，在备份验证、数据库 SHA、版本、Alembic head 和逐行 CAS 全部一致后，用受控脚本显式 --apply，并另写执行回执。</div>
+                    <div v-if="supplierPriceAdoption.error" class="notice warning">{{ supplierPriceAdoption.error }}</div>
+                    <div v-for="row in supplierPriceAdoption.rejected" :key="`reject-${row.incoming_receipt_item_id}`" class="notice warning" style="margin-top:6px">{{ row.receipt_number || row.source_key }}：{{ row.message }}<div class="muted">{{ row.recommended_action }}</div></div>
+                    <div v-if="supplierPriceAdoption.eligible.length" class="table-wrap" style="margin-top:8px"><table><thead><tr><th>收料</th><th>供应商 / 采购单</th><th>材质 / 规格</th><th>实收</th><th>采用价格</th><th>应付</th></tr></thead><tbody><tr v-for="row in supplierPriceAdoption.eligible" :key="row.incoming_receipt_item_id"><td>{{ row.receipt_date }}<div>{{ row.receipt_number }}</div></td><td>{{ row.supplier_name }}<div class="muted">{{ row.purchase_document_number }}</div></td><td>{{ row.material_code }}<div class="muted">{{ row.report_length_mm }}×{{ row.report_width_mm }}mm · {{ row.match_strategy==='stable_material_id'?'稳定材质':'供应商+唯一材质' }}</div></td><td>{{ row.received_quantity }} 张</td><td>{{ row.unit_price }} / {{ row.price_unit }}</td><td class="sensitive-price">¥ {{ money(row.erp_amount) }}</td></tr></tbody></table></div>
+                    <div v-if="supplierPriceAdoption.eligible.length" class="notice" style="margin-top:8px">计划哈希：{{ supplierPriceAdoption.planHash }}。当前仅供核对；网页没有历史采用写入口。</div>
+                  </details>
                   <div v-if="supplierSettlementState.loading" class="empty">正在读取供应商月结…</div>
                   <div v-else-if="!supplierSettlements.length" class="empty">本周期尚无月结草稿。确认 20 日已完整结束后，点击“生成 / 刷新草稿”。</div>
                   <details v-for="row in supplierSettlements" :key="row.id" class="panel" style="margin-top:10px" open>
                     <summary style="cursor:pointer"><strong>{{ row.supplier_name }}</strong>　{{ row.statement_number }}　<span :class="['status',supplierSettlementStatusTone(row.status)]">{{ supplierSettlementStatusText(row.status) }}</span>　ERP ¥{{ money(row.erp_amount) }}　调整后 ¥{{ money(row.adjusted_amount) }}　已付 ¥{{ money(row.paid_amount) }}</summary>
-                    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>实收日 / 单号</th><th>采购单</th><th>品类 / 规格</th><th>实收</th><th>冻结单价</th><th>含税应付</th><th>其中税额</th></tr></thead><tbody><tr v-for="line in row.lines" :key="line.id"><td>{{ line.receipt_date }}<div><a :href="line.source_link" target="_blank" rel="noopener">{{ line.receipt_number }}</a></div></td><td>{{ line.purchase_document_number }}</td><td>{{ line.material_or_product_snapshot }}<div class="muted">{{ line.category_label }} · {{ line.specification_snapshot || '-' }}</div></td><td>{{ line.received_quantity }} {{ line.quantity_unit }}</td><td>{{ line.frozen_unit_price }} / {{ line.price_unit }}</td><td class="sensitive-price">¥ {{ money(line.erp_amount) }}</td><td class="sensitive-price">¥ {{ money(line.tax_amount) }}</td></tr></tbody></table></div>
+                    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>实收日 / 单号</th><th>采购单</th><th>品类 / 规格</th><th>实收</th><th>冻结单价</th><th>含税应付</th><th>其中税额</th></tr></thead><tbody><tr v-for="line in row.lines" :key="line.id"><td>{{ line.receipt_date }}<div><a :href="line.source_link" target="_blank" rel="noopener">{{ line.receipt_number }}</a></div></td><td>{{ line.purchase_document_number }}<div v-if="line.price_fact_origin==='historical_master_adoption'" class="status orange">历史价格事后采用</div></td><td>{{ line.material_or_product_snapshot }}<div class="muted">{{ line.category_label }} · {{ line.specification_snapshot || '-' }}</div></td><td>{{ line.received_quantity }} {{ line.quantity_unit }}</td><td>{{ line.frozen_unit_price }} / {{ line.price_unit }}</td><td class="sensitive-price">¥ {{ money(line.erp_amount) }}</td><td class="sensitive-price">¥ {{ money(line.tax_amount) }}</td></tr></tbody></table></div>
                     <div v-if="['draft','difference'].includes(row.status) && canFinance" class="form-grid" style="padding:10px 0 0">
                       <div class="field"><label>供应商账单号</label><input class="input" v-model.trim="row._reviewNumber" /></div><div class="field"><label>账单日期</label><input class="input" type="date" v-model="row._reviewDate" /></div><div class="field"><label>供应商含税金额</label><input class="input" type="number" step="0.01" min="0" v-model="row._reviewAmount" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="reviewSupplierSettlement(row)">核对账单</button></div>
                       <div class="field"><label>差异类型</label><select class="select" v-model="row._adjustType"><option value="price">价格差异</option><option value="quantity">数量差异（只调应付）</option><option value="tax_rounding">税额尾差</option><option value="other">其他</option></select></div><div class="field"><label>差异调整（可正负）</label><input class="input" type="number" step="0.01" v-model="row._adjustAmount" /></div><div class="field"><label>说明</label><input class="input" v-model.trim="row._adjustNote" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="adjustSupplierSettlement(row)">登记差异</button></div>
@@ -9419,7 +9428,7 @@
         tax_mode:"tax_inclusive", tax_rate:"0.13", tax_amount_per_unit:"",
         unit_price:"", effective_from:today(), effective_to:"",
         moq_quantity:"", packaging_multiple:"", tier_prices:[],
-        shipping_fee_mode:"not_provided", shipping_fee:"",
+        shipping_fee_mode:"included", shipping_fee:"",
         sample_fee:"", plate_fee:"", die_fee:"", evidence_reference:"", remarks:"",
       });
       const calculateCornerGuardFormalCost = (lengthMm, quantity, ratePerMeter) => {
@@ -9881,6 +9890,7 @@
             supplierSettlementMonth:closedSupplierSettlementMonth(),
             supplierSettlements:[], supplierSettlementIssues:[],
             supplierSettlementState:{loading:false,action:"",statementId:null,error:"",periodStart:"",periodEnd:"",generateKey:"",autoGeneratedMonth:"",uploadStatementId:null,uploadInvoiceId:null},
+            supplierPriceAdoption:{loading:false,previewMonth:"",eligible:[],rejected:[],adoptionReason:"",planHash:"",error:""},
             supplierSettlementAttempts:{},
             simpleFinanceMeta:{primary_groups:[],rule_types:[],centers:[],customers:[],supplier_statements:[],note:""},
             simpleFinanceSummary:{primary_groups:{material:{},personnel:{},freight:{},fixed_operating:{}},active_employee_count:0,held_acceptance_count:0,held_acceptance_amount:"0.00",note:""},
@@ -22094,6 +22104,26 @@
                 this.supplierSettlementState.loading = false;
                 this.finishLatestRequest(requestKey,controller);
               }
+            }
+          },
+          async previewSupplierPriceAdoptions() {
+            if (!['admin','boss'].includes(this.user?.role) || this.supplierPriceAdoption.loading || this.supplierSettlementState.action) return false;
+            this.supplierPriceAdoption.loading = true;
+            this.supplierPriceAdoption.error = "";
+            try {
+              const {data} = await axios.get("/api/finance/supplier-settlements/price-adoptions/preview", {params:{settlement_month:this.supplierSettlementMonth}});
+              this.supplierPriceAdoption.previewMonth = data.settlement_month || this.supplierSettlementMonth;
+              this.supplierPriceAdoption.eligible = data.eligible || [];
+              this.supplierPriceAdoption.rejected = data.rejected || [];
+              this.supplierPriceAdoption.adoptionReason = data.adoption_reason || "";
+              this.supplierPriceAdoption.planHash = data.plan_hash || "";
+              if (!this.supplierPriceAdoption.eligible.length) this.showToast("没有可自动采用的唯一匹配历史收料");
+              return true;
+            } catch(error) {
+              this.supplierPriceAdoption.error = this.errorMessage(error);
+              return false;
+            } finally {
+              this.supplierPriceAdoption.loading = false;
             }
           },
           async generateSupplierSettlements(silent = false) {

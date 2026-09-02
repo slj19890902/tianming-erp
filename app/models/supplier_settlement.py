@@ -4,6 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -171,6 +172,146 @@ class SupplierMonthlyStatement(Base):
     )
 
 
+class SupplierReceiptSettlementPriceFact(Base):
+    """Immutable supplier price snapshot for one posted receipt item."""
+
+    __tablename__ = "supplier_receipt_settlement_price_facts"
+    __table_args__ = (
+        CheckConstraint(
+            "fact_origin IN ('receipt_frozen','historical_master_adoption')",
+            name="ck_supplier_receipt_price_facts_origin",
+        ),
+        CheckConstraint(
+            "source_kind IN "
+            "('supplier_order_item','requisition_item','stock_replenishment_item')",
+            name="ck_supplier_receipt_price_facts_source",
+        ),
+        CheckConstraint(
+            "match_strategy IN "
+            "('purchase_receipt_fact','stable_material_id',"
+            "'supplier_unique_material_code')",
+            name="ck_supplier_receipt_price_facts_match",
+        ),
+        CheckConstraint(
+            "unit_price > 0 AND source_material_version >= 1 "
+            "AND price_unit IN ('per_sheet','per_square_meter')",
+            name="ck_supplier_receipt_price_facts_price",
+        ),
+        CheckConstraint(
+            "received_quantity_snapshot > 0 AND report_length_mm > 0 "
+            "AND report_width_mm > 0 AND quantity_unit = '张'",
+            name="ck_supplier_receipt_price_facts_receipt",
+        ),
+        CheckConstraint(
+            "currency = 'CNY' AND tax_included AND tax_rate = 0.13 "
+            "AND shipping_fee_mode = 'included'",
+            name="ck_supplier_receipt_price_facts_tax",
+        ),
+        CheckConstraint(
+            "((fact_origin = 'receipt_frozen' AND adoption_reason IS NULL "
+            "AND adoption_evidence_reference IS NULL) OR "
+            "(fact_origin = 'historical_master_adoption' AND "
+            "adoption_reason IS NOT NULL AND "
+            "adoption_reason = '2026-09-02 老板确认采用当前主数据' "
+            "AND adoption_evidence_reference IS NOT NULL "
+            "AND length(trim(adoption_evidence_reference)) > 0))",
+            name="ck_supplier_receipt_price_facts_adoption",
+        ),
+        CheckConstraint(
+            "length(trim(supplier_name_snapshot)) > 0 "
+            "AND length(trim(material_code_snapshot)) > 0 "
+            "AND length(trim(purchase_document_number_snapshot)) > 0 "
+            "AND length(trim(receipt_number_snapshot)) > 0 "
+            "AND length(trim(currency)) = 3 "
+            "AND length(source_hash) = 64",
+            name="ck_supplier_receipt_price_facts_text",
+        ),
+        UniqueConstraint(
+            "incoming_receipt_item_id",
+            name="uq_supplier_receipt_price_facts_item",
+        ),
+        Index(
+            "ix_supplier_receipt_price_facts_supplier",
+            "supplier_id",
+            "created_at",
+        ),
+        Index(
+            "ix_supplier_receipt_price_facts_material",
+            "material_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    incoming_receipt_item_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "incoming_receipt_items.id",
+            ondelete="RESTRICT",
+            name="fk_supplier_receipt_price_facts_item",
+        ),
+        nullable=False,
+    )
+    supplier_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "supplier_master_records.id",
+            ondelete="RESTRICT",
+            name="fk_supplier_receipt_price_facts_supplier",
+        ),
+        nullable=False,
+    )
+    supplier_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    material_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "materials.id",
+            ondelete="RESTRICT",
+            name="fk_supplier_receipt_price_facts_material",
+        ),
+        nullable=False,
+    )
+    material_code_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_material_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    purchase_document_number_snapshot: Mapped[str] = mapped_column(
+        String(80), nullable=False
+    )
+    receipt_number_snapshot: Mapped[str] = mapped_column(String(80), nullable=False)
+    receipt_date_snapshot: Mapped[date] = mapped_column(Date, nullable=False)
+    received_quantity_snapshot: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6), nullable=False
+    )
+    quantity_unit: Mapped[str] = mapped_column(String(20), nullable=False)
+    report_length_mm: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    report_width_mm: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    price_unit: Mapped[str] = mapped_column(String(30), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    tax_included: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    tax_rate: Mapped[Decimal] = mapped_column(Numeric(8, 6), nullable=False)
+    shipping_fee_mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    fact_origin: Mapped[str] = mapped_column(String(40), nullable=False)
+    match_strategy: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    adoption_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    adoption_evidence_reference: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    created_by: Mapped[int] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="RESTRICT",
+            name="fk_supplier_receipt_price_facts_creator",
+        ),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+    statement_lines: Mapped[list["SupplierMonthlyStatementLine"]] = relationship(
+        back_populates="supplier_receipt_price_fact"
+    )
+
+
 class SupplierMonthlyStatementLine(Base):
     """Frozen receipt and price facts used by one supplier statement draft."""
 
@@ -200,6 +341,11 @@ class SupplierMonthlyStatementLine(Base):
             "active_guard IS NULL OR active_guard = 1",
             name="ck_supplier_monthly_statement_lines_active_guard",
         ),
+        CheckConstraint(
+            "supplier_receipt_price_fact_id IS NULL OR "
+            "(source_type = 'paperboard' AND incoming_receipt_item_id IS NOT NULL)",
+            name="ck_supplier_monthly_statement_lines_price_fact",
+        ),
         UniqueConstraint(
             "statement_id",
             "source_key",
@@ -218,6 +364,10 @@ class SupplierMonthlyStatementLine(Base):
         Index(
             "ix_supplier_monthly_statement_lines_receipt_date", "receipt_date"
         ),
+        Index(
+            "ix_supplier_monthly_statement_lines_price_fact",
+            "supplier_receipt_price_fact_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -232,6 +382,14 @@ class SupplierMonthlyStatementLine(Base):
     )
     external_receipt_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("external_packaging_receipt_items.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    supplier_receipt_price_fact_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "supplier_receipt_settlement_price_facts.id",
+            ondelete="RESTRICT",
+            name="fk_supplier_statement_lines_receipt_price_fact",
+        ),
         nullable=True,
     )
     purchase_document_number: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -267,6 +425,9 @@ class SupplierMonthlyStatementLine(Base):
     )
 
     statement: Mapped[SupplierMonthlyStatement] = relationship(back_populates="lines")
+    supplier_receipt_price_fact: Mapped[
+        SupplierReceiptSettlementPriceFact | None
+    ] = relationship(back_populates="statement_lines")
 
 
 class SupplierMonthlyAdjustment(Base):

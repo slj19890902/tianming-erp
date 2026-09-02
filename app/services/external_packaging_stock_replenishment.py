@@ -423,6 +423,7 @@ def create_external_stock_replenishment_purchase(
     item = StockReplenishmentOrderItem(
         stock_policy_id=policy.id,
         target_inventory_type="finished",
+        procurement_route_snapshot="external_packaging",
         product_id=product.id,
         reference_product_id=product.id,
         customer_id=product.customer_id,

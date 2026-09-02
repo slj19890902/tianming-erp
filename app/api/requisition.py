@@ -15187,6 +15187,7 @@ def _build_replenishment_item(
     return StockReplenishmentOrderItem(
         stock_policy_id=policy.id if policy else None,
         target_inventory_type=payload.target_inventory_type,
+        procurement_route_snapshot="paperboard",
         product_id=(
             product.id
             if product is not None and payload.target_inventory_type == "finished"

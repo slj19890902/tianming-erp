@@ -13,6 +13,7 @@ from app.core.time_contract import (
     utc_now_naive,
 )
 from app.models.incoming_receipt import IncomingReceiptItem
+from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
 from app.models.order import OrderItem
 from app.models.product import Product
 from app.models.product_bom import ProductBomComponent, SalesOrderItemBomComponent
@@ -1438,19 +1439,45 @@ def receive_replenishment_item(
             "本次实收超过补库单剩余待收数量；请核对后另建补库单处理超收。",
             409,
         )
+    finished_product = (
+        db.get(Product, item.product_id)
+        if item.target_inventory_type == "finished" and item.product_id is not None
+        else None
+    )
+    has_external_purchase_source = bool(
+        db.scalar(
+            select(ExternalPackagingPurchaseItem.id)
+            .where(
+                ExternalPackagingPurchaseItem.stock_replenishment_item_id == item.id
+            )
+            .limit(1)
+        )
+    )
+    external_finished = bool(
+        item.target_inventory_type == "finished"
+        and (
+            item.procurement_route_snapshot == "external_packaging"
+            or has_external_purchase_source
+        )
+    )
+    paperboard_finished = bool(
+        item.target_inventory_type == "finished"
+        and not external_finished
+        and (
+            item.procurement_route_snapshot == "paperboard"
+            or (
+                item.procurement_route_snapshot is None
+                and finished_product is not None
+                and box_type_code(finished_product.box_style) == "liner"
+            )
+        )
+    )
     if (
         order.source_type == "stock_warning"
         and item.target_inventory_type != "semi_finished"
     ):
-        warning_product = (
-            db.get(Product, item.product_id) if item.product_id is not None else None
-        )
-        if (
-            warning_product is None
-            or (
-                box_type_code(warning_product.box_style) != "liner"
-                and warning_product.supply_mode != "external_purchase"
-            )
+        if finished_product is None or not (
+            paperboard_finished or external_finished
         ):
             raise StockReplenishmentError(
                 "库存预警到料只能进入客户通用纸板备料；"
@@ -1470,16 +1497,12 @@ def receive_replenishment_item(
             raise StockReplenishmentError(str(error), error.status_code) from error
     else:
         target = None
-        finished_product = db.get(Product, item.product_id) if item.product_id else None
-        if finished_product is not None and box_type_code(finished_product.box_style) == "liner":
+        if paperboard_finished:
             try:
                 destination = automatic_floor3_finished_turnover_location(db)
             except WarehouseInventoryError as error:
                 raise StockReplenishmentError(str(error), error.status_code) from error
-        elif (
-            finished_product is not None
-            and finished_product.supply_mode == "external_purchase"
-        ):
+        elif external_finished and finished_product is not None:
             try:
                 from app.services.production_workflow import (
                     ProductionWorkflowError,
@@ -1552,8 +1575,7 @@ def receive_replenishment_item(
         "expected_layout_version": (
             int(target.layout_version)
             if item.target_inventory_type == "finished"
-            and finished_product is not None
-            and finished_product.supply_mode == "external_purchase"
+            and external_finished
             and target is not None
             else (
                 int(destination.floor3_layout.version)

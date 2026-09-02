@@ -8,9 +8,11 @@ from threading import Lock
 from sqlalchemy.orm import Session
 
 from app.models.requisition import Requisition
+from app.models.stock_replenishment import StockReplenishmentOrder
 from app.models.supplier_requisition_order import SupplierRequisitionOrder
 from app.services.requisition_production_print import (
     build_composite_requisition_production_package,
+    build_stock_replenishment_production_package,
     build_supplier_requisition_production_package,
     production_print_card_fingerprint,
     production_print_card_task_versions,
@@ -48,7 +50,11 @@ def canonical_batch_items(items: list[dict]) -> list[dict]:
     seen: set[tuple[str, int, str]] = set()
     for raw in items:
         source_type = str(raw.get("source_type") or "supplier_order").strip()
-        if source_type not in {"supplier_order", "composite_bom_requisition"}:
+        if source_type not in {
+            "supplier_order",
+            "composite_bom_requisition",
+            "stock_replenishment",
+        }:
             raise ProductionPrintBatchError(
                 "批量打印任务来源无效，请刷新后重新勾选",
                 status_code=422,
@@ -80,7 +86,17 @@ def canonical_batch_items(items: list[dict]) -> list[dict]:
                 for row in raw.get("task_versions") or []
             }
         )
-        if not versions or any(task_id <= 0 or version <= 0 for task_id, version in versions):
+        if any(task_id <= 0 or version <= 0 for task_id, version in versions):
+            raise ProductionPrintBatchError(
+                "生产任务版本不完整，请刷新后重新勾选",
+                status_code=422,
+            )
+        if source_type == "stock_replenishment" and versions:
+            raise ProductionPrintBatchError(
+                "库存补库计划不能冒充订单生产任务",
+                status_code=422,
+            )
+        if source_type != "stock_replenishment" and not versions:
             raise ProductionPrintBatchError(
                 "生产任务版本不完整，请刷新后重新勾选",
                 status_code=422,
@@ -151,10 +167,12 @@ def build_selected_production_print_package(
     selections: list[dict],
     orders: dict[int, SupplierRequisitionOrder],
     composite_requisitions: dict[int, Requisition] | None = None,
+    stock_replenishments: dict[int, StockReplenishmentOrder] | None = None,
     batch_id: str,
 ) -> dict:
     canonical = canonical_batch_items(selections)
     composite_requisitions = composite_requisitions or {}
+    stock_replenishments = stock_replenishments or {}
     packages: dict[tuple[str, int], dict] = {}
     invalid: list[dict] = []
     selected_cards: list[dict] = []
@@ -168,21 +186,33 @@ def build_selected_production_print_package(
         source = (
             orders.get(document_id)
             if source_type == "supplier_order"
+            else stock_replenishments.get(document_id)
+            if source_type == "stock_replenishment"
             else composite_requisitions.get(document_id)
         )
-        expected_status = "confirmed" if source_type == "supplier_order" else "已报料"
+        expected_statuses = (
+            {"confirmed"}
+            if source_type == "supplier_order"
+            else {"confirmed", "partially_stocked", "stocked"}
+            if source_type == "stock_replenishment"
+            else {"已报料"}
+        )
         identity_fields = {
             "supplier_order_id": document_id,
         } if source_type == "supplier_order" else {
             "source_type": source_type,
             "document_id": document_id,
         }
-        if source is None or source.status != expected_status:
+        if source is None or source.status not in expected_statuses:
             invalid.append(
                 {
                     **identity_fields,
                     "source_identity": source_identity,
-                    "reason": "报料单已撤销、作废或不存在",
+                    "reason": (
+                        "库存补库单已撤销、作废或不存在"
+                        if source_type == "stock_replenishment"
+                        else "报料单已撤销、作废或不存在"
+                    ),
                 }
             )
             continue
@@ -193,6 +223,8 @@ def build_selected_production_print_package(
                 package = (
                     build_supplier_requisition_production_package(db, source)
                     if source_type == "supplier_order"
+                    else build_stock_replenishment_production_package(db, source)
+                    if source_type == "stock_replenishment"
                     else build_composite_requisition_production_package(db, source)
                 )
             except ValueError as error:
@@ -238,7 +270,11 @@ def build_selected_production_print_package(
                 {
                     **identity_fields,
                     "source_identity": source_identity,
-                    "reason": "生产任务版本已变化",
+                    "reason": (
+                        "库存补库计划身份已变化"
+                        if source_type == "stock_replenishment"
+                        else "生产任务版本已变化"
+                    ),
                 }
             )
             continue
@@ -255,6 +291,10 @@ def build_selected_production_print_package(
         frozen = deepcopy(card)
         if source_type == "supplier_order":
             frozen["supplier_order_id"] = source.id
+            frozen["supplier_order_number"] = source.order_number
+        elif source_type == "stock_replenishment":
+            frozen["source_type"] = source_type
+            frozen["stock_replenishment_order_id"] = source.id
             frozen["supplier_order_number"] = source.order_number
         else:
             frozen["source_type"] = source_type

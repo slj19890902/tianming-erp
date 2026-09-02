@@ -19,6 +19,9 @@ from app.services.production_label_operations import (
 from app.services.production_packaging_label import (
     ProductionPackagingLabelError,
     apply_packaging_label_print_counts,
+    build_composite_requisition_packaging_label_package,
+    build_supplier_requisition_packaging_label_package,
+    combine_supplier_requisition_packaging_label_packages,
 )
 from tests.test_p1_32a2_requisition_production_print import (
     _login,
@@ -323,9 +326,215 @@ def test_supplier_label_preview_names_disabled_product_instead_of_silently_skipp
 
     assert response.status_code == 409
     detail = response.json()["detail"]
-    assert detail["code"] == "production_label_batch_review_required"
+    assert detail["code"] == "production_label_no_eligible_items"
+    assert detail["excluded_items"][0]["resolution"].startswith("到常用箱")
     assert any("P132A2" in reason for reason in detail["reasons"]), detail
     assert any("常用箱未启用打印标签" in reason for reason in detail["reasons"])
+
+
+def test_supplier_label_package_keeps_enabled_items_and_reports_disabled_items(
+    production_print_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    fixture = production_print_app
+    with fixture["session_factory"]() as db:
+        order = db.get(SupplierRequisitionOrder, fixture["supplier_order_id"])
+        assert order is not None
+        supplier_items = sorted(order.items, key=lambda row: int(row.id))
+        order_items = {
+            int(item.order_item_id): db.get(OrderItem, int(item.order_item_id))
+            for item in supplier_items
+        }
+        original = db.get(Product, fixture["product_id"])
+        assert original is not None
+        original.production_label_enabled = True
+        original.production_label_units_per_label = 5
+        disabled = Product(
+            customer_id=original.customer_id,
+            product_code="P038-LABEL-DISABLED",
+            customer_material_code="P038-LABEL-DISABLED",
+            product_name="未启用标签测试箱",
+            material_id=original.material_id,
+            production_label_enabled=False,
+        )
+        db.add(disabled)
+        db.flush()
+        disabled_order_item = order_items[sorted(order_items)[-1]]
+        assert disabled_order_item is not None
+        disabled_order_item.product_id = int(disabled.id)
+        for supplier_item in supplier_items:
+            if int(supplier_item.order_item_id) == int(disabled_order_item.id):
+                supplier_item.product_id = int(disabled.id)
+                supplier_item.product_code = disabled.product_code
+                supplier_item.product_name = disabled.product_name
+        selected_ids = {int(item.id) for item in supplier_items}
+        db.commit()
+
+        package = build_supplier_requisition_packaging_label_package(
+            db,
+            order,
+            selected_supplier_item_ids=selected_ids,
+        )
+        combined = combine_supplier_requisition_packaging_label_packages([package])
+
+    assert package["printable"] is True
+    assert package["review_required"] is False
+    assert package["label_count"] > 0
+    assert len(package["excluded_items"]) == 1
+    assert package["excluded_items"][0]["product_code"] == "P038-LABEL-DISABLED"
+    assert "常用箱未启用打印标签" in package["excluded_items"][0]["reason"]
+    assert combined["printable"] is True
+    assert combined["review_required"] is False
+    assert combined["label_count"] == package["label_count"]
+    assert len(combined["excluded_items"]) == 1
+
+
+def test_supplier_label_package_all_disabled_has_only_explicit_exclusions(
+    production_print_app,
+) -> None:
+    from app.models.product import Product
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    fixture = production_print_app
+    with fixture["session_factory"]() as db:
+        product = db.get(Product, fixture["product_id"])
+        assert product is not None
+        product.production_label_enabled = False
+        product.production_label_units_per_label = None
+        order = db.get(SupplierRequisitionOrder, fixture["supplier_order_id"])
+        assert order is not None
+        selected_ids = {int(item.id) for item in order.items}
+        db.commit()
+
+        package = build_supplier_requisition_packaging_label_package(
+            db,
+            order,
+            selected_supplier_item_ids=selected_ids,
+        )
+        combined = combine_supplier_requisition_packaging_label_packages([package])
+
+    assert package["printable"] is False
+    assert package["review_required"] is False
+    assert package["labels"] == []
+    assert package["excluded_items"]
+    assert all(
+        "常用箱未启用打印标签" in item["reason"]
+        for item in package["excluded_items"]
+    )
+    assert combined["printable"] is False
+    assert combined["review_required"] is False
+    assert combined["review_messages"] == []
+    assert combined["excluded_items"]
+
+
+def test_explicit_supplier_item_without_production_task_stops_single_and_batch(
+    production_print_app,
+) -> None:
+    """A broken task chain is a hard error, never a label-policy exclusion."""
+
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    fixture = production_print_app
+    with fixture["session_factory"]() as db:
+        order = db.get(SupplierRequisitionOrder, fixture["supplier_order_id"])
+        product = db.get(Product, fixture["product_id"])
+        assert order is not None and product is not None
+        product.production_label_enabled = True
+        product.production_label_units_per_label = 5
+        supplier_items = sorted(order.items, key=lambda row: int(row.id))
+        missing_item = supplier_items[0]
+        valid_item = next(
+            row
+            for row in supplier_items
+            if int(row.order_item_id) != int(missing_item.order_item_id)
+        )
+        missing_task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == missing_item.order_item_id
+            )
+        )
+        assert missing_task is not None
+        db.delete(missing_task)
+        db.commit()
+        missing_item_id = int(missing_item.id)
+        valid_item_id = int(valid_item.id)
+
+        with pytest.raises(ProductionPackagingLabelError, match="缺少有效生产任务"):
+            build_supplier_requisition_packaging_label_package(
+                db,
+                order,
+                selected_supplier_item_ids={missing_item_id},
+            )
+        with pytest.raises(ProductionPackagingLabelError, match="缺少有效生产任务"):
+            build_supplier_requisition_packaging_label_package(
+                db,
+                order,
+                selected_supplier_item_ids={missing_item_id, valid_item_id},
+            )
+
+    with TestClient(fixture["app"]) as client:
+        _login(client, "p132a2-admin")
+        single = client.get(
+            f"/api/requisition/supplier-orders/{fixture['supplier_order_id']}/"
+            "production-packaging-label-package",
+            params={"item_ids": str(missing_item_id)},
+        )
+        mixed_batch = client.get(
+            "/api/requisition/supplier-order-label-batches/package",
+            params={
+                "order_ids": str(fixture["supplier_order_id"]),
+                "item_ids": f"{valid_item_id},{missing_item_id}",
+            },
+        )
+
+    assert single.status_code == mixed_batch.status_code == 409
+    assert "缺少有效生产任务" in single.text
+    assert "缺少有效生产任务" in mixed_batch.text
+
+
+def test_composite_label_package_excludes_disabled_component_without_job_task(
+    tmp_path: Path,
+) -> None:
+    from app.models.product import Product
+
+    engine = create_sqlite_engine(tmp_path / "p0-38-composite-exclusion.sqlite3")
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as db:
+            requisition, _order_item, items = _seed_label_facts(db)
+            children = list(
+                db.scalars(
+                    select(Product)
+                    .where(Product.is_internal_component.is_(True))
+                    .order_by(Product.id)
+                )
+            )
+            assert len(children) == 2
+            children[1].production_label_enabled = False
+            children[1].production_label_units_per_label = None
+            db.commit()
+
+            package = build_composite_requisition_packaging_label_package(
+                db,
+                requisition,
+                selected_item_ids={int(item.id) for item in items},
+            )
+
+        assert package["printable"] is True
+        assert package["review_required"] is False
+        assert len(package["plans"]) == 1
+        assert len(package["job_tasks"]) == 1
+        assert len(package["excluded_items"]) == 1
+        assert package["excluded_items"][0]["product_name"] == "组合子件乙"
+        assert "未启用打印标签" in package["excluded_items"][0]["reason"]
+        assert int(package["job_tasks"][0]["product_id"]) == int(children[0].id)
+    finally:
+        engine.dispose()
 
 
 def test_current_common_box_label_setting_prints_selected_item_without_task_refresh(

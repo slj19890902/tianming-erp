@@ -359,7 +359,8 @@ def test_compact_incoming_frontend_uses_top_selection_and_no_row_print_buttons()
     incoming = incoming[: incoming.index('<template v-else-if="activePage === \'production\'">')]
     assert "incoming-compact-head" in incoming
     assert 'desc="老板端与车间共用' not in incoming
-    assert "打印生产卡（{{ incomingProductionCardSelectedCount }}）" in incoming
+    assert "打印产品标签（{{ incomingProductionCardSelectedCount }}）" in incoming
+    assert '@click="openSelectedIncomingProductLabels"' in incoming
     assert '@click="openIncomingProductionCard(row)"' not in incoming
     assert "报料长" in incoming and "报料宽" in incoming and "压线尺寸" in incoming
     assert "客户简称 / 存货编码 / 产品名称" in incoming

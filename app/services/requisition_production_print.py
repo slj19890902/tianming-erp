@@ -34,6 +34,10 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
+from app.models.stock_replenishment import (
+    StockReplenishmentOrder,
+    StockReplenishmentOrderItem,
+)
 from app.models.warehouse_inventory import InventoryLot, InventoryPalletItem
 from app.services.box_type_rules import box_type_code, canonical_box_style
 from app.services.order_number_display import build_display_registry, display_order_number
@@ -1132,8 +1136,6 @@ def build_supplier_requisition_production_package(
             card["production_task_versions"]
         ) != len(card.get("components") or []):
             selection_block_reasons.append("生产任务版本缺失，请先核对任务")
-        if card.get("receipt_versions"):
-            selection_block_reasons.append("任务已有实收事实，请从对应实收版处理")
         card["selection_block_reasons"] = selection_block_reasons
         card["selection_eligible"] = not selection_block_reasons
         card["selection_fingerprint"] = production_print_card_fingerprint(card)
@@ -1266,6 +1268,304 @@ def build_supplier_requisition_production_package(
         "production_label_task_count": len(current_label_counts),
         "production_label_count": sum(current_label_counts.values()),
         "production_label_refresh_options": label_plan_refresh_options,
+        "cards": cards,
+        "pages": pages,
+    }
+
+
+def build_stock_replenishment_production_package(
+    db: Session,
+    order: StockReplenishmentOrder,
+    *,
+    selected_item_ids: set[int] | None = None,
+) -> dict:
+    """Project stable replenishment lines onto the shared half-A4 paper card.
+
+    Stock replenishment deliberately has no sales-order ``ProductionTask``.
+    The paper card therefore keeps the immutable replenishment item as its
+    source identity and uses the stable product QR when one exists.  It never
+    invents an order task or advances stock/receipt state.
+    """
+
+    if order.status not in {"confirmed", "partially_stocked", "stocked"}:
+        raise ValueError("库存补库单已撤销、作废或尚未正式确认")
+    available = {int(item.id): item for item in order.items}
+    selected = (
+        {int(value) for value in selected_item_ids}
+        if selected_item_ids is not None
+        else set(available)
+    )
+    if not selected or not selected.issubset(available):
+        raise ValueError("所选库存补库明细不存在或已变化，请刷新后重试")
+
+    cards: list[dict] = []
+    for item_id in sorted(selected):
+        item: StockReplenishmentOrderItem = available[item_id]
+        product = item.product or item.reference_product
+        customer = item.customer or order.customer
+        product_is_current = bool(
+            product is not None
+            and product.deleted_at is None
+            and bool(product.is_active)
+        )
+        layout_kind = _layout_kind(
+            product.box_style if product is not None else None,
+            product.box_category if product is not None else None,
+        )
+        planned_quantity = int(item.quantity or 0)
+        stocked_quantity = int(item.stocked_quantity or 0)
+        remaining_quantity = max(planned_quantity - stocked_quantity, 0)
+        output_factor = max(int(item.stock_yield_per_sheet or 0), 1)
+        is_semi_finished = item.target_inventory_type == "semi_finished"
+        output_unit = "张" if is_semi_finished else "只"
+        # The replenishment line is already stored in its target inventory
+        # unit: board sheets for semi-finished stock and finished pieces for a
+        # direct-finished line.  Never multiply that frozen plan by yield.
+        planned_output = planned_quantity
+        requisition_quantity = (
+            planned_quantity
+            if is_semi_finished
+            else (planned_quantity + output_factor - 1) // output_factor
+        )
+        specification = (
+            resolved_product_specification(None, product)
+            if product is not None
+            else f"{item.report_length_mm or '-'}×{item.report_width_mm or '-'}"
+        )
+        production_steps = _unique_text(
+            [
+                product.production_process if product is not None else None,
+                product.production_notes if product is not None else None,
+                item.remark,
+            ]
+        )
+        joining_method = _explicit_joining_method(production_steps) or "无需结合"
+        component = {
+            "stock_replenishment_item_id": int(item.id),
+            "source_identity": f"stock_replenishment_item:{int(item.id)}",
+            "component_label": {
+                "cover": "盖",
+                "base": "底",
+                "whole": "整片",
+            }.get(str(item.component_type or "whole"), "整片"),
+            "display_order": 1,
+            "product_code": item.product_code_snapshot,
+            "product_name": item.product_name_snapshot,
+            "specification": specification,
+            "planned_finished_quantity": planned_output,
+            "finished_unit": output_unit,
+            "requisition_quantity": requisition_quantity,
+            "requisition_unit": "张",
+            "report_length_mm": item.report_length_mm,
+            "report_width_mm": item.report_width_mm,
+            "cutting_mode": None,
+            "pieces_per_box": max(int(item.pieces_per_box or 0), 1),
+            "required_piece_quantity": planned_quantity,
+            "material_code": item.material_code_snapshot,
+            "layer_count": item.layer_count,
+            "flute_type": item.flute_type,
+            "crease_type": item.crease_type,
+            "crease_display": _crease_display(
+                (
+                    item.crease_type,
+                    item.crease_left_mm,
+                    item.crease_middle_mm,
+                    item.crease_right_mm,
+                )
+            ),
+            "production_notes": production_steps,
+            "box_style": canonical_box_style(
+                product.box_style if product is not None else None
+            ),
+            "box_type_code": box_type_code(
+                product.box_style if product is not None else None
+            ),
+            "layout_kind": layout_kind,
+            "drawing_reference": None,
+            "drawing_url": None,
+            "drawing_kind": None,
+            "drawing_source": None,
+            "mold_tool_id": None,
+            "mold_code": None,
+            "mold_name": None,
+            "mold_location": None,
+            "mold_location_display": None,
+            "joining_method": joining_method,
+            "joining_method_source": (
+                "current_common_box_fallback"
+                if joining_method != "无需结合"
+                else "default_no_joining"
+            ),
+            "production_task_id": None,
+            "production_task_version": None,
+            "output_factor": output_factor,
+            "production_label_units_per_bundle": (
+                int(product.production_label_units_per_label)
+                if product is not None
+                and bool(product.production_label_enabled)
+                and product.production_label_units_per_label is not None
+                else None
+            ),
+            "printing_colors": _unique_text(
+                [product.printing_colors if product is not None else None]
+            ),
+            "printing_method": None,
+            "printing_content": product.print_content if product is not None else None,
+            "printing_plates": [],
+        }
+        review_messages = []
+        selection_block_reasons = []
+        if customer is None:
+            selection_block_reasons.append("补库明细缺少权威客户归属，请核对补库单")
+        if product is None:
+            selection_block_reasons.append(
+                "补库明细没有可回读的当前常用箱，请先核对产品资料"
+            )
+        elif not product_is_current:
+            selection_block_reasons.append(
+                "补库明细关联的常用箱已停用或删除，请先恢复或更换当前产品"
+            )
+        elif customer is not None and int(product.customer_id) != int(customer.id):
+            selection_block_reasons.append(
+                "补库明细的客户与常用箱客户不一致，请先核对补库来源"
+            )
+        receipt_match_status = (
+            "not_received"
+            if stocked_quantity <= 0
+            else "received"
+            if remaining_quantity <= 0
+            else "partially_received"
+        )
+        card = {
+            "source_type": "stock_replenishment",
+            "stock_replenishment_order_id": int(order.id),
+            "stock_replenishment_item_id": int(item.id),
+            "stock_replenishment_item_ids": [int(item.id)],
+            "source_identity": f"stock_replenishment_item:{int(item.id)}",
+            "component_label": component["component_label"],
+            "customer_id": int(customer.id) if customer is not None else None,
+            "customer_name": (
+                customer.chinese_short_name or customer.name
+                if customer is not None
+                else None
+            ),
+            "product_id": int(product.id) if product is not None else None,
+            "product_code": item.product_code_snapshot,
+            "product_name": item.product_name_snapshot,
+            "specifications": [specification],
+            "order_numbers": [order.order_number],
+            "item_order_numbers": [order.order_number],
+            "customer_pos": [],
+            "delivery_dates": [],
+            "planned_finished_quantity": planned_output,
+            "customer_order_quantity": 0,
+            "stock_deduction_quantity": 0,
+            "requisition_quantity": requisition_quantity,
+            "planned_replenishment_quantity": planned_quantity,
+            "received_quantity": stocked_quantity,
+            "remaining_quantity": remaining_quantity,
+            "output_unit": output_unit,
+            "paper_phase": "planned",
+            "paper_phase_label": "库存补库计划版",
+            "paper_version_key": None,
+            "receipt_versions": [],
+            "receipt_match_status": receipt_match_status,
+            "layout_kind": layout_kind,
+            "box_style": component["box_style"],
+            "box_type_code": component["box_type_code"],
+            "finished_length_mm": product.length_mm if product is not None else None,
+            "finished_width_mm": product.width_mm if product is not None else None,
+            "finished_height_mm": product.height_mm if product is not None else None,
+            "printing_colors": component["printing_colors"],
+            "joining_methods": [joining_method],
+            "joining_method_sources": [component["joining_method_source"]],
+            "joining_method": joining_method,
+            "joining_method_source": component["joining_method_source"],
+            "production_label_units_per_bundle": component[
+                "production_label_units_per_bundle"
+            ],
+            "estimated_bundle_count": None,
+            "production_steps": production_steps,
+            "structure_reference": None,
+            "review_required": bool(review_messages or selection_block_reasons),
+            "review_messages": review_messages,
+            "status_label": {
+                "not_received": "库存补库待收",
+                "partially_received": "库存补库部分已收",
+                "received": "库存补库已收齐",
+            }[receipt_match_status],
+            "components": [component],
+            "production_task_versions": [],
+            "selection_block_reasons": selection_block_reasons,
+            "selection_eligible": not selection_block_reasons,
+            "product_qr": (
+                product_qr_payload(int(product.id)) if product is not None else None
+            ),
+            "product_qr_unavailable_reason": (
+                None if product is not None else "补库明细没有正式产品二维码"
+            ),
+        }
+        cards.append(card)
+
+    immutable_payload = {
+        "stock_replenishment_order_id": int(order.id),
+        "stock_replenishment_order_number": order.order_number,
+        "status": order.status,
+        "cards": cards,
+    }
+    plan_fingerprint = hashlib.sha256(
+        json.dumps(
+            immutable_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    for card in cards:
+        card["paper_version_key"] = (
+            f"planned:stock-replenishment:{int(order.id)}:"
+            f"{int(card['stock_replenishment_item_id'])}:{plan_fingerprint}"
+        )
+        card["selection_fingerprint"] = production_print_card_fingerprint(card)
+    pages = [
+        {
+            "page_number": index // 2 + 1,
+            "top": cards[index],
+            "bottom": cards[index + 1] if index + 1 < len(cards) else None,
+        }
+        for index in range(0, len(cards), 2)
+    ]
+    review_messages = _unique_text(
+        [
+            message
+            for card in cards
+            for message in [
+                *(card.get("review_messages") or []),
+                *(card.get("selection_block_reasons") or []),
+            ]
+        ]
+    )
+    printable = bool(cards) and all(
+        bool(card.get("selection_eligible")) for card in cards
+    )
+    return {
+        "source_type": "stock_replenishment",
+        "stock_replenishment_order_id": int(order.id),
+        "supplier_order_id": None,
+        "supplier_order_number": order.order_number,
+        "status": order.status,
+        "status_label": "库存补库计划",
+        "created_at": utc_naive_to_api(order.created_at) if order.created_at else None,
+        "plan_fingerprint": plan_fingerprint,
+        "card_count": len(cards),
+        "page_count": len(pages),
+        "review_required": bool(review_messages),
+        "review_messages": review_messages,
+        "layout_overflow": False,
+        "printable": printable,
+        "production_label_task_count": 0,
+        "production_label_count": 0,
         "cards": cards,
         "pages": pages,
     }

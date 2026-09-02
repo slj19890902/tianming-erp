@@ -283,6 +283,7 @@
       }
 
       function titleFor(card) {
+        if (card.source_type === "stock_replenishment") return "库存补库待来料任务单";
         if (card.layout_kind === "die_cut") return "模切内盒生产任务单";
         if (card.layout_kind === "liner") return "衬板生产任务单";
         if (card.box_type_code === "a1_0201") return "A1 型纸箱生产任务单";
@@ -440,13 +441,14 @@
         const cutting = textList(firstValues(card, "cutting_mode"));
         const fit = (value, limit = 42) => fitLevel === "ultra" ? paperText(value, limit) : value;
         if (card.layout_kind === "liner") {
-          const perBundle = card.production_label_units_per_bundle ? `${card.production_label_units_per_bundle} 张` : "未设置";
+          const quantityUnit = card.output_unit || "张";
+          const perBundle = card.production_label_units_per_bundle ? `${card.production_label_units_per_bundle} ${quantityUnit}` : "未设置";
           const bundleCount = card.estimated_bundle_count ? `${card.estimated_bundle_count} 捆` : "待核对";
           return [
             detailRow("成品尺寸", fit(finishedSize(card))),
             detailRow("材质 / 楞型", fit(`${textList(materials)} / ${textList(flute)}`)),
             detailRow("开料方式", fit(cutting)),
-            detailRow("总数量", `${card.planned_finished_quantity || 0} 张`),
+            detailRow("总数量", `${card.planned_finished_quantity || 0} ${card.output_unit || "张"}`),
             detailRow("每捆数量", perBundle),
             detailRow("预计捆数", bundleCount),
             detailRow("加工要求", "无需加工，齐边捆扎"),
@@ -505,14 +507,22 @@
       }
 
       function orderFactsHtml(card, fitLevel = "normal") {
-        const quantityUnit = card.layout_kind === "liner" ? "张" : "只";
-        const rows = [
-          ["客户订单号", textList(card.customer_pos || [])],
-          ["订单数量", `${numberText(card.customer_order_quantity)} ${quantityUnit}`],
-          ["库存抵扣", `${numberText(card.stock_deduction_quantity || 0)} ${quantityUnit}`],
-          ["计划生产", `${numberText(card.planned_finished_quantity)} ${quantityUnit}`],
-          ["采购张数", `${numberText(card.requisition_quantity)} 张`],
-        ];
+        const quantityUnit = card.output_unit || (card.layout_kind === "liner" ? "张" : "只");
+        const rows = card.source_type !== "stock_replenishment"
+          ? [
+              ["客户订单号", textList(card.customer_pos || [])],
+              ["订单数量", `${numberText(card.customer_order_quantity)} ${quantityUnit}`],
+              ["库存抵扣", `${numberText(card.stock_deduction_quantity || 0)} ${quantityUnit}`],
+              ["计划生产", `${numberText(card.planned_finished_quantity)} ${quantityUnit}`],
+              ["采购张数", `${numberText(card.requisition_quantity)} 张`],
+            ]
+          : [
+              ["来源单号", textList(card.order_numbers || [])],
+              ["计划备库", `${numberText(card.planned_replenishment_quantity)} ${quantityUnit}`],
+              ["累计已收", `${numberText(card.received_quantity || 0)} ${quantityUnit}`],
+              ["剩余待收", `${numberText(card.remaining_quantity || 0)} ${quantityUnit}`],
+              ["采购张数", `${numberText(card.requisition_quantity)} 张`],
+            ];
         return `<div class="order-facts" data-capacity-label="订单与生产数量">${rows.map(([label, value]) => `<div class="order-fact"><span>${escapeHtml(label)}</span><strong>${escapeHtml(fitLevel === "ultra" ? paperText(value, 20) : value)}</strong></div>`).join("")}</div>`;
       }
 

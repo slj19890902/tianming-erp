@@ -304,6 +304,123 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
     _run_node(script, tmp_path, "p0-jsd-unified-label-page.js")
 
 
+def test_stock_replenishment_task_uses_shared_package_and_empty_task_versions(
+    tmp_path: Path,
+) -> None:
+    candidates = _method_body("reportedProductionCandidates")
+    prepare = _method_body("prepareReportedItemTaskPrint")
+    payload_items = _method_body("productionPrintPayloadItems")
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+const calls=[];
+global.axios={{get:async(url)=>{{calls.push(url);return {{data:{{source_type:'stock_replenishment',supplier_order_number:'SRP-9',cards:[{{source_identity:'stock_replenishment_item:91',selection_fingerprint:'c'.repeat(64),production_task_versions:[],selection_eligible:true,stock_replenishment_item_ids:[91],product_code:'STOCK-91'}}]}}}};}}}};
+const row={{stable_id:'stock_replenishment:9:91',source_type:'stock_replenishment',status:'confirmed',can_print_task:true,document_id:9,document_number:'SRP-9',item_id:91,product_code:'STOCK-91'}};
+const vm={{activePage:'requisition',requisitionTab:'submitted',authGeneration:1,user:{{id:3}},reportedItemPrintBusy:false,reportedItemPrintErrors:[],reportedLabelRecoveryUrls:[],productionPrintBatchAttempt:null,productionPrintRecoveryUrl:'',productionPrintSelections:{{}},productionPrintSelectionSequence:0,
+  reportedSelectedItems(){{return [row];}},productionPrintAttemptUncertain(){{return false;}},resetProductionPrintBatchOutcome(){{}},reportedPrintBlockMessage(){{throw new Error('unexpected blocker');}},
+  async prepareProductionPrintBatch(){{this.payload=this.productionPrintPayloadItems(Object.values(this.productionPrintSelections));return true;}},
+  errorMessage(error){{return error.message;}},resetPagePerformanceState(){{throw new Error('unexpected reset');}},
+}};
+vm.reportedProductionCandidates=new Function('orderId','row','data',{json.dumps(candidates, ensure_ascii=False)}).bind(vm);
+vm.productionPrintPayloadItems=new Function('items',{json.dumps(payload_items, ensure_ascii=False)}).bind(vm);
+vm.prepareReportedItemTaskPrint=new AsyncFunction({json.dumps(prepare, ensure_ascii=False)}).bind(vm);
+const expect=(value,message)=>{{if(!value)throw new Error(message);}};
+(async()=>{{
+  expect(await vm.prepareReportedItemTaskPrint()===true,'stock replenishment task was blocked');
+  expect(calls[0]==='/api/requisition/stock-replenishment/orders/9/production-print-package?item_ids=91','wrong stock task package URL');
+  expect(vm.payload.length===1&&vm.payload[0].source_type==='stock_replenishment'&&vm.payload[0].document_id===9,'stock source identity was lost');
+  expect(Array.isArray(vm.payload[0].task_versions)&&vm.payload[0].task_versions.length===0,'stock task invented a sales ProductionTask version');
+  expect(!('supplier_order_id' in vm.payload[0]),'stock task impersonated a supplier order');
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "p0-38-stock-task-print.js")
+
+
+def test_reported_labels_print_enabled_items_and_explain_excluded_items(
+    tmp_path: Path,
+) -> None:
+    body = _method_body("openReportedItemLabels")
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+let prompt='';const opened=[];
+global.confirm=message=>{{prompt=String(message);return true;}};
+global.window={{open(){{const tab={{location:{{href:'about:blank'}},close(){{this.closed=true;}}}};opened.push(tab);return tab;}}}};
+global.axios={{get:async()=>({{data:{{label_count:3,production_task_count:1,excluded_items:[{{product_code:'NO-LABEL',reason:'常用箱未勾选打印标签'}}]}}}})}};
+const rows=[31,32].map(item_id=>({{stable_id:`supplier_order:3:${{item_id}}`,source_type:'supplier_order',status:'active',can_print_label:true,document_id:3,document_number:'SRO-3',item_id,product_code:item_id===31?'PRINT':'NO-LABEL'}}));
+const vm={{reportedItemPrintBusy:false,reportedItemPrintErrors:[],reportedLabelRecoveryUrls:[],authGeneration:1,user:{{id:2}},activePage:'requisition',requisitionTab:'submitted',
+  reportedSelectedItems(){{return rows;}},reportedPrintBlockMessage(){{throw new Error('unexpected blocker');}},showToast(){{}},errorMessage(error){{return error.message;}},resetPagePerformanceState(){{throw new Error('unexpected reset');}},
+}};
+vm.openReportedItemLabels=new AsyncFunction({json.dumps(body, ensure_ascii=False)}).bind(vm);
+const expect=(value,message)=>{{if(!value)throw new Error(message);}};
+(async()=>{{
+  expect(await vm.openReportedItemLabels()===true,'eligible label was blocked by disabled companion');
+  expect(opened[0].location.href==='/production-packaging-label.html?id=3&item_ids=31%2C32','selected identities were lost');
+  expect(prompt.includes('NO-LABEL')&&prompt.includes('到常用箱打开“打印标签”并保存'),'confirmation did not explain excluded item and action');
+  expect(vm.reportedItemPrintErrors.some(message=>message.includes('NO-LABEL')&&message.includes('刷新后即可加入')),'excluded item was silently omitted after opening');
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "p0-38-reported-label-partial.js")
+
+
+def test_reported_labels_all_disabled_show_full_reason_without_opening(
+    tmp_path: Path,
+) -> None:
+    body = _method_body("openReportedItemLabels")
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+let confirmCount=0;const opened=[];
+global.confirm=()=>{{confirmCount++;return true;}};
+global.window={{open(){{const tab={{location:{{href:'about:blank'}},close(){{this.closed=true;}}}};opened.push(tab);return tab;}}}};
+global.axios={{get:async()=>{{const error=new Error('no labels');error.response={{status:409,data:{{detail:{{code:'production_label_no_eligible_items',reasons:['ALL-OFF：常用箱未勾选打印标签']}}}}}};throw error;}}}};
+const row={{stable_id:'supplier_order:4:41',source_type:'supplier_order',status:'active',can_print_label:true,document_id:4,document_number:'SRO-4',item_id:41,product_code:'ALL-OFF'}};
+const vm={{reportedItemPrintBusy:false,reportedItemPrintErrors:[],reportedLabelRecoveryUrls:[],authGeneration:1,user:{{id:2}},activePage:'requisition',requisitionTab:'submitted',
+  reportedSelectedItems(){{return [row];}},reportedPrintBlockMessage(){{throw new Error('unexpected blocker');}},showToast(){{}},errorMessage(error){{return error.message;}},resetPagePerformanceState(){{throw new Error('unexpected reset');}},
+}};
+vm.openReportedItemLabels=new AsyncFunction({json.dumps(body, ensure_ascii=False)}).bind(vm);
+const expect=(value,message)=>{{if(!value)throw new Error(message);}};
+(async()=>{{
+  expect(await vm.openReportedItemLabels()===false,'all-disabled label request reported success');
+  expect(confirmCount===0,'all-disabled selection asked to print an empty package');
+  expect(opened.length===1&&opened[0].closed===true,'pre-opened blank tab was left behind');
+  expect(vm.reportedItemPrintErrors.some(message=>message.includes('ALL-OFF')&&message.includes('到常用箱打开“打印标签”并保存')),'complete reason and action were not shown');
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "p0-38-reported-label-all-disabled.js")
+
+
+def test_incoming_label_entry_reuses_label_package_and_keeps_popup_recovery(
+    tmp_path: Path,
+) -> None:
+    can_print = _method_body("canPrintIncomingProductLabel")
+    blocker = _method_body("incomingProductLabelBlockMessage")
+    body = _method_body("openSelectedIncomingProductLabels")
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+global.confirm=()=>true;global.window={{open:()=>null}};const gets=[];
+global.axios={{get:async(url)=>{{gets.push(url);return {{data:{{label_count:2,production_task_count:1,excluded_items:[]}}}};}}}};
+const row={{receipt_item_id:81,receipt_status:'posted',supplier_order_id:8,supplier_order_item_id:18,supplier_order_number:'SRO-8',product_code:'BOX-8'}};
+const vm={{incomingProductionCardBatchBusy:false,incomingProductLabelMessages:[],incomingProductLabelRecoveryUrls:[],incomingReceived:[],incomingHistory:[],incomingProductionCardSelections:{{81:row}},authGeneration:2,user:{{id:5}},activePage:'incoming',incomingTab:'received',
+  showToast(){{}},errorMessage(error){{return error.message;}},resetPagePerformanceState(){{throw new Error('unexpected reset');}},
+}};
+vm.canPrintIncomingProductLabel=new Function('row',{json.dumps(can_print, ensure_ascii=False)}).bind(vm);
+vm.incomingProductLabelBlockMessage=new Function('row',{json.dumps(blocker, ensure_ascii=False)}).bind(vm);
+vm.openSelectedIncomingProductLabels=new AsyncFunction({json.dumps(body, ensure_ascii=False)}).bind(vm);
+const expect=(value,message)=>{{if(!value)throw new Error(message);}};
+(async()=>{{
+  expect(await vm.openSelectedIncomingProductLabels()===true,'valid incoming label entry failed');
+  expect(gets[0]==='/api/requisition/supplier-orders/8/production-packaging-label-package?item_ids=18','incoming entry did not reuse supplier label package');
+  expect(vm.incomingProductLabelRecoveryUrls.length===1,'blocked popup did not keep recovery link');
+  expect(vm.incomingProductLabelRecoveryUrls[0].url==='/production-packaging-label.html?id=8&item_ids=18','wrong incoming recovery URL');
+  const reversed={{...row,receipt_status:'reversed'}};
+  expect(!vm.canPrintIncomingProductLabel(reversed),'reversed receipt became printable');
+  expect(vm.incomingProductLabelBlockMessage(reversed).includes('已撤销'),'reversed receipt blocker is vague');
+  const stock={{receipt_item_id:82,receipt_status:'posted',source_type:'stock_replenishment',stock_replenishment_item_id:9,product_code:'STOCK'}};
+  expect(!vm.canPrintIncomingProductLabel(stock),'stock receipt became an order product label');
+  expect(vm.incomingProductLabelBlockMessage(stock).includes('库存补库'),'stock receipt blocker is vague');
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "p0-38-incoming-label-recovery.js")
+
+
 def test_session_reset_clears_reported_item_selection_detail_and_attempts() -> None:
     reset = _method_body("resetPagePerformanceState")
     for marker in (

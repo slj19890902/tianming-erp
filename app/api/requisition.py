@@ -212,6 +212,7 @@ from app.services.purchase_receipt_facts import (
 )
 from app.services.requisition_production_print import (
     build_composite_requisition_production_package,
+    build_stock_replenishment_production_package,
     build_supplier_requisition_production_package,
 )
 from app.services.requisition_production_print_batch import (
@@ -944,13 +945,15 @@ class ProductionPrintTaskVersion(BaseModel):
 
 class ProductionPrintBatchItem(BaseModel):
     source_type: Literal[
-        "supplier_order", "composite_bom_requisition"
+        "supplier_order", "composite_bom_requisition", "stock_replenishment"
     ] = "supplier_order"
     document_id: int | None = Field(default=None, gt=0)
     supplier_order_id: int | None = Field(default=None, gt=0)
     source_identity: str = Field(min_length=1, max_length=160)
     selection_fingerprint: str = Field(min_length=64, max_length=64)
-    task_versions: list[ProductionPrintTaskVersion] = Field(min_length=1, max_length=6)
+    task_versions: list[ProductionPrintTaskVersion] = Field(
+        default_factory=list, max_length=6
+    )
 
     @field_validator("source_identity", "selection_fingerprint")
     @classmethod
@@ -969,13 +972,25 @@ class ProductionPrintBatchItem(BaseModel):
                 and self.supplier_order_id != self.document_id
             ):
                 raise ValueError("供应商报料单编号不一致")
+            if not self.task_versions:
+                raise ValueError("供应商报料生产任务版本不能为空")
             self.supplier_order_id = resolved
             self.document_id = resolved
             return self
         if self.document_id is None:
-            raise ValueError("组合报料单编号不能为空")
+            raise ValueError(
+                "库存补库单编号不能为空"
+                if self.source_type == "stock_replenishment"
+                else "组合报料单编号不能为空"
+            )
         if self.supplier_order_id is not None:
-            raise ValueError("组合报料任务不能冒充供应商报料单")
+            raise ValueError("非供应商报料任务不能冒充供应商报料单")
+        if self.source_type == "stock_replenishment":
+            if self.task_versions:
+                raise ValueError("库存补库计划不能冒充订单生产任务")
+            return self
+        if not self.task_versions:
+            raise ValueError("组合报料生产任务版本不能为空")
         return self
 
 
@@ -13994,9 +14009,22 @@ def _stock_replenishment_item_customer_id(
             if relationships_loaded
             else db.get(Product, item.product_id)
         )
-        if product is None or product.deleted_at is not None:
+        if product is None or product.deleted_at is not None or not product.is_active:
             return None
         customer_ids.add(product.customer_id)
+    if item.reference_product_id is not None:
+        reference_product = (
+            item.reference_product
+            if relationships_loaded
+            else db.get(Product, item.reference_product_id)
+        )
+        if (
+            reference_product is None
+            or reference_product.deleted_at is not None
+            or not reference_product.is_active
+        ):
+            return None
+        customer_ids.add(reference_product.customer_id)
     if item.stock_policy_id is not None:
         policy = (
             item.stock_policy
@@ -15818,6 +15846,68 @@ def print_stock_replenishment_order(
     payload = replenishment_order_dict(order, db=db)
     payload["sender"] = _company_sender(db)
     return payload
+
+
+@router.get(
+    "/stock-replenishment/orders/{order_id}/production-print-package"
+)
+def get_stock_replenishment_production_print_package(
+    order_id: int,
+    item_ids: str = Query(min_length=1, max_length=1200),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return a read-only stock-plan projection on the shared half-A4 card."""
+
+    order = db.scalar(
+        _replenishment_order_query().where(
+            StockReplenishmentOrder.id == order_id
+        )
+    )
+    if order is None:
+        raise HTTPException(status_code=404, detail="库存补库单不存在。")
+    _require_stock_replenishment_order_access(
+        db, order, user, relationships_loaded=True
+    )
+    try:
+        package = build_stock_replenishment_production_package(
+            db,
+            order,
+            selected_item_ids=_composite_label_item_ids(item_ids),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if not package["card_count"]:
+        raise HTTPException(status_code=409, detail="所选库存补库明细没有可打印计划")
+    blocked_cards = [
+        card
+        for card in package.get("cards") or []
+        if not bool(card.get("selection_eligible"))
+    ]
+    if blocked_cards:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "stock_replenishment_production_print_review_required",
+                "message": "所选库存补库明细资料不完整，整批已停止打印",
+                "items": [
+                    {
+                        "stock_replenishment_item_id": card.get(
+                            "stock_replenishment_item_id"
+                        ),
+                        "product_code": card.get("product_code"),
+                        "product_name": card.get("product_name"),
+                        "current_status": card.get("status_label"),
+                        "reasons": list(
+                            card.get("selection_block_reasons") or []
+                        ),
+                        "resolution": "核对补库客户与当前常用箱，修复后刷新重试",
+                    }
+                    for card in blocked_cards
+                ],
+            },
+        )
+    return package
 
 
 @router.post("/stock-replenishment/orders/{order_id}/stock")
@@ -18752,6 +18842,9 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     "stock_policy_id"
                 ),
                 StockReplenishmentOrderItem.product_id.label("item_product_id"),
+                StockReplenishmentOrderItem.target_inventory_type.label(
+                    "target_inventory_type"
+                ),
                 StockReplenishmentOrderItem.customer_id.label(
                     "item_customer_id"
                 ),
@@ -18893,6 +18986,7 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
             lines.append(
                 {
                     "_item_id": item["item_id"],
+                    "_target_inventory_type": item["target_inventory_type"],
                     "_quantity": item["quantity"],
                     "_stocked_quantity": item["stocked_quantity"],
                     "_crease_type": item["crease_type"],
@@ -19344,7 +19438,11 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                             "requisition_qty": quantity,
                             "received_qty": stocked_quantity,
                             "remaining_qty": max(quantity - stocked_quantity, 0),
-                            "unit": "张",
+                            "unit": (
+                                "只"
+                                if line.get("_target_inventory_type") == "finished"
+                                else "张"
+                            ),
                             "status": _stock_replenishment_reported_line_status(
                                 candidate["status"]
                             ),
@@ -19495,6 +19593,7 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                                 if line.get("_received")
                                 else line.get("_item_status")
                             ),
+                            "source_item_status": line.get("_item_status"),
                             "can_void": (
                                 is_composite_bom
                                 and candidate["status"] == "已报料"
@@ -19794,7 +19893,9 @@ def _build_reported_documents(
                     "remaining_qty": max(
                         int(item.quantity or 0) - int(item.stocked_quantity or 0), 0
                     ),
-                    "unit": "张",
+                    "unit": (
+                        "只" if item.target_inventory_type == "finished" else "张"
+                    ),
                     "status": _stock_replenishment_reported_line_status(
                         order.status
                     ),
@@ -20059,6 +20160,7 @@ def _build_reported_documents(
                     "remaining_qty": None,
                     "unit": "张",
                     "status": "已收料" if item.id in received_requisition_item_ids else item.status,
+                    "source_item_status": item.status,
                     "can_void": (
                         is_composite_bom
                         and batch.status == "已报料"
@@ -20724,9 +20826,45 @@ def list_reported_items(
         is_current_composite_item = (
             candidate["source_type"] == "composite_bom_requisition"
             and document.get("status") == "已报料"
-            and line.get("status") in {"有效", "已入库"}
+            and line.get("source_item_status") in {"有效", "已入库"}
             and line.get("order_item_id") is not None
         )
+        is_current_stock_item = (
+            candidate["source_type"] == "stock_replenishment"
+            and document.get("status")
+            in {"confirmed", "partially_stocked", "stocked"}
+            and line.get("status") == "active"
+        )
+        can_print_task = (
+            is_current_supplier_item
+            or is_current_composite_item
+            or is_current_stock_item
+        )
+        can_print_label = is_current_supplier_item or is_current_composite_item
+        task_print_block_reason = None
+        task_print_resolution = None
+        if not can_print_task:
+            if document.get("status") in {"voided", "已取消"}:
+                task_print_block_reason = "该明细所属报料单已作废或取消"
+                task_print_resolution = "请重新建立有效报料单后再打印"
+            elif candidate["source_type"] == "legacy_material_requisition":
+                task_print_block_reason = "历史报料明细没有当前生产任务身份"
+                task_print_resolution = "请从当前有效供应商报料或组合报料重新进入"
+            else:
+                task_print_block_reason = "该明细当前不是有效正式报料状态"
+                task_print_resolution = "请刷新状态并核对该报料明细"
+        label_print_block_reason = None
+        label_print_resolution = None
+        if not can_print_label:
+            if candidate["source_type"] == "stock_replenishment":
+                label_print_block_reason = "库存补库不是订单成品标签来源"
+                label_print_resolution = "库存补库只打印备库计划；形成具体成品后再打印产品标签"
+            elif document.get("status") in {"voided", "已取消"}:
+                label_print_block_reason = "该明细所属报料单已作废或取消"
+                label_print_resolution = "请重新建立有效报料单后再打印"
+            else:
+                label_print_block_reason = "该明细缺少当前有效产品标签任务"
+                label_print_resolution = "请核对正式报料、常用箱标签开关和标签数量"
         composite_group_key = None
         composite_group_first = False
         composite_group_item_ids: list[int] = []
@@ -20786,12 +20924,12 @@ def list_reported_items(
                     is_current_supplier_item
                     and has_permission(user, "requisition.execute")
                 ),
-                "can_print_task": (
-                    is_current_supplier_item or is_current_composite_item
-                ),
-                "can_print_label": (
-                    is_current_supplier_item or is_current_composite_item
-                ),
+                "can_print_task": can_print_task,
+                "can_print_label": can_print_label,
+                "task_print_block_reason": task_print_block_reason,
+                "task_print_resolution": task_print_resolution,
+                "label_print_block_reason": label_print_block_reason,
+                "label_print_resolution": label_print_resolution,
                 "active_item_count": active_item_count,
                 "composite_group_key": (
                     f"{composite_group_key[0]}:{composite_group_key[1]}"
@@ -21025,7 +21163,11 @@ def _production_print_batch_sources(
     db: Session,
     user: User,
     selections: list[dict],
-) -> tuple[dict[int, SupplierRequisitionOrder], dict[int, Requisition]]:
+) -> tuple[
+    dict[int, SupplierRequisitionOrder],
+    dict[int, Requisition],
+    dict[int, StockReplenishmentOrder],
+]:
     order_ids = sorted(
         {
             int(item.get("supplier_order_id") or 0)
@@ -21081,7 +21223,38 @@ def _production_print_batch_sources(
         _require_requisition_customer_access(
             composite_requisitions[requisition_id], user, db
         )
-    return orders, composite_requisitions
+    stock_order_ids = sorted(
+        {
+            int(item.get("document_id") or 0)
+            for item in selections
+            if item.get("source_type") == "stock_replenishment"
+        }
+    )
+    stock_replenishments = {
+        int(row.id): row
+        for row in (
+            db.scalars(
+                _replenishment_order_query().where(
+                    StockReplenishmentOrder.id.in_(stock_order_ids)
+                )
+            ).all()
+            if stock_order_ids
+            else []
+        )
+    }
+    if len(stock_replenishments) != len(stock_order_ids):
+        raise HTTPException(
+            status_code=409,
+            detail="所选库存补库计划已撤销、作废或不存在，请刷新后重新勾选",
+        )
+    for order_id in stock_order_ids:
+        _require_stock_replenishment_order_access(
+            db,
+            stock_replenishments[order_id],
+            user,
+            relationships_loaded=True,
+        )
+    return orders, composite_requisitions, stock_replenishments
 
 
 def _production_print_batch_response(
@@ -21140,14 +21313,17 @@ def prepare_production_print_batch(
                     detail="该批量打印幂等键已用于不同的任务选择",
                 )
             stored_items = canonical_batch_items(details.get("items") or [])
-            orders, composite_requisitions = _production_print_batch_sources(
-                db, user, stored_items
-            )
+            (
+                orders,
+                composite_requisitions,
+                stock_replenishments,
+            ) = _production_print_batch_sources(db, user, stored_items)
             package = build_selected_production_print_package(
                 db,
                 selections=stored_items,
                 orders=orders,
                 composite_requisitions=composite_requisitions,
+                stock_replenishments=stock_replenishments,
                 batch_id=batch_id,
             )
             if package["package_fingerprint"] != details.get(
@@ -21159,14 +21335,17 @@ def prepare_production_print_batch(
                 )
             return _production_print_batch_response(package, replayed=True)
 
-        orders, composite_requisitions = _production_print_batch_sources(
-            db, user, items
-        )
+        (
+            orders,
+            composite_requisitions,
+            stock_replenishments,
+        ) = _production_print_batch_sources(db, user, items)
         package = build_selected_production_print_package(
             db,
             selections=items,
             orders=orders,
             composite_requisitions=composite_requisitions,
+            stock_replenishments=stock_replenishments,
             batch_id=batch_id,
         )
         append_audit_event(
@@ -21311,14 +21490,17 @@ def get_production_print_batch(
     details = _production_print_batch_details(log)
     try:
         items = canonical_batch_items(details.get("items") or [])
-        orders, composite_requisitions = _production_print_batch_sources(
-            db, user, items
-        )
+        (
+            orders,
+            composite_requisitions,
+            stock_replenishments,
+        ) = _production_print_batch_sources(db, user, items)
         package = build_selected_production_print_package(
             db,
             selections=items,
             orders=orders,
             composite_requisitions=composite_requisitions,
+            stock_replenishments=stock_replenishments,
             batch_id=normalized_batch_id,
         )
     except ProductionPrintBatchError as error:
@@ -21480,9 +21662,41 @@ def _supplier_label_batch_package(
     if not package["label_count"]:
         raise HTTPException(
             status_code=409,
-            detail="所选报料单没有可打印的产品标签",
+            detail=_production_label_no_eligible_detail(package),
         )
     return package
+
+
+def _production_label_no_eligible_detail(package: dict) -> dict:
+    """Explain every policy exclusion without disguising a hard data error."""
+
+    excluded_items = []
+    reasons = []
+    for row in package.get("excluded_items") or []:
+        identity = str(
+            row.get("product_code")
+            or row.get("product_name")
+            or f"产品 #{row.get('product_id') or '-'}"
+        ).strip()
+        reason = str(row.get("reason") or "当前产品不能打印标签").strip()
+        excluded_items.append(
+            {
+                "product_id": row.get("product_id"),
+                "product_code": row.get("product_code"),
+                "product_name": row.get("product_name"),
+                "production_task_id": row.get("production_task_id"),
+                "reason": reason,
+                "resolution": "到常用箱勾选打印标签、填写标签数量并保存，然后刷新页面",
+            }
+        )
+        reasons.append(f"{identity}：{reason}")
+    return {
+        "code": "production_label_no_eligible_items",
+        "message": "所选产品均未启用可打印标签，本次没有打开打印页",
+        "reasons": reasons or ["所选明细当前没有可打印的产品标签"],
+        "excluded_items": excluded_items,
+        "resolution": "到常用箱勾选打印标签、填写标签数量并保存，然后刷新页面",
+    }
 
 
 def _supplier_label_batch_audit_key(
@@ -21586,7 +21800,7 @@ def get_supplier_order_production_packaging_label_package(
     if not package["label_count"]:
         raise HTTPException(
             status_code=409,
-            detail="所选产品当前没有可打印的产品标签",
+            detail=_production_label_no_eligible_detail(package),
         )
     package["latest_printed_job"] = latest_printed_job_metadata(db, order.id)
     return package
@@ -21690,7 +21904,10 @@ def get_composite_requisition_packaging_label_package(
             },
         )
     if not package["label_count"]:
-        raise HTTPException(status_code=409, detail="所选组合报料明细没有可打印的产品标签")
+        raise HTTPException(
+            status_code=409,
+            detail=_production_label_no_eligible_detail(package),
+        )
     package["latest_printed_job"] = latest_printed_composite_job_metadata(
         db,
         requisition.id,

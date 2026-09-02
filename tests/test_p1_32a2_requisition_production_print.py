@@ -721,6 +721,11 @@ def test_posted_receipt_marks_preprint_for_review(production_print_app):
 
     assert package["review_required"] is True
     assert any("计划版不可冒充实收版" in text for text in package["review_messages"])
+    assert all(card["selection_eligible"] is True for card in package["cards"])
+    assert all(
+        not any("已有实收" in reason for reason in card["selection_block_reasons"])
+        for card in package["cards"]
+    )
     assert actual is not None
     assert actual["paper_phase"] == "actual_receipt"
     assert actual["paper_version_key"] == f"actual:receipt:{receipt_item.id}"

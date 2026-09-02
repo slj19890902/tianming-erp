@@ -962,3 +962,86 @@ def test_composite_bom_current_page_is_deep_equal_and_keeps_all_lines(
         for line in filtered_document["line_items"]
         if line["matched"]
     ] == ["COMP-A"]
+
+
+def test_composite_posted_receipt_keeps_reported_print_eligibility_from_source_status(
+    composite_requisition_app,
+) -> None:
+    """A display-only 已收料 overlay must not revoke a valid source line."""
+
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.order import OrderItem
+    from app.models.requisition import Requisition
+
+    app, session_factory = composite_requisition_app
+    with TestClient(app) as client:
+        _login_composite(client)
+        created = client.post(
+            "/api/requisition/batches",
+            json={
+                "supplier_name": "N039 供应商",
+                "items": [
+                    _parent_payload(),
+                    _component_payload(1),
+                    _component_payload(2),
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+
+    with session_factory() as db:
+        requisition = db.get(Requisition, created.json()["id"])
+        assert requisition is not None
+        received_item = sorted(requisition.items, key=lambda row: int(row.id))[0]
+        assert received_item.status == "有效"
+        order_item = db.get(OrderItem, received_item.order_item_id)
+        assert order_item is not None
+        received_quantity = int(received_item.requisition_qty or 0)
+        receipt = IncomingReceipt(
+            receipt_number="IR-P038-COMPOSITE-POSTED",
+            status="posted",
+            received_at=datetime(2026, 9, 2, 9, 30),
+            received_by=1,
+            idempotency_key="p0-38-composite-posted-receipt",
+        )
+        db.add(receipt)
+        db.flush()
+        db.add(
+            IncomingReceiptItem(
+                receipt_id=receipt.id,
+                order_id=order_item.order_id,
+                order_item_id=order_item.id,
+                requisition_id=requisition.id,
+                requisition_item_id=received_item.id,
+                planned_quantity=received_quantity,
+                received_quantity=received_quantity,
+                cumulative_received_quantity=received_quantity,
+                variance_quantity=0,
+                variance_type="matched",
+                resolution_status="not_required",
+                status="posted",
+            )
+        )
+        db.commit()
+        received_item_id = int(received_item.id)
+
+    with TestClient(app) as client:
+        _login_composite(client)
+        response = client.get(
+            "/api/requisition/reported-items",
+            params={
+                "source_type": "composite_bom_requisition",
+                "document_number": created.json()["requisition_number"],
+                "page_size": 20,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    row = next(
+        item
+        for item in response.json()["items"]
+        if item["item_id"] == received_item_id
+    )
+    assert row["status"] == "已收料"
+    assert row["can_print_task"] is True
+    assert row["can_print_label"] is True

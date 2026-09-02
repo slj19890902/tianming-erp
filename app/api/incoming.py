@@ -3038,6 +3038,7 @@ def _stock_replenishment_receipt_row(
         "source_type": "stock_replenishment",
         "order_item_id": None,
         "requisition_item_id": None,
+        "material_requisition_id": None,
         "receipt_id": fact.receipt_id,
         "receipt_item_id": fact.id,
         "receipt_number": fact.receipt.receipt_number,
@@ -3450,6 +3451,11 @@ def _receipt_fact_rows(
             ),
             "order_item_id": fact.order_item_id,
             "requisition_item_id": fact.requisition_item_id,
+            "material_requisition_id": (
+                int(requisition_item.requisition_id)
+                if requisition_item is not None
+                else None
+            ),
             "supplier_order_id": fact.supplier_order_id,
             "supplier_order_item_id": fact.supplier_order_item_id,
             "receipt_id": fact.receipt_id,

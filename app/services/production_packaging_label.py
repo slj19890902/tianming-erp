@@ -646,6 +646,7 @@ def build_supplier_requisition_packaging_label_package(
     all_task_sources: dict[int, tuple[dict, dict]] = {}
     item_filtered_task_sources: dict[int, tuple[dict, dict]] = {}
     available_item_ids: set[int] = set()
+    item_ids_with_tasks: set[int] = set()
     for card in production_package["cards"]:
         for component in card.get("components", []):
             supplier_item_id = component.get("supplier_order_item_id")
@@ -654,6 +655,8 @@ def build_supplier_requisition_packaging_label_package(
             task_id = component.get("production_task_id")
             if task_id is None:
                 continue
+            if supplier_item_id is not None:
+                item_ids_with_tasks.add(int(supplier_item_id))
             all_task_sources.setdefault(int(task_id), (card, component))
             if (
                 normalized_item_ids is None
@@ -668,6 +671,12 @@ def build_supplier_requisition_packaging_label_package(
         if missing_item_ids:
             raise ProductionPackagingLabelError(
                 "所选报料明细不存在、已作废或已变化，请刷新后重试"
+            )
+        missing_task_item_ids = sorted(normalized_item_ids - item_ids_with_tasks)
+        if missing_task_item_ids:
+            raise ProductionPackagingLabelError(
+                "所选报料明细缺少有效生产任务，整批已停止；"
+                f"请核对生产任务链后刷新重试：{missing_task_item_ids}"
             )
     if normalized_task_ids is not None:
         missing_task_ids = sorted(normalized_task_ids - set(all_task_sources))
@@ -771,7 +780,6 @@ def build_supplier_requisition_packaging_label_package(
             exclude(
                 "常用箱未启用打印标签；请在常用箱勾选并保存后刷新来料页面",
                 product_id=product_id,
-                blocks_single_order=True,
             )
             continue
         template_version = CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
@@ -959,7 +967,7 @@ def combine_supplier_requisition_packaging_label_packages(
         if package.get("template_version")
     }
     review_messages: list[str] = []
-    if len(templates) != 1:
+    if len(templates) > 1:
         review_messages.append("所选报料单包含不同纸型的产品标签，请分别打印")
     template_version = next(iter(templates)) if len(templates) == 1 else None
 
@@ -981,10 +989,6 @@ def combine_supplier_requisition_packaging_label_packages(
         )
         for reason in package.get("review_messages") or []:
             review_messages.append(f"{order_number or order_id}｜{reason}")
-        for item in package.get("excluded_items") or []:
-            identity = item.get("product_code") or item.get("product_name") or "未识别产品"
-            reason = item.get("reason") or "没有有效标签配置"
-            review_messages.append(f"{order_number or order_id}｜{identity}：{reason}")
         for target, source in (
             (plans, package.get("plans") or []),
             (labels, package.get("labels") or []),
@@ -1157,6 +1161,7 @@ def build_composite_requisition_packaging_label_package(
 
     plans: list[dict] = []
     job_tasks: list[dict] = []
+    excluded_items: list[dict] = []
     review_messages: list[str] = []
     template_versions: set[str] = set()
     seen_task_ids: set[int] = set()
@@ -1237,8 +1242,19 @@ def build_composite_requisition_packaging_label_package(
                 )
                 continue
             if not bool(parent_product.production_label_enabled):
-                review_messages.append(
-                    f"{order_item.snapshot_product_code or order_item_id} 未启用父件产品标签"
+                task_pairs = sorted(group_tasks, key=lambda pair: int(pair[0].id))
+                excluded_items.append(
+                    {
+                        "production_task_id": (
+                            int(task_pairs[0][0].id) if task_pairs else None
+                        ),
+                        "product_id": int(parent_product.id),
+                        "product_code": order_item.snapshot_product_code,
+                        "product_name": order_item.snapshot_product_name,
+                        "reason": (
+                            "常用箱未启用打印标签；请在常用箱勾选并保存后刷新来料页面"
+                        ),
+                    }
                 )
                 continue
             units_per_label = _positive_int(
@@ -1253,14 +1269,19 @@ def build_composite_requisition_packaging_label_package(
             task_pairs = sorted(group_tasks, key=lambda pair: int(pair[0].id))
             if not task_pairs:
                 continue
-            for task, snapshot, _source in task_pairs:
-                append_job_task(task, int(snapshot.component_product_id))
             template_version = str(
                 order_item.parent_production_label_template_version_snapshot
                 or CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
             )
+            if template_version not in ALLOWED_TEMPLATE_VERSIONS:
+                review_messages.append(
+                    f"{order_item.snapshot_product_code or order_item_id} 的父件标签模板版本不受支持"
+                )
+                continue
             template_versions.add(template_version)
             label_count = ceil(total_quantity / units_per_label)
+            for task, snapshot, _source in task_pairs:
+                append_job_task(task, int(snapshot.component_product_id))
             plans.append(
                 {
                     "production_task_id": int(task_pairs[0][0].id),
@@ -1299,7 +1320,6 @@ def build_composite_requisition_packaging_label_package(
         for task, snapshot, source in sorted(
             group_tasks, key=lambda pair: int(pair[0].id)
         ):
-            append_job_task(task, int(snapshot.component_product_id))
             product = products.get(int(snapshot.component_product_id))
             if product is None:
                 review_messages.append(
@@ -1307,8 +1327,16 @@ def build_composite_requisition_packaging_label_package(
                 )
                 continue
             if not bool(product.production_label_enabled):
-                review_messages.append(
-                    f"{snapshot.snapshot_component_product_code or snapshot.component_product_id} 未启用子件产品标签"
+                excluded_items.append(
+                    {
+                        "production_task_id": int(task.id),
+                        "product_id": int(snapshot.component_product_id),
+                        "product_code": snapshot.snapshot_component_product_code,
+                        "product_name": snapshot.snapshot_component_product_name,
+                        "reason": (
+                            "常用箱未启用打印标签；请在常用箱勾选并保存后刷新来料页面"
+                        ),
+                    }
                 )
                 continue
             template_version = str(
@@ -1329,6 +1357,7 @@ def build_composite_requisition_packaging_label_package(
                 )
                 continue
             template_versions.add(template_version)
+            append_job_task(task, int(snapshot.component_product_id))
             plans.append(
                 {
                     "production_task_id": int(task.id),
@@ -1424,6 +1453,7 @@ def build_composite_requisition_packaging_label_package(
         "plans": plans,
         "job_tasks": job_tasks,
         "labels": labels,
+        "excluded_items": excluded_items,
     }
     if label_layout is not None:
         result["label_layout"] = label_layout

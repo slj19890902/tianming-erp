@@ -103,18 +103,20 @@ def test_incoming_production_card_has_same_origin_root_route() -> None:
     assert "receiptMode" in response.text
 
 
-def test_incoming_received_and_history_expose_read_only_recoverable_entry() -> None:
+def test_incoming_received_and_history_expose_product_label_entry_with_recovery() -> None:
     incoming = INDEX.split('<template v-else-if="activePage === \'incoming\'">', 1)[1]
     incoming = incoming.split('<template v-else-if="activePage === \'production\'">', 1)[0]
-    assert "openSelectedIncomingProductionCards" in incoming
+    assert "openSelectedIncomingProductLabels" in incoming
     assert "incomingProductionCardSelections" in INDEX
-    assert "/api/incoming/production-card-batch" in INDEX
+    assert "/production-packaging-label-package?item_ids=" in INDEX
+    assert "/api/requisition/supplier-order-label-batches/package" in INDEX
     assert "openIncomingProductionCard(row)" not in incoming
-    assert "row?.receipt_status === \"posted\" && row?.order_item_id" in INDEX
-    assert 'v-if="incomingProductionCardRecoveryUrl"' in INDEX
-    assert ':href="incomingProductionCardRecoveryUrl"' in INDEX
+    assert 'row?.receipt_status !== "posted"' in INDEX
+    assert "stock_replenishment_item_id" in INDEX
+    assert 'v-if="incomingProductLabelRecoveryUrls.length"' in INDEX
+    assert ':href="item.url"' in INDEX
     assert 'target="_blank"' in INDEX
-    assert "点此直接打开生产卡" in INDEX
+    assert "到常用箱打开“打印标签”并保存" in INDEX
     method = _incoming_card_method()
     assert "/incoming-production-card.html?id=" in method
     assert method.count("window.open(") == 1
@@ -242,6 +244,8 @@ def test_logout_reset_clears_all_production_card_open_state() -> None:
         "incomingProductionCardAttemptId",
         "incomingProductionCardRecoveryUrl",
         "incomingProductionCardRecoveryMessage",
+        "incomingProductLabelMessages",
+        "incomingProductLabelRecoveryUrls",
     ):
         assert f"this.{field}" in reset_body
 

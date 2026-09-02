@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from math import ceil
 
@@ -43,6 +43,7 @@ from app.services.warehouse_inventory import (
     semi_finished_lot_allowed_product_ids,
     utc_now,
 )
+from app.services.requisition_quantities import cutting_factor
 
 
 VALID_COMPONENT_TYPES = {"whole", "cover", "base"}
@@ -76,6 +77,7 @@ class SemiFinishedCandidate:
     signature_differences: tuple[str, ...]
     warning_codes: tuple[str, ...]
     warning_messages: tuple[str, ...]
+    direct_deduction_eligible: bool = False
 
 
 @dataclass(frozen=True)
@@ -382,6 +384,106 @@ def safe_physical_board_facts_match(
     ) == expected_segments
 
 
+def is_direct_semi_finished_match(
+    detail: SemiFinishedInventoryDetail,
+    *,
+    expected: SemiFinishedSignature,
+    layer_count: int | None,
+    crease_type: str | None,
+    crease_left_mm: int | None,
+    crease_middle_mm: int | None,
+    crease_right_mm: int | None,
+) -> bool:
+    """Return the fail-closed contract for the green direct-deduction action.
+
+    Broader customer-generic and cross-customer compatibility remains available
+    through the existing manual-review paths.  This predicate intentionally
+    accepts only facts that are already identical before production starts.
+    """
+
+    if detail.owner_customer_id is None:
+        return False
+    if _signature_differences_from_signature(expected, detail):
+        return False
+    expected_layer = int(layer_count or 0)
+    if expected_layer <= 0 or int(detail.layer_count or 0) != expected_layer:
+        return False
+    normalized_crease = _normalize_crease_type(crease_type)
+    expected_sheet_type = {
+        "毛片": "raw_board",
+        "净料": "net_sheet",
+        "压线": "creased_sheet",
+    }.get(normalized_crease)
+    if expected_sheet_type is None:
+        return False
+    if (
+        detail.sheet_type != expected_sheet_type
+        or _normalize_crease_type(detail.crease_type) != normalized_crease
+    ):
+        return False
+    expected_segments = (
+        (crease_left_mm, crease_middle_mm, crease_right_mm)
+        if normalized_crease == "压线"
+        else (None, None, None)
+    )
+    if normalized_crease == "压线" and any(
+        value is None for value in expected_segments
+    ):
+        return False
+    return (
+        detail.crease_left_mm,
+        detail.crease_middle_mm,
+        detail.crease_right_mm,
+    ) == expected_segments
+
+
+def direct_semi_finished_deduction_eligible(
+    db: Session,
+    *,
+    lot: InventoryLot,
+    product_id: int,
+    customer_id: int,
+    expected: SemiFinishedSignature,
+    layer_count: int | None,
+    crease_type: str | None,
+    crease_left_mm: int | None,
+    crease_middle_mm: int | None,
+    crease_right_mm: int | None,
+) -> bool:
+    """Authorize a candidate for one-click, still-human-confirmed deduction."""
+
+    product = db.get(Product, product_id)
+    detail = lot.semi_finished_detail
+    if (
+        product is None
+        or product.deleted_at is not None
+        or product.customer_id != customer_id
+        or expected.customer_id != customer_id
+        or lot.inventory_type != "semi_finished"
+        or lot.status != "active"
+        or int(lot.quantity_available or 0) <= 0
+        or detail is None
+    ):
+        return False
+    scope = _lot_eligibility_scope(
+        lot,
+        customer_id=customer_id,
+        expected=expected,
+        allowed_lot_ids=_allowed_lot_ids_for_product(db, product_id),
+    )
+    if scope not in {"dedicated", "customer_generic"}:
+        return False
+    return is_direct_semi_finished_match(
+        detail,
+        expected=expected,
+        layer_count=layer_count,
+        crease_type=crease_type,
+        crease_left_mm=crease_left_mm,
+        crease_middle_mm=crease_middle_mm,
+        crease_right_mm=crease_right_mm,
+    )
+
+
 def _physical_signature_differences(
     expected: SemiFinishedSignature,
     detail: SemiFinishedInventoryDetail,
@@ -682,6 +784,11 @@ def semi_finished_candidates_for_product(
     component_type: str,
     pieces_per_box: int,
     stock_yield_per_sheet: int,
+    layer_count: int | None = None,
+    crease_type: str | None = None,
+    crease_left_mm: int | None = None,
+    crease_middle_mm: int | None = None,
+    crease_right_mm: int | None = None,
 ) -> list[SemiFinishedCandidate]:
     product = db.get(Product, product_id)
     if product is None or product.deleted_at is not None:
@@ -692,6 +799,18 @@ def semi_finished_candidates_for_product(
         raise WarehouseInventoryError("半成品实际长宽必须大于0")
     if pieces_per_box <= 0 or stock_yield_per_sheet <= 0:
         raise WarehouseInventoryError("每箱片数和每库存张产出片数必须大于0")
+    authoritative_pieces_per_box = (
+        1
+        if _component(component_type) in {"cover", "base"}
+        else max(
+            int(
+                product.pieces_per_box
+                or (2 if (product.splice_mode or "").lower() == "double" else 1)
+            ),
+            1,
+        )
+    )
+    authoritative_stock_yield = cutting_factor(product.default_cutting_mode)
     expected = SemiFinishedSignature(
         customer_id=customer_id,
         board_length_mm=board_length_mm,
@@ -699,12 +818,30 @@ def semi_finished_candidates_for_product(
         normalized_material_code=normalize_material_code(material_code),
         flute_type=_flute(flute_type),
         component_type=_component(component_type),
-        pieces_per_box=pieces_per_box,
-        stock_yield_per_sheet=stock_yield_per_sheet,
+        pieces_per_box=authoritative_pieces_per_box,
+        stock_yield_per_sheet=authoritative_stock_yield,
     )
-    return _semi_finished_candidates_for_signature(
+    rows = _semi_finished_candidates_for_signature(
         db, product_id=product.id, expected=expected
     )
+    return [
+        replace(
+            row,
+            direct_deduction_eligible=direct_semi_finished_deduction_eligible(
+                db,
+                lot=row.lot,
+                product_id=product.id,
+                customer_id=customer_id,
+                expected=expected,
+                layer_count=layer_count,
+                crease_type=crease_type,
+                crease_left_mm=crease_left_mm,
+                crease_middle_mm=crease_middle_mm,
+                crease_right_mm=crease_right_mm,
+            ),
+        )
+        for row in rows
+    ]
 
 
 def browse_semi_finished_inventory_for_product(
@@ -719,12 +856,28 @@ def browse_semi_finished_inventory_for_product(
     component_type: str,
     pieces_per_box: int,
     stock_yield_per_sheet: int,
+    layer_count: int | None = None,
+    crease_type: str | None = None,
+    crease_left_mm: int | None = None,
+    crease_middle_mm: int | None = None,
+    crease_right_mm: int | None = None,
 ) -> list[SemiFinishedCandidate]:
     product = db.get(Product, product_id)
     if product is None or product.deleted_at is not None:
         raise WarehouseInventoryError("产品不存在", 404)
     if product.customer_id != customer_id:
         raise WarehouseInventoryError("产品不属于所选客户", 409)
+    authoritative_pieces_per_box = (
+        1
+        if _component(component_type) in {"cover", "base"}
+        else max(
+            int(
+                product.pieces_per_box
+                or (2 if (product.splice_mode or "").lower() == "double" else 1)
+            ),
+            1,
+        )
+    )
     expected = SemiFinishedSignature(
         customer_id=customer_id,
         board_length_mm=board_length_mm,
@@ -732,8 +885,8 @@ def browse_semi_finished_inventory_for_product(
         normalized_material_code=normalize_material_code(material_code),
         flute_type=_flute(flute_type),
         component_type=_component(component_type),
-        pieces_per_box=pieces_per_box,
-        stock_yield_per_sheet=stock_yield_per_sheet,
+        pieces_per_box=authoritative_pieces_per_box,
+        stock_yield_per_sheet=cutting_factor(product.default_cutting_mode),
     )
     rows = db.scalars(
         select(InventoryLot)

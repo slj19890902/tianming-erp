@@ -270,15 +270,18 @@ from app.services.warehouse_inventory import (
     reserve_finished_inventory,
 )
 from app.services.semi_finished_inventory import (
+    CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,
     GENERAL_SEMI_FINISHED_STOCK,
     SIGNATURE_OVERRIDE_WARNING,
     SemiFinishedLotVersion,
     SemiFinishedSignature,
     active_semi_coverage_by_order_item,
     browse_semi_finished_inventory,
+    direct_semi_finished_deduction_eligible,
     ensure_semi_finished_lot_eligibility,
     release_active_semi_reservations_for_items,
     reserve_semi_finished_inventory,
+    requirement_signature,
     save_order_item_semi_requirement,
     semi_finished_inventory_candidates,
 )
@@ -464,11 +467,12 @@ class SemiReservationPlanEntry(BaseModel):
     )
     component_type: Literal["whole", "cover", "base"] = "whole"
     recommendation_source: Literal[
-        "learned", "signature", "general_signature", "manual"
+        "learned", "signature", "customer_generic", "general_signature", "manual"
     ]
     match_rule_id: int | None = None
     override: bool = False
     confirmed: bool = False
+    direct_deduction: bool = False
     warning_acknowledged_codes: list[str] = Field(default_factory=list)
 
 
@@ -1064,6 +1068,75 @@ def _preflight_semi_signature(
     )
 
 
+def _product_direct_semi_facts(
+    db: Session,
+    *,
+    product: Product,
+    item_payload: OrderItemCreate,
+    component_type: str,
+) -> tuple[int | None, str | None, int | None, int | None, int | None]:
+    """Mirror the order-create layer and crease snapshots before persistence."""
+
+    selected_material_id = (
+        item_payload.material_id
+        if item_payload.material_id is not None
+        else product.material_id
+    )
+    selected_material = (
+        db.get(Material, selected_material_id)
+        if selected_material_id is not None
+        else None
+    )
+    layer_count = (
+        selected_material.layer_count
+        if selected_material is not None
+        else (
+            item_payload.layer_count
+            if item_payload.layer_count is not None
+            else product.layer_count
+        )
+    )
+    if component_type == "base":
+        return (
+            layer_count,
+            product.base_crease_type,
+            product.base_crease_left_mm,
+            product.base_crease_middle_mm,
+            product.base_crease_right_mm,
+        )
+    return (
+        layer_count,
+        product.crease_type,
+        product.crease_left_mm,
+        product.crease_middle_mm,
+        product.crease_right_mm,
+    )
+
+
+def _order_item_direct_semi_facts(
+    item: OrderItem,
+    *,
+    component_type: str,
+) -> tuple[int | None, str | None, int | None, int | None, int | None]:
+    """Read the final immutable order snapshots for the second direct gate."""
+
+    if component_type == "base":
+        return (
+            item.layer_count,
+            item.snapshot_base_crease_type,
+            item.snapshot_base_crease_left_mm,
+            item.snapshot_base_crease_middle_mm,
+            item.snapshot_base_crease_right_mm,
+        )
+    return (
+        item.layer_count,
+        item.snapshot_crease_type,
+        item.snapshot_crease_left_mm,
+        item.snapshot_crease_middle_mm,
+        item.snapshot_crease_right_mm,
+    )
+
+
 def _preflight_reservation_plans(
     db: Session,
     *,
@@ -1149,12 +1222,13 @@ def _preflight_reservation_plans(
                         409,
                     )
                 component_yields[entry.component_type] = current_yield
+                expected_yield = cutting_factor(product.default_cutting_mode)
                 expected = _preflight_semi_signature(
                     customer_id=customer_id,
                     product=product,
                     item_payload=item_payload,
                     component_type=entry.component_type,
-                    stock_yield_per_sheet=current_yield,
+                    stock_yield_per_sheet=expected_yield,
                 )
                 scope = ensure_semi_finished_lot_eligibility(
                     db,
@@ -1163,7 +1237,39 @@ def _preflight_reservation_plans(
                     customer_id=customer_id,
                     expected=expected,
                 )
+                if entry.direct_deduction:
+                    (
+                        layer_count,
+                        crease_type,
+                        crease_left_mm,
+                        crease_middle_mm,
+                        crease_right_mm,
+                    ) = _product_direct_semi_facts(
+                        db,
+                        product=product,
+                        item_payload=item_payload,
+                        component_type=entry.component_type,
+                    )
+                    if entry.override or not direct_semi_finished_deduction_eligible(
+                        db,
+                        lot=lot,
+                        product_id=product.id,
+                        customer_id=customer_id,
+                        expected=expected,
+                        layer_count=layer_count,
+                        crease_type=crease_type,
+                        crease_left_mm=crease_left_mm,
+                        crease_middle_mm=crease_middle_mm,
+                        crease_right_mm=crease_right_mm,
+                    ):
+                        raise WarehouseInventoryError(
+                            "完全匹配资格已变化，请刷新库存候选后重新确认", 409
+                        )
                 if scope == "general":
+                    if entry.direct_deduction:
+                        raise WarehouseInventoryError(
+                            "跨客户通用半成品不能使用绿色直达抵扣", 409
+                        )
                     if entry.recommendation_source != "general_signature":
                         raise WarehouseInventoryError(
                             "通用半成品库存推荐来源已变化，请刷新", 409
@@ -1176,6 +1282,35 @@ def _preflight_reservation_plans(
                             "通用半成品库存抵扣必须确认通用库存警告", 409
                         )
                     continue
+                if scope == "customer_generic":
+                    if entry.recommendation_source != "customer_generic":
+                        raise WarehouseInventoryError(
+                            "客户通用半成品推荐来源已变化，请刷新", 409
+                        )
+                    if (
+                        CUSTOMER_GENERIC_SEMI_FINISHED_STOCK
+                        not in entry.warning_acknowledged_codes
+                    ):
+                        raise WarehouseInventoryError(
+                            "客户通用半成品抵扣必须确认客户库存范围", 409
+                        )
+                    if not entry.direct_deduction:
+                        if not entry.override:
+                            raise WarehouseInventoryError(
+                                "非完全匹配的客户通用半成品必须人工核对差异", 409
+                            )
+                        if (
+                            SIGNATURE_OVERRIDE_WARNING
+                            not in entry.warning_acknowledged_codes
+                        ):
+                            raise WarehouseInventoryError(
+                                "人工核对客户通用半成品必须确认签名差异警告", 409
+                            )
+                    continue
+                if entry.recommendation_source == "customer_generic":
+                    raise WarehouseInventoryError(
+                        "专用半成品库存不能伪造为客户通用库存推荐", 409
+                    )
                 if entry.recommendation_source == "general_signature":
                     raise WarehouseInventoryError(
                         "专用半成品库存不能伪造为通用库存推荐", 409
@@ -1388,13 +1523,6 @@ def _apply_order_reservation_plans(
                     )
                 continue
             stock_yield_per_sheet = cutting_output_factor(item.special_process)
-            if component_plans:
-                planned_lot = db.get(InventoryLot, component_plans[0].lot_id)
-                if planned_lot is None or planned_lot.semi_finished_detail is None:
-                    raise WarehouseInventoryError("半成品库存批次不存在", 404)
-                stock_yield_per_sheet = (
-                    planned_lot.semi_finished_detail.stock_yield_per_sheet
-                )
             pieces_per_box = int(spec["pieces_per_box"])
             requirement = save_order_item_semi_requirement(
                 db,
@@ -1440,7 +1568,54 @@ def _apply_order_reservation_plans(
                 )
             }
             candidate = candidates.get(lot.id)
-            if entry.recommendation_source == "general_signature":
+            if entry.direct_deduction:
+                (
+                    layer_count,
+                    crease_type,
+                    crease_left_mm,
+                    crease_middle_mm,
+                    crease_right_mm,
+                ) = _order_item_direct_semi_facts(
+                    item,
+                    component_type=entry.component_type,
+                )
+                if entry.override or not direct_semi_finished_deduction_eligible(
+                    db,
+                    lot=lot,
+                    product_id=item.product_id,
+                    customer_id=order.customer_id,
+                    expected=requirement_signature(requirement),
+                    layer_count=layer_count,
+                    crease_type=crease_type,
+                    crease_left_mm=crease_left_mm,
+                    crease_middle_mm=crease_middle_mm,
+                    crease_right_mm=crease_right_mm,
+                ):
+                    raise WarehouseInventoryError(
+                        "完全匹配资格在保存前已变化，整单保存已取消，请刷新后重试",
+                        409,
+                    )
+            if entry.recommendation_source == "customer_generic":
+                if candidate is None or candidate.source != "customer_generic":
+                    raise WarehouseInventoryError(
+                        "客户通用半成品推荐资格已变化，请刷新", 409
+                    )
+                if (
+                    CUSTOMER_GENERIC_SEMI_FINISHED_STOCK
+                    not in entry.warning_acknowledged_codes
+                ):
+                    raise WarehouseInventoryError(
+                        "客户通用半成品抵扣必须确认客户库存范围", 409
+                    )
+                if not entry.direct_deduction:
+                    if not entry.override or (
+                        SIGNATURE_OVERRIDE_WARNING
+                        not in entry.warning_acknowledged_codes
+                    ):
+                        raise WarehouseInventoryError(
+                            "非完全匹配的客户通用半成品必须人工核对差异", 409
+                        )
+            elif entry.recommendation_source == "general_signature":
                 if (
                     candidate is None
                     or candidate.source != "general_signature"

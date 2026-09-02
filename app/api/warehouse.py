@@ -1983,6 +1983,11 @@ class SemiProductCandidatePayload(BaseModel):
     component_type: str
     pieces_per_box: int = Field(gt=0)
     stock_yield_per_sheet: int = Field(gt=0)
+    layer_count: int | None = Field(default=None, gt=0)
+    crease_type: str | None = Field(default=None, max_length=20)
+    crease_left_mm: int | None = Field(default=None, ge=0)
+    crease_middle_mm: int | None = Field(default=None, ge=0)
+    crease_right_mm: int | None = Field(default=None, ge=0)
 
 
 class SemiMatchConfirmPayload(BaseModel):
@@ -2940,6 +2945,13 @@ def _semi_candidate_dict(
         "component_type": detail.component_type,
         "pieces_per_box": detail.pieces_per_box,
         "stock_yield_per_sheet": detail.stock_yield_per_sheet,
+        "layer_count": detail.layer_count,
+        "sheet_type": detail.sheet_type,
+        "crease_type": detail.crease_type,
+        "crease_left_mm": detail.crease_left_mm,
+        "crease_middle_mm": detail.crease_middle_mm,
+        "crease_right_mm": detail.crease_right_mm,
+        "direct_deduction_eligible": row.direct_deduction_eligible,
         "signature_differences": list(row.signature_differences),
         "warning_codes": list(row.warning_codes),
         "warning_messages": list(row.warning_messages),

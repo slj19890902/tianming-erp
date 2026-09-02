@@ -160,6 +160,113 @@ def test_general_semi_finished_source_is_manual_only_and_not_auto_selected() -> 
     assert "inventoryCandidateNeedsManualConfirmation(candidate)" in INDEX
 
 
+def test_exact_semi_finished_candidate_is_green_click_not_silent_auto_use() -> None:
+    assert 'candidate?.direct_deduction_eligible === true' in INDEX
+    assert '@click="confirmDirectSemiDeduction(item,component,candidate)"' in INDEX
+    assert '>抵扣</button>' in INDEX
+    assert "direct_deduction:directDeduction" in INDEX
+    assert 'warningAcknowledgedCodes.push("CUSTOMER_GENERIC_SEMI_FINISHED_STOCK")' in INDEX
+
+    node = shutil.which("node")
+    assert node, "Node.js is required for direct semi-finished plan test"
+    script = next(
+        script
+        for script in re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", INDEX, flags=re.DOTALL)
+        if script.strip()
+    )
+    harness = f"""
+const vm = require("vm");
+const sandbox = {{
+  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
+  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+}};
+vm.createContext(sandbox);
+vm.runInContext({json.dumps(script)}, sandbox);
+const methods = sandbox.definition.methods;
+const candidate = {{
+  lot_id: 9, version: 3, source: "customer_generic",
+  direct_deduction_eligible: true, signature_differences: [],
+  warning_codes: ["MANUAL_DEDUCTION_CONFIRM_REQUIRED", "CUSTOMER_GENERIC_SEMI_FINISHED_STOCK"],
+}};
+const context = {{
+  inventoryPlanApplies() {{ return true; }},
+  inventoryComponents() {{ return ["whole"]; }},
+  inventoryCandidateWarnings: methods.inventoryCandidateWarnings,
+  isGeneralSemiFinishedCandidate: methods.isGeneralSemiFinishedCandidate,
+  semiCandidateNeedsOverride: methods.semiCandidateNeedsOverride,
+  isDirectSemiDeductionCandidate: methods.isDirectSemiDeductionCandidate,
+}};
+const direct = methods.isDirectSemiDeductionCandidate.call(context, candidate);
+const safe = methods.isSafeSystemInventoryCandidate.call(context, "whole", candidate);
+const line = {{ quantity: 10, _inventory: {{
+  finished: {{allocations:[]}},
+  semi: {{whole: {{allocations:[{{candidate, requested_qty:10}}], general_confirmation:false}}}},
+}} }};
+const plan = methods.buildReservationPlan.call(context, line).semi[0];
+if (!direct || safe) throw new Error("direct candidate entered silent auto-use");
+if (plan.recommendation_source !== "customer_generic" || !plan.direct_deduction || plan.override) throw new Error(JSON.stringify(plan));
+if (JSON.stringify(plan.warning_acknowledged_codes) !== JSON.stringify(["CUSTOMER_GENERIC_SEMI_FINISHED_STOCK"])) throw new Error(JSON.stringify(plan));
+"""
+    result = subprocess.run(
+        [node], input=harness, text=True, encoding="utf-8", capture_output=True,
+        env=os.environ.copy(), check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_refreshed_pdf_draft_cannot_silently_downgrade_direct_deduction() -> None:
+    node = shutil.which("node")
+    assert node, "Node.js is required for direct deduction refresh test"
+    script = next(
+        script
+        for script in re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", INDEX, flags=re.DOTALL)
+        if script.strip()
+    )
+    harness = f"""
+const vm = require("vm");
+const sandbox = {{
+  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
+  Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
+  localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
+  window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
+}};
+vm.createContext(sandbox);
+vm.runInContext({json.dumps(script)}, sandbox);
+const methods = sandbox.definition.methods;
+const direct = {{lot_id:17,source:"signature",direct_deduction_eligible:true,signature_differences:[]}};
+const part = candidate => ({{candidates:[candidate],manual_candidates:[],selected:candidate,selected_candidates:[candidate],allocations:[],skipped:false,manual_override:false,general_confirmation:false}});
+const line = {{_inventory:{{finished:{{candidates:[],manual_candidates:[],selected:null,selected_candidates:[],allocations:[],skipped:true}},semi:{{whole:part(direct)}}}}}};
+const context = {{
+  inventoryComponents() {{ return ["whole"]; }},
+  isDirectSemiDeductionCandidate:methods.isDirectSemiDeductionCandidate,
+  isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate,
+  inventoryCandidateWarnings:methods.inventoryCandidateWarnings,
+  semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride,
+  isSafeSystemInventoryCandidate:methods.isSafeSystemInventoryCandidate,
+  async loadOrderLineManualInventory() {{}},
+}};
+const snapshot = methods.importDraftInventoryDecisionSnapshot.call(context,line);
+if (!snapshot.semi.whole.direct_deduction) throw new Error("direct intent was not snapshotted");
+const changed = {{...direct,direct_deduction_eligible:false,version:2}};
+line._inventory.semi.whole = part(changed);
+(async () => {{
+  try {{
+    await methods.restoreImportDraftInventoryDecision.call(context,line,snapshot,1);
+    throw new Error("stale direct candidate was silently restored");
+  }} catch (error) {{
+    if (!String(error.message || error).includes("不再完全匹配")) throw error;
+  }}
+}})().catch(error => {{ console.error(error); process.exitCode = 1; }});
+"""
+    result = subprocess.run(
+        [node], input=harness, text=True, encoding="utf-8", capture_output=True,
+        env=os.environ.copy(), check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_inline_javascript_is_syntax_valid() -> None:
     node = shutil.which("node")
     assert node, "Node.js is required for inline JavaScript syntax checks"
@@ -348,9 +455,10 @@ def test_manual_order_keeps_summary_and_pdf_uses_authoritative_three_state() -> 
     assert "pdfInventoryDisplayState(item)" in INDEX
     assert "pdfInventoryRequisitionText(item)" in INDEX
     assert "item._inventory.authoritative" in INDEX
-    assert "下单${orderQuantity}" in INDEX
-    assert "现有成品${availableFinished}" in INDEX
-    assert "自动预占${reservedFinished}" in INDEX
+    assert "下单${orderQuantity}" not in INDEX
+    assert "现有成品${availableFinished}" not in INDEX
+    assert "成品${reservedFinished}" in INDEX
+    assert "半成品${semiPieces}" in INDEX
     assert "需生产${productionRequired}" in INDEX
     assert '@input="onOrderDraftQuantityInput(item)"' in INDEX
     assert '@input="invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX

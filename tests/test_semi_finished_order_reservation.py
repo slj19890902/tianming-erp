@@ -317,6 +317,110 @@ def post_order(client: TestClient, items: list[dict], po: str):
     )
 
 
+def test_customer_generic_exact_candidate_is_direct_but_still_requires_click_plan(
+    b1_app,
+) -> None:
+    app, factory = b1_app
+    lot_id, version = add_semi_lot(
+        factory,
+        quantity=12,
+        key="customer-generic-direct",
+    )
+    with factory() as db:
+        product = db.get(Product, 1)
+        lot = db.get(InventoryLot, lot_id)
+        product.crease_type = "净料"
+        assert lot.semi_finished_detail is not None
+        lot.semi_finished_detail.customer_generic_eligible = True
+        lot.semi_finished_detail.sheet_type = "net_sheet"
+        lot.semi_finished_detail.crease_type = "净料"
+        db.commit()
+    candidate_payload = {
+        "customer_id": 1,
+        "board_length_mm": 800,
+        "board_width_mm": 600,
+        "material_code": "A416D",
+        "flute_type": "B",
+        "component_type": "whole",
+        "pieces_per_box": 1,
+        "stock_yield_per_sheet": 1,
+        "layer_count": 3,
+        "crease_type": "净料",
+    }
+    with TestClient(app) as client:
+        login(client)
+        candidates = client.post(
+            "/api/warehouse/semi-finished/products/1/candidates",
+            json=candidate_payload,
+        )
+        assert candidates.status_code == 200, candidates.text
+        candidate = next(
+            row for row in candidates.json()["items"] if row["lot_id"] == lot_id
+        )
+        assert candidate["source"] == "customer_generic"
+        assert candidate["direct_deduction_eligible"] is True
+        direct_plan = semi_plan(lot_id, version, 5)
+        direct_plan.update(
+            {
+                "recommendation_source": "customer_generic",
+                "direct_deduction": True,
+                "warning_acknowledged_codes": [
+                    "CUSTOMER_GENERIC_SEMI_FINISHED_STOCK"
+                ],
+            }
+        )
+        saved = post_order(
+            client,
+            [order_item(1, 5, {"semi": [direct_plan]})],
+            "B1-CUSTOMER-GENERIC-DIRECT",
+        )
+    assert saved.status_code == 201, saved.text
+    with factory() as db:
+        lot = db.get(InventoryLot, lot_id)
+        assert (lot.quantity_available, lot.quantity_reserved) == (7, 5)
+
+
+def test_direct_plan_rejects_changed_sheet_type_and_wrong_cutting_yield(
+    b1_app,
+) -> None:
+    app, factory = b1_app
+    lot_id, version = add_semi_lot(
+        factory,
+        quantity=12,
+        key="direct-stale-physical",
+        stock_yield_per_sheet=2,
+    )
+    with factory() as db:
+        product = db.get(Product, 1)
+        product.crease_type = "净料"
+        product.default_cutting_mode = "一开一"
+        lot = db.get(InventoryLot, lot_id)
+        assert lot.semi_finished_detail is not None
+        lot.semi_finished_detail.crease_type = "净料"
+        db.commit()
+    forged = semi_plan(lot_id, version, 5)
+    forged["direct_deduction"] = True
+    with TestClient(app) as client:
+        login(client)
+        response = post_order(
+            client,
+            [order_item(1, 5, {"semi": [forged]})],
+            "B1-DIRECT-WRONG-YIELD",
+        )
+    assert response.status_code == 409
+    assert "完全匹配资格" in response.json()["detail"]
+    with factory() as db:
+        assert db.scalar(
+            select(Order.id).where(Order.customer_po == "B1-DIRECT-WRONG-YIELD")
+        ) is None
+        lot = db.get(InventoryLot, lot_id)
+        assert (lot.quantity_available, lot.quantity_reserved, lot.version) == (
+            12,
+            0,
+            version,
+        )
+
+
 def test_old_payload_and_pdf_shaped_payload_only_reserve_on_final_post(b1_app) -> None:
     app, factory = b1_app
     lot_id, version = add_semi_lot(

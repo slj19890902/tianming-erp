@@ -987,8 +987,8 @@
       }
       .order-entry-quantity .input { min-height: 30px; padding-top: 4px; padding-bottom: 4px; }
       .order-entry-quantity .inventory-auto-summary {
-        margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        font-size: 10px; line-height: 1.2;
+        margin-top: 2px; white-space: normal; overflow-wrap: anywhere;
+        font-size: 10px; line-height: 1.25;
       }
       .order-entry-quantity .inventory-auto-detail-button {
         min-height: 22px; margin-top: 2px; padding: 2px 6px; font-size: 10px; line-height: 1.1;
@@ -7220,6 +7220,7 @@
                              <div v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id" class="pdf-inventory-candidate">
                                <span>{{ inventorySourceLabel(candidate) }}｜{{ candidate.lot_number }}｜可用 {{ candidate.available_stock_quantity }} 张｜{{ inventoryLocation(candidate) }}</span>
                                <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异：{{ candidate.signature_differences.join('、') }}</span>
+                               <button v-if="isDirectSemiDeductionCandidate(candidate) && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmDirectSemiDeduction(item,component,candidate)">抵扣</button>
                                <button v-if="pdfWarehouseLocatorCanOpen(candidate)" class="btn small" type="button" @click="openPdfWarehouseLocator(draft,item,candidate)">{{ pdfWarehouseLocatorLabel(candidate) }}</button>
                              </div>
                              <div class="toolbar-group" style="justify-content:flex-start;margin-top:5px">
@@ -7474,7 +7475,7 @@
                            </div>
                          </template>
                          <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品库存：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，{{ inventoryLocation(candidate) }}</span><button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">采用安全推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 个，{{ inventoryLocation(allocation.candidate) }}</div></div>
-                        <div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:5px"><strong>半成品{{ componentLabel(component) }}库存：</strong><span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><template v-if="item._inventory.semi[component].candidates.length"><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id" style="margin-left:8px">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }} <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span></span><button v-if="safeSystemInventoryCandidates(item,component).length && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">采用安全推荐</button></template><span v-else-if="!item._inventory.semi[component].unavailable_reason" class="muted">暂无可用库存</span><button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,component,orderForm.customer_id)">重新选择</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,orderForm.customer_id)">查看其他候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`manual-${candidate.lot_id}`" style="margin:4px 0 0 12px">人工匹配 {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }}；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 已核对差异</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认使用</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 片 / {{ allocation.stock_quantity }} 张，{{ inventoryLocation(allocation.candidate) }}</div></div>
+                        <div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:5px"><strong>半成品{{ componentLabel(component) }}库存：</strong><span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><template v-if="item._inventory.semi[component].candidates.length"><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id" style="margin-left:8px">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }} <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span> <button v-if="isDirectSemiDeductionCandidate(candidate) && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmDirectSemiDeduction(item,component,candidate)">抵扣</button></span><button v-if="safeSystemInventoryCandidates(item,component).length && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">采用安全推荐</button></template><span v-else-if="!item._inventory.semi[component].unavailable_reason" class="muted">暂无可用库存</span><button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,component,orderForm.customer_id)">重新选择</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,orderForm.customer_id)">查看其他候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`manual-${candidate.lot_id}`" style="margin:4px 0 0 12px">人工匹配 {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }}；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 已核对差异</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认使用</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 片 / {{ allocation.stock_quantity }} 张，{{ inventoryLocation(allocation.candidate) }}</div></div>
                       </div>
                     </td>
                   </tr>
@@ -13489,14 +13490,23 @@
             if (this.pdfWarehouseLocator.visible) this.closePdfWarehouseLocator(true);
           },
           inventorySourceLabel(candidate) {
-            return ({learned:"系统推荐（已学习）",signature:"系统推荐（规格一致）",general_signature:"通用半成品（general_signature）",manual:"人工匹配"})[candidate?.source] || "系统推荐（规格一致）";
+            return ({learned:"系统推荐（已学习）",signature:"系统推荐（规格一致）",customer_generic:"本客户通用片料",general_signature:"通用半成品（general_signature）",manual:"人工匹配"})[candidate?.source] || "系统推荐（规格一致）";
           },
           inventoryCandidateNeedsManualConfirmation(candidate) {
             const warnings = this.inventoryCandidateWarnings(candidate);
-            return candidate?.source === "general_signature" || candidate?.recommendation_source === "general_signature" || candidate?.source_type === "general_signature" || warnings.includes("GENERAL_SEMI_FINISHED_STOCK");
+            return candidate?.source === "general_signature"
+              || candidate?.recommendation_source === "general_signature"
+              || candidate?.source_type === "general_signature"
+              || warnings.includes("GENERAL_SEMI_FINISHED_STOCK")
+              || ((candidate?.source === "customer_generic" || candidate?.recommendation_source === "customer_generic") && !this.isDirectSemiDeductionCandidate(candidate));
           },
           isGeneralSemiFinishedCandidate(candidate) {
             return candidate?.source === "general_signature" || candidate?.recommendation_source === "general_signature" || candidate?.source_type === "general_signature" || this.inventoryCandidateWarnings(candidate).includes("GENERAL_SEMI_FINISHED_STOCK");
+          },
+          isDirectSemiDeductionCandidate(candidate) {
+            return candidate?.direct_deduction_eligible === true
+              && !this.isGeneralSemiFinishedCandidate(candidate)
+              && !(candidate?.signature_differences || []).length;
           },
           generalSemiFinishedCandidates(part) {
             return [...(part?.candidates || []), ...(part?.manual_candidates || [])].filter(candidate => this.isGeneralSemiFinishedCandidate(candidate));
@@ -13560,10 +13570,6 @@
             if (state.loading) return "系统正在自动查询库存和库位…";
             if (state.api_error) return "库存查询失败，请打开库存安排后重试";
             if (state.stale) return "产品或数量已变化，系统正在等待重新查询";
-            const availableFinished = (state.finished.candidates || []).reduce(
-              (sum, candidate) => sum + Math.max(Number(candidate.quantity_available || 0), 0),
-              0,
-            );
             const reservedFinished = (state.finished.allocations || []).reduce(
               (sum, allocation) => sum + Math.max(Number(allocation.requested_qty || 0), 0),
               0,
@@ -13576,25 +13582,7 @@
               0,
             );
             const productionRequired = Math.max(orderQuantity - reservedFinished, 0);
-            const finishedLocations = (state.finished.allocations || []).map(allocation =>
-              `${this.inventoryLocation(allocation.candidate)}取${Number(allocation.requested_qty || 0)}个`
-            );
-            const semiLocations = this.inventoryComponents(line).flatMap(component =>
-              (state.semi[component]?.allocations || []).map(allocation =>
-                `${this.inventoryLocation(allocation.candidate)}取${Number(allocation.stock_quantity || 0)}张`
-              )
-            );
-            const result = [
-              `下单${orderQuantity}`,
-              `现有成品${availableFinished}`,
-              `自动预占${reservedFinished}`,
-              `需生产${productionRequired}`,
-            ];
-            if (finishedLocations.length) result.push(`成品位置 ${finishedLocations.join(" + ")}`);
-            if (semiPieces > 0) result.push(`半成品抵料${semiPieces}片`);
-            if (semiLocations.length) result.push(`片料位置 ${semiLocations.join(" + ")}`);
-            if (this.inventoryDecisionRequired(line)) result.push("有例外需要处理");
-            return result.join("｜");
+            return `成品${reservedFinished}｜半成品${semiPieces}｜需生产${productionRequired}`;
           },
           inventorySourcesText(sources) {
             return (sources || []).map(source => {
@@ -13742,6 +13730,7 @@
           inventoryCandidatePayload(line, component) {
             const product = line._inventory_product || line;
             const isBase = component === "base";
+            const creasePrefix = isBase ? "base_" : "";
             return {
               customer_id:Number(this.inventoryCustomerForLine(line)),
               board_length_mm:Number(isBase ? product.base_report_length_mm : product.report_length_mm),
@@ -13750,7 +13739,12 @@
               flute_type:String(product.flute_type || line.flute_type || line._flute_filter || "").toUpperCase(),
               component_type:component,
               pieces_per_box:component === "whole" ? Math.max(Number(product.pieces_per_box || line.pieces_per_box || 1), 1) : 1,
-              stock_yield_per_sheet:Math.max(Number(product.stock_yield_per_sheet || line.stock_yield_per_sheet || 1), 1),
+              stock_yield_per_sheet:Math.max(Number(this.cuttingModeFactor?.(product.default_cutting_mode || line.default_cutting_mode || "一开一") || 1), 1),
+              layer_count:Number(line.layer_count || product.layer_count || 0) || null,
+              crease_type:product[`${creasePrefix}crease_type`] || null,
+              crease_left_mm:product[`${creasePrefix}crease_left_mm`] ?? null,
+              crease_middle_mm:product[`${creasePrefix}crease_middle_mm`] ?? null,
+              crease_right_mm:product[`${creasePrefix}crease_right_mm`] ?? null,
             };
           },
           inventoryPayloadUnavailableReason(payload) {
@@ -13886,6 +13880,22 @@
             const candidates = manual || general ? [candidate].filter(Boolean) : this.safeSystemInventoryCandidates(line, component);
             if (!candidates.length) { this.showToast("没有可一键确认的安全系统推荐；风险候选需人工核对或选择本次不用库存", true); return; }
             state.selected_candidates = candidates; state.selected = candidates[0]; state.allocations = []; state.skipped = false; state._batch_auto_skipped = false;
+            this.invalidatePdfDraftForItem?.(line);
+            this.reallocateAllDraftInventory();
+          },
+          confirmDirectSemiDeduction(line, component, candidate) {
+            if (!this.isDirectSemiDeductionCandidate(candidate)) {
+              this.showToast("该半成品已不再完全匹配，请刷新后重新核对", true);
+              return;
+            }
+            const state = line._inventory.semi[component];
+            state.selected_candidates = [candidate];
+            state.selected = candidate;
+            state.allocations = [];
+            state.skipped = false;
+            state._batch_auto_skipped = false;
+            state.manual_override = false;
+            state.general_confirmation = false;
             this.invalidatePdfDraftForItem?.(line);
             this.reallocateAllDraftInventory();
           },
@@ -14030,13 +14040,17 @@
               const selected = part?.selected_candidates?.length
                 ? part.selected_candidates
                 : (part?.selected ? [part.selected] : []);
+              const directDeduction = selected.some(
+                candidate => this.isDirectSemiDeductionCandidate?.(candidate) === true
+              );
               if (
                 !selected.length
-                || selected.every(candidate => this.isSafeSystemInventoryCandidate(component, candidate))
+                || (!directDeduction && selected.every(candidate => this.isSafeSystemInventoryCandidate(component, candidate)))
               ) return { mode:"automatic" };
               return {
                 mode:"exact",
                 lot_ids:selected.map(candidate => Number(candidate.lot_id)),
+                direct_deduction:directDeduction,
                 manual_override:!!part.manual_override,
                 general_confirmation:!!part.general_confirmation,
               };
@@ -14081,7 +14095,14 @@
               if (missing.length) {
                 throw new Error(`库存批次 ${missing.join("、")} 已变化，系统已刷新，请重新核对本份草稿后再保存。`);
               }
-              part.selected_candidates = decision.lot_ids.map(lotId => byLotId.get(Number(lotId)));
+              const restoredCandidates = decision.lot_ids.map(lotId => byLotId.get(Number(lotId)));
+              if (
+                decision.direct_deduction
+                && restoredCandidates.some(candidate => !this.isDirectSemiDeductionCandidate?.(candidate))
+              ) {
+                throw new Error("原绿色抵扣批次已不再完全匹配，请重新核对后再保存。");
+              }
+              part.selected_candidates = restoredCandidates;
               part.selected = part.selected_candidates[0] || null;
               part.allocations = [];
               part.skipped = false;
@@ -14123,11 +14144,14 @@
                 const part = state.semi[component];
                 const general = this.isGeneralSemiFinishedCandidate(candidate);
                 const override = this.semiCandidateNeedsOverride(candidate);
-                const warningAcknowledgedCodes = [];
-                if (override && !general) warningAcknowledgedCodes.push("SEMI_SIGNATURE_OVERRIDE");
-                if (general && part.general_confirmation) warningAcknowledgedCodes.push("GENERAL_SEMI_FINISHED_STOCK");
+                const directDeduction = this.isDirectSemiDeductionCandidate?.(candidate) === true;
                 const recommendationSource = candidate.recommendation_source || candidate.source || "signature";
-                return { lot_id:candidate.lot_id, expected_version:candidate.version, requested_qty, component_type:component, recommendation_source:recommendationSource, match_rule_id:candidate.match_rule_id || null, override, warning_acknowledged_codes:warningAcknowledgedCodes, confirmed:!general || part.general_confirmation };
+                const customerGeneric = recommendationSource === "customer_generic";
+                const warningAcknowledgedCodes = [];
+                if (customerGeneric) warningAcknowledgedCodes.push("CUSTOMER_GENERIC_SEMI_FINISHED_STOCK");
+                if (override && !general && !directDeduction) warningAcknowledgedCodes.push("SEMI_SIGNATURE_OVERRIDE");
+                if (general && part.general_confirmation) warningAcknowledgedCodes.push("GENERAL_SEMI_FINISHED_STOCK");
+                return { lot_id:candidate.lot_id, expected_version:candidate.version, requested_qty, component_type:component, recommendation_source:recommendationSource, match_rule_id:candidate.match_rule_id || null, override:directDeduction ? false : override, direct_deduction:directDeduction, warning_acknowledged_codes:warningAcknowledgedCodes, confirmed:!general || part.general_confirmation };
               });
             });
             return { finished, semi };

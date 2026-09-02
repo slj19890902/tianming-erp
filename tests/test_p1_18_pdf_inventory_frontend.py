@@ -104,12 +104,17 @@ def test_pdf_uses_dedicated_inventory_helpers_without_changing_manual_order() ->
 
     shared = _method_source("orderLineInventoryAutoSummary")
     for marker in (
-        "下单${orderQuantity}",
-        "现有成品${availableFinished}",
-        "自动预占${reservedFinished}",
+        "成品${reservedFinished}",
+        "半成品${semiPieces}",
         "需生产${productionRequired}",
     ):
         assert marker in shared
+    assert "下单${orderQuantity}" not in shared
+    assert "现有成品" not in shared
+    assert "text-overflow: ellipsis" not in INDEX[
+        INDEX.index(".order-entry-quantity .inventory-auto-summary") :
+        INDEX.index(".order-entry-quantity .inventory-auto-detail-button")
+    ]
 
 
 def test_pdf_product_name_is_always_visible_and_none_state_has_no_button() -> None:

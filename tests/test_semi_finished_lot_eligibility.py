@@ -35,14 +35,64 @@ from app.services.semi_finished_inventory import (
     CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,
     GENERAL_SEMI_FINISHED_STOCK,
     REVERSE_CREASE_ADMIN_OVERRIDE,
+    SemiFinishedSignature,
     SemiFinishedLotVersion,
     confirm_semi_finished_match,
     consume_semi_finished_reservation,
+    is_direct_semi_finished_match,
     reserve_semi_finished_inventory,
     reverse_semi_finished_consumption,
     save_order_item_semi_requirement,
     semi_finished_inventory_candidates,
 )
+
+
+def test_direct_deduction_requires_every_physical_fact_to_match(
+    eligibility_db,
+) -> None:
+    db, data = eligibility_db
+    lot = _add_lot(
+        db,
+        data,
+        key="direct-exact",
+        customer_id=data["customer"].id,
+    )
+    detail = lot.semi_finished_detail
+    assert detail is not None
+    detail.customer_generic_eligible = True
+    detail.sheet_type = "net_sheet"
+    detail.crease_type = "净料"
+    expected = SemiFinishedSignature(
+        customer_id=data["customer"].id,
+        board_length_mm=800,
+        board_width_mm=600,
+        normalized_material_code="A416D",
+        flute_type="B",
+        component_type="whole",
+        pieces_per_box=1,
+        stock_yield_per_sheet=1,
+    )
+
+    def matches(**changes) -> bool:
+        facts = {
+            "layer_count": 3,
+            "crease_type": "净料",
+            "crease_left_mm": None,
+            "crease_middle_mm": None,
+            "crease_right_mm": None,
+        }
+        facts.update(changes)
+        return is_direct_semi_finished_match(detail, expected=expected, **facts)
+
+    assert matches() is True
+    assert matches(layer_count=5) is False
+    assert matches(crease_type="毛片") is False
+    assert matches(crease_type="压线", crease_left_mm=100, crease_middle_mm=400, crease_right_mm=100) is False
+    detail.normalized_material_code = "B555B"
+    assert matches() is False
+    detail.normalized_material_code = "A416D"
+    detail.owner_customer_id = None
+    assert matches() is False
 
 
 def test_customer_generic_lot_matches_same_customer_without_product_or_material_binding(

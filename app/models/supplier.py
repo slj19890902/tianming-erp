@@ -37,6 +37,10 @@ class Supplier(Base):
             "sort_order >= 0",
             name="ck_supplier_master_records_sort_order",
         ),
+        CheckConstraint(
+            "settlement_day BETWEEN 1 AND 31",
+            name="ck_supplier_master_records_settlement_day",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -56,6 +60,12 @@ class Supplier(Base):
         nullable=False,
         default=100,
         server_default="100",
+    )
+    settlement_day: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=20,
+        server_default="20",
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean,

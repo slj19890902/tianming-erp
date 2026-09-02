@@ -51,6 +51,7 @@ def supplier_snapshot(supplier: Supplier) -> dict:
         "phone": supplier.phone,
         "remarks": supplier.remarks,
         "sort_order": supplier.sort_order,
+        "settlement_day": supplier.settlement_day,
         "is_active": supplier.is_active,
         "version": supplier.version,
         "aliases": [alias.alias_name for alias in supplier.aliases],

@@ -74,7 +74,10 @@ def test_p1_144_migration_upgrade_downgrade_upgrade_round_trip(
     database = tmp_path / "p1-144-round-trip.sqlite3"
     config = _config(monkeypatch, database)
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [TARGET_REVISION]
+    assert len(script.get_heads()) == 1
+    assert TARGET_REVISION in {
+        revision.revision for revision in script.walk_revisions("base", script.get_heads()[0])
+    }
     assert script.get_revision(TARGET_REVISION).down_revision == PREVIOUS_REVISION
 
     command.upgrade(config, TARGET_REVISION)

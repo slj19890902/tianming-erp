@@ -51,6 +51,7 @@ class SupplierPayload(BaseModel):
     phone: str | None = Field(default=None, max_length=100)
     remarks: str | None = None
     sort_order: int = Field(default=100, ge=0, le=100_000)
+    settlement_day: int = Field(default=20, ge=1, le=31)
     aliases: list[str] = Field(default_factory=list, max_length=30)
     supply_categories: list[str] | None = None
 
@@ -216,6 +217,7 @@ def _clean_payload(payload: SupplierPayload) -> tuple[dict, list[tuple[str, str]
             "phone": clean_supplier_name(payload.phone) or None,
             "remarks": clean_supplier_name(payload.remarks) or None,
             "sort_order": payload.sort_order,
+            "settlement_day": payload.settlement_day,
         },
         aliases,
     )

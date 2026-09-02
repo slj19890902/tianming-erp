@@ -3584,13 +3584,14 @@
                 <div v-else-if="!filteredSuppliers.length" class="empty">暂无符合条件的供应商</div>
                 <div v-else class="table-wrap">
                   <table class="compact-table">
-                    <thead><tr><th>供应商全称</th><th>显示简称</th><th>供应商大类</th><th>供货类别</th><th>业务代码</th><th>状态</th><th>联系人 / 电话</th><th>操作</th></tr></thead>
+                    <thead><tr><th>供应商全称</th><th>显示简称</th><th>供应商大类</th><th>供货类别</th><th>业务代码</th><th>对账日</th><th>状态</th><th>联系人 / 电话</th><th>操作</th></tr></thead>
                     <tbody><tr v-for="row in pagedSuppliers" :key="row.id">
                       <td><strong>{{ row.standard_name }}</strong></td>
                       <td>{{ row.display_name || row.standard_name }}</td>
                       <td><span :class="['status',supplierGroupFilter==='packaging' ? 'orange' : 'blue']">{{ supplierGroupFilter==='packaging' ? '包材供应商' : '纸板供应商' }}</span></td>
                       <td><span v-for="code in (row.supply_categories || ['corrugated_board'])" :key="code" class="status blue" style="margin:2px">{{ supplierCategoryLabel(code) }}</span></td>
                       <td>{{ row.business_code || "-" }}</td>
+                      <td>每月 {{ row.settlement_day || 20 }} 日</td>
                       <td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
                       <td>{{ [row.contact_name,row.phone].filter(Boolean).join(" / ") || "-" }}</td>
                       <td class="toolbar-group">
@@ -5054,18 +5055,19 @@
                 <input v-if="canViewFinanceCosts" ref="supplierInvoicePdfInput" type="file" accept="application/pdf,.pdf" style="display:none" @change="onSupplierInvoicePdfSelected" />
                 <div v-if="canViewFinanceCosts" class="panel finance-filter-panel" style="margin-bottom:10px">
                   <div class="toolbar">
-                    <div><div class="section-title">供应商 20 日月结</div><div class="muted">按实际收料日期自动归集上月 21 日至本月 20 日；纸板与外购包材均使用收料时冻结的价格和原采购单位。</div></div>
+                    <div><div class="section-title" title="旧称：供应商 20 日月结">供应商月结</div><div class="muted">按每家供应商的对账日归集结算周期；默认 20 日的旧周期仍为上月 21 日至本月 20 日。纸板与外购包材均使用收料时冻结的价格和原采购单位。</div></div>
                     <div class="toolbar-group">
                       <div class="field" style="width:150px"><label>月结月份</label><input class="input" type="month" v-model="supplierSettlementMonth" @change="loadSupplierSettlements" /></div>
                       <button class="btn" :disabled="supplierSettlementState.loading" @click="loadSupplierSettlements">刷新</button>
-                      <button v-if="canFinance" class="btn primary" :disabled="!!supplierSettlementState.action" @click="generateSupplierSettlements(false)">{{ supplierSettlementState.action==='generate' ? '归集中…' : '生成 / 刷新草稿' }}</button>
+                      <button v-if="canFinance" class="btn primary" :disabled="!!supplierSettlementState.action" @click="generateDueSupplierSettlements(false)">{{ supplierSettlementState.action==='generate-due' ? '补生成中…' : '补生成到期草稿' }}</button>
+                      <button v-if="canFinance" class="btn" title="兼容原“生成 / 刷新草稿”操作" :disabled="!!supplierSettlementState.action" @click="generateSupplierSettlements(false)">{{ supplierSettlementState.action==='generate' ? '归集中…' : '生成所选月份草稿' }}</button>
                       <button v-if="['admin','boss'].includes(user?.role) && supplierSettlementIssues.some(item=>item.code==='PAPERBOARD_FROZEN_PRICE_MISSING')" class="btn" :disabled="supplierPriceAdoption.loading || !!supplierSettlementState.action" @click="previewSupplierPriceAdoptions">{{ supplierPriceAdoption.loading ? '检查中…' : '检查历史缺价' }}</button>
                     </div>
                   </div>
-                  <div class="muted">当前周期：{{ supplierSettlementState.periodStart || '-' }} 至 {{ supplierSettlementState.periodEnd || '-' }}。未冻结最终价格或供应商主档异常的实收不会猜价，会列为待处理。</div>
+                  <div class="muted">列表中的结算周期以各供应商对账日为准；顶部日期仅为所选月份的默认 20 日兼容范围。未冻结最终价格或供应商主档异常的实收不会猜价，会列为待处理。</div>
                   <div v-if="supplierSettlementState.error" class="notice warning" style="margin-top:8px">{{ supplierSettlementState.error }}</div>
                   <div v-for="issue in supplierSettlementIssues" :key="`${issue.source_key}-${issue.code}`" class="notice warning" style="margin-top:8px"><strong>{{ issue.supplier_name || '供应商待核对' }} · {{ issue.receipt_number || issue.source_key }}</strong><span v-if="issue.purchase_document_number"> · {{ issue.purchase_document_number }}</span>：{{ issue.message }}<div v-if="issue.missing_fields?.length" class="muted">缺少：{{ issue.missing_fields.join('、') }}</div><div v-if="issue.recommended_action" class="muted">处理：{{ issue.recommended_action }}</div></div>
-                  <details v-if="supplierPriceAdoption.previewMonth===supplierSettlementMonth" class="panel" style="margin-top:8px" open>
+                  <details v-if="supplierPriceAdoption.previewMonth===supplierSettlementMonth" class="panel" style="margin-top:8px">
                     <summary style="cursor:pointer"><strong>历史缺价 dry-run 清单</strong> · 可唯一匹配 {{ supplierPriceAdoption.eligible.length }} 条 · 待人工核对 {{ supplierPriceAdoption.rejected.length }} 条</summary>
                     <div class="muted" style="margin:8px 0">本页面只读，不会采用或修改历史价格。正式采用必须由工厂 Codex 导出并核对逐行 CSV/JSON 计划，在备份验证、数据库 SHA、版本、Alembic head 和逐行 CAS 全部一致后，用受控脚本显式 --apply，并另写执行回执。</div>
                     <div v-if="supplierPriceAdoption.error" class="notice warning">{{ supplierPriceAdoption.error }}</div>
@@ -5074,9 +5076,11 @@
                     <div v-if="supplierPriceAdoption.eligible.length" class="notice" style="margin-top:8px">计划哈希：{{ supplierPriceAdoption.planHash }}。当前仅供核对；网页没有历史采用写入口。</div>
                   </details>
                   <div v-if="supplierSettlementState.loading" class="empty">正在读取供应商月结…</div>
-                  <div v-else-if="!supplierSettlements.length" class="empty">本周期尚无月结草稿。确认 20 日已完整结束后，点击“生成 / 刷新草稿”。</div>
-                  <details v-for="row in supplierSettlements" :key="row.id" class="panel" style="margin-top:10px" open>
-                    <summary style="cursor:pointer"><strong>{{ row.supplier_name }}</strong>　{{ row.statement_number }}　<span :class="['status',supplierSettlementStatusTone(row.status)]">{{ supplierSettlementStatusText(row.status) }}</span>　ERP ¥{{ money(row.erp_amount) }}　调整后 ¥{{ money(row.adjusted_amount) }}　已付 ¥{{ money(row.paid_amount) }}</summary>
+                  <div v-else-if="!supplierSettlements.length" class="empty">本周期尚无月结草稿。到期草稿会自动补生成，也可手动生成所选月份。</div>
+                  <details v-for="row in supplierSettlements" :key="row.id" class="panel" style="margin-top:10px">
+                    <summary style="cursor:pointer"><strong>{{ row.supplier_name }}</strong>　对账日 {{ row.settlement_day || row.settlement_day_snapshot || 20 }} 日　结算周期 {{ row.period_start }} 至 {{ row.period_end }}　版本 N{{ row.document_revision || 1 }}　<span :class="['status',supplierSettlementStatusTone(row.status)]">{{ supplierSettlementStatusText(row.status) }}</span>　ERP ¥{{ money(row.erp_amount) }}　应付 ¥{{ money(row.adjusted_amount) }}　剩余 ¥{{ money(row.remaining_payable_amount) }}</summary>
+                    <div class="toolbar" style="padding-top:8px"><div class="muted">{{ row.statement_number }} · 业务修订 N{{ row.document_revision || 1 }}；历史版本均保留，不会物理删除。</div><div class="toolbar-group"><button class="btn small" :disabled="row._historyLoading" @click="toggleSupplierSettlementHistory(row)">{{ row._historyLoading ? '读取中…' : '历史版本' }}</button><button v-if="row.can_regenerate && canFinance" class="btn small" :disabled="supplierSettlementBusy(row)" @click="regenerateSupplierSettlement(row)">重新生成</button></div></div>
+                    <div v-if="row._historyOpen" class="notice" style="margin-top:6px"><div v-if="!row._historyItems.length" class="muted">暂无更早业务修订。</div><div v-for="history in row._historyItems" :key="history.id" class="muted">N{{ history.document_revision || 1 }} · {{ history.statement_number }} · {{ history.period_start }} 至 {{ history.period_end }} · {{ supplierSettlementStatusText(history.status) }} · 应付 ¥{{ money(history.adjusted_amount) }}</div></div>
                     <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>实收日 / 单号</th><th>采购单</th><th>品类 / 规格</th><th>实收</th><th>冻结单价</th><th>含税应付</th><th>其中税额</th></tr></thead><tbody><tr v-for="line in row.lines" :key="line.id"><td>{{ line.receipt_date }}<div><a :href="line.source_link" target="_blank" rel="noopener">{{ line.receipt_number }}</a></div></td><td>{{ line.purchase_document_number }}<div v-if="line.price_fact_origin==='historical_master_adoption'" class="status orange">历史价格事后采用</div></td><td>{{ line.material_or_product_snapshot }}<div class="muted">{{ line.category_label }} · {{ line.specification_snapshot || '-' }}</div></td><td>{{ line.received_quantity }} {{ line.quantity_unit }}</td><td>{{ line.frozen_unit_price }} / {{ line.price_unit }}</td><td class="sensitive-price">¥ {{ money(line.erp_amount) }}</td><td class="sensitive-price">¥ {{ money(line.tax_amount) }}</td></tr></tbody></table></div>
                     <div v-if="['draft','difference'].includes(row.status) && canFinance" class="form-grid" style="padding:10px 0 0">
                       <div class="field"><label>供应商账单号</label><input class="input" v-model.trim="row._reviewNumber" /></div><div class="field"><label>账单日期</label><input class="input" type="date" v-model="row._reviewDate" /></div><div class="field"><label>供应商含税金额</label><input class="input" type="number" step="0.01" min="0" v-model="row._reviewAmount" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="reviewSupplierSettlement(row)">核对账单</button></div>
@@ -5088,9 +5092,24 @@
                     </div>
                     <div v-for="adjustment in row.adjustments" :key="adjustment.id" class="muted" style="padding:3px 0">{{ supplierSettlementAdjustmentText(adjustment.difference_type) }} · {{ adjustment.amount>0?'+':'' }}¥{{ money(adjustment.amount) }}<span v-if="adjustment.statement_line_id"> · 收料行 #{{ adjustment.statement_line_id }}</span><span v-if="adjustment.note"> · {{ adjustment.note }}</span></div>
                     <template v-if="['confirmed_pending_invoice','invoiced_pending_payment','partial_payment','paid'].includes(row.status)">
+                      <details v-if="canFinance && row.can_post_adjustment" style="margin-top:8px"><summary class="muted" style="cursor:pointer">确认后正负调整</summary><div class="muted" style="padding-top:6px">只调整当前应付，不改收料事实；负调整低于已付款分配时，差额自动形成该供应商贷项。</div><div class="form-grid" style="padding:8px 0"><div class="field"><label>调整类型</label><select class="select" v-model="row._adjustType"><option value="price">价格差异</option><option value="quantity">数量差异（只调应付）</option><option value="tax_rounding">税额尾差</option><option value="other">其他</option></select></div><div class="field"><label>调整金额（可正负）</label><input class="input" type="number" step="0.01" v-model="row._adjustAmount" /></div><div class="field wide"><label>说明</label><input class="input" v-model.trim="row._adjustNote" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="adjustSupplierSettlement(row)">登记调整</button></div></div></details>
                       <div v-if="canFinance" class="form-grid" style="padding:8px 0"><div class="field"><label>发票号码</label><input class="input" v-model.trim="row._invoiceNumber" /></div><div class="field"><label>发票日期</label><input class="input" type="date" v-model="row._invoiceDate" /></div><div class="field"><label>收到日期</label><input class="input" type="date" v-model="row._invoiceReceivedDate" /></div><div class="field"><label>发票总额</label><input class="input" type="number" step="0.01" min="0" v-model="row._invoiceTotal" /></div><div class="field"><label>分配本期</label><input class="input" type="number" step="0.01" min="0" v-model="row._invoiceAllocated" /></div><div class="field"><label>其中税额</label><input class="input" type="number" step="0.01" min="0" v-model="row._invoiceTax" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="addSupplierInvoice(row)">登记发票</button></div></div>
                       <div v-for="invoice in row.invoices" :key="invoice.id" class="toolbar" style="border-top:1px solid #e5e7eb;padding:6px 0"><span>{{ invoice.invoice_number }} · {{ invoice.invoice_date }} · 本期 ¥{{ money(invoice.allocated_amount) }}（税 ¥{{ money(invoice.tax_amount) }}）</span><span class="toolbar-group"><a v-if="invoice.attachment_url" class="btn small" :href="invoice.attachment_url" target="_blank">查看原件</a><button v-if="canFinance && !invoice.attachment_url" class="btn small" :disabled="supplierSettlementState.action==='upload'" @click="chooseSupplierInvoicePdf(row,invoice)">上传 PDF 原件</button></span></div>
-                      <div v-if="canFinance && row.status!=='paid'" class="form-grid" style="padding:8px 0"><div class="field"><label>银行付款日期</label><input class="input" type="date" v-model="row._paymentDate" /></div><div class="field"><label>银行付款金额</label><input class="input" type="number" step="0.01" min="0" v-model="row._paymentAmount" /></div><div class="field"><label>银行流水 / 备注</label><input class="input" v-model.trim="row._paymentReference" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="addSupplierPayment(row)">登记付款（银行）</button></div></div>
+                      <div v-if="canFinance && row.status!=='paid'" class="panel" style="margin-top:8px;padding:10px">
+                        <div class="toolbar"><div><strong>组合付款（一次提交）</strong><div class="muted">可同时使用供应商贷项、客户承兑与银行转账；承兑超出本期可抵付额时，新形成该供应商贷项。</div></div><span class="status blue">可用贷项 ¥{{ money(row.credit_available_amount || 0) }}</span></div>
+                        <div v-if="(row.available_credits || []).length" class="form-grid" style="margin-top:8px">
+                          <div v-for="credit in row.available_credits" :key="credit.id" class="field"><label>贷项 {{ credit.source_label || ('#'+credit.id) }}（可用 ¥{{ money(credit.available_amount) }}）</label><input class="input" type="number" min="0" :max="credit.available_amount" step="0.01" v-model="credit._applyAmount" @input="applySupplierSettlementPaymentSuggestion(row)" /></div>
+                        </div>
+                        <div class="form-grid" style="margin-top:8px">
+                          <div class="field"><label>付款日期</label><input class="input" type="date" v-model="row._paymentDate" /></div>
+                          <div class="field"><label>承兑票据</label><select class="select" v-model.number="row._acceptanceNoteId" @change="applySupplierSettlementPaymentSuggestion(row)"><option :value="null">本次不使用承兑</option><option v-for="note in supplierSettlementAcceptanceOptions(row)" :key="note.id" :value="note.id">{{ note.bill_number }} · {{ note.customer_name }} · ¥{{ money(note.amount) }}</option></select></div>
+                          <div class="field"><label>本期承兑抵付</label><input class="input" :value="money(supplierSettlementAcceptanceAppliedAmount(row))" disabled /><span v-if="supplierSettlementNewCreditAmount(row)>0" class="muted">新形成贷项 ¥{{ money(supplierSettlementNewCreditAmount(row)) }}</span><span v-else-if="supplierSettlementSelectedAcceptance(row) && Number(supplierSettlementSelectedAcceptance(row).amount)>supplierSettlementAcceptanceAppliedAmount(row)" class="danger-text">已收发票额度不足，暂不能使用整张承兑</span></div>
+                          <div class="field"><label>银行转账</label><input class="input" type="number" min="0" step="0.01" v-model="row._bankAmount" /><span class="muted">建议转账 ¥{{ money(supplierSettlementSuggestedBank(row)) }}</span></div>
+                          <div class="field wide"><label>银行流水 / 备注</label><input class="input" v-model.trim="row._bankReference" /></div>
+                          <div class="field"><label>&nbsp;</label><button class="btn success" :disabled="supplierSettlementBusy(row)" @click="addSupplierPaymentBatch(row)">一次确认付款</button></div>
+                        </div>
+                        <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">兼容入口：仅登记一笔银行付款</summary><div class="form-grid" style="padding:8px 0"><div class="field"><label>银行付款金额</label><input class="input" type="number" step="0.01" min="0" v-model="row._paymentAmount" /></div><div class="field"><label>银行流水 / 备注</label><input class="input" v-model.trim="row._paymentReference" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="addSupplierPayment(row)">登记付款（银行）</button></div></div></details>
+                      </div>
                       <div v-for="payment in row.payments" :key="payment.id" class="muted" style="padding:3px 0">{{ payment.payment_date }} · {{ payment.payment_method_label || '银行付款' }} · ¥{{ money(payment.amount) }}<span v-if="payment.reference"> · {{ payment.reference }}</span></div>
                     </template>
                   </details>
@@ -5125,12 +5144,28 @@
                     <div class="table-wrap"><table><thead><tr><th>类型</th><th>人员 / 费用</th><th>组成 / 金额</th><th>期间</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in financeRecurringRules" :key="row.id"><td>{{ row.rule_type_label }}</td><td><strong>{{ row.name }}</strong><div class="muted">{{ row.role_name || '-' }}</div></td><td><template v-if="row.rule_type==='employee_wage'">基本 {{ money(row.base_amount) }} + 津贴 {{ money(row.allowance_amount) }} + 社保 {{ money(row.employer_social_amount) }} - 扣款 {{ money(row.deduction_amount) }}</template><template v-else-if="row.rule_type==='annual_rent'">年 ¥{{ money(row.annual_amount) }}</template><template v-else>月 ¥{{ money(row.monthly_amount) }}</template></td><td>{{ row.start_month }} 至 {{ row.end_month || '持续' }}</td><td><span :class="['status',row.is_active?'green':'gray']">{{ row.is_active ? '启用' : '停用' }}</span></td><td><button v-if="canManageFinanceCosts" class="btn small" @click="editFinanceRecurringRule(row)">编辑</button></td></tr><tr v-if="!financeRecurringRules.length"><td colspan="6" class="empty">尚未配置固定费用。</td></tr></tbody></table></div>
                   </details>
 
-                  <details style="margin-top:10px"><summary style="cursor:pointer"><strong>水电表数、发票与付款</strong></summary>
-                    <div class="finance-cost-grid" style="margin-top:10px"><div class="field"><label>类型</label><select class="select" v-model="financeUtilityForm.utility_type" @change="applyFinanceUtilityType"><option value="electricity">电费</option><option value="water">水费</option></select></div><div class="field"><label>上月表数</label><input class="input" type="number" min="0" step="0.001" v-model="financeUtilityForm.previous_reading" /></div><div class="field"><label>本月表数</label><input class="input" type="number" min="0" step="0.001" v-model="financeUtilityForm.current_reading" /></div><div class="field"><label>单价</label><input class="input" type="number" min="0" step="0.0001" v-model="financeUtilityForm.unit_price" /></div><div class="field"><label>发票号（可空）</label><input class="input" v-model.trim="financeUtilityForm.invoice_number" /></div><div class="field"><label>发票日期</label><input class="input" type="date" v-model="financeUtilityForm.invoice_date" /></div><div class="field"><label>发票金额（优先）</label><input class="input" type="number" min="0" step="0.01" v-model="financeUtilityForm.invoice_amount" /></div><div class="field"><label>已付金额</label><input class="input" type="number" min="0" step="0.01" v-model="financeUtilityForm.paid_amount" /></div><div class="field"><label>付款日期</label><input class="input" type="date" v-model="financeUtilityForm.payment_date" /></div><div class="field"><label>&nbsp;</label><button v-if="canManageFinanceCosts" class="btn primary" :disabled="simpleFinanceState.saving" @click="saveFinanceUtilityReading">保存本月水电</button></div></div>
-                    <div v-for="row in financeUtilityReadings" :key="row.id" class="muted">{{ row.utility_type_label }}：{{ row.previous_reading }} → {{ row.current_reading }}，用量 {{ row.usage_quantity }}，计算 ¥{{ money(row.calculated_amount) }}，发票 {{ row.invoice_amount==null ? '待补' : `¥${money(row.invoice_amount)}` }}<span v-if="row.difference_amount!=null">，差异 ¥{{ money(row.difference_amount) }}</span>，已付 ¥{{ money(row.paid_amount || 0) }}<span v-if="row.payment_date">（{{ row.payment_date }}）</span></div>
+                  <details style="margin-top:10px" open><summary style="cursor:pointer"><strong>水电费（每月一笔）</strong><span v-if="financeUtilityExpense" class="muted"> · ¥{{ money(financeUtilityExpense.total_amount) }} · 已付 ¥{{ money(financeUtilityExpense.paid_amount || 0) }}</span></summary>
+                    <div v-if="['legacy','conflict'].includes(financeUtilityExpenseMode)" class="notice warning" style="margin-top:8px">本月已有历史水费 / 电费明细，为避免重复记账，本月不能再新增合并水电费；历史数据可在下方高级入口查看。</div>
+                    <div class="finance-cost-grid" style="margin-top:10px">
+                      <div class="field"><label>费用月份</label><input class="input" type="month" v-model="financeUtilityExpenseForm.cost_month" @change="syncFinanceUtilityExpenseMonth" /></div>
+                      <div class="field"><label>水电费总额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeUtilityExpenseForm.total_amount" /></div>
+                      <div class="field"><label>成本中心</label><select class="select" v-model.number="financeUtilityExpenseForm.cost_center_id"><option v-for="item in simpleFinanceMeta.centers" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
+                      <div class="field"><label>发票号（可空）</label><input class="input" v-model.trim="financeUtilityExpenseForm.invoice_number" /></div>
+                      <div class="field"><label>发票日期</label><input class="input" type="date" v-model="financeUtilityExpenseForm.invoice_date" /></div>
+                      <div class="field"><label>发票金额（可空）</label><input class="input" type="number" min="0" step="0.01" v-model="financeUtilityExpenseForm.invoice_amount" /></div>
+                      <div class="field"><label>已付金额</label><input class="input" type="number" min="0" step="0.01" v-model="financeUtilityExpenseForm.paid_amount" /></div>
+                      <div class="field"><label>付款日期</label><input class="input" type="date" v-model="financeUtilityExpenseForm.payment_date" /></div>
+                      <div class="field wide"><label>备注</label><input class="input" v-model.trim="financeUtilityExpenseForm.note" /></div>
+                      <div class="field"><label>&nbsp;</label><button v-if="canManageFinanceCosts" class="btn primary" :disabled="simpleFinanceState.saving || ['legacy','conflict'].includes(financeUtilityExpenseMode)" @click="saveFinanceUtilityExpense">保存本月水电费</button></div>
+                    </div>
+                    <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">高级 / 历史：历史水费 / 电费明细</summary>
+                      <div class="finance-cost-grid" style="margin-top:10px"><div class="field"><label>类型</label><select class="select" v-model="financeUtilityForm.utility_type" disabled @change="applyFinanceUtilityType"><option value="electricity">电费</option><option value="water">水费</option></select></div><div class="field"><label>上月表数</label><input class="input" type="number" min="0" step="0.001" v-model="financeUtilityForm.previous_reading" disabled /></div><div class="field"><label>本月表数</label><input class="input" type="number" min="0" step="0.001" v-model="financeUtilityForm.current_reading" disabled /></div><div class="field"><label>单价</label><input class="input" type="number" min="0" step="0.0001" v-model="financeUtilityForm.unit_price" disabled /></div><div class="field"><label>发票号（可空）</label><input class="input" v-model.trim="financeUtilityForm.invoice_number" disabled /></div><div class="field"><label>发票日期</label><input class="input" type="date" v-model="financeUtilityForm.invoice_date" disabled /></div><div class="field"><label>发票金额（优先）</label><input class="input" type="number" min="0" step="0.01" v-model="financeUtilityForm.invoice_amount" disabled /></div><div class="field"><label>已付金额</label><input class="input" type="number" min="0" step="0.01" v-model="financeUtilityForm.paid_amount" disabled /></div><div class="field"><label>付款日期</label><input class="input" type="date" v-model="financeUtilityForm.payment_date" disabled /></div><div class="field"><label>&nbsp;</label><button v-if="canManageFinanceCosts" class="btn" disabled>保存本月水电（历史入口停写）</button></div></div>
+                      <div v-for="row in financeUtilityReadings" :key="row.id" class="muted">{{ row.utility_type_label }}：{{ row.previous_reading }} → {{ row.current_reading }}，用量 {{ row.usage_quantity }}，计算 ¥{{ money(row.calculated_amount) }}，发票 {{ row.invoice_amount==null ? '待补' : `¥${money(row.invoice_amount)}` }}<span v-if="row.difference_amount!=null">，差异 ¥{{ money(row.difference_amount) }}</span>，已付 ¥{{ money(row.paid_amount || 0) }}<span v-if="row.payment_date">（{{ row.payment_date }}）</span></div>
+                    </details>
                   </details>
 
                   <details style="margin-top:10px"><summary style="cursor:pointer"><strong>客户承兑与供应商背书</strong> · 在手 {{ simpleFinanceSummary.held_acceptance_count || 0 }} 张</summary>
+                    <div class="muted" style="margin-top:8px">新承兑的客户下拉仅显示最近三个月内有有效订单的客户；历史承兑仍按原稳定客户 ID 展示。供应商组合付款请优先在上方月结单中一次完成，下面保留旧版背书抵付兼容入口。</div>
                     <div v-if="canFinance" class="finance-cost-grid" style="margin-top:10px"><div class="field"><label>承兑号码</label><input class="input" v-model.trim="financeAcceptanceForm.bill_number" /></div><div class="field"><label>客户</label><select class="select" v-model.number="financeAcceptanceForm.customer_id"><option :value="null">请选择</option><option v-for="item in simpleFinanceMeta.customers" :key="item.id" :value="item.id">{{ item.short_name }}</option></select></div><div class="field"><label>票面金额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeAcceptanceForm.amount" /></div><div class="field"><label>收到日期</label><input class="input" type="date" v-model="financeAcceptanceForm.received_date" /></div><div class="field"><label>到期日期</label><input class="input" type="date" v-model="financeAcceptanceForm.maturity_date" /></div><div class="field"><label>备注</label><input class="input" v-model.trim="financeAcceptanceForm.note" /></div><div class="field"><label>&nbsp;</label><button class="btn primary" :disabled="simpleFinanceState.saving" @click="saveFinanceAcceptance">登记在手承兑</button></div></div>
                     <div class="table-wrap"><table><thead><tr><th>客户 / 承兑号</th><th>金额</th><th>收到 / 到期</th><th>状态</th><th>供应商月结 / 操作</th></tr></thead><tbody><tr v-for="row in financeAcceptances" :key="row.id"><td><strong>{{ row.customer_name }}</strong><div class="muted">{{ row.bill_number }}</div></td><td class="sensitive-price">¥ {{ money(row.amount) }}</td><td>{{ row.received_date }} / {{ row.maturity_date }}</td><td><span :class="['status',row.status==='held'?'orange':row.status==='endorsed'?'blue':row.status==='matured'?'green':'gray']">{{ row.status_label }}</span><div v-if="row.supplier_name" class="muted">{{ row.supplier_name }}</div></td><td><div v-if="row.status==='held'" class="toolbar-group"><select class="select" style="max-width:310px" v-model.number="row._statementId"><option :value="null">选择供应商月结</option><option v-for="item in simpleFinanceMeta.supplier_statements" :key="item.id" :value="item.id" :disabled="Number(row.amount)>Number(item.available_payment_amount)">{{ item.supplier_name }} · {{ item.statement_number }} · 可抵付 {{ money(item.available_payment_amount) }}{{ Number(row.amount)>Number(item.available_payment_amount) ? '（余额不足）' : '' }}</option></select><button v-if="canFinance" class="btn small primary" :disabled="!!simpleFinanceState.action" @click="endorseFinanceAcceptance(row)">背书抵付</button><button v-if="canFinance" class="btn small" :disabled="!!simpleFinanceState.action" @click="transitionFinanceAcceptance(row,'matured')">到期</button><button v-if="canFinance" class="btn small danger" :disabled="!!simpleFinanceState.action" @click="transitionFinanceAcceptance(row,'returned')">退回</button></div><span v-else class="muted">{{ row.supplier_statement_id ? `已关联月结 #${row.supplier_statement_id}` : '-' }}</span></td></tr><tr v-if="!financeAcceptances.length"><td colspan="5" class="empty">尚无承兑记录。</td></tr></tbody></table></div>
                   </details>
@@ -6144,6 +6179,7 @@
                 <div class="field wide"><label>供应商全称 *</label><input class="input" v-model.trim="supplierForm.standard_name" placeholder="用于单据和历史关联" /></div>
                 <div class="field"><label>显示简称</label><input class="input" v-model.trim="supplierForm.display_name" placeholder="例如：鸣朋" /></div>
                 <div class="field"><label>业务代码</label><input class="input" v-model.trim="supplierForm.business_code" placeholder="例如：MP" /></div>
+                <div class="field"><label>每月对账日</label><input class="input" type="number" min="1" max="31" step="1" v-model.number="supplierForm.settlement_day" /><span class="muted">默认20日，短月自动取月末</span></div>
                 <div class="field"><label>状态</label><select class="select" v-model="supplierForm.is_active"><option :value="true">启用</option><option :value="false">停用</option></select></div>
                 <div class="field"><label>排序</label><input class="input" type="number" min="0" step="1" v-model.number="supplierForm.sort_order" /></div>
               </div>
@@ -9416,7 +9452,7 @@
       const blankSupplier = () => ({
         id:null, version:null, standard_name:"", display_name:"", business_code:"",
         is_active:true, sort_order:100, contact_name:"", phone:"", remarks:"", aliases:[],
-        supply_categories:["corrugated_board"]
+        supply_categories:["corrugated_board"], settlement_day:20
       });
       const blankSupplierPackagingProduct = () => ({
         id:null, version:null, category_code:"", supplier_product_code:"", product_name:"",
@@ -9889,15 +9925,17 @@
             financeProcessingDieModes:[{value:"auto",label:"按默认"},{value:"none",label:"不模切"},{value:"small_normal",label:"小模切"},{value:"small_complex",label:"小复杂"},{value:"large",label:"大模切"},{value:"oversize",label:"超大模切"}],
             supplierSettlementMonth:closedSupplierSettlementMonth(),
             supplierSettlements:[], supplierSettlementIssues:[],
-            supplierSettlementState:{loading:false,action:"",statementId:null,error:"",periodStart:"",periodEnd:"",generateKey:"",autoGeneratedMonth:"",uploadStatementId:null,uploadInvoiceId:null},
+            supplierSettlementState:{loading:false,action:"",statementId:null,error:"",periodStart:"",periodEnd:"",generateKey:"",generateDueKey:"",autoGeneratedMonth:"",uploadStatementId:null,uploadInvoiceId:null},
             supplierPriceAdoption:{loading:false,previewMonth:"",eligible:[],rejected:[],adoptionReason:"",planHash:"",error:""},
             supplierSettlementAttempts:{},
             simpleFinanceMeta:{primary_groups:[],rule_types:[],centers:[],customers:[],supplier_statements:[],note:""},
             simpleFinanceSummary:{primary_groups:{material:{},personnel:{},freight:{},fixed_operating:{}},active_employee_count:0,held_acceptance_count:0,held_acceptance_amount:"0.00",note:""},
             financeRecurringRules:[], financeUtilityReadings:[], financeUtilityRecommended:{water:"",electricity:""}, financeAcceptances:[],
+            financeUtilityExpenseMode:"empty", financeUtilityExpense:null,
             simpleFinanceState:{loading:false,saving:false,action:"",error:""},
             financeRecurringForm:{id:null,version:null,rule_type:"employee_wage",name:"",role_name:"",cost_center_id:null,start_month:`${month().slice(0,4)}-01`,end_month:"",base_amount:"",allowance_amount:"",employer_social_amount:"",deduction_amount:"",annual_amount:"380000",monthly_amount:"",due_day:20,note:"",is_active:true},
             financeUtilityForm:{id:null,version:null,utility_type:"electricity",cost_center_id:null,previous_reading:"",current_reading:"",unit_price:"",invoice_number:"",invoice_date:"",invoice_amount:"",paid_amount:"",payment_date:"",note:""},
+            financeUtilityExpenseForm:{id:null,version:null,cost_month:month(),cost_center_id:null,total_amount:"",invoice_number:"",invoice_date:"",invoice_amount:"",paid_amount:"",payment_date:"",note:""},
             financeAcceptanceForm:{bill_number:"",customer_id:null,amount:"",received_date:today(),maturity_date:"",note:""},
             financePayables: [], financePayableSuppliers: [], financePayableState:{loading:false,saving:false,error:""},
             financePayableForm:{supplier_id:null,counterparty_name:"",category:"material",document_number:"",document_date:today(),due_date:"",amount:"",note:""},
@@ -14487,6 +14525,9 @@
             this.financeRecurringRules = [];
             this.financeUtilityReadings = [];
             this.financeUtilityRecommended = {water:"",electricity:""};
+            this.financeUtilityExpenseMode = "empty";
+            this.financeUtilityExpense = null;
+            this.financeUtilityExpenseForm = {id:null,version:null,cost_month:month(),cost_center_id:null,total_amount:"",invoice_number:"",invoice_date:"",invoice_amount:"",paid_amount:"",payment_date:"",note:""};
             this.financeAcceptances = [];
             this.simpleFinanceState = {loading:false,saving:false,action:"",error:""};
             this.pages.financeCosts = 1;
@@ -15587,14 +15628,17 @@
               ...JSON.parse(JSON.stringify(row)),
               is_active:row.is_active !== false,
               sort_order:Number(row.sort_order ?? 100),
+              settlement_day:Number(row.settlement_day ?? 20),
             } : blankSupplier();
             this.modal = {type:"supplier", title:row ? "编辑供应商" : "新增供应商"};
           },
           supplierPayload() {
             const form = this.supplierForm || {};
             const sortOrder = form.sort_order === "" || form.sort_order == null ? 100 : Number(form.sort_order);
+            const settlementDay = Number(form.settlement_day ?? 20);
             if (!String(form.standard_name || "").trim()) throw new Error("请填写供应商全称");
             if (!Number.isInteger(sortOrder) || sortOrder < 0) throw new Error("排序必须是大于等于0的整数");
+            if (!Number.isInteger(settlementDay) || settlementDay < 1 || settlementDay > 31) throw new Error("供应商对账日必须是 1 至 31 的整数");
             return {
               standard_name:String(form.standard_name).trim(),
               display_name:String(form.display_name || "").trim() || null,
@@ -15605,6 +15649,7 @@
               remarks:String(form.remarks || "").trim() || null,
               aliases:Array.isArray(form.aliases) ? form.aliases : [],
               supply_categories:Array.isArray(form.supply_categories) ? form.supply_categories : ["corrugated_board"],
+              settlement_day:Number(form.settlement_day ?? 20),
             };
           },
           supplierCategoryLabel(code) {
@@ -21674,6 +21719,7 @@
           },
           async onFinanceCostMonthChange() {
             if (!this.financeCostForm.id) this.financeCostForm.cost_month = this.financeCostMonth || month();
+            if (!this.financeUtilityExpenseForm.id) this.financeUtilityExpenseForm.cost_month = this.financeCostMonth || month();
             this.pages.financeCosts = 1;
             return Promise.all([this.loadFinanceCosts(),this.loadSimpleFinance()]);
           },
@@ -21922,10 +21968,11 @@
             this.simpleFinanceState.error = "";
             try {
               const params = {month:this.financeCostMonth || month()};
-              const [metadata,summary,rules,utilities,acceptances] = await Promise.all([
+              const [metadata,summary,rules,utilityExpense,utilities,acceptances] = await Promise.all([
                 axios.get("/api/finance/simple-finance/metadata",{signal:controller.signal}),
                 axios.get("/api/finance/simple-finance/summary",{params,signal:controller.signal}),
                 axios.get("/api/finance/simple-finance/recurring-rules",{signal:controller.signal}),
+                axios.get("/api/finance/simple-finance/utility-expenses",{params:{month:params.month},signal:controller.signal}),
                 axios.get("/api/finance/simple-finance/utility-readings",{params,signal:controller.signal}),
                 axios.get("/api/finance/simple-finance/acceptances",{signal:controller.signal}),
               ]);
@@ -21933,10 +21980,13 @@
               this.simpleFinanceMeta = metadata.data || this.simpleFinanceMeta;
               this.simpleFinanceSummary = summary.data || this.simpleFinanceSummary;
               this.financeRecurringRules = rules.data.items || [];
+              this.financeUtilityExpenseMode = utilityExpense.data.mode || "empty";
+              this.financeUtilityExpense = utilityExpense.data.item || null;
               this.financeUtilityReadings = utilities.data.items || [];
               this.financeUtilityRecommended = utilities.data.recommended_previous_readings || {};
               this.financeAcceptances = (acceptances.data.items || []).map(row=>({...row,_statementId:null}));
               if (!this.financeRecurringForm.id) this.applyFinanceRecurringTypeDefaults();
+              this.hydrateFinanceUtilityExpense(this.financeUtilityExpense);
               this.applyFinanceUtilityType();
               return true;
             } catch(error) {
@@ -21989,6 +22039,43 @@
             const center=(this.simpleFinanceMeta.centers||[]).find(row=>row.code==="PROD");
             if (current) this.financeUtilityForm={id:current.id,version:current.version,utility_type:current.utility_type,cost_center_id:Number(current.cost_center_id),previous_reading:String(current.previous_reading),current_reading:String(current.current_reading),unit_price:String(current.unit_price),invoice_number:current.invoice_number||"",invoice_date:current.invoice_date||"",invoice_amount:current.invoice_amount==null?"":String(current.invoice_amount),paid_amount:String(current.paid_amount||""),payment_date:current.payment_date||"",note:current.note||""};
             else this.financeUtilityForm={id:null,version:null,utility_type:this.financeUtilityForm.utility_type,cost_center_id:center?Number(center.id):null,previous_reading:String(this.financeUtilityRecommended?.[this.financeUtilityForm.utility_type]||""),current_reading:"",unit_price:"",invoice_number:"",invoice_date:"",invoice_amount:"",paid_amount:"",payment_date:"",note:""};
+          },
+          hydrateFinanceUtilityExpense(row=null) {
+            const center=(this.simpleFinanceMeta.centers||[]).find(item=>item.code==="PROD");
+            this.financeUtilityExpenseForm={
+              id:row?.id || null,
+              version:row?.version || null,
+              cost_month:row?.cost_month || this.financeCostMonth || month(),
+              cost_center_id:Number(row?.cost_center_id || center?.id || 0) || null,
+              total_amount:row?.total_amount == null ? "" : String(row.total_amount),
+              invoice_number:row?.invoice_number || "",
+              invoice_date:row?.invoice_date || "",
+              invoice_amount:row?.invoice_amount == null ? "" : String(row.invoice_amount),
+              paid_amount:row?.paid_amount == null ? "" : String(row.paid_amount),
+              payment_date:row?.payment_date || "",
+              note:row?.note || "",
+            };
+          },
+          syncFinanceUtilityExpenseMonth() {
+            this.financeCostMonth=this.financeUtilityExpenseForm.cost_month || month();
+            return this.onFinanceCostMonthChange();
+          },
+          async saveFinanceUtilityExpense() {
+            const form=this.financeUtilityExpenseForm;
+            if (["legacy","conflict"].includes(this.financeUtilityExpenseMode)) { this.showToast("本月已有历史水费/电费明细，不能重复新增合并水电费",true); return false; }
+            if (!form.cost_month || !form.cost_center_id || !(Number(form.total_amount)>0)) { this.showToast("请填写月份、水电费总额和成本中心",true); return false; }
+            const payload={cost_month:form.cost_month,total_amount:String(form.total_amount),cost_center_id:Number(form.cost_center_id),invoice_number:String(form.invoice_number||"").trim()||null,invoice_date:form.invoice_date||null,invoice_amount:form.invoice_amount===""?null:String(form.invoice_amount),paid_amount:String(form.paid_amount||0),payment_date:form.payment_date||null,note:String(form.note||"").trim()||null,expected_version:form.version?Number(form.version):null,idempotency_key:createIdempotencyKey()};
+            this.simpleFinanceState.saving=true;
+            try {
+              const {data}=await axios.post("/api/finance/simple-finance/utility-expenses",payload);
+              const saved=data.item || data;
+              this.financeUtilityExpense=saved;
+              this.financeUtilityExpenseMode="combined";
+              this.hydrateFinanceUtilityExpense(saved);
+              await Promise.all([this.loadSimpleFinance(),this.loadFinanceCosts()]);
+              this.showToast("本月水电费已保存"); return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.simpleFinanceState.saving=false; }
           },
           async saveFinanceUtilityReading() {
             const form=this.financeUtilityForm;
@@ -22044,7 +22131,12 @@
           },
           hydrateSupplierSettlement(row) {
             const confirmed = row.confirmed_amount ?? row.adjusted_amount ?? "";
+            const remaining = Math.max(0,Number(row.remaining_payable_amount || 0));
+            const paymentCapacity = row.available_payment_amount != null
+              ? Math.max(0,Math.min(remaining,Number(row.available_payment_amount || 0)))
+              : Math.max(0,Math.min(remaining,Number(row.invoice_allocated_amount || 0)-Number(row.paid_amount || 0)));
             return Object.assign({}, row, {
+              available_credits:(row.available_credits || []).map(credit=>({...credit,_applyAmount:""})),
               _reviewNumber:row.supplier_statement_number || "",
               _reviewDate:row.supplier_statement_date || today(),
               _reviewAmount:row.supplier_statement_amount ?? row.adjusted_amount ?? "",
@@ -22052,7 +22144,46 @@
               _invoiceNumber:"", _invoiceDate:today(), _invoiceReceivedDate:today(),
               _invoiceTotal:confirmed, _invoiceAllocated:confirmed, _invoiceTax:"0.00",
               _paymentDate:today(), _paymentAmount:row.remaining_payable_amount ?? "", _paymentReference:"",
+              _acceptanceNoteId:null, _bankAmount:paymentCapacity.toFixed(2), _bankReference:"",
+              _historyOpen:false, _historyLoading:false, _historyItems:[],
             });
+          },
+          supplierSettlementAcceptanceOptions() {
+            return (this.financeAcceptances || []).filter(note=>note.status === "held");
+          },
+          supplierSettlementSelectedAcceptance(row) {
+            return this.supplierSettlementAcceptanceOptions(row).find(note=>Number(note.id)===Number(row._acceptanceNoteId)) || null;
+          },
+          supplierSettlementCreditApplyTotal(row) {
+            return (row.available_credits || []).reduce((total,credit)=>total + Math.max(0,Number(credit._applyAmount || 0)),0);
+          },
+          supplierSettlementPaymentCapacity(row) {
+            const remaining=Math.max(0,Number(row.remaining_payable_amount || 0));
+            if (row.available_payment_amount != null) return Math.max(0,Math.min(remaining,Number(row.available_payment_amount || 0)));
+            return Math.max(0,Math.min(remaining,Number(row.invoice_allocated_amount || 0)-Number(row.paid_amount || 0)));
+          },
+          supplierSettlementAcceptanceAppliedAmount(row) {
+            const note=this.supplierSettlementSelectedAcceptance(row);
+            if (!note) return 0;
+            const remaining=Math.max(0,Number(row.remaining_payable_amount || 0)-this.supplierSettlementCreditApplyTotal(row));
+            const paymentCapacity=Math.max(0,this.supplierSettlementPaymentCapacity(row)-this.supplierSettlementCreditApplyTotal(row));
+            return Math.max(0,Math.min(Number(note.amount || 0),remaining,paymentCapacity));
+          },
+          supplierSettlementNewCreditAmount(row) {
+            const note=this.supplierSettlementSelectedAcceptance(row);
+            if (!note) return 0;
+            const remaining=Math.max(0,Number(row.remaining_payable_amount || 0)-this.supplierSettlementCreditApplyTotal(row));
+            const paymentCapacity=Math.max(0,this.supplierSettlementPaymentCapacity(row)-this.supplierSettlementCreditApplyTotal(row));
+            return paymentCapacity >= remaining ? Math.max(0,Number(note.amount || 0)-remaining) : 0;
+          },
+          supplierSettlementSuggestedBank(row) {
+            if (this.supplierSettlementNewCreditAmount(row)>0) return 0;
+            const remaining=Math.max(0,Number(row.remaining_payable_amount || 0)-this.supplierSettlementCreditApplyTotal(row)-this.supplierSettlementAcceptanceAppliedAmount(row));
+            const paymentCapacity=Math.max(0,this.supplierSettlementPaymentCapacity(row)-this.supplierSettlementCreditApplyTotal(row)-this.supplierSettlementAcceptanceAppliedAmount(row));
+            return Math.max(0,Math.min(remaining,paymentCapacity));
+          },
+          applySupplierSettlementPaymentSuggestion(row) {
+            row._bankAmount=this.supplierSettlementSuggestedBank(row).toFixed(2);
           },
           supplierSettlementBusy(row) {
             return !!this.supplierSettlementState.action && Number(this.supplierSettlementState.statementId) === Number(row.id);
@@ -22072,6 +22203,17 @@
             if (index < 0) this.supplierSettlements = [...this.supplierSettlements,hydrated];
             else this.supplierSettlements = this.supplierSettlements.map((item,itemIndex)=>itemIndex===index?hydrated:item);
           },
+          async toggleSupplierSettlementHistory(row) {
+            if (row._historyOpen) { row._historyOpen=false; return true; }
+            if (row._historyItems.length) { row._historyOpen=true; return true; }
+            row._historyLoading=true;
+            try {
+              const {data}=await axios.get(`/api/finance/supplier-settlements/${row.id}/history`);
+              row._historyItems=(data.items || []).filter(item=>Number(item.id)!==Number(row.id));
+              row._historyOpen=true; return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { row._historyLoading=false; }
+          },
           async loadSupplierSettlements(autoGenerate = true) {
             if (!this.canViewFinanceCosts) return false;
             const requestKey = "finance:supplier-settlements";
@@ -22090,10 +22232,11 @@
                 autoGenerate
                 && this.canFinance
                 && data.default_month === this.supplierSettlementMonth
-                && this.supplierSettlementState.autoGeneratedMonth !== this.supplierSettlementMonth
+                && this.supplierSettlementState.autoGeneratedMonth !== today()
               ) {
-                this.supplierSettlementState.autoGeneratedMonth = this.supplierSettlementMonth;
-                return this.generateSupplierSettlements(true);
+                this.supplierSettlementState.autoGeneratedMonth = today();
+                // P1-132 兼容说明：旧版曾调用 generateSupplierSettlements(true)，现改为按各供应商对账日补生成。
+                return this.generateDueSupplierSettlements(true);
               }
               return true;
             } catch(error) {
@@ -22124,6 +22267,28 @@
               return false;
             } finally {
               this.supplierPriceAdoption.loading = false;
+            }
+          },
+          async generateDueSupplierSettlements(silent = false) {
+            if (!this.canFinance || this.supplierSettlementState.action) return false;
+            const key = this.supplierSettlementState.generateDueKey || createIdempotencyKey();
+            this.supplierSettlementState.generateDueKey = key;
+            this.supplierSettlementState.action = "generate-due";
+            this.supplierSettlementState.statementId = null;
+            try {
+              const {data}=await axios.post("/api/finance/supplier-settlements/generate-due",{idempotency_key:key});
+              this.supplierSettlementState.generateDueKey="";
+              this.supplierSettlementState.action="";
+              await this.loadSupplierSettlements(false);
+              if (!silent) this.showToast(`已补生成或核对 ${data.changed_statement_count ?? data.created_statement_count ?? data.created_count ?? 0} 张到期草稿`);
+              return true;
+            } catch(error) {
+              this.supplierSettlementState.error=this.errorMessage(error);
+              if (!silent) this.showToast(this.supplierSettlementState.error,true);
+              return false;
+            } finally {
+              this.supplierSettlementState.action="";
+              this.supplierSettlementState.statementId=null;
             }
           },
           async generateSupplierSettlements(silent = false) {
@@ -22186,6 +22351,21 @@
             if (!confirm("确认重开这张尚未付款的供应商月结单吗？原应付记录将作废。")) return false;
             return this.mutateSupplierSettlement(row,"reopen",`/api/finance/supplier-settlements/${row.id}/reopen`,{expected_version:Number(row.version)},"供应商月结已受控重开");
           },
+          async regenerateSupplierSettlement(row) {
+            if (!this.canFinance || this.supplierSettlementState.action || !row.can_regenerate) return false;
+            if (!confirm(`确认重新生成 ${row.supplier_name} 的本期草稿吗？当前业务修订 N${row.document_revision || 1} 将作废并保留历史。`)) return false;
+            const payload={expected_version:Number(row.version)};
+            const attempt=this.supplierSettlementAttempt("regenerate",row,payload);
+            this.supplierSettlementState.action="regenerate";
+            this.supplierSettlementState.statementId=Number(row.id);
+            try {
+              await axios.post(`/api/finance/supplier-settlements/${row.id}/regenerate`,{...payload,idempotency_key:attempt.key});
+              const attempts={...this.supplierSettlementAttempts}; delete attempts[attempt.slot]; this.supplierSettlementAttempts=attempts;
+              await this.loadSupplierSettlements(false);
+              this.showToast("供应商月结已生成新业务修订，旧版已作废留档"); return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.supplierSettlementState.action=""; this.supplierSettlementState.statementId=null; }
+          },
           addSupplierInvoice(row) {
             const payload={expected_version:Number(row.version),invoice_number:String(row._invoiceNumber||"").trim(),invoice_date:row._invoiceDate,received_date:row._invoiceReceivedDate,invoice_total_amount:String(row._invoiceTotal||""),allocated_amount:String(row._invoiceAllocated||""),tax_amount:String(row._invoiceTax||"0"),note:null};
             if (!payload.invoice_number || !payload.invoice_date || !payload.received_date || !(Number(payload.invoice_total_amount)>0) || !(Number(payload.allocated_amount)>0)) { this.showToast("请完整填写发票号码、日期、总额和本期分配金额",true); return false; }
@@ -22195,6 +22375,44 @@
             const payload={expected_version:Number(row.version),payment_date:row._paymentDate,amount:String(row._paymentAmount||""),reference:String(row._paymentReference||"").trim()||null};
             if (!payload.payment_date || !(Number(payload.amount)>0)) { this.showToast("请填写付款日期和本次付款金额",true); return false; }
             return this.mutateSupplierSettlement(row,"payment",`/api/finance/supplier-settlements/${row.id}/payments`,payload,"供应商付款已登记");
+          },
+          async addSupplierPaymentBatch(row) {
+            if (!this.canFinance || this.supplierSettlementState.action) return false;
+            const credit_applications=[];
+            for (const credit of (row.available_credits || [])) {
+              const amount=Number(credit._applyAmount || 0);
+              if (amount < 0 || amount > Number(credit.available_amount || 0)) { this.showToast("贷项抵扣金额不能超过该贷项可用余额",true); return false; }
+              if (amount > 0) credit_applications.push({credit_id:Number(credit.id),amount:String(credit._applyAmount),expected_version:Number(credit.version)});
+            }
+            const acceptance=this.supplierSettlementSelectedAcceptance(row);
+            const bankAmount=Number(row._bankAmount || 0);
+            const creditTotal=this.supplierSettlementCreditApplyTotal(row);
+            const paymentCapacity=this.supplierSettlementPaymentCapacity(row);
+            if (!row._paymentDate || bankAmount < 0) { this.showToast("请填写正确的付款日期和银行转账金额",true); return false; }
+            if (!credit_applications.length && !acceptance && !(bankAmount>0)) { this.showToast("请至少选择贷项、承兑或填写银行转账金额",true); return false; }
+            if (creditTotal > paymentCapacity) { this.showToast("本次贷项抵扣超过已收发票可付款额度",true); return false; }
+            if (acceptance && Number(acceptance.amount)>this.supplierSettlementAcceptanceAppliedAmount(row) && !(this.supplierSettlementNewCreditAmount(row)>0)) { this.showToast("当前已收发票额度不足，暂不能使用整张承兑",true); return false; }
+            if (this.supplierSettlementNewCreditAmount(row)>0 && bankAmount>0) { this.showToast("承兑已超过本期可抵付额并形成贷项，本次银行转账应为 0",true); return false; }
+            if (bankAmount > this.supplierSettlementSuggestedBank(row)) { this.showToast("银行转账超过本期剩余或已收发票可付款额度",true); return false; }
+            const payload={
+              expected_version:Number(row.version),
+              payment_date:row._paymentDate,
+              credit_applications,
+              acceptance_note_id:acceptance ? Number(acceptance.id) : null,
+              expected_acceptance_version:acceptance ? Number(acceptance.version) : null,
+              bank_amount:String(row._bankAmount || 0),
+              bank_reference:String(row._bankReference || "").trim() || null,
+            };
+            const attempt=this.supplierSettlementAttempt("payment-batch",row,payload);
+            this.supplierSettlementState.action="payment-batch";
+            this.supplierSettlementState.statementId=Number(row.id);
+            try {
+              await axios.post(`/api/finance/supplier-settlements/${row.id}/payment-batches`,{...payload,idempotency_key:attempt.key});
+              const attempts={...this.supplierSettlementAttempts}; delete attempts[attempt.slot]; this.supplierSettlementAttempts=attempts;
+              await Promise.all([this.loadSupplierSettlements(false),this.loadSimpleFinance()]);
+              this.showToast("贷项、承兑和银行转账已一次登记"); return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.supplierSettlementState.action=""; this.supplierSettlementState.statementId=null; }
           },
           chooseSupplierInvoicePdf(statement,invoice) {
             const input=this.$refs?.supplierInvoicePdfInput;

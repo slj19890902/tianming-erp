@@ -164,8 +164,10 @@ from app.models.finance_payable import FinancePayable  # noqa: E402,F401
 from app.models.supplier_settlement import (  # noqa: E402,F401
     SupplierReceiptSettlementPriceFact,
     SupplierMonthlyAdjustment,
+    SupplierCreditLot,
     SupplierMonthlyInvoice,
     SupplierMonthlyPayment,
+    SupplierPaymentBatch,
     SupplierMonthlyStatement,
     SupplierMonthlyStatementLine,
 )
@@ -176,6 +178,8 @@ from app.models.finance_cost import (  # noqa: E402,F401
 from app.models.finance_simplified import (  # noqa: E402,F401
     FinanceAcceptanceNote,
     FinanceRecurringRule,
+    FinanceUtilityExpense,
+    FinanceUtilityMonthMode,
     FinanceUtilityReading,
 )
 from app.models.processing_cost import (  # noqa: E402,F401

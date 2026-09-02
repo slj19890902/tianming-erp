@@ -68,7 +68,10 @@ def test_floor4_ledger_migration_is_the_unique_linear_head(
 ) -> None:
     config = _config(monkeypatch, ROOT / "data" / "unused-floor4-test.sqlite3")
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [TARGET]
+    assert len(script.get_heads()) == 1
+    assert TARGET in {
+        revision.revision for revision in script.walk_revisions("base", script.get_heads()[0])
+    }
     assert script.get_revision(TARGET).down_revision == PARENT
 
     spec = importlib.util.spec_from_file_location("p1_134_floor4_ledger", MIGRATION)

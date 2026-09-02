@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -16,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -55,6 +57,26 @@ class SupplierMonthlyStatement(Base):
         ),
         CheckConstraint("version >= 1", name="ck_supplier_monthly_statements_version"),
         CheckConstraint(
+            "document_revision >= 1",
+            name="ck_supplier_monthly_statements_document_revision",
+        ),
+        CheckConstraint(
+            "settlement_day_snapshot BETWEEN 1 AND 31",
+            name="ck_supplier_monthly_statements_settlement_day",
+        ),
+        CheckConstraint(
+            "generation_origin IN ('legacy','automatic','manual','regenerate')",
+            name="ck_supplier_monthly_statements_generation_origin",
+        ),
+        CheckConstraint(
+            "((generation_origin = 'regenerate' AND supersedes_statement_id IS NOT NULL "
+            "AND document_revision > 1) OR "
+            "(generation_origin <> 'regenerate' AND supersedes_statement_id IS NULL "
+            "AND document_revision = 1)) "
+            "AND (source_hash IS NULL OR length(source_hash) = 64)",
+            name="ck_supplier_monthly_statements_revision_source",
+        ),
+        CheckConstraint(
             "active_guard IS NULL OR active_guard = 1",
             name="ck_supplier_monthly_statements_active_guard",
         ),
@@ -68,6 +90,30 @@ class SupplierMonthlyStatement(Base):
             "tax_basis",
             "active_guard",
             name="uq_supplier_monthly_statements_active_period",
+        ),
+        Index(
+            "uq_supplier_monthly_statements_business_revision",
+            "supplier_id",
+            "settlement_month",
+            "currency",
+            "tax_basis",
+            "document_revision",
+            unique=True,
+            sqlite_where=text("generation_origin <> 'legacy'"),
+            postgresql_where=text("generation_origin <> 'legacy'"),
+        ),
+        Index(
+            "uq_supplier_monthly_statements_superseded_once",
+            "supersedes_statement_id",
+            unique=True,
+            sqlite_where=text("supersedes_statement_id IS NOT NULL"),
+            postgresql_where=text("supersedes_statement_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_supplier_monthly_statements_id_supplier",
+            "id",
+            "supplier_id",
+            unique=True,
         ),
         Index(
             "ix_supplier_monthly_statements_month_status",
@@ -126,6 +172,21 @@ class SupplierMonthlyStatement(Base):
     finance_payable_id: Mapped[int | None] = mapped_column(
         ForeignKey("finance_payables.id", ondelete="SET NULL"), nullable=True
     )
+    document_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    settlement_day_snapshot: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=20, server_default="20"
+    )
+    generation_origin: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="manual", server_default="legacy"
+    )
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    supersedes_statement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("supplier_monthly_statements.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    supersede_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
@@ -438,6 +499,15 @@ class SupplierMonthlyAdjustment(Base):
             name="ck_supplier_monthly_adjustments_type",
         ),
         CheckConstraint("amount <> 0", name="ck_supplier_monthly_adjustments_amount"),
+        CheckConstraint(
+            "(is_post_confirmation IS FALSE "
+            "AND statement_version_before IS NULL AND amount_before IS NULL "
+            "AND amount_after IS NULL) OR "
+            "(statement_version_before >= 1 AND amount_before IS NOT NULL "
+            "AND amount_after IS NOT NULL "
+            "AND abs(amount_after - (amount_before + amount)) < 0.005)",
+            name="ck_supplier_monthly_adjustments_audit",
+        ),
         Index("ix_supplier_monthly_adjustments_statement", "statement_id"),
     )
 
@@ -453,6 +523,12 @@ class SupplierMonthlyAdjustment(Base):
     difference_type: Mapped[str] = mapped_column(String(30), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    statement_version_before: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    amount_before: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    amount_after: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    is_post_confirmation: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     created_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -529,21 +605,249 @@ class SupplierMonthlyInvoice(Base):
     statement: Mapped[SupplierMonthlyStatement] = relationship(back_populates="invoices")
 
 
+class SupplierPaymentBatch(Base):
+    """One operator action that settles a statement with credit, acceptance and bank."""
+
+    __tablename__ = "supplier_payment_batches"
+    __table_args__ = (
+        CheckConstraint(
+            "credit_applied_amount >= 0 AND acceptance_face_amount >= 0 "
+            "AND acceptance_applied_amount >= 0 AND bank_amount >= 0 "
+            "AND credit_created_amount >= 0 AND settled_amount > 0",
+            name="ck_supplier_payment_batches_amounts",
+        ),
+        CheckConstraint(
+            "acceptance_applied_amount <= acceptance_face_amount",
+            name="ck_supplier_payment_batches_acceptance_amount",
+        ),
+        CheckConstraint(
+            "(acceptance_note_id IS NULL AND acceptance_face_amount = 0 "
+            "AND acceptance_applied_amount = 0 AND credit_created_amount = 0) OR "
+            "(acceptance_note_id IS NOT NULL AND acceptance_face_amount > 0 "
+            "AND acceptance_applied_amount > 0)",
+            name="ck_supplier_payment_batches_acceptance_link",
+        ),
+        CheckConstraint(
+            "abs(settled_amount - (credit_applied_amount + "
+            "acceptance_applied_amount + bank_amount)) < 0.005 "
+            "AND abs(credit_created_amount - (acceptance_face_amount - "
+            "acceptance_applied_amount)) < 0.005 "
+            "AND (credit_created_amount = 0 OR bank_amount = 0)",
+            name="ck_supplier_payment_batches_balance",
+        ),
+        UniqueConstraint(
+            "acceptance_note_id", name="uq_supplier_payment_batches_acceptance"
+        ),
+        UniqueConstraint(
+            "id", "statement_id", name="uq_supplier_payment_batches_id_statement"
+        ),
+        UniqueConstraint(
+            "id",
+            "acceptance_note_id",
+            "statement_id",
+            "acceptance_applied_amount",
+            name="uq_supplier_payment_batches_acceptance_payment",
+        ),
+        UniqueConstraint(
+            "id",
+            "supplier_id",
+            "statement_id",
+            "acceptance_note_id",
+            "credit_created_amount",
+            name="uq_supplier_payment_batches_credit_source",
+        ),
+        ForeignKeyConstraint(
+            ["statement_id", "supplier_id"],
+            ["supplier_monthly_statements.id", "supplier_monthly_statements.supplier_id"],
+            name="fk_supplier_payment_batches_statement_supplier",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["acceptance_note_id", "supplier_id", "statement_id", "acceptance_face_amount"],
+            [
+                "finance_acceptance_notes.id",
+                "finance_acceptance_notes.supplier_id",
+                "finance_acceptance_notes.supplier_statement_id",
+                "finance_acceptance_notes.amount",
+            ],
+            name="fk_supplier_payment_batches_acceptance_supplier",
+            ondelete="RESTRICT",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        Index("ix_supplier_payment_batches_statement", "statement_id", "payment_date"),
+        Index("ix_supplier_payment_batches_supplier", "supplier_id", "payment_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    statement_id: Mapped[int] = mapped_column(
+        ForeignKey("supplier_monthly_statements.id", ondelete="RESTRICT"), nullable=False
+    )
+    supplier_id: Mapped[int] = mapped_column(
+        ForeignKey("supplier_master_records.id", ondelete="RESTRICT"), nullable=False
+    )
+    acceptance_note_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_acceptance_notes.id", ondelete="RESTRICT"), nullable=True
+    )
+    payment_date: Mapped[date] = mapped_column(Date, nullable=False)
+    credit_applied_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), nullable=False, default=0, server_default="0"
+    )
+    acceptance_face_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), nullable=False, default=0, server_default="0"
+    )
+    acceptance_applied_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), nullable=False, default=0, server_default="0"
+    )
+    bank_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), nullable=False, default=0, server_default="0"
+    )
+    credit_created_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), nullable=False, default=0, server_default="0"
+    )
+    settled_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    bank_reference: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+
+class SupplierCreditLot(Base):
+    """Auditable supplier-specific credit created by an over-endorsed acceptance."""
+
+    __tablename__ = "supplier_credit_lots"
+    __table_args__ = (
+        CheckConstraint(
+            "source_type IN ('acceptance_overpayment','statement_adjustment')",
+            name="ck_supplier_credit_lots_source_type",
+        ),
+        CheckConstraint(
+            "original_amount > 0 AND available_amount >= 0 "
+            "AND available_amount <= original_amount",
+            name="ck_supplier_credit_lots_amounts",
+        ),
+        CheckConstraint(
+            "status IN ('available','partial','exhausted','voided')",
+            name="ck_supplier_credit_lots_status",
+        ),
+        CheckConstraint(
+            "(source_type = 'acceptance_overpayment' "
+            "AND source_acceptance_note_id IS NOT NULL "
+            "AND source_payment_batch_id IS NOT NULL) OR "
+            "(source_type = 'statement_adjustment' "
+            "AND source_acceptance_note_id IS NULL "
+            "AND source_payment_batch_id IS NULL)",
+            name="ck_supplier_credit_lots_source_link",
+        ),
+        CheckConstraint(
+            "(status = 'available' AND available_amount = original_amount) OR "
+            "(status = 'partial' AND available_amount > 0 "
+            "AND available_amount < original_amount) OR "
+            "(status = 'exhausted' AND available_amount = 0) OR status = 'voided'",
+            name="ck_supplier_credit_lots_balance_status",
+        ),
+        CheckConstraint("version >= 1", name="ck_supplier_credit_lots_version"),
+        UniqueConstraint(
+            "source_acceptance_note_id",
+            name="uq_supplier_credit_lots_source_acceptance",
+        ),
+        ForeignKeyConstraint(
+            ["source_statement_id", "supplier_id"],
+            ["supplier_monthly_statements.id", "supplier_monthly_statements.supplier_id"],
+            name="fk_supplier_credit_lots_statement_supplier",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            [
+                "source_payment_batch_id",
+                "supplier_id",
+                "source_statement_id",
+                "source_acceptance_note_id",
+                "original_amount",
+            ],
+            [
+                "supplier_payment_batches.id",
+                "supplier_payment_batches.supplier_id",
+                "supplier_payment_batches.statement_id",
+                "supplier_payment_batches.acceptance_note_id",
+                "supplier_payment_batches.credit_created_amount",
+            ],
+            name="fk_supplier_credit_lots_acceptance_source",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_supplier_credit_lots_supplier", "supplier_id", "status", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    supplier_id: Mapped[int] = mapped_column(
+        ForeignKey("supplier_master_records.id", ondelete="RESTRICT"), nullable=False
+    )
+    supplier_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_acceptance_note_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_acceptance_notes.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_statement_id: Mapped[int] = mapped_column(
+        ForeignKey("supplier_monthly_statements.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_payment_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("supplier_payment_batches.id", ondelete="RESTRICT"), nullable=True
+    )
+    original_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    available_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="available", server_default="available"
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+
 class SupplierMonthlyPayment(Base):
     __tablename__ = "supplier_monthly_payments"
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_supplier_monthly_payments_amount"),
         CheckConstraint(
-            "payment_method IN ('bank','acceptance')",
+            "payment_method IN ('bank','acceptance','credit')",
             name="ck_supplier_monthly_payments_method",
         ),
         CheckConstraint(
-            "(payment_method = 'bank' AND acceptance_note_id IS NULL) OR "
-            "(payment_method = 'acceptance' AND acceptance_note_id IS NOT NULL)",
+            "(payment_method = 'bank' AND acceptance_note_id IS NULL "
+            "AND supplier_credit_id IS NULL) OR "
+            "(payment_method = 'acceptance' AND acceptance_note_id IS NOT NULL "
+            "AND supplier_credit_id IS NULL) OR "
+            "(payment_method = 'credit' AND acceptance_note_id IS NULL "
+            "AND supplier_credit_id IS NOT NULL AND payment_batch_id IS NOT NULL)",
             name="ck_supplier_monthly_payments_acceptance_link",
         ),
         UniqueConstraint(
             "acceptance_note_id", name="uq_supplier_monthly_payments_acceptance"
+        ),
+        ForeignKeyConstraint(
+            ["payment_batch_id", "statement_id"],
+            ["supplier_payment_batches.id", "supplier_payment_batches.statement_id"],
+            name="fk_supplier_monthly_payments_batch_statement",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["payment_batch_id", "acceptance_note_id", "statement_id", "amount"],
+            [
+                "supplier_payment_batches.id",
+                "supplier_payment_batches.acceptance_note_id",
+                "supplier_payment_batches.statement_id",
+                "supplier_payment_batches.acceptance_applied_amount",
+            ],
+            name="fk_supplier_monthly_payments_acceptance_batch",
+            ondelete="RESTRICT",
         ),
         Index("ix_supplier_monthly_payments_statement", "statement_id"),
     )
@@ -560,6 +864,12 @@ class SupplierMonthlyPayment(Base):
     )
     acceptance_note_id: Mapped[int | None] = mapped_column(
         ForeignKey("finance_acceptance_notes.id", ondelete="RESTRICT"), nullable=True
+    )
+    payment_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("supplier_payment_batches.id", ondelete="RESTRICT"), nullable=True
+    )
+    supplier_credit_id: Mapped[int | None] = mapped_column(
+        ForeignKey("supplier_credit_lots.id", ondelete="RESTRICT"), nullable=True
     )
     reference: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_by: Mapped[int | None] = mapped_column(

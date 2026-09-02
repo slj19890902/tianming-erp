@@ -133,7 +133,10 @@ def test_p0_39_price_fact_migration_is_linear_round_trips_and_never_backfills(
     database = tmp_path / "p0-39-round-trip.sqlite3"
     config = _config(monkeypatch, database)
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [TARGET]
+    assert len(script.get_heads()) == 1
+    assert TARGET in {
+        revision.revision for revision in script.walk_revisions("base", script.get_heads()[0])
+    }
     assert script.get_revision(TARGET).down_revision == PARENT
 
     command.upgrade(config, PARENT)

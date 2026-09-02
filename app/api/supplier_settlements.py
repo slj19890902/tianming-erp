@@ -41,14 +41,19 @@ from app.services.supplier_monthly_settlement import (
     add_payment,
     confirm_statement,
     default_closed_settlement_month,
+    generate_due_supplier_settlements,
     generate_or_refresh_settlements,
+    list_statement_history_responses,
     list_statement_responses,
+    payment_options,
+    post_payment_batch,
+    regenerate_statement,
     reopen_statement,
     review_statement,
-    scan_settlement_candidates,
     settlement_period,
     settlement_period_utc_bounds,
     statement_response,
+    supplier_settlement_overview,
 )
 from app.services.supplier_receipt_price_facts import (
     SupplierReceiptPriceFactError,
@@ -104,6 +109,16 @@ class GeneratePayload(IdempotentPayload):
     def validate_month(cls, value: str) -> str:
         settlement_period(value)
         return value
+
+
+class RegeneratePayload(IdempotentPayload):
+    expected_version: int = Field(gt=0)
+    reason: str | None = Field(default=None, max_length=120)
+
+    @field_validator("reason")
+    @classmethod
+    def clean_reason(cls, value: str | None) -> str | None:
+        return str(value or "").strip() or None
 
 
 class ReviewPayload(IdempotentPayload):
@@ -200,6 +215,45 @@ class PaymentPayload(IdempotentPayload):
     @classmethod
     def clean_reference(cls, value: str | None) -> str | None:
         return str(value or "").strip() or None
+
+
+class CreditApplicationPayload(BaseModel):
+    credit_id: int = Field(gt=0)
+    amount: Decimal = Field(gt=0)
+    expected_version: int = Field(gt=0)
+
+    @field_validator("amount")
+    @classmethod
+    def normalize_credit_amount(cls, value: Decimal) -> Decimal:
+        return value.quantize(MONEY, rounding=ROUND_HALF_UP)
+
+
+class PaymentBatchPayload(IdempotentPayload):
+    expected_version: int = Field(gt=0)
+    payment_date: date
+    credit_applications: list[CreditApplicationPayload] = Field(default_factory=list)
+    acceptance_note_id: int | None = Field(default=None, gt=0)
+    expected_acceptance_version: int | None = Field(default=None, gt=0)
+    bank_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    bank_reference: str | None = Field(default=None, max_length=200)
+
+    @field_validator("bank_amount")
+    @classmethod
+    def normalize_bank_amount(cls, value: Decimal) -> Decimal:
+        return value.quantize(MONEY, rounding=ROUND_HALF_UP)
+
+    @field_validator("bank_reference")
+    @classmethod
+    def clean_bank_reference(cls, value: str | None) -> str | None:
+        return str(value or "").strip() or None
+
+    @model_validator(mode="after")
+    def validate_acceptance_version(self):
+        if (self.acceptance_note_id is None) != (
+            self.expected_acceptance_version is None
+        ):
+            raise ValueError("承兑票据和版本必须同时选择")
+        return self
 
 
 def _request_hash(action: str, payload: dict[str, Any]) -> str:
@@ -376,15 +430,16 @@ def list_supplier_settlements(
     _user: User = Depends(company_read),
 ) -> dict[str, Any]:
     selected = settlement_month or default_closed_settlement_month()
-    _candidates, issues, period_start, period_end = scan_settlement_candidates(
-        db,
-        settlement_month=selected,
+    _candidates, issues, supplier_periods = supplier_settlement_overview(
+        db, settlement_month=selected
     )
+    period_start, period_end = settlement_period(selected)
     return {
         "settlement_month": selected,
         "period_start": period_start,
         "period_end": period_end,
         "default_month": default_closed_settlement_month(),
+        "supplier_periods": supplier_periods,
         "items": list_statement_responses(db, settlement_month=selected),
         "issues": issues,
     }
@@ -416,7 +471,11 @@ def generate_supplier_settlements(
 
     def operation():
         response = generate_or_refresh_settlements(
-            db, settlement_month=payload.settlement_month, user=user
+            db,
+            settlement_month=payload.settlement_month,
+            user=user,
+            generation_origin="manual",
+            replace_changed_drafts=False,
         )
         first_id = response["items"][0]["id"] if response["items"] else None
         row = db.get(SupplierMonthlyStatement, first_id) if first_id else None
@@ -429,8 +488,79 @@ def generate_supplier_settlements(
         action="SUPPLIER_SETTLEMENT_GENERATE",
         payload=values,
         operation=operation,
-        description="生成或刷新供应商20日月结草稿",
+        description="按供应商结算日生成月结草稿",
     )
+
+
+@router.post("/supplier-settlements/generate-due")
+def generate_due_settlement_drafts(
+    payload: IdempotentPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(company_execute),
+) -> dict[str, Any]:
+    def operation():
+        response = generate_due_supplier_settlements(db, user=user)
+        return response, None
+
+    return _run_mutation(
+        db,
+        user=user,
+        key=payload.idempotency_key,
+        action="SUPPLIER_SETTLEMENT_GENERATE_DUE",
+        payload={},
+        operation=operation,
+        description="补生成所有已到期供应商月结草稿",
+    )
+
+
+@router.post("/supplier-settlements/{statement_id}/regenerate")
+def regenerate_supplier_settlement(
+    statement_id: int,
+    payload: RegeneratePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(company_execute),
+) -> dict[str, Any]:
+    values = payload.model_dump(exclude={"idempotency_key"})
+
+    def operation():
+        row = regenerate_statement(
+            db, statement_id=statement_id, user=user, **values
+        )
+        return statement_response(db, row), row
+
+    return _run_mutation(
+        db,
+        user=user,
+        key=payload.idempotency_key,
+        action="SUPPLIER_SETTLEMENT_REGENERATE",
+        payload={"statement_id": statement_id, **values},
+        operation=operation,
+        description="重生成供应商月结新业务修订并保留旧版",
+    )
+
+
+@router.get("/supplier-settlements/{statement_id}/history")
+def supplier_settlement_history(
+    statement_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(company_read),
+) -> dict[str, Any]:
+    try:
+        return {"items": list_statement_history_responses(db, statement_id=statement_id)}
+    except SupplierSettlementError as error:
+        raise _translate(error) from error
+
+
+@router.get("/supplier-settlements/{statement_id}/payment-options")
+def supplier_settlement_payment_options(
+    statement_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(company_read),
+) -> dict[str, Any]:
+    try:
+        return payment_options(db, statement_id=statement_id)
+    except SupplierSettlementError as error:
+        raise _translate(error) from error
 
 
 @router.post("/supplier-settlements/{statement_id}/review")
@@ -586,6 +716,42 @@ def create_supplier_payment(
         payload={"statement_id": statement_id, **values},
         operation=operation,
         description="登记供应商分次付款",
+    )
+
+
+@router.post(
+    "/supplier-settlements/{statement_id}/payment-batches", status_code=201
+)
+def create_supplier_payment_batch(
+    statement_id: int,
+    payload: PaymentBatchPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(company_execute),
+) -> dict[str, Any]:
+    values = payload.model_dump(exclude={"idempotency_key"})
+    values["credit_applications"] = [
+        item.model_dump() for item in payload.credit_applications
+    ]
+
+    def operation():
+        row, batch, created_credit = post_payment_batch(
+            db, statement_id=statement_id, user=user, **values
+        )
+        response = statement_response(db, row)
+        response["created_payment_batch_id"] = batch.id
+        response["created_credit_id"] = (
+            created_credit.id if created_credit is not None else None
+        )
+        return response, row
+
+    return _run_mutation(
+        db,
+        user=user,
+        key=payload.idempotency_key,
+        action="SUPPLIER_SETTLEMENT_PAYMENT_BATCH",
+        payload={"statement_id": statement_id, **values},
+        operation=operation,
+        description="一次登记供应商余额、承兑与银行组合付款",
     )
 
 

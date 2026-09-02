@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
+import json
 import re
 from typing import Any
 
@@ -23,6 +26,7 @@ from app.models.external_packaging_purchase import (
     ExternalPackagingReceiptItem,
 )
 from app.models.finance_payable import FinancePayable
+from app.models.finance_simplified import FinanceAcceptanceNote
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.purchase_receipt import (
     IncomingReceiptPurposeAllocation,
@@ -40,6 +44,8 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrderItem,
 )
 from app.models.supplier_settlement import (
+    SupplierCreditLot,
+    SupplierPaymentBatch,
     SupplierReceiptSettlementPriceFact,
     SupplierMonthlyAdjustment,
     SupplierMonthlyInvoice,
@@ -130,16 +136,34 @@ def _shift_month(value: str, offset: int) -> str:
     return f"{position // 12:04d}-{position % 12 + 1:02d}"
 
 
-def settlement_period(settlement_month: str) -> tuple[date, date]:
+def _effective_cutoff(settlement_month: str, settlement_day: int) -> date:
+    if not 1 <= int(settlement_day) <= 31:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_DAY_INVALID", "供应商结算日必须在 1 至 31 日之间", 422
+        )
+    month_start = date.fromisoformat(f"{_shift_month(settlement_month, 0)}-01")
+    last_day = calendar.monthrange(month_start.year, month_start.month)[1]
+    return date(month_start.year, month_start.month, min(int(settlement_day), last_day))
+
+
+def settlement_period(
+    settlement_month: str, settlement_day: int = 20
+) -> tuple[date, date]:
     current = date.fromisoformat(f"{_shift_month(settlement_month, 0)}-01")
-    previous = date.fromisoformat(f"{_shift_month(settlement_month, -1)}-01")
-    return date(previous.year, previous.month, 21), date(current.year, current.month, 20)
+    previous_month = _shift_month(settlement_month, -1)
+    previous_cutoff = _effective_cutoff(previous_month, settlement_day)
+    return previous_cutoff + timedelta(days=1), _effective_cutoff(
+        current.strftime("%Y-%m"), settlement_day
+    )
 
 
-def default_closed_settlement_month(today: date | None = None) -> str:
+def default_closed_settlement_month(
+    today: date | None = None, settlement_day: int = 20
+) -> str:
     business_date = today or beijing_today()
     current = business_date.strftime("%Y-%m")
-    return current if business_date.day > 20 else _shift_month(current, -1)
+    current_cutoff = _effective_cutoff(current, settlement_day)
+    return current if business_date > current_cutoff else _shift_month(current, -1)
 
 
 def _utc_period_bounds(start: date, end: date) -> tuple[datetime, datetime]:
@@ -149,9 +173,9 @@ def _utc_period_bounds(start: date, end: date) -> tuple[datetime, datetime]:
 
 
 def settlement_period_utc_bounds(
-    settlement_month: str,
+    settlement_month: str, settlement_day: int = 20
 ) -> tuple[date, date, datetime, datetime]:
-    start, end = settlement_period(settlement_month)
+    start, end = settlement_period(settlement_month, settlement_day)
     start_utc, end_utc = _utc_period_bounds(start, end)
     return start, end, start_utc, end_utc
 
@@ -615,9 +639,20 @@ def _scan_external_packaging(
 
 
 def scan_settlement_candidates(
-    db: Session, *, settlement_month: str
+    db: Session, *, settlement_month: str, settlement_day: int = 20
 ) -> tuple[list[SettlementCandidate], list[dict[str, Any]], date, date]:
-    start, end, start_utc, end_utc = settlement_period_utc_bounds(settlement_month)
+    start, end, start_utc, end_utc = settlement_period_utc_bounds(
+        settlement_month, settlement_day
+    )
+    candidates, issues = _scan_candidates_for_bounds(
+        db, start_utc=start_utc, end_utc=end_utc
+    )
+    return candidates, issues, start, end
+
+
+def _scan_candidates_for_bounds(
+    db: Session, *, start_utc: datetime, end_utc: datetime
+) -> tuple[list[SettlementCandidate], list[dict[str, Any]]]:
     paperboard, paperboard_issues = _scan_paperboard(
         db, start_utc=start_utc, end_utc=end_utc
     )
@@ -628,7 +663,74 @@ def scan_settlement_candidates(
         [*paperboard, *packaging],
         key=lambda row: (row.receipt_date, row.source_type, row.source_key),
     )
-    return candidates, [*paperboard_issues, *packaging_issues], start, end
+    return candidates, [*paperboard_issues, *packaging_issues]
+
+
+def supplier_settlement_period(
+    db: Session,
+    *,
+    supplier_id: int,
+    settlement_month: str,
+    settlement_day: int,
+) -> tuple[date, date]:
+    """Return a gap-free supplier period even after its cutoff day changes."""
+
+    default_start, period_end = settlement_period(settlement_month, settlement_day)
+    previous_period_end = db.scalar(
+        select(func.max(SupplierMonthlyStatement.period_end)).where(
+            SupplierMonthlyStatement.supplier_id == supplier_id,
+            SupplierMonthlyStatement.settlement_month != settlement_month,
+            SupplierMonthlyStatement.period_end < period_end,
+            SupplierMonthlyStatement.status != "voided",
+        )
+    )
+    period_start = (
+        previous_period_end + timedelta(days=1)
+        if previous_period_end is not None
+        else default_start
+    )
+    if period_start > period_end:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_PERIOD_OVERLAP",
+            "该供应商结算日变更后与既有周期重叠，请先核对上一期月结",
+        )
+    return period_start, period_end
+
+
+def _candidate_source_hash(candidates: list[SettlementCandidate]) -> str:
+    payload = [
+        {
+            "source_key": item.source_key,
+            "receipt_date": item.receipt_date.isoformat(),
+            "quantity": _plain_decimal(item.received_quantity),
+            "unit_price": _plain_decimal(item.frozen_unit_price),
+            "amount": _plain_decimal(item.erp_amount),
+            "tax_amount": _plain_decimal(item.tax_amount),
+        }
+        for item in sorted(candidates, key=lambda value: value.source_key)
+    ]
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _statement_line_source_hash(
+    lines: list[SupplierMonthlyStatementLine],
+) -> str:
+    payload = [
+        {
+            "source_key": item.source_key,
+            "receipt_date": item.receipt_date.isoformat(),
+            "quantity": _plain_decimal(item.received_quantity),
+            "unit_price": _plain_decimal(item.frozen_unit_price),
+            "amount": _plain_decimal(item.erp_amount),
+            "tax_amount": _plain_decimal(item.tax_amount),
+        }
+        for item in sorted(lines, key=lambda value: value.source_key)
+    ]
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _statement_number(
@@ -716,159 +818,481 @@ def _recalculate_statement(db: Session, row: SupplierMonthlyStatement) -> bool:
     return True
 
 
+def _add_candidate_line(
+    db: Session,
+    *,
+    statement_id: int,
+    candidate: SettlementCandidate,
+) -> None:
+    db.add(
+        SupplierMonthlyStatementLine(
+            statement_id=statement_id,
+            source_type=candidate.source_type,
+            source_key=candidate.source_key,
+            incoming_receipt_item_id=candidate.incoming_receipt_item_id,
+            external_receipt_item_id=candidate.external_receipt_item_id,
+            supplier_receipt_price_fact_id=candidate.supplier_receipt_price_fact_id,
+            purchase_document_number=candidate.purchase_document_number,
+            receipt_number=candidate.receipt_number,
+            receipt_date=candidate.receipt_date,
+            category_label=candidate.category_label,
+            specification_snapshot=candidate.specification_snapshot,
+            material_or_product_snapshot=candidate.material_or_product_snapshot,
+            received_quantity=candidate.received_quantity,
+            quantity_unit=candidate.quantity_unit,
+            frozen_unit_price=candidate.frozen_unit_price,
+            price_unit=candidate.price_unit,
+            currency=candidate.currency,
+            tax_basis=candidate.tax_basis,
+            tax_rate=candidate.tax_rate,
+            erp_amount=candidate.erp_amount,
+            tax_amount=candidate.tax_amount,
+            source_link=candidate.source_link,
+        )
+    )
+
+
+def _create_statement_from_candidates(
+    db: Session,
+    *,
+    supplier: Supplier,
+    settlement_month: str,
+    period_start: date,
+    period_end: date,
+    candidates: list[SettlementCandidate],
+    user: User,
+    generation_origin: str,
+    document_revision: int = 1,
+    supersedes_statement_id: int | None = None,
+    supersede_reason: str | None = None,
+) -> SupplierMonthlyStatement:
+    first = candidates[0]
+    row = SupplierMonthlyStatement(
+        statement_number=_statement_number(
+            db,
+            supplier_id=supplier.id,
+            settlement_month=settlement_month,
+            currency=first.currency,
+            tax_basis=first.tax_basis,
+        ),
+        supplier_id=supplier.id,
+        supplier_name_snapshot=first.supplier_name,
+        settlement_month=settlement_month,
+        period_start=period_start,
+        period_end=period_end,
+        currency=first.currency,
+        tax_basis=first.tax_basis,
+        document_revision=document_revision,
+        settlement_day_snapshot=int(supplier.settlement_day or 20),
+        generation_origin=generation_origin,
+        source_hash=_candidate_source_hash(candidates),
+        supersedes_statement_id=supersedes_statement_id,
+        supersede_reason=supersede_reason,
+        generated_by=user.id,
+    )
+    db.add(row)
+    db.flush()
+    for candidate in candidates:
+        _add_candidate_line(db, statement_id=row.id, candidate=candidate)
+    db.flush()
+    _recalculate_statement(db, row)
+    return row
+
+
+def _replace_draft_statement(
+    db: Session,
+    *,
+    row: SupplierMonthlyStatement,
+    supplier: Supplier,
+    candidates: list[SettlementCandidate],
+    user: User,
+    reason: str,
+    period_start: date | None = None,
+    period_end: date | None = None,
+) -> tuple[SupplierMonthlyStatement, int]:
+    if row.status not in ACTIVE_DRAFT_STATUSES or row.active_guard != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_REGENERATION_BLOCKED",
+            "只有未确认的当前草稿可以重生成；已确认、已开票或已付款记录必须保留",
+        )
+    if row.invoices or row.payments or row.finance_payable_id is not None:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_REGENERATION_DOWNSTREAM_EXISTS",
+            "该月结已有应付、发票或付款事实，不能重生成",
+        )
+    if not candidates:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_REGENERATION_EMPTY",
+            "当前周期没有可生成的有效实收，原草稿保持不变",
+        )
+    expected_version = int(row.version)
+    statement_id = int(row.id)
+    settlement_month = row.settlement_month
+    original_period_start = row.period_start
+    original_period_end = row.period_end
+    next_document_revision = int(row.document_revision or 1) + 1
+    now = utc_now_naive()
+    statement_result = db.execute(
+        update(SupplierMonthlyStatement)
+        .where(
+            SupplierMonthlyStatement.id == statement_id,
+            SupplierMonthlyStatement.active_guard == 1,
+            SupplierMonthlyStatement.status.in_(ACTIVE_DRAFT_STATUSES),
+            SupplierMonthlyStatement.version == expected_version,
+        )
+        .values(
+            active_guard=None,
+            status="voided",
+            voided_by=user.id,
+            voided_at=now,
+            version=expected_version + 1,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if statement_result.rowcount != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_STALE",
+            "供应商月结草稿已被其他操作修改，请刷新后重试",
+            409,
+        )
+    released_result = db.execute(
+        update(SupplierMonthlyStatementLine)
+        .where(
+            SupplierMonthlyStatementLine.statement_id == statement_id,
+            SupplierMonthlyStatementLine.active_guard == 1,
+        )
+        .values(active_guard=None, released_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    released = int(released_result.rowcount or 0)
+    db.expire(row)
+    db.flush()
+    replacement = _create_statement_from_candidates(
+        db,
+        supplier=supplier,
+        settlement_month=settlement_month,
+        period_start=period_start or original_period_start,
+        period_end=period_end or original_period_end,
+        candidates=candidates,
+        user=user,
+        generation_origin="regenerate",
+        document_revision=next_document_revision,
+        supersedes_statement_id=statement_id,
+        supersede_reason=reason,
+    )
+    return replacement, released
+
+
+def _supplier_candidates(
+    db: Session,
+    *,
+    supplier: Supplier,
+    settlement_month: str,
+) -> tuple[list[SettlementCandidate], list[dict[str, Any]], date, date]:
+    start, end = supplier_settlement_period(
+        db,
+        supplier_id=supplier.id,
+        settlement_month=settlement_month,
+        settlement_day=int(supplier.settlement_day or 20),
+    )
+    start_utc, end_utc = _utc_period_bounds(start, end)
+    candidates, issues = _scan_candidates_for_bounds(
+        db, start_utc=start_utc, end_utc=end_utc
+    )
+    return (
+        [item for item in candidates if item.supplier_id == supplier.id],
+        issues,
+        start,
+        end,
+    )
+
+
+def supplier_settlement_overview(
+    db: Session, *, settlement_month: str
+) -> tuple[list[SettlementCandidate], list[dict[str, Any]], list[dict[str, Any]]]:
+    candidates: list[SettlementCandidate] = []
+    issues: list[dict[str, Any]] = []
+    periods: list[dict[str, Any]] = []
+    issue_keys: set[tuple[str, str]] = set()
+    suppliers = list(
+        db.scalars(select(Supplier).order_by(Supplier.sort_order, Supplier.id)).all()
+    )
+    for supplier in suppliers:
+        supplier_candidates, supplier_issues, start, end = _supplier_candidates(
+            db, supplier=supplier, settlement_month=settlement_month
+        )
+        candidates.extend(supplier_candidates)
+        periods.append(
+            {
+                "supplier_id": supplier.id,
+                "supplier_name": supplier.standard_name,
+                "settlement_day": int(supplier.settlement_day or 20),
+                "period_start": start,
+                "period_end": end,
+            }
+        )
+        for issue in supplier_issues:
+            key = (str(issue.get("code") or ""), str(issue.get("source_key") or ""))
+            if key not in issue_keys:
+                issue_keys.add(key)
+                issues.append(issue)
+    return (
+        sorted(candidates, key=lambda item: (item.receipt_date, item.source_key)),
+        issues,
+        periods,
+    )
+
+
 def generate_or_refresh_settlements(
     db: Session,
     *,
     settlement_month: str,
     user: User,
     business_date: date | None = None,
+    generation_origin: str = "manual",
+    replace_changed_drafts: bool = True,
+    supplier_ids: set[int] | None = None,
 ) -> dict[str, Any]:
-    candidates, issues, period_start, period_end = scan_settlement_candidates(
-        db, settlement_month=settlement_month
-    )
-    if period_end >= (business_date or beijing_today()):
+    business_today = business_date or beijing_today()
+    if generation_origin not in {"automatic", "manual"}:
         raise SupplierSettlementError(
-            "SUPPLIER_SETTLEMENT_PERIOD_OPEN",
-            f"{settlement_month} 月结周期要到 {period_end.isoformat()} 才能生成草稿",
-            409,
+            "SUPPLIER_SETTLEMENT_ORIGIN_INVALID", "月结草稿生成来源无效", 422
         )
-    valid_source_keys = {row.source_key for row in candidates}
-    now = utc_now_naive()
+    suppliers = list(
+        db.scalars(
+            select(Supplier)
+            .order_by(Supplier.sort_order, Supplier.id)
+        ).all()
+    )
+    if supplier_ids is not None:
+        suppliers = [item for item in suppliers if item.id in supplier_ids]
+    issues: list[dict[str, Any]] = []
+    issue_keys: set[tuple[str, str]] = set()
     added = 0
     released = 0
     changed_statement_ids: set[int] = set()
-    draft_statements = list(
-        db.scalars(
-            select(SupplierMonthlyStatement).where(
-                SupplierMonthlyStatement.settlement_month == settlement_month,
-                SupplierMonthlyStatement.active_guard == 1,
-                SupplierMonthlyStatement.status.in_(ACTIVE_DRAFT_STATUSES),
-            )
-        ).all()
-    )
-    for statement in draft_statements:
-        for line in _active_lines(db, statement.id):
-            if line.source_key in valid_source_keys:
-                continue
-            line.active_guard = None
-            line.released_at = now
-            released += 1
-            changed_statement_ids.add(statement.id)
-    db.flush()
+    supplier_periods: list[dict[str, Any]] = []
+    any_closed_period = False
 
-    active_source_keys = set(
-        db.scalars(
-            select(SupplierMonthlyStatementLine.source_key).where(
-                SupplierMonthlyStatementLine.active_guard == 1
-            )
-        ).all()
-    )
-    statements_by_group = {
-        (row.supplier_id, row.currency, row.tax_basis): row
-        for row in db.scalars(
-            select(SupplierMonthlyStatement).where(
-                SupplierMonthlyStatement.settlement_month == settlement_month,
-                SupplierMonthlyStatement.active_guard == 1,
-            )
-        ).all()
-    }
-    for candidate in candidates:
-        if candidate.source_key in active_source_keys:
+    for supplier in suppliers:
+        candidates, scan_issues, period_start, period_end = _supplier_candidates(
+            db, supplier=supplier, settlement_month=settlement_month
+        )
+        supplier_periods.append(
+            {
+                "supplier_id": supplier.id,
+                "supplier_name": supplier.standard_name,
+                "settlement_day": int(supplier.settlement_day or 20),
+                "period_start": period_start,
+                "period_end": period_end,
+                "closed": period_end < business_today,
+            }
+        )
+        if period_end >= business_today:
             continue
-        group = (candidate.supplier_id, candidate.currency, candidate.tax_basis)
-        statement = statements_by_group.get(group)
-        if statement is not None and statement.status not in ACTIVE_DRAFT_STATUSES:
-            issues.append(
-                _issue(
-                    source_type=candidate.source_type,
-                    source_key=candidate.source_key,
-                    receipt_number=candidate.receipt_number,
-                    code="SUPPLIER_SETTLEMENT_ALREADY_CONFIRMED",
-                    message="该周期已确认应付；请先受控重开后再刷新晚到实收",
+        any_closed_period = True
+        for issue in scan_issues:
+            key = (str(issue.get("code") or ""), str(issue.get("source_key") or ""))
+            if key not in issue_keys:
+                issue_keys.add(key)
+                issues.append(issue)
+
+        groups: dict[tuple[str, str], list[SettlementCandidate]] = {}
+        for candidate in candidates:
+            groups.setdefault((candidate.currency, candidate.tax_basis), []).append(
+                candidate
+            )
+        for (currency, tax_basis), group_candidates in groups.items():
+            existing = db.scalar(
+                select(SupplierMonthlyStatement).where(
+                    SupplierMonthlyStatement.supplier_id == supplier.id,
+                    SupplierMonthlyStatement.settlement_month == settlement_month,
+                    SupplierMonthlyStatement.currency == currency,
+                    SupplierMonthlyStatement.tax_basis == tax_basis,
+                    SupplierMonthlyStatement.active_guard == 1,
                 )
             )
-            continue
-        if statement is None:
-            statement = SupplierMonthlyStatement(
-                statement_number=_statement_number(
+            desired_hash = _candidate_source_hash(group_candidates)
+            if existing is None:
+                created = _create_statement_from_candidates(
                     db,
-                    supplier_id=candidate.supplier_id,
+                    supplier=supplier,
                     settlement_month=settlement_month,
-                    currency=candidate.currency,
-                    tax_basis=candidate.tax_basis,
-                ),
-                supplier_id=candidate.supplier_id,
-                supplier_name_snapshot=candidate.supplier_name,
-                settlement_month=settlement_month,
+                    period_start=period_start,
+                    period_end=period_end,
+                    candidates=group_candidates,
+                    user=user,
+                    generation_origin=generation_origin,
+                )
+                added += len(group_candidates)
+                changed_statement_ids.add(created.id)
+                continue
+            metadata_matches = (
+                existing.period_start == period_start
+                and existing.period_end == period_end
+                and int(existing.settlement_day_snapshot or 20)
+                == int(supplier.settlement_day or 20)
+            )
+            if existing.source_hash == desired_hash and metadata_matches:
+                continue
+            existing_lines = _active_lines(db, existing.id)
+            if (
+                existing.source_hash is None
+                and _statement_line_source_hash(existing_lines) == desired_hash
+                and metadata_matches
+            ):
+                existing.source_hash = desired_hash
+                continue
+            if existing.status not in ACTIVE_DRAFT_STATUSES:
+                issues.append(
+                    _issue(
+                        source_type="supplier_statement",
+                        source_key=str(existing.id),
+                        receipt_number=existing.statement_number,
+                        supplier_name=supplier.standard_name,
+                        code="SUPPLIER_SETTLEMENT_ALREADY_CONFIRMED",
+                        message="该周期已确认应付；新增或变化的实收不会静默改写历史",
+                        recommended_action="登记受控调整，不能重生成已确认月结",
+                    )
+                )
+                continue
+            if not replace_changed_drafts:
+                issues.append(
+                    _issue(
+                        source_type="supplier_statement",
+                        source_key=str(existing.id),
+                        receipt_number=existing.statement_number,
+                        supplier_name=supplier.standard_name,
+                        code="SUPPLIER_SETTLEMENT_REGENERATION_REQUIRED",
+                        message="草稿来源已变化，请人工核对后重生成新业务修订",
+                        recommended_action="点击重生成，旧草稿和明细将完整保留",
+                    )
+                )
+                continue
+            replacement, released_count = _replace_draft_statement(
+                db,
+                row=existing,
+                supplier=supplier,
+                candidates=group_candidates,
+                user=user,
+                reason="人工重新生成：结算周期或实收来源发生变化",
                 period_start=period_start,
                 period_end=period_end,
-                currency=candidate.currency,
-                tax_basis=candidate.tax_basis,
-                generated_by=user.id,
             )
-            db.add(statement)
-            db.flush()
-            statements_by_group[group] = statement
-        db.add(
-            SupplierMonthlyStatementLine(
-                statement_id=statement.id,
-                source_type=candidate.source_type,
-                source_key=candidate.source_key,
-                incoming_receipt_item_id=candidate.incoming_receipt_item_id,
-                external_receipt_item_id=candidate.external_receipt_item_id,
-                supplier_receipt_price_fact_id=(
-                    candidate.supplier_receipt_price_fact_id
-                ),
-                purchase_document_number=candidate.purchase_document_number,
-                receipt_number=candidate.receipt_number,
-                receipt_date=candidate.receipt_date,
-                category_label=candidate.category_label,
-                specification_snapshot=candidate.specification_snapshot,
-                material_or_product_snapshot=candidate.material_or_product_snapshot,
-                received_quantity=candidate.received_quantity,
-                quantity_unit=candidate.quantity_unit,
-                frozen_unit_price=candidate.frozen_unit_price,
-                price_unit=candidate.price_unit,
-                currency=candidate.currency,
-                tax_basis=candidate.tax_basis,
-                tax_rate=candidate.tax_rate,
-                erp_amount=candidate.erp_amount,
-                tax_amount=candidate.tax_amount,
-                source_link=candidate.source_link,
-            )
+            added += len(group_candidates)
+            released += released_count
+            changed_statement_ids.add(replacement.id)
+    if not any_closed_period:
+        _start, period_end = settlement_period(settlement_month)
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_PERIOD_OPEN",
+            f"{settlement_month} 月结周期尚未完整结束（默认截止 {period_end.isoformat()}）",
+            409,
         )
-        added += 1
-        active_source_keys.add(candidate.source_key)
-        changed_statement_ids.add(statement.id)
     db.flush()
-
-    for statement in statements_by_group.values():
-        if statement.status not in ACTIVE_DRAFT_STATUSES:
-            continue
-        active_count = len(_active_lines(db, statement.id))
-        if active_count == 0 and not statement.adjustments:
-            statement.status = "voided"
-            statement.active_guard = None
-            statement.voided_at = now
-            statement.voided_by = user.id
-            changed_statement_ids.add(statement.id)
-            continue
-        if _recalculate_statement(db, statement):
-            changed_statement_ids.add(statement.id)
-    for statement_id in changed_statement_ids:
-        statement = db.get(SupplierMonthlyStatement, statement_id)
-        if statement is not None:
-            statement.version += 1
-    db.flush()
+    period_start, period_end = settlement_period(settlement_month)
     return {
         "settlement_month": settlement_month,
         "period_start": period_start,
         "period_end": period_end,
+        "supplier_periods": supplier_periods,
         "added_line_count": added,
         "released_line_count": released,
         "changed_statement_count": len(changed_statement_ids),
         "issues": issues,
         "items": list_statement_responses(db, settlement_month=settlement_month),
+    }
+
+
+def regenerate_statement(
+    db: Session,
+    *,
+    statement_id: int,
+    expected_version: int,
+    reason: str | None,
+    user: User,
+) -> SupplierMonthlyStatement:
+    row = _editable_statement(
+        db, statement_id=statement_id, expected_version=expected_version
+    )
+    supplier = db.get(Supplier, row.supplier_id)
+    if supplier is None:
+        raise SupplierSettlementError(
+            "SUPPLIER_NOT_FOUND", "供应商主数据不存在，不能重生成月结", 404
+        )
+    period_start, period_end = supplier_settlement_period(
+        db,
+        supplier_id=supplier.id,
+        settlement_month=row.settlement_month,
+        settlement_day=int(supplier.settlement_day or 20),
+    )
+    start_utc, end_utc = _utc_period_bounds(period_start, period_end)
+    candidates, _issues = _scan_candidates_for_bounds(
+        db, start_utc=start_utc, end_utc=end_utc
+    )
+    selected = [
+        item
+        for item in candidates
+        if item.supplier_id == row.supplier_id
+        and item.currency == row.currency
+        and item.tax_basis == row.tax_basis
+    ]
+    desired_hash = _candidate_source_hash(selected) if selected else None
+    if (
+        desired_hash == row.source_hash
+        and row.period_start == period_start
+        and row.period_end == period_end
+        and int(row.settlement_day_snapshot or 20) == int(supplier.settlement_day or 20)
+    ):
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_REGENERATION_NO_CHANGE",
+            "周期内实收来源没有变化，无需重生成",
+            409,
+        )
+    replacement, _released = _replace_draft_statement(
+        db,
+        row=row,
+        supplier=supplier,
+        candidates=selected,
+        user=user,
+        reason=str(reason or "").strip() or "人工核对后重生成",
+        period_start=period_start,
+        period_end=period_end,
+    )
+    db.flush()
+    return replacement
+
+
+def generate_due_supplier_settlements(
+    db: Session, *, user: User, business_date: date | None = None
+) -> dict[str, Any]:
+    today = business_date or beijing_today()
+    suppliers = list(db.scalars(select(Supplier)).all())
+    grouped: dict[str, set[int]] = {}
+    for supplier in suppliers:
+        month = default_closed_settlement_month(today, int(supplier.settlement_day or 20))
+        grouped.setdefault(month, set()).add(supplier.id)
+    results = []
+    for month, ids in sorted(grouped.items()):
+        results.append(
+            generate_or_refresh_settlements(
+                db,
+                settlement_month=month,
+                user=user,
+                business_date=today,
+                generation_origin="automatic",
+                replace_changed_drafts=False,
+                supplier_ids=ids,
+            )
+        )
+    return {
+        "business_date": today,
+        "generated_months": sorted(grouped),
+        "results": results,
+        "changed_statement_count": sum(
+            int(item["changed_statement_count"]) for item in results
+        ),
     }
 
 
@@ -914,6 +1338,10 @@ def _adjustment_response(row: SupplierMonthlyAdjustment) -> dict[str, Any]:
         "difference_type": row.difference_type,
         "amount": row.amount,
         "note": row.note,
+        "statement_version_before": row.statement_version_before,
+        "amount_before": row.amount_before,
+        "amount_after": row.amount_after,
+        "is_post_confirmation": row.is_post_confirmation,
         "created_at": row.created_at,
     }
 
@@ -942,20 +1370,65 @@ def _invoice_response(row: SupplierMonthlyInvoice) -> dict[str, Any]:
 
 
 def _payment_response(row: SupplierMonthlyPayment) -> dict[str, Any]:
+    labels = {"bank": "银行付款", "acceptance": "承兑背书", "credit": "供应商余额抵扣"}
     return {
         "id": row.id,
         "payment_date": row.payment_date,
         "amount": row.amount,
         "payment_method": row.payment_method,
-        "payment_method_label": "承兑背书" if row.payment_method == "acceptance" else "银行付款",
+        "payment_method_label": labels.get(row.payment_method, row.payment_method),
         "acceptance_note_id": row.acceptance_note_id,
+        "payment_batch_id": row.payment_batch_id,
+        "supplier_credit_id": row.supplier_credit_id,
         "reference": row.reference,
         "created_at": row.created_at,
     }
 
 
+def _payment_batch_response(row: SupplierPaymentBatch) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "payment_date": row.payment_date,
+        "credit_applied_amount": row.credit_applied_amount,
+        "acceptance_note_id": row.acceptance_note_id,
+        "acceptance_face_amount": row.acceptance_face_amount,
+        "acceptance_applied_amount": row.acceptance_applied_amount,
+        "bank_amount": row.bank_amount,
+        "credit_created_amount": row.credit_created_amount,
+        "settled_amount": row.settled_amount,
+        "bank_reference": row.bank_reference,
+        "created_at": row.created_at,
+    }
+
+
+def _credit_response(row: SupplierCreditLot) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "supplier_id": row.supplier_id,
+        "source_type": row.source_type,
+        "source_acceptance_note_id": row.source_acceptance_note_id,
+        "source_statement_id": row.source_statement_id,
+        "source_payment_batch_id": row.source_payment_batch_id,
+        "original_amount": row.original_amount,
+        "available_amount": row.available_amount,
+        "status": row.status,
+        "version": row.version,
+        "created_at": row.created_at,
+    }
+
+
 def statement_response(db: Session, row: SupplierMonthlyStatement) -> dict[str, Any]:
-    lines = _active_lines(db, row.id)
+    lines = (
+        _active_lines(db, row.id)
+        if row.active_guard == 1
+        else list(
+            db.scalars(
+                select(SupplierMonthlyStatementLine)
+                .where(SupplierMonthlyStatementLine.statement_id == row.id)
+                .order_by(SupplierMonthlyStatementLine.receipt_date, SupplierMonthlyStatementLine.id)
+            ).all()
+        )
+    )
     adjustments = list(
         db.scalars(
             select(SupplierMonthlyAdjustment)
@@ -977,6 +1450,24 @@ def statement_response(db: Session, row: SupplierMonthlyStatement) -> dict[str, 
             .order_by(SupplierMonthlyPayment.payment_date, SupplierMonthlyPayment.id)
         ).all()
     )
+    payment_batches = list(
+        db.scalars(
+            select(SupplierPaymentBatch)
+            .where(SupplierPaymentBatch.statement_id == row.id)
+            .order_by(SupplierPaymentBatch.payment_date, SupplierPaymentBatch.id)
+        ).all()
+    )
+    available_credits = list(
+        db.scalars(
+            select(SupplierCreditLot)
+            .where(
+                SupplierCreditLot.supplier_id == row.supplier_id,
+                SupplierCreditLot.status.in_({"available", "partial"}),
+                SupplierCreditLot.available_amount > 0,
+            )
+            .order_by(SupplierCreditLot.id)
+        ).all()
+    )
     adjusted = _money(row.adjusted_amount)
     supplier_amount = (
         _money(row.supplier_statement_amount)
@@ -987,7 +1478,9 @@ def statement_response(db: Session, row: SupplierMonthlyStatement) -> dict[str, 
         _money(row.confirmed_amount) if row.confirmed_amount is not None else None
     )
     invoiced = _money(sum((item.allocated_amount for item in invoices), Decimal("0")))
-    paid = _money(sum((item.amount for item in payments), Decimal("0")))
+    # paid_amount is the current allocation after any post-confirmation
+    # adjustment; immutable payment rows remain the cash/acceptance history.
+    paid = _money(row.paid_amount)
     return {
         "id": row.id,
         "statement_number": row.statement_number,
@@ -999,6 +1492,13 @@ def statement_response(db: Session, row: SupplierMonthlyStatement) -> dict[str, 
         "currency": row.currency,
         "tax_basis": row.tax_basis,
         "status": row.status,
+        "active": row.active_guard == 1,
+        "document_revision": row.document_revision,
+        "settlement_day_snapshot": row.settlement_day_snapshot,
+        "generation_origin": row.generation_origin,
+        "source_hash": row.source_hash,
+        "supersedes_statement_id": row.supersedes_statement_id,
+        "supersede_reason": row.supersede_reason,
         "erp_amount": _money(row.erp_amount),
         "adjustment_amount": _money(row.adjustment_amount),
         "adjusted_amount": adjusted,
@@ -1020,11 +1520,22 @@ def statement_response(db: Session, row: SupplierMonthlyStatement) -> dict[str, 
             else None
         ),
         "version": row.version,
-        "can_reopen": row.status in CONFIRMED_STATUSES and paid == 0,
+        "can_regenerate": row.active_guard == 1 and row.status in ACTIVE_DRAFT_STATUSES,
+        "can_post_adjustment": row.active_guard == 1 and row.status in CONFIRMED_STATUSES,
+        "can_reopen": (
+            row.status in CONFIRMED_STATUSES
+            and paid == 0
+            and not invoices
+        ),
+        "available_credits": [_credit_response(item) for item in available_credits],
+        "credit_available_amount": _money(
+            sum((item.available_amount for item in available_credits), Decimal("0"))
+        ),
         "lines": [_line_response(item) for item in lines],
         "adjustments": [_adjustment_response(item) for item in adjustments],
         "invoices": [_invoice_response(item) for item in invoices],
         "payments": [_payment_response(item) for item in payments],
+        "payment_batches": [_payment_batch_response(item) for item in payment_batches],
     }
 
 
@@ -1042,6 +1553,27 @@ def list_statement_responses(
             SupplierMonthlyStatement.currency,
             SupplierMonthlyStatement.tax_basis,
         )
+    ).all()
+    return [statement_response(db, row) for row in rows]
+
+
+def list_statement_history_responses(
+    db: Session, *, statement_id: int
+) -> list[dict[str, Any]]:
+    current = db.get(SupplierMonthlyStatement, statement_id)
+    if current is None:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_NOT_FOUND", "供应商月结单不存在", 404
+        )
+    rows = db.scalars(
+        select(SupplierMonthlyStatement)
+        .where(
+            SupplierMonthlyStatement.supplier_id == current.supplier_id,
+            SupplierMonthlyStatement.settlement_month == current.settlement_month,
+            SupplierMonthlyStatement.currency == current.currency,
+            SupplierMonthlyStatement.tax_basis == current.tax_basis,
+        )
+        .order_by(SupplierMonthlyStatement.document_revision.desc(), SupplierMonthlyStatement.id.desc())
     ).all()
     return [statement_response(db, row) for row in rows]
 
@@ -1152,9 +1684,9 @@ def add_adjustment(
     row = _editable_statement(
         db, statement_id=statement_id, expected_version=expected_version
     )
-    if row.status not in ACTIVE_DRAFT_STATUSES:
+    if row.status not in ACTIVE_DRAFT_STATUSES | CONFIRMED_STATUSES:
         raise SupplierSettlementError(
-            "SUPPLIER_SETTLEMENT_FROZEN", "已确认月结单不能直接增加差异调整"
+            "SUPPLIER_SETTLEMENT_FROZEN", "当前月结状态不能增加差异调整"
         )
     normalized_type = str(difference_type or "").strip()
     if normalized_type not in {"price", "quantity", "tax_rounding", "other"}:
@@ -1176,50 +1708,62 @@ def add_adjustment(
             raise SupplierSettlementError(
                 "SUPPLIER_ADJUSTMENT_LINE_INVALID", "差异调整明细不属于当前月结单", 422
             )
-    erp_amount = _money(
-        sum((line.erp_amount for line in _active_lines(db, row.id)), Decimal("0"))
+    is_post_confirmation = row.status in CONFIRMED_STATUSES
+    erp_amount = _money(row.erp_amount)
+    adjustment_amount = _money(row.adjustment_amount + normalized_amount)
+    amount_before = _money(
+        row.confirmed_amount if is_post_confirmation else row.adjusted_amount
     )
-    adjustment_amount = _money(
-        (
-            db.scalar(
-                select(func.coalesce(func.sum(SupplierMonthlyAdjustment.amount), 0)).where(
-                    SupplierMonthlyAdjustment.statement_id == row.id
-                )
-            )
-            or 0
-        )
-        + normalized_amount
-    )
-    adjusted_amount = _money(erp_amount + adjustment_amount)
-    if adjusted_amount < 0:
+    amount_after = _money(amount_before + normalized_amount)
+    if amount_after < 0 or (is_post_confirmation and amount_after == 0):
         raise SupplierSettlementError(
             "SUPPLIER_SETTLEMENT_NEGATIVE_AMOUNT",
-            "应付调整后金额不能小于 0",
+            "应付调整后金额必须大于 0",
             422,
         )
-    next_status = (
-        "difference"
-        if row.supplier_statement_amount is not None
-        and _money(row.supplier_statement_amount) != adjusted_amount
-        else "draft"
-    )
     now = utc_now_naive()
+    next_values: dict[str, Any] = {
+        "adjustment_amount": adjustment_amount,
+        "adjusted_amount": amount_after,
+        "version": expected_version + 1,
+        "updated_at": now,
+    }
+    credit_created = Decimal("0")
+    if is_post_confirmation:
+        paid_before = _money(row.paid_amount)
+        effective_paid = min(paid_before, amount_after)
+        credit_created = _money(max(paid_before - amount_after, Decimal("0")))
+        invoiced = _money(row.invoice_allocated_amount)
+        if effective_paid >= amount_after:
+            next_status = "paid"
+        elif effective_paid > 0:
+            next_status = "partial_payment"
+        elif invoiced > 0:
+            next_status = "invoiced_pending_payment"
+        else:
+            next_status = "confirmed_pending_invoice"
+        next_values.update(
+            confirmed_amount=amount_after,
+            paid_amount=effective_paid,
+            status=next_status,
+        )
+    else:
+        next_status = (
+            "difference"
+            if row.supplier_statement_amount is not None
+            and _money(row.supplier_statement_amount) != amount_after
+            else "draft"
+        )
+        next_values["status"] = next_status
     result = db.execute(
         update(SupplierMonthlyStatement)
         .where(
             SupplierMonthlyStatement.id == row.id,
             SupplierMonthlyStatement.active_guard == 1,
-            SupplierMonthlyStatement.status.in_(ACTIVE_DRAFT_STATUSES),
+            SupplierMonthlyStatement.status == row.status,
             SupplierMonthlyStatement.version == expected_version,
         )
-        .values(
-            erp_amount=erp_amount,
-            adjustment_amount=adjustment_amount,
-            adjusted_amount=adjusted_amount,
-            status=next_status,
-            version=expected_version + 1,
-            updated_at=now,
-        )
+        .values(**next_values)
         .execution_options(synchronize_session=False)
     )
     if result.rowcount != 1:
@@ -1234,10 +1778,59 @@ def add_adjustment(
         difference_type=normalized_type,
         amount=normalized_amount,
         note=str(note or "").strip() or None,
+        statement_version_before=expected_version,
+        amount_before=amount_before,
+        amount_after=amount_after,
+        is_post_confirmation=is_post_confirmation,
         created_by=user.id,
     )
     db.add(adjustment)
     db.flush()
+    if is_post_confirmation:
+        payable = (
+            db.get(FinancePayable, row.finance_payable_id)
+            if row.finance_payable_id is not None
+            else None
+        )
+        if payable is not None:
+            payable_values: dict[str, Any] = {
+                "status": "paid" if next_status == "paid" else "confirmed",
+                "amount": amount_after,
+                "version": payable.version + 1,
+                "updated_at": now,
+            }
+            if next_status == "paid":
+                payable_values.update(paid_by=user.id, paid_at=now)
+            else:
+                payable_values.update(paid_by=None, paid_at=None)
+            payable_result = db.execute(
+                update(FinancePayable)
+                .where(
+                    FinancePayable.id == payable.id,
+                    FinancePayable.status == payable.status,
+                    FinancePayable.version == payable.version,
+                )
+                .values(**payable_values)
+                .execution_options(synchronize_session=False)
+            )
+            if payable_result.rowcount != 1:
+                raise SupplierSettlementError(
+                    "SUPPLIER_PAYABLE_STALE",
+                    "关联应付状态已变化，请刷新后重试",
+                )
+        if credit_created > 0:
+            db.add(
+                SupplierCreditLot(
+                    supplier_id=row.supplier_id,
+                    supplier_name_snapshot=row.supplier_name_snapshot,
+                    source_type="statement_adjustment",
+                    source_statement_id=row.id,
+                    original_amount=credit_created,
+                    available_amount=credit_created,
+                    created_by=user.id,
+                )
+            )
+            db.flush()
     db.expire(row)
     db.refresh(row)
     return row, adjustment
@@ -1286,7 +1879,10 @@ def confirm_statement(
         document_date=row.period_end,
         amount=_money(row.adjusted_amount),
         status="confirmed",
-        note=f"供应商20日月结 {row.statement_number}",
+        note=(
+            f"供应商{row.settlement_day_snapshot}日月结 "
+            f"{row.statement_number}（业务修订N{row.document_revision}）"
+        ),
         idempotency_key=f"supplier-monthly-confirm:{row.id}:v{row.version}",
         confirmed_by=user.id,
         confirmed_at=now,
@@ -1343,14 +1939,20 @@ def reopen_statement(
         raise SupplierSettlementError(
             "SUPPLIER_SETTLEMENT_NOT_REOPENABLE", "当前月结状态不能重开"
         )
-    paid = _money(
+    invoice_count = int(
         db.scalar(
-            select(func.coalesce(func.sum(SupplierMonthlyPayment.amount), 0)).where(
-                SupplierMonthlyPayment.statement_id == row.id
+            select(func.count(SupplierMonthlyInvoice.id)).where(
+                SupplierMonthlyInvoice.statement_id == row.id
             )
         )
         or 0
     )
+    if invoice_count:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_INVOICE_EXISTS",
+            "该月结单已有供应商发票事实，只能登记正负调整，不能重开",
+        )
+    paid = _money(row.paid_amount)
     if paid > 0:
         raise SupplierSettlementError(
             "SUPPLIER_SETTLEMENT_PAYMENT_EXISTS",
@@ -1584,14 +2186,7 @@ def add_payment(
         )
         or 0
     )
-    paid = _money(
-        db.scalar(
-            select(func.coalesce(func.sum(SupplierMonthlyPayment.amount), 0)).where(
-                SupplierMonthlyPayment.statement_id == row.id
-            )
-        )
-        or 0
-    )
+    paid = _money(row.paid_amount)
     if invoiced <= 0:
         raise SupplierSettlementError(
             "SUPPLIER_INVOICE_REQUIRED", "请先登记已收到的供应商发票再登记付款"
@@ -1673,6 +2268,376 @@ def add_payment(
     db.expire(row)
     db.refresh(row)
     return row, payment
+
+
+def payment_options(
+    db: Session, *, statement_id: int
+) -> dict[str, Any]:
+    row = db.get(SupplierMonthlyStatement, statement_id)
+    if row is None or row.active_guard != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_NOT_FOUND", "供应商月结单不存在", 404
+        )
+    credits = list(
+        db.scalars(
+            select(SupplierCreditLot)
+            .where(
+                SupplierCreditLot.supplier_id == row.supplier_id,
+                SupplierCreditLot.status.in_({"available", "partial"}),
+                SupplierCreditLot.available_amount > 0,
+            )
+            .order_by(SupplierCreditLot.id)
+        ).all()
+    )
+    acceptances = list(
+        db.scalars(
+            select(FinanceAcceptanceNote)
+            .where(FinanceAcceptanceNote.status == "held")
+            .order_by(FinanceAcceptanceNote.received_date, FinanceAcceptanceNote.id)
+        ).all()
+    )
+    return {
+        "statement_id": row.id,
+        "statement_version": row.version,
+        "remaining_payable_amount": _money(
+            max(_money(row.confirmed_amount) - _money(row.paid_amount), Decimal("0"))
+        ),
+        "remaining_invoice_amount": _money(
+            max(_money(row.invoice_allocated_amount) - _money(row.paid_amount), Decimal("0"))
+        ),
+        "credits": [_credit_response(item) for item in credits],
+        "acceptances": [
+            {
+                "id": item.id,
+                "bill_number": item.bill_number,
+                "customer_id": item.customer_id,
+                "customer_name": item.customer_name_snapshot,
+                "amount": item.amount,
+                "received_date": item.received_date,
+                "maturity_date": item.maturity_date,
+                "version": item.version,
+            }
+            for item in acceptances
+        ],
+    }
+
+
+def post_payment_batch(
+    db: Session,
+    *,
+    statement_id: int,
+    expected_version: int,
+    payment_date: date,
+    credit_applications: list[dict[str, Any]],
+    acceptance_note_id: int | None,
+    expected_acceptance_version: int | None,
+    bank_amount: Decimal,
+    bank_reference: str | None,
+    user: User,
+) -> tuple[SupplierMonthlyStatement, SupplierPaymentBatch, SupplierCreditLot | None]:
+    row = _editable_statement(
+        db, statement_id=statement_id, expected_version=expected_version
+    )
+    if row.status not in CONFIRMED_STATUSES or row.status == "paid":
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_NOT_PAYABLE", "当前月结状态不能登记组合付款"
+        )
+    confirmed = _money(row.confirmed_amount)
+    paid = _money(row.paid_amount)
+    invoiced = _money(row.invoice_allocated_amount)
+    remaining_payable = _money(max(confirmed - paid, Decimal("0")))
+    remaining_invoice = _money(max(invoiced - paid, Decimal("0")))
+    if remaining_payable <= 0:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_ALREADY_PAID", "当前月结已经结清"
+        )
+    if remaining_invoice <= 0:
+        raise SupplierSettlementError(
+            "SUPPLIER_INVOICE_REQUIRED", "请先登记足额供应商发票再付款"
+        )
+
+    selected_credits: list[tuple[SupplierCreditLot, Decimal, int]] = []
+    seen_credit_ids: set[int] = set()
+    credit_total = Decimal("0")
+    for application in credit_applications or []:
+        credit_id = int(application.get("credit_id") or 0)
+        expected_credit_version = int(application.get("expected_version") or 0)
+        amount = _money(application.get("amount"))
+        if credit_id <= 0 or expected_credit_version <= 0 or amount <= 0:
+            raise SupplierSettlementError(
+                "SUPPLIER_CREDIT_APPLICATION_INVALID", "供应商余额抵扣明细无效", 422
+            )
+        if credit_id in seen_credit_ids:
+            raise SupplierSettlementError(
+                "SUPPLIER_CREDIT_DUPLICATED", "同一供应商余额不能重复选择", 422
+            )
+        seen_credit_ids.add(credit_id)
+        credit = db.get(SupplierCreditLot, credit_id)
+        if (
+            credit is None
+            or credit.supplier_id != row.supplier_id
+            or credit.status not in {"available", "partial"}
+            or int(credit.version) != expected_credit_version
+            or amount > _money(credit.available_amount)
+        ):
+            raise SupplierSettlementError(
+                "SUPPLIER_CREDIT_STALE",
+                "供应商余额已变化或不属于当前供应商，请刷新后重试",
+            )
+        selected_credits.append((credit, amount, expected_credit_version))
+        credit_total = _money(credit_total + amount)
+    if credit_total > remaining_payable or credit_total > remaining_invoice:
+        raise SupplierSettlementError(
+            "SUPPLIER_CREDIT_EXCEEDS_SETTLEMENT",
+            "供应商余额抵扣不能超过本期未付应付或已收发票金额",
+            422,
+        )
+
+    after_credit_payable = _money(remaining_payable - credit_total)
+    after_credit_invoice = _money(remaining_invoice - credit_total)
+    acceptance: FinanceAcceptanceNote | None = None
+    acceptance_face = Decimal("0")
+    acceptance_applied = Decimal("0")
+    credit_created = Decimal("0")
+    if acceptance_note_id is not None:
+        if expected_acceptance_version is None or expected_acceptance_version <= 0:
+            raise SupplierSettlementError(
+                "ACCEPTANCE_VERSION_REQUIRED", "请选择最新承兑票据后再提交", 422
+            )
+        acceptance = db.get(FinanceAcceptanceNote, acceptance_note_id)
+        if (
+            acceptance is None
+            or acceptance.status != "held"
+            or int(acceptance.version) != int(expected_acceptance_version)
+        ):
+            raise SupplierSettlementError(
+                "ACCEPTANCE_NOTE_STALE", "承兑票据状态已变化，请刷新后重试"
+            )
+        if payment_date < acceptance.received_date:
+            raise SupplierSettlementError(
+                "ACCEPTANCE_ENDORSE_DATE_INVALID", "背书日期不能早于承兑收到日期", 422
+            )
+        acceptance_face = _money(acceptance.amount)
+        acceptance_applied = _money(
+            min(acceptance_face, after_credit_payable, after_credit_invoice)
+        )
+        if acceptance_applied <= 0:
+            raise SupplierSettlementError(
+                "ACCEPTANCE_NOT_APPLICABLE", "当前应付没有可由该承兑结算的金额", 422
+            )
+        if acceptance_face > acceptance_applied:
+            if acceptance_applied != after_credit_payable:
+                raise SupplierSettlementError(
+                    "ACCEPTANCE_EXCEEDS_INVOICE",
+                    "当前发票金额不足，承兑超出部分不能误记为供应商余额",
+                    422,
+                )
+            credit_created = _money(acceptance_face - acceptance_applied)
+
+    bank = _money(bank_amount)
+    if bank < 0:
+        raise SupplierSettlementError(
+            "SUPPLIER_BANK_AMOUNT_INVALID", "银行付款金额不能小于 0", 422
+        )
+    if credit_created > 0 and bank > 0:
+        raise SupplierSettlementError(
+            "SUPPLIER_BANK_WITH_ACCEPTANCE_OVERAGE",
+            "承兑已超过本期应付并形成供应商余额，本次不能再填写银行付款",
+            422,
+        )
+    after_nonbank_payable = _money(
+        after_credit_payable - acceptance_applied
+    )
+    after_nonbank_invoice = _money(after_credit_invoice - acceptance_applied)
+    if bank > after_nonbank_payable:
+        raise SupplierSettlementError(
+            "SUPPLIER_PAYMENT_EXCEEDS_PAYABLE", "银行付款不能超过本期剩余应付", 422
+        )
+    if bank > after_nonbank_invoice:
+        raise SupplierSettlementError(
+            "SUPPLIER_PAYMENT_EXCEEDS_INVOICE", "银行付款不能超过剩余发票金额", 422
+        )
+    settled = _money(credit_total + acceptance_applied + bank)
+    if settled <= 0:
+        raise SupplierSettlementError(
+            "SUPPLIER_PAYMENT_BATCH_EMPTY", "请至少填写一种有效付款方式", 422
+        )
+
+    batch = SupplierPaymentBatch(
+        statement_id=row.id,
+        supplier_id=row.supplier_id,
+        acceptance_note_id=(acceptance.id if acceptance is not None else None),
+        payment_date=payment_date,
+        credit_applied_amount=credit_total,
+        acceptance_face_amount=acceptance_face,
+        acceptance_applied_amount=acceptance_applied,
+        bank_amount=bank,
+        credit_created_amount=credit_created,
+        settled_amount=settled,
+        bank_reference=str(bank_reference or "").strip() or None,
+        created_by=user.id,
+    )
+    db.add(batch)
+    db.flush()
+
+    for credit, amount, expected_credit_version in selected_credits:
+        next_available = _money(credit.available_amount - amount)
+        credit_result = db.execute(
+            update(SupplierCreditLot)
+            .where(
+                SupplierCreditLot.id == credit.id,
+                SupplierCreditLot.version == expected_credit_version,
+                SupplierCreditLot.available_amount == credit.available_amount,
+                SupplierCreditLot.status.in_({"available", "partial"}),
+            )
+            .values(
+                available_amount=next_available,
+                status="exhausted" if next_available == 0 else "partial",
+                version=expected_credit_version + 1,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if credit_result.rowcount != 1:
+            raise SupplierSettlementError(
+                "SUPPLIER_CREDIT_STALE", "供应商余额已被其他操作使用，请刷新后重试"
+            )
+        db.add(
+            SupplierMonthlyPayment(
+                statement_id=row.id,
+                payment_date=payment_date,
+                amount=amount,
+                payment_method="credit",
+                payment_batch_id=batch.id,
+                supplier_credit_id=credit.id,
+                reference=f"供应商余额 #{credit.id}",
+                created_by=user.id,
+            )
+        )
+
+    acceptance_payment: SupplierMonthlyPayment | None = None
+    if acceptance is not None:
+        acceptance_result = db.execute(
+            update(FinanceAcceptanceNote)
+            .where(
+                FinanceAcceptanceNote.id == acceptance.id,
+                FinanceAcceptanceNote.status == "held",
+                FinanceAcceptanceNote.version == expected_acceptance_version,
+            )
+            .values(
+                status="endorsed",
+                supplier_id=row.supplier_id,
+                supplier_name_snapshot=row.supplier_name_snapshot,
+                supplier_statement_id=row.id,
+                endorsed_date=payment_date,
+                updated_by=user.id,
+                updated_at=utc_now_naive(),
+                version=int(expected_acceptance_version) + 1,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if acceptance_result.rowcount != 1:
+            raise SupplierSettlementError(
+                "ACCEPTANCE_NOTE_STALE", "承兑票据状态已变化，请刷新后重试"
+            )
+        acceptance_payment = SupplierMonthlyPayment(
+            statement_id=row.id,
+            payment_date=payment_date,
+            amount=acceptance_applied,
+            payment_method="acceptance",
+            acceptance_note_id=acceptance.id,
+            payment_batch_id=batch.id,
+            reference=f"承兑 {acceptance.bill_number}",
+            created_by=user.id,
+        )
+        db.add(acceptance_payment)
+        db.flush()
+        db.execute(
+            update(FinanceAcceptanceNote)
+            .where(FinanceAcceptanceNote.id == acceptance.id)
+            .values(supplier_payment_id=acceptance_payment.id)
+        )
+
+    if bank > 0:
+        db.add(
+            SupplierMonthlyPayment(
+                statement_id=row.id,
+                payment_date=payment_date,
+                amount=bank,
+                payment_method="bank",
+                payment_batch_id=batch.id,
+                reference=str(bank_reference or "").strip() or None,
+                created_by=user.id,
+            )
+        )
+
+    created_credit: SupplierCreditLot | None = None
+    if credit_created > 0 and acceptance is not None:
+        created_credit = SupplierCreditLot(
+            supplier_id=row.supplier_id,
+            supplier_name_snapshot=row.supplier_name_snapshot,
+            source_type="acceptance_overpayment",
+            source_acceptance_note_id=acceptance.id,
+            source_statement_id=row.id,
+            source_payment_batch_id=batch.id,
+            original_amount=credit_created,
+            available_amount=credit_created,
+            created_by=user.id,
+        )
+        db.add(created_credit)
+
+    new_paid = _money(paid + settled)
+    next_status = "paid" if new_paid == confirmed else "partial_payment"
+    statement_result = db.execute(
+        update(SupplierMonthlyStatement)
+        .where(
+            SupplierMonthlyStatement.id == row.id,
+            SupplierMonthlyStatement.active_guard == 1,
+            SupplierMonthlyStatement.status == row.status,
+            SupplierMonthlyStatement.version == expected_version,
+        )
+        .values(
+            paid_amount=new_paid,
+            status=next_status,
+            version=expected_version + 1,
+            updated_at=utc_now_naive(),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if statement_result.rowcount != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_STALE",
+            "供应商月结单付款状态已被其他人修改，请刷新后重试",
+        )
+    payable = (
+        db.get(FinancePayable, row.finance_payable_id)
+        if row.finance_payable_id is not None
+        else None
+    )
+    if payable is not None and next_status == "paid":
+        payable_result = db.execute(
+            update(FinancePayable)
+            .where(
+                FinancePayable.id == payable.id,
+                FinancePayable.status == "confirmed",
+                FinancePayable.version == payable.version,
+            )
+            .values(
+                status="paid",
+                paid_by=user.id,
+                paid_at=utc_now_naive(),
+                version=payable.version + 1,
+                updated_at=utc_now_naive(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if payable_result.rowcount != 1:
+            raise SupplierSettlementError(
+                "SUPPLIER_PAYABLE_STALE", "关联应付状态已变化，请刷新后重试"
+            )
+    db.flush()
+    db.expire(row)
+    db.refresh(row)
+    return row, batch, created_credit
 
 
 def assert_receipt_item_not_in_confirmed_statement(

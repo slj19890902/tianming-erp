@@ -628,6 +628,26 @@ def _seed_payable_statement(factory) -> tuple[int, int]:
         return customer.id, statement.id
 
 
+def _seed_recent_order_for_acceptance(factory, customer_id: int, suffix: str) -> None:
+    from app.core.time_contract import beijing_today
+    from app.models.order import Order
+
+    with factory() as db:
+        today = beijing_today()
+        db.add(
+            Order(
+                order_number=f"P1144-ACCEPT-{suffix}",
+                customer_id=customer_id,
+                order_date=today,
+                delivery_date=today,
+                status="pending_production",
+                payment_status="unpaid",
+                total_amount=Decimal("100.00"),
+            )
+        )
+        db.commit()
+
+
 def test_material_summary_includes_mold_ink_and_keeps_zero_supplier_bill(
     p1_131_cost_app,
 ) -> None:
@@ -692,6 +712,7 @@ def test_acceptance_supplier_payment_requires_company_cost_permission(
     app, factory = p1_131_cost_app
     _enable_router(app)
     customer_id, statement_id = _seed_payable_statement(factory)
+    _seed_recent_order_for_acceptance(factory, customer_id, "PERMISSION")
     with factory() as db:
         admin = db.query(User).filter_by(username="p1131-admin").one()
         restricted = User(
@@ -750,6 +771,7 @@ def test_acceptance_idempotency_replays_before_customer_state_revalidation(
     app, factory = p1_131_cost_app
     _enable_router(app)
     customer_id, _statement_id = _seed_payable_statement(factory)
+    _seed_recent_order_for_acceptance(factory, customer_id, "IDEMPOTENT")
     payload = {
         "bill_number": "ACCEPT-IDEMPOTENT",
         "customer_id": customer_id,
@@ -777,6 +799,7 @@ def test_acceptance_rejects_impossible_endorsement_and_early_maturity_dates(
     app, factory = p1_131_cost_app
     _enable_router(app)
     customer_id, statement_id = _seed_payable_statement(factory)
+    _seed_recent_order_for_acceptance(factory, customer_id, "DATE-GUARD")
     with TestClient(app) as client:
         _login(client)
         created = client.post(
@@ -831,6 +854,7 @@ def test_acceptance_cannot_exceed_confirmed_or_invoiced_supplier_balance(
     app, factory = p1_131_cost_app
     _enable_router(app)
     customer_id, statement_id = _seed_payable_statement(factory)
+    _seed_recent_order_for_acceptance(factory, customer_id, "BALANCE")
     with TestClient(app) as client:
         _login(client)
         metadata = client.get("/api/finance/simple-finance/metadata")
@@ -1014,6 +1038,7 @@ def test_acceptance_endorsement_is_traceable_non_cash_supplier_payment_and_expor
     app, factory = p1_131_cost_app
     _enable_router(app)
     customer_id, statement_id = _seed_payable_statement(factory)
+    _seed_recent_order_for_acceptance(factory, customer_id, "TRACE")
     with TestClient(app) as client:
         _login(client)
         created = client.post(

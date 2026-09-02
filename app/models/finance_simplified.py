@@ -195,6 +195,14 @@ class FinanceAcceptanceNote(Base):
         CheckConstraint("version >= 1", name="ck_finance_acceptance_notes_version"),
         UniqueConstraint("bill_number", name="uq_finance_acceptance_notes_bill_number"),
         UniqueConstraint("supplier_payment_id", name="uq_finance_acceptance_notes_supplier_payment"),
+        Index(
+            "uq_finance_acceptance_notes_supplier_link",
+            "id",
+            "supplier_id",
+            "supplier_statement_id",
+            "amount",
+            unique=True,
+        ),
         Index("ix_finance_acceptance_notes_status_maturity", "status", "maturity_date"),
         Index("ix_finance_acceptance_notes_customer", "customer_id", "received_date"),
     )
@@ -235,3 +243,94 @@ class FinanceAcceptanceNote(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class FinanceUtilityExpense(Base):
+    """One combined monthly water-and-electricity expense for daily entry."""
+
+    __tablename__ = "finance_utility_expenses"
+    __table_args__ = (
+        CheckConstraint(
+            "length(cost_month) = 7 AND substr(cost_month, 5, 1) = '-' "
+            "AND substr(cost_month, 1, 1) BETWEEN '0' AND '9' "
+            "AND substr(cost_month, 2, 1) BETWEEN '0' AND '9' "
+            "AND substr(cost_month, 3, 1) BETWEEN '0' AND '9' "
+            "AND substr(cost_month, 4, 1) BETWEEN '0' AND '9' "
+            "AND substr(cost_month, 6, 2) BETWEEN '01' AND '12'",
+            name="ck_finance_utility_expenses_month",
+        ),
+        CheckConstraint(
+            "total_amount > 0 AND (invoice_amount IS NULL OR invoice_amount >= 0) "
+            "AND paid_amount >= 0 AND paid_amount <= total_amount",
+            name="ck_finance_utility_expenses_amounts",
+        ),
+        CheckConstraint(
+            "((invoice_number IS NULL AND invoice_date IS NULL AND invoice_amount IS NULL) "
+            "OR (invoice_number IS NOT NULL AND length(trim(invoice_number)) > 0 "
+            "AND invoice_date IS NOT NULL AND invoice_amount IS NOT NULL)) "
+            "AND ((paid_amount = 0 AND payment_date IS NULL) "
+            "OR (paid_amount > 0 AND payment_date IS NOT NULL))",
+            name="ck_finance_utility_expenses_facts",
+        ),
+        CheckConstraint("version >= 1", name="ck_finance_utility_expenses_version"),
+        UniqueConstraint("cost_month", name="uq_finance_utility_expenses_month"),
+        UniqueConstraint(
+            "cost_pool_entry_id", name="uq_finance_utility_expenses_cost_entry"
+        ),
+        Index("ix_finance_utility_expenses_month", "cost_month"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    cost_month: Mapped[str] = mapped_column(String(7), nullable=False)
+    cost_center_id: Mapped[int] = mapped_column(
+        ForeignKey("finance_cost_centers.id", ondelete="RESTRICT"), nullable=False
+    )
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    invoice_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    invoice_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    invoice_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    paid_amount: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), nullable=False, default=0, server_default="0"
+    )
+    payment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    cost_pool_entry_id: Mapped[int] = mapped_column(
+        ForeignKey("finance_cost_pool_entries.id", ondelete="RESTRICT"), nullable=False
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class FinanceUtilityMonthMode(Base):
+    """Internal claim that keeps legacy and combined utility facts exclusive."""
+
+    __tablename__ = "finance_utility_month_modes"
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('legacy','combined')",
+            name="ck_finance_utility_month_modes_mode",
+        ),
+        CheckConstraint(
+            "length(cost_month) = 7 AND substr(cost_month, 5, 1) = '-' "
+            "AND substr(cost_month, 1, 1) BETWEEN '0' AND '9' "
+            "AND substr(cost_month, 2, 1) BETWEEN '0' AND '9' "
+            "AND substr(cost_month, 3, 1) BETWEEN '0' AND '9' "
+            "AND substr(cost_month, 4, 1) BETWEEN '0' AND '9' "
+            "AND substr(cost_month, 6, 2) BETWEEN '01' AND '12'",
+            name="ck_finance_utility_month_modes_month",
+        ),
+    )
+
+    cost_month: Mapped[str] = mapped_column(String(7), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)

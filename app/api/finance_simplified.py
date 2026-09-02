@@ -44,8 +44,10 @@ from app.models.finance_payable import FinancePayable
 from app.models.finance_simplified import (
     FinanceAcceptanceNote,
     FinanceRecurringRule,
+    FinanceUtilityExpense,
     FinanceUtilityReading,
 )
+from app.models.order import Order
 from app.models.supplier_settlement import (
     SupplierMonthlyAdjustment,
     SupplierMonthlyInvoice,
@@ -77,6 +79,7 @@ RULE_CATEGORIES = {
     "fixed_monthly": "finance_expense",
 }
 UTILITY_LABELS = {"water": "水费", "electricity": "电费"}
+INVALID_ACCEPTANCE_CUSTOMER_ORDER_STATUSES = {"cancelled", "dead"}
 ACCEPTANCE_LABELS = {
     "held": "在手",
     "endorsed": "已背书供应商",
@@ -143,6 +146,47 @@ def _month_bounds(month: str) -> tuple[date, date]:
     if month_number == 12:
         return start, date(year + 1, 1, 1)
     return start, date(year, month_number + 1, 1)
+
+
+def _calendar_months_ago(reference: date, months: int) -> date:
+    """Return the same business day N calendar months ago, clamped at month end."""
+
+    absolute_month = reference.year * 12 + (reference.month - 1) - months
+    year, zero_based_month = divmod(absolute_month, 12)
+    month = zero_based_month + 1
+    day = min(reference.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _recent_order_customer_ids(db: Session) -> Any:
+    business_date = beijing_now_naive().date()
+    period_start = _calendar_months_ago(business_date, 3)
+    return (
+        select(Order.customer_id)
+        .where(
+            Order.order_date >= period_start,
+            Order.order_date <= business_date,
+            Order.status.notin_(INVALID_ACCEPTANCE_CUSTOMER_ORDER_STATUSES),
+        )
+        .distinct()
+    )
+
+
+def _eligible_acceptance_customer(db: Session, customer_id: int) -> Customer:
+    customer = db.scalar(
+        select(Customer).where(
+            Customer.id == customer_id,
+            Customer.is_active.is_(True),
+            Customer.status == "active",
+            Customer.id.in_(_recent_order_customer_ids(db)),
+        )
+    )
+    if customer is None:
+        raise HTTPException(
+            status_code=409,
+            detail="客户不存在、已停用，或最近三个月内没有有效订单",
+        )
+    return customer
 
 
 def _run_mutation(
@@ -387,6 +431,53 @@ class UtilityReadingPayload(IdempotentPayload):
         return self
 
 
+class UtilityExpensePayload(IdempotentPayload):
+    cost_month: str
+    cost_center_id: int = Field(gt=0)
+    total_amount: Decimal = Field(gt=0, le=MAX_MONEY)
+    invoice_number: str | None = Field(default=None, max_length=120)
+    invoice_date: date | None = None
+    invoice_amount: Decimal | None = Field(default=None, ge=0, le=MAX_MONEY)
+    paid_amount: Decimal = Field(default=0, ge=0, le=MAX_MONEY)
+    payment_date: date | None = None
+    note: str | None = Field(default=None, max_length=1000)
+    expected_version: int | None = Field(default=None, gt=0)
+
+    @field_validator("cost_month")
+    @classmethod
+    def valid_month(cls, value: str) -> str:
+        return _month(value)
+
+    @field_validator("total_amount", "invoice_amount", "paid_amount")
+    @classmethod
+    def normalize_money(cls, value: Decimal | None) -> Decimal | None:
+        return _money(value) if value is not None else None
+
+    @field_validator("invoice_number", "note")
+    @classmethod
+    def clean_optional(cls, value: str | None) -> str | None:
+        return _text(value)
+
+    @model_validator(mode="after")
+    def valid_payment(self):
+        invoice_values = (
+            self.invoice_number,
+            self.invoice_date,
+            self.invoice_amount,
+        )
+        if any(value is not None for value in invoice_values) and not all(
+            value is not None for value in invoice_values
+        ):
+            raise ValueError("填写水电发票时，发票号、日期和金额必须完整")
+        if self.paid_amount > self.total_amount:
+            raise ValueError("已付金额不能超过本月水电费总额")
+        if self.paid_amount > 0 and self.payment_date is None:
+            raise ValueError("填写已付金额时必须填写付款日期")
+        if self.paid_amount == 0 and self.payment_date is not None:
+            raise ValueError("未填写已付金额时不能填写付款日期")
+        return self
+
+
 class AcceptanceCreate(IdempotentPayload):
     bill_number: str = Field(min_length=1, max_length=120)
     customer_id: int = Field(gt=0)
@@ -528,6 +619,33 @@ def _utility_response(row: FinanceUtilityReading) -> dict[str, Any]:
     }
 
 
+def _utility_expense_response(row: FinanceUtilityExpense) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "cost_month": row.cost_month,
+        "cost_center_id": row.cost_center_id,
+        "total_amount": row.total_amount,
+        "invoice_number": row.invoice_number,
+        "invoice_date": row.invoice_date,
+        "invoice_amount": row.invoice_amount,
+        "invoice_difference_amount": (
+            _money(row.invoice_amount - row.total_amount)
+            if row.invoice_amount is not None
+            else None
+        ),
+        "paid_amount": row.paid_amount,
+        "remaining_amount": _money(
+            max(row.total_amount - row.paid_amount, Decimal("0"))
+        ),
+        "payment_date": row.payment_date,
+        "cost_pool_entry_id": row.cost_pool_entry_id,
+        "note": row.note,
+        "version": row.version,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
 def _acceptance_response(row: FinanceAcceptanceNote) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -567,7 +685,11 @@ def simple_finance_metadata(
     customers = list(
         db.scalars(
             select(Customer)
-            .where(Customer.is_active.is_(True))
+            .where(
+                Customer.is_active.is_(True),
+                Customer.status == "active",
+                Customer.id.in_(_recent_order_customer_ids(db)),
+            )
             .order_by(Customer.name)
         ).all()
     )
@@ -864,6 +986,273 @@ def generate_recurring_drafts(
     )
 
 
+@router.get("/simple-finance/utility-expenses")
+def list_utility_expenses(
+    month: str = Query(pattern=r"^\d{4}-\d{2}$"),
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_cost_read),
+) -> dict[str, Any]:
+    normalized_month = _month(month)
+    row = db.scalar(
+        select(FinanceUtilityExpense).where(
+            FinanceUtilityExpense.cost_month == normalized_month
+        )
+    )
+    legacy_rows = list(
+        db.scalars(
+            select(FinanceUtilityReading)
+            .where(FinanceUtilityReading.cost_month == normalized_month)
+            .order_by(FinanceUtilityReading.utility_type)
+        ).all()
+    )
+    if row is not None and legacy_rows:
+        mode = "conflict"
+        message = "本月同时存在合并水电费和旧抄表记录，请先由管理员核对，当前禁止继续写入。"
+    elif row is not None:
+        mode = "combined"
+        message = "本月水费和电费按一条合并费用管理。"
+    elif legacy_rows:
+        mode = "legacy"
+        message = "本月已有旧水费/电费抄表记录，为避免重复记账不能再新增合并水电费。"
+    else:
+        mode = "empty"
+        message = "本月尚未登记水电费。"
+    return {
+        "month": normalized_month,
+        "mode": mode,
+        "item": _utility_expense_response(row) if row is not None else None,
+        "legacy_items": [_utility_response(legacy) for legacy in legacy_rows],
+        "can_save_combined": not legacy_rows,
+        "message": message,
+    }
+
+
+@router.post("/simple-finance/utility-expenses")
+def save_utility_expense(
+    payload: UtilityExpensePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_cost_manage),
+) -> dict[str, Any]:
+    def operation():
+        legacy_exists = db.scalar(
+            select(FinanceUtilityReading.id)
+            .where(FinanceUtilityReading.cost_month == payload.cost_month)
+            .limit(1)
+        )
+        if legacy_exists is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="本月已有旧水费或电费抄表记录，为避免重复记账不能保存合并水电费",
+            )
+
+        center = _validated_center(
+            db, payload.cost_center_id, accounting_class="manufacturing"
+        )
+        existing = db.scalar(
+            select(FinanceUtilityExpense).where(
+                FinanceUtilityExpense.cost_month == payload.cost_month
+            )
+        )
+        if existing is None and payload.expected_version is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="本月水电费尚未建立，请刷新后重试",
+            )
+        if existing is not None and existing.version != payload.expected_version:
+            raise HTTPException(
+                status_code=409,
+                detail="本月水电费已被修改，请刷新后重试",
+            )
+
+        fingerprint = f"utility:combined:{payload.cost_month}"
+        entry = (
+            db.get(FinanceCostPoolEntry, existing.cost_pool_entry_id)
+            if existing is not None
+            else None
+        )
+        if existing is None:
+            orphan_entry = db.scalar(
+                select(FinanceCostPoolEntry).where(
+                    FinanceCostPoolEntry.source_fingerprint == fingerprint
+                )
+            )
+            if orphan_entry is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="本月水电费已有费用事实但明细关联异常，请刷新后联系管理员",
+                )
+        elif entry is None:
+            raise HTTPException(
+                status_code=409,
+                detail="本月水电费对应的费用事实不存在，请联系管理员核对",
+            )
+        elif entry.status == "voided":
+            raise HTTPException(
+                status_code=409,
+                detail="本月水电费已作废，不能继续修改",
+            )
+
+        confirmed_payment_only = False
+        if entry is not None and entry.status == "confirmed":
+            locked_values_unchanged = (
+                existing is not None
+                and existing.cost_center_id == center.id
+                and existing.total_amount == payload.total_amount
+                and existing.invoice_number == payload.invoice_number
+                and existing.invoice_date == payload.invoice_date
+                and existing.invoice_amount == payload.invoice_amount
+                and existing.note == payload.note
+            )
+            if not locked_values_unchanged:
+                raise HTTPException(
+                    status_code=409,
+                    detail="本月水电费已确认，只能补录付款金额和付款日期",
+                )
+            confirmed_payment_only = True
+
+        entry_values = {
+            "cost_month": payload.cost_month,
+            "document_date": payload.invoice_date or _last_day(payload.cost_month),
+            "cost_center_id": center.id,
+            "cost_center_code_snapshot": center.code,
+            "cost_center_name_snapshot": center.name,
+            "cost_center_type_snapshot": center.center_type,
+            "cost_category": "factory_utilities",
+            "accounting_class": "manufacturing",
+            "allocation_basis": "unallocated",
+            "description": f"{payload.cost_month} 水电费",
+            "counterparty_name": None,
+            "document_number": payload.invoice_number,
+            "amount": payload.total_amount,
+            "tax_amount": Decimal("0"),
+            "source_type": "utility_reading",
+            "source_reference": "水电费合并",
+            "source_fingerprint": fingerprint,
+            "note": payload.note,
+        }
+        if entry is None:
+            entry = FinanceCostPoolEntry(
+                **entry_values, status="draft", created_by=user.id
+            )
+            db.add(entry)
+            db.flush()
+        elif confirmed_payment_only:
+            entry_gate = db.execute(
+                update(FinanceCostPoolEntry)
+                .where(
+                    FinanceCostPoolEntry.id == entry.id,
+                    FinanceCostPoolEntry.status == "confirmed",
+                    FinanceCostPoolEntry.version == entry.version,
+                )
+                .values(updated_at=FinanceCostPoolEntry.updated_at)
+                .execution_options(synchronize_session=False)
+            )
+            if entry_gate.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="本月水电费状态或版本已变化，请刷新后重试",
+                )
+        else:
+            expected_entry_version = entry.version
+            entry_result = db.execute(
+                update(FinanceCostPoolEntry)
+                .where(
+                    FinanceCostPoolEntry.id == entry.id,
+                    FinanceCostPoolEntry.status == "draft",
+                    FinanceCostPoolEntry.version == expected_entry_version,
+                )
+                .values(
+                    **entry_values,
+                    version=expected_entry_version + 1,
+                    updated_at=beijing_now_naive(),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if entry_result.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="本月水电费状态或版本已变化，请刷新后重试",
+                )
+            db.expire(entry)
+            db.refresh(entry)
+
+        expense_values = {
+            "cost_month": payload.cost_month,
+            "cost_center_id": center.id,
+            "total_amount": payload.total_amount,
+            "invoice_number": payload.invoice_number,
+            "invoice_date": payload.invoice_date,
+            "invoice_amount": payload.invoice_amount,
+            "paid_amount": payload.paid_amount,
+            "payment_date": payload.payment_date,
+            "cost_pool_entry_id": entry.id,
+            "note": payload.note,
+        }
+        if existing is None:
+            existing = FinanceUtilityExpense(**expense_values, created_by=user.id)
+            db.add(existing)
+            db.flush()
+        elif confirmed_payment_only:
+            expense_result = db.execute(
+                update(FinanceUtilityExpense)
+                .where(
+                    FinanceUtilityExpense.id == existing.id,
+                    FinanceUtilityExpense.version == payload.expected_version,
+                )
+                .values(
+                    paid_amount=payload.paid_amount,
+                    payment_date=payload.payment_date,
+                    version=payload.expected_version + 1,
+                    updated_by=user.id,
+                    updated_at=beijing_now_naive(),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if expense_result.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="本月水电费付款记录已被修改，请刷新后重试",
+                )
+            db.expire(existing)
+            db.refresh(existing)
+        else:
+            expense_result = db.execute(
+                update(FinanceUtilityExpense)
+                .where(
+                    FinanceUtilityExpense.id == existing.id,
+                    FinanceUtilityExpense.version == payload.expected_version,
+                )
+                .values(
+                    **expense_values,
+                    version=payload.expected_version + 1,
+                    updated_by=user.id,
+                    updated_at=beijing_now_naive(),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if expense_result.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="本月水电费已被修改，请刷新后重试",
+                )
+            db.expire(existing)
+            db.refresh(existing)
+        return _utility_expense_response(existing), existing.id
+
+    return _run_mutation(
+        db,
+        request=request,
+        user=user,
+        action="finance.simple.utility_expense.save",
+        key=payload.idempotency_key,
+        payload=payload.model_dump(exclude={"idempotency_key"}),
+        resource="FinanceUtilityExpense",
+        description="保存月度合并水电费、发票和付款事实",
+        operation=operation,
+    )
+
+
 @router.get("/simple-finance/utility-readings")
 def list_utility_readings(
     month: str = Query(pattern=r"^\d{4}-\d{2}$"),
@@ -909,6 +1298,16 @@ def save_utility_reading(
     recognized = payload.invoice_amount if payload.invoice_amount is not None else calculated
 
     def operation():
+        combined_exists = db.scalar(
+            select(FinanceUtilityExpense.id)
+            .where(FinanceUtilityExpense.cost_month == payload.cost_month)
+            .limit(1)
+        )
+        if combined_exists is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="本月已使用合并水电费，不能再新增旧水费或电费抄表记录",
+            )
         center = _validated_center(
             db, payload.cost_center_id, accounting_class="manufacturing"
         )
@@ -1126,9 +1525,7 @@ def create_acceptance_note(
     user: User = Depends(require_finance_execute),
 ) -> dict[str, Any]:
     def operation():
-        customer = db.get(Customer, payload.customer_id)
-        if customer is None or not customer.is_active:
-            raise HTTPException(status_code=409, detail="客户不存在或已停用")
+        customer = _eligible_acceptance_customer(db, payload.customer_id)
         if payload.customer_statement_id is not None:
             customer_statement = db.get(Statement, payload.customer_statement_id)
             if (

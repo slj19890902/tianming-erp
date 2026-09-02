@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.231"
-    assert APP_VERSION_NAME == "产品标签逐项打印与常用箱即时生效"
+    assert APP_VERSION == "v0.22.232"
+    assert APP_VERSION_NAME == "组合成品仓库总数按齐套数显示"
     assert APP_BUILD_DATE == "2026-09-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,13 +49,16 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "独立打印" in item and "全部勾选" in item for item in current_release)
-    assert any("本次更新｜" in item and "刷新来料页面立即" in item and "无需撤回" in item for item in current_release)
-    assert any("本次更新｜" in item and "当前待生产需求" in item and "静默漏印" in item for item in current_release)
-    assert any("本次更新｜" in item and "历史作业" in item and "不受" in item for item in current_release)
-    assert any("本次更新｜" in item and "无数据库迁移" in item and "历史打印" in item for item in current_release)
-    assert any("如何验证｜" in item and "一款产品" in item and "整张单据全选" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.231" in item and "jh67v8x9z56" in item for item in current_release)
+    assert any("本次更新｜" in item and "BOM齐套数" in item and "组件件数" in item for item in current_release)
+    assert any("本次更新｜" in item and "Z.001.000205" in item and "1300套" in item for item in current_release)
+    assert any("本次更新｜" in item and "普通非BOM产品" in item and "原事实" in item for item in current_release)
+    assert any("本次更新｜" in item and "无数据库迁移" in item and "库存数量" in item for item in current_release)
+    assert any("如何验证｜" in item and "9100" in item and "1300套" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.232" in item and "jh67v8x9z56" in item for item in current_release)
+    prior_release_231 = [item for item in APP_CHANGELOG if item.startswith("v0.22.231：")]
+    assert any("本次更新｜" in item and "独立打印" in item and "全部勾选" in item for item in prior_release_231)
+    assert any("本次更新｜" in item and "刷新来料页面立即" in item and "无需撤回" in item for item in prior_release_231)
+    assert any("如何验证｜" in item and "v0.22.231" in item and "jh67v8x9z56" in item for item in prior_release_231)
     prior_release_230 = [item for item in APP_CHANGELOG if item.startswith("v0.22.230：")]
     assert any("本次更新｜" in item and "MK005" in item and "AB/BE适用范围" in item for item in prior_release_230)
     assert any("如何验证｜" in item and "v0.22.230" in item and "jh67v8x9z56" in item for item in prior_release_230)

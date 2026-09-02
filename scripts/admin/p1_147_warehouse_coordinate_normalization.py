@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 import shutil
 import sqlite3
 import sys
@@ -12,12 +13,14 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from statistics import median
 from typing import Any, Iterable
 
 
 TASK_CODE = "P1-147"
 AUTHORITY_CODE = "published_measured_geometry_plus_visible_percent_layout"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SCOPE_FLOOR_CODE = "3F"
 CHANGE_TOLERANCE_MM = Decimal("0.500")
 COORDINATE_QUANTUM = Decimal("0.001")
 APPLY_TOKEN = "APPLY-P1-147-ISOLATED-COPY"
@@ -35,14 +38,14 @@ PROTECTED_TABLES = (
     "inventory_pallet_items",
     "warehouse_ground_occupancies",
     "warehouse_ground_occupancy_slots",
+    "warehouse_floors",
+    "warehouse_areas",
+    "warehouse_area_storage_policies",
     "warehouse_locations",
     "floor3_location_layouts",
+    "warehouse_ground_layout_plans",
 )
 MUTABLE_TRIGGERS = {
-    "trg_ground_plans_published_immutable": (
-        "warehouse_ground_layout_plans",
-        "published ground layout plan is immutable",
-    ),
     "trg_ground_layout_slots_immutable_update": (
         "warehouse_ground_layout_slots",
         "published ground layout slot is immutable",
@@ -175,6 +178,23 @@ def _floor_revision_map(map_document: dict[str, Any]) -> dict[str, str]:
         str(code).upper(): str((floor or {}).get("revision") or "").strip()
         for code, floor in (map_document.get("floors") or {}).items()
     }
+
+
+def _scope_floor_document(
+    map_document: dict[str, Any], floor_code: str = SCOPE_FLOOR_CODE
+) -> dict[str, Any]:
+    for code, floor in (map_document.get("floors") or {}).items():
+        if str(code).strip().upper() == floor_code:
+            return floor or {}
+    raise CoordinateNormalizationError(f"正式地图缺少 {floor_code} 楼层。")
+
+
+def _physical_floor_number(floor_code: str) -> int | None:
+    normalized = str(floor_code or "").strip().upper()
+    match = re.fullmatch(r"(?:F(\d+)|(\d+)F)", normalized)
+    if match is None:
+        return None
+    return int(match.group(1) or match.group(2))
 
 
 def _load_map(path: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
@@ -539,109 +559,256 @@ def protected_snapshot(connection: sqlite3.Connection) -> dict[str, Any]:
     return {table: _logical_table_hash(connection, table) for table in PROTECTED_TABLES}
 
 
-def ground_preview_fingerprint(
-    *, area_id: int, policy_version: int, map_revision: str, plan: sqlite3.Row, rows: list[dict]
-) -> str:
-    configuration = {
-        "target_slot_count": int(plan["target_slot_count"]),
-        "numbering_origin": plan["numbering_origin"],
-        "row_direction": plan["row_direction"],
-        "slot_direction": plan["slot_direction"],
-        "row_start_no": int(plan["row_start_no"]),
-        "slot_start_no": int(plan["slot_start_no"]),
+def _published_counts(
+    connection: sqlite3.Connection, *, plans: bool
+) -> dict[str, int]:
+    counted_table = "warehouse_ground_layout_plans AS p"
+    counted_value = "p.id"
+    joins = ""
+    if not plans:
+        counted_table = "warehouse_ground_layout_slots AS s"
+        counted_value = "s.id"
+        joins = "JOIN warehouse_ground_layout_plans AS p ON p.id=s.plan_id"
+    return {
+        str(row[0]).strip().upper(): int(row[1])
+        for row in connection.execute(
+            f"""
+            SELECT f.floor_code,count({counted_value})
+            FROM {counted_table}
+            {joins}
+            JOIN warehouse_areas AS a ON a.id=p.area_id
+            JOIN warehouse_floors AS f ON f.id=a.floor_id
+            WHERE p.status='published'
+            GROUP BY f.id,f.floor_code,f.floor_number
+            ORDER BY f.floor_number,f.id
+            """
+        )
     }
-    slots = []
-    for row in sorted(rows, key=lambda value: (value["route_sequence"], value["ground_slot_id"])):
-        slots.append(
+
+
+def _out_of_scope_findings(
+    source_rows: list[sqlite3.Row],
+    feature_by_id: dict[str, dict[str, Any]],
+    inventory: dict[int, dict[str, Any]],
+    *,
+    scope_floor_code: str,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for source in source_rows:
+        database_floor_code = str(source["floor_code"] or "").strip().upper()
+        if database_floor_code == scope_floor_code:
+            continue
+        feature_id = str(source["map_feature_id"] or "").strip()
+        feature = feature_by_id.get(feature_id)
+        issue_code: str | None = None
+        map_floor_code: str | None = None
+        map_revision: str | None = None
+        if feature is None:
+            issue_code = "map_feature_missing"
+        else:
+            map_floor_code = str(feature["floor_code"] or "").strip().upper()
+            map_revision = str(feature["floor_revision"] or "")
+            if map_floor_code != database_floor_code:
+                if _physical_floor_number(map_floor_code) == _physical_floor_number(
+                    database_floor_code
+                ):
+                    issue_code = "floor_code_alias_mismatch"
+                else:
+                    issue_code = "cross_floor_binding"
+            elif (
+                str(source["policy_map_revision"] or "") != map_revision
+                and str(source["published_map_revision"] or "") != map_revision
+            ):
+                issue_code = "policy_and_plan_revision_mismatch"
+            elif str(source["policy_map_revision"] or "") != map_revision:
+                issue_code = "policy_revision_mismatch"
+            elif str(source["published_map_revision"] or "") != map_revision:
+                issue_code = "plan_revision_mismatch"
+        if issue_code is None:
+            continue
+        evidence = inventory[int(source["location_id"])]
+        quantity = max(
+            int(evidence["direct_quantity"]), int(evidence["occupancy_quantity"])
+        )
+        findings.append(
             {
-                "route_sequence": row["route_sequence"],
-                "row_no": row["row_no"],
-                "slot_no": row["slot_no"],
-                "location_code": row["location_code"],
-                "x_mm": Decimal(row["target_x_mm"]),
-                "y_mm": Decimal(row["target_y_mm"]),
-                "width_mm": row["width_mm"],
-                "depth_mm": row["depth_mm"],
-                "left_pct": row["left_pct"],
-                "top_pct": row["top_pct"],
-                "width_pct": row["width_pct"],
-                "height_pct": row["height_pct"],
-                "existing_location_id": row["location_id"],
-                "existing_layout_version": row["layout_version"],
+                "issue_code": issue_code,
+                "database_floor_code": database_floor_code,
+                "map_floor_code": map_floor_code,
+                "area_code": source["area_code"],
+                "plan_id": int(source["plan_id"]),
+                "location_id": int(source["location_id"]),
+                "location_code": source["location_code"],
+                "map_feature_id": feature_id,
+                "policy_map_revision": source["policy_map_revision"],
+                "plan_map_revision": source["published_map_revision"],
+                "current_map_revision": map_revision,
+                "inventory_quantity": quantity,
+                "occupied": quantity > 0 or bool(evidence["occupancy_ids"]),
+                "pallet_codes": evidence["pallet_codes"],
             }
         )
-    return canonical_hash(
-        {
-            "rule_version": "P1-87",
-            "area_id": area_id,
-            "policy_version": policy_version,
-            "map_revision": map_revision,
-            "configuration": configuration,
-            "slots": slots,
-        }
+    return findings
+
+
+def _coordinate_pattern_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    changed = [row for row in rows if row["change_required"]]
+    deviations = sorted(Decimal(row["deviation_mm"]) for row in changed)
+    mirror_groups: list[dict[str, Any]] = []
+    for area_code in sorted({str(row["area_code"]) for row in rows}):
+        group = [row for row in rows if str(row["area_code"]) == area_code]
+        current_y_values = {Decimal(row["current_y_mm"]) for row in group}
+        if len(group) < 2 or len(current_y_values) < 2:
+            continue
+        intercepts = [
+            Decimal(row["current_y_mm"]) + Decimal(row["target_y_mm"])
+            for row in group
+        ]
+        intercept = median(intercepts)
+        residual = max(abs(value - intercept) for value in intercepts)
+        mirror_groups.append(
+            {
+                "area_code": area_code,
+                "row_count": len(group),
+                "mirror_intercept_mm": format(_q(intercept), "f"),
+                "max_residual_mm": format(_q(residual), "f"),
+            }
+        )
+    max_abs_delta_x = max(
+        (abs(Decimal(row["delta_x_mm"])) for row in rows), default=Decimal("0")
     )
+    max_mirror_residual = max(
+        (
+            Decimal(group["max_residual_mm"])
+            for group in mirror_groups
+        ),
+        default=Decimal("0"),
+    )
+    return {
+        "max_abs_delta_x_mm": format(_q(max_abs_delta_x), "f"),
+        "changed_deviation_min_mm": (
+            format(_q(deviations[0]), "f") if deviations else None
+        ),
+        "changed_deviation_median_mm": (
+            format(_q(median(deviations)), "f") if deviations else None
+        ),
+        "changed_deviation_max_mm": (
+            format(_q(deviations[-1]), "f") if deviations else None
+        ),
+        "multi_row_mirror_group_count": len(mirror_groups),
+        "max_mirror_residual_mm": format(_q(max_mirror_residual), "f"),
+        "pattern": (
+            "consistent_with_reversed_y_axis_or_origin"
+            if changed
+            and max_abs_delta_x <= Decimal("0.010")
+            and mirror_groups
+            and max_mirror_residual <= Decimal("0.010")
+            else "not_classified"
+        ),
+        "mirror_groups": mirror_groups,
+    }
 
 
-def build_audit(database: Path, map_path: Path) -> dict[str, Any]:
+def build_audit(
+    database: Path,
+    map_path: Path,
+    *,
+    scope_floor_code: str = SCOPE_FLOOR_CODE,
+) -> dict[str, Any]:
+    scope_floor_code = str(scope_floor_code or "").strip().upper()
+    if scope_floor_code != SCOPE_FLOOR_CODE:
+        raise CoordinateNormalizationError(
+            f"P1-147 仅允许 {SCOPE_FLOOR_CODE} 专项，拒绝审计 {scope_floor_code or '<empty>'}。"
+        )
     database = database.resolve(strict=True)
     map_path = map_path.resolve(strict=True)
     _assert_isolated_database(database, True)
     map_document, feature_by_id = _load_map(map_path)
+    scope_floor_document = _scope_floor_document(map_document, scope_floor_code)
     with readonly_database(database) as connection:
         _required_tables(connection)
         checks = _check_database(connection)
         if not checks["ok"]:
             raise CoordinateNormalizationError("数据库完整性或外键检查未通过。")
         source_rows = _query_rows(connection)
-        published_slot_count = int(
-            connection.execute(
-                """
-                SELECT count(*)
-                FROM warehouse_ground_layout_slots s
-                JOIN warehouse_ground_layout_plans p ON p.id=s.plan_id
-                WHERE p.status='published'
-                """
-            ).fetchone()[0]
-        )
-        published_plan_count = int(
-            connection.execute(
-                "SELECT count(*) FROM warehouse_ground_layout_plans WHERE status='published'"
-            ).fetchone()[0]
-        )
+        published_slots_by_floor = _published_counts(connection, plans=False)
+        published_plans_by_floor = _published_counts(connection, plans=True)
         inventory = _inventory_evidence(
             connection, [int(row["location_id"]) for row in source_rows]
         )
         protected = protected_snapshot(connection)
-        alembic_rows = [row[0] for row in connection.execute("SELECT version_num FROM alembic_version")]
-    rows: list[dict[str, Any]] = []
-    blockers: list[str] = []
-    hard_blockers: list[str] = []
-    if len(source_rows) != published_slot_count:
-        message = (
-            f"发布地堆明细共 {published_slot_count} 行，但只有 {len(source_rows)} 行具备正式策略、"
-            "货位与百分比布局完整关联"
-        )
-        blockers.append(message)
-        hard_blockers.append(message)
+        alembic_rows = [
+            row[0] for row in connection.execute("SELECT version_num FROM alembic_version")
+        ]
+
+    warehouse_published_slot_count = sum(published_slots_by_floor.values())
+    warehouse_published_plan_count = sum(published_plans_by_floor.values())
+    joined_rows_by_floor: dict[str, int] = {}
     for source in source_rows:
+        code = str(source["floor_code"] or "").strip().upper()
+        joined_rows_by_floor[code] = joined_rows_by_floor.get(code, 0) + 1
+    scoped_sources = [
+        source
+        for source in source_rows
+        if str(source["floor_code"] or "").strip().upper() == scope_floor_code
+    ]
+    out_of_scope_sources = [
+        source
+        for source in source_rows
+        if str(source["floor_code"] or "").strip().upper() != scope_floor_code
+    ]
+    out_of_scope_findings = _out_of_scope_findings(
+        source_rows,
+        feature_by_id,
+        inventory,
+        scope_floor_code=scope_floor_code,
+    )
+
+    input_quality_findings: list[str] = []
+    hard_blockers: list[str] = []
+    if len(source_rows) != warehouse_published_slot_count:
+        input_quality_findings.append(
+            f"全仓已发布货位 {warehouse_published_slot_count} 行，完整关联查询仅返回 {len(source_rows)} 行。"
+        )
+    scope_published_slot_count = published_slots_by_floor.get(scope_floor_code, 0)
+    scope_published_plan_count = published_plans_by_floor.get(scope_floor_code, 0)
+    if len(scoped_sources) != scope_published_slot_count:
+        hard_blockers.append(
+            f"{scope_floor_code} 已发布货位 {scope_published_slot_count} 行，完整关联查询仅返回 {len(scoped_sources)} 行。"
+        )
+    if len({int(row["plan_id"]) for row in scoped_sources}) != scope_published_plan_count:
+        hard_blockers.append(
+            f"{scope_floor_code} 已发布规划 {scope_published_plan_count} 个，完整关联查询仅覆盖 "
+            f"{len({int(row['plan_id']) for row in scoped_sources})} 个。"
+        )
+    if len({int(row["ground_slot_id"]) for row in scoped_sources}) != len(scoped_sources):
+        hard_blockers.append(f"{scope_floor_code} 完整关联查询出现重复 ground slot id。")
+    if len({int(row["location_id"]) for row in scoped_sources}) != len(scoped_sources):
+        hard_blockers.append(f"{scope_floor_code} 已发布货位不是一行一个唯一 location id。")
+
+    rows: list[dict[str, Any]] = []
+    for source in scoped_sources:
         feature_id = str(source["map_feature_id"] or "").strip()
         feature = feature_by_id.get(feature_id)
         if feature is None:
-            message = f"location {source['location_id']} 的正式区域 {feature_id!r} 不在正式地图中"
-            blockers.append(message)
-            hard_blockers.append(message)
+            hard_blockers.append(
+                f"location {source['location_id']} 的正式区域 {feature_id!r} 不在正式地图中。"
+            )
             continue
-        floor_code = str(source["floor_code"] or "").upper()
+        floor_code = str(source["floor_code"] or "").strip().upper()
         map_revision = str(feature["floor_revision"])
         if feature["floor_code"] != floor_code:
-            message = f"location {source['location_id']} 的区域跨楼层绑定"
-            blockers.append(message)
-            hard_blockers.append(message)
+            hard_blockers.append(
+                f"location {source['location_id']} 的区域跨楼层绑定：数据库 {floor_code}，地图 {feature['floor_code']}。"
+            )
             continue
-        if source["policy_map_revision"] != map_revision or source["published_map_revision"] != map_revision:
-            message = f"location {source['location_id']} 的 policy/plan 地图版本与正式地图不一致"
-            blockers.append(message)
-            hard_blockers.append(message)
+        if (
+            str(source["policy_map_revision"] or "") != map_revision
+            or str(source["published_map_revision"] or "") != map_revision
+        ):
+            hard_blockers.append(
+                f"location {source['location_id']} 的 policy/plan 地图版本与 {floor_code} 正式地图不一致。"
+            )
             continue
         geometry = visible_geometry(
             feature.get("points") or [],
@@ -653,25 +820,17 @@ def build_audit(database: Path, map_path: Path) -> dict[str, Any]:
         delta_x = geometry["target_x_mm"] - current_x
         delta_y = geometry["target_y_mm"] - current_y
         deviation = _q(math.hypot(float(delta_x), float(delta_y)))
-        width_delta = abs(geometry["mapped_width_mm"] - Decimal(int(source["width_mm"])))
-        depth_delta = abs(geometry["mapped_depth_mm"] - Decimal(int(source["depth_mm"])))
+        width_delta = abs(
+            geometry["mapped_width_mm"] - Decimal(int(source["width_mm"]))
+        )
+        depth_delta = abs(
+            geometry["mapped_depth_mm"] - Decimal(int(source["depth_mm"]))
+        )
         unsafe_reason = None
         if geometry["geometry_class"] == "rotated_rectangle":
-            unsafe_reason = "rotated_rectangle_requires_explicit_field_sample"
-            message = (
-                f"location {source['location_id']} 位于旋转矩形区域；当前地堆表没有旋转字段，"
-                "不能仅凭中心点自动修正"
-            )
-            blockers.append(message)
-            hard_blockers.append(message)
+            unsafe_reason = "rotated_rectangle_has_no_ground_slot_rotation_contract"
         elif width_delta > Decimal("2.000") or depth_delta > Decimal("2.000"):
             unsafe_reason = "visible_size_does_not_match_ground_slot_contract"
-            message = (
-                f"location {source['location_id']} 的可见尺寸与地堆标准尺寸不一致，"
-                "不能只修正坐标"
-            )
-            blockers.append(message)
-            hard_blockers.append(message)
         elif not _target_footprint_inside_zone(
             feature.get("points") or [],
             x_mm=geometry["target_x_mm"],
@@ -680,12 +839,19 @@ def build_audit(database: Path, map_path: Path) -> dict[str, Any]:
             depth_mm=int(source["depth_mm"]),
         ):
             unsafe_reason = "target_footprint_crosses_published_zone"
-            message = (
-                f"location {source['location_id']} 的候选标准矩形越出已发布区域边界，"
-                "不能只修正坐标"
-            )
-            blockers.append(message)
-            hard_blockers.append(message)
+        change_required = (
+            abs(delta_x) > CHANGE_TOLERANCE_MM
+            or abs(delta_y) > CHANGE_TOLERANCE_MM
+        )
+        if not change_required:
+            candidate_disposition = "unchanged"
+        elif unsafe_reason:
+            candidate_disposition = "geometry_blocked"
+        elif geometry["geometry_class"] == "axis_aligned_rectangle":
+            candidate_disposition = "rehearsal_candidate"
+        else:
+            candidate_disposition = "field_confirmation_required"
+        execution_eligible = candidate_disposition == "rehearsal_candidate"
         evidence = inventory[int(source["location_id"])]
         row = {
             "floor_code": floor_code,
@@ -733,9 +899,13 @@ def build_audit(database: Path, map_path: Path) -> dict[str, Any]:
             "policy_id": int(source["policy_id"]),
             "policy_version": int(source["policy_version"]),
             "location_address_version": int(source["location_address_version"]),
+            "location_placement_status": source["placement_status"],
+            "location_storage_type": source["storage_type"],
+            "location_is_active": int(source["is_active"]),
             "area_version": int(source["area_version"]),
             "pallet_codes": evidence["pallet_codes"],
-            "occupied_batch_lots": evidence["occupancy_lots"] or evidence["direct_lots"],
+            "occupied_batch_lots": evidence["occupancy_lots"]
+            or evidence["direct_lots"],
             "direct_inventory_lots": evidence["direct_lots"],
             "direct_inventory_quantity": evidence["direct_quantity"],
             "occupancy_ids": evidence["occupancy_ids"],
@@ -743,58 +913,151 @@ def build_audit(database: Path, map_path: Path) -> dict[str, Any]:
             "inventory_quantity": max(
                 int(evidence["direct_quantity"]), int(evidence["occupancy_quantity"])
             ),
-            "change_required": abs(delta_x) > CHANGE_TOLERANCE_MM
-            or abs(delta_y) > CHANGE_TOLERANCE_MM,
+            "change_required": change_required,
+            "candidate_disposition": candidate_disposition,
+            "execution_eligible": execution_eligible,
             "unsafe_reason": unsafe_reason,
         }
         rows.append(row)
+
     plan_groups: list[dict[str, Any]] = []
+    scoped_source_by_plan = {
+        int(source["plan_id"]): source for source in scoped_sources
+    }
     for plan_id in sorted({row["plan_id"] for row in rows}):
         group = [row for row in rows if row["plan_id"] == plan_id]
-        source = next(row for row in source_rows if int(row["plan_id"]) == plan_id)
+        source = scoped_source_by_plan[plan_id]
         if len(group) != int(source["target_slot_count"]):
-            message = (
-                f"plan {plan_id} 声明 {source['target_slot_count']} 个位置，实际可审计 {len(group)} 个"
+            hard_blockers.append(
+                f"plan {plan_id} 声明 {source['target_slot_count']} 个位置，实际可审计 {len(group)} 个。"
             )
-            blockers.append(message)
-            hard_blockers.append(message)
-        target_fingerprint = ground_preview_fingerprint(
-            area_id=int(source["area_id"]),
-            policy_version=int(source["policy_version"]),
-            map_revision=str(source["published_map_revision"]),
-            plan=source,
-            rows=group,
-        )
-        plan_group = {
+        execution_count = sum(bool(row["execution_eligible"]) for row in group)
+        if not execution_count:
+            continue
+        plan_groups.append(
+            {
                 "plan_id": plan_id,
                 "area_id": int(source["area_id"]),
-                "floor_code": source["floor_code"],
+                "floor_code": str(source["floor_code"] or "").strip().upper(),
                 "area_code": source["area_code"],
                 "expected_version": int(source["plan_version"]),
-                "target_version": int(source["plan_version"]) + 1,
                 "expected_preview_fingerprint": source["preview_fingerprint"],
-                "target_preview_fingerprint": target_fingerprint,
                 "expected_updated_at": source["plan_updated_at"],
                 "policy_id": int(source["policy_id"]),
                 "policy_version": int(source["policy_version"]),
                 "map_revision": source["published_map_revision"],
                 "row_count": len(group),
                 "changed_row_count": sum(bool(row["change_required"]) for row in group),
+                "execution_candidate_row_count": execution_count,
+                "field_confirmation_row_count": sum(
+                    row["candidate_disposition"] == "field_confirmation_required"
+                    for row in group
+                ),
+                "geometry_blocked_row_count": sum(
+                    row["candidate_disposition"] == "geometry_blocked"
+                    for row in group
+                ),
             }
-        if plan_group["changed_row_count"]:
-            plan_groups.append(plan_group)
-    change_rows = [row for row in rows if row["change_required"]]
-    unsafe_rows = [row for row in change_rows if row["unsafe_reason"]]
-    if unsafe_rows:
-        blockers.append(
-            f"{len(unsafe_rows)} 个待修正位置属于旋转或尺寸契约不一致区域，必须逐点现场确认"
         )
+
+    change_rows = [row for row in rows if row["change_required"]]
+    unchanged_rows = [row for row in rows if not row["change_required"]]
+    execution_rows = [row for row in rows if row["execution_eligible"]]
+    field_confirmation_rows = [
+        row
+        for row in rows
+        if row["candidate_disposition"] == "field_confirmation_required"
+    ]
+    geometry_blocked_rows = [
+        row for row in rows if row["candidate_disposition"] == "geometry_blocked"
+    ]
+    out_of_scope_issue_counts: dict[str, int] = {}
+    for finding in out_of_scope_findings:
+        issue = str(finding["issue_code"])
+        out_of_scope_issue_counts[issue] = out_of_scope_issue_counts.get(issue, 0) + 1
+
+    blockers = list(hard_blockers)
+    if field_confirmation_rows:
+        blockers.append(
+            f"{len(field_confirmation_rows)} 个不越界非矩形位置须现场确认，已排除在当前执行集之外。"
+        )
+    if geometry_blocked_rows:
+        blockers.append(
+            f"{len(geometry_blocked_rows)} 个位置越界、旋转或尺寸契约不一致，已排除在当前执行集之外。"
+        )
+    blockers.append(
+        "正式坐标写入仍须现场抽样确认、老板选择权威坐标方案，并提供与计划哈希绑定的独立批准文件。"
+    )
+    follow_up_items: list[str] = []
+    if out_of_scope_issue_counts.get("floor_code_alias_mismatch"):
+        follow_up_items.append(
+            f"1F/F1 楼层编码别名问题 {out_of_scope_issue_counts['floor_code_alias_mismatch']} 行，另建修复闭环。"
+        )
+    revision_issue_count = sum(
+        count
+        for issue, count in out_of_scope_issue_counts.items()
+        if "revision_mismatch" in issue
+    )
+    if revision_issue_count:
+        follow_up_items.append(
+            f"非 3F plan/policy revision 问题 {revision_issue_count} 行，另建修复闭环。"
+        )
+
+    occupied = lambda candidate_rows: sum(
+        int(row["inventory_quantity"]) > 0 or bool(row["occupancy_ids"])
+        for row in candidate_rows
+    )
+    execution_location_ids = sorted(int(row["location_id"]) for row in execution_rows)
+    scope_floor_revision = str(scope_floor_document.get("revision") or "").strip()
+    summary = {
+        "warehouse_published_slot_count": warehouse_published_slot_count,
+        "warehouse_joined_source_row_count": len(source_rows),
+        "warehouse_published_plan_count": warehouse_published_plan_count,
+        "published_slots_by_floor": published_slots_by_floor,
+        "published_plans_by_floor": published_plans_by_floor,
+        "joined_source_rows_by_floor": joined_rows_by_floor,
+        "scope_floor_code": scope_floor_code,
+        "scope_published_slot_count": scope_published_slot_count,
+        "scope_joined_source_row_count": len(scoped_sources),
+        "scope_audited_slot_count": len(rows),
+        "scope_published_plan_count": scope_published_plan_count,
+        "scope_changed_slot_count": len(change_rows),
+        "scope_unchanged_slot_count": len(unchanged_rows),
+        "scope_occupied_slot_count": occupied(rows),
+        "scope_changed_occupied_slot_count": occupied(change_rows),
+        "rehearsal_candidate_slot_count": len(execution_rows),
+        "rehearsal_candidate_occupied_slot_count": occupied(execution_rows),
+        "field_confirmation_slot_count": len(field_confirmation_rows),
+        "field_confirmation_occupied_slot_count": occupied(field_confirmation_rows),
+        "geometry_blocked_slot_count": len(geometry_blocked_rows),
+        "geometry_blocked_occupied_slot_count": occupied(geometry_blocked_rows),
+        "execution_plan_count": len(plan_groups),
+        "out_of_scope_source_slot_count": len(out_of_scope_sources),
+        "out_of_scope_issue_count": len(out_of_scope_findings),
+        "out_of_scope_occupied_issue_count": sum(
+            bool(finding["occupied"]) for finding in out_of_scope_findings
+        ),
+        "out_of_scope_issue_counts": out_of_scope_issue_counts,
+        "geometry_counts": {
+            kind: sum(row["geometry_class"] == kind for row in rows)
+            for kind in (
+                "axis_aligned_rectangle",
+                "rotated_rectangle",
+                "non_rectangular",
+            )
+        },
+    }
     result = {
         "schema_version": SCHEMA_VERSION,
         "task": TASK_CODE,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "read_only_audit",
         "authority_candidate": AUTHORITY_CODE,
+        "scope": {
+            "floor_code": scope_floor_code,
+            "scope_kind": "three_floor_coordinate_normalization_only",
+            "warehouse_input_is_reported_separately": True,
+        },
         "database": {
             "path": str(database),
             "size": database.stat().st_size,
@@ -805,27 +1068,39 @@ def build_audit(database: Path, map_path: Path) -> dict[str, Any]:
             "path": str(map_path),
             "sha256": file_sha256(map_path),
             "floor_revisions": _floor_revision_map(map_document),
+            "scope_floor_code": scope_floor_code,
+            "scope_floor_revision": scope_floor_revision,
+            "scope_floor_sha256": canonical_hash(scope_floor_document),
         },
         "checks": checks,
+        "input_quality_findings": input_quality_findings,
+        "coordinate_pattern": _coordinate_pattern_summary(rows),
         "protected_snapshot": protected,
-        "summary": {
-            "published_slot_count": len(rows),
-            "changed_slot_count": len(change_rows),
-            "unchanged_slot_count": len(rows) - len(change_rows),
-            "unsafe_changed_slot_count": len(unsafe_rows),
+        "summary": summary,
+        "execution_candidate": {
+            "row_count": len(execution_rows),
             "plan_count": len(plan_groups),
-            "published_plan_count": published_plan_count,
-            "geometry_counts": {
-                kind: sum(row["geometry_class"] == kind for row in rows)
-                for kind in (
-                    "axis_aligned_rectangle",
-                    "rotated_rectangle",
-                    "non_rectangular",
-                )
-            },
+            "location_ids_sha256": canonical_hash(execution_location_ids),
+        },
+        "execution_gate": {
+            "rehearsal_ready": not hard_blockers and bool(execution_rows),
+            "formal_apply_ready": False,
+            "formal_apply_requires": [
+                "field_sampling_confirmed",
+                "owner_authority_choice_confirmed",
+                "hash_bound_approval_file",
+                "fresh_isolated_copy_rehearsal",
+            ],
         },
         "apply_blockers": sorted(set(blockers)),
         "hard_apply_blockers": sorted(set(hard_blockers)),
+        "follow_up_items": follow_up_items,
+        "out_of_scope": {
+            "source_slot_count": len(out_of_scope_sources),
+            "issue_count": len(out_of_scope_findings),
+            "issue_counts": out_of_scope_issue_counts,
+            "findings": out_of_scope_findings,
+        },
         "plans": plan_groups,
         "rows": rows,
     }
@@ -838,7 +1113,11 @@ def _sample_rows(plan: dict[str, Any]) -> list[dict[str, Any]]:
     samples: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
 
-    def add(category: str, candidates: list[dict[str, Any]], limit: int = 5) -> None:
+    def add(
+        category: str,
+        candidates: list[dict[str, Any]],
+        limit: int | None = 5,
+    ) -> None:
         ordered = sorted(
             candidates,
             key=lambda row: (
@@ -847,7 +1126,8 @@ def _sample_rows(plan: dict[str, Any]) -> list[dict[str, Any]]:
                 row["location_code"],
             ),
         )
-        for row in ordered[:limit]:
+        selected = ordered if limit is None else ordered[:limit]
+        for row in selected:
             key = (category, int(row["location_id"]))
             if key not in seen:
                 samples.append({"sample_category": category, **row})
@@ -869,11 +1149,31 @@ def _sample_rows(plan: dict[str, Any]) -> list[dict[str, Any]]:
         )
     add(
         "rotated_zones",
-        [row for row in rows if row["geometry_class"] == "rotated_rectangle"],
+        [
+            row
+            for row in rows
+            if row["geometry_class"] == "rotated_rectangle"
+            and row["change_required"]
+        ],
+        limit=None,
     )
     add(
-        "non_rectangular_zones",
-        [row for row in rows if row["geometry_class"] == "non_rectangular"],
+        "non_rectangular_in_bounds_field_confirmation",
+        [
+            row
+            for row in rows
+            if row["candidate_disposition"] == "field_confirmation_required"
+        ],
+        limit=None,
+    )
+    add(
+        "geometry_blocked_full_review",
+        [
+            row
+            for row in rows
+            if row["candidate_disposition"] == "geometry_blocked"
+        ],
+        limit=None,
     )
     return samples
 
@@ -902,6 +1202,8 @@ CSV_COLUMNS = (
     "occupied_batch_lots",
     "inventory_quantity",
     "change_required",
+    "candidate_disposition",
+    "execution_eligible",
     "unsafe_reason",
 )
 
@@ -916,6 +1218,8 @@ def write_audit_outputs(plan: dict[str, Any], output_dir: Path) -> dict[str, Pat
     csv_path = output_dir / "p1_147_coordinate_audit.csv"
     sample_path = output_dir / "p1_147_field_samples.csv"
     geometry_path = output_dir / "p1_147_zone_geometry.csv"
+    candidate_path = output_dir / "p1_147_rehearsal_candidates.csv"
+    out_of_scope_path = output_dir / "p1_147_out_of_scope_findings.csv"
     summary_path = output_dir / "p1_147_summary.md"
     plan_path.write_text(
         json.dumps(_json_safe(plan), ensure_ascii=False, indent=2) + "\n",
@@ -934,6 +1238,37 @@ def write_audit_outputs(plan: dict[str, Any], output_dir: Path) -> dict[str, Pat
         writer.writerows(
             {key: _csv_value(value) for key, value in row.items()}
             for row in _sample_rows(plan)
+        )
+    with candidate_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(
+            {key: _csv_value(value) for key, value in row.items()}
+            for row in plan["rows"]
+            if row["execution_eligible"]
+        )
+    out_of_scope_columns = (
+        "issue_code",
+        "database_floor_code",
+        "map_floor_code",
+        "area_code",
+        "plan_id",
+        "location_id",
+        "location_code",
+        "map_feature_id",
+        "policy_map_revision",
+        "plan_map_revision",
+        "current_map_revision",
+        "inventory_quantity",
+        "occupied",
+        "pallet_codes",
+    )
+    with out_of_scope_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=out_of_scope_columns)
+        writer.writeheader()
+        writer.writerows(
+            {key: _csv_value(value) for key, value in finding.items()}
+            for finding in plan["out_of_scope"]["findings"]
         )
     geometry_rows: dict[tuple[str, str], dict[str, Any]] = {}
     for row in plan["rows"]:
@@ -961,7 +1296,11 @@ def write_audit_outputs(plan: dict[str, Any], output_dir: Path) -> dict[str, Pat
         writer.writeheader()
         writer.writerows(geometry_rows.values())
     summary = plan["summary"]
-    blocker_lines = "\n".join(f"- {item}" for item in plan["apply_blockers"]) or "- 无结构性阻断；仍须完成现场抽样并取得老板确认。"
+    blocker_lines = "\n".join(f"- {item}" for item in plan["apply_blockers"])
+    follow_up_lines = "\n".join(f"- {item}" for item in plan["follow_up_items"])
+    if not follow_up_lines:
+        follow_up_lines = "- 未发现跨楼层后续问题。"
+    pattern = plan["coordinate_pattern"]
     summary_path.write_text(
         "\n".join(
             [
@@ -969,17 +1308,40 @@ def write_audit_outputs(plan: dict[str, Any], output_dir: Path) -> dict[str, Pat
                 "",
                 f"- 数据库 SHA-256：`{plan['database']['sha256']}`",
                 f"- 正式地图 SHA-256：`{plan['published_map']['sha256']}`",
-                f"- 发布地堆位置：{summary['published_slot_count']}",
-                f"- 坐标待归一：{summary['changed_slot_count']}",
-                f"- 坐标一致：{summary['unchanged_slot_count']}",
-                f"- 高风险待现场确认：{summary['unsafe_changed_slot_count']}",
+                f"- 全仓输入：{summary['warehouse_published_slot_count']} 个已发布货位 / "
+                f"{summary['warehouse_published_plan_count']} 个已发布规划",
+                f"- 专项范围：{summary['scope_floor_code']}，"
+                f"{summary['scope_audited_slot_count']} 个货位 / "
+                f"{summary['scope_published_plan_count']} 个规划",
+                f"- 坐标待归一：{summary['scope_changed_slot_count']}；"
+                f"坐标一致：{summary['scope_unchanged_slot_count']}",
+                f"- 受控复演候选：{summary['rehearsal_candidate_slot_count']}；"
+                f"当前占用：{summary['rehearsal_candidate_occupied_slot_count']}",
+                f"- 非矩形现场确认：{summary['field_confirmation_slot_count']}；"
+                f"当前占用：{summary['field_confirmation_occupied_slot_count']}",
+                f"- 几何阻断并排除：{summary['geometry_blocked_slot_count']}；"
+                f"当前占用：{summary['geometry_blocked_occupied_slot_count']}",
+                f"- 范围外问题：{summary['out_of_scope_issue_count']}；"
+                f"当前占用：{summary['out_of_scope_occupied_issue_count']}",
                 f"- 候选权威：`{AUTHORITY_CODE}`",
+                "",
+                "## 差异模式",
+                "",
+                f"- 最大横向绝对偏差：{pattern['max_abs_delta_x_mm']} mm",
+                f"- 纵向镜像分组：{pattern['multi_row_mirror_group_count']}；"
+                f"最大拟合残差：{pattern['max_mirror_residual_mm']} mm",
+                f"- 模式判断：`{pattern['pattern']}`",
                 "",
                 "## 写入门禁",
                 "",
                 blocker_lines,
                 "- 本审计不发布或丢弃任何地图草稿，不修改数据库。",
+                "- 当前执行集只含 3F 轴对齐且不越界的候选；其他行不会被 rehearse/apply/rollback 更新。",
                 "- `apply` 还要求独立批准文件、源 SHA、CAS、逐行审计和隔离路径确认。",
+                "",
+                "## 独立后续闭环",
+                "",
+                follow_up_lines,
                 "",
             ]
         ),
@@ -990,6 +1352,8 @@ def write_audit_outputs(plan: dict[str, Any], output_dir: Path) -> dict[str, Pat
         "audit_csv": csv_path,
         "samples_csv": sample_path,
         "geometry_csv": geometry_path,
+        "rehearsal_candidates_csv": candidate_path,
+        "out_of_scope_findings_csv": out_of_scope_path,
         "summary": summary_path,
     }
 
@@ -1003,7 +1367,60 @@ def load_plan(path: Path) -> dict[str, Any]:
         raise CoordinateNormalizationError("候选计划哈希不匹配，文件可能被修改。")
     if plan.get("task") != TASK_CODE or plan.get("schema_version") != SCHEMA_VERSION:
         raise CoordinateNormalizationError("候选计划不是受支持的 P1-147 格式。")
+    _validate_plan_contract(plan)
     return plan
+
+
+def _execution_rows(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    return [row for row in plan["rows"] if row.get("execution_eligible") is True]
+
+
+def _validate_plan_contract(plan: dict[str, Any]) -> None:
+    scope = plan.get("scope") or {}
+    if scope.get("floor_code") != SCOPE_FLOOR_CODE:
+        raise CoordinateNormalizationError("候选计划未严格限定为 3F 专项。")
+    rows = plan.get("rows")
+    plans = plan.get("plans")
+    summary = plan.get("summary") or {}
+    candidate = plan.get("execution_candidate") or {}
+    if not isinstance(rows, list) or not isinstance(plans, list):
+        raise CoordinateNormalizationError("候选计划 rows/plans 结构无效。")
+    if any(str(row.get("floor_code") or "").upper() != SCOPE_FLOOR_CODE for row in rows):
+        raise CoordinateNormalizationError("候选计划 rows 混入非 3F 数据。")
+    if any(str(item.get("floor_code") or "").upper() != SCOPE_FLOOR_CODE for item in plans):
+        raise CoordinateNormalizationError("候选计划 plans 混入非 3F 数据。")
+    location_ids = [int(row["location_id"]) for row in rows]
+    ground_slot_ids = [int(row["ground_slot_id"]) for row in rows]
+    if len(location_ids) != len(set(location_ids)) or len(ground_slot_ids) != len(
+        set(ground_slot_ids)
+    ):
+        raise CoordinateNormalizationError("候选计划 3F 行主键不唯一。")
+    execution_rows = _execution_rows(plan)
+    for row in execution_rows:
+        if (
+            not row.get("change_required")
+            or row.get("candidate_disposition") != "rehearsal_candidate"
+            or row.get("geometry_class") != "axis_aligned_rectangle"
+            or row.get("unsafe_reason")
+        ):
+            raise CoordinateNormalizationError("候选执行集包含未通过几何门禁的行。")
+    execution_location_ids = sorted(int(row["location_id"]) for row in execution_rows)
+    expected_plan_ids = sorted({int(row["plan_id"]) for row in execution_rows})
+    actual_plan_ids = sorted(int(item["plan_id"]) for item in plans)
+    if expected_plan_ids != actual_plan_ids:
+        raise CoordinateNormalizationError("候选执行集与 plan CAS 集合不一致。")
+    if int(summary.get("scope_audited_slot_count", -1)) != len(rows):
+        raise CoordinateNormalizationError("候选计划 3F 审计分母与 rows 不一致。")
+    if int(summary.get("rehearsal_candidate_slot_count", -1)) != len(
+        execution_rows
+    ):
+        raise CoordinateNormalizationError("候选计划复演分子与执行集不一致。")
+    if int(candidate.get("row_count", -1)) != len(execution_rows):
+        raise CoordinateNormalizationError("候选计划 execution_candidate 行数不一致。")
+    if int(candidate.get("plan_count", -1)) != len(plans):
+        raise CoordinateNormalizationError("候选计划 execution_candidate 规划数不一致。")
+    if candidate.get("location_ids_sha256") != canonical_hash(execution_location_ids):
+        raise CoordinateNormalizationError("候选计划执行 location id 集合哈希不一致。")
 
 
 def _validate_approval(plan: dict[str, Any], approval_path: Path | None) -> dict[str, Any]:
@@ -1020,6 +1437,11 @@ def _validate_approval(plan: dict[str, Any], approval_path: Path | None) -> dict
         "plan_sha256": plan["plan_sha256"],
         "authority": AUTHORITY_CODE,
         "field_sampling_status": "confirmed",
+        "scope_floor_code": SCOPE_FLOOR_CODE,
+        "approved_candidate_count": plan["execution_candidate"]["row_count"],
+        "candidate_location_ids_sha256": plan["execution_candidate"][
+            "location_ids_sha256"
+        ],
     }
     if any(approval.get(key) != value for key, value in required.items()):
         raise CoordinateNormalizationError("批准文件与任务、计划哈希、权威方案或抽样状态不一致。")
@@ -1028,7 +1450,7 @@ def _validate_approval(plan: dict[str, Any], approval_path: Path | None) -> dict
     ).strip():
         raise CoordinateNormalizationError("批准文件缺少 approved_by/approved_at。")
     changed_classes = {
-        row["geometry_class"] for row in plan["rows"] if row["change_required"]
+        row["geometry_class"] for row in _execution_rows(plan)
     }
     confirmed_classes = set(approval.get("confirmed_geometry_classes") or [])
     if not changed_classes.issubset(confirmed_classes):
@@ -1081,66 +1503,110 @@ def _assert_actor(connection: sqlite3.Connection, actor_user_id: int) -> str | N
     return None
 
 
+def _decimal_matches(actual: Any, expected: Any, tolerance: str = "0.0005") -> bool:
+    return abs(Decimal(str(actual)) - Decimal(str(expected))) <= Decimal(tolerance)
+
+
+def _row_contract_matches(
+    connection: sqlite3.Connection,
+    row: dict[str, Any],
+    *,
+    target: bool,
+) -> bool:
+    actual = connection.execute(
+        """
+        SELECT
+          s.plan_id,s.location_id,s.route_sequence,s.row_no,s.slot_no,
+          s.x_mm,s.y_mm,s.width_mm,s.depth_mm,
+          p.area_id,p.status AS plan_status,p.published_map_revision,
+          p.preview_fingerprint,p.version AS plan_version,p.updated_at AS plan_updated_at,
+          a.address_version AS area_version,
+          f.floor_code,
+          policy.id AS policy_id,policy.status AS policy_status,
+          policy.map_feature_id,policy.published_map_revision AS policy_map_revision,
+          policy.version AS policy_version,
+          l.location_code,l.address_version AS location_address_version,
+          l.placement_status,l.storage_type,l.is_active,
+          fl.id AS layout_id,fl.location_id AS layout_location_id,
+          fl.left_pct,fl.top_pct,fl.width_pct,fl.height_pct,
+          fl.version AS layout_version,fl.source_type,fl.layout_kind,
+          fl.updated_at AS layout_updated_at
+        FROM warehouse_ground_layout_slots AS s
+        JOIN warehouse_ground_layout_plans AS p ON p.id=s.plan_id
+        JOIN warehouse_areas AS a ON a.id=p.area_id
+        JOIN warehouse_floors AS f ON f.id=a.floor_id
+        JOIN warehouse_area_storage_policies AS policy ON policy.area_id=a.id
+        JOIN warehouse_locations AS l ON l.id=s.location_id
+        JOIN floor3_location_layouts AS fl ON fl.location_id=l.id
+        WHERE s.id=?
+        """,
+        (row["ground_slot_id"],),
+    ).fetchone()
+    if actual is None:
+        return False
+    expected_x = row["target_x_mm"] if target and row["execution_eligible"] else row[
+        "current_x_mm"
+    ]
+    expected_y = row["target_y_mm"] if target and row["execution_eligible"] else row[
+        "current_y_mm"
+    ]
+    exact_expectations = {
+        "plan_id": int(row["plan_id"]),
+        "location_id": int(row["location_id"]),
+        "route_sequence": int(row["route_sequence"]),
+        "row_no": int(row["row_no"]),
+        "slot_no": int(row["slot_no"]),
+        "width_mm": int(row["width_mm"]),
+        "depth_mm": int(row["depth_mm"]),
+        "area_id": int(row["area_id"]),
+        "plan_status": "published",
+        "published_map_revision": row["map_revision"],
+        "preview_fingerprint": row["plan_preview_fingerprint"],
+        "plan_version": int(row["plan_version"]),
+        "plan_updated_at": row["plan_updated_at"],
+        "area_version": int(row["area_version"]),
+        "floor_code": SCOPE_FLOOR_CODE,
+        "policy_id": int(row["policy_id"]),
+        "policy_status": "published",
+        "map_feature_id": row["map_feature_id"],
+        "policy_map_revision": row["map_revision"],
+        "policy_version": int(row["policy_version"]),
+        "location_code": row["location_code"],
+        "location_address_version": int(row["location_address_version"]),
+        "placement_status": row["location_placement_status"],
+        "storage_type": row["location_storage_type"],
+        "is_active": int(row["location_is_active"]),
+        "layout_id": int(row["layout_id"]),
+        "layout_location_id": int(row["location_id"]),
+        "layout_version": int(row["layout_version"]),
+        "source_type": row["layout_source_type"],
+        "layout_kind": row["layout_kind"],
+        "layout_updated_at": row["layout_updated_at"],
+    }
+    for key, expected in exact_expectations.items():
+        if actual[key] != expected:
+            return False
+    for key, expected in (
+        ("left_pct", row["left_pct"]),
+        ("top_pct", row["top_pct"]),
+        ("width_pct", row["width_pct"]),
+        ("height_pct", row["height_pct"]),
+    ):
+        if not _decimal_matches(actual[key], expected, "0.000000001"):
+            return False
+    return _decimal_matches(actual["x_mm"], expected_x) and _decimal_matches(
+        actual["y_mm"], expected_y
+    )
+
+
 def _state_matches(connection: sqlite3.Connection, plan: dict[str, Any], target: bool) -> bool:
-    for row in plan["rows"]:
-        if not row["change_required"]:
-            continue
-        actual = connection.execute(
-            "SELECT x_mm,y_mm FROM warehouse_ground_layout_slots WHERE id=?",
-            (row["ground_slot_id"],),
-        ).fetchone()
-        if actual is None:
-            return False
-        expected_x = Decimal(row["target_x_mm"] if target else row["current_x_mm"])
-        expected_y = Decimal(row["target_y_mm"] if target else row["current_y_mm"])
-        if abs(Decimal(str(actual[0])) - expected_x) > Decimal("0.0005") or abs(
-            Decimal(str(actual[1])) - expected_y
-        ) > Decimal("0.0005"):
-            return False
-    for item in plan["plans"]:
-        actual = connection.execute(
-            "SELECT version,preview_fingerprint FROM warehouse_ground_layout_plans WHERE id=?",
-            (item["plan_id"],),
-        ).fetchone()
-        if actual is None:
-            return False
-        expected_version = item["target_version"] if target else item["expected_version"]
-        expected_fingerprint = (
-            item["target_preview_fingerprint"]
-            if target
-            else item["expected_preview_fingerprint"]
-        )
-        if int(actual[0]) != int(expected_version) or actual[1] != expected_fingerprint:
-            return False
-    return True
+    return all(
+        _row_contract_matches(connection, row, target=target) for row in plan["rows"]
+    )
 
 
 def _rollback_state_matches(connection: sqlite3.Connection, plan: dict[str, Any]) -> bool:
-    for row in plan["rows"]:
-        if not row["change_required"]:
-            continue
-        actual = connection.execute(
-            "SELECT x_mm,y_mm FROM warehouse_ground_layout_slots WHERE id=?",
-            (row["ground_slot_id"],),
-        ).fetchone()
-        if actual is None or abs(
-            Decimal(str(actual[0])) - Decimal(row["current_x_mm"])
-        ) > Decimal("0.0005") or abs(
-            Decimal(str(actual[1])) - Decimal(row["current_y_mm"])
-        ) > Decimal("0.0005"):
-            return False
-    for item in plan["plans"]:
-        actual = connection.execute(
-            "SELECT version,preview_fingerprint FROM warehouse_ground_layout_plans WHERE id=?",
-            (item["plan_id"],),
-        ).fetchone()
-        if (
-            actual is None
-            or int(actual[0]) < int(item["target_version"]) + 1
-            or actual[1] != item["expected_preview_fingerprint"]
-        ):
-            return False
-    return True
+    return _state_matches(connection, plan, False)
 
 
 def _insert_audit(
@@ -1238,7 +1704,6 @@ def _mutate(
     batch_id = canonical_hash(
         {"plan_sha256": plan["plan_sha256"], "direction": direction}
     )
-    target_state = direction == "apply"
     already_at_target = (
         _state_matches(connection, plan, True)
         if direction == "apply"
@@ -1247,15 +1712,20 @@ def _mutate(
     if _operation_seen(connection, batch_id, action_code) and already_at_target:
         return {"status": "idempotent_replay", "batch_id": batch_id, "changed": 0}
     actor_name = _assert_actor(connection, actor_user_id)
-    protected_before = protected_snapshot(connection)
-    triggers = _trigger_sql(connection)
     connection.execute("BEGIN IMMEDIATE")
     try:
+        source_is_target_state = direction == "rollback"
+        if not _state_matches(connection, plan, source_is_target_state):
+            raise CoordinateNormalizationError(
+                "计划内 3F 坐标、布局版本或规划版本已变化，CAS 前置校验失败，整批回滚。"
+            )
+        protected_before = protected_snapshot(connection)
+        triggers = _trigger_sql(connection)
         for trigger_name in triggers:
             connection.execute(f'DROP TRIGGER "{trigger_name}"')
         changed = 0
         for row in plan["rows"]:
-            if not row["change_required"]:
+            if not row["execution_eligible"]:
                 continue
             source_x = row["current_x_mm"] if direction == "apply" else row["target_x_mm"]
             source_y = row["current_y_mm"] if direction == "apply" else row["target_y_mm"]
@@ -1273,17 +1743,28 @@ def _mutate(
                     WHERE fl.id=? AND fl.location_id=? AND fl.version=?
                       AND fl.left_pct=? AND fl.top_pct=?
                       AND fl.width_pct=? AND fl.height_pct=?
+                      AND fl.source_type=? AND fl.layout_kind=? AND fl.updated_at=?
+                  )
+                  AND EXISTS (
+                    SELECT 1 FROM warehouse_locations l
+                    WHERE l.id=? AND l.location_code=? AND l.address_version=?
+                      AND l.placement_status=? AND l.storage_type=? AND l.is_active=?
                   )
                   AND EXISTS (
                     SELECT 1
                     FROM warehouse_ground_layout_plans p
+                    JOIN warehouse_areas a ON a.id=p.area_id
+                    JOIN warehouse_floors f ON f.id=a.floor_id
                     JOIN warehouse_area_storage_policies policy ON policy.area_id=p.area_id
                     WHERE p.id=warehouse_ground_layout_slots.plan_id
+                      AND p.area_id=? AND p.status='published'
+                      AND p.version=? AND p.preview_fingerprint=? AND p.updated_at=?
+                      AND p.published_map_revision=?
+                      AND a.id=? AND a.address_version=? AND f.floor_code=?
                       AND policy.id=? AND policy.version=?
                       AND policy.status='published'
                       AND policy.map_feature_id=?
                       AND policy.published_map_revision=?
-                      AND p.published_map_revision=?
                   )
                 """,
                 (
@@ -1306,10 +1787,26 @@ def _mutate(
                     row["top_pct"],
                     row["width_pct"],
                     row["height_pct"],
+                    row["layout_source_type"],
+                    row["layout_kind"],
+                    row["layout_updated_at"],
+                    row["location_id"],
+                    row["location_code"],
+                    row["location_address_version"],
+                    row["location_placement_status"],
+                    row["location_storage_type"],
+                    row["location_is_active"],
+                    row["area_id"],
+                    row["plan_version"],
+                    row["plan_preview_fingerprint"],
+                    row["plan_updated_at"],
+                    row["map_revision"],
+                    row["area_id"],
+                    row["area_version"],
+                    SCOPE_FLOOR_CODE,
                     row["policy_id"],
                     row["policy_version"],
                     row["map_feature_id"],
-                    row["map_revision"],
                     row["map_revision"],
                 ),
             )
@@ -1327,53 +1824,6 @@ def _mutate(
                 direction=direction,
             )
             changed += 1
-        for item in plan["plans"]:
-            source_version = (
-                item["expected_version"] if direction == "apply" else item["target_version"]
-            )
-            target_version = int(source_version) + 1 if direction == "rollback" else item["target_version"]
-            source_fingerprint = (
-                item["expected_preview_fingerprint"]
-                if direction == "apply"
-                else item["target_preview_fingerprint"]
-            )
-            target_fingerprint = (
-                item["target_preview_fingerprint"]
-                if direction == "apply"
-                else item["expected_preview_fingerprint"]
-            )
-            result = connection.execute(
-                """
-                UPDATE warehouse_ground_layout_plans
-                SET preview_fingerprint=?,version=?,updated_by=?,updated_at=CURRENT_TIMESTAMP
-                WHERE id=? AND area_id=? AND status='published'
-                  AND version=? AND preview_fingerprint=?
-                  AND published_map_revision=?
-                  AND EXISTS (
-                    SELECT 1 FROM warehouse_area_storage_policies policy
-                    WHERE policy.id=? AND policy.area_id=warehouse_ground_layout_plans.area_id
-                      AND policy.version=? AND policy.status='published'
-                      AND policy.published_map_revision=?
-                  )
-                """,
-                (
-                    target_fingerprint,
-                    target_version,
-                    actor_user_id,
-                    item["plan_id"],
-                    item["area_id"],
-                    source_version,
-                    source_fingerprint,
-                    item["map_revision"],
-                    item["policy_id"],
-                    item["policy_version"],
-                    item["map_revision"],
-                ),
-            )
-            if result.rowcount != 1:
-                raise CoordinateNormalizationError(
-                    f"plan {item['plan_id']} CAS 失败，整批回滚。"
-                )
         _restore_triggers(connection, triggers)
         protected_after = protected_snapshot(connection)
         if protected_after != protected_before:
@@ -1382,30 +1832,14 @@ def _mutate(
         if not checks["ok"]:
             raise CoordinateNormalizationError("修正后完整性/外键检查失败，整批回滚。")
         expected_target_state = direction == "apply"
-        if direction == "rollback":
-            # Rollback deliberately advances plan.version while restoring the
-            # original geometry/fingerprint, so verify slot state separately.
-            for row in plan["rows"]:
-                if not row["change_required"]:
-                    continue
-                actual = connection.execute(
-                    "SELECT x_mm,y_mm FROM warehouse_ground_layout_slots WHERE id=?",
-                    (row["ground_slot_id"],),
-                ).fetchone()
-                if actual is None or abs(Decimal(str(actual[0])) - Decimal(row["current_x_mm"])) > Decimal("0.0005") or abs(Decimal(str(actual[1])) - Decimal(row["current_y_mm"])) > Decimal("0.0005"):
-                    raise CoordinateNormalizationError("回退后坐标验证失败。")
-        elif not _state_matches(connection, plan, expected_target_state):
+        if not _state_matches(connection, plan, expected_target_state):
             raise CoordinateNormalizationError("修正后目标状态验证失败。")
         if rollback_after_validation:
             connection.rollback()
             if protected_snapshot(connection) != protected_before or not _state_matches(
-                connection, plan, direction == "rollback"
+                connection, plan, source_is_target_state
             ):
-                # For an apply rehearsal the rolled-back state is source(False);
-                # for rollback rehearsal it is target(True).
-                expected_after_rollback = direction == "rollback"
-                if not _state_matches(connection, plan, expected_after_rollback):
-                    raise CoordinateNormalizationError("复演事务回滚后的源状态验证失败。")
+                raise CoordinateNormalizationError("复演事务回滚后的源状态验证失败。")
             return {
                 "status": "rehearsed_and_rolled_back",
                 "batch_id": batch_id,
@@ -1461,14 +1895,27 @@ def execute_plan(
     database = database.resolve(strict=True)
     _assert_isolated_database(database, confirm_isolated_copy)
     plan = load_plan(plan_path)
+    if plan.get("hard_apply_blockers"):
+        raise CoordinateNormalizationError(
+            "候选计划仍有 3F 结构性阻断，rehearse/apply/rollback 均拒绝执行："
+            + "; ".join(plan["hard_apply_blockers"])
+        )
+    if not _execution_rows(plan):
+        raise CoordinateNormalizationError("候选计划没有通过门禁的 3F 执行行。")
     if published_map is None:
         raise CoordinateNormalizationError("受控操作必须提供当前 --published-map。")
     published_map = published_map.resolve(strict=True)
-    if file_sha256(published_map) != plan["published_map"]["sha256"]:
-        raise CoordinateNormalizationError("当前正式地图 SHA-256 与审计计划不一致。")
     map_document, _ = _load_map(published_map)
-    if _floor_revision_map(map_document) != plan["published_map"]["floor_revisions"]:
-        raise CoordinateNormalizationError("当前正式地图楼层 revision 与审计计划不一致。")
+    scope_floor_document = _scope_floor_document(map_document, SCOPE_FLOOR_CODE)
+    if (
+        str(scope_floor_document.get("revision") or "")
+        != plan["published_map"]["scope_floor_revision"]
+        or canonical_hash(scope_floor_document)
+        != plan["published_map"]["scope_floor_sha256"]
+    ):
+        raise CoordinateNormalizationError(
+            "当前 3F 正式地图 revision/内容哈希与审计计划不一致。"
+        )
     expected_token = APPLY_TOKEN if direction == "apply" else ROLLBACK_TOKEN
     if token != expected_token:
         raise CoordinateNormalizationError("受控操作确认 token 不匹配。")
@@ -1536,6 +1983,12 @@ def _build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--database", type=Path, required=True)
     audit.add_argument("--published-map", type=Path, required=True)
     audit.add_argument("--output-dir", type=Path, required=True)
+    audit.add_argument(
+        "--scope-floor",
+        choices=(SCOPE_FLOOR_CODE,),
+        default=SCOPE_FLOOR_CODE,
+        help="P1-147 固定为 3F 专项；全仓数量只作输入透明度统计。",
+    )
     for command in ("rehearse", "apply", "rollback"):
         child = subparsers.add_parser(command)
         child.add_argument("--database", type=Path, required=True)
@@ -1556,7 +2009,11 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         if args.command == "audit":
-            plan = build_audit(args.database, args.published_map)
+            plan = build_audit(
+                args.database,
+                args.published_map,
+                scope_floor_code=args.scope_floor,
+            )
             paths = write_audit_outputs(plan, args.output_dir)
             print(
                 json.dumps(
@@ -1564,6 +2021,8 @@ def main(argv: list[str] | None = None) -> int:
                         "status": "audited",
                         "summary": plan["summary"],
                         "apply_blockers": plan["apply_blockers"],
+                        "hard_apply_blockers": plan["hard_apply_blockers"],
+                        "execution_gate": plan["execution_gate"],
                         "plan_sha256": plan["plan_sha256"],
                         "outputs": {key: str(value) for key, value in paths.items()},
                     },
@@ -1571,7 +2030,7 @@ def main(argv: list[str] | None = None) -> int:
                     indent=2,
                 )
             )
-            return 0
+            return 0 if plan["execution_gate"]["rehearsal_ready"] else 2
         direction = "rollback" if args.command == "rollback" else "apply"
         rehearse = args.command == "rehearse"
         result = execute_plan(

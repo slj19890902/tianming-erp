@@ -3,6 +3,7 @@
 ## 1. 本轮边界
 
 - 候选权威方案：**已发布的实测区域几何 + 当前用户可见的百分比货位布局**。
+- P1-147 固定为 **3F 专项**。脚本必须如实报告全仓输入数量，但只有数据库楼层码为 `3F` 的已发布货位可以进入差异审计和候选执行集。
 - `floor3_location_layouts` 决定用户当前看见的货位中心；`warehouse_ground_layout_slots.x_mm/y_mm` 是地堆标准矩形左下角。
 - 本任务只生成审计、现场抽样清单和受控修正候选；未取得现场抽样与老板确认前，不执行正式库修正。
 - 不发布、丢弃或改写 `data/layout_drafts/twin_layout_v1.draft.json`，也不改写正式地图 JSON。
@@ -25,16 +26,21 @@
 python scripts/admin/p1_147_warehouse_coordinate_normalization.py audit `
   --database "D:\P1-147-UAT\factory_snapshot.sqlite3" `
   --published-map "D:\P1-147-UAT\twin_layout_v1.json" `
-  --output-dir "docs\migration_reports\P1-147-current-copy"
+  --output-dir "docs\migration_reports\P1-147-current-copy" `
+  --scope-floor 3F
 ```
 
 审计以 SQLite `mode=ro` + `query_only` 打开数据库，先执行 `integrity_check` 和 `foreign_key_check`，再输出：
 
 - `p1_147_coordinate_audit.csv`：逐位置的楼层、区域、货位、当前毫米坐标、用户可见中心、候选左下角、偏差、批次、栈板和库存数量；
-- `p1_147_field_samples.csv`：A/B/D/E、旋转区域和非矩形区域的分组抽样；
+- `p1_147_rehearsal_candidates.csv`：只含 3F 轴对齐、不越界且超过门槛的受控复演候选；
+- `p1_147_field_samples.csv`：A/B/D/E 抽样、全部旋转位置、全部不越界非矩形位置，以及全部几何阻断位置；
+- `p1_147_out_of_scope_findings.csv`：1F/4F 等范围外问题，只作独立闭环证据，绝不进入 P1-147 执行集；
 - `p1_147_zone_geometry.csv`：区域几何分类；
-- `p1_147_coordinate_correction_plan.json`：源数据库/地图 SHA、逐行 CAS 事实和按 plan 重算的指纹；
+- `p1_147_coordinate_correction_plan.json`：全仓输入分母、3F 专项分母、逐行候选状态、源数据库/3F 地图哈希和逐行 CAS 事实；
 - `p1_147_summary.md`：数量汇总和写入阻断。
+
+计划 schema v2 将货位分为四类：`rehearsal_candidate`、`field_confirmation_required`、`geometry_blocked`、`unchanged`。只有第一类可被 rehearse/apply/rollback 更新。旧 schema v1 计划因统计作用域不明确而永久拒绝执行。
 
 当前代码基线自带的三楼正式地图 revision 为 `3994317ae14a7f18`，静态分类为 24 个轴对齐矩形、0 个旋转矩形、16 个非矩形。现场结论必须以工厂导出的运行态正式地图重新生成；不得用代码树静态数量替代。
 
@@ -55,9 +61,11 @@ python scripts/admin/p1_147_warehouse_coordinate_normalization.py audit `
   "plan_sha256": "从审计输出原样复制",
   "authority": "published_measured_geometry_plus_visible_percent_layout",
   "field_sampling_status": "confirmed",
+  "scope_floor_code": "3F",
+  "approved_candidate_count": 240,
+  "candidate_location_ids_sha256": "从计划 execution_candidate 原样复制",
   "confirmed_geometry_classes": [
-    "axis_aligned_rectangle",
-    "non_rectangular"
+    "axis_aligned_rectangle"
   ],
   "approved_by": "老板姓名",
   "approved_at": "2026-09-02T20:00:00+08:00"
@@ -68,7 +76,7 @@ python scripts/admin/p1_147_warehouse_coordinate_normalization.py audit `
 
 ## 5. 零持久写复演
 
-复演会在一个事务中临时解除且随后恢复两条已核验的 UPDATE 保护触发器，逐行执行 CAS、写入审计、检查保护表摘要、完整性和外键，最后强制回滚整个事务。
+复演会在一个事务中临时解除且随后恢复 `warehouse_ground_layout_slots` 的一条已核验 UPDATE 保护触发器，逐行执行 CAS、写入审计、检查保护表摘要、完整性和外键，最后强制回滚整个事务。正式规划的不可变触发器始终保留，规划 version/fingerprint 不会被修改。
 
 ```powershell
 python scripts/admin/p1_147_warehouse_coordinate_normalization.py rehearse `
@@ -82,9 +90,9 @@ python scripts/admin/p1_147_warehouse_coordinate_normalization.py rehearse `
 
 验收结果必须是 `rehearsed_and_rolled_back`，并再次确认：
 
-- 坐标与 plan 指纹回到复演前状态；
-- 两条保护触发器仍存在且定义未变；
-- `inventory_lots`、`inventory_pallets`、`inventory_pallet_items`、占用表、`warehouse_locations`、`floor3_location_layouts` 的逐表逻辑 SHA 未变；
+- 所有 3F 坐标、数据库文件 SHA 和操作日志回到复演前状态；
+- 地堆货位 UPDATE 保护触发器仍存在且定义未变，正式规划不可变触发器从未解除；
+- `inventory_lots`、栈板/占用表、楼层、区域、策略、`warehouse_locations`、`floor3_location_layouts` 和正式规划的逐表逻辑 SHA 未变；
 - `integrity_check=ok`、外键违规为 0。
 
 ## 6. 未来受控修正（本轮不执行）
@@ -103,7 +111,7 @@ python scripts/admin/p1_147_warehouse_coordinate_normalization.py apply `
   --token "APPLY-P1-147-ISOLATED-COPY"
 ```
 
-脚本在提交前自动创建并逐字节核验数据库备份，按 `slot + plan + layout + policy + map revision` 做 CAS；任一行失败则整批回滚。每个改动位置写一条 `operation_logs`，批次号由计划哈希和方向确定，重复执行返回 `idempotent_replay`。
+脚本在提交前自动创建并逐字节核验数据库备份，按 `slot + location + layout + area + plan version/fingerprint + policy + 3F map revision/hash` 做 CAS；任一行失败则整批回滚。只更新候选行的 `x_mm/y_mm`，不修改 plan version/fingerprint。每个改动位置写一条 `operation_logs`，批次号由计划哈希和方向确定，重复执行返回 `idempotent_replay`。
 
 隔离副本验收通过也不构成正式库写入授权。正式库必须另行备份、停服、复核路径并取得老板明确批准。
 
@@ -111,7 +119,7 @@ python scripts/admin/p1_147_warehouse_coordinate_normalization.py apply `
 
 ### 7.1 逻辑回退
 
-对已经受控提交的隔离副本，可用同一计划将每一行 CAS 回原坐标；回退保留原修正审计并新增逐行回退审计，plan 版本继续递增：
+对已经受控提交的隔离副本，可用同一计划将每一行 CAS 回原坐标；回退保留原修正审计并新增逐行回退审计，正式规划 version/fingerprint 始终不变：
 
 ```powershell
 python scripts/admin/p1_147_warehouse_coordinate_normalization.py rollback `
@@ -139,3 +147,14 @@ python -m pytest `
 ```
 
 Chrome 人工验收只连接隔离 UAT：三楼地图分别抽查 A/B/D/E、有库存位、非矩形区域及任何旋转区域，核对货位中心、名称、栈板、批次、数量和详情一致；刷新后位置不跳动。不得使用内置浏览器，也不得发布或放弃现存三楼地图草稿。
+
+没有经批准的持久修正副本时，不做“修正后 Chrome 验收”；静态前端坐标换算回归和零持久复演通过不能冒充现场验收。
+
+## 9. 2026-09-02 scope v2 隔离复演记录
+
+- 已验签输入：数据库 SHA-256 `2f9c26c6d9af061e42790dd098e66dc2c2daf97286f3fd6b787c702711dd0577`，正式地图 SHA-256 `8a9b9c86a83a3fd563a9bb4771a8ccd4dc3a8823b05b5c28dafe1f1e055fac69`。
+- 全仓输入 342 / 23；3F 专项 308 / 20；差异 306、门槛内 2。
+- 当前执行集 240（占用 217）；不越界非矩形 22（占用 0）等待现场确认；几何阻断 44（占用 14）被排除。
+- 范围外只读发现：`F1/1F` 别名 10（占用 10），4F plan revision 落后 24（占用 0）。
+- 240 行零持久复演连续两次通过，事务回滚后数据库 SHA 不变；CAS 冲突副本整批拒绝，坐标和操作日志不变；完整性 `ok`、外键异常 0。
+- 未生成批准文件，未执行持久 apply/rollback，未进行 Chrome 修正后验收。

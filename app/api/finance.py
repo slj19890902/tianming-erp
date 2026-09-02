@@ -94,6 +94,7 @@ from app.services.ordered_finished_receipt_return import (
 from app.services.warehouse_inventory import WarehouseInventoryError
 from app.services.product_specification import resolved_product_specification
 from app.services.statement_pdf import render_customer_statement_pdf
+from app.services.supplier_monthly_settlement import partial_paid_amounts_by_payable
 
 
 router = APIRouter()
@@ -7148,8 +7149,15 @@ def finance_overview(
     open_payables = db.scalars(
         select(FinancePayable).where(FinancePayable.status == "confirmed")
     ).all()
+    supplier_partial_payments = partial_paid_amounts_by_payable(
+        db, [int(row.id) for row in open_payables]
+    )
     for row in open_payables:
-        amount = Decimal(str(row.amount))
+        amount = max(
+            Decimal(str(row.amount))
+            - supplier_partial_payments.get(int(row.id), Decimal("0")),
+            Decimal("0"),
+        )
         if row.due_date is None or row.due_date >= today:
             aging["not_due"] += amount
             continue

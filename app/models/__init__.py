@@ -161,6 +161,13 @@ from app.models.finance import (  # noqa: E402,F401
     StatementMonthlySequence,
 )
 from app.models.finance_payable import FinancePayable  # noqa: E402,F401
+from app.models.supplier_settlement import (  # noqa: E402,F401
+    SupplierMonthlyAdjustment,
+    SupplierMonthlyInvoice,
+    SupplierMonthlyPayment,
+    SupplierMonthlyStatement,
+    SupplierMonthlyStatementLine,
+)
 from app.models.finance_cost import (  # noqa: E402,F401
     FinanceCostCenter,
     FinanceCostPoolEntry,

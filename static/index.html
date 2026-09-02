@@ -2469,6 +2469,11 @@
         overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer;
       }
       .production-history-table .history-delivered { color:#7c3aed; font-weight:800; }
+      .trace-map-link {
+        color:var(--blue); font-weight:800; text-decoration:underline;
+        text-underline-offset:2px; overflow-wrap:anywhere;
+      }
+      .trace-map-link:hover,.trace-map-link:focus-visible { color:#1d4ed8; }
       .production-placement-table th,
       .production-placement-table td { padding:5px 6px; line-height:1.2; vertical-align:middle; }
       .production-placement-table .placement-two-lines { display:grid; gap:2px; min-width:0; }
@@ -7685,11 +7690,11 @@
               <div class="section-title">当前关联库存位置</div>
               <div v-if="!orderTrace.current_inventory.length" class="muted">当前没有可按精确单据关联展示的库存批次。</div>
               <table v-else>
-                <thead><tr><th>批次</th><th>类型</th><th>可用 / 预占</th><th>当前位置</th><th>状态</th></tr></thead>
+                <thead><tr><th>批次</th><th>类型</th><th>现存 / 预占</th><th>当前位置</th><th>状态</th></tr></thead>
                 <tbody><tr v-for="lot in orderTrace.current_inventory" :key="lot.lot_id">
                   <td>{{ lot.lot_number }}</td><td>{{ lot.inventory_type === "finished" ? "成品" : "半成品" }}</td>
-                  <td>{{ lot.quantity_available }} / {{ lot.quantity_reserved }} {{ lot.unit === "boxes" ? "只" : "张" }}</td>
-                  <td>{{ lot.location_name || "位置名称待完善" }}</td><td>{{ lot.status_label }}</td>
+                  <td>{{ lot.physical_quantity ?? (Number(lot.quantity_available || 0) + Number(lot.quantity_reserved || 0)) }} / {{ lot.quantity_reserved }} {{ lot.unit === "boxes" ? "只" : "张" }}</td>
+                  <td><a v-if="lot.map_deep_link" class="trace-map-link" :href="lot.map_deep_link" target="_blank" rel="noopener noreferrer" title="新页打开只读实测地图并定位此批次">{{ lot.location_name || "位置名称待完善" }}</a><span v-else>{{ lot.location_name || "位置名称待完善" }}</span><div v-if="lot.location_issue" class="status orange" style="display:block;white-space:normal;margin-top:4px">{{ lot.location_issue }}</div></td><td>{{ lot.status_label }}</td>
                 </tr></tbody>
               </table>
               <div class="section-title">真实单据时间线</div>

@@ -385,6 +385,7 @@ def order_trace_app(tmp_path: Path):
             yield db
 
     app.dependency_overrides[get_db] = override_get_db
+    app.state.trace_session_factory = factory
     return app, ids
 
 
@@ -429,6 +430,375 @@ def test_exact_item_trace_does_not_mix_same_customer_po(order_trace_app) -> None
     assert "REQ-TRACE-A" not in {
         event["document_number"] for event in empty_body["events"]
     }
+
+
+def test_trace_maps_only_current_exact_completion_lots_and_split_descendants(
+    order_trace_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from urllib.parse import parse_qs, urlsplit
+
+    from sqlalchemy import func, select
+
+    import app.services.order_document_trace as trace_service
+    from app.models.customer import Customer
+    from app.models.order import OrderItem
+    from app.models.production import (
+        ProductionCompletion,
+        ProductionCompletionBatch,
+        ProductionTask,
+    )
+    from app.models.user import User
+    from app.models.warehouse_inventory import (
+        FinishedGoodsInventoryDetail,
+        InventoryLot,
+        InventoryLotTransfer,
+        InventoryPallet,
+        InventoryPalletItem,
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
+
+    app, ids = order_trace_app
+    factory = app.state.trace_session_factory
+    completed_at = datetime(2026, 7, 29, 8, 0, 0)
+    with factory() as db:
+        item = db.get(OrderItem, ids["item_a"])
+        assert item is not None
+        customer = db.get(Customer, ids["customer_a"])
+        assert customer is not None
+        other_customer = db.get(Customer, ids["customer_b"])
+        assert other_customer is not None
+        other_item = db.get(OrderItem, ids["item_b"])
+        assert other_item is not None
+        admin = db.scalar(select(User).where(User.username == "trace-admin"))
+        assert admin is not None
+
+        floor = WarehouseFloor(
+            floor_code="3F",
+            floor_name="三楼成品仓库",
+            floor_number=3,
+            construction_status="enabled",
+        )
+        db.add(floor)
+        db.flush()
+        area = WarehouseArea(
+            floor_id=floor.id,
+            area_code="C",
+            area_name="三楼成品区",
+            construction_status="enabled",
+        )
+        db.add(area)
+        db.flush()
+
+        locations: list[WarehouseLocation] = []
+        for index, active in enumerate(
+            (True, True, True, True, True, True, True),
+            start=1,
+        ):
+            location = WarehouseLocation(
+                location_code=f"C3-L{index:02d}",
+                location_name=f"三楼成品区第{index}位",
+                warehouse_type="finished",
+                warehouse_floor=3,
+                area_code="C",
+                address_area_id=area.id,
+                storage_type="ground",
+                placement_status="placed",
+                is_active=active,
+                sort_order=index,
+            )
+            locations.append(location)
+            db.add(location)
+        locations[4].is_active = False
+        db.flush()
+
+        task = ProductionTask(
+            order_item_id=item.id,
+            task_role="order_main",
+            status="completed",
+            planned_quantity=39,
+            ordered_quantity_snapshot=39,
+            material_received_quantity=39,
+            material_input_quantity=39,
+            finished_coverage_snapshot=39,
+            ready_at=completed_at - timedelta(hours=1),
+        )
+        batch = ProductionCompletionBatch(
+            idempotency_key="p1-146-trace-batch",
+            request_hash="1" * 64,
+            item_count=1,
+            completed_by=admin.id,
+            completed_at=completed_at,
+        )
+        db.add_all([task, batch])
+        db.flush()
+        completion = ProductionCompletion(
+            batch_id=batch.id,
+            task_id=task.id,
+            order_item_id=item.id,
+            expected_version=task.version,
+            quantity=39,
+            material_input_quantity=39,
+            planned_output_quantity=39,
+            actual_output_quantity=39,
+            defective_quantity=0,
+            order_reserved_quantity=30,
+            direct_delivery_quantity=0,
+            stock_quantity=39,
+            surplus_finished_quantity=9,
+            initial_disposition="stock",
+            warehouse_location_id=locations[0].id,
+            status="posted",
+            completed_by=admin.id,
+            completed_at=completed_at,
+        )
+        db.add(completion)
+        db.flush()
+
+        lot_specs = (
+            ("LOT-TRACE-ROOT", locations[0], 9, 0, "production_completion"),
+            ("LOT-TRACE-SPLIT", locations[1], 8, 0, "transfer"),
+            ("LOT-TRACE-MISMATCH", locations[2], 12, 0, "transfer"),
+            ("LOT-TRACE-DRAINED", locations[3], 0, 1, "transfer"),
+            ("LOT-TRACE-DISABLED", locations[4], 2, 0, "transfer"),
+            ("LOT-TRACE-UNMAPPED", locations[5], 3, 0, "transfer"),
+            ("LOT-TRACE-CROSS-CUSTOMER", locations[6], 4, 0, "transfer"),
+        )
+        lots: list[InventoryLot] = []
+        for lot_number, location, available, consumed, source_type in lot_specs:
+            lot = InventoryLot(
+                lot_number=lot_number,
+                inventory_type="finished",
+                warehouse_location_id=location.id,
+                quantity_available=available,
+                quantity_reserved=0,
+                quantity_consumed=consumed,
+                quantity_damaged=0,
+                quantity_scrapped=0,
+                unit="boxes",
+                status="active",
+                source_type=source_type,
+                source_ref_type=(
+                    "production_completion" if source_type == "production_completion" else None
+                ),
+                source_ref_id=(completion.id if source_type == "production_completion" else None),
+                stock_date=date(2026, 7, 29),
+                stock_date_accuracy="exact",
+                last_movement_at=completed_at,
+                created_by=admin.id,
+            )
+            lots.append(lot)
+            db.add(lot)
+        db.flush()
+        completion.inventory_lot_id = lots[0].id
+        for lot in lots:
+            is_cross_customer = lot.lot_number == "LOT-TRACE-CROSS-CUSTOMER"
+            db.add(
+                FinishedGoodsInventoryDetail(
+                    inventory_lot_id=lot.id,
+                    owner_customer_id=(other_customer.id if is_cross_customer else customer.id),
+                    owner_customer_name_snapshot=(
+                        other_customer.name if is_cross_customer else customer.name
+                    ),
+                    is_general=False,
+                    product_id=(other_item.product_id if is_cross_customer else item.product_id),
+                    inventory_code_snapshot=("TRACE-B" if is_cross_customer else "TRACE-A"),
+                    product_name_snapshot=("追溯纸箱乙" if is_cross_customer else "追溯纸箱甲"),
+                )
+            )
+
+        for index, (target_lot, quantity) in enumerate(
+            zip(lots[1:], (8, 12, 1, 2, 3, 4), strict=True),
+            start=1,
+        ):
+            db.add(
+                InventoryLotTransfer(
+                    source_lot_id=lots[0].id,
+                    target_lot_id=target_lot.id,
+                    source_location_id=locations[0].id,
+                    target_location_id=target_lot.warehouse_location_id,
+                    quantity=quantity,
+                    available_quantity=quantity,
+                    reserved_quantity=0,
+                    source_version_before=index,
+                    source_version_after=index + 1,
+                    idempotency_key=f"p1-146-transfer-{index}",
+                    request_hash=str(index) * 64,
+                    transferred_by=admin.id,
+                    transferred_at=completed_at + timedelta(minutes=index),
+                )
+            )
+
+        pallet_locations = (
+            locations[0],
+            locations[1],
+            locations[3],  # LOT-TRACE-MISMATCH is deliberately bound elsewhere.
+            locations[4],
+            locations[5],
+            locations[6],
+        )
+        pallet_lots = (lots[0], lots[1], lots[2], lots[4], lots[5], lots[6])
+        for index, (pallet_location, lot) in enumerate(
+            zip(pallet_locations, pallet_lots, strict=True),
+            start=1,
+        ):
+            pallet = InventoryPallet(
+                pallet_code=f"PLT-P1-146-{index}",
+                location_id=pallet_location.id,
+                status="active",
+                is_current=True,
+                created_by=admin.id,
+            )
+            db.add(pallet)
+            db.flush()
+            db.add(
+                InventoryPalletItem(
+                    pallet_id=pallet.id,
+                    inventory_lot_id=lot.id,
+                    customer_id=(
+                        other_customer.id
+                        if lot.lot_number == "LOT-TRACE-CROSS-CUSTOMER"
+                        else customer.id
+                    ),
+                    product_id=(
+                        other_item.product_id
+                        if lot.lot_number == "LOT-TRACE-CROSS-CUSTOMER"
+                        else item.product_id
+                    ),
+                    inventory_code=(
+                        "TRACE-B"
+                        if lot.lot_number == "LOT-TRACE-CROSS-CUSTOMER"
+                        else "TRACE-A"
+                    ),
+                    order_no="TMTRACE-A1",
+                    customer_name_snapshot=(
+                        other_customer.name
+                        if lot.lot_number == "LOT-TRACE-CROSS-CUSTOMER"
+                        else customer.name
+                    ),
+                    product_name=(
+                        "追溯纸箱乙"
+                        if lot.lot_number == "LOT-TRACE-CROSS-CUSTOMER"
+                        else "追溯纸箱甲"
+                    ),
+                    item_type="finished",
+                    quantity=max(lot.quantity_available, 1),
+                    unit="boxes",
+                    match_status="matched",
+                    created_by=admin.id,
+                )
+            )
+        db.commit()
+        related_ids = [lot.id for lot in lots]
+        before_lots = {
+            lot.id: (
+                lot.quantity_available,
+                lot.quantity_reserved,
+                lot.quantity_consumed,
+                lot.warehouse_location_id,
+                lot.version,
+            )
+            for lot in lots
+        }
+        before_transfer_count = db.scalar(select(func.count(InventoryLotTransfer.id)))
+        unmapped_location_id = locations[5].id
+
+    monkeypatch.setattr(
+        trace_service,
+        "warehouse_location_projection",
+        lambda location, **context: (
+            {
+                "position_status": "unplaced",
+                "map_issue": "该库位尚未发布到当前实测地图",
+            }
+            if location.id == unmapped_location_id
+            else {"position_status": "mapped", "map_issue": None}
+        ),
+    )
+
+    with TestClient(app) as client:
+        _login(client, "trace-admin")
+        response = client.get(
+            f"/api/orders/{ids['order_a']}/items/{ids['item_a']}/documents"
+        )
+        repeated_response = client.get(
+            f"/api/orders/{ids['order_a']}/items/{ids['item_a']}/documents"
+        )
+        _login(client, "trace-sales")
+        restricted_response = client.get(
+            f"/api/orders/{ids['order_a']}/items/{ids['item_a']}/documents"
+        )
+
+    assert response.status_code == 200, response.text
+    assert repeated_response.status_code == 200, repeated_response.text
+    assert repeated_response.json()["current_inventory"] == response.json()[
+        "current_inventory"
+    ]
+    inventory_rows = {
+        row["lot_number"]: row for row in response.json()["current_inventory"]
+    }
+    assert set(inventory_rows) == {
+        lot_number
+        for lot_number, *_ in lot_specs
+        if lot_number != "LOT-TRACE-CROSS-CUSTOMER"
+    }
+    assert "LOT-UNRELATED-SAME-PRODUCT" not in inventory_rows
+    assert "LOT-TRACE-CROSS-CUSTOMER" not in inventory_rows
+
+    for lot_number, expected_location in (
+        ("LOT-TRACE-ROOT", locations[0].id),
+        ("LOT-TRACE-SPLIT", locations[1].id),
+    ):
+        row = inventory_rows[lot_number]
+        assert row["map_position_status"] == "mapped"
+        assert row["map_deep_link"] is not None
+        parsed = urlsplit(row["map_deep_link"])
+        params = parse_qs(parsed.query)
+        assert parsed.path == "/warehouse.html"
+        assert params == {
+            "floor": ["3F"],
+            "view": ["2d"],
+            "mode": ["lookup"],
+            "readonly": ["1"],
+            "source": ["order_trace"],
+            "area_code": ["C"],
+            "location_id": [str(expected_location)],
+            "lot_id": [str(row["lot_id"])],
+        }
+
+    assert inventory_rows["LOT-TRACE-DRAINED"]["map_deep_link"] is None
+    assert "已清零" in inventory_rows["LOT-TRACE-DRAINED"]["location_issue"]
+    assert inventory_rows["LOT-TRACE-MISMATCH"]["map_deep_link"] is None
+    assert "不一致" in inventory_rows["LOT-TRACE-MISMATCH"]["location_issue"]
+    assert inventory_rows["LOT-TRACE-DISABLED"]["map_deep_link"] is None
+    assert "已停用" in inventory_rows["LOT-TRACE-DISABLED"]["location_issue"]
+    assert inventory_rows["LOT-TRACE-UNMAPPED"]["map_deep_link"] is None
+    assert "尚未发布" in inventory_rows["LOT-TRACE-UNMAPPED"]["location_issue"]
+
+    assert restricted_response.status_code == 200, restricted_response.text
+    assert restricted_response.json()["current_inventory"] == []
+    assert "inventory" in {
+        row["stage"] for row in restricted_response.json()["restricted_stages"]
+    }
+
+    with factory() as db:
+        after_lots = {
+            lot.id: (
+                lot.quantity_available,
+                lot.quantity_reserved,
+                lot.quantity_consumed,
+                lot.warehouse_location_id,
+                lot.version,
+            )
+            for lot in db.scalars(
+                select(InventoryLot).where(InventoryLot.id.in_(related_ids))
+            ).all()
+        }
+        after_transfer_count = db.scalar(select(func.count(InventoryLotTransfer.id)))
+    assert after_lots == before_lots
+    assert after_transfer_count == before_transfer_count
 
 
 def test_scope_and_stage_permissions_are_enforced(order_trace_app) -> None:

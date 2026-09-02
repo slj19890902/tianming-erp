@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.241"
-    assert APP_VERSION_NAME == "正式首页空白紧急修复"
+    assert APP_VERSION == "v0.22.242"
+    assert APP_VERSION_NAME == "订单追溯成品位置地图定位"
     assert APP_BUILD_DATE == "2026-09-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,10 +49,16 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "模板解析冲突" in item and "空白" in item for item in current_release)
-    assert any("本次更新｜" in item and "余额不足" in item and "业务判断" in item for item in current_release)
-    assert any("本次更新｜" in item and "模板安全门禁" in item and "裸小于号" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.241" in item and "jl70v8x9z59" in item for item in current_release)
+    assert any("本次更新｜" in item and "当前位置" in item and "location_id" in item for item in current_release)
+    assert any("本次更新｜" in item and "部分移库" in item and "转移链" in item for item in current_release)
+    assert any("本次更新｜" in item and "实体栈板" in item and "异常" in item for item in current_release)
+    assert any("本次更新｜" in item and "只读查货模式" in item and "区域规划" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.242" in item and "jl70v8x9z59" in item for item in current_release)
+    prior_release_241 = [item for item in APP_CHANGELOG if item.startswith("v0.22.241：")]
+    assert any("本次更新｜" in item and "模板解析冲突" in item and "空白" in item for item in prior_release_241)
+    assert any("本次更新｜" in item and "余额不足" in item and "业务判断" in item for item in prior_release_241)
+    assert any("本次更新｜" in item and "模板安全门禁" in item and "裸小于号" in item for item in prior_release_241)
+    assert any("如何验证｜" in item and "v0.22.241" in item and "jl70v8x9z59" in item for item in prior_release_241)
     prior_release_240 = [item for item in APP_CHANGELOG if item.startswith("v0.22.240：")]
     assert any("本次更新｜" in item and "绿色" in item and "抵扣" in item for item in prior_release_240)
     assert any("本次更新｜" in item and "人工点击" in item and "库存预占" in item for item in prior_release_240)

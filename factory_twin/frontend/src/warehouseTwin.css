@@ -596,6 +596,26 @@ body.warehouse-twin-page {
   background: #f8fafb;
   box-shadow: 0 1px 4px #0f172a0d;
 }
+.twin-deeplink-message {
+  flex: 1 1 420px;
+  min-width: 260px;
+  padding: 7px 10px;
+  overflow: hidden;
+  border: 1px solid #8ec8c1;
+  border-radius: 4px;
+  color: #0f5f59;
+  background: #e8f5f2;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.twin-deeplink-message.error {
+  border-color: #f0a6a6;
+  color: #991b1b;
+  background: #fff1f1;
+}
 .twin-layer-toggle,
 .twin-segmented,
 .twin-camera-presets button,

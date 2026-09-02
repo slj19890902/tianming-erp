@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.241"
-APP_VERSION_NAME = "正式首页空白紧急修复"
+APP_VERSION = "v0.22.242"
+APP_VERSION_NAME = "订单追溯成品位置地图定位"
 APP_BUILD_DATE = "2026-09-02"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -1695,18 +1695,34 @@ _V022240_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认版本为v0.22.240、数据库revision仍为唯一head jl70v8x9z59。",
 ]
 
-APP_CHANGES = [
+_V022241_CHANGES = [
     "修复供应商承兑月结选项中的浏览器模板解析冲突，ERP首页重新正常挂载，不再因Vue编译错误打开空白。",
     "承兑金额超过供应商月结可抵付余额时，仍按原规则禁用该选项并显示余额不足，业务判断保持不变。",
     "新增首屏模板安全门禁，禁止在可见Vue表达式中直接写入会被浏览器误当标签的裸小于号。",
     "本版无数据库迁移，不修改订单、库存、采购、收料、财务、权限或审批等正式业务事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022241_VERIFICATION_STEPS = [
     "用Chrome强制刷新ERP首页，确认登录页或主菜单完整显示，不再空白，控制台没有Vue模板编译错误。",
     "进入财务承兑列表，确认余额不足的供应商月结仍不可选择并显示余额不足，余额充足的选项可正常选择。",
     "运行首屏模板安全门禁和内联JavaScript语法检查，确认浏览器DOM解析及脚本语法均通过。",
     "进入系统备份→系统版本，确认版本为v0.22.241、数据库revision仍为唯一head jl70v8x9z59。",
+]
+
+APP_CHANGES = [
+    "订单明细追溯中的成品当前位置可逐批点击，新标签页打开既有仓库地图，并按真实楼层、区域、location_id和lot_id定位及高亮，不通过显示文字猜库位。",
+    "完工批次发生部分移库后，追溯会沿正式批次转移链展示当前仍有实物的多个位置；同品但无该订单单据关系的库存不会混入。",
+    "只有库存仍有实物、库位启用、实体栈板当前有效且与批次库位一致、位置已发布到实测地图时才提供链接；清零、移位、停用或异常会明确提示。",
+    "从订单追溯打开的地图固定为只读查货模式，隐藏移货、盘点和区域规划入口；刷新页面保持定位，打开和查看不会写库存、地图或订单事实。",
+    "本版无数据库迁移，不修改既有订单、完工、库存批次、栈板、库位、移动或送货事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "打开一条已有成品库存的订单明细追溯，点击当前位置，确认新标签页打开仓库地图并高亮同一批次和实际库位。",
+    "抽查一个部分移库后的成品批次，确认追溯分别列出各个当前实际位置，逐个点击都定位正确；同存货编码的无关库存不出现。",
+    "抽查清零批次、栈板与批次库位不一致或停用库位，确认不生成可点击链接，并显示对应核对提示。",
+    "在追溯地图页刷新一次，确认仍定位同一location_id和lot_id；管理员账号也只显示查货，不显示移货、盘点或区域规划入口。",
+    "进入系统备份→系统版本，确认版本为v0.22.242、数据库revision仍为唯一head jl70v8x9z59。",
 ]
 
 
@@ -1800,6 +1816,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.241：本次更新｜{item}" for item in _V022241_CHANGES),
+    *(f"v0.22.241：如何验证｜{item}" for item in _V022241_VERIFICATION_STEPS),
     *(f"v0.22.240：本次更新｜{item}" for item in _V022240_CHANGES),
     *(f"v0.22.240：如何验证｜{item}" for item in _V022240_VERIFICATION_STEPS),
     *(f"v0.22.239：本次更新｜{item}" for item in _V022239_CHANGES),

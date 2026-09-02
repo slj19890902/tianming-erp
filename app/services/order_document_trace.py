@@ -4,6 +4,7 @@ from datetime import date, datetime
 import logging
 import re
 from typing import Any
+from urllib.parse import urlencode
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -33,7 +34,9 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrderItem,
 )
 from app.models.warehouse_inventory import (
+    FinishedGoodsInventoryDetail,
     InventoryLot,
+    InventoryLotTransfer,
     InventoryMovement,
     InventoryPallet,
     InventoryPalletItem,
@@ -43,12 +46,16 @@ from app.models.warehouse_inventory import (
 )
 from app.services.location_candidates import (
     load_warehouse_location_projection_contexts,
+    warehouse_location_projection,
 )
 from app.services.warehouse_location_address import employee_location_name
 from app.services.order_business_status import BUSINESS_STATUS_LABELS
 from app.services.product_specification import resolved_product_specification
 
 logger = logging.getLogger(__name__)
+
+
+WAREHOUSE_MAP_FLOORS = {"1F", "3F", "4F"}
 
 
 STAGE_LABELS = {
@@ -174,6 +181,29 @@ def _quantity(value: Any) -> int | float | None:
         return None
     number = float(value)
     return int(number) if number.is_integer() else number
+
+
+def _inventory_lot_descendant_ids(
+    db: Session,
+    seed_ids: set[int],
+) -> set[int]:
+    """Return every location-transfer descendant of exact source lots."""
+
+    related_ids = {int(value) for value in seed_ids if int(value) > 0}
+    frontier = set(related_ids)
+    while frontier:
+        target_ids = {
+            int(value)
+            for value in db.scalars(
+                select(InventoryLotTransfer.target_lot_id).where(
+                    InventoryLotTransfer.source_lot_id.in_(frontier)
+                )
+            ).all()
+            if value is not None
+        }
+        frontier = target_ids - related_ids
+        related_ids.update(frontier)
+    return related_ids
 
 
 def _status_label(
@@ -854,6 +884,48 @@ def build_order_item_document_trace(
                     business_date=settlement.settlement_date,
                 )
 
+    if "warehouse.view" in permissions and completion_ids:
+        production_lot_seed_ids = {
+            int(row.inventory_lot_id)
+            for row in completion_rows
+            if row.inventory_lot_id is not None
+        }
+        production_lot_seed_ids.update(
+            int(row.inventory_lot_id)
+            for row in transfer_rows
+            if row.inventory_lot_id is not None
+        )
+        production_lot_seed_ids.update(
+            int(value)
+            for value in db.scalars(
+                select(InventoryLot.id).where(
+                    InventoryLot.inventory_type == "finished",
+                    InventoryLot.source_ref_type == "production_completion",
+                    InventoryLot.source_ref_id.in_(completion_ids),
+                )
+            ).all()
+        )
+        production_related_lot_ids = _inventory_lot_descendant_ids(
+            db,
+            production_lot_seed_ids,
+        )
+        customer_owned_production_lot_ids = set(
+            db.scalars(
+                select(FinishedGoodsInventoryDetail.inventory_lot_id).where(
+                    FinishedGoodsInventoryDetail.inventory_lot_id.in_(
+                        production_related_lot_ids
+                    ),
+                    FinishedGoodsInventoryDetail.owner_customer_id
+                    == order.customer_id,
+                )
+            ).all()
+        )
+        # Exact production links still fail closed when an anomalous historical
+        # transfer changed the customer owner.  Customer-scoped trace must not
+        # expose another customer's physical inventory position.
+        lot_ids.difference_update(production_related_lot_ids)
+        lot_ids.update(customer_owned_production_lot_ids)
+
     current_inventory: list[dict[str, Any]] = []
     if "warehouse.view" in permissions and lot_ids:
         lots = db.scalars(
@@ -896,6 +968,74 @@ def build_order_item_document_trace(
         for lot in lots:
             location = lot_locations.get(lot.warehouse_location_id)
             pallet = pallet_by_lot.get(lot.id)
+            location_context = (
+                location_contexts.get(int(location.id), {})
+                if location is not None
+                else {}
+            )
+            location_projection = (
+                warehouse_location_projection(location, **location_context)
+                if location is not None
+                else None
+            )
+            floor = location_context.get("floor")
+            floor_code = str(getattr(floor, "floor_code", "") or "").strip().upper()
+            area_code = (
+                str(location.area_code or "").strip().upper()
+                if location is not None
+                else ""
+            )
+            physical_quantity = max(
+                int(lot.quantity_available or 0)
+                + int(lot.quantity_reserved or 0)
+                + int(lot.quantity_damaged or 0),
+                0,
+            )
+            location_issue: str | None = None
+            map_deep_link: str | None = None
+            if lot.inventory_type == "finished":
+                if physical_quantity <= 0:
+                    location_issue = "该成品批次已清零，无当前地图位置"
+                elif lot.status not in {"active", "frozen"}:
+                    location_issue = "成品批次仍有数量但状态不可用，请核对仓库"
+                elif location is None:
+                    location_issue = "成品批次缺少有效库位，请核对仓库"
+                elif not bool(location.is_active):
+                    location_issue = "成品批次所在库位已停用，请核对仓库"
+                elif pallet is None:
+                    location_issue = "当前成品未关联实体栈板，请核对仓库"
+                elif (
+                    not bool(pallet.is_current)
+                    or str(pallet.status or "").strip().lower() != "active"
+                    or pallet.location_id is None
+                    or int(pallet.location_id) != int(lot.warehouse_location_id)
+                ):
+                    location_issue = "成品批次与实体栈板库位不一致，请核对仓库"
+                elif (
+                    location_projection is None
+                    or location_projection.get("position_status") != "mapped"
+                ):
+                    location_issue = str(
+                        (location_projection or {}).get("map_issue")
+                        or "该库位尚未发布到当前实测地图"
+                    )
+                elif floor_code not in WAREHOUSE_MAP_FLOORS:
+                    location_issue = "当前实测地图尚未支持该楼层"
+                elif not area_code:
+                    location_issue = "该库位尚未登记实际区域"
+                else:
+                    map_deep_link = "/warehouse.html?" + urlencode(
+                        {
+                            "floor": floor_code,
+                            "view": "2d",
+                            "mode": "lookup",
+                            "readonly": "1",
+                            "source": "order_trace",
+                            "area_code": area_code,
+                            "location_id": int(location.id),
+                            "lot_id": int(lot.id),
+                        }
+                    )
             current_inventory.append(
                 {
                     "lot_id": lot.id,
@@ -910,9 +1050,21 @@ def build_order_item_document_trace(
                     "quantity_available": lot.quantity_available,
                     "quantity_reserved": lot.quantity_reserved,
                     "quantity_consumed": lot.quantity_consumed,
+                    "quantity_damaged": lot.quantity_damaged,
+                    "physical_quantity": physical_quantity,
                     "unit": lot.unit,
+                    "location_id": location.id if location else None,
                     "location_code": location.location_code if location else None,
                     "location_name": projected_location_name(location),
+                    "floor_code": floor_code or None,
+                    "area_code": area_code or None,
+                    "map_position_status": (
+                        location_projection.get("position_status")
+                        if location_projection is not None
+                        else None
+                    ),
+                    "map_deep_link": map_deep_link,
+                    "location_issue": location_issue,
                     "pallet_code": pallet.pallet_code if pallet else None,
                     "last_movement_at": _api_datetime(lot.last_movement_at),
                 }

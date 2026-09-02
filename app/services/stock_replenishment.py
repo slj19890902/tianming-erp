@@ -13,7 +13,9 @@ from app.core.time_contract import (
     utc_now_naive,
 )
 from app.models.incoming_receipt import IncomingReceiptItem
+from app.models.order import OrderItem
 from app.models.product import Product
+from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.stock_replenishment import (
     InventoryStockPolicy,
     StockReplenishmentOrder,
@@ -22,6 +24,7 @@ from app.models.stock_replenishment import (
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     InventoryLot,
+    InventoryReservation,
     SemiFinishedInventoryDetail,
     WarehouseLocation,
 )
@@ -46,6 +49,7 @@ from app.services.warehouse_inventory import (
     replace_semi_finished_lot_allowed_products,
 )
 from app.services.box_type_rules import box_type_code
+from app.services.composite_bom_workflow import component_availability
 from app.services.semi_finished_inventory import (
     safe_physical_board_facts_match,
 )
@@ -232,49 +236,12 @@ def compatible_customer_product_ids(
     ]
 
 
-def finished_product_quantity_summary(
+def _finished_inventory_quantity_summary(
     db: Session,
     *,
-    product_id: int,
     customer_id: int,
+    product_condition,
 ) -> dict[str, int]:
-    """Return warehouse stock for one customer inventory code.
-
-    Stock warnings describe how many sound finished goods are still physically
-    in the warehouse, so ``available_quantity`` includes both allocatable and
-    already-reserved quantities.  ``allocatable_available_quantity`` keeps the
-    narrower allocation fact explicit and prevents reserved stock from being
-    allocated again.  Inventory is grouped by the frozen inventory-code
-    snapshot instead of one product master id because historical and composite
-    products may legitimately have multiple master rows for the same code.
-
-    Valid third-floor V11 locations are formal inventory even while their
-    placement status still needs attention.
-    """
-    product_fact = db.execute(
-        select(Product.product_code, Product.customer_id).where(
-            Product.id == product_id
-        )
-    ).one_or_none()
-    if product_fact is None or int(product_fact.customer_id) != int(customer_id):
-        return {
-            "available_quantity": 0,
-            "allocatable_available_quantity": 0,
-            "dedicated_available_quantity": 0,
-            "general_available_quantity": 0,
-            "reserved_quantity": 0,
-            "physical_unconsumed_quantity": 0,
-        }
-    inventory_code = str(product_fact.product_code or "").strip().lower()
-    if not inventory_code:
-        return {
-            "available_quantity": 0,
-            "allocatable_available_quantity": 0,
-            "dedicated_available_quantity": 0,
-            "general_available_quantity": 0,
-            "reserved_quantity": 0,
-            "physical_unconsumed_quantity": 0,
-        }
     row = db.execute(
         select(
             func.coalesce(func.sum(InventoryLot.quantity_available), 0),
@@ -318,10 +285,7 @@ def finished_product_quantity_summary(
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
             Product.customer_id == customer_id,
-            func.lower(
-                func.trim(FinishedGoodsInventoryDetail.inventory_code_snapshot)
-            )
-            == inventory_code,
+            product_condition,
             or_(
                 and_(
                     FinishedGoodsInventoryDetail.is_general.is_(False),
@@ -356,6 +320,203 @@ def finished_product_quantity_summary(
         "reserved_quantity": reserved,
         "physical_unconsumed_quantity": physical_unconsumed,
     }
+
+
+def _composite_parent_finished_quantity_summary(
+    db: Session,
+    *,
+    customer_id: int,
+    inventory_code: str,
+) -> dict[str, int]:
+    """Return complete parent sets without adding same-code component pieces.
+
+    Composite components may deliberately share the parent's inventory code.
+    Their physical ledgers remain in pieces, so adding those ledgers turns one
+    finished set into the sum of all BOM pieces.  Only order-scoped active BOM
+    reservations can establish which pieces belong together.  Convert each
+    required component back to sets, take the shortest component and cap it by
+    the parent order's undelivered set quantity.
+    """
+
+    parent_product_ids = list(
+        db.scalars(
+            select(Product.id).where(
+                Product.customer_id == customer_id,
+                func.lower(func.trim(Product.product_code)) == inventory_code,
+                Product.is_internal_component.is_(False),
+                or_(
+                    Product.is_composite.is_(True),
+                    Product.is_virtual_composite_parent.is_(True),
+                ),
+            )
+        ).all()
+    )
+    if not parent_product_ids:
+        return {
+            "available_quantity": 0,
+            "allocatable_available_quantity": 0,
+            "dedicated_available_quantity": 0,
+            "general_available_quantity": 0,
+            "reserved_quantity": 0,
+            "physical_unconsumed_quantity": 0,
+        }
+
+    direct = _finished_inventory_quantity_summary(
+        db,
+        customer_id=customer_id,
+        product_condition=FinishedGoodsInventoryDetail.product_id.in_(
+            parent_product_ids
+        ),
+    )
+    reservation_remaining = (
+        InventoryReservation.reserved_stock_quantity
+        - InventoryReservation.consumed_stock_quantity
+        - InventoryReservation.released_stock_quantity
+    )
+    order_item_ids = list(
+        db.scalars(
+            select(OrderItem.id)
+            .join(
+                SalesOrderItemBomComponent,
+                SalesOrderItemBomComponent.sales_order_item_id == OrderItem.id,
+            )
+            .join(
+                InventoryReservation,
+                InventoryReservation.sales_order_item_bom_component_id
+                == SalesOrderItemBomComponent.id,
+            )
+            .where(
+                OrderItem.product_id.in_(parent_product_ids),
+                OrderItem.is_force_closed.is_(False),
+                OrderItem.quantity > func.coalesce(OrderItem.delivered_quantity, 0),
+                InventoryReservation.reservation_type == "finished_order",
+                InventoryReservation.status.in_(("active", "partial")),
+                reservation_remaining > 0,
+            )
+            .distinct()
+            .order_by(OrderItem.id)
+        ).all()
+    )
+
+    component_reserved_sets = 0
+    for order_item_id in order_item_ids:
+        item = db.get(OrderItem, order_item_id)
+        if item is None:
+            continue
+        required_component_sets: list[int] = []
+        snapshots = db.scalars(
+            select(SalesOrderItemBomComponent)
+            .where(
+                SalesOrderItemBomComponent.sales_order_item_id == order_item_id,
+                SalesOrderItemBomComponent.is_required.is_(True),
+            )
+            .order_by(
+                SalesOrderItemBomComponent.display_order,
+                SalesOrderItemBomComponent.id,
+            )
+        ).all()
+        for snapshot in snapshots:
+            availability = component_availability(db, int(snapshot.id))
+            required_component_sets.append(
+                int(availability.stock_quantity)
+                // max(int(availability.quantity_per_set), 1)
+            )
+        if not required_component_sets:
+            continue
+        remaining_order_sets = max(
+            int(item.quantity or 0) - int(item.delivered_quantity or 0),
+            0,
+        )
+        component_reserved_sets += min(
+            min(required_component_sets),
+            remaining_order_sets,
+        )
+
+    physical_unconsumed = (
+        int(direct["physical_unconsumed_quantity"]) + component_reserved_sets
+    )
+    reserved = int(direct["reserved_quantity"]) + component_reserved_sets
+    dedicated = (
+        int(direct["dedicated_available_quantity"]) + component_reserved_sets
+    )
+    return {
+        "available_quantity": physical_unconsumed,
+        "allocatable_available_quantity": int(
+            direct["allocatable_available_quantity"]
+        ),
+        "dedicated_available_quantity": dedicated,
+        "general_available_quantity": int(direct["general_available_quantity"]),
+        "reserved_quantity": reserved,
+        "physical_unconsumed_quantity": physical_unconsumed,
+    }
+
+
+def finished_product_quantity_summary(
+    db: Session,
+    *,
+    product_id: int,
+    customer_id: int,
+) -> dict[str, int]:
+    """Return warehouse stock for one customer inventory code.
+
+    Stock warnings describe how many sound finished goods are still physically
+    in the warehouse, so ``available_quantity`` includes both allocatable and
+    already-reserved quantities.  ``allocatable_available_quantity`` keeps the
+    narrower allocation fact explicit and prevents reserved stock from being
+    allocated again.  Inventory is grouped by the frozen inventory-code
+    snapshot instead of one product master id because historical and composite
+    products may legitimately have multiple master rows for the same code.
+
+    Valid third-floor V11 locations are formal inventory even while their
+    placement status still needs attention.
+    """
+    product_fact = db.execute(
+        select(
+            Product.product_code,
+            Product.customer_id,
+            Product.is_composite,
+            Product.is_virtual_composite_parent,
+        ).where(
+            Product.id == product_id
+        )
+    ).one_or_none()
+    if product_fact is None or int(product_fact.customer_id) != int(customer_id):
+        return {
+            "available_quantity": 0,
+            "allocatable_available_quantity": 0,
+            "dedicated_available_quantity": 0,
+            "general_available_quantity": 0,
+            "reserved_quantity": 0,
+            "physical_unconsumed_quantity": 0,
+        }
+    inventory_code = str(product_fact.product_code or "").strip().lower()
+    if not inventory_code:
+        return {
+            "available_quantity": 0,
+            "allocatable_available_quantity": 0,
+            "dedicated_available_quantity": 0,
+            "general_available_quantity": 0,
+            "reserved_quantity": 0,
+            "physical_unconsumed_quantity": 0,
+        }
+    if bool(product_fact.is_composite) or bool(
+        product_fact.is_virtual_composite_parent
+    ):
+        return _composite_parent_finished_quantity_summary(
+            db,
+            customer_id=customer_id,
+            inventory_code=inventory_code,
+        )
+    return _finished_inventory_quantity_summary(
+        db,
+        customer_id=customer_id,
+        product_condition=(
+            func.lower(
+                func.trim(FinishedGoodsInventoryDetail.inventory_code_snapshot)
+            )
+            == inventory_code
+        ),
+    )
 
 
 def current_policy_quantity(db: Session, policy: InventoryStockPolicy) -> int:

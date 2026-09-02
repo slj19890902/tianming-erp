@@ -425,6 +425,169 @@ def test_finished_stock_warning_aggregates_same_customer_inventory_code(
         assert summary["physical_unconsumed_quantity"] == 1380
 
 
+def test_composite_parent_warehouse_total_uses_complete_sets_not_component_pieces(
+    tmp_path: Path,
+) -> None:
+    from decimal import Decimal
+
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryReservation,
+        WarehouseLocation,
+    )
+    from app.services.stock_replenishment import finished_product_quantity_summary
+
+    _engine, factory, ids = _factory(tmp_path)
+    with factory() as db:
+        location = db.get(WarehouseLocation, ids["standard_location"])
+        assert location is not None
+        parent = Product(
+            customer_id=ids["customer_a"],
+            product_code="KIT-SAME-CODE",
+            customer_material_code="KIT-SAME-CODE",
+            product_name="组合成品",
+            box_category="normal",
+            is_composite=True,
+            is_virtual_composite_parent=True,
+            is_active=True,
+        )
+        long_piece = Product(
+            customer_id=ids["customer_a"],
+            product_code="KIT-SAME-CODE",
+            customer_material_code="KIT-SAME-CODE",
+            product_name="长片组件",
+            box_category="normal",
+            is_internal_component=True,
+            is_active=True,
+        )
+        short_piece = Product(
+            customer_id=ids["customer_a"],
+            product_code="KIT-SAME-CODE",
+            customer_material_code="KIT-SAME-CODE",
+            product_name="短片组件",
+            box_category="normal",
+            is_internal_component=True,
+            is_active=True,
+        )
+        db.add_all([parent, long_piece, short_piece])
+        db.flush()
+        order = Order(
+            order_number="KIT-SETS-001",
+            customer_id=ids["customer_a"],
+            order_date=date.today(),
+            delivery_date=date.today(),
+            status="partially_delivered",
+            payment_status="unpaid",
+            total_amount=Decimal("1800"),
+        )
+        db.add(order)
+        db.flush()
+        item = OrderItem(
+            order_id=order.id,
+            product_id=parent.id,
+            item_order_number="KIT-SETS-001-001",
+            item_sequence=1,
+            quantity=1800,
+            delivered_quantity=500,
+            unit_price=Decimal("1"),
+            subtotal=Decimal("1800"),
+            material_status="received",
+            snapshot_product_name=parent.product_name,
+            snapshot_product_code=parent.product_code,
+            snapshot_spec="1139*778*102",
+            inventory_deducted_qty=0,
+            requisition_qty=1800,
+            requisition_status="已入库",
+            special_process="无",
+            combination_mode_snapshot="parent_priced_set",
+            combination_role="set_parent",
+        )
+        db.add(item)
+        db.flush()
+        snapshots = []
+        for display_order, (component, per_set) in enumerate(
+            ((long_piece, 3), (short_piece, 4)),
+            start=1,
+        ):
+            snapshot = SalesOrderItemBomComponent(
+                sales_order_item_id=item.id,
+                component_product_id=component.id,
+                parent_product_version=1,
+                component_product_version=1,
+                snapshot_schema_version=2,
+                order_set_quantity=1800,
+                quantity_per_set=Decimal(per_set),
+                required_piece_quantity=Decimal(1800 * per_set),
+                display_order=display_order,
+                internal_component_code=f"KIT-S{display_order:02d}",
+                is_die_cut=False,
+                spare_sheet_quantity=0,
+                display_mode="internal_only",
+                is_required=True,
+                snapshot_component_product_code=component.product_code,
+                snapshot_component_product_name=component.product_name,
+                snapshot_component_spec="组件规格",
+                snapshot_component_box_category="normal",
+            )
+            db.add(snapshot)
+            snapshots.append(snapshot)
+        db.flush()
+
+        for component, snapshot, per_set in (
+            (long_piece, snapshots[0], 3),
+            (short_piece, snapshots[1], 4),
+        ):
+            remaining_pieces = 1300 * per_set
+            delivered_pieces = 500 * per_set
+            _add_finished_lot(
+                db,
+                lot_number=f"LOT-{snapshot.id}",
+                product=component,
+                location=location,
+                quantity_available=0,
+                quantity_reserved=remaining_pieces,
+            )
+            db.flush()
+            lot = db.scalar(
+                select(InventoryLot).where(
+                    InventoryLot.lot_number == f"LOT-{snapshot.id}"
+                )
+            )
+            assert lot is not None
+            db.add(
+                InventoryReservation(
+                    reservation_number=f"KIT-RES-{snapshot.id}",
+                    inventory_lot_id=lot.id,
+                    reservation_type="finished_order",
+                    order_id=order.id,
+                    order_item_id=item.id,
+                    sales_order_item_bom_component_id=snapshot.id,
+                    reserved_stock_quantity=1800 * per_set,
+                    credited_requirement_quantity=1800 * per_set,
+                    yield_factor=1,
+                    consumed_stock_quantity=delivered_pieces,
+                    consumed_requirement_quantity=delivered_pieces,
+                    status="partial",
+                    idempotency_key=f"KIT-RES-{snapshot.id}",
+                )
+            )
+        db.flush()
+
+        summary = finished_product_quantity_summary(
+            db,
+            product_id=parent.id,
+            customer_id=parent.customer_id,
+        )
+        assert summary["available_quantity"] == 1300
+        assert summary["allocatable_available_quantity"] == 0
+        assert summary["reserved_quantity"] == 1300
+        assert summary["dedicated_available_quantity"] == 1300
+        assert summary["physical_unconsumed_quantity"] == 1300
+
+
 def test_dashboard_warning_is_read_only_permissioned_and_customer_scoped(
     tmp_path: Path,
 ) -> None:

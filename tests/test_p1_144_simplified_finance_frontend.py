@@ -45,7 +45,7 @@ def test_fixed_expense_utility_and_acceptance_forms_are_compact_and_actionable()
         assert text in panel
     assert 'v-model="financeRecurringForm.is_active"' in panel
     assert 'v-model.number="row._statementId"' in panel
-    assert ':disabled="Number(item.available_payment_amount)<Number(row.amount)"' in panel
+    assert ':disabled="Number(row.amount)>Number(item.available_payment_amount)"' in panel
     assert "余额不足" in panel
 
 

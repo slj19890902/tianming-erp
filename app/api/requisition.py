@@ -113,6 +113,12 @@ from app.services.stock_replenishment import (
     theoretical_requisition_quantity,
     validate_stock_policy,
 )
+from app.services.external_packaging_stock_replenishment import (
+    create_external_stock_replenishment_purchase,
+    external_stock_draft,
+    external_stock_purchase_payload,
+)
+from app.services.external_packaging_purchase import ExternalPurchaseContractError
 from app.services.supplier_master import (
     SupplierLookupError,
     normalize_supplier_identity,
@@ -1552,6 +1558,7 @@ class FinishedStockPolicyQuickPayload(BaseModel):
 
 class StockReplenishmentItemPayload(BaseModel):
     stock_policy_id: int | None = None
+    procurement_mode: str | None = Field(default=None, max_length=40)
     target_inventory_type: str
     product_id: int | None = None
     reference_product_id: int | None = None
@@ -1580,6 +1587,10 @@ class StockReplenishmentItemPayload(BaseModel):
     historical_row: int | None = Field(default=None, gt=0)
     historical_search_text: str | None = None
     remark: str | None = None
+    external_purchase_quantity: Decimal | None = Field(default=None, gt=0)
+    external_purchase_unit: str | None = Field(default=None, max_length=20)
+    external_order_quantity_basis: Decimal | None = Field(default=None, gt=0)
+    external_purchase_quantity_basis: Decimal | None = Field(default=None, gt=0)
 
     @field_validator("target_inventory_type")
     @classmethod
@@ -14571,6 +14582,58 @@ def stock_policy_replenishment_draft(
         }
     if product is None or product.deleted_at is not None or not product.is_active:
         raise HTTPException(status_code=409, detail="库存预警关联的常用箱不可用。")
+    if product.supply_mode == "external_purchase":
+        finished_quantity = int(
+            summary.get("suggested_new_requisition_finished_quantity", 0) or 0
+        )
+        try:
+            external = external_stock_draft(
+                db,
+                policy=policy,
+                finished_quantity=finished_quantity,
+            )
+            return {
+                "source_type": "stock_warning",
+                "procurement_mode": "external_purchase",
+                "supplier_name": external["supplier_name"],
+                "customer_id": policy.customer_id,
+                "stock_now": False,
+                "draft_ready": True,
+                "missing_fields": [],
+                "items": [external["item"]],
+                "compatible_products": [],
+                "compatible_board_products": [],
+                "policy_summary": summary,
+            }
+        except ExternalPurchaseContractError as error:
+            return {
+                "source_type": "stock_warning",
+                "procurement_mode": "external_purchase",
+                "supplier_name": None,
+                "customer_id": policy.customer_id,
+                "stock_now": False,
+                "draft_ready": False,
+                "missing_fields": [str(error)],
+                "items": [
+                    {
+                        "stock_policy_id": policy.id,
+                        "procurement_mode": "external_purchase",
+                        "target_inventory_type": "finished",
+                        "product_id": product.id,
+                        "reference_product_id": product.id,
+                        "customer_id": product.customer_id,
+                        "product_code": product.product_code,
+                        "product_name": product.product_name,
+                        "quantity": finished_quantity,
+                        "suggested_finished_quantity": finished_quantity,
+                        "draft_ready": False,
+                        "missing_fields": [str(error)],
+                    }
+                ],
+                "compatible_products": [],
+                "compatible_board_products": [],
+                "policy_summary": summary,
+            }
     defaults = product_replenishment_defaults(product)
 
     def draft_item(
@@ -14822,6 +14885,16 @@ def _replenishment_order_query():
     )
 
 
+def _replenishment_order_response(
+    db: Session, order: StockReplenishmentOrder
+) -> dict:
+    response = replenishment_order_dict(order, db=db)
+    external = external_stock_purchase_payload(db, order)
+    if external is not None:
+        response.update(external)
+    return response
+
+
 def _coalesce(value, fallback):
     return fallback if value in (None, "") else value
 
@@ -15034,7 +15107,90 @@ def create_stock_replenishment_order(
                     user,
                     relationships_loaded=True,
                 )
+                if external_stock_purchase_payload(db, existing_order) is not None:
+                    return _replenishment_order_response(db, existing_order)
                 return replenishment_order_dict(existing_order, db=db)
+        external_lines: list[
+            tuple[StockReplenishmentItemPayload, Product]
+        ] = []
+        for raw_item in payload.items:
+            reference_product_id = (
+                raw_item.reference_product_id or raw_item.product_id
+            )
+            referenced_product = (
+                db.get(Product, reference_product_id)
+                if reference_product_id is not None
+                else None
+            )
+            if (
+                referenced_product is not None
+                and referenced_product.supply_mode == "external_purchase"
+            ):
+                external_lines.append((raw_item, referenced_product))
+        if external_lines:
+            if user.role != "admin" or not has_permission(user, "cost.view"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="外购包材备库会生成正式供应商采购单，仅管理员可确认。",
+                )
+            if payload.source_type != "stock_warning":
+                raise StockReplenishmentError(
+                    "无订单外购包材备库只能从已启用的库存预警发起。", 409
+                )
+            if len(external_lines) != 1 or len(payload.items) != 1:
+                raise StockReplenishmentError(
+                    "外购包材备库必须按单款、单供应商独立生成采购单。", 409
+                )
+            external_item, external_product = external_lines[0]
+            policy = (
+                db.get(InventoryStockPolicy, external_item.stock_policy_id)
+                if external_item.stock_policy_id is not None
+                else None
+            )
+            if (
+                policy is None
+                or not policy.active
+                or policy.target_inventory_type != "finished"
+                or policy.product_id != external_product.id
+                or policy.customer_id != external_product.customer_id
+            ):
+                raise StockReplenishmentError(
+                    "外购包材备库草稿与当前库存预警不一致，请刷新后重试。", 409
+                )
+            _require_stock_policy_customer_access(db, policy, user)
+            if external_item.target_inventory_type != "finished":
+                raise StockReplenishmentError(
+                    "外购包材备库必须在实收换算后进入客户专属成品库存。", 409
+                )
+            if (
+                external_item.customer_id not in (None, external_product.customer_id)
+                or payload.customer_id not in (None, external_product.customer_id)
+            ):
+                raise StockReplenishmentError(
+                    "外购包材备库客户与常用箱不一致。", 409
+                )
+            if idempotent_order_number is None or payload.idempotency_key is None:
+                raise StockReplenishmentError(
+                    "外购包材备库缺少防重复标识，请关闭后重新打开。", 409
+                )
+            order = create_external_stock_replenishment_purchase(
+                db,
+                policy=policy,
+                finished_quantity=int(external_item.quantity),
+                order_number=idempotent_order_number,
+                idempotency_key=payload.idempotency_key,
+                remark=payload.remark or external_item.remark,
+                user=user,
+            )
+            _require_stock_replenishment_order_access(db, order, user)
+            db.commit()
+            order = db.scalar(
+                _replenishment_order_query().where(
+                    StockReplenishmentOrder.id == order.id
+                )
+            )
+            assert order is not None
+            return _replenishment_order_response(db, order)
         items = [
             _build_replenishment_item(
                 db,
@@ -15187,12 +15343,18 @@ def create_stock_replenishment_order(
                     user,
                     relationships_loaded=True,
                 )
+                if external_stock_purchase_payload(db, existing_order) is not None:
+                    return _replenishment_order_response(db, existing_order)
                 return replenishment_order_dict(existing_order, db=db)
         raise
     except HTTPException:
         db.rollback()
         raise
-    except (StockReplenishmentError, WarehouseInventoryError) as error:
+    except (
+        StockReplenishmentError,
+        WarehouseInventoryError,
+        ExternalPurchaseContractError,
+    ) as error:
         db.rollback()
         raise HTTPException(
             status_code=getattr(error, "status_code", 400), detail=str(error)

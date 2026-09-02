@@ -43,6 +43,8 @@ from app.services.stock_replenishment import (
     product_replenishment_signature,
     stock_policy_dict,
 )
+from app.services.external_packaging_purchase import ExternalPurchaseContractError
+from app.services.external_packaging_stock_replenishment import external_stock_draft
 from app.services.location_candidates import (
     load_warehouse_location_projection_contexts,
 )
@@ -402,6 +404,32 @@ def _common_box_low_stock_warnings(
         if product is None:
             continue
         defaults = product_replenishment_defaults(product)
+        external_defaults: dict = {}
+        if product.supply_mode == "external_purchase":
+            try:
+                external_defaults = external_stock_draft(
+                    db,
+                    policy=policy,
+                    finished_quantity=max(
+                        int(item["suggested_replenishment_quantity"] or 0), 1
+                    ),
+                )
+                defaults = {
+                    **defaults,
+                    "draft_ready": True,
+                    "missing_fields": [],
+                }
+            except ExternalPurchaseContractError as error:
+                external_defaults = {
+                    "procurement_mode": "external_purchase",
+                    "draft_ready": False,
+                    "missing_fields": [str(error)],
+                }
+                defaults = {
+                    **defaults,
+                    "draft_ready": False,
+                    "missing_fields": [str(error)],
+                }
         signature = product_replenishment_signature(product)
         warnings.append(
             {
@@ -460,6 +488,19 @@ def _common_box_low_stock_warnings(
                 ),
                 "draft_ready": defaults["draft_ready"],
                 "missing_fields": defaults["missing_fields"],
+                "procurement_mode": external_defaults.get(
+                    "procurement_mode", "corrugated_board"
+                ),
+                "external_purchase_quantity": (
+                    external_defaults.get("item", {}).get(
+                        "external_purchase_quantity"
+                    )
+                ),
+                "external_purchase_unit": (
+                    external_defaults.get("item", {}).get(
+                        "external_purchase_unit"
+                    )
+                ),
                 "_replenishment_signature": signature,
             }
         )

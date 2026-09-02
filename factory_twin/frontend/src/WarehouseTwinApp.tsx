@@ -11,7 +11,7 @@ import {
   floor1CandidateBlockerHref
 } from "./floor1CandidateBlockers.mjs";
 import type { Floor1CandidateBlockingItem } from "./floor1CandidateBlockers.mjs";
-import { pointsBoundsMm, resizeAndMovePointsMm, translatePointsMm } from "./layoutGeometry.mjs";
+import { pointsBoundsMm, polygonAreaMm2, resizeAndMovePointsMm, translatePointsMm } from "./layoutGeometry.mjs";
 import {
   buildMappedLocationPallets,
   employeeAreaName,
@@ -2025,9 +2025,21 @@ export function WarehouseTwinApp() {
     () => mergePublishedFeatureGeometry(features, planningPublishedFeatures) as TwinFeature[],
     [features, planningPublishedFeatures]
   );
+  const planningVisibleFeatures = useMemo(
+    () => features.map((feature) => zoneGeometryDrafts[feature.id]
+      ? { ...feature, points: zoneGeometryDrafts[feature.id] }
+      : feature),
+    [features, zoneGeometryDrafts]
+  );
   const locationCollisionStructures = planningPublishedLayout?.structures || layout?.structures || [];
   const locationCollisionPlacements = planningPublishedLayout?.placements || layout?.placements || [];
   const locationCollisionRacks = planningPublishedLayout?.racks || layout?.racks || [];
+  const planningCollisionStructures = layout?.structures || [];
+  const planningCollisionPlacements = layout?.placements || [];
+  const planningCollisionRacks = useMemo(
+    () => (layout?.racks || []).map((rack) => rackDrafts[rack.id] || rack),
+    [layout?.racks, rackDrafts]
+  );
   const standardPallet = useMemo(
     () => standardPalletContractsMatch(layoutStandardPallet, dashboard?.standard_pallet)
       ? normalizeStandardPalletContract(layoutStandardPallet)
@@ -2132,13 +2144,13 @@ export function WarehouseTwinApp() {
   const planningGeometryConflicts = useMemo(
     () => locationEditMode && layout ? findPalletPlanningConflicts(
       planningCollisionPallets,
-      locationCollisionStructures,
-      locationProjectionFeatures,
+      planningCollisionStructures,
+      planningVisibleFeatures,
       0,
-      locationCollisionPlacements,
-      locationCollisionRacks
+      planningCollisionPlacements,
+      planningCollisionRacks
     ) : [],
-    [locationEditMode, planningCollisionPallets, locationCollisionStructures, locationProjectionFeatures, locationCollisionPlacements, locationCollisionRacks, layout]
+    [locationEditMode, planningCollisionPallets, planningCollisionStructures, planningVisibleFeatures, planningCollisionPlacements, planningCollisionRacks, layout]
   );
   const displayedLocationConflicts = locationEditMode
     ? planningGeometryConflicts
@@ -2358,10 +2370,8 @@ export function WarehouseTwinApp() {
   const visualLayout = useMemo(
     () => layout ? {
       ...layout,
-      features: (locationEditMode && !layoutMapToolsOpen ? locationProjectionFeatures : layout.features).map((feature) => {
-        const projected = layoutMapToolsOpen && zoneGeometryDrafts[feature.id]
-          ? { ...feature, points: zoneGeometryDrafts[feature.id] }
-          : feature;
+      features: planningVisibleFeatures.map((feature) => {
+        const projected = feature;
         return projected.feature_kind === "zone"
           ? { ...projected, name: employeeAreaName(projected, { floorCode }) }
           : projected;
@@ -2385,7 +2395,7 @@ export function WarehouseTwinApp() {
         }))
       ]
     } : null,
-    [layout, locationEditMode, layoutMapToolsOpen, locationProjectionFeatures, zoneGeometryDrafts, rackDrafts, groundCandidatePallets, displayedLocationConflicts, floorCode]
+    [layout, planningVisibleFeatures, rackDrafts, groundCandidatePallets, displayedLocationConflicts, floorCode]
   );
   const searchProductGroups = useMemo(
     () => groupSearchProducts(searchResponse?.items || []),
@@ -2671,6 +2681,9 @@ export function WarehouseTwinApp() {
     : [];
   const selectedAreaBoundary = selectedAreaBoundaryPoints.length
     ? pointsBoundsMm(selectedAreaBoundaryPoints) : null;
+  const selectedAreaVisibleAreaMm2 = selectedAreaBoundaryPoints.length
+    ? polygonAreaMm2(selectedAreaBoundaryPoints)
+    : Number(selectedAreaFeature?.area_mm2 || 0);
   const selectedFeatureIsMeasuredDispatch = floorCode === "1F" && isMeasuredDispatchFeature(selectedFeature);
   const dispatchStagingItems = dispatchStagingLocation?.loose_items || [];
   const selectedAreaCode = featureAreaCode(selectedAreaFeature) || selectedLocationAreaCode || selectedRackAreaCode;
@@ -5448,7 +5461,7 @@ export function WarehouseTwinApp() {
         <button type="button" className={floorCode === "3F" ? "active" : ""} onClick={() => switchWarehouseFloor("3F")}><b>3F</b><span>成品仓库</span></button>
         <button type="button" className={floorCode === "4F" ? "active" : ""} onClick={() => switchWarehouseFloor("4F")}><b>4F</b><span>成品仓库</span></button>
         <button type="button" className="planning" onClick={() => setLocationEditMessage("5F 小区域正在等待现场尺寸、用途和安全资料；当前未建立可作业地图。")}><b>5F</b><span>小区规划中</span></button>
-      </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><span>{selectedAreaFeature?.area_mm2 ? `${(selectedAreaFeature.area_mm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorCode === "4F" ? floor4CalibrationMode ? `${floorTitle} · 正在重新校正货梯位置与朝向` : floor4CalibrationApplied ? `${floorTitle} · 已与 3F 货梯对齐` : `${floorTitle} · 扫描规划 / 待现场标定，尚未启用正式作业` : `${floorTitle} · 正式仓库作业层`}</p></div>
+      </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><span>{selectedAreaVisibleAreaMm2 ? `${(selectedAreaVisibleAreaMm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorCode === "4F" ? floor4CalibrationMode ? `${floorTitle} · 正在重新校正货梯位置与朝向` : floor4CalibrationApplied ? `${floorTitle} · 已与 3F 货梯对齐` : `${floorTitle} · 扫描规划 / 待现场标定，尚未启用正式作业` : `${floorTitle} · 正式仓库作业层`}</p></div>
       <div className="twin-command-status"><span className="live">{mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : layoutMapToolsOpen ? "区域规划 · 调整地图" : advancedAreaMaintenanceOpen ? "区域规划 · 整理货位/货架" : "区域规划 · 核对区域" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
       <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
     </header>

@@ -2,11 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  polygonAreaMm2,
   pointsBoundsMm,
   resizeAndMovePointsMm,
   resizeSegmentMm,
   translatePointsMm
 } from "../src/layoutGeometry.mjs";
+
+test("visible polygon area follows the exact points currently shown", () => {
+  assert.equal(polygonAreaMm2([[0, 0], [3000, 0], [3000, 10800], [0, 10800]]), 32_400_000);
+  assert.equal(polygonAreaMm2([[0, 0], [2550, 0], [2550, 14000], [0, 14000]]), 35_700_000);
+  assert.equal(polygonAreaMm2([]), 0);
+});
 
 test("dragging a semantic feature translates every point without changing its shape", () => {
   const source = [[100, 200], [1100, 200], [1100, 700], [100, 700]];

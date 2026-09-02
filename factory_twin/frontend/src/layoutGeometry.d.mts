@@ -11,6 +11,8 @@ export function pointsBoundsMm(points: number[][]): {
   heightMm: number;
 };
 
+export function polygonAreaMm2(points: number[][]): number;
+
 export function resizeAndMovePointsMm(
   points: number[][],
   centerXmm: number,

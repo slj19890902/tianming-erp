@@ -21,6 +21,17 @@ export function pointsBoundsMm(points) {
   };
 }
 
+export function polygonAreaMm2(points) {
+  if (!Array.isArray(points) || points.length < 3) return 0;
+  let areaTwice = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const [x1, y1] = points[index];
+    const [x2, y2] = points[(index + 1) % points.length];
+    areaTwice += Number(x1) * Number(y2) - Number(x2) * Number(y1);
+  }
+  return Math.abs(areaTwice) / 2;
+}
+
 export function resizeAndMovePointsMm(points, centerXmm, centerYmm, widthMm, heightMm) {
   const bounds = pointsBoundsMm(points);
   const safeWidth = Math.max(1, Math.round(widthMm));

@@ -3159,13 +3159,13 @@
                     <div v-for="group in lowStockCustomerGroups" :key="group.key" class="low-stock-customer-card">
                       <button class="low-stock-customer-head" type="button" @click="toggleLowStockCustomer(group.key)">
                         <span class="low-stock-customer-title"><strong>{{ group.customer_name }}</strong><span class="status orange">库存不足 {{ group.items.length }} 款</span></span>
-                        <span class="low-stock-customer-summary">本次新报 {{ group.total_new_requisition_sheets }} 张　{{ lowStockExpandedCustomers[group.key] ? "收起" : "展开明细" }}</span>
+                        <span class="low-stock-customer-summary"><template v-if="group.external_count && group.external_count===group.items.length">建议外购备库 {{ group.total_external_finished_quantity }} 个成品</template><template v-else-if="group.external_count">纸板 {{ group.total_new_requisition_sheets }} 张｜外购成品 {{ group.total_external_finished_quantity }} 个</template><template v-else>本次新报 {{ group.total_new_requisition_sheets }} 张</template>　{{ lowStockExpandedCustomers[group.key] ? "收起" : "展开明细" }}</span>
                       </button>
                       <div v-if="lowStockExpandedCustomers[group.key]" class="low-stock-detail-list">
                         <div v-for="item in group.items" :key="item.policy_id" class="low-stock-detail">
                           <div>
                             <div><strong class="low-stock-detail-code">{{ item.product_code || "无编码" }}</strong>｜{{ item.product_name }}</div>
-                            <div class="muted">{{ item.material_code || "材质未完善" }}｜{{ item.report_length_mm || "-" }} × {{ item.report_width_mm || "-" }} mm｜{{ item.flute_type || "-" }}楞</div>
+                            <div v-if="item.procurement_mode==='external_purchase'" class="muted">外购包材｜按常用箱采购规格、默认供应商和当前正式报价</div><div v-else class="muted">{{ item.material_code || "材质未完善" }}｜{{ item.report_length_mm || "-" }} × {{ item.report_width_mm || "-" }} mm｜{{ item.flute_type || "-" }}楞</div>
                             <span v-if="item.same_spec_warning_count" class="status blue">另有 {{ item.same_spec_warning_count }} 款同规格也在预警</span>
                             <span v-if="!item.draft_ready" class="status orange">常用箱缺：{{ (item.missing_fields || []).join("、") }}</span>
                           </div>
@@ -3177,10 +3177,10 @@
                             <span v-else-if="item.customer_board_preparation_available_sheet_quantity">同规格备料 <strong>{{ item.customer_board_preparation_available_sheet_quantity }}</strong> 张（已计入另一款，不重复计算）</span>
                             <span v-if="item.incoming_board_preparation_sheet_quantity && item.incoming_board_preparation_auto_cover_capacity">已报料待到 <strong>{{ item.incoming_board_preparation_sheet_quantity }}</strong> 张</span>
                             <span v-else-if="item.incoming_board_preparation_sheet_quantity">同规格在途 <strong>{{ item.incoming_board_preparation_sheet_quantity }}</strong> 张（已计入另一款，不重复计算）</span>
-                            <span>本次新报 <strong>{{ item.suggested_new_requisition_sheet_quantity }}</strong> 张</span>
+                            <span v-if="item.procurement_mode==='external_purchase'">本次建议备库 <strong>{{ item.suggested_new_requisition_finished_quantity }}</strong> 个成品</span><span v-else>本次新报 <strong>{{ item.suggested_new_requisition_sheet_quantity }}</strong> 张</span>
                           </div>
                           <div class="low-stock-detail-actions">
-                            <button v-if="canRequisition" class="btn small success" :disabled="!item.draft_ready || !Number(item.suggested_new_requisition_sheet_quantity || 0)" @click="openLowStockReplenishment(item)">{{ Number(item.suggested_new_requisition_sheet_quantity || 0) ? `建议报料 ${item.suggested_new_requisition_sheet_quantity} 张` : item.replenishment_state==='board_preparation_ready' ? '已有备料，待生产' : item.replenishment_state==='already_ordered' ? '已报料，待到货' : '无需再报料' }}</button>
+                            <button v-if="canRequisition && (item.procurement_mode!=='external_purchase' || (canAdmin && canViewCosts))" class="btn small success" :disabled="!item.draft_ready || !Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0)" @click="openLowStockReplenishment(item)">{{ Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0) ? (item.procurement_mode==='external_purchase' ? `建议采购备库 ${item.suggested_new_requisition_finished_quantity} 个` : `建议报料 ${item.suggested_new_requisition_sheet_quantity} 张`) : item.replenishment_state==='board_preparation_ready' ? '已有备料，待生产' : item.replenishment_state==='already_ordered' ? (item.procurement_mode==='external_purchase' ? '已采购，待到货' : '已报料，待到货') : '无需再报料' }}</button>
                             <button class="btn small primary" @click="openLowStockLocations(item)">查看库存位置</button>
                             <button v-if="canRequisition" class="btn small" @click="openProductStockPolicy(item)">修改预警</button>
                           </div>
@@ -4236,7 +4236,7 @@
                           <td><div v-for="item in purchase.items" :key="`purchase-history-item-${item.id}`"><strong>{{ item.supplier_product_code || '-' }}｜{{ item.product_name }}</strong><div class="muted">{{ item.specification_summary || '-' }}｜{{ item.purchase_quantity }} {{ item.purchase_unit }}</div></div></td>
                           <td>采购 {{ purchase.ordered_quantity }}<br>已收 {{ purchase.received_quantity }}</td>
                           <td><span :class="['status',purchase.lifecycle_status==='cancelled'?'red':(purchase.receipt_status==='received'?'green':'orange')]">{{ purchase.lifecycle_status==='cancelled' ? '已撤销' : (purchase.receipt_status==='received' ? '已收齐' : (purchase.receipt_status==='partially_received' ? '部分实收' : '未实收')) }}</span><div v-if="purchase.cancellation" class="muted">{{ formatDateTime(purchase.cancellation.cancelled_at) }}<br>{{ purchase.cancellation.reason }}</div></td>
-                          <td><div class="toolbar-group"><button class="btn small primary" type="button" @click="openExternalPurchase({id:batch.order_id,order_number:batch.order_number,customer_po:batch.customer_order_number})">{{ batch.can_cancel ? '查看 / 撤销采购' : '查看采购' }}</button><a class="btn small" :href="`/external-purchase-print.html?id=${purchase.id}`" target="_blank" rel="noopener">打印采购单</a></div></td>
+                          <td><div class="toolbar-group"><button v-if="batch.source_type==='stock_replenishment' && batch.can_cancel" class="btn small danger" type="button" @click="cancelStockExternalPurchase(batch,purchase)">撤销采购</button><button v-else-if="batch.source_type!=='stock_replenishment'" class="btn small primary" type="button" @click="openExternalPurchase({id:batch.order_id,order_number:batch.order_number,customer_po:batch.customer_order_number})">{{ batch.can_cancel ? '查看 / 撤销采购' : '查看采购' }}</button><a class="btn small" :href="`/external-purchase-print.html?id=${purchase.id}`" target="_blank" rel="noopener">打印采购单</a></div></td>
                         </tr>
                       </template>
                     </tbody>
@@ -8148,19 +8148,25 @@
               </div>
               <div class="form-grid" style="margin-bottom:10px">
                 <div class="field"><label>补库来源</label><input class="input" :value="stockReplenishmentForm.source_type==='stock_warning' ? '库存预警' : '手动库存补库'" disabled /></div>
-                <div class="field"><label>供应商</label><select class="select" v-model="stockReplenishmentForm.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select><div v-if="stockReplenishmentMaterialSuppliers().length > 1" class="status orange">存在多个材质供应商，请拆分补库单</div></div>
+                <div class="field"><label>供应商</label><input v-if="stockReplenishmentForm.items.some(line=>line.procurement_mode==='external_purchase')" class="input" :value="stockReplenishmentForm.supplier_name" disabled /><select v-else class="select" v-model="stockReplenishmentForm.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select><div v-if="stockReplenishmentMaterialSuppliers().length > 1" class="status orange">存在多个材质供应商，请拆分补库单</div></div>
               </div>
               <div v-if="!stockReplenishmentForm.items.length" class="empty">点击“新增补库行”。</div>
               <div v-else class="stock-replenishment-lines">
                 <div v-for="(line,index) in stockReplenishmentForm.items" :key="line._key" class="stock-replenishment-line-card">
-                  <div class="stock-replenishment-line-head"><div><strong>补库明细 {{ index + 1 }}</strong><span class="muted" style="margin-left:10px">{{ line.material_supplier_name || stockReplenishmentForm.supplier_name || '供应商待确认' }}｜{{ line.material_code || '材质待选择' }}</span></div><button class="btn small danger" type="button" @click="removeStockReplenishmentLine(index)">删除行</button></div>
-                  <div v-if="stockReplenishmentForm.source_type==='stock_warning'" class="stock-warning-summary">
+                  <div class="stock-replenishment-line-head"><div><strong>补库明细 {{ index + 1 }}</strong><span class="muted" style="margin-left:10px">{{ line.material_supplier_name || stockReplenishmentForm.supplier_name || '供应商待确认' }}<template v-if="line.procurement_mode!=='external_purchase'">｜{{ line.material_code || '材质待选择' }}</template></span></div><button class="btn small danger" type="button" @click="removeStockReplenishmentLine(index)">删除行</button></div>
+                  <div v-if="line.procurement_mode==='external_purchase'" class="stock-warning-summary">
+                    <div><strong>{{ line.product_code }}｜{{ line.product_name }}</strong><div class="muted">{{ line.external_specification_summary }}</div><div class="muted">供应商货号 {{ line.external_supplier_product_code }}｜{{ line.external_supplier_product_name }}</div></div>
+                    <div><span class="muted">客户产品备库</span><br><strong>{{ line.quantity }} 个</strong></div>
+                    <div><span class="muted">常用箱比例</span><br><strong>{{ line.external_order_quantity_basis }} : {{ line.external_purchase_quantity_basis }}</strong></div>
+                    <div><span class="muted">供应商采购数量</span><br><strong>{{ line.external_purchase_quantity }} {{ line.external_purchase_unit }}</strong></div>
+                  </div>
+                  <div v-else-if="stockReplenishmentForm.source_type==='stock_warning'" class="stock-warning-summary">
                     <div><strong>{{ line.product_code }}｜{{ line.product_name }}</strong><div class="muted">{{ line.material_code || "材质待完善" }}｜{{ line.report_length_mm || "-" }} × {{ line.report_width_mm || "-" }} mm｜{{ line.flute_type || "-" }}楞｜{{ line.cutting_mode || "一开一" }}</div><div class="muted">客户专用纸板备料，可供：{{ (line.compatible_product_codes || [line.product_code]).join("、") }}</div><span v-if="!line.draft_ready" class="status orange">还缺：{{ (line.missing_fields || []).join("、") }}</span></div>
                     <div><span class="muted">建议补成品</span><br><strong>{{ line.suggested_finished_quantity || 0 }} 个</strong></div>
                     <div><span class="muted">理论报料</span><br><strong>{{ stockWarningTheoreticalSheets(line) }} 张</strong></div>
                     <div class="field"><label>本次报料张数（可多报）</label><input class="input" type="number" min="1" step="1" v-model.number="line.quantity" /><div v-if="stockWarningExtraSheets(line)>0" class="status blue">多报 {{ stockWarningExtraSheets(line) }} 张，入客户专用纸板备料</div><div v-else-if="Number(line.quantity||0)<stockWarningTheoreticalSheets(line)" class="status orange">少于理论报料 {{ stockWarningTheoreticalSheets(line) }} 张</div></div>
                   </div>
-                  <details :open="stockReplenishmentForm.source_type!=='stock_warning' || !line.draft_ready" :class="{'stock-warning-advanced':stockReplenishmentForm.source_type==='stock_warning'}">
+                  <details v-if="line.procurement_mode!=='external_purchase'" :open="stockReplenishmentForm.source_type!=='stock_warning' || !line.draft_ready" :class="{'stock-warning-advanced':stockReplenishmentForm.source_type==='stock_warning'}">
                     <summary v-if="stockReplenishmentForm.source_type==='stock_warning'">查看详细参数</summary>
                     <div class="stock-replenishment-line-grid">
                     <div class="field stock-span-2"><label>到料去向</label><select class="select" v-model="line.target_inventory_type" disabled><option value="semi_finished">三楼左区客户通用备料</option><option value="finished">三楼右区 F34/F12 临时周转</option></select></div>
@@ -10356,12 +10362,19 @@
                   items:[],
                   total_suggested_quantity:0,
                   total_new_requisition_sheets:0,
+                  total_external_finished_quantity:0,
+                  external_count:0,
                 });
               }
               const group = groups.get(key);
               group.items.push(item);
               group.total_suggested_quantity += Number(item.suggested_replenishment_quantity || 0);
-              group.total_new_requisition_sheets += Number(item.suggested_new_requisition_sheet_quantity || 0);
+              if (item.procurement_mode === "external_purchase") {
+                group.external_count += 1;
+                group.total_external_finished_quantity += Number(item.suggested_new_requisition_finished_quantity || 0);
+              } else {
+                group.total_new_requisition_sheets += Number(item.suggested_new_requisition_sheet_quantity || 0);
+              }
             }
             return [...groups.values()]
               .map(group => ({
@@ -18341,7 +18354,8 @@
               if (!["semi_finished","finished"].includes(line.target_inventory_type)) return `${label}到料去向无效`;
               if (line.target_inventory_type === "finished") {
                 const product=(this.stockReplenishmentProducts || []).find(row=>Number(row.id)===Number(line.reference_product_id));
-                if (!product || product.box_type_code !== "liner") return `${label}只有衬板可直接进入成品区`;
+                if (line.procurement_mode !== "external_purchase" && (!product || product.box_type_code !== "liner")) return `${label}只有衬板或正式外购包材可直接进入成品区`;
+                if (line.procurement_mode === "external_purchase" && (!line.reference_product_id || !line.external_purchase_quantity || !line.external_purchase_unit || !line.external_order_quantity_basis || !line.external_purchase_quantity_basis)) return `${label}外购包材采购资料不完整，请刷新后重试`;
               }
               if (this.stockReplenishmentForm.source_type === "customer_request" && !line.customer_id) return `${label}请选择客户`;
               if (this.stockReplenishmentForm.source_type === "stock_warning") {
@@ -24370,6 +24384,25 @@
               return false;
             } finally {
               this.externalPurchase.cancelSaving = false;
+            }
+          },
+          async cancelStockExternalPurchase(batch, purchase) {
+            if (!batch?.can_cancel || !purchase?.id || !this.canAdmin || !this.canViewCosts) return false;
+            const reason = String(window.prompt("填写撤销原因", "备库采购内容或数量需要重新核对") || "").trim();
+            if (!reason) return false;
+            if (!window.confirm(`确认撤销采购单 ${purchase.purchase_number} 吗？未实收才能撤销，历史会保留。`)) return false;
+            try {
+              await axios.post(`/api/external-packaging-purchases/${purchase.id}/cancel`, {
+                expected_batch_id:Number(batch.batch_id),
+                confirmed:true,
+                reason,
+              });
+              await Promise.all([this.loadExternalPurchaseHistory(), this.loadOverview()]);
+              this.showToast("外购备库采购已撤销，库存预警可重新建议采购");
+              return true;
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              return false;
             }
           },
           orderBomComponentText(component) {
@@ -31506,10 +31539,15 @@
               if (this.modal?.type === "stockReplenishment") this.modal = null;
               let printFailed = false;
               try {
-                const printable = (await axios.get(`/api/requisition/stock-replenishment/orders/${data.id}/print`)).data;
-                this.openStockReplenishmentPrint(printable);
-              } catch (error) {
-                printFailed = true;
+                if (data.procurement_mode === "external_purchase") {
+                  const purchaseId = Number(data.external_purchase_orders?.[0]?.id || 0);
+                  if (!purchaseId || !window.open(`/external-purchase-print.html?id=${purchaseId}`, "_blank")) printFailed = true;
+                } else {
+                  const printable = (await axios.get(`/api/requisition/stock-replenishment/orders/${data.id}/print`)).data;
+                  this.openStockReplenishmentPrint(printable);
+                }
+                } catch (error) {
+                  printFailed = true;
               }
               const refreshResults = await Promise.allSettled([this.loadRequisition()]);
               const refreshFailed = refreshResults.some(result =>
@@ -34694,9 +34732,9 @@
                     data._refresh_failed ? "已报料列表刷新失败" : "",
                     data._print_failed ? "打印页未打开" : "",
                   ].filter(Boolean).join("、");
-                  this.showToast(`补库报料草稿已经保存；${details}。请从“已报料/来料待入库”核对，不要重复提交。`, true);
+                  this.showToast(`${data?.procurement_mode==='external_purchase' ? '外购备库采购单' : '补库报料草稿'}已经保存；${details}。请从“包材采购历史/来料待入库”核对，不要重复提交。`, true);
                 } else {
-                  this.showToast("补库报料草稿已保存；到料确认后进入客户专用纸板备料，不增加成品库存");
+                  this.showToast(data?.procurement_mode==='external_purchase' ? "外购备库采购单已生成；收料按常用箱比例累计，凑足一套后自动增加客户专属成品库存" : "补库报料草稿已保存；到料确认后进入客户专用纸板备料，不增加成品库存");
                 }
                 return true;
               }

@@ -12,6 +12,8 @@ from app.models.external_packaging_purchase import (
     ExternalPackagingPurchaseOrder,
     ExternalPackagingReceiptItem,
 )
+from app.models.stock_replenishment import StockReplenishmentOrder
+from app.core.time_contract import utc_now_naive
 
 
 class ExternalPackagingPurchaseLifecycleError(ValueError):
@@ -127,3 +129,82 @@ def cancel_unreceived_external_purchases(
         )
     db.flush()
     return changes
+
+
+def cancel_unreceived_stock_replenishment_purchase(
+    db: Session,
+    *,
+    purchase_order_id: int,
+    expected_batch_id: int,
+    reason: str,
+    cancelled_by: int | None,
+) -> dict:
+    purchase = db.scalar(
+        select(ExternalPackagingPurchaseOrder)
+        .options(selectinload(ExternalPackagingPurchaseOrder.items))
+        .where(ExternalPackagingPurchaseOrder.id == purchase_order_id)
+        .with_for_update(of=ExternalPackagingPurchaseOrder)
+    )
+    if purchase is None or int(purchase.batch_id) != int(expected_batch_id):
+        raise ExternalPackagingPurchaseLifecycleError(
+            "采购记录已变化，请刷新后重新核对"
+        )
+    batch = db.get(ExternalPackagingPurchaseBatch, int(expected_batch_id))
+    if (
+        batch is None
+        or batch.sales_order_id is not None
+        or batch.stock_replenishment_order_id is None
+    ):
+        raise ExternalPackagingPurchaseLifecycleError(
+            "当前采购单不是库存预警外购备库来源"
+        )
+    existing = db.scalar(
+        select(ExternalPackagingPurchaseCancellation.id).where(
+            ExternalPackagingPurchaseCancellation.purchase_order_id == purchase.id
+        )
+    )
+    if existing is not None:
+        raise ExternalPackagingPurchaseLifecycleError("当前采购单已经撤销")
+    received = Decimal(
+        db.scalar(
+            select(func.coalesce(func.sum(ExternalPackagingReceiptItem.received_quantity), 0))
+            .join(
+                ExternalPackagingPurchaseItem,
+                ExternalPackagingPurchaseItem.id
+                == ExternalPackagingReceiptItem.purchase_item_id,
+            )
+            .where(ExternalPackagingPurchaseItem.purchase_order_id == purchase.id)
+        )
+        or 0
+    )
+    if received > 0:
+        raise ExternalPackagingPurchaseLifecycleError(
+            f"外购包材采购单 {purchase.purchase_number} 已有实收，不能撤销；请先处理包材实收。"
+        )
+    replenishment = db.get(
+        StockReplenishmentOrder, int(batch.stock_replenishment_order_id)
+    )
+    if replenishment is None:
+        raise ExternalPackagingPurchaseLifecycleError("库存补库来源不存在")
+    if replenishment.status in {"partially_stocked", "stocked"}:
+        raise ExternalPackagingPurchaseLifecycleError(
+            "库存补库已经形成成品库存，不能撤销采购"
+        )
+    db.add(
+        ExternalPackagingPurchaseCancellation(
+            purchase_order_id=purchase.id,
+            source="manual_purchase_cancel",
+            reason=reason,
+            cancelled_by=cancelled_by,
+        )
+    )
+    replenishment.status = "voided"
+    replenishment.voided_at = utc_now_naive()
+    db.flush()
+    return {
+        "purchase_order_id": int(purchase.id),
+        "purchase_number": purchase.purchase_number,
+        "stock_replenishment_order_id": int(replenishment.id),
+        "stock_replenishment_order_number": replenishment.order_number,
+        "action": "cancel_purchase_and_void_replenishment",
+    }

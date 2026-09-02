@@ -625,11 +625,48 @@ def stock_policy_dict(
             db,
             product=policy.product,
         )
+    external_purchase_incoming_quantity = 0
+    if (
+        policy.target_inventory_type == "finished"
+        and policy.product is not None
+        and policy.product.supply_mode == "external_purchase"
+    ):
+        external_purchase_incoming_quantity = int(
+            db.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(
+                            StockReplenishmentOrderItem.quantity
+                            - StockReplenishmentOrderItem.stocked_quantity
+                        ),
+                        0,
+                    )
+                )
+                .join(
+                    StockReplenishmentOrder,
+                    StockReplenishmentOrder.id
+                    == StockReplenishmentOrderItem.replenishment_order_id,
+                )
+                .where(
+                    StockReplenishmentOrder.source_type == "stock_warning",
+                    StockReplenishmentOrder.status.in_(
+                        ("confirmed", "partially_stocked")
+                    ),
+                    StockReplenishmentOrderItem.stock_policy_id == policy.id,
+                    StockReplenishmentOrderItem.target_inventory_type
+                    == "finished",
+                    StockReplenishmentOrderItem.quantity
+                    > StockReplenishmentOrderItem.stocked_quantity,
+                )
+            )
+            or 0
+        )
     suggested_finished_quantity = max(target - available, 0)
     suggested_new_requisition_finished_quantity = max(
         suggested_finished_quantity
         - int(board_coverage["customer_board_preparation_auto_cover_capacity"])
-        - int(board_coverage["incoming_board_preparation_auto_cover_capacity"]),
+        - int(board_coverage["incoming_board_preparation_auto_cover_capacity"])
+        - external_purchase_incoming_quantity,
         0,
     )
     output_per_sheet = (
@@ -644,6 +681,8 @@ def stock_policy_dict(
     replenishment_state = (
         "purchase_needed"
         if suggested_new_requisition_sheet_quantity > 0
+        else "already_ordered"
+        if external_purchase_incoming_quantity > 0
         else "board_preparation_ready"
         if board_coverage[
             "customer_board_preparation_available_sheet_quantity"
@@ -695,6 +734,9 @@ def stock_policy_dict(
         ),
         "suggested_new_requisition_sheet_quantity": (
             suggested_new_requisition_sheet_quantity
+        ),
+        "external_purchase_incoming_quantity": (
+            external_purchase_incoming_quantity
         ),
         "replenishment_state": replenishment_state,
         "default_location": (
@@ -978,11 +1020,14 @@ def receive_replenishment_item(
         )
         if (
             warning_product is None
-            or box_type_code(warning_product.box_style) != "liner"
+            or (
+                box_type_code(warning_product.box_style) != "liner"
+                and warning_product.supply_mode != "external_purchase"
+            )
         ):
             raise StockReplenishmentError(
                 "库存预警到料只能进入客户通用纸板备料；"
-                "只有衬板可按直接成品进入三楼右区 F34/F12 临时周转位置。"
+                "只有衬板或正式外购包材可按直接成品入库。"
             )
     if item.target_inventory_type == "semi_finished":
         try:
@@ -997,12 +1042,31 @@ def receive_replenishment_item(
         except WarehouseInventoryError as error:
             raise StockReplenishmentError(str(error), error.status_code) from error
     else:
+        target = None
         finished_product = db.get(Product, item.product_id) if item.product_id else None
         if finished_product is not None and box_type_code(finished_product.box_style) == "liner":
             try:
                 destination = automatic_floor3_finished_turnover_location(db)
             except WarehouseInventoryError as error:
                 raise StockReplenishmentError(str(error), error.status_code) from error
+        elif (
+            finished_product is not None
+            and finished_product.supply_mode == "external_purchase"
+        ):
+            try:
+                from app.services.production_workflow import (
+                    ProductionWorkflowError,
+                    _production_direct_finished_target,
+                )
+
+                destination, target = _production_direct_finished_target(
+                    db,
+                    customer_id=(item.customer_id or finished_product.customer_id),
+                )
+            except ProductionWorkflowError as error:
+                raise StockReplenishmentError(
+                    str(error), error.status_code
+                ) from error
         else:
             # Preserve receivability of historical non-liner finished rows only
             # through the explicit destination that was frozen on the row.
@@ -1050,14 +1114,25 @@ def receive_replenishment_item(
         "idempotency_key": (
             f"incoming-replenishment-item-{receipt_item_id}"
             if source_ref_type == "stock_replenishment_receipt"
-            else f"stock-replenishment-item-{item.id}"
+            else (
+                f"stock-replenishment-item-{item.id}"
+                if source_ref_type == "stock_replenishment_item"
+                else f"{source_ref_type}-{receipt_item_id}"
+            )
         ),
         "source_ref_type": source_ref_type,
         "source_ref_id": receipt_item_id,
         "expected_layout_version": (
-            int(destination.floor3_layout.version)
-            if destination.floor3_layout is not None
-            else None
+            int(target.layout_version)
+            if item.target_inventory_type == "finished"
+            and finished_product is not None
+            and finished_product.supply_mode == "external_purchase"
+            and target is not None
+            else (
+                int(destination.floor3_layout.version)
+                if destination.floor3_layout is not None
+                else None
+            )
         ),
     }
     try:

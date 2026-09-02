@@ -35,11 +35,25 @@ class ExternalPackagingPurchaseBatch(Base):
         UniqueConstraint(
             "idempotency_key", name="uq_external_packaging_purchase_batch_key"
         ),
+        CheckConstraint(
+            "((sales_order_id IS NOT NULL AND stock_replenishment_order_id IS NULL) "
+            "OR (sales_order_id IS NULL AND stock_replenishment_order_id IS NOT NULL))",
+            name="ck_external_packaging_purchase_batch_source",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    sales_order_id: Mapped[int] = mapped_column(
-        ForeignKey("sales_orders.id", ondelete="RESTRICT"), nullable=False, index=True
+    sales_order_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_orders.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    stock_replenishment_order_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "stock_replenishment_orders.id",
+            ondelete="RESTRICT",
+            name="fk_external_packaging_purchase_batch_stock_replenishment",
+        ),
+        nullable=True,
+        index=True,
     )
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
     request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -130,6 +144,27 @@ class ExternalPackagingPurchaseItem(Base):
             "order_component_id",
             name="uq_external_packaging_purchase_order_component",
         ),
+        UniqueConstraint(
+            "purchase_order_id",
+            "stock_replenishment_item_id",
+            name="uq_external_packaging_purchase_stock_item",
+        ),
+        CheckConstraint(
+            "((stock_replenishment_item_id IS NULL "
+            "AND sales_order_id IS NOT NULL "
+            "AND sales_order_item_id IS NOT NULL "
+            "AND order_component_id IS NOT NULL "
+            "AND order_candidate_id IS NOT NULL) "
+            "OR (stock_replenishment_item_id IS NOT NULL "
+            "AND sales_order_id IS NULL "
+            "AND sales_order_item_id IS NULL "
+            "AND order_component_id IS NULL "
+            "AND order_candidate_id IS NULL "
+            "AND customer_product_id_snapshot IS NOT NULL "
+            "AND order_quantity_basis_snapshot > 0 "
+            "AND purchase_quantity_basis_snapshot > 0))",
+            name="ck_external_packaging_purchase_item_source",
+        ),
         CheckConstraint(
             "purchase_quantity > 0", name="ck_external_packaging_purchase_item_qty"
         ),
@@ -164,21 +199,44 @@ class ExternalPackagingPurchaseItem(Base):
         nullable=False,
         index=True,
     )
-    sales_order_id: Mapped[int] = mapped_column(
-        ForeignKey("sales_orders.id", ondelete="RESTRICT"), nullable=False, index=True
+    sales_order_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_orders.id", ondelete="RESTRICT"), nullable=True, index=True
     )
-    sales_order_item_id: Mapped[int] = mapped_column(
-        ForeignKey("sales_order_items.id", ondelete="RESTRICT"), nullable=False
+    sales_order_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sales_order_items.id", ondelete="RESTRICT"), nullable=True
     )
-    order_component_id: Mapped[int] = mapped_column(
+    order_component_id: Mapped[int | None] = mapped_column(
         ForeignKey("sales_order_item_external_components.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
-    order_candidate_id: Mapped[int] = mapped_column(
+    order_candidate_id: Mapped[int | None] = mapped_column(
         ForeignKey(
             "sales_order_item_external_component_candidates.id", ondelete="RESTRICT"
         ),
-        nullable=False,
+        nullable=True,
+    )
+    stock_replenishment_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "stock_replenishment_order_items.id",
+            ondelete="RESTRICT",
+            name="fk_external_packaging_purchase_item_stock_replenishment",
+        ),
+        nullable=True,
+        index=True,
+    )
+    customer_product_id_snapshot: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "products.id",
+            ondelete="RESTRICT",
+            name="fk_external_packaging_purchase_item_customer_product",
+        ),
+        nullable=True,
+    )
+    order_quantity_basis_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6), nullable=True
+    )
+    purchase_quantity_basis_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6), nullable=True
     )
     purpose_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
     category_code_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -351,6 +409,10 @@ class ExternalPackagingReceiptItem(Base):
             "received_quantity > 0",
             name="ck_external_packaging_receipt_item_quantity",
         ),
+        CheckConstraint(
+            "converted_finished_quantity >= 0 AND loose_remainder_quantity_after >= 0",
+            name="ck_external_packaging_receipt_item_conversion",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -368,5 +430,11 @@ class ExternalPackagingReceiptItem(Base):
         Numeric(18, 6), nullable=False
     )
     purchase_unit_snapshot: Mapped[str] = mapped_column(String(20), nullable=False)
+    converted_finished_quantity: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    loose_remainder_quantity_after: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6), nullable=False, default=0, server_default="0"
+    )
 
     receipt: Mapped[ExternalPackagingReceipt] = relationship(back_populates="items")

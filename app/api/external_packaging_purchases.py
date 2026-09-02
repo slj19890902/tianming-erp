@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,11 @@ from app.api.deps import (
 )
 from app.models.customer import Customer
 from app.models.order import Order
+from app.models.external_packaging_purchase import (
+    ExternalPackagingPurchaseBatch,
+    ExternalPackagingPurchaseOrder,
+)
+from app.models.stock_replenishment import StockReplenishmentOrder
 from app.models.user import User
 from app.services.audit_log import append_audit_event
 from app.services.external_packaging_purchase import (
@@ -32,6 +38,7 @@ from app.services.external_packaging_purchase import (
 )
 from app.services.external_packaging_purchase_lifecycle import (
     ExternalPackagingPurchaseLifecycleError,
+    cancel_unreceived_stock_replenishment_purchase,
     cancel_unreceived_external_purchases,
 )
 from app.services.external_packaging_receiving import (
@@ -161,6 +168,11 @@ def receive_external_packaging_purchase(
             visible_customer_ids=visible_ids,
         )
         if created:
+            receipt_payload = serialize_external_receipt(receipt)
+            converted_finished_quantity = sum(
+                int(row.get("converted_finished_quantity") or 0)
+                for row in receipt_payload["items"]
+            )
             append_audit_event(
                 db,
                 event_category="business",
@@ -181,8 +193,18 @@ def receive_external_packaging_purchase(
                     "line_count": len(lines),
                     "original_units_preserved": True,
                     "prices_redacted": True,
-                    "no_inventory_created": True,
-                    "no_location_required": True,
+                    "converted_finished_quantity": converted_finished_quantity,
+                    "no_inventory_created": converted_finished_quantity == 0,
+                    "loose_external_units_preserved": any(
+                        Decimal(
+                            str(
+                                row.get("loose_remainder_quantity_after")
+                                or "0"
+                            )
+                        )
+                        > 0
+                        for row in receipt_payload["items"]
+                    ),
                 },
             )
             db.commit()
@@ -366,6 +388,90 @@ def cancel_external_packaging_purchase(
             "changes": changes,
             "preview": build_external_purchase_preview(db, order_id),
         }
+    except ExternalPackagingPurchaseLifecycleError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except HTTPException:
+        db.rollback()
+        raise
+    except (IntegrityError, OperationalError) as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="采购撤销发生并发冲突，请刷新后重新核对",
+        ) from error
+
+
+@router.post("/external-packaging-purchases/{purchase_order_id}/cancel")
+def cancel_external_stock_replenishment_purchase(
+    purchase_order_id: int,
+    payload: ExternalPurchaseCancelPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+    _cost_user: User = Depends(can_cost),
+) -> dict[str, Any]:
+    try:
+        source = db.execute(
+            select(
+                ExternalPackagingPurchaseBatch,
+                StockReplenishmentOrder,
+            )
+            .join(
+                ExternalPackagingPurchaseOrder,
+                ExternalPackagingPurchaseOrder.batch_id
+                == ExternalPackagingPurchaseBatch.id,
+            )
+            .join(
+                StockReplenishmentOrder,
+                StockReplenishmentOrder.id
+                == ExternalPackagingPurchaseBatch.stock_replenishment_order_id,
+            )
+            .where(
+                ExternalPackagingPurchaseOrder.id == purchase_order_id,
+                ExternalPackagingPurchaseBatch.id == payload.expected_batch_id,
+            )
+        ).first()
+        if source is None:
+            raise HTTPException(
+                status_code=404, detail="库存预警外购采购单不存在"
+            )
+        batch, replenishment = source
+        visible_ids = _visible_customer_ids(user, db)
+        if (
+            visible_ids is not None
+            and replenishment.customer_id not in visible_ids
+        ):
+            raise HTTPException(status_code=403, detail="无权撤销该客户的外购备库")
+        change = cancel_unreceived_stock_replenishment_purchase(
+            db,
+            purchase_order_id=purchase_order_id,
+            expected_batch_id=payload.expected_batch_id,
+            reason=payload.reason,
+            cancelled_by=user.id,
+        )
+        append_audit_event(
+            db,
+            event_category="business",
+            result="success",
+            source="web",
+            module_code="external_packaging_purchase",
+            action_code="external_packaging.stock_purchase.cancel",
+            resource="ExternalPackagingPurchaseBatch",
+            legacy_action="CANCEL_STOCK_PURCHASE",
+            actor=user,
+            entity_type="external_packaging_purchase_batch",
+            entity_id=batch.id,
+            object_ref=replenishment.order_number,
+            customer_id=replenishment.customer_id,
+            description="撤销未实收的库存预警外购包材采购",
+            details={
+                "reason": payload.reason,
+                "change": change,
+                "history_preserved": True,
+            },
+        )
+        db.commit()
+        return {"cancelled": True, "change": change}
     except ExternalPackagingPurchaseLifecycleError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(error)) from error

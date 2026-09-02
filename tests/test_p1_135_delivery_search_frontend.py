@@ -25,10 +25,11 @@ def test_detailed_search_is_collapsed_and_keeps_three_fields() -> None:
     page = _delivery_page()
     assert "deliveryListFilterVisible" in page
     assert "详细筛选" in page
+    assert 'v-model="deliveryListFilters.customer_id"' in page
     assert 'v-model.trim="deliveryDetailedFilters.customer_po"' in page
     assert 'v-model.trim="deliveryDetailedFilters.product_code"' in page
     assert 'v-model.trim="deliveryDetailedFilters.product_name"' in page
-    assert "清空全部" in page
+    assert 'click="clearDeliveryDetailedFilters">清空详细条件' in page
     assert ':filter-count="deliveryListFilterCount"' in page
 
 

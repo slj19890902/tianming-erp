@@ -52,6 +52,7 @@ def test_filterbar_keeps_compact_search_and_pager_while_details_are_explicit() -
     )
     advanced = toolbar[advanced_start:]
     advanced_markers = [
+        "deliveryListFilters.customer_id",
         "deliveryListFilters.date_from",
         "deliveryListFilters.date_to",
         "deliveryListFilters.status",
@@ -60,7 +61,7 @@ def test_filterbar_keeps_compact_search_and_pager_while_details_are_explicit() -
         "deliveryDetailedFilters.product_code",
         "deliveryDetailedFilters.product_name",
         ">查询详细条件<",
-        ">清空全部<",
+        ">清空详细条件<",
     ]
     positions = [advanced.index(marker) for marker in advanced_markers]
     assert positions == sorted(positions)

@@ -519,13 +519,37 @@
       }
       .delivery-list-pager { flex:0 0 auto; margin-left:auto; padding:3px 0 3px 6px; border:0; background:transparent; }
       .delivery-detailed-filterbar {
-        display:flex; align-items:flex-end; gap:7px; flex-wrap:nowrap;
+        position:relative; z-index:12; overflow:visible;
+        display:grid; align-items:end; gap:7px;
+        grid-template-columns:
+          minmax(170px, 1.1fr)
+          repeat(2, minmax(125px, .75fr))
+          repeat(2, minmax(118px, .7fr))
+          repeat(3, minmax(140px, 1fr))
+          max-content;
         margin:0 0 8px; padding:9px 10px; border:1px solid var(--line);
         border-radius:10px; background:var(--panel);
       }
-      .delivery-detailed-filterbar .field { margin:0; min-width:0; flex:1 1 0; }
+      .delivery-detailed-filterbar > .input,
+      .delivery-detailed-filterbar > .select,
+      .delivery-detailed-filterbar .field { width:100%; min-width:0; }
+      .delivery-detailed-filterbar > .select { position:relative; z-index:1; }
+      .delivery-detailed-filterbar > .select:focus { z-index:2; }
+      .delivery-detailed-filterbar .field { margin:0; }
       .delivery-detailed-filterbar .field label { display:block; margin-bottom:3px; }
       .delivery-detailed-filterbar .input { width:100%; min-width:0; }
+      .delivery-detailed-filterbar .search-select { width:100%; min-width:0; }
+      .delivery-detailed-filterbar .search-select:focus-within { z-index:300; }
+      .delivery-detailed-filterbar .search-select-list {
+        left:0; right:auto; width:max(100%, 260px); z-index:500;
+      }
+      .delivery-detailed-filter-actions {
+        display:flex; align-items:center; justify-content:flex-end; gap:7px;
+        min-width:max-content; justify-self:end;
+      }
+      .delivery-detailed-filter-actions .btn {
+        flex:0 0 auto; white-space:nowrap;
+      }
       .delivery-search-match-summary { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
       .delivery-search-match-summary .status { white-space:normal; overflow-wrap:anywhere; }
       .delivery-search-hit {
@@ -570,8 +594,20 @@
         .ui-large .delivery-list-table .delivery-list-actions .btn.small {
           padding-left: 8px; padding-right: 8px; line-height: 1.3;
         }
-        .delivery-detailed-filterbar { flex-wrap:wrap; }
-        .delivery-detailed-filterbar .field { flex:1 1 220px; }
+        .delivery-detailed-filterbar {
+          grid-template-columns:repeat(5, minmax(140px, 1fr));
+        }
+      }
+      .ui-large .delivery-detailed-filterbar {
+        grid-template-columns:repeat(5, minmax(140px, 1fr));
+      }
+      @media (max-width: 900px) {
+        .delivery-detailed-filterbar { grid-template-columns:repeat(2, minmax(150px, 1fr)); }
+      }
+      @media (max-width: 560px) {
+        .delivery-detailed-filterbar { grid-template-columns:minmax(0, 1fr); }
+        .delivery-detailed-filter-actions { width:100%; min-width:0; justify-self:stretch; }
+        .delivery-detailed-filter-actions .btn { flex:1 1 0; white-space:normal; }
       }
       .finance-current-table { table-layout: fixed; white-space: normal; }
       .finance-current-table th,
@@ -4696,6 +4732,7 @@
                 <pager :page="pages.deliveries" :total="deliveriesTotal" :page-size="deliveryListPageSize()" :always="true" :compact="true" :filter-count="deliveryListFilterCount" @change="pages.deliveries=$event; loadDeliveries()"></pager>
               </div>
               <div v-if="deliveryListFilterVisible" class="delivery-detailed-filterbar delivery-advanced-filters">
+                <div class="field delivery-detailed-customer-filter"><label>客户</label><search-select v-model="deliveryListFilters.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="全部客户" :allow-empty="true" @change="pages.deliveries=1; loadDeliveries()"></search-select></div>
                 <input class="input delivery-date-input" type="date" v-model="deliveryListFilters.date_from" aria-label="送货开始日期" @change="pages.deliveries=1; loadDeliveries()" />
                 <input class="input delivery-date-input" type="date" v-model="deliveryListFilters.date_to" aria-label="送货结束日期" @change="pages.deliveries=1; loadDeliveries()" />
                 <select class="select delivery-status-select" v-model="deliveryListFilters.status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部送货状态</option><option value="pending">草稿</option><option value="dispatched">已发货</option><option value="voided">已作废</option></select>
@@ -4703,8 +4740,10 @@
                 <div class="field"><label>客户订单号</label><input class="input" v-model.trim="deliveryDetailedFilters.customer_po" placeholder="输入客户订单号" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="deliveryDetailedFilters.product_code" placeholder="输入存货编码" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="deliveryDetailedFilters.product_name" placeholder="输入产品名称" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
-                <button class="btn primary" type="button" @click="applyDeliveryDetailedFilters">查询详细条件</button>
-                <button class="btn" type="button" @click="resetDeliveryListFilters()">清空全部</button>
+                <div class="delivery-detailed-filter-actions">
+                  <button class="btn primary" type="button" @click="applyDeliveryDetailedFilters">查询详细条件</button>
+                  <button class="btn" type="button" @click="clearDeliveryDetailedFilters">清空详细条件</button>
+                </div>
               </div>
               <div v-if="deliveryListState.initialLoading" class="panel delivery-list-panel empty">正在加载送货单</div>
               <div v-else-if="deliveryListState.error && !deliveries.length" class="panel delivery-list-panel empty">送货单加载失败：{{ deliveryListState.error }} <button class="btn small" @click="loadDeliveries">重试</button></div>

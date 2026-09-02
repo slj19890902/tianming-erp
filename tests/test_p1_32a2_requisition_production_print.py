@@ -886,9 +886,9 @@ def test_print_page_and_erp_entry_use_one_layout_for_plan_and_receipt_phases():
         ".task-card.printing-heavy .production-key-value,\n    .task-card.printing-heavy .detail-row.production-key-fact .value { font-size:9.5pt;"
         in print_html
     )
-    assert 'detailRow("压线尺寸", crease, "production-key-fact")' in print_html
+    assert 'detailRow("压线尺寸", fit(crease), "production-key-fact")' in print_html
     assert (
-        'detailRow("结合方式", card.joining_method || "无需结合", "production-key-fact")'
+        'detailRow("结合方式", fit(card.joining_method || "无需结合"), "production-key-fact")'
         in print_html
     )
     assert 'detailRow("是否粘贴", "不需要 / 待确认")' not in print_html
@@ -896,14 +896,15 @@ def test_print_page_and_erp_entry_use_one_layout_for_plan_and_receipt_phases():
     liner_layout = print_html.split('if (card.layout_kind === "liner") {', 1)[1].split(
         'if (card.layout_kind === "die_cut") {', 1
     )[0]
-    assert 'detailRow("开料方式", cutting)' in liner_layout
+    assert 'detailRow("开料方式", fit(cutting))' in liner_layout
     assert "drawingReferenceText(card)" in print_html
-    assert "图号 / 图纸版本" in print_html
+    assert "有图纸，扫码查看" in print_html
     assert 'class="structure-body"' not in print_html
     assert '<object data="${escapeHtml(drawing.url)}"' not in print_html
     assert "请核对后再打印" in print_html
     assert "card.scrollHeight > card.clientHeight + 1" in print_html
-    assert "任务内容超过页面容量，已停止打印" in print_html
+    assert "任务内容超过页面容量，已停止打印" not in print_html
+    assert "function renderPages(packageData, ultraKeys = new Set())" in print_html
     assert 'credentials:"include"' in print_html
     assert 'cache:"no-store"' in print_html
     assert "customer-safe" in print_html
@@ -1002,8 +1003,8 @@ def test_p1_67_task_sheet_prioritizes_identity_fields_and_process_order() -> Non
     card = source[source.index("function cardHtml"):source.index("function applyMode")]
     assert card.index("<span>存货编码</span>") < card.index("<span>产品名称</span>")
     strip = card[card.index('<div class="product-strip">'):]
-    assert strip.index("成品内尺寸") < strip.index("图号 / 图纸版本")
-    assert strip.index("图号 / 图纸版本") < strip.index("<span class=\"field-label\">交期")
+    assert strip.index("成品内尺寸") < strip.index("<span class=\"field-label\">图纸")
+    assert strip.index("<span class=\"field-label\">图纸") < strip.index("<span class=\"field-label\">交期")
     facts = source[source.index("function orderFactsHtml"):source.index("function productionNotesHtml")]
     assert facts.index("客户订单号") < facts.index("订单数量")
     assert facts.index("订单数量") < facts.index("库存抵扣")
@@ -1016,8 +1017,8 @@ def test_p1_67_task_sheet_prioritizes_identity_fields_and_process_order() -> Non
     assert process_steps.index('add("模具")') < process_steps.index('add("印刷")')
     assert process_steps.index('add("印刷")') < process_steps.index('add("粘贴")')
     process_details = source[source.index("function processDetailsHtml"):source.index("function cardHtml")]
-    assert process_details.index("moldHtml(card)") < process_details.index("printingHtml(card)")
-    assert process_details.index("printingHtml(card)") < process_details.index("joiningHtml(card)")
+    assert process_details.index("moldHtml(card, fitLevel)") < process_details.index("printingHtml(card, fitLevel)")
+    assert process_details.index("printingHtml(card, fitLevel)") < process_details.index("joiningHtml(card, fitLevel)")
     assert "模具名称与现场位置" in source
     assert "扫描模具上的固定二维码" in source
     assert "扫码不会自动开工" in source

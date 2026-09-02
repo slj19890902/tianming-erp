@@ -27,14 +27,14 @@ def test_receipt_card_keeps_packaging_label_entry_and_uses_supplier_order_id() -
     assert "packageData.review_required === true" not in TASK_PRINT
 
 
-def test_a4_layout_overflow_does_not_block_independent_packaging_labels() -> None:
+def test_a4_layout_adaptation_keeps_independent_packaging_labels_available() -> None:
     render_start = TASK_PRINT.index("async function render(packageData)")
     label_actions = TASK_PRINT.index(
         "applyProductionLabelActions(packageData)",
         render_start,
     )
     qr_wait = TASK_PRINT.index("await waitForProductQrImages()", render_start)
-    overflow_gate = TASK_PRINT.index("if (overflowingCards.length)", render_start)
+    overflow_gate = TASK_PRINT.index("const initialOverflow = overflowingCards()", render_start)
     helper_start = TASK_PRINT.index("function applyProductionLabelActions(packageData)")
     helper_end = TASK_PRINT.index("async function waitForProductQrImages()", helper_start)
     label_count = TASK_PRINT.index(
@@ -53,6 +53,7 @@ def test_a4_layout_overflow_does_not_block_independent_packaging_labels() -> Non
     assert label_count < label_gate < helper_end
     assert refresh_gate < helper_end
     assert label_actions < qr_wait < overflow_gate
+    assert "printButton.disabled = true;\n          return;" not in TASK_PRINT[overflow_gate:]
 
 
 def test_existing_v1_labels_offer_only_the_explicit_compact_upgrade(tmp_path: Path) -> None:

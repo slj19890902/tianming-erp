@@ -838,6 +838,16 @@ expect(mobileLines({{printing_situation:'无印刷',printing_plate_mode:'no_plat
 const html=printingHtml({{components:[plate]}},printingComponentHtml);
 expect(['printing-block','printing-plate-line','第1色','第2色','第3色','颜色：专红','挂板编号：PL-001','挂板内容：'+longPlate,'当前位置','机器设定'].every(value=>html.includes(value)),'black-white text contract incomplete');
 expect(html.includes('internal-only'),'internal facts were not marked sensitive');
+globalThis.escapeHtml=escapeHtml;
+globalThis.detailRow=detailRow;
+globalThis.numberText=numberText;
+globalThis.paperText=(value,limit=48)=>{{const text=String(value??'-').trim()||'-';const chars=Array.from(text);return chars.length>limit?`${{chars.slice(0,limit).join('')}}…扫码查看`:text;}};
+globalThis.paperList=(values,limit,fitLevel)=>fitLevel==='ultra'?paperText(Array.isArray(values)&&values.length?values.map(String).join(' / '):'-',limit):(Array.isArray(values)&&values.length?values.map(String).join(' / '):'-');
+const compactPrintingComponentHtml=new Function('component','componentIndex','componentCount','mode',{json.dumps(component_body, ensure_ascii=False)});
+const compactHtml=compactPrintingComponentHtml(plate,0,1,'ultra');
+expect(compactHtml.includes('第1色 专红 / PL-001'),'compact plate identity missing');
+expect(compactHtml.includes('明细扫码查看'),'compact plate route missing');
+expect(!compactHtml.includes(longPlate),'compact paper leaked unbounded plate content');
 expect(cardNeedsCompactLayout({{components:[plate]}})===true,'three-plate card did not receive compact half-page styling');
 expect(cardNeedsCompactLayout({{components:[{{printing_situation:'单色印刷',printing_plate_mode:'no_plate',printing_colors_frozen:true,printing_colors:['黑色']}}]}})===false,'simple direct-print card was over-compacted');
 const mixed={{components:[{{printing_situation:'单色印刷',printing_plate_mode:'no_plate',printing_colors_frozen:true,printing_colors:['黑色']}},plate]}};

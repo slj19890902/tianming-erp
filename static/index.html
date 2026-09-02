@@ -26751,34 +26751,47 @@
               this.reportedItemPrintErrors = incomplete;
               return false;
             }
-            if (!confirm(`确认核验并打开 ${groups.size} 个产品标签页？\n\n子件交付按所选子件分别打印；父件交付必须整组核验后按父件标签策略打印。不可打印时对应单据整体停止。`)) return false;
+            const unifiedSupplierBatch = groups.size > 1 && [...groups.values()].every(group => group.source_type === "supplier_order");
+            const pageCount = unifiedSupplierBatch ? 1 : groups.size;
+            if (!confirm(`确认核验并打开 ${pageCount} 个产品标签页？\n\n跨报料单的纸箱标签会汇总到同一页面、一次打印；任何所选产品没有有效标签配置时整批停止并明确提示。`)) return false;
             const authGeneration = this.authGeneration;
             const userId = this.user?.id ?? null;
-            const windows = [...groups.keys()].map(() => {
+            const windows = Array.from({length:pageCount}, () => {
               try { const opened=window.open("about:blank","_blank"); if(opened) opened.opener=null; return opened; } catch(_error) { return null; }
             });
             this.reportedItemPrintBusy = true;
             try {
-              const packages = await Promise.all([...groups.values()].map(async group => {
-                const itemIds = group.rows.map(row => Number(row.item_id)).sort((a,b) => a-b);
-                const url = group.source_type === "supplier_order"
-                  ? `/api/requisition/supplier-orders/${group.document_id}/production-packaging-label-package`
-                  : `/api/requisition/batches/${group.document_id}/production-packaging-label-package?item_ids=${encodeURIComponent(itemIds.join(","))}`;
-                const {data}=await axios.get(url);
-                return {group,itemIds,data};
-              }));
+              const supplierBatchIds = unifiedSupplierBatch
+                ? [...groups.values()].map(group => Number(group.document_id)).sort((a,b) => a-b)
+                : [];
+              const packages = unifiedSupplierBatch
+                ? [await (async() => {
+                    const {data}=await axios.get(`/api/requisition/supplier-order-label-batches/package?order_ids=${encodeURIComponent(supplierBatchIds.join(","))}`);
+                    return {group:null,itemIds:[],data};
+                  })()]
+                : await Promise.all([...groups.values()].map(async group => {
+                    const itemIds = group.rows.map(row => Number(row.item_id)).sort((a,b) => a-b);
+                    const url = group.source_type === "supplier_order"
+                      ? `/api/requisition/supplier-orders/${group.document_id}/production-packaging-label-package`
+                      : `/api/requisition/batches/${group.document_id}/production-packaging-label-package?item_ids=${encodeURIComponent(itemIds.join(","))}`;
+                    const {data}=await axios.get(url);
+                    return {group,itemIds,data};
+                  }));
               if (this.authGeneration !== authGeneration || (this.user?.id ?? null) !== userId || this.activePage !== "requisition" || this.requisitionTab !== "submitted") {
                 windows.forEach(opened => { try { opened?.close(); } catch(_error) {} });
                 return false;
               }
               const recovery = [];
               packages.forEach(({group,itemIds},index) => {
-                const url=group.source_type === "supplier_order"
-                  ? `/production-packaging-label.html?id=${encodeURIComponent(group.document_id)}`
-                  : `/production-packaging-label.html?batch_id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent(itemIds.join(","))}`;
+                const url=unifiedSupplierBatch
+                  ? `/production-packaging-label.html?ids=${encodeURIComponent(supplierBatchIds.join(","))}`
+                  : group.source_type === "supplier_order"
+                    ? `/production-packaging-label.html?id=${encodeURIComponent(group.document_id)}`
+                    : `/production-packaging-label.html?batch_id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent(itemIds.join(","))}`;
                 const opened=windows[index];
-                if (opened) { try { opened.location.href=url; } catch(_error) { recovery.push({url,document_number:group.document_number}); } }
-                else recovery.push({url,document_number:group.document_number});
+                const documentNumber = unifiedSupplierBatch ? `${supplierBatchIds.length} 张报料单` : group.document_number;
+                if (opened) { try { opened.location.href=url; } catch(_error) { recovery.push({url,document_number:documentNumber}); } }
+                else recovery.push({url,document_number:documentNumber});
               });
               this.reportedLabelRecoveryUrls = recovery;
               this.showToast(`已核验并打开 ${packages.length} 个产品标签页`);

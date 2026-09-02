@@ -196,6 +196,11 @@ def test_print_page_exposes_per_task_counts_shortcuts_and_frozen_summary() -> No
         'method:"POST"',
         "plan_fingerprint:fingerprint",
         "items,",
+        'params.get("ids")',
+        "/api/requisition/supplier-order-label-batches/package?order_ids=",
+        "/api/requisition/supplier-order-label-batches/production-packaging-label-jobs",
+        "/api/requisition/supplier-order-label-batches/confirm",
+        "job_ids:jobIds",
     ):
         assert marker in PAGE
 
@@ -219,7 +224,6 @@ def test_api_freezes_reduced_count_replays_exactly_and_never_changes_task(
             before.production_label_units_per_label_snapshot,
             before.production_label_count_snapshot,
         )
-
     with TestClient(fixture["app"]) as client:
         _login(client, "p132a2-admin")
         preview = client.get(
@@ -286,6 +290,155 @@ def test_api_freezes_reduced_count_replays_exactly_and_never_changes_task(
             after.production_label_count_snapshot,
         ) == before_snapshot
         assert db.scalar(select(func.count(ProductionPackagingLabelPrintJob.id))) == 1
+
+
+def test_supplier_label_preview_names_disabled_product_instead_of_silently_skipping(
+    production_print_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+
+    fixture = production_print_app
+    task_id, _task_version, _product_version = _enable_one_frozen_plan(fixture)
+    with fixture["session_factory"]() as db:
+        task = db.get(ProductionTask, task_id)
+        assert task is not None
+        item = db.get(OrderItem, task.order_item_id)
+        assert item is not None
+        product = db.get(Product, item.product_id)
+        assert product is not None
+        product.production_label_enabled = False
+        product.production_label_units_per_label = None
+        db.commit()
+
+    with TestClient(fixture["app"]) as client:
+        _login(client, "p132a2-admin")
+        response = client.get(
+            "/api/requisition/supplier-order-label-batches/package"
+            f"?order_ids={fixture['supplier_order_id']}"
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "production_label_batch_review_required"
+    assert any("P132A2" in reason for reason in detail["reasons"]), detail
+    assert any("常用箱未启用打印标签" in reason for reason in detail["reasons"])
+
+
+def test_supplier_label_batch_freezes_two_orders_and_confirms_them_atomically(
+    production_print_app,
+) -> None:
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+    from app.models.production_label_print import ProductionPackagingLabelPrintJob
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    fixture = production_print_app
+    with fixture["session_factory"]() as db:
+        first = db.get(SupplierRequisitionOrder, fixture["supplier_order_id"])
+        assert first is not None
+        second = SupplierRequisitionOrder(
+            order_number="SRO-P183B-BATCH-002",
+            supplier_name=first.supplier_name,
+            material_id=first.material_id,
+            layer_count=first.layer_count,
+            flute_type=first.flute_type,
+            report_length_mm=first.report_length_mm,
+            report_width_mm=first.report_width_mm,
+            total_quantity=first.total_quantity,
+            requisition_qty=first.requisition_qty,
+            stock_deduction_qty=first.stock_deduction_qty,
+            required_piece_qty=first.required_piece_qty,
+            status="confirmed",
+            created_by=first.created_by,
+        )
+        db.add(second)
+        db.flush()
+        for item in sorted(first.items, key=lambda row: row.id)[-2:]:
+            item.supplier_order = second
+
+        product = db.get(Product, fixture["product_id"])
+        assert product is not None
+        product.production_label_enabled = True
+        product.production_label_units_per_label = 5
+        for index, task in enumerate(
+            db.scalars(select(ProductionTask).order_by(ProductionTask.id)), start=1
+        ):
+            task.production_label_enabled_snapshot = True
+            task.production_label_units_per_label_snapshot = 5
+            task.production_label_total_quantity_snapshot = 10 + index
+            task.production_label_count_snapshot = 3
+            task.production_label_template_version_snapshot = "current_40x30_v2"
+            task.production_label_product_version_snapshot = int(product.version)
+        db.commit()
+        second_id = int(second.id)
+
+    order_ids = sorted([fixture["supplier_order_id"], second_id])
+    with TestClient(fixture["app"]) as client:
+        _login(client, "p132a2-admin")
+        preview = client.get(
+            "/api/requisition/supplier-order-label-batches/package",
+            params={"order_ids": ",".join(str(value) for value in order_ids)},
+        )
+        assert preview.status_code == 200, preview.text
+        package = preview.json()
+        assert package["supplier_order_ids"] == order_ids
+        assert len(package["plans"]) >= 2
+
+        payload = {
+            "idempotency_key": "p1-83b-two-supplier-orders",
+            "plan_fingerprint": package["plan_fingerprint"],
+            "confirmed": True,
+            "order_ids": order_ids,
+            "items": [
+                {
+                    "production_task_id": int(plan["production_task_id"]),
+                    "print_label_count": 1,
+                }
+                for plan in package["plans"]
+            ],
+        }
+        prepared = client.post(
+            "/api/requisition/supplier-order-label-batches/production-packaging-label-jobs",
+            json=payload,
+        )
+        assert prepared.status_code == 200, prepared.text
+        prepared_payload = prepared.json()
+        assert len(prepared_payload["jobs"]) == 2
+        assert prepared_payload["package"]["label_count"] == len(package["plans"])
+        job_ids = sorted(int(row["job_id"]) for row in prepared_payload["jobs"])
+
+        replay = client.post(
+            "/api/requisition/supplier-order-label-batches/production-packaging-label-jobs",
+            json=payload,
+        )
+        assert replay.status_code == 200, replay.text
+        assert sorted(int(row["job_id"]) for row in replay.json()["jobs"]) == job_ids
+        assert replay.json()["replayed"] is True
+
+        confirmation = {
+            "idempotency_key": "p1-83b-two-supplier-orders-confirmed",
+            "confirmed": True,
+            "job_ids": job_ids,
+        }
+        confirmed = client.post(
+            "/api/requisition/supplier-order-label-batches/confirm",
+            json=confirmation,
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        assert {row["status"] for row in confirmed.json()["jobs"]} == {"printed"}
+
+    with fixture["session_factory"]() as db:
+        jobs = list(
+            db.scalars(
+                select(ProductionPackagingLabelPrintJob).where(
+                    ProductionPackagingLabelPrintJob.id.in_(job_ids)
+                )
+            )
+        )
+        assert len(jobs) == 2
+        assert {job.status for job in jobs} == {"printed"}
 
 
 def test_composite_parent_label_job_uses_same_count_freeze_and_keeps_evidence(

@@ -644,6 +644,7 @@ def build_supplier_requisition_packaging_label_package(
     }
 
     plans: list[dict] = []
+    excluded_items: list[dict] = []
     template_versions: set[str] = set()
     # An explicitly refreshed label snapshot is allowed to be newer than the
     # requisition card.  That production-card warning must not make the frozen
@@ -654,9 +655,36 @@ def build_supplier_requisition_packaging_label_package(
         if str(message) != "生产任务版本已变化，请核对并重打"
     ]
     for task_id in sorted(task_sources):
+        card, component = task_sources[task_id]
+        product_code = str(
+            component.get("product_code") or card.get("product_code") or ""
+        ).strip()
+        product_name = str(
+            component.get("product_name") or card.get("product_name") or ""
+        ).strip()
+
+        def exclude(
+            reason: str,
+            *,
+            product_id: int | None = None,
+            blocks_single_order: bool = False,
+        ) -> None:
+            excluded_items.append(
+                {
+                    "production_task_id": task_id,
+                    "product_id": product_id,
+                    "product_code": product_code or None,
+                    "product_name": product_name or None,
+                    "reason": reason,
+                }
+            )
+            if blocks_single_order:
+                identity = product_code or product_name or f"生产任务 #{task_id}"
+                package_review_messages.append(f"{identity}：{reason}")
+
         task = tasks.get(task_id)
         if task is None:
-            package_review_messages.append(f"生产任务 #{task_id} 不存在，请核对")
+            exclude("对应生产任务不存在，请核对", blocks_single_order=True)
             continue
         item = db.get(OrderItem, task.order_item_id)
         component_snapshot = (
@@ -676,11 +704,17 @@ def build_supplier_requisition_packaging_label_package(
         )
         product = db.get(Product, product_id) if product_id is not None else None
         if product is None:
-            package_review_messages.append(
-                f"生产任务 #{task_id} 没有可回读的常用箱产品，请核对"
+            exclude(
+                "没有可回读的常用箱产品，请核对",
+                product_id=product_id,
+                blocks_single_order=True,
             )
             continue
         if not bool(product.production_label_enabled):
+            exclude(
+                "常用箱未启用打印标签；请在常用箱勾选并保存后，刷新该生产任务的标签计划",
+                product_id=product_id,
+            )
             continue
         if not bool(task.production_label_enabled_snapshot):
             if (
@@ -690,9 +724,16 @@ def build_supplier_requisition_packaging_label_package(
                 and task.production_label_product_version_snapshot
                 == int(product.version)
             ):
-                package_review_messages.append(
-                    f"生产任务 #{task_id} 的当前产品已启用标签策略，"
-                    "但任务快照未启用；请停止打印并核对任务创建链路"
+                exclude(
+                    "当前产品已启用标签策略，但任务快照未启用；"
+                    "请停止打印并核对任务创建链路",
+                    product_id=product_id,
+                    blocks_single_order=True,
+                )
+            else:
+                exclude(
+                    "生产任务标签计划未启用；请按当前常用箱刷新标签计划",
+                    product_id=product_id,
                 )
             continue
 
@@ -715,7 +756,6 @@ def build_supplier_requisition_packaging_label_package(
             )
             continue
 
-        card, component = task_sources[task_id]
         quantities = [
             min(units_per_label, total_quantity - index * units_per_label)
             for index in range(label_count)
@@ -842,9 +882,136 @@ def build_supplier_requisition_packaging_label_package(
         "printable": bool(labels) and not review_messages,
         "plans": plans,
         "labels": labels,
+        "excluded_items": excluded_items,
     }
     if label_layout is not None:
         result["label_layout"] = label_layout
+    return result
+
+
+def combine_supplier_requisition_packaging_label_packages(
+    packages: list[dict],
+) -> dict:
+    """Combine multiple supplier-order plans into one fail-closed print surface.
+
+    Each source order keeps its own fingerprint and later its own immutable print
+    job.  This combined projection exists only so one operator selection opens a
+    single label page and a single printer dialog.
+    """
+
+    if not packages:
+        raise ProductionPackagingLabelError("请选择需要打印标签的供应商报料单")
+    ordered = sorted(packages, key=lambda value: int(value["supplier_order_id"]))
+    order_ids = [int(package["supplier_order_id"]) for package in ordered]
+    if len(order_ids) != len(set(order_ids)):
+        raise ProductionPackagingLabelError("供应商报料单不能重复")
+
+    templates = {
+        str(package.get("template_version") or "").strip()
+        for package in ordered
+        if package.get("template_version")
+    }
+    review_messages: list[str] = []
+    if len(templates) != 1:
+        review_messages.append("所选报料单包含不同纸型的产品标签，请分别打印")
+    template_version = next(iter(templates)) if len(templates) == 1 else None
+
+    plans: list[dict] = []
+    labels: list[dict] = []
+    excluded_items: list[dict] = []
+    print_selection: list[dict] = []
+    source_fingerprints: list[dict] = []
+    layout_payloads: list[dict] = []
+    for package in ordered:
+        order_id = int(package["supplier_order_id"])
+        order_number = package.get("supplier_order_number")
+        source_fingerprints.append(
+            {
+                "supplier_order_id": order_id,
+                "supplier_order_number": order_number,
+                "plan_fingerprint": package.get("plan_fingerprint"),
+            }
+        )
+        for reason in package.get("review_messages") or []:
+            review_messages.append(f"{order_number or order_id}｜{reason}")
+        for item in package.get("excluded_items") or []:
+            identity = item.get("product_code") or item.get("product_name") or "未识别产品"
+            reason = item.get("reason") or "没有有效标签配置"
+            review_messages.append(f"{order_number or order_id}｜{identity}：{reason}")
+        for target, source in (
+            (plans, package.get("plans") or []),
+            (labels, package.get("labels") or []),
+            (excluded_items, package.get("excluded_items") or []),
+            (print_selection, package.get("print_selection") or []),
+        ):
+            for row in source:
+                target.append(
+                    {
+                        **row,
+                        "supplier_order_id": order_id,
+                        "supplier_order_number": order_number,
+                    }
+                )
+        if package.get("label_layout") is not None:
+            layout_payloads.append(package["label_layout"])
+
+    if layout_payloads and any(
+        json.dumps(layout, ensure_ascii=False, sort_keys=True, default=str)
+        != json.dumps(layout_payloads[0], ensure_ascii=False, sort_keys=True, default=str)
+        for layout in layout_payloads[1:]
+    ):
+        review_messages.append("所选报料单读取到不同版本的标签布局，请刷新后重试")
+
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            source_fingerprints,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    messages = list(dict.fromkeys(review_messages))
+    result = {
+        "source_type": "supplier_order_batch",
+        "supplier_order_ids": order_ids,
+        "supplier_order_numbers": [
+            package.get("supplier_order_number") for package in ordered
+        ],
+        "batch_source_fingerprints": source_fingerprints,
+        "status_label": "生产包装标签｜非库存标签",
+        "label_policy_source": "product_master_current",
+        "template_version": template_version,
+        "template_dimensions": (
+            template_dimensions(template_version) if template_version else None
+        ),
+        "plan_fingerprint": fingerprint,
+        "production_task_count": len(plans),
+        "label_count": len(labels),
+        "review_required": bool(messages),
+        "review_messages": messages,
+        "printable": bool(labels) and not messages,
+        "plans": plans,
+        "labels": labels,
+        "excluded_items": excluded_items,
+    }
+    if print_selection:
+        result["print_selection"] = print_selection
+        result["system_label_count"] = sum(
+            int(package.get("system_label_count") or package.get("label_count") or 0)
+            for package in ordered
+        )
+        result["print_summary"] = {
+            "printed_task_count": len(plans),
+            "print_label_count": len(labels),
+            "system_task_count": sum(
+                int(package.get("print_summary", {}).get("system_task_count") or 0)
+                for package in ordered
+            ),
+            "system_label_count": result["system_label_count"],
+        }
+    if layout_payloads:
+        result["label_layout"] = layout_payloads[0]
     return result
 
 

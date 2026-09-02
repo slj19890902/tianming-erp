@@ -278,6 +278,35 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
     _run_node(script, tmp_path, "p1-73d-label-print-selection.js")
 
 
+def test_label_print_opens_one_unified_page_for_multiple_supplier_orders(
+    tmp_path: Path,
+) -> None:
+    body = _method_body("openReportedItemLabels")
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+global.confirm=()=>true;const gets=[];const opened=[];
+global.window={{open(){{const tab={{location:{{href:'about:blank'}},close(){{this.closed=true;}}}};opened.push(tab);return tab;}}}};
+global.axios={{get:async(url)=>{{gets.push(url);return {{data:{{label_count:120}}}};}}}};
+const rows=[
+  {{stable_id:'supplier_order:147:1',source_type:'supplier_order',status:'active',can_print_label:true,active_item_count:1,document_id:147,document_number:'SRO-147',item_id:1,product_code:'A'}},
+  {{stable_id:'supplier_order:148:2',source_type:'supplier_order',status:'active',can_print_label:true,active_item_count:1,document_id:148,document_number:'SRO-148',item_id:2,product_code:'B'}},
+];
+const vm={{reportedItemPrintBusy:false,reportedItemPrintErrors:[],reportedLabelRecoveryUrls:[],authGeneration:1,user:{{id:2}},activePage:'requisition',requisitionTab:'submitted',
+  reportedSelectedItems(){{return rows;}},showToast(){{}},errorMessage(error){{return error.message;}},resetPagePerformanceState(){{throw new Error('unexpected reset');}},
+}};
+vm.openReportedItemLabels=new AsyncFunction({json.dumps(body, ensure_ascii=False)}).bind(vm);
+const expect=(value,message)=>{{if(!value)throw new Error(message);}};
+(async()=>{{
+  expect(await vm.openReportedItemLabels()===true,'multi-order label selection failed');
+  expect(gets.length===1,'multi-order selection did not use one batch preflight');
+  expect(gets[0]==='/api/requisition/supplier-order-label-batches/package?order_ids=147%2C148','wrong batch preflight URL');
+  expect(opened.length===1,'multi-order selection opened more than one tab');
+  expect(opened[0].location.href==='/production-packaging-label.html?ids=147%2C148','wrong unified label page URL');
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "p0-jsd-unified-label-page.js")
+
+
 def test_session_reset_clears_reported_item_selection_detail_and_attempts() -> None:
     reset = _method_body("resetPagePerformanceState")
     for marker in (

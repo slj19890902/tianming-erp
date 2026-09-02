@@ -280,6 +280,12 @@
       const unitsPerLabelHeading = document.getElementById("unitsPerLabelHeading");
       const params = new URLSearchParams(window.location.search);
       const supplierOrderId = Number(params.get("id"));
+      const supplierOrderIds = [...new Set(
+        String(params.get("ids") || "")
+          .split(",")
+          .map((value) => Number(value.trim()))
+          .filter((value) => Number.isInteger(value) && value > 0)
+      )].sort((a, b) => a - b);
       const compositeBatchId = Number(params.get("batch_id"));
       const deliveryId = Number(params.get("delivery_id"));
       const compositeItemIds = [...new Set(
@@ -298,6 +304,7 @@
       let activeController = null;
       let loadedPackage = null;
       let loadedJob = null;
+      let loadedJobs = [];
       let prepareAttempt = null;
       let confirmationAttempt = null;
       let printing = false;
@@ -474,9 +481,17 @@
           printed_at:job.printed_at || root.printed_at || null,
           template_version:templateVersion,
         } : null;
+        const normalizedJobs = Array.isArray(root.jobs) ? root.jobs.map((item) => ({
+          ...item,
+          id:Number(item?.id || item?.job_id || 0),
+          status:String(item?.status || "").trim(),
+          printed_at:item?.printed_at || null,
+          template_version:String(item?.template_version || packageData.template_version || "").trim(),
+        })).filter((item) => positiveInteger(item.id)) : [];
         return {
           packageData:{...packageData, template_version:templateVersion},
           job:normalizedJob,
+          jobs:normalizedJobs,
           latestPrintedJob:root.latest_printed_job || root.latest_print_job || packageData.latest_printed_job || null,
           latestPrintedJobId:Number(root.latest_printed_job_id || packageData.latest_printed_job_id || 0),
         };
@@ -1057,10 +1072,11 @@
         validateRenderedLabels();
         loadedPackage = packageData;
         loadedJob = normalized.job || null;
+        loadedJobs = normalized.jobs?.length ? normalized.jobs : (loadedJob ? [loadedJob] : []);
         updateLatestJobLink(normalized);
         printButton.textContent = Number.isInteger(requestedJobId) && requestedJobId > 0 ? "补打冻结作业" : "打印包装标签";
         printButton.disabled = false;
-        confirmPrintedButton.hidden = !(showPrintConfirmation && isPrepared && loadedJob && !loadedJob.printed_at && loadedJob.status !== "printed");
+        confirmPrintedButton.hidden = !(showPrintConfirmation && isPrepared && loadedJobs.length && loadedJobs.some((job) => !job.printed_at && job.status !== "printed"));
         if (isPrepared && !showPrintConfirmation) {
           const summary = packageData.print_summary;
           showMessage(summary
@@ -1075,6 +1091,7 @@
       function resetView() {
         loadedPackage = null;
         loadedJob = null;
+        loadedJobs = [];
         plannedPackage = null;
         printCounts = new Map();
         printPlanPanel.hidden = true;
@@ -1100,9 +1117,10 @@
         resetView();
         const loadingJob = Number.isInteger(requestedJobId) && requestedJobId > 0;
         const loadingSupplier = Number.isInteger(supplierOrderId) && supplierOrderId > 0;
+        const loadingSupplierBatch = supplierOrderIds.length > 0;
         const loadingComposite = Number.isInteger(compositeBatchId) && compositeBatchId > 0 && compositeItemIds.length > 0;
         const loadingDelivery = Number.isInteger(deliveryId) && deliveryId > 0;
-        const liveSourceCount = [loadingSupplier, loadingComposite, loadingDelivery].filter(Boolean).length;
+        const liveSourceCount = [loadingSupplier, loadingSupplierBatch, loadingComposite, loadingDelivery].filter(Boolean).length;
         if (!loadingJob && liveSourceCount !== 1) {
           showMessage(liveSourceCount > 1 ? "标签实时来源冲突，已停止加载" : "报料单或送货单编号无效", "message error");
           return;
@@ -1112,6 +1130,8 @@
             ? `/api/requisition/production-packaging-label-jobs/${requestedJobId}`
             : loadingDelivery
               ? `/api/deliveries/${deliveryId}/production-packaging-label-package`
+              : loadingSupplierBatch
+                ? `/api/requisition/supplier-order-label-batches/package?order_ids=${encodeURIComponent(supplierOrderIds.join(","))}`
               : loadingComposite
               ? `/api/requisition/batches/${compositeBatchId}/production-packaging-label-package?item_ids=${encodeURIComponent(compositeItemIds.join(","))}`
               : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package`;
@@ -1141,7 +1161,7 @@
               body:JSON.stringify(prepareAttempt.body),
             });
             const normalized = normalizeResponse(payload);
-            if (!normalized.job || !positiveInteger(normalized.job.id)) throw new Error("服务器未返回冻结打印作业编号，已停止打印");
+            if ((!normalized.job || !positiveInteger(normalized.job.id)) && !normalized.jobs?.length) throw new Error("服务器未返回冻结打印作业编号，已停止打印");
             prepareAttempt = null;
             setPrepareAttemptLocked(false);
             return normalized;
@@ -1156,6 +1176,7 @@
         const fingerprint = planFingerprint(loadedPackage);
         if (!fingerprint) throw new Error("标签计划缺少校验指纹，已停止创建打印作业；请重新加载");
         const isDelivery = Number.isInteger(deliveryId) && deliveryId > 0;
+        const isSupplierBatch = supplierOrderIds.length > 0;
         const items = (plannedPackage?.plans || []).map((plan) => isDelivery ? ({
           selection_key:planSelectionKey(plan),
           print_label_count:parsePrintCount(printCounts.get(planSelectionKey(plan)), Number(plan.label_count)),
@@ -1166,6 +1187,8 @@
         if (!items.some((item) => item.print_label_count > 0)) throw new Error("本次未选择需要打印的标签");
         const sourceSignature = isDelivery
           ? `delivery:${deliveryId}`
+          : isSupplierBatch
+            ? `supplier-batch:${supplierOrderIds.join(",")}`
           : Number.isInteger(compositeBatchId) && compositeBatchId > 0
             ? `composite:${compositeBatchId}:${compositeItemIds.join(",")}`
             : `supplier:${supplierOrderId}`;
@@ -1176,6 +1199,8 @@
         const isComposite = Number.isInteger(compositeBatchId) && compositeBatchId > 0;
         const url = isDelivery
           ? `/api/deliveries/${deliveryId}/production-packaging-label-jobs`
+          : isSupplierBatch
+            ? "/api/requisition/supplier-order-label-batches/production-packaging-label-jobs"
           : isComposite
             ? `/api/requisition/batches/${compositeBatchId}/production-packaging-label-jobs`
             : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-jobs`;
@@ -1184,6 +1209,7 @@
           confirmed:true,
           plan_fingerprint:fingerprint,
           items,
+          ...(isSupplierBatch ? {order_ids:supplierOrderIds} : {}),
           ...(isComposite ? {selected_item_ids:compositeItemIds} : {}),
         };
         prepareAttempt.url = url;
@@ -1192,7 +1218,7 @@
         try {
           const payload = await requestJson(url, {method:"POST", body:JSON.stringify(body)});
           const normalized = normalizeResponse(payload);
-          if (!normalized.job || !positiveInteger(normalized.job.id)) throw new Error("服务器未返回冻结打印作业编号，已停止打印");
+          if ((!normalized.job || !positiveInteger(normalized.job.id)) && !normalized.jobs?.length) throw new Error("服务器未返回冻结打印作业编号，已停止打印");
           prepareAttempt = null;
           setPrepareAttemptLocked(false);
           return normalized;
@@ -1214,9 +1240,9 @@
         printButton.disabled = true;
         confirmPrintedButton.hidden = true;
         try {
-          if (!positiveInteger(loadedJob?.id) && !(selectedPrintPackage()?.labels?.length)) throw new Error("本次未选择需要打印的标签");
+          if (!loadedJobs.length && !(selectedPrintPackage()?.labels?.length)) throw new Error("本次未选择需要打印的标签");
           validateRenderedLabels();
-          const hasFrozenJob = positiveInteger(loadedJob?.id);
+          const hasFrozenJob = loadedJobs.length > 0;
           if (!hasFrozenJob) {
             showMessage("正在冻结本次打印作业……");
             const normalized = await preparePrintJob();
@@ -1224,7 +1250,7 @@
           }
           validateRenderedLabels();
           window.print();
-          if (loadedJob?.status === "printed" || loadedJob?.printed_at) {
+          if (loadedJobs.length && loadedJobs.every((job) => job.status === "printed" || job.printed_at)) {
             showMessage("已打开历史作业打印对话框；补打沿用原作业的冻结内容和纸型。", "message");
           } else {
             confirmPrintedButton.hidden = false;
@@ -1236,7 +1262,7 @@
             : `${error?.message || "打印准备失败"}；本次未登记实际打印`, "message error");
         } finally {
           printing = false;
-          printButton.disabled = !loadedPackage || (!positiveInteger(loadedJob?.id) && !(selectedPrintPackage()?.labels?.length));
+          printButton.disabled = !loadedPackage || (!loadedJobs.length && !(selectedPrintPackage()?.labels?.length));
           if (prepareAttempt?.uncertain) {
             printButton.textContent = "重试核对并继续打印";
             setPrepareAttemptLocked(true);
@@ -1248,26 +1274,40 @@
       allZeroButton.addEventListener("click", () => setAllPrintCounts("zero"));
 
       async function confirmPrinted() {
-        const jobId = Number(loadedJob?.id || 0);
-        if (!positiveInteger(jobId) || confirmationAttempt?.submitting) return;
-        const signature = String(jobId);
+        const jobIds = loadedJobs.map((job) => Number(job.id || 0)).filter(positiveInteger).sort((a,b) => a-b);
+        if (!jobIds.length || confirmationAttempt?.submitting) return;
+        const signature = jobIds.join(",");
         if (!confirmationAttempt || confirmationAttempt.signature !== signature) {
           confirmationAttempt = {signature, idempotencyKey:newIdempotencyKey("p150c-label-printed"), submitting:false};
         }
         confirmationAttempt.submitting = true;
         confirmPrintedButton.disabled = true;
         try {
-          await requestJson(`/api/requisition/production-packaging-label-jobs/${jobId}/confirm`, {
+          const isSupplierBatch = supplierOrderIds.length > 0 && jobIds.length > 0;
+          const url = isSupplierBatch
+            ? "/api/requisition/supplier-order-label-batches/confirm"
+            : `/api/requisition/production-packaging-label-jobs/${jobIds[0]}/confirm`;
+          await requestJson(url, {
             method:"POST",
-            body:JSON.stringify({idempotency_key:confirmationAttempt.idempotencyKey, confirmed:true}),
+            body:JSON.stringify({
+              idempotency_key:confirmationAttempt.idempotencyKey,
+              confirmed:true,
+              ...(isSupplierBatch ? {job_ids:jobIds} : {}),
+            }),
           });
           confirmationAttempt = null;
-          loadedJob.status = "printed";
-          loadedJob.printed_at = new Date().toISOString();
+          loadedJobs.forEach((job) => {
+            job.status = "printed";
+            job.printed_at = new Date().toISOString();
+          });
+          if (loadedJob) {
+            loadedJob.status = "printed";
+            loadedJob.printed_at = loadedJobs[0]?.printed_at || new Date().toISOString();
+          }
           confirmPrintedButton.hidden = true;
           const summary = loadedPackage?.print_summary;
           const countText = summary ? `本次 ${summary.print_label_count} 张 / 系统计划 ${summary.system_label_count} 张；` : "";
-          showMessage(`打印作业 #${jobId} 已登记为“实际打印”；${countText}标签计划与生产状态均未改变。`, "message success");
+          showMessage(`打印作业 ${jobIds.map((id) => `#${id}`).join("、")} 已登记为“实际打印”；${countText}标签计划与生产状态均未改变。`, "message success");
         } catch (error) {
           confirmationAttempt.submitting = false;
           confirmPrintedButton.disabled = false;

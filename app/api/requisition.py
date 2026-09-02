@@ -216,6 +216,7 @@ from app.services.production_packaging_label import (
     ProductionPackagingLabelError,
     build_composite_requisition_packaging_label_package,
     build_supplier_requisition_packaging_label_package,
+    combine_supplier_requisition_packaging_label_packages,
 )
 from app.services.production_packaging_label_layout import (
     ProductionPackagingLabelLayoutConflict,
@@ -817,6 +818,20 @@ class ProductionPackagingLabelJobRequest(BaseModel):
         return self
 
 
+class SupplierOrderPackagingLabelBatchJobRequest(
+    ProductionPackagingLabelJobRequest
+):
+    order_ids: list[int] = Field(min_length=1, max_length=50)
+
+    @field_validator("order_ids")
+    @classmethod
+    def normalize_order_ids(cls, value: list[int]) -> list[int]:
+        normalized = sorted({int(order_id) for order_id in value})
+        if not normalized or any(order_id <= 0 for order_id in normalized):
+            raise ValueError("必须选择有效的供应商报料单")
+        return normalized
+
+
 class CompositeProductionPackagingLabelJobRequest(
     ProductionPackagingLabelJobRequest
 ):
@@ -839,6 +854,20 @@ class ProductionPackagingLabelPrintConfirmationRequest(BaseModel):
     @classmethod
     def trim_label_confirmation_key(cls, value: str) -> str:
         return value.strip()
+
+
+class SupplierOrderPackagingLabelBatchConfirmationRequest(
+    ProductionPackagingLabelPrintConfirmationRequest
+):
+    job_ids: list[int] = Field(min_length=1, max_length=50)
+
+    @field_validator("job_ids")
+    @classmethod
+    def normalize_job_ids(cls, value: list[int]) -> list[int]:
+        normalized = sorted({int(job_id) for job_id in value})
+        if not normalized or any(job_id <= 0 for job_id in normalized):
+            raise ValueError("必须选择有效的标签打印作业")
+        return normalized
 
 
 class ProductionPackagingLabelLayoutPaperPayload(BaseModel):
@@ -20755,6 +20784,134 @@ def get_production_print_batch(
     return package
 
 
+def _supplier_label_batch_order_ids(raw_value: str) -> list[int]:
+    values: set[int] = set()
+    for token in str(raw_value or "").split(","):
+        normalized = token.strip()
+        if not normalized:
+            continue
+        if not normalized.isdigit() or int(normalized) <= 0:
+            raise HTTPException(status_code=422, detail="供应商报料单编号无效")
+        values.add(int(normalized))
+    if not values:
+        raise HTTPException(status_code=422, detail="请选择需要打印标签的供应商报料单")
+    if len(values) > 50:
+        raise HTTPException(status_code=422, detail="单次最多选择 50 张供应商报料单")
+    return sorted(values)
+
+
+def _supplier_label_batch_orders(
+    db: Session,
+    *,
+    order_ids: list[int],
+    user: User,
+) -> list[SupplierRequisitionOrder]:
+    orders = list(
+        db.scalars(
+            select(SupplierRequisitionOrder)
+            .where(SupplierRequisitionOrder.id.in_(order_ids))
+            .order_by(SupplierRequisitionOrder.id)
+        )
+    )
+    found_ids = {int(order.id) for order in orders}
+    missing = [order_id for order_id in order_ids if order_id not in found_ids]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"供应商报料单不存在：{', '.join(str(value) for value in missing)}",
+        )
+    for order in orders:
+        _require_supplier_order_customer_access(order, user, db)
+        if order.status != "confirmed":
+            raise HTTPException(
+                status_code=409,
+                detail=f"{order.order_number} 不是正式有效的报料单，不能打印产品标签",
+            )
+    return orders
+
+
+def _supplier_label_batch_package(
+    db: Session,
+    *,
+    orders: list[SupplierRequisitionOrder],
+) -> dict:
+    try:
+        package = combine_supplier_requisition_packaging_label_packages(
+            [
+                build_supplier_requisition_packaging_label_package(db, order)
+                for order in orders
+            ]
+        )
+    except ProductionPackagingLabelLayoutError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=f"生产包装标签布局不可用：{error}",
+        ) from error
+    except ProductionPackagingLabelError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if package["review_required"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "production_label_batch_review_required",
+                "message": "所选产品中有标签配置未保存或标签计划未同步，整批已停止",
+                "reasons": package["review_messages"],
+            },
+        )
+    if not package["label_count"]:
+        raise HTTPException(
+            status_code=409,
+            detail="所选报料单没有可打印的产品标签",
+        )
+    return package
+
+
+def _supplier_label_batch_audit_key(
+    db: Session,
+    *,
+    action_code: str,
+    idempotency_key: str,
+    request_signature: str,
+    user_id: int,
+) -> str:
+    audit_key = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+    existing = db.scalar(
+        select(OperationLog)
+        .where(
+            OperationLog.action_code == action_code,
+            OperationLog.batch_id == audit_key,
+            OperationLog.actor_user_id_snapshot == int(user_id),
+        )
+        .order_by(OperationLog.id)
+        .limit(1)
+    )
+    if existing is not None:
+        try:
+            details = json.loads(existing.details or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            details = {}
+        if details.get("batch_request_hash") != request_signature:
+            raise ProductionLabelOperationError(
+                "跨报料单标签批次幂等键已用于另一组单据或张数"
+            )
+    return audit_key
+
+
+@router.get("/supplier-order-label-batches/package")
+def get_supplier_order_packaging_label_batch(
+    order_ids: str = Query(min_length=1, max_length=600),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_production_labels),
+) -> dict:
+    normalized_ids = _supplier_label_batch_order_ids(order_ids)
+    orders = _supplier_label_batch_orders(
+        db,
+        order_ids=normalized_ids,
+        user=user,
+    )
+    return _supplier_label_batch_package(db, orders=orders)
+
+
 @router.get("/supplier-orders/{order_id}/production-packaging-label-package")
 def get_supplier_order_production_packaging_label_package(
     order_id: int,
@@ -20987,6 +21144,158 @@ def post_composite_requisition_packaging_label_job(
         raise
 
 
+@router.post("/supplier-order-label-batches/production-packaging-label-jobs")
+def post_supplier_order_packaging_label_batch_job(
+    payload: SupplierOrderPackagingLabelBatchJobRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_production_labels),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    orders = _supplier_label_batch_orders(
+        db,
+        order_ids=payload.order_ids,
+        user=user,
+    )
+    current_package = _supplier_label_batch_package(db, orders=orders)
+    if current_package.get("plan_fingerprint") != payload.plan_fingerprint:
+        raise HTTPException(status_code=409, detail="跨报料单标签计划已变化，请刷新预览后重试")
+    requested_counts = (
+        {
+            item.production_task_id: item.print_label_count
+            for item in payload.items
+        }
+        if payload.items is not None
+        else {
+            int(plan["production_task_id"]): int(plan["label_count"])
+            for plan in current_package.get("plans") or []
+        }
+    )
+    expected_task_ids = {
+        int(plan["production_task_id"])
+        for plan in current_package.get("plans") or []
+    }
+    if set(requested_counts) != expected_task_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="本次跨报料单打印任务清单与当前标签计划不一致，请刷新后重试",
+        )
+    if not any(count > 0 for count in requested_counts.values()):
+        raise HTTPException(status_code=409, detail="本次未选择需要打印的标签")
+    request_signature = hashlib.sha256(
+        json.dumps(
+            {
+                "order_ids": payload.order_ids,
+                "plan_fingerprint": payload.plan_fingerprint,
+                "items": [
+                    [task_id, requested_counts[task_id]]
+                    for task_id in sorted(requested_counts)
+                ],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    audit_batch_id = _supplier_label_batch_audit_key(
+        db,
+        action_code="production.packaging_label_batch_job.prepared",
+        idempotency_key=payload.idempotency_key,
+        request_signature=request_signature,
+        user_id=user.id,
+    )
+
+    plans_by_order: dict[int, list[dict]] = {}
+    for plan in current_package.get("plans") or []:
+        plans_by_order.setdefault(int(plan["supplier_order_id"]), []).append(plan)
+    results = []
+    try:
+        for order in orders:
+            order_plans = plans_by_order.get(int(order.id), [])
+            order_counts = {
+                int(plan["production_task_id"]): requested_counts[
+                    int(plan["production_task_id"])
+                ]
+                for plan in order_plans
+            }
+            if not any(count > 0 for count in order_counts.values()):
+                continue
+            source_fingerprint = next(
+                str(source["plan_fingerprint"])
+                for source in current_package["batch_source_fingerprints"]
+                if int(source["supplier_order_id"]) == int(order.id)
+            )
+            child_key = "p0-label-batch-" + hashlib.sha256(
+                f"{payload.idempotency_key}|supplier_order:{order.id}".encode("utf-8")
+            ).hexdigest()
+            result = prepare_packaging_label_job(
+                db,
+                order=order,
+                idempotency_key=child_key,
+                expected_plan_fingerprint=source_fingerprint,
+                requested_print_counts=order_counts,
+                operator_id=user.id,
+            )
+            results.append(result)
+            if not result.replayed:
+                append_audit_event(
+                    db,
+                    event_category="business",
+                    result="success",
+                    source="web",
+                    module_code="production",
+                    action_code="production.packaging_label_batch_job.prepared",
+                    legacy_action="PREPARE_LABEL_BATCH_JOB",
+                    resource="ProductionPackagingLabelPrintJob",
+                    actor=user,
+                    entity_type="production_packaging_label_print_job",
+                    entity_id=result.job.id,
+                    object_ref=f"production_packaging_label_print_job:{result.job.id}",
+                    batch_id=audit_batch_id,
+                    description="跨报料单批量冻结生产包装标签打印作业",
+                    details={
+                        "supplier_order_ids": payload.order_ids,
+                        "batch_request_hash": request_signature,
+                        "supplier_order_id": order.id,
+                        "plan_fingerprint": result.job.plan_fingerprint,
+                        "payload_hash": result.job.payload_hash,
+                        "label_count": result.package.get("label_count"),
+                        "system_label_count": result.package.get("system_label_count"),
+                        "print_selection": result.package.get("print_selection"),
+                    },
+                )
+        frozen_package = combine_supplier_requisition_packaging_label_packages(
+            [result.package for result in results]
+        )
+        db.commit()
+        return {
+            "jobs": [
+                packaging_label_job_response(
+                    result.job,
+                    result.package,
+                    replayed=result.replayed,
+                )
+                for result in results
+            ],
+            "package": frozen_package,
+            "replayed": all(result.replayed for result in results),
+        }
+    except (ProductionPackagingLabelError, ProductionPackagingLabelLayoutError) as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ProductionLabelOperationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="跨报料单标签打印作业已被其他请求创建，请重试核对",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.post("/supplier-orders/{order_id}/production-packaging-label-jobs")
 def post_supplier_order_production_packaging_label_job(
     order_id: int,
@@ -21102,6 +21411,103 @@ def _require_packaging_label_job_access(
         require_customer_access(delivery.customer_id, user, db)
         return
     raise ProductionLabelOperationError("标签打印作业缺少来源单据")
+
+
+@router.post("/supplier-order-label-batches/confirm")
+def confirm_supplier_order_packaging_label_batch(
+    payload: SupplierOrderPackagingLabelBatchConfirmationRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_production_labels),
+    _write_guard: None = Depends(production_label_write_guard),
+) -> dict:
+    results = []
+    try:
+        request_signature = hashlib.sha256(
+            json.dumps(
+                {"job_ids": payload.job_ids},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        audit_batch_id = _supplier_label_batch_audit_key(
+            db,
+            action_code="production.packaging_label_batch_job.printed",
+            idempotency_key=payload.idempotency_key,
+            request_signature=request_signature,
+            user_id=user.id,
+        )
+        for job_id in payload.job_ids:
+            job = db.get(ProductionPackagingLabelPrintJob, job_id)
+            if job is None:
+                raise ProductionLabelOperationError(f"标签打印作业 #{job_id} 不存在", 404)
+            if job.supplier_order_id is None:
+                raise ProductionLabelOperationError(
+                    f"标签打印作业 #{job_id} 不是供应商报料单标签，整批已停止"
+                )
+            _require_packaging_label_job_access(db, job, user)
+            get_packaging_label_job(db, job_id)
+            confirmation_key = "p0-label-batch-confirm-" + hashlib.sha256(
+                f"{payload.idempotency_key}|job:{job_id}".encode("utf-8")
+            ).hexdigest()
+            result = confirm_packaging_label_job_printed(
+                db,
+                job_id=job_id,
+                confirmation_key=confirmation_key,
+                operator_id=user.id,
+            )
+            results.append(result)
+            if not result.replayed:
+                append_audit_event(
+                    db,
+                    event_category="business",
+                    result="success",
+                    source="web",
+                    module_code="production",
+                    action_code="production.packaging_label_batch_job.printed",
+                    legacy_action="CONFIRM_LABEL_BATCH_PRINT",
+                    resource="ProductionPackagingLabelPrintJob",
+                    actor=user,
+                    entity_type="production_packaging_label_print_job",
+                    entity_id=result.job.id,
+                    object_ref=f"production_packaging_label_print_job:{result.job.id}",
+                    batch_id=audit_batch_id,
+                    description="人工确认跨报料单产品标签已实际打印",
+                    details={
+                        "job_ids": payload.job_ids,
+                        "batch_request_hash": request_signature,
+                        "supplier_order_id": result.job.supplier_order_id,
+                        "plan_fingerprint": result.job.plan_fingerprint,
+                        "payload_hash": result.job.payload_hash,
+                        "label_count": result.package.get("label_count"),
+                        "system_label_count": result.package.get("system_label_count"),
+                        "print_selection": result.package.get("print_selection"),
+                    },
+                )
+        package = combine_supplier_requisition_packaging_label_packages(
+            [result.package for result in results]
+        )
+        db.commit()
+        return {
+            "jobs": [
+                packaging_label_job_response(
+                    result.job,
+                    result.package,
+                    replayed=result.replayed,
+                )
+                for result in results
+            ],
+            "package": package,
+            "replayed": all(result.replayed for result in results),
+        }
+    except (ProductionPackagingLabelError, ProductionPackagingLabelLayoutError) as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ProductionLabelOperationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get("/production-packaging-label-jobs/{job_id}")

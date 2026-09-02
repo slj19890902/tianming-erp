@@ -365,7 +365,11 @@ from app.services.warehouse_rack_cells import (
     preview_legacy_rack_cell_bindings,
     sync_published_rack_cells,
 )
-from app.services.requisition_quantities import cutting_factor, normalize_cutting_mode
+from app.services.requisition_quantities import (
+    CuttingModeError,
+    frozen_bom_yield_per_sheet,
+    normalize_cutting_mode,
+)
 from app.services.product_specification import product_dimension_specification
 from app.services.master_data_versioning import (
     apply_versioned_update,
@@ -3269,9 +3273,14 @@ def auto_cover_bom_component_inventory(
                     OrderItemSemiRequirement.component_type == component_type,
                 )
             )
-            yield_per_sheet = cutting_factor(
-                snapshot.snapshot_component_default_cutting_mode
-            )
+            try:
+                yield_per_sheet = frozen_bom_yield_per_sheet(
+                    snapshot.snapshot_component_default_cutting_mode,
+                    is_die_cut=bool(snapshot.is_die_cut),
+                    mold_max_yield_per_sheet=snapshot.mold_max_yield_per_sheet,
+                )
+            except CuttingModeError as error:
+                raise WarehouseInventoryError(str(error), 409) from error
             if requirement is None:
                 preview_candidates = semi_finished_candidates_for_product(
                     db,
@@ -3284,6 +3293,14 @@ def auto_cover_bom_component_inventory(
                     component_type=component_type,
                     pieces_per_box=physical_pieces_per_component,
                     stock_yield_per_sheet=yield_per_sheet,
+                    frozen_stock_yield_per_sheet=yield_per_sheet,
+                    frozen_pieces_per_box=physical_pieces_per_component,
+                    layer_count=snapshot.snapshot_component_layer_count,
+                    crease_type=physical_facts["crease_type"],
+                    crease_left_mm=physical_facts["crease_left_mm"],
+                    crease_middle_mm=physical_facts["crease_middle_mm"],
+                    crease_right_mm=physical_facts["crease_right_mm"],
+                    include_stock_plan_reservations=True,
                 )
             else:
                 preview_candidates = semi_finished_inventory_candidates(
@@ -3297,7 +3314,11 @@ def auto_cover_bom_component_inventory(
                     and row.lot.semi_finished_detail.owner_customer_id
                     == order.customer_id
                     and not row.signature_differences
-                    and row.source in {"signature", "learned"}
+                    and row.source in {"signature", "learned", "customer_generic"}
+                    and (
+                        row.source != "customer_generic"
+                        or row.direct_deduction_eligible
+                    )
                     and safe_physical_board_facts_match(
                         row.lot.semi_finished_detail,
                         supplier_name=snapshot.snapshot_component_supplier_name,
@@ -3344,7 +3365,16 @@ def auto_cover_bom_component_inventory(
                     ),
                     confirmed=True,
                     override=False,
-                    warning_acknowledged_codes=[],
+                    # The auto-cover action itself is the operator's explicit
+                    # confirmation.  Acknowledge only warnings actually
+                    # returned by the exact, same-customer candidates above.
+                    warning_acknowledged_codes=sorted(
+                        {
+                            warning_code
+                            for row in safe_candidates
+                            for warning_code in row.warning_codes
+                        }
+                    ),
                 )
                 semi_added = result.allocated_requirement_quantity
 
@@ -3599,6 +3629,7 @@ def semi_product_candidates(
         rows = semi_finished_candidates_for_product(
             db,
             product_id=product_id,
+            include_stock_plan_reservations=True,
             **payload.model_dump(),
         )
         rows = _visible_semi_candidates(rows, user, db)

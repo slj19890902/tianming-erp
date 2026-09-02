@@ -83,16 +83,14 @@ def test_virtual_parent_api_marker_clears_parent_physical_facts() -> None:
     for field in (
         "material_id",
         "mold_tool_id",
-        "length_mm",
-        "width_mm",
-        "height_mm",
-        "box_style",
         "report_length_mm",
         "report_width_mm",
         "production_process",
         "production_label_units_per_label",
     ):
         assert getattr(payload, field) is None
+    assert (payload.length_mm, payload.width_mm, payload.height_mm) == (780, 500, 300)
+    assert payload.box_style == "模切内盒"
     assert payload.production_label_enabled is False
     assert "is_virtual_composite_parent" in ProductResponse.model_fields
     assert "is_virtual_composite_parent" in _PRODUCT_FIELDS

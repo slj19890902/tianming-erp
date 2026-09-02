@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.248"
-    assert APP_VERSION_NAME == "供应商月结周期、组合付款与简化水电费"
+    assert APP_VERSION == "v0.22.249"
+    assert APP_VERSION_NAME == "组合BOM父件套数与组件库存抵扣闭环"
     assert APP_BUILD_DATE == "2026-09-03"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,11 +49,17 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "对账日" in item and "结算周期" in item for item in current_release)
-    assert any("本次更新｜" in item and "业务修订N+1" in item and "旧明细" in item for item in current_release)
-    assert any("本次更新｜" in item and "供应商贷项" in item and "组合付款" in item for item in current_release)
-    assert any("本次更新｜" in item and "水费电费" in item and "重复记账" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.248" in item and "jo73v8x9z62" in item for item in current_release)
+    assert any("本次更新｜" in item and "父件套数" in item and "真实BOM组件" in item for item in current_release)
+    assert any("本次更新｜" in item and "绿色抵扣" in item and "静默预占" in item for item in current_release)
+    assert any("本次更新｜" in item and "BOM指纹" in item and "CAS库存" in item for item in current_release)
+    assert any("本次更新｜" in item and "作废补库单" in item and "重复作废" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.249" in item and "jp74v8x9z63" in item for item in current_release)
+    prior_release_248 = [item for item in APP_CHANGELOG if item.startswith("v0.22.248：")]
+    assert any("本次更新｜" in item and "对账日" in item and "结算周期" in item for item in prior_release_248)
+    assert any("本次更新｜" in item and "业务修订N+1" in item and "旧明细" in item for item in prior_release_248)
+    assert any("本次更新｜" in item and "供应商贷项" in item and "组合付款" in item for item in prior_release_248)
+    assert any("本次更新｜" in item and "水费电费" in item and "重复记账" in item for item in prior_release_248)
+    assert any("如何验证｜" in item and "v0.22.248" in item and "jo73v8x9z62" in item for item in prior_release_248)
     prior_release_247 = [item for item in APP_CHANGELOG if item.startswith("v0.22.247：")]
     assert any("本次更新｜" in item and "有效实收" in item and "不可变结算价格事实" in item for item in prior_release_247)
     assert any("本次更新｜" in item and "旧无路线成品" in item and "失败关闭" in item for item in prior_release_247)

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.240"
-APP_VERSION_NAME = "半成品完全匹配直达抵扣"
+APP_VERSION = "v0.22.241"
+APP_VERSION_NAME = "正式首页空白紧急修复"
 APP_BUILD_DATE = "2026-09-02"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -1679,7 +1679,7 @@ _V022239_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认版本为v0.22.239、数据库revision仍为唯一head jl70v8x9z59。",
 ]
 
-APP_CHANGES = [
+_V022240_CHANGES = [
     "新建订单和 PDF 草稿的半成品主候选区直接显示绿色“抵扣”；只有同客户且尺寸、材质、楞型、层数、净毛片/压线、每箱片数和一开数全部相同的批次才会出现。",
     "绿色抵扣仍须人工点击，继续使用原库存预占、版本校验、数量上限、事务、幂等与审计链；系统不会静默自动选择半成品。",
     "同客户通用片料在完全匹配时可直达；近似材质、可后压线、跨客户通用和其他高级候选继续保留原人工核对流程。",
@@ -1687,12 +1687,26 @@ APP_CHANGES = [
     "本版无数据库迁移，不修改既有订单、预占、库存、报料、收料、生产或送货事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022240_VERIFICATION_STEPS = [
     "新建订单选择有完全匹配片料的常用箱，确认主候选区直接显示绿色“抵扣”，无需先点查看其他候选。",
     "点击抵扣后确认摘要显示成品、半成品和需生产三项；保存订单后核对原半成品批次预占数量、库存版本和订单需求一致。",
     "分别修改材质、层数、净/毛片、压线三段或一开数，确认不完全匹配的候选不会显示绿色按钮；跨客户候选仍须黄色人工确认。",
     "缩窄窗口或使用手机宽度查看新建订单，确认三项数量可换行但不出现省略号，也不丢失需生产数量。",
     "进入系统备份→系统版本，确认版本为v0.22.240、数据库revision仍为唯一head jl70v8x9z59。",
+]
+
+APP_CHANGES = [
+    "修复供应商承兑月结选项中的浏览器模板解析冲突，ERP首页重新正常挂载，不再因Vue编译错误打开空白。",
+    "承兑金额超过供应商月结可抵付余额时，仍按原规则禁用该选项并显示余额不足，业务判断保持不变。",
+    "新增首屏模板安全门禁，禁止在可见Vue表达式中直接写入会被浏览器误当标签的裸小于号。",
+    "本版无数据库迁移，不修改订单、库存、采购、收料、财务、权限或审批等正式业务事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "用Chrome强制刷新ERP首页，确认登录页或主菜单完整显示，不再空白，控制台没有Vue模板编译错误。",
+    "进入财务承兑列表，确认余额不足的供应商月结仍不可选择并显示余额不足，余额充足的选项可正常选择。",
+    "运行首屏模板安全门禁和内联JavaScript语法检查，确认浏览器DOM解析及脚本语法均通过。",
+    "进入系统备份→系统版本，确认版本为v0.22.241、数据库revision仍为唯一head jl70v8x9z59。",
 ]
 
 
@@ -1786,6 +1800,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.240：本次更新｜{item}" for item in _V022240_CHANGES),
+    *(f"v0.22.240：如何验证｜{item}" for item in _V022240_VERIFICATION_STEPS),
     *(f"v0.22.239：本次更新｜{item}" for item in _V022239_CHANGES),
     *(f"v0.22.239：如何验证｜{item}" for item in _V022239_VERIFICATION_STEPS),
     *(f"v0.22.238：本次更新｜{item}" for item in _V022238_CHANGES),

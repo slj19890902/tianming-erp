@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.243"
-    assert APP_VERSION_NAME == "送货取消地堆恢复与规格留空"
+    assert APP_VERSION == "v0.22.244"
+    assert APP_VERSION_NAME == "组合父件送货规格保留"
     assert APP_BUILD_DATE == "2026-09-02"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,11 +49,16 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "地堆栈板" in item and "受控恢复" in item for item in current_release)
-    assert any("本次更新｜" in item and "已释放→已占用" in item and "数据库拒绝" in item for item in current_release)
-    assert any("本次更新｜" in item and "修订" in item and "半成功" in item for item in current_release)
-    assert any("本次更新｜" in item and "规格格" in item and "规格未登记" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.243" in item and "jm71v8x9z60" in item for item in current_release)
+    assert any("本次更新｜" in item and "组合父件" in item and "长、宽、高" in item for item in current_release)
+    assert any("本次更新｜" in item and "报料尺寸" in item and "实体 BOM 子件" in item for item in current_release)
+    assert any("本次更新｜" in item and "订单同步" in item and "冻结规格" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.244" in item and "jm71v8x9z60" in item for item in current_release)
+    prior_release_243 = [item for item in APP_CHANGELOG if item.startswith("v0.22.243：")]
+    assert any("本次更新｜" in item and "地堆栈板" in item and "受控恢复" in item for item in prior_release_243)
+    assert any("本次更新｜" in item and "已释放→已占用" in item and "数据库拒绝" in item for item in prior_release_243)
+    assert any("本次更新｜" in item and "修订" in item and "半成功" in item for item in prior_release_243)
+    assert any("本次更新｜" in item and "规格格" in item and "规格未登记" in item for item in prior_release_243)
+    assert any("如何验证｜" in item and "v0.22.243" in item and "jm71v8x9z60" in item for item in prior_release_243)
     prior_release_242 = [item for item in APP_CHANGELOG if item.startswith("v0.22.242：")]
     assert any("本次更新｜" in item and "当前位置" in item and "location_id" in item for item in prior_release_242)
     assert any("本次更新｜" in item and "部分移库" in item and "转移链" in item for item in prior_release_242)

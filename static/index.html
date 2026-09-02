@@ -6656,7 +6656,7 @@
                     <option value="component_priced">组件分别计价</option>
                   </select>
                 </div>
-                <label v-if="bomEditor.enabled && productForm.combination_mode === 'parent_priced_set'" class="remember-line" style="margin:0 0 10px"><input type="checkbox" v-model="productForm.is_virtual_composite_parent" /> 父件只表示整套数量和价格，不报料、不生产</label>
+                <label v-if="bomEditor.enabled && productForm.combination_mode === 'parent_priced_set'" class="remember-line" style="margin:0 0 10px"><input type="checkbox" v-model="productForm.is_virtual_composite_parent" /> 父件只表示整套数量和价格，不报料、不生产；可填写箱型与成品长宽高，仅用于送货规格展示</label>
                 <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存父产品，再维护内部组件 BOM。</div>
                 <div v-else-if="bomEditor.error" class="status orange" style="display:block;white-space:normal">{{ bomEditor.error }}</div>
                 <div v-else-if="bomEditor.notice" class="muted" style="margin-bottom:8px">{{ bomEditor.notice }}</div>

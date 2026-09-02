@@ -831,9 +831,12 @@ _EXTERNAL_PURCHASE_SYNC_BLOCKED_FIELDS = frozenset(
     {*_EXTERNAL_PURCHASE_PAPER_FIELDS, "splice_mode", "pieces_per_box", "flap_mm", "box_style", "print_content"}
 )
 
+_VIRTUAL_COMPOSITE_PARENT_DELIVERY_DISPLAY_FIELDS = (
+    "length_mm", "width_mm", "height_mm", "box_style",
+)
+
 _VIRTUAL_COMPOSITE_PARENT_PHYSICAL_FIELDS = (
     "material_id", "mold_tool_id", "legacy_material_text",
-    "length_mm", "width_mm", "height_mm", "box_style",
     "print_content", "printing_colors", "production_process", "production_notes", "die_cut_path",
     "flute_type", "layer_count", "surface_paper_type",
     "report_length_mm", "report_width_mm", "crease_type",
@@ -843,12 +846,17 @@ _VIRTUAL_COMPOSITE_PARENT_PHYSICAL_FIELDS = (
     "base_report_notes", "flap_mm",
 )
 _VIRTUAL_COMPOSITE_PARENT_SYNC_BLOCKED_FIELDS = frozenset(
-    {*_VIRTUAL_COMPOSITE_PARENT_PHYSICAL_FIELDS, "splice_mode", "pieces_per_box"}
+    {
+        *_VIRTUAL_COMPOSITE_PARENT_PHYSICAL_FIELDS,
+        *_VIRTUAL_COMPOSITE_PARENT_DELIVERY_DISPLAY_FIELDS,
+        "splice_mode",
+        "pieces_per_box",
+    }
 )
 
 
 def _clear_virtual_composite_parent_fields(payload: ProductPayload) -> None:
-    """Keep a virtual set parent commercial-only; components own all facts."""
+    """Keep BOM facts on components while retaining an optional delivery display spec."""
 
     for field in _VIRTUAL_COMPOSITE_PARENT_PHYSICAL_FIELDS:
         setattr(payload, field, None)

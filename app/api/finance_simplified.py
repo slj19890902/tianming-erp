@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -30,7 +30,12 @@ from app.api.cost_accounting import (
     require_cost_manage,
     require_cost_read,
 )
-from app.api.deps import PermissionChecker, get_db, has_unrestricted_customer_access
+from app.api.deps import (
+    PermissionChecker,
+    get_db,
+    has_permission,
+    has_unrestricted_customer_access,
+)
 from app.core.time_contract import beijing_now_naive
 from app.models.customer import Customer
 from app.models.finance import Statement
@@ -44,6 +49,7 @@ from app.models.finance_simplified import (
 from app.models.supplier_settlement import (
     SupplierMonthlyAdjustment,
     SupplierMonthlyInvoice,
+    SupplierMonthlyPayment,
     SupplierMonthlyStatement,
     SupplierMonthlyStatementLine,
 )
@@ -99,10 +105,14 @@ def require_finance_execute(
     user: User = Depends(can_finance_execute),
     db: Session = Depends(get_db),
 ) -> User:
-    if not has_unrestricted_customer_access(user, db):
+    if (
+        not has_permission(user, "finance.view")
+        or not has_permission(user, "cost.view")
+        or not has_unrestricted_customer_access(user, db)
+    ):
         raise HTTPException(
             status_code=403,
-            detail="承兑与供应商付款仅允许全客户范围的财务或管理员操作",
+            detail="承兑与供应商付款仅允许可查看全公司成本的财务或管理员操作",
         )
     return user
 
@@ -214,7 +224,10 @@ class IdempotentPayload(BaseModel):
     @field_validator("idempotency_key")
     @classmethod
     def clean_key(cls, value: str) -> str:
-        return value.strip()
+        normalized = value.strip()
+        if len(normalized) < 8:
+            raise ValueError("幂等键去除空格后至少需要 8 个字符")
+        return normalized
 
 
 class RecurringRuleFields(BaseModel):
@@ -245,7 +258,10 @@ class RecurringRuleFields(BaseModel):
     @field_validator("name")
     @classmethod
     def clean_name(cls, value: str) -> str:
-        return value.strip()
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("规则名称不能为空")
+        return normalized
 
     @field_validator("role_name", "note")
     @classmethod
@@ -366,6 +382,8 @@ class UtilityReadingPayload(IdempotentPayload):
             raise ValueError("已付金额不能超过本月确认金额")
         if self.paid_amount > 0 and self.payment_date is None:
             raise ValueError("填写已付金额时必须填写付款日期")
+        if self.paid_amount == 0 and self.payment_date is not None:
+            raise ValueError("未填写已付金额时不能填写付款日期")
         return self
 
 
@@ -381,7 +399,10 @@ class AcceptanceCreate(IdempotentPayload):
     @field_validator("bill_number")
     @classmethod
     def clean_number(cls, value: str) -> str:
-        return value.strip()
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("承兑票号不能为空")
+        return normalized
 
     @field_validator("amount")
     @classmethod
@@ -561,6 +582,34 @@ def simple_finance_metadata(
             .limit(200)
         ).all()
     )
+
+    def statement_option(row: SupplierMonthlyStatement) -> dict[str, Any]:
+        remaining = _money(
+            max(
+                _money(row.confirmed_amount or 0) - _money(row.paid_amount or 0),
+                Decimal("0"),
+            )
+        )
+        invoice_available = _money(
+            max(
+                _money(row.invoice_allocated_amount or 0)
+                - _money(row.paid_amount or 0),
+                Decimal("0"),
+            )
+        )
+        return {
+            "id": row.id,
+            "statement_number": row.statement_number,
+            "supplier_id": row.supplier_id,
+            "supplier_name": row.supplier_name_snapshot,
+            "settlement_month": row.settlement_month,
+            "status": row.status,
+            "version": row.version,
+            "remaining_amount": remaining,
+            "invoice_available_amount": invoice_available,
+            "available_payment_amount": min(remaining, invoice_available),
+        }
+
     return {
         "primary_groups": [
             {"value": "material", "label": "材料采购"},
@@ -582,31 +631,7 @@ def simple_finance_metadata(
             }
             for row in customers
         ],
-        "supplier_statements": [
-            {
-                "id": row.id,
-                "statement_number": row.statement_number,
-                "supplier_id": row.supplier_id,
-                "supplier_name": row.supplier_name_snapshot,
-                "settlement_month": row.settlement_month,
-                "status": row.status,
-                "version": row.version,
-                "remaining_amount": _money(
-                    max(
-                        _money(row.confirmed_amount or 0) - _money(row.paid_amount or 0),
-                        Decimal("0"),
-                    )
-                ),
-                "invoice_available_amount": _money(
-                    max(
-                        _money(row.invoice_allocated_amount or 0)
-                        - _money(row.paid_amount or 0),
-                        Decimal("0"),
-                    )
-                ),
-            }
-            for row in statements
-        ],
+        "supplier_statements": [statement_option(row) for row in statements],
         "note": "自动延续只生成草稿；承兑背书不是银行现金付款。",
     }
 
@@ -632,15 +657,15 @@ def create_recurring_rule(
     user: User = Depends(require_cost_manage),
 ) -> dict[str, Any]:
     values = _rule_values(payload)
-    _validated_center(
-        db,
-        payload.cost_center_id,
-        accounting_class=(
-            "manufacturing" if payload.rule_type != "fixed_monthly" else "finance"
-        ),
-    )
 
     def operation():
+        _validated_center(
+            db,
+            payload.cost_center_id,
+            accounting_class=(
+                "manufacturing" if payload.rule_type != "fixed_monthly" else "finance"
+            ),
+        )
         row = FinanceRecurringRule(**values, created_by=user.id)
         db.add(row)
         db.flush()
@@ -668,26 +693,36 @@ def update_recurring_rule(
     user: User = Depends(require_cost_manage),
 ) -> dict[str, Any]:
     values = _rule_values(payload)
-    _validated_center(
-        db,
-        payload.cost_center_id,
-        accounting_class=(
-            "manufacturing" if payload.rule_type != "fixed_monthly" else "finance"
-        ),
-    )
 
     def operation():
+        _validated_center(
+            db,
+            payload.cost_center_id,
+            accounting_class=(
+                "manufacturing" if payload.rule_type != "fixed_monthly" else "finance"
+            ),
+        )
         row = db.get(FinanceRecurringRule, rule_id)
         if row is None:
             raise HTTPException(status_code=404, detail="固定费用规则不存在")
-        if row.version != payload.expected_version:
+        result = db.execute(
+            update(FinanceRecurringRule)
+            .where(
+                FinanceRecurringRule.id == rule_id,
+                FinanceRecurringRule.version == payload.expected_version,
+            )
+            .values(
+                **values,
+                version=payload.expected_version + 1,
+                updated_by=user.id,
+                updated_at=beijing_now_naive(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
             raise HTTPException(status_code=409, detail="规则已被修改，请刷新后重试")
-        for key, value in values.items():
-            setattr(row, key, value)
-        row.version += 1
-        row.updated_by = user.id
-        row.updated_at = beijing_now_naive()
-        db.flush()
+        db.expire(row)
+        db.refresh(row)
         return _rule_response(row), row.id
 
     return _run_mutation(
@@ -770,9 +805,28 @@ def generate_recurring_drafts(
                 db.flush()
                 created += 1
             elif entry.status == "draft":
-                for key, value in values.items():
-                    setattr(entry, key, value)
-                entry.version += 1
+                expected_entry_version = entry.version
+                result = db.execute(
+                    update(FinanceCostPoolEntry)
+                    .where(
+                        FinanceCostPoolEntry.id == entry.id,
+                        FinanceCostPoolEntry.status == "draft",
+                        FinanceCostPoolEntry.version == expected_entry_version,
+                    )
+                    .values(
+                        **values,
+                        version=expected_entry_version + 1,
+                        updated_at=beijing_now_naive(),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if result.rowcount != 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="固定费用草稿状态或版本已变化，请刷新后重试",
+                    )
+                db.expire(entry)
+                db.refresh(entry)
                 updated += 1
             else:
                 preserved += 1
@@ -850,19 +904,20 @@ def save_utility_reading(
     db: Session = Depends(get_db),
     user: User = Depends(require_cost_manage),
 ) -> dict[str, Any]:
-    center = _validated_center(db, payload.cost_center_id, accounting_class="manufacturing")
     usage = _decimal(payload.current_reading - payload.previous_reading, THREE_DECIMALS)
     calculated = _money(usage * payload.unit_price)
     recognized = payload.invoice_amount if payload.invoice_amount is not None else calculated
-    existing = db.scalar(
-        select(FinanceUtilityReading).where(
-            FinanceUtilityReading.cost_month == payload.cost_month,
-            FinanceUtilityReading.utility_type == payload.utility_type,
-        )
-    )
 
     def operation():
-        nonlocal existing
+        center = _validated_center(
+            db, payload.cost_center_id, accounting_class="manufacturing"
+        )
+        existing = db.scalar(
+            select(FinanceUtilityReading).where(
+                FinanceUtilityReading.cost_month == payload.cost_month,
+                FinanceUtilityReading.utility_type == payload.utility_type,
+            )
+        )
         if existing is not None and existing.version != payload.expected_version:
             raise HTTPException(status_code=409, detail="水电记录已被修改，请刷新后重试")
         entry = (
@@ -870,8 +925,29 @@ def save_utility_reading(
             if existing is not None
             else None
         )
-        if entry is not None and entry.status != "draft":
-            raise HTTPException(status_code=409, detail="本月水电费用已确认或作废，不能覆盖")
+        confirmed_payment_only = False
+        if entry is not None and entry.status == "voided":
+            raise HTTPException(status_code=409, detail="本月水电费用已作废，不能补录付款")
+        if entry is not None and entry.status == "confirmed":
+            locked_values_unchanged = (
+                existing is not None
+                and existing.cost_center_id == center.id
+                and existing.previous_reading == payload.previous_reading
+                and existing.current_reading == payload.current_reading
+                and existing.usage_quantity == usage
+                and existing.unit_price == payload.unit_price
+                and existing.calculated_amount == calculated
+                and existing.invoice_number == payload.invoice_number
+                and existing.invoice_date == payload.invoice_date
+                and existing.invoice_amount == payload.invoice_amount
+                and existing.note == payload.note
+            )
+            if not locked_values_unchanged:
+                raise HTTPException(
+                    status_code=409,
+                    detail="水电费用已确认，只能补录付款金额和付款日期",
+                )
+            confirmed_payment_only = True
         fingerprint = f"utility:{payload.utility_type}:{payload.cost_month}"
         entry_values = {
             "cost_month": payload.cost_month,
@@ -897,10 +973,45 @@ def save_utility_reading(
             entry = FinanceCostPoolEntry(**entry_values, status="draft", created_by=user.id)
             db.add(entry)
             db.flush()
+        elif confirmed_payment_only:
+            entry_gate = db.execute(
+                update(FinanceCostPoolEntry)
+                .where(
+                    FinanceCostPoolEntry.id == entry.id,
+                    FinanceCostPoolEntry.status == "confirmed",
+                    FinanceCostPoolEntry.version == entry.version,
+                )
+                .values(updated_at=FinanceCostPoolEntry.updated_at)
+                .execution_options(synchronize_session=False)
+            )
+            if entry_gate.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="本月水电费用状态或版本已变化，请刷新后重试",
+                )
         else:
-            for key, value in entry_values.items():
-                setattr(entry, key, value)
-            entry.version += 1
+            expected_entry_version = entry.version
+            entry_result = db.execute(
+                update(FinanceCostPoolEntry)
+                .where(
+                    FinanceCostPoolEntry.id == entry.id,
+                    FinanceCostPoolEntry.status == "draft",
+                    FinanceCostPoolEntry.version == expected_entry_version,
+                )
+                .values(
+                    **entry_values,
+                    version=expected_entry_version + 1,
+                    updated_at=beijing_now_naive(),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if entry_result.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="本月水电费用状态或版本已变化，请刷新后重试",
+                )
+            db.expire(entry)
+            db.refresh(entry)
         reading_values = {
             "cost_month": payload.cost_month,
             "utility_type": payload.utility_type,
@@ -921,13 +1032,53 @@ def save_utility_reading(
         if existing is None:
             existing = FinanceUtilityReading(**reading_values, created_by=user.id)
             db.add(existing)
+        elif confirmed_payment_only:
+            reading_result = db.execute(
+                update(FinanceUtilityReading)
+                .where(
+                    FinanceUtilityReading.id == existing.id,
+                    FinanceUtilityReading.version == payload.expected_version,
+                )
+                .values(
+                    paid_amount=payload.paid_amount,
+                    payment_date=payload.payment_date,
+                    version=payload.expected_version + 1,
+                    updated_by=user.id,
+                    updated_at=beijing_now_naive(),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if reading_result.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="水电付款记录已被修改，请刷新后重试",
+                )
+            db.expire(existing)
+            db.refresh(existing)
         else:
-            for key, value in reading_values.items():
-                setattr(existing, key, value)
-            existing.version += 1
-            existing.updated_by = user.id
-            existing.updated_at = beijing_now_naive()
-        db.flush()
+            reading_result = db.execute(
+                update(FinanceUtilityReading)
+                .where(
+                    FinanceUtilityReading.id == existing.id,
+                    FinanceUtilityReading.version == payload.expected_version,
+                )
+                .values(
+                    **reading_values,
+                    version=payload.expected_version + 1,
+                    updated_by=user.id,
+                    updated_at=beijing_now_naive(),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if reading_result.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="水电记录已被修改，请刷新后重试",
+                )
+            db.expire(existing)
+            db.refresh(existing)
+        if existing.id is None:
+            db.flush()
         return _utility_response(existing), existing.id
 
     return _run_mutation(
@@ -974,15 +1125,17 @@ def create_acceptance_note(
     db: Session = Depends(get_db),
     user: User = Depends(require_finance_execute),
 ) -> dict[str, Any]:
-    customer = db.get(Customer, payload.customer_id)
-    if customer is None or not customer.is_active:
-        raise HTTPException(status_code=409, detail="客户不存在或已停用")
-    if payload.customer_statement_id is not None:
-        customer_statement = db.get(Statement, payload.customer_statement_id)
-        if customer_statement is None or customer_statement.customer_id != customer.id:
-            raise HTTPException(status_code=409, detail="客户对账单与承兑客户不一致")
-
     def operation():
+        customer = db.get(Customer, payload.customer_id)
+        if customer is None or not customer.is_active:
+            raise HTTPException(status_code=409, detail="客户不存在或已停用")
+        if payload.customer_statement_id is not None:
+            customer_statement = db.get(Statement, payload.customer_statement_id)
+            if (
+                customer_statement is None
+                or customer_statement.customer_id != customer.id
+            ):
+                raise HTTPException(status_code=409, detail="客户对账单与承兑客户不一致")
         row = FinanceAcceptanceNote(
             bill_number=payload.bill_number,
             customer_id=customer.id,
@@ -1028,6 +1181,11 @@ def endorse_acceptance_note(
             raise HTTPException(status_code=409, detail="承兑票据已被修改，请刷新后重试")
         if row.status != "held":
             raise HTTPException(status_code=409, detail="只有在手承兑可以背书供应商")
+        if not row.received_date <= payload.endorsement_date <= row.maturity_date:
+            raise HTTPException(
+                status_code=409,
+                detail="背书日期必须在承兑收到日与到期日之间",
+            )
         statement = db.get(SupplierMonthlyStatement, payload.supplier_statement_id)
         if statement is None or statement.active_guard != 1:
             raise HTTPException(status_code=404, detail="供应商月结不存在")
@@ -1042,16 +1200,33 @@ def endorse_acceptance_note(
             acceptance_note_id=row.id,
             user=user,
         )
-        row.status = "endorsed"
-        row.supplier_id = statement.supplier_id
-        row.supplier_name_snapshot = statement.supplier_name_snapshot
-        row.supplier_statement_id = statement.id
-        row.supplier_payment_id = payment.id
-        row.endorsed_date = payload.endorsement_date
-        row.version += 1
-        row.updated_by = user.id
-        row.updated_at = beijing_now_naive()
-        db.flush()
+        result = db.execute(
+            update(FinanceAcceptanceNote)
+            .where(
+                FinanceAcceptanceNote.id == row.id,
+                FinanceAcceptanceNote.status == "held",
+                FinanceAcceptanceNote.version == payload.expected_version,
+            )
+            .values(
+                status="endorsed",
+                supplier_id=statement.supplier_id,
+                supplier_name_snapshot=statement.supplier_name_snapshot,
+                supplier_statement_id=statement.id,
+                supplier_payment_id=payment.id,
+                endorsed_date=payload.endorsement_date,
+                version=payload.expected_version + 1,
+                updated_by=user.id,
+                updated_at=beijing_now_naive(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise HTTPException(
+                status_code=409,
+                detail="承兑票据状态或版本已变化，请刷新后重试",
+            )
+        db.expire(row)
+        db.refresh(row)
         return {
             "acceptance": _acceptance_response(row),
             "supplier_statement": {
@@ -1093,11 +1268,33 @@ def transition_acceptance_note(
             raise HTTPException(status_code=409, detail="承兑票据已被修改，请刷新后重试")
         if row.status != "held":
             raise HTTPException(status_code=409, detail="只有在手承兑可以到期、退回或作废")
-        row.status = payload.action
-        row.version += 1
-        row.updated_by = user.id
-        row.updated_at = beijing_now_naive()
-        db.flush()
+        if (
+            payload.action == "matured"
+            and beijing_now_naive().date() < row.maturity_date
+        ):
+            raise HTTPException(status_code=409, detail="承兑尚未到期，不能标记为已到期")
+        result = db.execute(
+            update(FinanceAcceptanceNote)
+            .where(
+                FinanceAcceptanceNote.id == row.id,
+                FinanceAcceptanceNote.status == "held",
+                FinanceAcceptanceNote.version == payload.expected_version,
+            )
+            .values(
+                status=payload.action,
+                version=payload.expected_version + 1,
+                updated_by=user.id,
+                updated_at=beijing_now_naive(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise HTTPException(
+                status_code=409,
+                detail="承兑票据状态或版本已变化，请刷新后重试",
+            )
+        db.expire(row)
+        db.refresh(row)
         return _acceptance_response(row), row.id
 
     return _run_mutation(
@@ -1193,13 +1390,29 @@ def simple_finance_summary(
         ).all()
     )
     material_erp = _money(sum((row.adjusted_amount for row in statements), Decimal("0")))
+    material_total = _money(material_erp + standalone_material)
     supplier_actual = _money(
-        sum((row.supplier_statement_amount or row.adjusted_amount for row in statements), Decimal("0"))
+        sum(
+            (
+                row.supplier_statement_amount
+                if row.supplier_statement_amount is not None
+                else row.adjusted_amount
+                for row in statements
+            ),
+            Decimal("0"),
+        )
+    )
+    confirmed_total = _money(
+        sum((row.confirmed_amount or Decimal("0") for row in statements), Decimal("0"))
     )
     invoice_total = _money(sum((row.allocated_amount for row in invoices), Decimal("0")))
     differences: list[dict[str, Any]] = []
     for row in statements:
-        supplier_amount = _money(row.supplier_statement_amount or row.adjusted_amount)
+        supplier_amount = _money(
+            row.supplier_statement_amount
+            if row.supplier_statement_amount is not None
+            else row.adjusted_amount
+        )
         confirmed = _money(row.confirmed_amount or 0)
         row_invoiced = _money(row.invoice_allocated_amount or 0)
         adjustments = list(
@@ -1236,11 +1449,12 @@ def simple_finance_summary(
         "primary_groups": {
             "material": {
                 "label": "材料采购",
-                "erp_amount": material_erp,
+                "erp_amount": material_total,
+                "supplier_settlement_erp_amount": material_erp,
                 "supplier_statement_amount": supplier_actual,
                 "invoice_amount": invoice_total,
                 "statement_difference_amount": _money(supplier_actual - material_erp),
-                "invoice_difference_amount": _money(invoice_total - supplier_actual),
+                "invoice_difference_amount": _money(invoice_total - confirmed_total),
                 "paperboard_amount": source_totals["paperboard"],
                 "external_packaging_amount": source_totals["external_packaging"],
                 "mold_ink_other_amount": standalone_material,
@@ -1305,12 +1519,35 @@ def export_monthly_materials(
             "确认应付",
             "已收发票",
             "发票差异",
-            "已付",
+            "已结算（含承兑）",
+            "其中银行付款",
+            "其中承兑抵付",
             "状态",
         ]
     )
+    payment_totals: dict[tuple[int, str], Decimal] = {}
+    if statements:
+        for statement_id, payment_method, amount in db.execute(
+            select(
+                SupplierMonthlyPayment.statement_id,
+                SupplierMonthlyPayment.payment_method,
+                func.coalesce(func.sum(SupplierMonthlyPayment.amount), 0),
+            )
+            .where(
+                SupplierMonthlyPayment.statement_id.in_([row.id for row in statements])
+            )
+            .group_by(
+                SupplierMonthlyPayment.statement_id,
+                SupplierMonthlyPayment.payment_method,
+            )
+        ).all():
+            payment_totals[(int(statement_id), str(payment_method))] = _money(amount)
     for row in statements:
-        supplier_amount = _money(row.supplier_statement_amount or row.adjusted_amount)
+        supplier_amount = _money(
+            row.supplier_statement_amount
+            if row.supplier_statement_amount is not None
+            else row.adjusted_amount
+        )
         confirmed = _money(row.confirmed_amount or 0)
         summary.append(
             [
@@ -1324,6 +1561,8 @@ def export_monthly_materials(
                 float(row.invoice_allocated_amount),
                 float(_money(row.invoice_allocated_amount - confirmed)),
                 float(row.paid_amount),
+                float(payment_totals.get((row.id, "bank"), Decimal("0"))),
+                float(payment_totals.get((row.id, "acceptance"), Decimal("0"))),
                 row.status,
             ]
         )
@@ -1395,7 +1634,9 @@ def export_monthly_materials(
     }
     for statement in statements:
         supplier_amount = _money(
-            statement.supplier_statement_amount or statement.adjusted_amount
+            statement.supplier_statement_amount
+            if statement.supplier_statement_amount is not None
+            else statement.adjusted_amount
         )
         statement_difference = _money(supplier_amount - statement.adjusted_amount)
         confirmed = _money(statement.confirmed_amount or 0)

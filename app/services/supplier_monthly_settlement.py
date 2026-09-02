@@ -6,7 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import re
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import (
@@ -911,14 +911,51 @@ def review_statement(
         raise SupplierSettlementError(
             "SUPPLIER_STATEMENT_NUMBER_REQUIRED", "供应商对账单号不能为空", 422
         )
-    row.supplier_statement_number = number
-    row.supplier_statement_date = supplier_statement_date
-    row.supplier_statement_amount = amount
-    row.reviewed_by = user.id
-    row.reviewed_at = utc_now_naive()
-    _recalculate_statement(db, row)
-    row.version += 1
-    db.flush()
+    erp_amount = _money(
+        sum((line.erp_amount for line in _active_lines(db, row.id)), Decimal("0"))
+    )
+    adjustment_amount = _money(
+        db.scalar(
+            select(func.coalesce(func.sum(SupplierMonthlyAdjustment.amount), 0)).where(
+                SupplierMonthlyAdjustment.statement_id == row.id
+            )
+        )
+        or 0
+    )
+    adjusted_amount = _money(erp_amount + adjustment_amount)
+    next_status = "difference" if amount != adjusted_amount else "draft"
+    now = utc_now_naive()
+    result = db.execute(
+        update(SupplierMonthlyStatement)
+        .where(
+            SupplierMonthlyStatement.id == row.id,
+            SupplierMonthlyStatement.active_guard == 1,
+            SupplierMonthlyStatement.status.in_(ACTIVE_DRAFT_STATUSES),
+            SupplierMonthlyStatement.version == expected_version,
+        )
+        .values(
+            supplier_statement_number=number,
+            supplier_statement_date=supplier_statement_date,
+            supplier_statement_amount=amount,
+            erp_amount=erp_amount,
+            adjustment_amount=adjustment_amount,
+            adjusted_amount=adjusted_amount,
+            status=next_status,
+            reviewed_by=user.id,
+            reviewed_at=now,
+            version=expected_version + 1,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_STALE",
+            "供应商月结单已被其他人修改，请刷新后重试",
+            409,
+        )
+    db.expire(row)
+    db.refresh(row)
     return row
 
 
@@ -960,6 +997,58 @@ def add_adjustment(
             raise SupplierSettlementError(
                 "SUPPLIER_ADJUSTMENT_LINE_INVALID", "差异调整明细不属于当前月结单", 422
             )
+    erp_amount = _money(
+        sum((line.erp_amount for line in _active_lines(db, row.id)), Decimal("0"))
+    )
+    adjustment_amount = _money(
+        (
+            db.scalar(
+                select(func.coalesce(func.sum(SupplierMonthlyAdjustment.amount), 0)).where(
+                    SupplierMonthlyAdjustment.statement_id == row.id
+                )
+            )
+            or 0
+        )
+        + normalized_amount
+    )
+    adjusted_amount = _money(erp_amount + adjustment_amount)
+    if adjusted_amount < 0:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_NEGATIVE_AMOUNT",
+            "应付调整后金额不能小于 0",
+            422,
+        )
+    next_status = (
+        "difference"
+        if row.supplier_statement_amount is not None
+        and _money(row.supplier_statement_amount) != adjusted_amount
+        else "draft"
+    )
+    now = utc_now_naive()
+    result = db.execute(
+        update(SupplierMonthlyStatement)
+        .where(
+            SupplierMonthlyStatement.id == row.id,
+            SupplierMonthlyStatement.active_guard == 1,
+            SupplierMonthlyStatement.status.in_(ACTIVE_DRAFT_STATUSES),
+            SupplierMonthlyStatement.version == expected_version,
+        )
+        .values(
+            erp_amount=erp_amount,
+            adjustment_amount=adjustment_amount,
+            adjusted_amount=adjusted_amount,
+            status=next_status,
+            version=expected_version + 1,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_STALE",
+            "供应商月结单已被其他人修改，请刷新后重试",
+            409,
+        )
     adjustment = SupplierMonthlyAdjustment(
         statement_id=row.id,
         statement_line_id=statement_line_id,
@@ -970,9 +1059,8 @@ def add_adjustment(
     )
     db.add(adjustment)
     db.flush()
-    _recalculate_statement(db, row)
-    row.version += 1
-    db.flush()
+    db.expire(row)
+    db.refresh(row)
     return row, adjustment
 
 
@@ -1027,17 +1115,38 @@ def confirm_statement(
     )
     db.add(payable)
     db.flush()
-    row.finance_payable_id = payable.id
-    row.confirmed_amount = _money(row.adjusted_amount)
-    row.confirmed_by = user.id
-    row.confirmed_at = now
-    row.status = (
+    next_status = (
         "invoiced_pending_payment"
         if _money(row.invoice_allocated_amount) > 0
         else "confirmed_pending_invoice"
     )
-    row.version += 1
-    db.flush()
+    result = db.execute(
+        update(SupplierMonthlyStatement)
+        .where(
+            SupplierMonthlyStatement.id == row.id,
+            SupplierMonthlyStatement.active_guard == 1,
+            SupplierMonthlyStatement.status == "draft",
+            SupplierMonthlyStatement.version == expected_version,
+        )
+        .values(
+            finance_payable_id=payable.id,
+            confirmed_amount=_money(row.adjusted_amount),
+            confirmed_by=user.id,
+            confirmed_at=now,
+            status=next_status,
+            version=expected_version + 1,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_STALE",
+            "供应商月结单已被其他人修改，请刷新后重试",
+            409,
+        )
+    db.expire(row)
+    db.refresh(row)
     return row
 
 
@@ -1074,26 +1183,69 @@ def reopen_statement(
         else None
     )
     now = utc_now_naive()
+    next_note = None
     if payable is not None and payable.status != "voided":
-        payable.status = "voided"
-        payable.voided_by = user.id
-        payable.voided_at = now
-        payable.note = "；".join(
+        next_note = "；".join(
             value for value in (payable.note, "供应商月结受控重开") if value
         )
-        payable.version += 1
-    row.finance_payable_id = None
-    row.confirmed_amount = None
-    row.reopened_by = user.id
-    row.reopened_at = now
-    row.status = (
+    next_status = (
         "difference"
         if row.supplier_statement_amount is not None
         and _money(row.supplier_statement_amount) != _money(row.adjusted_amount)
         else "draft"
     )
-    row.version += 1
-    db.flush()
+    statement_result = db.execute(
+        update(SupplierMonthlyStatement)
+        .where(
+            SupplierMonthlyStatement.id == row.id,
+            SupplierMonthlyStatement.active_guard == 1,
+            SupplierMonthlyStatement.status == row.status,
+            SupplierMonthlyStatement.version == expected_version,
+            SupplierMonthlyStatement.paid_amount == 0,
+        )
+        .values(
+            finance_payable_id=None,
+            confirmed_amount=None,
+            reopened_by=user.id,
+            reopened_at=now,
+            status=next_status,
+            version=expected_version + 1,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if statement_result.rowcount != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_STALE",
+            "供应商月结单付款状态已变化，不能重开，请刷新后重试",
+            409,
+        )
+    if payable is not None and payable.status != "voided":
+        payable_result = db.execute(
+            update(FinancePayable)
+            .where(
+                FinancePayable.id == payable.id,
+                FinancePayable.status == payable.status,
+                FinancePayable.version == payable.version,
+            )
+            .values(
+                status="voided",
+                voided_by=user.id,
+                voided_at=now,
+                note=next_note,
+                version=payable.version + 1,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if payable_result.rowcount != 1:
+            raise SupplierSettlementError(
+                "SUPPLIER_PAYABLE_STALE",
+                "关联应付状态已变化，不能重开，请刷新后重试",
+                409,
+            )
+    db.expire(row)
+    db.refresh(row)
     return row
 
 
@@ -1154,6 +1306,42 @@ def add_invoice(
             "该发票跨期累计分配金额不能超过发票总额",
             422,
         )
+    current_statement_invoiced = _money(
+        db.scalar(
+            select(func.coalesce(func.sum(SupplierMonthlyInvoice.allocated_amount), 0)).where(
+                SupplierMonthlyInvoice.statement_id == row.id
+            )
+        )
+        or 0
+    )
+    next_invoice_allocated = _money(current_statement_invoiced + allocated)
+    next_status = (
+        row.status
+        if row.status in {"partial_payment", "paid"}
+        else "invoiced_pending_payment"
+    )
+    statement_result = db.execute(
+        update(SupplierMonthlyStatement)
+        .where(
+            SupplierMonthlyStatement.id == row.id,
+            SupplierMonthlyStatement.active_guard == 1,
+            SupplierMonthlyStatement.status == row.status,
+            SupplierMonthlyStatement.version == expected_version,
+        )
+        .values(
+            invoice_allocated_amount=next_invoice_allocated,
+            status=next_status,
+            version=expected_version + 1,
+            updated_at=utc_now_naive(),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if statement_result.rowcount != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_STALE",
+            "供应商月结单发票或付款状态已变化，请刷新后重试",
+            409,
+        )
     invoice = SupplierMonthlyInvoice(
         statement_id=row.id,
         supplier_id=row.supplier_id,
@@ -1168,18 +1356,8 @@ def add_invoice(
     )
     db.add(invoice)
     db.flush()
-    row.invoice_allocated_amount = _money(
-        db.scalar(
-            select(func.coalesce(func.sum(SupplierMonthlyInvoice.allocated_amount), 0)).where(
-                SupplierMonthlyInvoice.statement_id == row.id
-            )
-        )
-        or 0
-    )
-    if row.status not in {"partial_payment", "paid"}:
-        row.status = "invoiced_pending_payment"
-    row.version += 1
-    db.flush()
+    db.expire(row)
+    db.refresh(row)
     return row, invoice
 
 
@@ -1249,6 +1427,59 @@ def add_payment(
             "累计付款不能超过当前已登记发票分配金额",
             422,
         )
+    new_paid = _money(paid + normalized_amount)
+    next_status = "paid" if new_paid == confirmed else "partial_payment"
+    statement_result = db.execute(
+        update(SupplierMonthlyStatement)
+        .where(
+            SupplierMonthlyStatement.id == row.id,
+            SupplierMonthlyStatement.active_guard == 1,
+            SupplierMonthlyStatement.status == row.status,
+            SupplierMonthlyStatement.version == expected_version,
+        )
+        .values(
+            paid_amount=new_paid,
+            status=next_status,
+            version=expected_version + 1,
+            updated_at=utc_now_naive(),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if statement_result.rowcount != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_STALE",
+            "供应商月结单付款状态已被其他人修改，请刷新后重试",
+            409,
+        )
+    payable = (
+        db.get(FinancePayable, row.finance_payable_id)
+        if row.finance_payable_id is not None
+        else None
+    )
+    if new_paid == confirmed:
+        if payable is not None:
+            payable_result = db.execute(
+                update(FinancePayable)
+                .where(
+                    FinancePayable.id == payable.id,
+                    FinancePayable.status == "confirmed",
+                    FinancePayable.version == payable.version,
+                )
+                .values(
+                    status="paid",
+                    paid_by=user.id,
+                    paid_at=utc_now_naive(),
+                    version=payable.version + 1,
+                    updated_at=utc_now_naive(),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if payable_result.rowcount != 1:
+                raise SupplierSettlementError(
+                    "SUPPLIER_PAYABLE_STALE",
+                    "关联应付状态已变化，请刷新后重试",
+                    409,
+                )
     payment = SupplierMonthlyPayment(
         statement_id=row.id,
         payment_date=payment_date,
@@ -1260,24 +1491,8 @@ def add_payment(
     )
     db.add(payment)
     db.flush()
-    new_paid = _money(paid + normalized_amount)
-    row.paid_amount = new_paid
-    payable = (
-        db.get(FinancePayable, row.finance_payable_id)
-        if row.finance_payable_id is not None
-        else None
-    )
-    if new_paid == confirmed:
-        row.status = "paid"
-        if payable is not None:
-            payable.status = "paid"
-            payable.paid_by = user.id
-            payable.paid_at = utc_now_naive()
-            payable.version += 1
-    else:
-        row.status = "partial_payment"
-    row.version += 1
-    db.flush()
+    db.expire(row)
+    db.refresh(row)
     return row, payment
 
 

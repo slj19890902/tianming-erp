@@ -192,7 +192,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "previous_reading >= 0 AND current_reading >= previous_reading "
-            "AND usage_quantity = current_reading - previous_reading",
+            "AND abs(usage_quantity - (current_reading - previous_reading)) < 0.0005",
             name="ck_finance_utility_readings_meter",
         ),
         sa.CheckConstraint(

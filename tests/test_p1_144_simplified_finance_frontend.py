@@ -17,7 +17,7 @@ def test_finance_page_leads_with_four_simple_expense_groups() -> None:
         assert label in panel
     assert "生成本月固定草稿" in panel
     assert "导出材料核票" in panel
-    assert "纸板" in panel and "外购包材" in panel
+    assert "纸板" in panel and "外购包材" in panel and "模具/油墨等" in panel
     assert "发票差" in panel
     assert "查看材料账单 / 发票差异具体位置" in panel
     assert "承兑不计作银行现金" not in panel  # the wording is rendered from API
@@ -37,12 +37,16 @@ def test_fixed_expense_utility_and_acceptance_forms_are_compact_and_actionable()
         "上月表数",
         "本月表数",
         "发票金额（优先）",
+        "已付 ¥",
+        "row.payment_date",
         "客户承兑与供应商背书",
         "背书抵付",
     ):
         assert text in panel
     assert 'v-model="financeRecurringForm.is_active"' in panel
     assert 'v-model.number="row._statementId"' in panel
+    assert ':disabled="Number(item.available_payment_amount)<Number(row.amount)"' in panel
+    assert "余额不足" in panel
 
 
 def test_new_cost_entry_categories_hide_outsourcing_but_keep_history_mapping() -> None:
@@ -73,6 +77,8 @@ def test_simple_finance_calls_are_loaded_with_payables_and_keep_acceptance_non_c
     assert "/endorse" in endorse
     assert "supplier_statement_id" in endorse
     assert "expected_version" in endorse
+    assert "available_payment_amount" in endorse
+    assert "确认应付或已收发票余额不足" in endorse
 
     export = _section("async exportFinanceMaterialReconciliation() {", "payableCategoryText(value) {")
     assert "/api/finance/simple-finance/material-export" in export

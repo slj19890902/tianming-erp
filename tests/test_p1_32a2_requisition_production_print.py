@@ -1064,15 +1064,27 @@ def test_production_packaging_labels_deduplicate_split_rows_and_keep_remainder(
             production_print_app["supplier_order_id"],
         )
         before = db.scalar(select(func.count()).select_from(ProductionTask))
-        first = build_supplier_requisition_packaging_label_package(db, order)
-        second = build_supplier_requisition_packaging_label_package(db, order)
+        selected_item_ids = {production_print_app["supplier_item_id"]}
+        first = build_supplier_requisition_packaging_label_package(
+            db,
+            order,
+            selected_supplier_item_ids=selected_item_ids,
+        )
+        second = build_supplier_requisition_packaging_label_package(
+            db,
+            order,
+            selected_supplier_item_ids=selected_item_ids,
+        )
         after = db.scalar(select(func.count()).select_from(ProductionTask))
 
     # Cover/base supplier rows share one ordinary production task and must not
     # duplicate its packaging-label plan.
     assert first["production_task_count"] == 1
-    assert first["label_count"] == 5
-    assert [row["quantity"] for row in first["labels"]] == [5, 5, 5, 5, 3]
+    # The print package reads the current outstanding task demand, while a
+    # prepared print job freezes the result.  The selected cover row resolves
+    # to its one shared production task (200 products, five per label).
+    assert first["label_count"] == 40
+    assert [row["quantity"] for row in first["labels"]] == [5] * 40
     assert {row["customer_code"] for row in first["labels"]} == {"P132A2-A"}
     assert {row["production_task_id"] for row in first["labels"]} == {task.id}
     assert first["plan_fingerprint"] == second["plan_fingerprint"]
@@ -1126,19 +1138,21 @@ def test_production_packaging_label_api_is_read_only_and_customer_scoped(
 
     with TestClient(production_print_app["app"]) as client:
         _login(client, "p132a2-admin")
-        first = client.get(
-            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+        selected_item_id = production_print_app["supplier_item_id"]
+        url = (
+            f"/api/requisition/supplier-orders/{order_id}/"
+            f"production-packaging-label-package?item_ids={selected_item_id}"
         )
-        second = client.get(
-            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
-        )
+        first = client.get(url)
+        second = client.get(url)
         assert first.status_code == second.status_code == 200
         assert first.json() == second.json()
-        assert first.json()["label_count"] == 5
+        assert first.json()["label_count"] == 40
 
     with TestClient(production_print_app["app"]) as client:
         _login(client, "p132a2-sales")
         forbidden = client.get(
-            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+            f"/api/requisition/supplier-orders/{order_id}/"
+            f"production-packaging-label-package?item_ids={production_print_app['supplier_item_id']}"
         )
         assert forbidden.status_code == 403

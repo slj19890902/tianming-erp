@@ -1676,6 +1676,7 @@ def test_component_finished_stock_reduces_only_component_requisition(
 def test_component_inventory_auto_cover_uses_only_safe_exact_stock(
     composite_requisition_app,
 ) -> None:
+    from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
     from app.models.warehouse_inventory import (
         InventoryLot,
@@ -1694,6 +1695,9 @@ def test_component_inventory_auto_cover_uses_only_safe_exact_stock(
         snapshot = db.get(SalesOrderItemBomComponent, 1)
         assert snapshot is not None
         snapshot.snapshot_component_default_cutting_mode = "一开二"
+        component_product = db.get(Product, snapshot.component_product_id)
+        assert component_product is not None
+        component_product.default_cutting_mode = "一开二"
         location = WarehouseLocation(
             location_code="N039-AUTO-01",
             location_name="组件自动抵扣",

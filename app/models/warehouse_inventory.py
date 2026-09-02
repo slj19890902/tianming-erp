@@ -1599,6 +1599,16 @@ class InventoryReservation(Base):
             "<= credited_requirement_quantity)",
             name="ck_inventory_reservations_cumulative_requirement_quantities",
         ),
+        CheckConstraint(
+            "(reservation_type = 'semi_requisition' AND ("
+            "(requisition_item_id IS NOT NULL AND "
+            "stock_replenishment_bom_component_plan_id IS NULL) OR "
+            "(requisition_item_id IS NULL AND "
+            "stock_replenishment_bom_component_plan_id IS NOT NULL))) OR "
+            "(reservation_type <> 'semi_requisition' AND "
+            "stock_replenishment_bom_component_plan_id IS NULL)",
+            name="ck_inventory_reservations_semi_requisition_target",
+        ),
         UniqueConstraint("reservation_number", name="uq_inventory_reservations_number"),
         UniqueConstraint("idempotency_key", name="uq_inventory_reservations_idempotency"),
         UniqueConstraint(
@@ -1614,6 +1624,11 @@ class InventoryReservation(Base):
             "status",
         ),
         Index("ix_inventory_reservations_requisition", "requisition_item_id"),
+        Index(
+            "ix_inventory_reservations_stock_replenishment_bom_plan",
+            "stock_replenishment_bom_component_plan_id",
+            "status",
+        ),
         Index(
             "ix_inventory_reservations_semi_requirement",
             "semi_requirement_id",
@@ -1645,6 +1660,13 @@ class InventoryReservation(Base):
     )
     requisition_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("material_requisition_items.id", ondelete="SET NULL"), nullable=True
+    )
+    stock_replenishment_bom_component_plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "stock_replenishment_bom_component_plans.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
     )
     semi_requirement_id: Mapped[int | None] = mapped_column(
         ForeignKey("order_item_semi_requirements.id", ondelete="SET NULL"),
@@ -1697,6 +1719,13 @@ class InventoryReservation(Base):
     )
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime, onupdate=func.current_timestamp(), nullable=True
+    )
+
+    stock_replenishment_bom_component_plan: Mapped[
+        "StockReplenishmentBomComponentPlan | None"
+    ] = relationship(
+        "StockReplenishmentBomComponentPlan",
+        back_populates="reservations",
     )
 
 

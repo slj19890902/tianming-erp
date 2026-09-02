@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from math import ceil
 from uuid import uuid4
 
@@ -19,6 +21,7 @@ from app.models.product import Product
 from app.models.product_bom import ProductBomComponent, SalesOrderItemBomComponent
 from app.models.stock_replenishment import (
     InventoryStockPolicy,
+    StockReplenishmentBomComponentPlan,
     StockReplenishmentOrder,
     StockReplenishmentOrderItem,
 )
@@ -36,7 +39,9 @@ from app.services.location_candidates import (
 )
 from app.services.warehouse_location_address import employee_location_name
 from app.services.requisition_quantities import (
+    CuttingModeError,
     cutting_factor,
+    frozen_bom_yield_per_sheet,
     normalize_cutting_mode,
 )
 from app.services.warehouse_inventory import (
@@ -52,6 +57,8 @@ from app.services.warehouse_inventory import (
 from app.services.box_type_rules import box_type_code
 from app.services.composite_bom_workflow import component_availability
 from app.services.semi_finished_inventory import (
+    SemiFinishedLotVersion,
+    reserve_stock_replenishment_component_inventory,
     safe_physical_board_facts_match,
 )
 
@@ -228,13 +235,15 @@ def virtual_composite_replenishment_components(
         missing.extend(
             f"{label}：{field}" for field in defaults["missing_fields"]
         )
-        output_per_sheet = max(int(defaults.get("output_per_sheet") or 1), 1)
-        if relation.is_die_cut and relation.mold_max_yield_per_sheet is not None:
-            mold_yield = int(relation.mold_max_yield_per_sheet)
-            if output_per_sheet > mold_yield:
-                missing.append(f"{label}：默认开料出数超过模具最大出数")
-            elif output_per_sheet == 1:
-                output_per_sheet = mold_yield
+        try:
+            output_per_sheet = frozen_bom_yield_per_sheet(
+                defaults.get("cutting_mode"),
+                is_die_cut=bool(relation.is_die_cut),
+                mold_max_yield_per_sheet=relation.mold_max_yield_per_sheet,
+            )
+        except CuttingModeError as error:
+            missing.append(f"{label}：{error}")
+            output_per_sheet = max(int(defaults.get("output_per_sheet") or 1), 1)
         components.append(
             {
                 "relation": relation,
@@ -260,6 +269,105 @@ def virtual_composite_replenishment_components(
         "supplier_names": supplier_names,
         "supplier_name": supplier_names[0] if len(supplier_names) == 1 else None,
     }
+
+
+def virtual_composite_bom_fingerprint(
+    product: Product,
+    components: list[dict],
+) -> str:
+    """Return a stable fingerprint for the current physical BOM facts."""
+
+    canonical = {
+        "parent_product_id": int(product.id),
+        "parent_product_version": int(product.version or 0),
+        "components": [
+            {
+                "product_bom_component_id": int(row["relation"].id),
+                "component_product_id": int(row["product"].id),
+                "component_product_version": int(row["product"].version or 0),
+                "display_order": int(row["relation"].display_order or 0),
+                "quantity_per_set": int(row["quantity_per_set"]),
+                "cutting_mode": str(row["defaults"].get("cutting_mode") or ""),
+                "output_per_sheet": int(row["output_per_sheet"]),
+                "is_die_cut": bool(row["relation"].is_die_cut),
+                "mold_max_yield_per_sheet": (
+                    int(row["relation"].mold_max_yield_per_sheet)
+                    if row["relation"].mold_max_yield_per_sheet is not None
+                    else None
+                ),
+                "spare_sheet_quantity": int(
+                    row["relation"].spare_sheet_quantity or 0
+                ),
+                "material_id": row["defaults"].get("material_id"),
+                "material_code": row["defaults"].get("material_code"),
+                "layer_count": row["defaults"].get("layer_count"),
+                "flute_type": row["defaults"].get("flute_type"),
+                "report_length_mm": row["defaults"].get("report_length_mm"),
+                "report_width_mm": row["defaults"].get("report_width_mm"),
+                "crease_type": row["defaults"].get("crease_type"),
+                "crease_left_mm": row["defaults"].get("crease_left_mm"),
+                "crease_middle_mm": row["defaults"].get("crease_middle_mm"),
+                "crease_right_mm": row["defaults"].get("crease_right_mm"),
+            }
+            for row in components
+        ],
+    }
+    encoded = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def active_stock_policy_replenishment_order_id(
+    db: Session, *, policy_id: int | None
+) -> int | None:
+    """Return the active order that exclusively owns a warning policy."""
+
+    if policy_id is None:
+        return None
+    plan_owner = db.scalar(
+        select(StockReplenishmentOrder.id)
+        .join(
+            StockReplenishmentBomComponentPlan,
+            StockReplenishmentBomComponentPlan.replenishment_order_id
+            == StockReplenishmentOrder.id,
+        )
+        .join(
+            InventoryReservation,
+            InventoryReservation.stock_replenishment_bom_component_plan_id
+            == StockReplenishmentBomComponentPlan.id,
+        )
+        .where(
+            StockReplenishmentOrder.status.in_(
+                ("confirmed", "partially_stocked", "stocked")
+            ),
+            StockReplenishmentBomComponentPlan.stock_policy_id == policy_id,
+            InventoryReservation.status.in_(("active", "partial")),
+        )
+        .order_by(StockReplenishmentOrder.id)
+        .limit(1)
+    )
+    if plan_owner is not None:
+        return int(plan_owner)
+    return db.scalar(
+        select(StockReplenishmentOrder.id)
+        .join(
+            StockReplenishmentOrderItem,
+            StockReplenishmentOrderItem.replenishment_order_id
+            == StockReplenishmentOrder.id,
+        )
+        .where(
+            StockReplenishmentOrder.status.in_(("confirmed", "partially_stocked")),
+            StockReplenishmentOrderItem.stock_policy_id == policy_id,
+            StockReplenishmentOrderItem.quantity
+            > StockReplenishmentOrderItem.stocked_quantity,
+        )
+        .order_by(StockReplenishmentOrder.id)
+        .limit(1)
+    )
 
 
 def product_replenishment_signature(
@@ -916,6 +1024,7 @@ def virtual_composite_replenishment_demand_plan(
     *,
     product: Product,
     finished_quantity: int,
+    stock_policy_id: int | None = None,
 ) -> dict | None:
     """Build component-level board demand for a virtual finished set."""
 
@@ -940,10 +1049,14 @@ def virtual_composite_replenishment_demand_plan(
             output_per_sheet=int(row["output_per_sheet"]),
         )
         required_pieces = parent_sets * quantity_per_set
-        covered_pieces = (
-            int(coverage["customer_board_preparation_auto_cover_capacity"])
-            + int(coverage["incoming_board_preparation_auto_cover_capacity"])
-        )
+        # Freely available semi-finished stock is deliberately not subtracted
+        # here.  It becomes coverage only after an operator selects it and the
+        # formal submit atomically creates a version-checked reservation.
+        # Incoming quantities and reservations already owned by another plan
+        # are never reusable coverage for this new formal plan.
+        incoming_covered_pieces = 0
+        reserved_plan_pieces = 0
+        covered_pieces = 0
         outstanding_pieces = max(required_pieces - covered_pieces, 0)
         output_per_sheet = int(row["output_per_sheet"])
         net_sheets = ceil(outstanding_pieces / output_per_sheet)
@@ -962,6 +1075,8 @@ def virtual_composite_replenishment_demand_plan(
                 "coverage": coverage,
                 "required_piece_quantity": required_pieces,
                 "covered_piece_quantity": covered_pieces,
+                "incoming_covered_piece_quantity": incoming_covered_pieces,
+                "reserved_plan_piece_quantity": reserved_plan_pieces,
                 "suggested_component_piece_quantity": outstanding_pieces,
                 "net_sheet_quantity": net_sheets,
                 "spare_sheet_quantity": spare_sheets,
@@ -970,6 +1085,10 @@ def virtual_composite_replenishment_demand_plan(
         )
     return {
         **resolved,
+        "bom_fingerprint": virtual_composite_bom_fingerprint(
+            product,
+            resolved["components"],
+        ),
         "parent_set_quantity": parent_sets,
         "suggested_parent_set_quantity": parent_sets_still_needing_board,
         "suggested_sheet_quantity": total_sheets,
@@ -1068,18 +1187,40 @@ def stock_policy_dict(
             db,
             product=policy.product,
             finished_quantity=suggested_finished_quantity,
+            stock_policy_id=policy.id,
         )
         if policy.product is not None
         else None
     )
+    active_composite_policy_order_id: int | None = None
+    active_composite_policy_has_pending_purchase = False
     if composite_plan is not None:
         output_per_sheet = 1
-        suggested_new_requisition_finished_quantity = int(
-            composite_plan["suggested_parent_set_quantity"]
+        active_composite_policy_order_id = active_stock_policy_replenishment_order_id(
+            db, policy_id=policy.id
         )
-        suggested_new_requisition_sheet_quantity = int(
-            composite_plan["suggested_sheet_quantity"]
-        )
+        if active_composite_policy_order_id is not None:
+            active_composite_policy_has_pending_purchase = bool(
+                db.scalar(
+                    select(StockReplenishmentOrderItem.id)
+                    .where(
+                        StockReplenishmentOrderItem.replenishment_order_id
+                        == active_composite_policy_order_id,
+                        StockReplenishmentOrderItem.quantity
+                        > StockReplenishmentOrderItem.stocked_quantity,
+                    )
+                    .limit(1)
+                )
+            )
+            suggested_new_requisition_finished_quantity = 0
+            suggested_new_requisition_sheet_quantity = 0
+        else:
+            suggested_new_requisition_finished_quantity = int(
+                composite_plan["suggested_parent_set_quantity"]
+            )
+            suggested_new_requisition_sheet_quantity = int(
+                composite_plan["suggested_sheet_quantity"]
+            )
     else:
         output_per_sheet = (
             int(product_replenishment_defaults(policy.product)["output_per_sheet"])
@@ -1093,6 +1234,10 @@ def stock_policy_dict(
     replenishment_state = (
         "purchase_needed"
         if suggested_new_requisition_sheet_quantity > 0
+        else "already_ordered"
+        if active_composite_policy_has_pending_purchase
+        else "inventory_reserved"
+        if active_composite_policy_order_id is not None
         else "already_ordered"
         if external_purchase_incoming_quantity > 0
         else "board_preparation_ready"
@@ -1399,6 +1544,59 @@ def replenishment_order_dict(
             )
             for item in order.items
         ],
+        "composite_parent_plans": [
+            {
+                "id": plan.id,
+                "stock_policy_id": plan.stock_policy_id,
+                "parent_product_id": plan.parent_product_id,
+                "parent_product_version": plan.parent_product_version,
+                "parent_product_code": plan.parent_product_code_snapshot,
+                "parent_product_name": plan.parent_product_name_snapshot,
+                "product_bom_component_id": plan.product_bom_component_id,
+                "component_product_id": plan.component_product_id,
+                "component_product_version": plan.component_product_version,
+                "component_product_code": plan.component_product_code_snapshot,
+                "component_product_name": plan.component_product_name_snapshot,
+                "parent_set_quantity": plan.parent_set_quantity,
+                "quantity_per_set": plan.quantity_per_set,
+                "required_piece_quantity": plan.required_piece_quantity,
+                "incoming_covered_piece_quantity": (
+                    plan.incoming_covered_piece_quantity
+                ),
+                "reserved_piece_quantity": plan.reserved_piece_quantity,
+                "net_required_piece_quantity": plan.net_required_piece_quantity,
+                "pieces_per_box": plan.pieces_per_box,
+                "yield_per_sheet": plan.yield_per_sheet,
+                "cutting_mode": plan.cutting_mode_snapshot,
+                "is_die_cut": bool(plan.is_die_cut_snapshot),
+                "mold_max_yield_per_sheet": (
+                    plan.mold_max_yield_per_sheet_snapshot
+                ),
+                "spare_sheet_quantity": plan.spare_sheet_quantity,
+                "purchase_sheet_quantity": plan.purchase_sheet_quantity,
+                "cutting_remainder_piece_quantity": (
+                    plan.cutting_remainder_piece_quantity
+                ),
+                "replenishment_item_id": plan.replenishment_item_id,
+                "bom_fingerprint": plan.bom_fingerprint,
+                "request_fingerprint": plan.request_fingerprint,
+                "reservations": [
+                    {
+                        "id": reservation.id,
+                        "inventory_lot_id": reservation.inventory_lot_id,
+                        "reserved_stock_quantity": (
+                            reservation.reserved_stock_quantity
+                        ),
+                        "credited_piece_quantity": (
+                            reservation.credited_requirement_quantity
+                        ),
+                        "status": reservation.status,
+                    }
+                    for reservation in plan.reservations
+                ],
+            }
+            for plan in order.component_plans
+        ],
     }
 
 
@@ -1649,6 +1847,45 @@ def receive_replenishment_item(
                     expected_version=lot.version,
                     operator_id=operator_id,
                 )
+            component_plan = item.bom_component_plan
+            if component_plan is not None:
+                yield_per_sheet = max(int(component_plan.yield_per_sheet or 1), 1)
+                planned_component_pieces = max(
+                    int(component_plan.net_required_piece_quantity or 0), 0
+                )
+                order_purpose_sheet_quantity = ceil(
+                    planned_component_pieces / yield_per_sheet
+                )
+                stocked_before = max(int(item.stocked_quantity or 0), 0)
+                stocked_after = stocked_before + int(quantity)
+                credited_before = min(
+                    min(stocked_before, order_purpose_sheet_quantity)
+                    * yield_per_sheet,
+                    planned_component_pieces,
+                )
+                credited_after = min(
+                    min(stocked_after, order_purpose_sheet_quantity)
+                    * yield_per_sheet,
+                    planned_component_pieces,
+                )
+                received_order_purpose_pieces = credited_after - credited_before
+                if received_order_purpose_pieces > 0:
+                    reserve_stock_replenishment_component_inventory(
+                        db,
+                        plan=component_plan,
+                        requested_piece_quantity=received_order_purpose_pieces,
+                        lots=[
+                            SemiFinishedLotVersion(
+                                lot_id=int(lot.id),
+                                expected_version=int(lot.version),
+                            )
+                        ],
+                        operator_id=operator_id,
+                        idempotency_key=(
+                            f"stock-plan-receipt-{int(component_plan.id)}-"
+                            f"{int(receipt_item_id)}"
+                        ),
+                    )
         else:
             raise StockReplenishmentError("补库目标类型无效。")
     except WarehouseInventoryError as error:

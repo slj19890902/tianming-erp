@@ -133,6 +133,7 @@ from app.models.supplier_requisition_order import (  # noqa: E402,F401
 )
 from app.models.stock_replenishment import (  # noqa: E402,F401
     InventoryStockPolicy,
+    StockReplenishmentBomComponentPlan,
     StockReplenishmentOrder,
     StockReplenishmentOrderItem,
 )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -183,6 +184,11 @@ def _seed(factory: sessionmaker[Session]) -> dict[str, int]:
             supplier_name="匿名纸板供应商",
             layer_count=3,
             flute_type="B",
+            quote_price=Decimal("2.0000"),
+            price_unit="元/张",
+            purchase_currency="CNY",
+            purchase_tax_included=True,
+            purchase_tax_rate=Decimal("0.13"),
             is_active=True,
         )
         db.add(material_a)
@@ -601,6 +607,7 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
     from app.models.product_bom import ProductBomComponent
     from app.models.stock_replenishment import (
         InventoryStockPolicy,
+        StockReplenishmentBomComponentPlan,
         StockReplenishmentOrderItem,
     )
     from app.services.stock_replenishment import stock_policy_dict
@@ -702,6 +709,8 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
         db.add(policy)
         db.commit()
         policy_id = policy.id
+        parent_id = parent.id
+        long_piece_id = long_piece.id
         short_piece_id = short_piece.id
 
     app = FastAPI()
@@ -718,14 +727,35 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
             "/api/auth/login",
             json={"username": "admin", "password": "123456"},
         ).status_code == 200
-        draft_response = client.get(
+        parent_step_response = client.get(
             f"/api/requisition/stock-policies/{policy_id}/replenishment-draft"
+        )
+        assert parent_step_response.status_code == 200, parent_step_response.text
+        parent_step = parent_step_response.json()
+        assert parent_step["requires_parent_set_confirmation"] is True
+        assert parent_step["items"] == []
+        assert parent_step["composite_parent_plan"] == {
+            **parent_step["composite_parent_plan"],
+            "stock_policy_id": policy_id,
+            "parent_product_id": parent_id,
+            "parent_set_quantity": 500,
+            "current_complete_set_quantity": 0,
+            "warning_set_quantity": 100,
+            "target_set_quantity": 500,
+            "suggested_parent_set_quantity": 500,
+            "components": [],
+        }
+
+        draft_response = client.get(
+            f"/api/requisition/stock-policies/{policy_id}/replenishment-draft",
+            params={"parent_set_quantity": 500},
         )
         assert draft_response.status_code == 200, draft_response.text
         draft = draft_response.json()
         assert draft["draft_ready"] is True
         assert draft["missing_fields"] == []
         assert draft["is_virtual_composite_parent"] is True
+        assert draft["requires_parent_set_confirmation"] is False
         assert draft["policy_summary"][
             "suggested_new_requisition_finished_quantity"
         ] == 500
@@ -738,6 +768,24 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
         ]
         assert [line["quantity"] for line in draft["items"]] == [375, 500]
         assert [line["bom_quantity_per_set"] for line in draft["items"]] == [3, 4]
+        assert [
+            line["required_piece_quantity"] for line in draft["items"]
+        ] == [1500, 2000]
+        assert [
+            line["inventory_deducted_piece_quantity"] for line in draft["items"]
+        ] == [0, 0]
+        assert [
+            line["net_required_piece_quantity"] for line in draft["items"]
+        ] == [1500, 2000]
+        assert [line["yield_per_sheet"] for line in draft["items"]] == [4, 4]
+        assert [
+            line["purchase_sheet_quantity"] for line in draft["items"]
+        ] == [375, 500]
+        assert draft["composite_parent_plan"]["parent_set_quantity"] == 500
+        assert {
+            row["component_product_id"]
+            for row in draft["composite_parent_plan"]["components"]
+        } == {long_piece_id, short_piece_id}
         assert all(line["material_code"] == "R616R" for line in draft["items"])
         assert all(line["layer_count"] == 5 for line in draft["items"])
         assert all(line["flute_type"] == "AB" for line in draft["items"])
@@ -764,6 +812,7 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
                 "supplier_name": draft["supplier_name"],
                 "customer_id": draft["customer_id"],
                 "stock_now": False,
+                "composite_parent_plan": draft["composite_parent_plan"],
                 "items": draft["items"],
             },
         )
@@ -792,16 +841,21 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
                 "supplier_name": draft["supplier_name"],
                 "customer_id": draft["customer_id"],
                 "stock_now": False,
-                "items": [
-                    {
-                        **payload_items[0],
-                        "reference_product_id": ids["product_a"],
-                    }
-                ],
+                "composite_parent_plan": {
+                    **draft["composite_parent_plan"],
+                    "components": [
+                        {
+                            **draft["composite_parent_plan"]["components"][0],
+                            "component_product_id": ids["product_a"],
+                        },
+                        *draft["composite_parent_plan"]["components"][1:],
+                    ],
+                },
+                "items": payload_items,
             },
         )
         assert tampered.status_code == 409
-        assert "只能报该成品的必需BOM组件" in tampered.text
+        assert "BOM组件" in tampered.text
         incomplete = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
@@ -810,13 +864,25 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
                 "supplier_name": draft["supplier_name"],
                 "customer_id": draft["customer_id"],
                 "stock_now": False,
-                "items": payload_items[:1],
+                "composite_parent_plan": {
+                    **draft["composite_parent_plan"],
+                    "components": draft["composite_parent_plan"]["components"][:1],
+                },
+                "items": payload_items,
             },
         )
         assert incomplete.status_code == 409
         assert "BOM必需组件不完整" in incomplete.text
-        underreported_items = [dict(row) for row in payload_items]
-        underreported_items[0]["quantity"] = 374
+        underreported_plan = {
+            **draft["composite_parent_plan"],
+            "components": [
+                {
+                    **draft["composite_parent_plan"]["components"][0],
+                    "purchase_sheet_quantity": 374,
+                },
+                *draft["composite_parent_plan"]["components"][1:],
+            ],
+        }
         underreported = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
@@ -825,11 +891,12 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
                 "supplier_name": draft["supplier_name"],
                 "customer_id": draft["customer_id"],
                 "stock_now": False,
-                "items": underreported_items,
+                "composite_parent_plan": underreported_plan,
+                "items": payload_items,
             },
         )
         assert underreported.status_code == 409
-        assert "至少需报375张" in underreported.text
+        assert "应采购375张" in underreported.text
         saved = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
@@ -838,6 +905,7 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
                 "supplier_name": draft["supplier_name"],
                 "customer_id": draft["customer_id"],
                 "stock_now": False,
+                "composite_parent_plan": draft["composite_parent_plan"],
                 "items": payload_items,
             },
         )
@@ -852,6 +920,28 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
             ).all()
         )
         assert [row.quantity for row in saved_items] == [375, 500]
+        component_plans = list(
+            db.scalars(
+                select(StockReplenishmentBomComponentPlan)
+                .where(
+                    StockReplenishmentBomComponentPlan.stock_policy_id
+                    == policy_id
+                )
+                .order_by(StockReplenishmentBomComponentPlan.id)
+            ).all()
+        )
+        assert len(component_plans) == 2
+        assert [row.parent_set_quantity for row in component_plans] == [500, 500]
+        assert [row.required_piece_quantity for row in component_plans] == [
+            1500,
+            2000,
+        ]
+        assert [row.purchase_sheet_quantity for row in component_plans] == [
+            375,
+            500,
+        ]
+        assert all(row.parent_product_id == parent_id for row in component_plans)
+        assert all(row.component_product_id != parent_id for row in component_plans)
         policy = db.get(InventoryStockPolicy, policy_id)
         assert policy is not None
         summary = stock_policy_dict(db, policy)

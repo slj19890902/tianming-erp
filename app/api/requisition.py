@@ -6,6 +6,7 @@ import re
 from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal
+from math import ceil
 from threading import Lock
 from types import SimpleNamespace
 from typing import Annotated, Literal
@@ -68,6 +69,7 @@ from app.models.purchase_receipt import (
 )
 from app.models.stock_replenishment import (
     InventoryStockPolicy,
+    StockReplenishmentBomComponentPlan,
     StockReplenishmentOrder,
     StockReplenishmentOrderItem,
 )
@@ -105,6 +107,7 @@ from app.services.warehouse_location_address import employee_location_name
 from app.services.audit_log import append_audit_event
 from app.services.stock_replenishment import (
     StockReplenishmentError,
+    active_stock_policy_replenishment_order_id,
     finished_product_quantity_summary,
     next_replenishment_order_number,
     product_replenishment_defaults,
@@ -114,6 +117,7 @@ from app.services.stock_replenishment import (
     stock_replenishment_order,
     theoretical_requisition_quantity,
     validate_stock_policy,
+    virtual_composite_bom_fingerprint,
     virtual_composite_replenishment_demand_plan,
 )
 from app.services.external_packaging_stock_replenishment import (
@@ -159,7 +163,9 @@ from app.services.semi_finished_inventory import (
     browse_semi_finished_inventory_for_product,
     ensure_semi_finished_lot_eligibility,
     release_active_semi_reservations_for_items,
+    release_semi_finished_reservation,
     requirement_signature,
+    reserve_stock_replenishment_component_inventory,
     reserve_semi_finished_inventory,
     safe_physical_board_facts_match,
     save_order_item_semi_requirement,
@@ -187,6 +193,7 @@ from app.services.requisition_quantities import (
     DEFAULT_CUTTING_MODE,
     CuttingModeError,
     cutting_factor,
+    frozen_bom_yield_per_sheet,
     normalize_cutting_mode,
     purchase_sheet_quantity,
     required_piece_quantity,
@@ -1656,6 +1663,48 @@ class StockReplenishmentItemPayload(BaseModel):
         return self
 
 
+class StockReplenishmentPlanLotPayload(BaseModel):
+    lot_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+
+
+class StockReplenishmentPlanComponentPayload(BaseModel):
+    product_bom_component_id: int = Field(gt=0)
+    component_product_id: int = Field(gt=0)
+    component_product_version: int = Field(gt=0)
+    pieces_per_box: int = Field(gt=0)
+    spare_sheet_quantity: int = Field(default=0, ge=0)
+    requested_offset_piece_quantity: int = Field(default=0, ge=0)
+    selected_lots: list[StockReplenishmentPlanLotPayload] = Field(
+        default_factory=list
+    )
+    purchase_sheet_quantity: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_inventory_selection(
+        self,
+    ) -> "StockReplenishmentPlanComponentPayload":
+        if self.requested_offset_piece_quantity > 0 and not self.selected_lots:
+            raise ValueError("组件库存抵扣必须选择库存批次")
+        if self.requested_offset_piece_quantity == 0 and self.selected_lots:
+            raise ValueError("未填写抵扣片数时不能提交库存批次")
+        lot_ids = [row.lot_id for row in self.selected_lots]
+        if len(lot_ids) != len(set(lot_ids)):
+            raise ValueError("同一组件不能重复选择库存批次")
+        return self
+
+
+class StockReplenishmentCompositeParentPayload(BaseModel):
+    stock_policy_id: int | None = Field(default=None, gt=0)
+    parent_product_id: int = Field(gt=0)
+    parent_product_version: int = Field(gt=0)
+    parent_set_quantity: int = Field(gt=0)
+    bom_fingerprint: str = Field(min_length=64, max_length=64)
+    components: list[StockReplenishmentPlanComponentPayload] = Field(
+        min_length=1
+    )
+
+
 class StockReplenishmentCreatePayload(BaseModel):
     source_type: str = "manual_history"
     idempotency_key: str | None = Field(default=None, max_length=80)
@@ -1663,7 +1712,8 @@ class StockReplenishmentCreatePayload(BaseModel):
     customer_id: int | None = None
     remark: str | None = None
     stock_now: bool = False
-    items: list[StockReplenishmentItemPayload] = Field(min_length=1)
+    items: list[StockReplenishmentItemPayload] = Field(default_factory=list)
+    composite_parent_plan: StockReplenishmentCompositeParentPayload | None = None
 
     @field_validator("source_type")
     @classmethod
@@ -1678,6 +1728,20 @@ class StockReplenishmentCreatePayload(BaseModel):
     def normalize_idempotency_key(cls, value: str | None) -> str | None:
         normalized = str(value or "").strip()
         return normalized or None
+
+    @model_validator(mode="after")
+    def require_replenishment_content(self) -> "StockReplenishmentCreatePayload":
+        if not self.items and self.composite_parent_plan is None:
+            raise ValueError("至少添加一条补库明细")
+        if self.composite_parent_plan is not None:
+            if self.source_type not in {"stock_warning", "customer_request"}:
+                raise ValueError("组合父件计划仅支持库存预警或手工库存补库")
+            if (
+                self.source_type == "stock_warning"
+                and self.composite_parent_plan.stock_policy_id is None
+            ):
+                raise ValueError("库存预警组合父件计划缺少库存策略")
+        return self
 
 
 class PendingSupplierOrderDraftItem(BaseModel):
@@ -3020,21 +3084,15 @@ def _bom_snapshot_requirements(
     cutting_factor = _cutting_factor(resolved_cutting_mode)
     if actual_yield_per_sheet is not None:
         yield_per_sheet = actual_yield_per_sheet
-    elif cutting_factor > 1:
-        if (
-            snapshot.is_die_cut
-            and snapshot.mold_max_yield_per_sheet is not None
-            and cutting_factor > int(snapshot.mold_max_yield_per_sheet)
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="默认开料每张产出不能超过模具最大出数",
-            )
-        yield_per_sheet = cutting_factor
-    elif snapshot.is_die_cut and snapshot.mold_max_yield_per_sheet is not None:
-        yield_per_sheet = int(snapshot.mold_max_yield_per_sheet)
     else:
-        yield_per_sheet = 1
+        try:
+            yield_per_sheet = frozen_bom_yield_per_sheet(
+                resolved_cutting_mode,
+                is_die_cut=bool(snapshot.is_die_cut),
+                mold_max_yield_per_sheet=snapshot.mold_max_yield_per_sheet,
+            )
+        except CuttingModeError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
     coverage = (
         inventory_coverage_override
         if inventory_coverage_override is not None
@@ -3811,6 +3869,13 @@ def _semi_candidate_dict_for_requisition(
         "component_type": detail.component_type,
         "pieces_per_box": detail.pieces_per_box,
         "stock_yield_per_sheet": detail.stock_yield_per_sheet,
+        "layer_count": detail.layer_count,
+        "sheet_type": detail.sheet_type,
+        "crease_type": detail.crease_type,
+        "crease_left_mm": detail.crease_left_mm,
+        "crease_middle_mm": detail.crease_middle_mm,
+        "crease_right_mm": detail.crease_right_mm,
+        "direct_deduction_eligible": row.direct_deduction_eligible,
         "signature_differences": list(row.signature_differences),
         "warning_codes": list(row.warning_codes),
         "warning_messages": list(row.warning_messages),
@@ -3872,6 +3937,7 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
                 component_type=component,
                 pieces_per_box=int(spec["pieces_per_box"]),
                 stock_yield_per_sheet=stock_yield,
+                include_stock_plan_reservations=True,
             )
         )
         recommended_ids = {row.lot.id for row in recommended}
@@ -4218,6 +4284,7 @@ def _safe_customer_board_preparation_options(
                 component_type=component,
                 pieces_per_box=int(spec["pieces_per_box"]),
                 stock_yield_per_sheet=stock_yield,
+                include_stock_plan_reservations=True,
             )
         )
         safe_candidates = [
@@ -14044,6 +14111,52 @@ def _stock_replenishment_item_customer_id(
     return next(iter(customer_ids)) if len(customer_ids) == 1 else None
 
 
+def _stock_replenishment_plan_customer_id(
+    db: Session,
+    plan: StockReplenishmentBomComponentPlan,
+) -> int | None:
+    """Resolve every authoritative customer reference on a BOM plan.
+
+    A scoped user must never see a corrupt plan merely because its denormalized
+    ``customer_id`` still points at an allowed customer while the frozen parent,
+    component, policy, or linked physical line points elsewhere.
+    """
+
+    if plan.customer_id is None:
+        return None
+    customer_ids: set[int] = {int(plan.customer_id)}
+    for product_id in (plan.parent_product_id, plan.component_product_id):
+        product = db.get(Product, int(product_id))
+        if (
+            product is None
+            or product.deleted_at is not None
+            or not product.is_active
+            or product.customer_id is None
+        ):
+            return None
+        customer_ids.add(int(product.customer_id))
+    if plan.stock_policy_id is not None:
+        policy = db.get(InventoryStockPolicy, int(plan.stock_policy_id))
+        if policy is None:
+            return None
+        policy_customer_id = _stock_policy_customer_id(db, policy)
+        if policy_customer_id is None:
+            return None
+        customer_ids.add(int(policy_customer_id))
+    if plan.replenishment_item_id is not None:
+        item = db.get(
+            StockReplenishmentOrderItem,
+            int(plan.replenishment_item_id),
+        )
+        if item is None:
+            return None
+        item_customer_id = _stock_replenishment_item_customer_id(db, item)
+        if item_customer_id is None:
+            return None
+        customer_ids.add(int(item_customer_id))
+    return next(iter(customer_ids)) if len(customer_ids) == 1 else None
+
+
 def _stock_replenishment_order_is_visible(
     db: Session,
     order: StockReplenishmentOrder,
@@ -14054,8 +14167,6 @@ def _stock_replenishment_order_is_visible(
     allowed = _allowed_customer_ids(user, db)
     if allowed is None:
         return True
-    if not order.items:
-        return False
     item_customer_ids = {
         _stock_replenishment_item_customer_id(
             db,
@@ -14064,11 +14175,25 @@ def _stock_replenishment_order_is_visible(
         )
         for item in order.items
     }
-    if None in item_customer_ids or not item_customer_ids.issubset(allowed):
+    plan_customer_ids = {
+        _stock_replenishment_plan_customer_id(db, row)
+        for row in order.component_plans
+    }
+    scoped_customer_ids = item_customer_ids | plan_customer_ids
+    if order.customer_id is not None:
+        scoped_customer_ids.add(order.customer_id)
+    if (
+        not scoped_customer_ids
+        or None in scoped_customer_ids
+        or not scoped_customer_ids.issubset(allowed)
+    ):
         return False
     if order.customer_id is not None and (
         order.customer_id not in allowed
-        or order.customer_id not in item_customer_ids
+        or (
+            (item_customer_ids or plan_customer_ids)
+            and order.customer_id not in (item_customer_ids | plan_customer_ids)
+        )
     ):
         return False
     return True
@@ -14426,6 +14551,11 @@ def search_stock_replenishment_products(
                 "crease_right_mm": row.crease_right_mm,
                 "splice_mode": row.splice_mode,
                 "pieces_per_box": row.pieces_per_box,
+                "version": row.version,
+                "is_composite": bool(row.is_composite),
+                "is_virtual_composite_parent": bool(
+                    row.is_virtual_composite_parent
+                ),
                 "box_type_code": box_type_code(row.box_style),
                 "material_code": (
                     row.material.code
@@ -14554,9 +14684,333 @@ def update_stock_policy(
             ) from error
 
 
+def _composite_parent_plan_header(
+    *,
+    product: Product,
+    parent_set_quantity: int,
+    current_complete_set_quantity: int,
+    warning_set_quantity: int,
+    target_set_quantity: int,
+    suggested_parent_set_quantity: int,
+    stock_policy_id: int | None,
+    bom_fingerprint: str,
+    components: list[dict] | None = None,
+) -> dict:
+    return {
+        "stock_policy_id": stock_policy_id,
+        "parent_product_id": product.id,
+        "parent_product_version": int(product.version or 0),
+        "parent_product_code": product.product_code,
+        "parent_product_name": product.product_name,
+        "customer_id": product.customer_id,
+        "current_complete_set_quantity": current_complete_set_quantity,
+        "warning_set_quantity": warning_set_quantity,
+        "target_set_quantity": target_set_quantity,
+        "suggested_parent_set_quantity": suggested_parent_set_quantity,
+        "parent_set_quantity": parent_set_quantity,
+        "bom_fingerprint": bom_fingerprint,
+        "components": components or [],
+    }
+
+
+@router.get("/stock-replenishment/products/{product_id}/composite-draft")
+def manual_stock_composite_replenishment_draft(
+    product_id: int,
+    parent_set_quantity: int | None = Query(default=None, gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    product = db.scalar(
+        select(Product)
+        .options(selectinload(Product.material))
+        .where(
+            Product.id == product_id,
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+        )
+    )
+    if product is None:
+        raise HTTPException(status_code=404, detail="组合父件常用箱不存在。")
+    require_customer_access(product.customer_id, user, db)
+    probe_quantity = parent_set_quantity or 1
+    probe = virtual_composite_replenishment_demand_plan(
+        db,
+        product=product,
+        finished_quantity=probe_quantity,
+    )
+    if probe is None:
+        raise HTTPException(status_code=409, detail="所选常用箱不是虚拟组合父件。")
+    if parent_set_quantity is None:
+        return {
+            "source_type": "customer_request",
+            "supplier_name": probe["supplier_name"],
+            "customer_id": product.customer_id,
+            "stock_now": False,
+            "draft_ready": probe["draft_ready"],
+            "missing_fields": probe["missing_fields"],
+            "items": [],
+            "compatible_products": [],
+            "compatible_board_products": [],
+            "policy_summary": {},
+            "is_virtual_composite_parent": True,
+            "requires_parent_set_confirmation": True,
+            "composite_parent_plan": _composite_parent_plan_header(
+                product=product,
+                parent_set_quantity=1,
+                current_complete_set_quantity=0,
+                warning_set_quantity=0,
+                target_set_quantity=0,
+                suggested_parent_set_quantity=1,
+                stock_policy_id=None,
+                bom_fingerprint=probe["bom_fingerprint"],
+            ),
+        }
+    return _virtual_composite_replenishment_draft(
+        db,
+        product=product,
+        parent_set_quantity=parent_set_quantity,
+        summary=None,
+        stock_policy_id=None,
+        supplier_name=None,
+        remark=None,
+    )
+
+
+def _composite_component_inventory_candidates(
+    db: Session,
+    *,
+    component: Product,
+    defaults: dict,
+    output_per_sheet: int,
+) -> list[dict]:
+    try:
+        candidates = semi_finished_candidates_for_product(
+            db,
+            product_id=component.id,
+            customer_id=component.customer_id,
+            board_length_mm=int(defaults["report_length_mm"]),
+            board_width_mm=int(defaults["report_width_mm"]),
+            material_code=str(defaults["material_code"]),
+            flute_type=str(defaults["flute_type"]),
+            component_type="whole",
+            pieces_per_box=max(int(defaults.get("pieces_per_box") or 1), 1),
+            stock_yield_per_sheet=output_per_sheet,
+            frozen_pieces_per_box=max(
+                int(defaults.get("pieces_per_box") or 1), 1
+            ),
+            frozen_stock_yield_per_sheet=output_per_sheet,
+            layer_count=int(defaults["layer_count"]),
+            crease_type=defaults.get("crease_type"),
+            crease_left_mm=defaults.get("crease_left_mm"),
+            crease_middle_mm=defaults.get("crease_middle_mm"),
+            crease_right_mm=defaults.get("crease_right_mm"),
+        )
+    except WarehouseInventoryError:
+        return []
+    exact = [row for row in candidates if row.direct_deduction_eligible]
+    contexts = load_warehouse_location_projection_contexts(
+        db,
+        [row.lot.location for row in exact if row.lot.location is not None],
+    )
+    return [
+        _semi_candidate_dict_for_requisition(
+            row,
+            contexts.get(int(row.lot.location.id))
+            if row.lot.location is not None
+            else None,
+        )
+        for row in exact
+    ]
+
+
+def _virtual_composite_replenishment_draft(
+    db: Session,
+    *,
+    product: Product,
+    parent_set_quantity: int,
+    summary: dict | None,
+    stock_policy_id: int | None,
+    supplier_name: str | None,
+    remark: str | None,
+) -> dict:
+    plan = virtual_composite_replenishment_demand_plan(
+        db,
+        product=product,
+        finished_quantity=parent_set_quantity,
+        stock_policy_id=stock_policy_id,
+    )
+    if plan is None:
+        raise StockReplenishmentError("所选常用箱不是虚拟组合父件。", 409)
+    current_complete_sets = int((summary or {}).get("available_quantity", 0) or 0)
+    warning_sets = int((summary or {}).get("warning_quantity", 0) or 0)
+    target_sets = int((summary or {}).get("target_quantity", 0) or 0)
+    suggested_sets = int(
+        (summary or {}).get("suggested_replenishment_quantity", parent_set_quantity)
+        or 0
+    )
+    component_items: list[dict] = []
+    component_payloads: list[dict] = []
+    compatible_board_products: list[dict] = []
+    for demand in plan["component_demands"]:
+        relation = demand["relation"]
+        component = demand["product"]
+        defaults = demand["defaults"]
+        output_per_sheet = int(demand["output_per_sheet"])
+        required_pieces = int(demand["required_piece_quantity"])
+        incoming_pieces = min(
+            int(demand.get("covered_piece_quantity", 0) or 0),
+            required_pieces,
+        )
+        net_pieces = max(required_pieces - incoming_pieces, 0)
+        net_purchase_sheets = ceil(net_pieces / output_per_sheet)
+        spare_sheets = int(demand.get("spare_sheet_quantity", 0) or 0)
+        purchase_sheets = (
+            net_purchase_sheets + spare_sheets if net_purchase_sheets > 0 else 0
+        )
+        remainder_pieces = net_purchase_sheets * output_per_sheet - net_pieces
+        candidates = (
+            _composite_component_inventory_candidates(
+                db,
+                component=component,
+                defaults=defaults,
+                output_per_sheet=output_per_sheet,
+            )
+            if plan["draft_ready"]
+            else []
+        )
+        crease_type = defaults["crease_type"]
+        sheet_type = (
+            "creased_sheet"
+            if crease_type == "压线"
+            else "net_sheet"
+            if crease_type == "净料"
+            else "raw_board"
+        )
+        component_plan = {
+            "product_bom_component_id": relation.id,
+            "component_product_id": component.id,
+            "component_product_version": int(component.version or 0),
+            "component_product_code": component.product_code,
+            "component_product_name": component.product_name,
+            "quantity_per_set": int(demand["quantity_per_set"]),
+            "pieces_per_box": int(defaults["pieces_per_box"]),
+            "spare_sheet_quantity": spare_sheets,
+            "required_piece_quantity": required_pieces,
+            "incoming_covered_piece_quantity": incoming_pieces,
+            "requested_offset_piece_quantity": 0,
+            "selected_lots": [],
+            "yield_per_sheet": output_per_sheet,
+            "cutting_mode": defaults["cutting_mode"],
+            "is_die_cut": bool(relation.is_die_cut),
+            "mold_max_yield_per_sheet": (
+                int(relation.mold_max_yield_per_sheet)
+                if relation.mold_max_yield_per_sheet is not None
+                else None
+            ),
+            "purchase_sheet_quantity": purchase_sheets,
+            "cutting_remainder_piece_quantity": remainder_pieces,
+        }
+        component_payloads.append(component_plan)
+        compatible_board_products.append(
+            {
+                "product_id": component.id,
+                "product_code": component.product_code,
+                "product_name": component.product_name,
+            }
+        )
+        component_items.append(
+            {
+                "stock_policy_id": stock_policy_id,
+                "target_inventory_type": "semi_finished",
+                "product_id": component.id,
+                "reference_product_id": component.id,
+                "customer_id": component.customer_id,
+                "product_code": component.product_code,
+                "product_name": component.product_name,
+                "material_id": defaults["material_id"],
+                "material_code": defaults["material_code"],
+                "material_supplier_name": defaults["material_supplier_name"],
+                "layer_count": defaults["layer_count"],
+                "flute_type": defaults["flute_type"],
+                "report_length_mm": defaults["report_length_mm"],
+                "report_width_mm": defaults["report_width_mm"],
+                "crease_type": crease_type,
+                "crease_left_mm": defaults["crease_left_mm"],
+                "crease_middle_mm": defaults["crease_middle_mm"],
+                "crease_right_mm": defaults["crease_right_mm"],
+                "sheet_type": sheet_type,
+                "component_type": "whole",
+                "pieces_per_box": defaults["pieces_per_box"],
+                "stock_yield_per_sheet": output_per_sheet,
+                "quantity": purchase_sheets,
+                "suggested_finished_quantity": net_pieces,
+                "location_id": None,
+                "remark": remark,
+                "cutting_mode": defaults["cutting_mode"],
+                "is_die_cut": bool(relation.is_die_cut),
+                "mold_max_yield_per_sheet": (
+                    int(relation.mold_max_yield_per_sheet)
+                    if relation.mold_max_yield_per_sheet is not None
+                    else None
+                ),
+                "output_per_sheet": output_per_sheet,
+                "theoretical_requisition_quantity": purchase_sheets,
+                "draft_ready": defaults["draft_ready"],
+                "missing_fields": defaults["missing_fields"],
+                "compatible_product_ids": [component.id],
+                "compatible_product_codes": [component.product_code],
+                "bom_parent_product_id": product.id,
+                "bom_parent_product_name": product.product_name,
+                "bom_parent_set_quantity": parent_set_quantity,
+                "bom_quantity_per_set": int(demand["quantity_per_set"]),
+                "product_bom_component_id": relation.id,
+                "component_product_id": component.id,
+                "component_product_version": int(component.version or 0),
+                "parent_set_quantity": parent_set_quantity,
+                "required_piece_quantity": required_pieces,
+                "incoming_covered_piece_quantity": incoming_pieces,
+                "inventory_deducted_piece_quantity": 0,
+                "net_required_piece_quantity": net_pieces,
+                "yield_per_sheet": output_per_sheet,
+                "spare_sheet_quantity": spare_sheets,
+                "purchase_sheet_quantity": purchase_sheets,
+                "cutting_remainder_piece_quantity": remainder_pieces,
+                "inventory_candidates": candidates,
+                "is_virtual_composite_parent": False,
+            }
+        )
+    parent_header = _composite_parent_plan_header(
+        product=product,
+        parent_set_quantity=parent_set_quantity,
+        current_complete_set_quantity=current_complete_sets,
+        warning_set_quantity=warning_sets,
+        target_set_quantity=target_sets,
+        suggested_parent_set_quantity=suggested_sets,
+        stock_policy_id=stock_policy_id,
+        bom_fingerprint=plan["bom_fingerprint"],
+        components=component_payloads,
+    )
+    return {
+        "source_type": "stock_warning" if stock_policy_id else "customer_request",
+        "supplier_name": plan["supplier_name"] or supplier_name,
+        "customer_id": product.customer_id,
+        "stock_now": False,
+        "draft_ready": plan["draft_ready"],
+        "missing_fields": plan["missing_fields"],
+        "items": component_items,
+        "compatible_products": [],
+        "compatible_board_products": compatible_board_products,
+        "policy_summary": summary or {},
+        "is_virtual_composite_parent": True,
+        "requires_parent_set_confirmation": False,
+        "composite_parent_plan": parent_header,
+    }
+
+
 @router.get("/stock-policies/{policy_id}/replenishment-draft")
 def stock_policy_replenishment_draft(
     policy_id: int,
+    parent_set_quantity: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
@@ -14666,6 +15120,62 @@ def stock_policy_replenishment_draft(
                 "compatible_board_products": [],
                 "policy_summary": summary,
             }
+    suggested_parent_sets = int(
+        summary.get("suggested_replenishment_quantity", 0) or 0
+    )
+    composite_probe = virtual_composite_replenishment_demand_plan(
+        db,
+        product=product,
+        finished_quantity=(
+            parent_set_quantity
+            if parent_set_quantity is not None
+            else suggested_parent_sets
+        ),
+        stock_policy_id=policy.id,
+    )
+    if composite_probe is not None:
+        if parent_set_quantity is None:
+            return {
+                "source_type": "stock_warning",
+                "supplier_name": (
+                    composite_probe["supplier_name"] or policy.supplier_name
+                ),
+                "customer_id": policy.customer_id,
+                "stock_now": False,
+                "draft_ready": composite_probe["draft_ready"],
+                "missing_fields": composite_probe["missing_fields"],
+                "items": [],
+                "compatible_products": [],
+                "compatible_board_products": [],
+                "policy_summary": summary,
+                "is_virtual_composite_parent": True,
+                "requires_parent_set_confirmation": True,
+                "composite_parent_plan": _composite_parent_plan_header(
+                    product=product,
+                    parent_set_quantity=suggested_parent_sets,
+                    current_complete_set_quantity=int(
+                        summary.get("available_quantity", 0) or 0
+                    ),
+                    warning_set_quantity=int(
+                        summary.get("warning_quantity", 0) or 0
+                    ),
+                    target_set_quantity=int(
+                        summary.get("target_quantity", 0) or 0
+                    ),
+                    suggested_parent_set_quantity=suggested_parent_sets,
+                    stock_policy_id=policy.id,
+                    bom_fingerprint=composite_probe["bom_fingerprint"],
+                ),
+            }
+        return _virtual_composite_replenishment_draft(
+            db,
+            product=product,
+            parent_set_quantity=parent_set_quantity,
+            summary=summary,
+            stock_policy_id=policy.id,
+            supplier_name=policy.supplier_name,
+            remark=policy.remark,
+        )
     defaults = product_replenishment_defaults(product)
 
     def draft_item(
@@ -14755,109 +15265,6 @@ def stock_policy_replenishment_draft(
             ),
             "draft_ready": product_defaults["draft_ready"],
             "missing_fields": product_defaults["missing_fields"],
-        }
-
-    composite_plan = virtual_composite_replenishment_demand_plan(
-        db,
-        product=product,
-        finished_quantity=int(summary["suggested_replenishment_quantity"] or 0),
-    )
-    if composite_plan is not None:
-        component_items: list[dict] = []
-        compatible_board_products: list[dict] = []
-        for demand in composite_plan["component_demands"]:
-            component = demand["product"]
-            component_defaults = demand["defaults"]
-            compatible_board_products.append(
-                {
-                    "product_id": component.id,
-                    "product_code": component.product_code,
-                    "product_name": component.product_name,
-                }
-            )
-            if int(demand["sheet_quantity"] or 0) <= 0:
-                continue
-            crease_type = component_defaults["crease_type"]
-            sheet_type = (
-                "creased_sheet"
-                if crease_type == "压线"
-                else "net_sheet"
-                if crease_type == "净料"
-                else "raw_board"
-            )
-            component_items.append(
-                {
-                    "stock_policy_id": policy.id,
-                    "target_inventory_type": "semi_finished",
-                    "product_id": component.id,
-                    "reference_product_id": component.id,
-                    "customer_id": component.customer_id,
-                    "product_code": component.product_code,
-                    "product_name": component.product_name,
-                    "material_id": component_defaults["material_id"],
-                    "material_code": component_defaults["material_code"],
-                    "material_supplier_name": component_defaults[
-                        "material_supplier_name"
-                    ],
-                    "layer_count": component_defaults["layer_count"],
-                    "flute_type": component_defaults["flute_type"],
-                    "report_length_mm": component_defaults["report_length_mm"],
-                    "report_width_mm": component_defaults["report_width_mm"],
-                    "crease_type": crease_type,
-                    "crease_left_mm": component_defaults["crease_left_mm"],
-                    "crease_middle_mm": component_defaults["crease_middle_mm"],
-                    "crease_right_mm": component_defaults["crease_right_mm"],
-                    "sheet_type": sheet_type,
-                    "component_type": "whole",
-                    "pieces_per_box": component_defaults["pieces_per_box"],
-                    "stock_yield_per_sheet": int(demand["output_per_sheet"]),
-                    "quantity": int(demand["sheet_quantity"]),
-                    "suggested_finished_quantity": int(
-                        demand["suggested_component_piece_quantity"]
-                    ),
-                    "location_id": None,
-                    "remark": policy.remark,
-                    "cutting_mode": component_defaults["cutting_mode"],
-                    "output_per_sheet": int(demand["output_per_sheet"]),
-                    "theoretical_requisition_quantity": int(
-                        demand["sheet_quantity"]
-                    ),
-                    "customer_board_preparation_available_sheet_quantity": int(
-                        demand["coverage"][
-                            "customer_board_preparation_available_sheet_quantity"
-                        ]
-                    ),
-                    "incoming_board_preparation_sheet_quantity": int(
-                        demand["coverage"][
-                            "incoming_board_preparation_sheet_quantity"
-                        ]
-                    ),
-                    "draft_ready": component_defaults["draft_ready"],
-                    "missing_fields": component_defaults["missing_fields"],
-                    "compatible_product_ids": [component.id],
-                    "compatible_product_codes": [component.product_code],
-                    "bom_parent_product_id": product.id,
-                    "bom_parent_product_name": product.product_name,
-                    "bom_parent_set_quantity": int(
-                        composite_plan["parent_set_quantity"]
-                    ),
-                    "bom_quantity_per_set": int(demand["quantity_per_set"]),
-                }
-            )
-        return {
-            "source_type": "stock_warning",
-            "supplier_name": (
-                composite_plan["supplier_name"] or policy.supplier_name
-            ),
-            "customer_id": policy.customer_id,
-            "stock_now": False,
-            "draft_ready": composite_plan["draft_ready"],
-            "missing_fields": composite_plan["missing_fields"],
-            "items": component_items,
-            "compatible_products": [],
-            "compatible_board_products": compatible_board_products,
-            "policy_summary": summary,
-            "is_virtual_composite_parent": True,
         }
 
     primary_item = draft_item(policy, summary, product)
@@ -14994,6 +15401,9 @@ def stock_policy_replenishment_draft(
 def _replenishment_order_query():
     return select(StockReplenishmentOrder).options(
         selectinload(StockReplenishmentOrder.customer),
+        selectinload(StockReplenishmentOrder.component_plans).selectinload(
+            StockReplenishmentBomComponentPlan.reservations
+        ),
         selectinload(StockReplenishmentOrder.items).selectinload(
             StockReplenishmentOrderItem.location
         ),
@@ -15034,6 +15444,306 @@ def _coalesce(value, fallback):
     return fallback if value in (None, "") else value
 
 
+def _composite_parent_request_fingerprint(
+    payload: StockReplenishmentCreatePayload,
+) -> str | None:
+    plan = payload.composite_parent_plan
+    if plan is None:
+        return None
+    canonical = {
+        "source_type": payload.source_type,
+        "supplier_name": str(payload.supplier_name or "").strip(),
+        "customer_id": payload.customer_id,
+        "remark": str(payload.remark or "").strip(),
+        "composite_parent_plan": plan.model_dump(mode="json"),
+    }
+    return hashlib.sha256(
+        json.dumps(
+            canonical,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _claim_stock_policy_replenishment_slot(
+    db: Session,
+    *,
+    policy_id: int,
+) -> InventoryStockPolicy:
+    """Serialize formal replenishment creation for one warning policy.
+
+    PostgreSQL locks the updated row.  SQLite ignores ``FOR UPDATE``, so the
+    guarded no-op update obtains its single writer slot without changing the
+    policy timestamp or any business value.
+    """
+
+    try:
+        result = db.execute(
+            update(InventoryStockPolicy)
+            .where(InventoryStockPolicy.id == policy_id)
+            .values(
+                active=InventoryStockPolicy.active,
+                updated_at=InventoryStockPolicy.updated_at,
+            )
+            .execution_options(synchronize_session=False)
+        )
+    except OperationalError as error:
+        raise StockReplenishmentError(
+            "该库存预警正在生成补库单，请稍后刷新。", 409
+        ) from error
+    if result.rowcount != 1:
+        raise StockReplenishmentError("组合父件库存预警策略不存在。", 409)
+    policy = db.scalar(
+        select(InventoryStockPolicy)
+        .where(InventoryStockPolicy.id == policy_id)
+        .execution_options(populate_existing=True)
+    )
+    if policy is None:
+        raise StockReplenishmentError("组合父件库存预警策略不存在。", 409)
+    return policy
+
+
+def _prepare_composite_parent_replenishment(
+    db: Session,
+    *,
+    payload: StockReplenishmentCreatePayload,
+    user: User,
+) -> dict | None:
+    requested = payload.composite_parent_plan
+    if requested is None:
+        return None
+    parent = db.scalar(
+        select(Product)
+        .options(selectinload(Product.material))
+        .where(
+            Product.id == requested.parent_product_id,
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+        )
+    )
+    if parent is None:
+        raise StockReplenishmentError("组合父件常用箱不存在或已停用。", 409)
+    require_customer_access(parent.customer_id, user, db)
+    if not (parent.is_composite and parent.is_virtual_composite_parent):
+        raise StockReplenishmentError("所选常用箱不是虚拟组合父件。", 409)
+    if int(parent.version or 0) != requested.parent_product_version:
+        raise StockReplenishmentError(
+            "组合父件版本已变化，请刷新草稿后重试。", 409
+        )
+    if payload.customer_id not in (None, parent.customer_id):
+        raise StockReplenishmentError("组合父件补库客户已变化。", 409)
+
+    policy = None
+    if requested.stock_policy_id is not None:
+        policy = _claim_stock_policy_replenishment_slot(
+            db,
+            policy_id=requested.stock_policy_id,
+        )
+        if (
+            policy is None
+            or not policy.active
+            or policy.target_inventory_type != "finished"
+            or policy.product_id != parent.id
+            or policy.customer_id != parent.customer_id
+        ):
+            raise StockReplenishmentError(
+                "组合父件库存预警已变化，请刷新草稿后重试。", 409
+            )
+        _require_stock_policy_customer_access(db, policy, user)
+    if payload.source_type == "stock_warning" and policy is None:
+        raise StockReplenishmentError("组合父件库存预警策略不存在。", 409)
+    if payload.source_type == "customer_request" and policy is not None:
+        raise StockReplenishmentError(
+            "手工组合补库不能冒用库存预警策略。", 409
+        )
+    if policy is not None:
+        active_order_id = active_stock_policy_replenishment_order_id(
+            db, policy_id=policy.id
+        )
+        if active_order_id is not None:
+            raise StockReplenishmentError(
+                "该组合父件库存预警已有未完成补库单，不能重复生成。",
+                409,
+            )
+
+    authoritative = virtual_composite_replenishment_demand_plan(
+        db,
+        product=parent,
+        finished_quantity=requested.parent_set_quantity,
+        stock_policy_id=policy.id if policy is not None else None,
+    )
+    if authoritative is None or not authoritative["draft_ready"]:
+        detail = "、".join((authoritative or {}).get("missing_fields", []))
+        raise StockReplenishmentError(
+            f"组合成品BOM报料资料已变化：{detail or '必需组件不可用'}，"
+            "请刷新后重新生成草稿。",
+            409,
+        )
+    if authoritative["bom_fingerprint"] != requested.bom_fingerprint:
+        raise StockReplenishmentError(
+            "组合成品BOM版本已变化，请刷新后重新展开组件。", 409
+        )
+    demand_by_relation = {
+        int(row["relation"].id): row
+        for row in authoritative["component_demands"]
+    }
+    requested_by_relation = {
+        row.product_bom_component_id: row for row in requested.components
+    }
+    if (
+        len(requested_by_relation) != len(requested.components)
+        or set(requested_by_relation) != set(demand_by_relation)
+    ):
+        raise StockReplenishmentError(
+            "组合成品BOM必需组件不完整或已变化，请刷新全部组件草稿。",
+            409,
+        )
+    selected_lot_ids: set[int] = set()
+    contexts: list[dict] = []
+    for relation_id, demand in demand_by_relation.items():
+        component_payload = requested_by_relation[relation_id]
+        relation = demand["relation"]
+        component = demand["product"]
+        defaults = demand["defaults"]
+        if (
+            component_payload.component_product_id != component.id
+            or component_payload.component_product_version
+            != int(component.version or 0)
+        ):
+            raise StockReplenishmentError(
+                f"BOM组件“{component.product_name}”版本已变化，请刷新草稿。",
+                409,
+            )
+        current_lot_ids = {row.lot_id for row in component_payload.selected_lots}
+        if selected_lot_ids.intersection(current_lot_ids):
+            raise StockReplenishmentError(
+                "同一库存批次不能同时抵扣多个组合组件。", 409
+            )
+        selected_lot_ids.update(current_lot_ids)
+        required_pieces = int(demand["required_piece_quantity"])
+        incoming_pieces = min(
+            int(demand.get("covered_piece_quantity", 0) or 0),
+            required_pieces,
+        )
+        offset_pieces = int(component_payload.requested_offset_piece_quantity)
+        maximum_offset = max(required_pieces - incoming_pieces, 0)
+        if offset_pieces > maximum_offset:
+            raise StockReplenishmentError(
+                f"“{component.product_name}”库存抵扣超过当前净需求。", 409
+            )
+        output_per_sheet = int(demand["output_per_sheet"])
+        net_pieces = required_pieces - incoming_pieces - offset_pieces
+        net_purchase_sheets = ceil(net_pieces / output_per_sheet)
+        spare_sheets = int(demand.get("spare_sheet_quantity", 0) or 0)
+        purchase_sheets = (
+            net_purchase_sheets + spare_sheets if net_purchase_sheets > 0 else 0
+        )
+        if (
+            component_payload.pieces_per_box != int(defaults["pieces_per_box"])
+            or component_payload.spare_sheet_quantity != spare_sheets
+        ):
+            raise StockReplenishmentError(
+                f"“{component.product_name}”组件换算或备用张数已变化，请刷新。",
+                409,
+            )
+        if component_payload.purchase_sheet_quantity != purchase_sheets:
+            raise StockReplenishmentError(
+                f"“{component.product_name}”本次应采购{purchase_sheets}张；"
+                "组件需求、库存或一张出数已变化，请刷新。",
+                409,
+            )
+        contexts.append(
+            {
+                "relation": relation,
+                "component": component,
+                "defaults": defaults,
+                "payload": component_payload,
+                "required_piece_quantity": required_pieces,
+                "incoming_covered_piece_quantity": incoming_pieces,
+                "reserved_piece_quantity": offset_pieces,
+                "net_required_piece_quantity": net_pieces,
+                "pieces_per_box": int(defaults["pieces_per_box"]),
+                "yield_per_sheet": output_per_sheet,
+                "spare_sheet_quantity": spare_sheets,
+                "purchase_sheet_quantity": purchase_sheets,
+                "cutting_remainder_piece_quantity": (
+                    net_purchase_sheets * output_per_sheet - net_pieces
+                ),
+            }
+        )
+
+    positive_component_ids = {
+        int(row["component"].id)
+        for row in contexts
+        if int(row["purchase_sheet_quantity"]) > 0
+    }
+    submitted_component_ids = [
+        int(item.reference_product_id or item.product_id or 0)
+        for item in payload.items
+    ]
+    if payload.items and (
+        len(submitted_component_ids) != len(set(submitted_component_ids))
+        or set(submitted_component_ids) != positive_component_ids
+        or parent.id in submitted_component_ids
+    ):
+        raise StockReplenishmentError(
+            "组合补库采购行必须且只能包含净需求大于0的真实BOM组件。",
+            409,
+        )
+    return {
+        "parent": parent,
+        "policy": policy,
+        "authoritative": authoritative,
+        "contexts": contexts,
+        "request_fingerprint": _composite_parent_request_fingerprint(payload),
+    }
+
+
+def _server_composite_replenishment_item_payload(
+    *,
+    context: dict,
+    stock_policy_id: int | None,
+    remark: str | None,
+) -> StockReplenishmentItemPayload:
+    component = context["component"]
+    defaults = context["defaults"]
+    crease_type = defaults["crease_type"]
+    return StockReplenishmentItemPayload(
+        stock_policy_id=stock_policy_id,
+        target_inventory_type="semi_finished",
+        product_id=None,
+        reference_product_id=component.id,
+        customer_id=component.customer_id,
+        product_code=component.product_code,
+        product_name=component.product_name,
+        material_id=defaults["material_id"],
+        material_code=defaults["material_code"],
+        layer_count=defaults["layer_count"],
+        flute_type=defaults["flute_type"],
+        report_length_mm=defaults["report_length_mm"],
+        report_width_mm=defaults["report_width_mm"],
+        crease_type=crease_type,
+        crease_left_mm=defaults["crease_left_mm"],
+        crease_middle_mm=defaults["crease_middle_mm"],
+        crease_right_mm=defaults["crease_right_mm"],
+        sheet_type=(
+            "creased_sheet"
+            if crease_type == "压线"
+            else "net_sheet"
+            if crease_type == "净料"
+            else "raw_board"
+        ),
+        component_type="whole",
+        pieces_per_box=defaults["pieces_per_box"],
+        stock_yield_per_sheet=context["yield_per_sheet"],
+        quantity=context["purchase_sheet_quantity"],
+        location_id=None,
+        remark=remark,
+    )
+
+
 def _build_replenishment_item(
     db: Session,
     payload: StockReplenishmentItemPayload,
@@ -15060,6 +15770,15 @@ def _build_replenishment_item(
     product = db.get(Product, reference_product_id) if reference_product_id else None
     if reference_product_id and (product is None or product.deleted_at is not None):
         raise StockReplenishmentError("补库明细产品不存在。", 404)
+    if (
+        product is not None
+        and product.is_composite
+        and product.is_virtual_composite_parent
+    ):
+        raise StockReplenishmentError(
+            "虚拟组合父件不能作为物理采购行；请先确认父件套数并展开真实BOM组件。",
+            409,
+        )
     policy_product = (
         db.get(Product, policy.product_id)
         if policy is not None and policy.product_id is not None
@@ -15235,6 +15954,9 @@ def create_stock_replenishment_order(
     user: User = Depends(can_operate),
 ) -> dict:
     idempotent_order_number: str | None = None
+    composite_request_fingerprint = _composite_parent_request_fingerprint(
+        payload
+    )
     requested_external_purchase = any(
         str(item.procurement_mode or "").strip() == "external_purchase"
         or item.external_purchase_quantity is not None
@@ -15264,6 +15986,11 @@ def create_stock_replenishment_order(
         if payload.source_type == "stock_warning" and payload.idempotency_key is None:
             raise StockReplenishmentError(
                 "库存预警报料草稿缺少防重复标识，请关闭后重新打开再保存。"
+            )
+        if payload.composite_parent_plan is not None and payload.idempotency_key is None:
+            raise StockReplenishmentError(
+                "组合父件补库缺少防重复标识，请关闭后重新打开再保存。",
+                409,
             )
         if payload.idempotency_key:
             key_digest = hashlib.sha256(
@@ -15338,6 +16065,25 @@ def create_stock_replenishment_order(
                         "同一防重复标识对应的补库来源已变化，请关闭后重新操作。",
                         409,
                     )
+                existing_plan_fingerprints = {
+                    str(row.request_fingerprint)
+                    for row in existing_order.component_plans
+                }
+                if composite_request_fingerprint is not None:
+                    if existing_plan_fingerprints != {
+                        composite_request_fingerprint
+                    }:
+                        raise StockReplenishmentError(
+                            "同一防重复标识对应的组合父件套数、BOM、"
+                            "库存抵扣或采购数量已变化，请关闭后重新操作。",
+                            409,
+                        )
+                    return replenishment_order_dict(existing_order, db=db)
+                if existing_plan_fingerprints:
+                    raise StockReplenishmentError(
+                        "同一防重复标识已经用于组合父件补库，请关闭后重新操作。",
+                        409,
+                    )
                 existing_external_purchase = (
                     external_stock_purchase_payload(db, existing_order) is not None
                 )
@@ -15375,6 +16121,246 @@ def create_stock_replenishment_order(
                         "外购包材备库重放状态不完整，请刷新后重试。", 409
                     )
                 return _replenishment_order_response(db, replayed_order)
+        composite_prepared = _prepare_composite_parent_replenishment(
+            db,
+            payload=payload,
+            user=user,
+        )
+        if composite_prepared is not None:
+            parent: Product = composite_prepared["parent"]
+            policy: InventoryStockPolicy | None = composite_prepared["policy"]
+            contexts: list[dict] = composite_prepared["contexts"]
+            request_fingerprint = str(
+                composite_prepared["request_fingerprint"] or ""
+            )
+            if len(request_fingerprint) != 64:
+                raise StockReplenishmentError(
+                    "组合父件补库请求指纹无效，请关闭后重试。", 409
+                )
+            material_suppliers = {
+                str(row["defaults"].get("material_supplier_name") or "").strip()
+                for row in contexts
+                if str(row["defaults"].get("material_supplier_name") or "").strip()
+            }
+            if len(material_suppliers) != 1:
+                raise StockReplenishmentError(
+                    "组合父件的真实组件必须按同一供应商生成补库单。", 409
+                )
+            derived_supplier = _require_active_supplier(
+                db, next(iter(material_suppliers))
+            )
+            if payload.supplier_name and (
+                normalize_supplier_identity(payload.supplier_name)
+                != normalize_supplier_identity(derived_supplier)
+            ):
+                raise StockReplenishmentError(
+                    "组合父件补库供应商已变化，请刷新组件草稿。", 409
+                )
+            server_items: list[StockReplenishmentOrderItem] = []
+            for context in contexts:
+                if int(context["purchase_sheet_quantity"]) <= 0:
+                    continue
+                item_payload = _server_composite_replenishment_item_payload(
+                    context=context,
+                    stock_policy_id=policy.id if policy is not None else None,
+                    remark=payload.remark,
+                )
+                server_items.append(
+                    _build_replenishment_item(
+                        db,
+                        item_payload,
+                        source_type=payload.source_type,
+                    )
+                )
+            order = StockReplenishmentOrder(
+                order_number=(
+                    idempotent_order_number
+                    or next_replenishment_order_number()
+                ),
+                supplier_name=derived_supplier,
+                customer_id=parent.customer_id,
+                source_type=payload.source_type,
+                status="confirmed",
+                remark=payload.remark,
+                created_by=user.id,
+                confirmed_by=user.id,
+                confirmed_at=utc_now_naive(),
+            )
+            order.items = server_items
+            _require_stock_replenishment_order_access(db, order, user)
+            db.add(order)
+            db.flush()
+            purchase_item_by_component_id = {
+                int(item.reference_product_id): item
+                for item in order.items
+                if item.reference_product_id is not None
+            }
+            plan_rows: list[StockReplenishmentBomComponentPlan] = []
+            for context in contexts:
+                relation = context["relation"]
+                component = context["component"]
+                defaults = context["defaults"]
+                purchase_item = purchase_item_by_component_id.get(component.id)
+                plan_row = StockReplenishmentBomComponentPlan(
+                    replenishment_order_id=order.id,
+                    replenishment_item_id=(
+                        purchase_item.id if purchase_item is not None else None
+                    ),
+                    stock_policy_id=policy.id if policy is not None else None,
+                    parent_product_id=parent.id,
+                    parent_product_version=int(parent.version or 0),
+                    parent_product_code_snapshot=parent.product_code,
+                    parent_product_name_snapshot=parent.product_name,
+                    product_bom_component_id=relation.id,
+                    component_product_id=component.id,
+                    component_product_version=int(component.version or 0),
+                    component_product_code_snapshot=component.product_code,
+                    component_product_name_snapshot=component.product_name,
+                    display_order=int(relation.display_order or 0),
+                    parent_set_quantity=(
+                        payload.composite_parent_plan.parent_set_quantity
+                    ),
+                    quantity_per_set=int(relation.quantity_per_set),
+                    required_piece_quantity=context["required_piece_quantity"],
+                    incoming_covered_piece_quantity=context[
+                        "incoming_covered_piece_quantity"
+                    ],
+                    reserved_piece_quantity=context["reserved_piece_quantity"],
+                    net_required_piece_quantity=context[
+                        "net_required_piece_quantity"
+                    ],
+                    pieces_per_box=context["pieces_per_box"],
+                    yield_per_sheet=context["yield_per_sheet"],
+                    cutting_mode_snapshot=defaults["cutting_mode"],
+                    is_die_cut_snapshot=bool(relation.is_die_cut),
+                    mold_max_yield_per_sheet_snapshot=(
+                        int(relation.mold_max_yield_per_sheet)
+                        if relation.mold_max_yield_per_sheet is not None
+                        else None
+                    ),
+                    spare_sheet_quantity=context["spare_sheet_quantity"],
+                    purchase_sheet_quantity=context["purchase_sheet_quantity"],
+                    cutting_remainder_piece_quantity=context[
+                        "cutting_remainder_piece_quantity"
+                    ],
+                    customer_id=component.customer_id,
+                    supplier_name_snapshot=derived_supplier,
+                    procurement_route_snapshot="paperboard",
+                    material_id=defaults["material_id"],
+                    material_code_snapshot=defaults["material_code"],
+                    normalized_material_code=normalize_material_code(
+                        defaults["material_code"]
+                    ),
+                    layer_count=defaults["layer_count"],
+                    flute_type=defaults["flute_type"],
+                    report_length_mm=defaults["report_length_mm"],
+                    report_width_mm=defaults["report_width_mm"],
+                    crease_type=defaults["crease_type"],
+                    crease_left_mm=defaults["crease_left_mm"],
+                    crease_middle_mm=defaults["crease_middle_mm"],
+                    crease_right_mm=defaults["crease_right_mm"],
+                    sheet_type=(
+                        "creased_sheet"
+                        if defaults["crease_type"] == "压线"
+                        else "net_sheet"
+                        if defaults["crease_type"] == "净料"
+                        else "raw_board"
+                    ),
+                    component_type="whole",
+                    internal_component_code_snapshot=(
+                        relation.internal_component_code
+                    ),
+                    bom_fingerprint=(
+                        payload.composite_parent_plan.bom_fingerprint
+                    ),
+                    request_fingerprint=request_fingerprint,
+                )
+                db.add(plan_row)
+                db.flush()
+                plan_rows.append(plan_row)
+                component_request = context["payload"]
+                if component_request.requested_offset_piece_quantity > 0:
+                    reservation_key = (
+                        "CBP-"
+                        + hashlib.sha256(
+                            (
+                                f"{payload.idempotency_key}:"
+                                f"{relation.id}"
+                            ).encode("utf-8")
+                        ).hexdigest()[:48]
+                    )
+                    reserve_stock_replenishment_component_inventory(
+                        db,
+                        plan=plan_row,
+                        requested_piece_quantity=(
+                            component_request.requested_offset_piece_quantity
+                        ),
+                        lots=[
+                            SemiFinishedLotVersion(
+                                lot_id=row.lot_id,
+                                expected_version=row.expected_version,
+                            )
+                            for row in component_request.selected_lots
+                        ],
+                        operator_id=user.id,
+                        idempotency_key=reservation_key,
+                    )
+            db.add(
+                OperationLog(
+                    user_id=user.id,
+                    action="CREATE_COMPOSITE_STOCK_REPLENISHMENT",
+                    resource="StockReplenishmentOrder",
+                    details=json.dumps(
+                        {
+                            "stock_replenishment_order_id": order.id,
+                            "parent_product_id": parent.id,
+                            "parent_set_quantity": (
+                                payload.composite_parent_plan.parent_set_quantity
+                            ),
+                            "component_plan_ids": [row.id for row in plan_rows],
+                            "request_fingerprint": request_fingerprint,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    username=user.username,
+                    role=user.role,
+                    entity_type="stock_replenishment_order",
+                    entity_id=order.id,
+                    description="按父件套数确认组合BOM补库并冻结真实组件计划",
+                )
+            )
+            db.commit()
+            order = db.scalar(
+                _replenishment_order_query().where(
+                    StockReplenishmentOrder.id == order.id
+                )
+            )
+            assert order is not None
+            return replenishment_order_dict(order, db=db)
+
+        if payload.source_type == "stock_warning":
+            for raw_item in payload.items:
+                raw_policy = (
+                    db.get(InventoryStockPolicy, raw_item.stock_policy_id)
+                    if raw_item.stock_policy_id is not None
+                    else None
+                )
+                raw_parent = (
+                    db.get(Product, raw_policy.product_id)
+                    if raw_policy is not None
+                    and raw_policy.product_id is not None
+                    else None
+                )
+                if (
+                    raw_parent is not None
+                    and raw_parent.is_composite
+                    and raw_parent.is_virtual_composite_parent
+                ):
+                    raise StockReplenishmentError(
+                        "组合父件库存预警必须先确认父件套数，再提交组件计划。",
+                        409,
+                    )
+
         external_lines: list[
             tuple[StockReplenishmentItemPayload, Product]
         ] = []
@@ -15706,6 +16692,20 @@ def create_stock_replenishment_order(
                     user,
                     relationships_loaded=True,
                 )
+                if composite_request_fingerprint is not None:
+                    fingerprints = {
+                        str(row.request_fingerprint)
+                        for row in existing_order.component_plans
+                    }
+                    if fingerprints != {composite_request_fingerprint}:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "同一防重复标识对应的组合父件补库内容已变化，"
+                                "请关闭后重新操作。"
+                            ),
+                        )
+                    return replenishment_order_dict(existing_order, db=db)
                 existing_external_purchase = (
                     external_stock_purchase_payload(db, existing_order) is not None
                 )
@@ -15844,6 +16844,11 @@ def print_stock_replenishment_order(
     _require_stock_replenishment_order_access(
         db, order, _user, relationships_loaded=True
     )
+    if not order.items:
+        raise HTTPException(
+            status_code=409,
+            detail="组件库存已全部抵扣，本次没有供应商采购明细，无需打印报料单。",
+        )
     payload = replenishment_order_dict(order, db=db)
     payload["sender"] = _company_sender(db)
     return payload
@@ -15956,7 +16961,9 @@ def void_stock_replenishment_order(
     user: User = Depends(can_operate),
 ) -> dict:
     order = db.scalar(
-        _replenishment_order_query().where(StockReplenishmentOrder.id == order_id)
+        _replenishment_order_query()
+        .where(StockReplenishmentOrder.id == order_id)
+        .with_for_update()
     )
     if order is None:
         raise HTTPException(status_code=404, detail="库存补库单不存在。")
@@ -15990,6 +16997,67 @@ def void_stock_replenishment_order(
             status_code=409,
             detail="该补库单已经部分或全部实际收货，不能直接撤销报料。",
         )
+    plan_ids = [row.id for row in order.component_plans]
+    plan_reservations = (
+        list(
+            db.scalars(
+                select(InventoryReservation)
+                .where(
+                    InventoryReservation.stock_replenishment_bom_component_plan_id.in_(
+                        plan_ids
+                    ),
+                    InventoryReservation.reservation_type == "semi_requisition",
+                )
+                .order_by(InventoryReservation.id)
+            ).all()
+        )
+        if plan_ids
+        else []
+    )
+    if any(
+        int(row.consumed_stock_quantity or 0) > 0
+        or int(row.consumed_requirement_quantity or 0) > 0
+        or int(row.released_stock_quantity or 0) > 0
+        or int(row.released_requirement_quantity or 0) > 0
+        for row in plan_reservations
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该组合补库的组件库存已经转接或使用，请先撤销下游使用后再作废。",
+        )
+    released_reservation_ids: list[int] = []
+    try:
+        for reservation in plan_reservations:
+            remaining = (
+                int(reservation.reserved_stock_quantity or 0)
+                - int(reservation.consumed_stock_quantity or 0)
+                - int(reservation.released_stock_quantity or 0)
+            )
+            if remaining <= 0:
+                continue
+            lot = db.get(InventoryLot, reservation.inventory_lot_id)
+            if lot is None:
+                raise WarehouseInventoryError(
+                    "组合补库预占的库存批次不存在，不能安全作废。",
+                    status_code=409,
+                )
+            release_semi_finished_reservation(
+                db,
+                reservation_id=reservation.id,
+                expected_version=lot.version,
+                operator_id=user.id,
+                release_reason="组合父件补库报料作废，释放组件库存预占",
+                idempotency_key=(
+                    f"void-stock-bom-plan:{order.id}:{reservation.id}"
+                ),
+                allow_stock_replenishment_plan=True,
+            )
+            released_reservation_ids.append(reservation.id)
+    except (StockReplenishmentError, WarehouseInventoryError) as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=getattr(error, "status_code", 400), detail=str(error)
+        ) from error
     order_number = order.order_number
     voided_at = utc_now_naive()
     transition = db.execute(
@@ -16030,6 +17098,9 @@ def void_stock_replenishment_order(
                     "order_number": order_number,
                     "received_quantity": 0,
                     "inventory_created": False,
+                    "released_component_reservation_ids": (
+                        released_reservation_ids
+                    ),
                 },
                 ensure_ascii=False,
             ),
@@ -18810,6 +19881,8 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
     stock_item_product = aliased(Product)
     stock_policy = aliased(InventoryStockPolicy)
     stock_policy_product = aliased(Product)
+    stock_plan_customer = aliased(Customer)
+    stock_plan_product = aliased(Product)
     stock_headers = db.execute(
         select(
             StockReplenishmentOrder.id.label("document_id"),
@@ -18923,6 +19996,112 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
             stock_items_by_order.setdefault(int(item["document_id"]), []).append(
                 item
             )
+        stock_plan_only_rows = db.execute(
+            select(
+                StockReplenishmentBomComponentPlan.id.label("plan_id"),
+                StockReplenishmentBomComponentPlan.replenishment_order_id.label(
+                    "document_id"
+                ),
+                StockReplenishmentBomComponentPlan.customer_id.label(
+                    "plan_customer_id"
+                ),
+                StockReplenishmentBomComponentPlan.component_product_id.label(
+                    "component_product_id"
+                ),
+                StockReplenishmentBomComponentPlan.component_product_code_snapshot.label(
+                    "product_code"
+                ),
+                StockReplenishmentBomComponentPlan.component_product_name_snapshot.label(
+                    "product_name"
+                ),
+                StockReplenishmentBomComponentPlan.material_code_snapshot.label(
+                    "material_code"
+                ),
+                StockReplenishmentBomComponentPlan.flute_type.label("flute_type"),
+                StockReplenishmentBomComponentPlan.report_length_mm.label(
+                    "report_length_mm"
+                ),
+                StockReplenishmentBomComponentPlan.report_width_mm.label(
+                    "report_width_mm"
+                ),
+                StockReplenishmentBomComponentPlan.crease_type.label("crease_type"),
+                StockReplenishmentBomComponentPlan.crease_left_mm.label(
+                    "crease_left_mm"
+                ),
+                StockReplenishmentBomComponentPlan.crease_middle_mm.label(
+                    "crease_middle_mm"
+                ),
+                StockReplenishmentBomComponentPlan.crease_right_mm.label(
+                    "crease_right_mm"
+                ),
+                stock_plan_customer.id.label("resolved_plan_customer_id"),
+                stock_plan_customer.name.label("plan_customer_name"),
+                stock_plan_product.id.label("resolved_plan_product_id"),
+                stock_plan_product.customer_id.label("plan_product_customer_id"),
+                stock_plan_product.deleted_at.label("plan_product_deleted_at"),
+            )
+            .outerjoin(
+                stock_plan_customer,
+                stock_plan_customer.id
+                == StockReplenishmentBomComponentPlan.customer_id,
+            )
+            .outerjoin(
+                stock_plan_product,
+                stock_plan_product.id
+                == StockReplenishmentBomComponentPlan.component_product_id,
+            )
+            .where(
+                StockReplenishmentBomComponentPlan.replenishment_order_id.in_(
+                    stock_ids
+                ),
+                StockReplenishmentBomComponentPlan.replenishment_item_id.is_(None),
+            )
+            .order_by(
+                StockReplenishmentBomComponentPlan.replenishment_order_id,
+                StockReplenishmentBomComponentPlan.display_order,
+                StockReplenishmentBomComponentPlan.id,
+            )
+        ).mappings().all()
+        for plan in stock_plan_only_rows:
+            stock_items_by_order.setdefault(int(plan["document_id"]), []).append(
+                {
+                    "item_id": -int(plan["plan_id"]),
+                    "document_id": int(plan["document_id"]),
+                    "stock_policy_id": None,
+                    "item_product_id": plan["component_product_id"],
+                    "target_inventory_type": "semi_finished",
+                    "item_customer_id": plan["plan_customer_id"],
+                    "product_code": plan["product_code"],
+                    "product_name": plan["product_name"],
+                    "material_code": plan["material_code"],
+                    "flute_type": plan["flute_type"],
+                    "report_length_mm": plan["report_length_mm"],
+                    "report_width_mm": plan["report_width_mm"],
+                    "crease_type": plan["crease_type"],
+                    "crease_left_mm": plan["crease_left_mm"],
+                    "crease_middle_mm": plan["crease_middle_mm"],
+                    "crease_right_mm": plan["crease_right_mm"],
+                    "quantity": 0,
+                    "stocked_quantity": 0,
+                    "resolved_item_customer_id": plan[
+                        "resolved_plan_customer_id"
+                    ],
+                    "item_customer_name": plan["plan_customer_name"],
+                    "resolved_item_product_id": plan["resolved_plan_product_id"],
+                    "item_product_customer_id": plan[
+                        "plan_product_customer_id"
+                    ],
+                    "item_product_deleted_at": plan["plan_product_deleted_at"],
+                    "resolved_stock_policy_id": None,
+                    "policy_customer_id": None,
+                    "policy_product_id": None,
+                    "resolved_policy_product_id": None,
+                    "policy_product_customer_id": None,
+                    "policy_product_deleted_at": None,
+                    "_is_plan_only": True,
+                    "_component_plan_id": int(plan["plan_id"]),
+                }
+            )
 
     def projected_stock_item_customer_id(item) -> int | None:
         customer_ids: set[int | None] = set()
@@ -18987,6 +20166,8 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
             lines.append(
                 {
                     "_item_id": item["item_id"],
+                    "_is_plan_only": bool(item.get("_is_plan_only")),
+                    "_component_plan_id": item.get("_component_plan_id"),
                     "_target_inventory_type": item["target_inventory_type"],
                     "_quantity": item["quantity"],
                     "_stocked_quantity": item["stocked_quantity"],
@@ -19424,8 +20605,11 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                         {
                             "id": line["_item_id"],
                             "stable_id": (
-                                f"stock_replenishment:{candidate['id']}:{line['_item_id']}"
+                                f"stock_replenishment_{'plan' if line.get('_is_plan_only') else 'item'}:"
+                                f"{candidate['id']}:{line['_item_id']}"
                             ),
+                            "is_plan_only": bool(line.get("_is_plan_only")),
+                            "component_plan_id": line.get("_component_plan_id"),
                             "customer_id": line.get("customer_id"),
                             "customer_name": line.get("customer_name"),
                             "order_number": None,
@@ -19457,6 +20641,11 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                 "stocked": "已入库",
                 "voided": "已作废",
             }.get(candidate["status"], candidate["status"])
+            plan_only = bool(candidate_lines) and all(
+                bool(line.get("_is_plan_only")) for line in candidate_lines
+            )
+            if plan_only and candidate["status"] != "voided":
+                incoming_status = "库存已抵扣，无需采购"
             documents.append(
                 finish_document(
                     {
@@ -19487,7 +20676,9 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                             for line in candidate_lines
                         ),
                         "pdf_url": (
-                            "/api/requisition/stock-replenishment/orders/"
+                            None
+                            if plan_only
+                            else "/api/requisition/stock-replenishment/orders/"
                             f"{candidate['id']}/print"
                         ),
                         "line_items": line_items,
@@ -20835,6 +22026,7 @@ def list_reported_items(
             and document.get("status")
             in {"confirmed", "partially_stocked", "stocked"}
             and line.get("status") == "active"
+            and not line.get("is_plan_only")
         )
         can_print_task = (
             is_current_supplier_item
@@ -20845,7 +22037,10 @@ def list_reported_items(
         task_print_block_reason = None
         task_print_resolution = None
         if not can_print_task:
-            if document.get("status") in {"voided", "已取消"}:
+            if line.get("is_plan_only"):
+                task_print_block_reason = "组件库存已预占，本次没有供应商采购明细"
+                task_print_resolution = "无需打印待来料任务单；可在补库追溯中查看组件计划"
+            elif document.get("status") in {"voided", "已取消"}:
                 task_print_block_reason = "该明细所属报料单已作废或取消"
                 task_print_resolution = "请重新建立有效报料单后再打印"
             elif candidate["source_type"] == "legacy_material_requisition":
@@ -20921,6 +22116,8 @@ def list_reported_items(
                     and bool(document.get("can_void"))
                     and has_permission(user, "requisition.execute")
                 ),
+                "is_plan_only": bool(line.get("is_plan_only")),
+                "component_plan_id": line.get("component_plan_id"),
                 "can_void_item": (
                     is_current_supplier_item
                     and has_permission(user, "requisition.execute")

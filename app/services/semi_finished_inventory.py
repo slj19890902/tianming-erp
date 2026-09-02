@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+import hashlib
 import json
 from math import ceil
 
@@ -10,9 +11,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.delivery import DeliveryItem
+from app.models.audit import OperationLog
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
+from app.models.stock_replenishment import (
+    StockReplenishmentBomComponentPlan,
+    StockReplenishmentOrder,
+)
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     Floor3LocationLayout,
@@ -449,6 +455,7 @@ def direct_semi_finished_deduction_eligible(
     crease_left_mm: int | None,
     crease_middle_mm: int | None,
     crease_right_mm: int | None,
+    available_stock_quantity: int | None = None,
 ) -> bool:
     """Authorize a candidate for one-click, still-human-confirmed deduction."""
 
@@ -461,7 +468,11 @@ def direct_semi_finished_deduction_eligible(
         or expected.customer_id != customer_id
         or lot.inventory_type != "semi_finished"
         or lot.status != "active"
-        or int(lot.quantity_available or 0) <= 0
+        or int(
+            lot.quantity_available
+            if available_stock_quantity is None
+            else available_stock_quantity
+        ) <= 0
         or detail is None
     ):
         return False
@@ -735,6 +746,7 @@ def semi_finished_inventory_candidates(
         db,
         product_id=_requirement_product_id(db, requirement),
         expected=expected,
+        include_stock_plan_reservations=True,
     )
     resolved: list[SemiFinishedCandidate] = []
     for row in candidates:
@@ -789,6 +801,9 @@ def semi_finished_candidates_for_product(
     crease_left_mm: int | None = None,
     crease_middle_mm: int | None = None,
     crease_right_mm: int | None = None,
+    include_stock_plan_reservations: bool = False,
+    frozen_stock_yield_per_sheet: int | None = None,
+    frozen_pieces_per_box: int | None = None,
 ) -> list[SemiFinishedCandidate]:
     product = db.get(Product, product_id)
     if product is None or product.deleted_at is not None:
@@ -800,17 +815,33 @@ def semi_finished_candidates_for_product(
     if pieces_per_box <= 0 or stock_yield_per_sheet <= 0:
         raise WarehouseInventoryError("每箱片数和每库存张产出片数必须大于0")
     authoritative_pieces_per_box = (
-        1
-        if _component(component_type) in {"cover", "base"}
-        else max(
-            int(
-                product.pieces_per_box
-                or (2 if (product.splice_mode or "").lower() == "double" else 1)
-            ),
-            1,
+        int(frozen_pieces_per_box)
+        if frozen_pieces_per_box is not None
+        else (
+            1
+            if _component(component_type) in {"cover", "base"}
+            else max(
+                int(
+                    product.pieces_per_box
+                    or (
+                        2
+                        if (product.splice_mode or "").lower() == "double"
+                        else 1
+                    )
+                ),
+                1,
+            )
         )
     )
-    authoritative_stock_yield = cutting_factor(product.default_cutting_mode)
+    if authoritative_pieces_per_box <= 0:
+        raise WarehouseInventoryError("冻结的每箱片数必须大于0", 409)
+    authoritative_stock_yield = (
+        int(frozen_stock_yield_per_sheet)
+        if frozen_stock_yield_per_sheet is not None
+        else cutting_factor(product.default_cutting_mode)
+    )
+    if authoritative_stock_yield <= 0:
+        raise WarehouseInventoryError("冻结的一张出数必须大于0", 409)
     expected = SemiFinishedSignature(
         customer_id=customer_id,
         board_length_mm=board_length_mm,
@@ -822,7 +853,10 @@ def semi_finished_candidates_for_product(
         stock_yield_per_sheet=authoritative_stock_yield,
     )
     rows = _semi_finished_candidates_for_signature(
-        db, product_id=product.id, expected=expected
+        db,
+        product_id=product.id,
+        expected=expected,
+        include_stock_plan_reservations=include_stock_plan_reservations,
     )
     return [
         replace(
@@ -838,6 +872,7 @@ def semi_finished_candidates_for_product(
                 crease_left_mm=crease_left_mm,
                 crease_middle_mm=crease_middle_mm,
                 crease_right_mm=crease_right_mm,
+                available_stock_quantity=row.available_stock_quantity,
             ),
         )
         for row in rows
@@ -966,11 +1001,47 @@ def browse_semi_finished_inventory_for_product(
     return candidates
 
 
+def _stock_plan_reserved_quantity_by_lot(
+    db: Session, *, product_id: int, customer_id: int
+) -> dict[int, int]:
+    rows = db.execute(
+        select(
+            InventoryReservation.inventory_lot_id,
+            func.sum(
+                InventoryReservation.reserved_stock_quantity
+                - InventoryReservation.consumed_stock_quantity
+                - InventoryReservation.released_stock_quantity
+            ),
+        )
+        .join(
+            StockReplenishmentBomComponentPlan,
+            StockReplenishmentBomComponentPlan.id
+            == InventoryReservation.stock_replenishment_bom_component_plan_id,
+        )
+        .join(
+            StockReplenishmentOrder,
+            StockReplenishmentOrder.id
+            == StockReplenishmentBomComponentPlan.replenishment_order_id,
+        )
+        .where(
+            StockReplenishmentBomComponentPlan.customer_id == customer_id,
+            StockReplenishmentOrder.status.in_(
+                ("confirmed", "partially_stocked", "stocked")
+            ),
+            InventoryReservation.reservation_type == "semi_requisition",
+            InventoryReservation.status.in_(("active", "partial")),
+        )
+        .group_by(InventoryReservation.inventory_lot_id)
+    ).all()
+    return {int(lot_id): int(quantity or 0) for lot_id, quantity in rows}
+
+
 def _semi_finished_candidates_for_signature(
     db: Session,
     *,
     product_id: int,
     expected: SemiFinishedSignature,
+    include_stock_plan_reservations: bool = False,
 ) -> list[SemiFinishedCandidate]:
     learned = _learned_rules_for_product(
         db,
@@ -978,6 +1049,18 @@ def _semi_finished_candidates_for_signature(
         customer_id=expected.customer_id,
         component_type=expected.component_type,
     )
+    plan_reserved = (
+        _stock_plan_reserved_quantity_by_lot(
+            db, product_id=product_id, customer_id=expected.customer_id
+        )
+        if include_stock_plan_reservations
+        else {}
+    )
+    availability_condition = InventoryLot.quantity_available > 0
+    if plan_reserved:
+        availability_condition = or_(
+            availability_condition, InventoryLot.id.in_(plan_reserved)
+        )
     rows = db.scalars(
         select(InventoryLot)
         .join(
@@ -987,7 +1070,7 @@ def _semi_finished_candidates_for_signature(
         .where(
             InventoryLot.inventory_type == "semi_finished",
             InventoryLot.status == "active",
-            InventoryLot.quantity_available > 0,
+            availability_condition,
             or_(
                 SemiFinishedInventoryDetail.owner_customer_id.is_(None),
                 SemiFinishedInventoryDetail.owner_customer_id
@@ -1011,6 +1094,9 @@ def _semi_finished_candidates_for_signature(
         )
         if scope is None:
             continue
+        available_stock_quantity = int(lot.quantity_available or 0) + int(
+            plan_reserved.get(int(lot.id), 0)
+        )
         if scope == "customer_generic":
             differences = _customer_generic_signature_differences(expected, detail)
             codes = [MANUAL_CONFIRM_WARNING, CUSTOMER_GENERIC_SEMI_FINISHED_STOCK]
@@ -1026,9 +1112,9 @@ def _semi_finished_candidates_for_signature(
                     lot=lot,
                     source="customer_generic",
                     match_rule_id=None,
-                    available_stock_quantity=lot.quantity_available,
+                    available_stock_quantity=available_stock_quantity,
                     deductible_requirement_quantity=(
-                        lot.quantity_available * detail.stock_yield_per_sheet
+                        available_stock_quantity * detail.stock_yield_per_sheet
                     ),
                     signature_differences=differences,
                     warning_codes=tuple(codes),
@@ -1042,9 +1128,9 @@ def _semi_finished_candidates_for_signature(
                     lot=lot,
                     source="general_signature",
                     match_rule_id=None,
-                    available_stock_quantity=lot.quantity_available,
+                    available_stock_quantity=available_stock_quantity,
                     deductible_requirement_quantity=(
-                        lot.quantity_available * detail.stock_yield_per_sheet
+                        available_stock_quantity * detail.stock_yield_per_sheet
                     ),
                     signature_differences=(),
                     warning_codes=(
@@ -1085,9 +1171,9 @@ def _semi_finished_candidates_for_signature(
                 lot=lot,
                 source=source,
                 match_rule_id=match_rule_id,
-                available_stock_quantity=lot.quantity_available,
+                available_stock_quantity=available_stock_quantity,
                 deductible_requirement_quantity=(
-                    lot.quantity_available * detail.stock_yield_per_sheet
+                    available_stock_quantity * detail.stock_yield_per_sheet
                 ),
                 signature_differences=differences,
                 warning_codes=tuple(warning_codes),
@@ -2131,6 +2217,14 @@ def reserve_semi_finished_inventory(
         )
         if requirement is None:
             raise WarehouseInventoryError("半成品需求已被删除，请刷新后重试", 409)
+        existing = _existing_reservation_batch(
+            db,
+            requirement_id=requirement_id,
+            idempotency_key=idempotency_key,
+            requested_requirement_quantity=requested_requirement_quantity,
+        )
+        if existing is not None:
+            return existing
 
         if has_production_completion_facts(db, [requirement.order_item_id]):
             raise WarehouseInventoryError(
@@ -2165,6 +2259,37 @@ def reserve_semi_finished_inventory(
         target = min(requested_requirement_quantity, remaining_requirement)
         if target <= 0:
             raise WarehouseInventoryError("该半成品需求已全部抵扣", 409)
+        transferred_plan_order_ids: set[int] = set()
+        transferred_plan_sources: dict[int, list[dict[str, int]]] = {}
+        source_plan_order_ids = list(
+            db.scalars(
+                select(StockReplenishmentBomComponentPlan.replenishment_order_id)
+                .join(
+                    InventoryReservation,
+                    InventoryReservation.stock_replenishment_bom_component_plan_id
+                    == StockReplenishmentBomComponentPlan.id,
+                )
+                .where(
+                    InventoryReservation.inventory_lot_id.in_(expected_versions),
+                    InventoryReservation.reservation_type == "semi_requisition",
+                    InventoryReservation.status.in_(("active", "partial")),
+                    StockReplenishmentBomComponentPlan.customer_id
+                    == requirement.customer_id,
+                )
+                .distinct()
+                .order_by(
+                    StockReplenishmentBomComponentPlan.replenishment_order_id
+                )
+            ).all()
+        )
+        if source_plan_order_ids:
+            db.scalars(
+                select(StockReplenishmentOrder)
+                .where(StockReplenishmentOrder.id.in_(source_plan_order_ids))
+                .order_by(StockReplenishmentOrder.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).all()
         inventory_lots = db.scalars(
             select(InventoryLot)
             .where(InventoryLot.id.in_(expected_versions))
@@ -2183,6 +2308,87 @@ def reserve_semi_finished_inventory(
                 or lot.semi_finished_detail is None
             ):
                 raise WarehouseInventoryError("所选半成品库存批次当前不可预占", 409)
+            detail = lot.semi_finished_detail
+            assert detail is not None
+            remaining_target = target - allocated
+            needed_stock = ceil(
+                remaining_target / max(int(detail.stock_yield_per_sheet or 1), 1)
+            )
+            plan_reservations = db.scalars(
+                select(InventoryReservation)
+                .join(
+                    StockReplenishmentBomComponentPlan,
+                    StockReplenishmentBomComponentPlan.id
+                    == InventoryReservation.stock_replenishment_bom_component_plan_id,
+                )
+                .join(
+                    StockReplenishmentOrder,
+                    StockReplenishmentOrder.id
+                    == StockReplenishmentBomComponentPlan.replenishment_order_id,
+                )
+                .where(
+                    InventoryReservation.inventory_lot_id == lot.id,
+                    InventoryReservation.reservation_type == "semi_requisition",
+                    InventoryReservation.status.in_(("active", "partial")),
+                    StockReplenishmentBomComponentPlan.customer_id
+                    == requirement.customer_id,
+                    StockReplenishmentOrder.status.in_(
+                        ("confirmed", "partially_stocked", "stocked")
+                    ),
+                )
+                .order_by(InventoryReservation.id)
+            ).all()
+            # A received stock-plan lot may contain both order-purpose sheets
+            # and genuinely free spare sheets.  Transfer the plan-owned sheets
+            # first so the free spare balance is not consumed while an active
+            # plan reservation is stranded on the same physical lot.
+            plan_stock_still_needed = needed_stock
+            for plan_reservation in plan_reservations:
+                if plan_stock_still_needed <= 0:
+                    break
+                plan_remaining = (
+                    int(plan_reservation.reserved_stock_quantity or 0)
+                    - int(plan_reservation.consumed_stock_quantity or 0)
+                    - int(plan_reservation.released_stock_quantity or 0)
+                )
+                transfer_stock = min(plan_stock_still_needed, plan_remaining)
+                if transfer_stock <= 0:
+                    continue
+                plan = db.get(
+                    StockReplenishmentBomComponentPlan,
+                    plan_reservation.stock_replenishment_bom_component_plan_id,
+                )
+                if plan is None:
+                    raise WarehouseInventoryError(
+                        "组合补库组件预占来源缺失，请刷新后重试", 409
+                    )
+                transfer_digest = hashlib.sha256(
+                    (
+                        f"{requirement.id}|{idempotency_key}|"
+                        f"{plan_reservation.id}"
+                    ).encode("utf-8")
+                ).hexdigest()
+                release_semi_finished_reservation(
+                    db,
+                    reservation_id=plan_reservation.id,
+                    expected_version=int(lot.version),
+                    operator_id=operator_id,
+                    release_reason="组合补库组件库存转接订单需求",
+                    idempotency_key=f"plan-transfer:{transfer_digest}",
+                    stock_quantity=transfer_stock,
+                    allow_stock_replenishment_plan=True,
+                )
+                plan_stock_still_needed -= transfer_stock
+                transferred_plan_order_ids.add(int(plan.replenishment_order_id))
+                transferred_plan_sources.setdefault(int(lot.id), []).append(
+                    {
+                        "source_reservation_id": int(plan_reservation.id),
+                        "source_plan_id": int(plan.id),
+                        "source_order_id": int(plan.replenishment_order_id),
+                        "stock_quantity": int(transfer_stock),
+                    }
+                )
+                db.refresh(lot)
             if lot.quantity_available <= 0:
                 continue
             confirmation = confirm_semi_finished_match(
@@ -2195,7 +2401,6 @@ def reserve_semi_finished_inventory(
                 admin_reverse_crease_override=admin_reverse_crease_override,
                 reverse_crease_override_reason=reverse_crease_override_reason,
             )
-            detail = lot.semi_finished_detail
             remaining_target = target - allocated
             capacity = lot.quantity_available * detail.stock_yield_per_sheet
             credited = min(remaining_target, capacity)
@@ -2208,7 +2413,7 @@ def reserve_semi_finished_inventory(
                 update(InventoryLot)
                 .where(
                     InventoryLot.id == lot.id,
-                    InventoryLot.version == expected_versions[lot.id],
+                    InventoryLot.version == lot.version,
                     InventoryLot.inventory_type == "semi_finished",
                     InventoryLot.status == "active",
                     InventoryLot.quantity_available >= stock_quantity,
@@ -2267,6 +2472,28 @@ def reserve_semi_finished_inventory(
             )
             db.add(reservation)
             db.flush()
+            transfer_sources = transferred_plan_sources.get(int(lot.id), [])
+            if transfer_sources:
+                db.add(
+                    OperationLog(
+                        user_id=operator_id,
+                        action="TRANSFER_STOCK_PLAN_TO_ORDER",
+                        resource="InventoryReservation",
+                        entity_type="inventory_reservation",
+                        entity_id=reservation.id,
+                        description="组合补库组件预占转接订单半成品需求",
+                        details=json.dumps(
+                            {
+                                "target_reservation_id": int(reservation.id),
+                                "target_requirement_id": int(requirement.id),
+                                "target_order_item_id": int(requirement.order_item_id),
+                                "inventory_lot_id": int(lot.id),
+                                "sources": transfer_sources,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                )
             db.expire(lot)
             refreshed_lot = db.get(InventoryLot, lot.id)
             assert refreshed_lot is not None
@@ -2287,6 +2514,28 @@ def reserve_semi_finished_inventory(
             allocated += credited
             if allocated >= target:
                 break
+        for source_order_id in transferred_plan_order_ids:
+            source_order = db.get(StockReplenishmentOrder, source_order_id)
+            if source_order is None or source_order.items:
+                continue
+            active_plan_reservation = db.scalar(
+                select(InventoryReservation.id)
+                .join(
+                    StockReplenishmentBomComponentPlan,
+                    StockReplenishmentBomComponentPlan.id
+                    == InventoryReservation.stock_replenishment_bom_component_plan_id,
+                )
+                .where(
+                    StockReplenishmentBomComponentPlan.replenishment_order_id
+                    == source_order_id,
+                    InventoryReservation.status.in_(("active", "partial")),
+                )
+                .limit(1)
+            )
+            if active_plan_reservation is None:
+                source_order.status = "stocked"
+                source_order.stocked_by = operator_id
+                source_order.stocked_at = utc_now()
         if not reservations:
             raise WarehouseInventoryError("所选库存当前没有可预占数量", 409)
         db.flush()
@@ -2300,6 +2549,207 @@ def reserve_semi_finished_inventory(
         unallocated_requirement_quantity=max(
             requested_requirement_quantity - allocated, 0
         ),
+    )
+
+
+def reserve_stock_replenishment_component_inventory(
+    db: Session,
+    *,
+    plan: StockReplenishmentBomComponentPlan,
+    requested_piece_quantity: int,
+    lots: list[SemiFinishedLotVersion],
+    operator_id: int | None,
+    idempotency_key: str,
+) -> SemiFinishedReservationBatch:
+    """Reserve an explicitly selected exact-match lot for a stock BOM plan.
+
+    Previewing or expanding a parent plan never calls this function.  It is
+    used only inside the formal replenishment submit transaction, after the
+    current BOM has been revalidated and the component-plan row exists.
+    """
+
+    if requested_piece_quantity <= 0:
+        raise WarehouseInventoryError("本次组件库存抵扣片数必须大于0")
+    if not idempotency_key or len(idempotency_key) > 80:
+        raise WarehouseInventoryError("请求标识长度必须为1到80个字符")
+    if not lots:
+        raise WarehouseInventoryError("至少选择一个完全匹配的组件库存批次")
+    expected_versions = {row.lot_id: row.expected_version for row in lots}
+    if len(expected_versions) != len(lots):
+        raise WarehouseInventoryError("同一库存批次不能重复选择")
+    if any(version <= 0 for version in expected_versions.values()):
+        raise WarehouseInventoryError("库存版本必须大于0")
+
+    existing = list(
+        db.scalars(
+            select(InventoryReservation)
+            .where(
+                InventoryReservation.reservation_group_key == idempotency_key,
+                InventoryReservation.stock_replenishment_bom_component_plan_id
+                == plan.id,
+            )
+            .order_by(InventoryReservation.inventory_lot_id)
+        ).all()
+    )
+    if existing:
+        allocated = sum(
+            int(row.credited_requirement_quantity or 0) for row in existing
+        )
+        if allocated != requested_piece_quantity:
+            raise WarehouseInventoryError(
+                "该请求标识对应的组件库存抵扣数量已变化", 409
+            )
+        return SemiFinishedReservationBatch(
+            reservations=tuple(existing),
+            requested_requirement_quantity=requested_piece_quantity,
+            allocated_requirement_quantity=allocated,
+            unallocated_requirement_quantity=0,
+        )
+
+    product = db.get(Product, plan.component_product_id)
+    if product is None or product.deleted_at is not None or not product.is_active:
+        raise WarehouseInventoryError("组合组件常用箱已失效，请刷新草稿", 409)
+    candidates = semi_finished_candidates_for_product(
+        db,
+        product_id=product.id,
+        customer_id=int(plan.customer_id or 0),
+        board_length_mm=int(plan.report_length_mm or 0),
+        board_width_mm=int(plan.report_width_mm or 0),
+        material_code=str(plan.material_code_snapshot or ""),
+        flute_type=str(plan.flute_type or ""),
+        component_type=plan.component_type,
+        pieces_per_box=int(plan.pieces_per_box),
+        stock_yield_per_sheet=int(plan.yield_per_sheet),
+        frozen_stock_yield_per_sheet=int(plan.yield_per_sheet),
+        frozen_pieces_per_box=int(plan.pieces_per_box),
+        layer_count=plan.layer_count,
+        crease_type=plan.crease_type,
+        crease_left_mm=plan.crease_left_mm,
+        crease_middle_mm=plan.crease_middle_mm,
+        crease_right_mm=plan.crease_right_mm,
+    )
+    candidate_by_lot = {
+        row.lot.id: row
+        for row in candidates
+        if row.direct_deduction_eligible
+    }
+    if set(expected_versions) - set(candidate_by_lot):
+        raise WarehouseInventoryError(
+            "所选组件库存已不再完全匹配，请刷新候选后重试", 409
+        )
+
+    reservations: list[InventoryReservation] = []
+    allocated = 0
+    with db.begin_nested():
+        for candidate in candidates:
+            lot = candidate.lot
+            if lot.id not in expected_versions:
+                continue
+            expected_version = expected_versions[lot.id]
+            if lot.version != expected_version:
+                raise WarehouseInventoryError(
+                    "库存已被其他人修改，请刷新候选后重试", 409
+                )
+            detail = lot.semi_finished_detail
+            if (
+                detail is None
+                or lot.inventory_type != "semi_finished"
+                or lot.status != "active"
+                or lot.quantity_available <= 0
+            ):
+                raise WarehouseInventoryError(
+                    "所选组件库存批次当前不可预占", 409
+                )
+            remaining = requested_piece_quantity - allocated
+            if remaining <= 0:
+                break
+            yield_factor = max(int(detail.stock_yield_per_sheet or 1), 1)
+            credited = min(remaining, lot.quantity_available * yield_factor)
+            if credited <= 0:
+                continue
+            stock_quantity = ceil(credited / yield_factor)
+            before = _balances(lot)
+            now = utc_now()
+            result = db.execute(
+                update(InventoryLot)
+                .where(
+                    InventoryLot.id == lot.id,
+                    InventoryLot.version == expected_version,
+                    InventoryLot.inventory_type == "semi_finished",
+                    InventoryLot.status == "active",
+                    InventoryLot.quantity_available >= stock_quantity,
+                )
+                .values(
+                    quantity_available=InventoryLot.quantity_available
+                    - stock_quantity,
+                    quantity_reserved=InventoryLot.quantity_reserved
+                    + stock_quantity,
+                    version=InventoryLot.version + 1,
+                    last_movement_at=now,
+                )
+            )
+            if result.rowcount != 1:
+                raise WarehouseInventoryError(
+                    "库存数量或版本已变化，请刷新候选后重试", 409
+                )
+            row_key = (
+                idempotency_key
+                if not reservations
+                else f"{idempotency_key}:{lot.id}"
+            )
+            reservation = InventoryReservation(
+                reservation_number=_number("SRS"),
+                inventory_lot_id=lot.id,
+                reservation_type="semi_requisition",
+                stock_replenishment_bom_component_plan_id=plan.id,
+                reserved_stock_quantity=stock_quantity,
+                credited_requirement_quantity=credited,
+                yield_factor=yield_factor,
+                consumed_stock_quantity=0,
+                released_stock_quantity=0,
+                consumed_requirement_quantity=0,
+                released_requirement_quantity=0,
+                status="active",
+                warning_codes="[]",
+                reserved_by=operator_id,
+                reserved_at=now,
+                reservation_group_key=idempotency_key,
+                reservation_group_requested_quantity=requested_piece_quantity,
+                idempotency_key=row_key,
+            )
+            db.add(reservation)
+            db.flush()
+            db.expire(lot)
+            refreshed_lot = db.get(InventoryLot, lot.id)
+            assert refreshed_lot is not None
+            _movement(
+                db,
+                lot=refreshed_lot,
+                movement_type="reserve",
+                quantity=stock_quantity,
+                before=before,
+                operator_id=operator_id,
+                reason="组合父件补库人工确认抵扣组件库存",
+                idempotency_key=row_key,
+                reservation_id=reservation.id,
+            )
+            reservations.append(reservation)
+            allocated += credited
+        if allocated != requested_piece_quantity:
+            raise WarehouseInventoryError(
+                "所选组件库存不足以覆盖确认抵扣片数，请刷新候选", 409
+            )
+        if {row.inventory_lot_id for row in reservations} != set(expected_versions):
+            raise WarehouseInventoryError(
+                "所选组件库存批次包含本次抵扣未实际使用的批次，请刷新后重选",
+                409,
+            )
+        db.flush()
+    return SemiFinishedReservationBatch(
+        reservations=tuple(reservations),
+        requested_requirement_quantity=requested_piece_quantity,
+        allocated_requirement_quantity=allocated,
+        unallocated_requirement_quantity=0,
     )
 
 
@@ -2358,6 +2808,7 @@ def release_semi_finished_reservation(
     release_reason: str | None,
     idempotency_key: str,
     stock_quantity: int | None = None,
+    allow_stock_replenishment_plan: bool = False,
 ) -> SemiFinishedReservationMutation:
     repeated = _idempotent_mutation(
         db,
@@ -2366,14 +2817,30 @@ def release_semi_finished_reservation(
         reservation_id=reservation_id,
     )
     if repeated is not None:
+        if (
+            stock_quantity is not None
+            and int(repeated.movement.quantity) != int(stock_quantity)
+        ):
+            raise WarehouseInventoryError(
+                "同一请求标识的半成品预占释放数量已变化", 409
+            )
         return repeated
     reason = (release_reason or "").strip() or "释放半成品库存预占（系统记录）"
     with db.begin_nested():
         reservation = db.get(InventoryReservation, reservation_id)
         if reservation is None:
             raise WarehouseInventoryError("库存预占记录不存在", 404)
-        if reservation.reservation_type != "semi_order":
-            raise WarehouseInventoryError("该记录不是半成品订单预占")
+        stock_plan_reservation = bool(
+            reservation.reservation_type == "semi_requisition"
+            and reservation.stock_replenishment_bom_component_plan_id is not None
+            and reservation.requisition_item_id is None
+        )
+        if stock_plan_reservation and not allow_stock_replenishment_plan:
+            raise WarehouseInventoryError(
+                "组合补库组件预占只能随补库单作废统一释放", 409
+            )
+        if reservation.reservation_type != "semi_order" and not stock_plan_reservation:
+            raise WarehouseInventoryError("该记录不是可释放的半成品预占")
         from app.services.production_workflow import has_production_completion_facts
 
         if reservation.order_item_id is not None and has_production_completion_facts(
@@ -2450,7 +2917,8 @@ def release_semi_finished_reservation(
         db.flush()
     from app.services.production_workflow import refresh_existing_production_task
 
-    refresh_existing_production_task(db, reservation.order_item_id)
+    if reservation.order_item_id is not None:
+        refresh_existing_production_task(db, reservation.order_item_id)
     return SemiFinishedReservationMutation(reservation, movement)
 
 

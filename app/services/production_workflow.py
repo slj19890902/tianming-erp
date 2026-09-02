@@ -2738,6 +2738,12 @@ def _consume_completion_semi_reservations(
             OrderItemSemiRequirement.id,
         )
     ).all()
+    component_input_stock_quantity = (
+        max(int(completion.material_input_quantity or 0), 0)
+        if task.sales_order_item_bom_component_id is not None
+        and len(requirements) == 1
+        else None
+    )
     require_full = task.readiness_basis in {
         "semi_finished_inventory",
         "component_semi_finished_inventory",
@@ -2789,8 +2795,14 @@ def _consume_completion_semi_reservations(
             continue
         target_pieces = planned_quantity * max(int(requirement.pieces_per_box or 1), 1)
         remaining_pieces = target_pieces
+        remaining_component_input_stock = component_input_stock_quantity
         for reservation in reservations:
-            if remaining_pieces <= 0:
+            if (
+                remaining_component_input_stock is not None
+                and remaining_component_input_stock <= 0
+            ) or (
+                remaining_component_input_stock is None and remaining_pieces <= 0
+            ):
                 break
             available_credit = max(
                 int(reservation.credited_requirement_quantity or 0)
@@ -2806,16 +2818,28 @@ def _consume_completion_semi_reservations(
                 - int(reservation.consumed_stock_quantity or 0)
                 - int(reservation.released_stock_quantity or 0)
             )
-            stock_quantity = min(
-                available_stock,
-                ceil(min(remaining_pieces, available_credit) / yield_factor),
-            )
+            if remaining_component_input_stock is not None:
+                # A rounded component input can produce more pieces than this
+                # order still needs (for example one sheet yields four pieces
+                # while the component demand is one).  Consume the physical
+                # sheets actually put into production; requirement credit is
+                # intentionally capped below by the reservation itself.
+                stock_quantity = min(
+                    available_stock,
+                    remaining_component_input_stock,
+                )
+            else:
+                stock_quantity = min(
+                    available_stock,
+                    ceil(min(remaining_pieces, available_credit) / yield_factor),
+                )
             if stock_quantity <= 0:
                 continue
             lot = db.get(InventoryLot, reservation.inventory_lot_id)
             if lot is None:
                 raise ProductionWorkflowError("半成品库存批次不存在", 409)
             before_credit = int(reservation.consumed_requirement_quantity or 0)
+            before_stock = int(reservation.consumed_stock_quantity or 0)
             mutation = consume_semi_finished_reservation(
                 db,
                 reservation_id=reservation.id,
@@ -2832,11 +2856,21 @@ def _consume_completion_semi_reservations(
                 int(mutation.reservation.consumed_requirement_quantity or 0)
                 - before_credit
             )
+            consumed_stock = (
+                int(mutation.reservation.consumed_stock_quantity or 0)
+                - before_stock
+            )
             remaining_pieces -= consumed_credit
+            if remaining_component_input_stock is not None:
+                remaining_component_input_stock -= consumed_stock
         if (
             require_full
             and requirement.component_type in expected_components
-            and remaining_pieces > 0
+            and (
+                remaining_component_input_stock > 0
+                if remaining_component_input_stock is not None
+                else remaining_pieces > 0
+            )
         ):
             raise ProductionWorkflowError(
                 f"{requirement.component_type}半成品预占余额不足，无法完成生产完工",
@@ -2854,7 +2888,7 @@ def _reserve_component_completion_lot(
     lot: InventoryLot,
     operator_id: int | None,
     idempotency_key: str,
-) -> InventoryReservation:
+) -> InventoryReservation | None:
     """Reserve a just-created component lot for its immutable BOM snapshot.
 
     The legacy helper checks the parent product, which is intentionally wrong
@@ -2862,6 +2896,14 @@ def _reserve_component_completion_lot(
     movement and reservation invariants while binding both the parent order
     item and the component snapshot.
     """
+    produced_quantity = int(completion.quantity or 0)
+    reserve_quantity = int(completion.order_reserved_quantity or 0)
+    if (
+        produced_quantity <= 0
+        or reserve_quantity < 0
+        or reserve_quantity > produced_quantity
+    ):
+        raise ProductionWorkflowError("组件完工库存数量与完工事实不一致", 409)
     existing = db.scalar(
         select(InventoryReservation).where(
             InventoryReservation.idempotency_key == idempotency_key
@@ -2872,12 +2914,15 @@ def _reserve_component_completion_lot(
             existing.order_item_id != item.id
             or existing.inventory_lot_id != lot.id
             or existing.sales_order_item_bom_component_id != snapshot_id
+            or int(existing.reserved_stock_quantity or 0) != reserve_quantity
+            or int(existing.credited_requirement_quantity or 0) != reserve_quantity
         ):
             raise ProductionWorkflowError("组件完工库存预占幂等标识冲突", 409)
         return existing
-    quantity = int(completion.quantity or 0)
-    if quantity <= 0 or int(lot.quantity_available or 0) != quantity:
+    if int(lot.quantity_available or 0) != produced_quantity:
         raise ProductionWorkflowError("组件完工库存数量与完工事实不一致", 409)
+    if reserve_quantity == 0:
+        return None
     before = _balances(lot)
     expected_version = int(lot.version or 0)
     now = utc_now_naive()
@@ -2886,13 +2931,13 @@ def _reserve_component_completion_lot(
         .where(
             InventoryLot.id == lot.id,
             InventoryLot.version == expected_version,
-            InventoryLot.quantity_available == quantity,
+            InventoryLot.quantity_available == produced_quantity,
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
         )
         .values(
-            quantity_available=InventoryLot.quantity_available - quantity,
-            quantity_reserved=InventoryLot.quantity_reserved + quantity,
+            quantity_available=InventoryLot.quantity_available - reserve_quantity,
+            quantity_reserved=InventoryLot.quantity_reserved + reserve_quantity,
             version=InventoryLot.version + 1,
             last_movement_at=now,
         )
@@ -2906,8 +2951,8 @@ def _reserve_component_completion_lot(
         order_id=order.id,
         order_item_id=item.id,
         sales_order_item_bom_component_id=snapshot_id,
-        reserved_stock_quantity=quantity,
-        credited_requirement_quantity=quantity,
+        reserved_stock_quantity=reserve_quantity,
+        credited_requirement_quantity=reserve_quantity,
         yield_factor=1,
         status="active",
         warning_codes="[]",
@@ -2924,7 +2969,7 @@ def _reserve_component_completion_lot(
         db,
         lot=refreshed_lot,
         movement_type="reserve",
-        quantity=quantity,
+        quantity=reserve_quantity,
         before=before,
         operator_id=operator_id,
         reason="复合 BOM 组件生产完工自动预占",

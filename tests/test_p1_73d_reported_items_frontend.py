@@ -250,7 +250,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
     _run_node(script, tmp_path, "p1-73d-composite-task-print.js")
 
 
-def test_label_print_requires_every_active_line_of_each_supplier_order(
+def test_label_print_accepts_each_selected_supplier_item_independently(
     tmp_path: Path,
 ) -> None:
     body = _method_body("openReportedItemLabels")
@@ -266,13 +266,10 @@ const vm={{reportedItemPrintBusy:false,reportedItemPrintErrors:[],reportedLabelR
 vm.openReportedItemLabels=new AsyncFunction({json.dumps(body, ensure_ascii=False)}).bind(vm);
 const expect=(value,message)=>{{if(!value)throw new Error(message);}};
 (async()=>{{
-  expect(await vm.openReportedItemLabels()===false,'partial supplier order label selection was accepted');
-  expect(gets.length===0&&opened.length===0,'partial label selection reached preview or opened a tab');
-  expect(vm.reportedItemPrintErrors[0].includes('全部 2 条有效明细'),'partial label blocker was not explicit');
-  vm.selection=rows;vm.reportedItemPrintErrors=[];
-  expect(await vm.openReportedItemLabels()===true,'complete supplier order label selection failed');
-  expect(gets.length===1&&opened.length===1,'complete label selection did not preflight one order once');
-  expect(opened[0].location.href==='/production-packaging-label.html?id=3','validated label page URL is wrong');
+  expect(await vm.openReportedItemLabels()===true,'single selected supplier item was blocked');
+  expect(gets[0]==='/api/requisition/supplier-orders/3/production-packaging-label-package?item_ids=31','single item was not used for live preview');
+  expect(opened.length===1,'single item selection opened the wrong number of tabs');
+  expect(opened[0].location.href==='/production-packaging-label.html?id=3&item_ids=31','selected item identity was lost from label page URL');
 }})().catch(error=>{{console.error(error);process.exit(1);}});
 """
     _run_node(script, tmp_path, "p1-73d-label-print-selection.js")
@@ -299,9 +296,9 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
 (async()=>{{
   expect(await vm.openReportedItemLabels()===true,'multi-order label selection failed');
   expect(gets.length===1,'multi-order selection did not use one batch preflight');
-  expect(gets[0]==='/api/requisition/supplier-order-label-batches/package?order_ids=147%2C148','wrong batch preflight URL');
+  expect(gets[0]==='/api/requisition/supplier-order-label-batches/package?order_ids=147%2C148&item_ids=1%2C2','wrong batch preflight URL');
   expect(opened.length===1,'multi-order selection opened more than one tab');
-  expect(opened[0].location.href==='/production-packaging-label.html?ids=147%2C148','wrong unified label page URL');
+  expect(opened[0].location.href==='/production-packaging-label.html?ids=147%2C148&item_ids=1%2C2','wrong unified label page URL');
 }})().catch(error=>{{console.error(error);process.exit(1);}});
 """
     _run_node(script, tmp_path, "p0-jsd-unified-label-page.js")

@@ -1131,10 +1131,10 @@
             : loadingDelivery
               ? `/api/deliveries/${deliveryId}/production-packaging-label-package`
               : loadingSupplierBatch
-                ? `/api/requisition/supplier-order-label-batches/package?order_ids=${encodeURIComponent(supplierOrderIds.join(","))}`
+                ? `/api/requisition/supplier-order-label-batches/package?order_ids=${encodeURIComponent(supplierOrderIds.join(","))}${compositeItemIds.length ? `&item_ids=${encodeURIComponent(compositeItemIds.join(","))}` : ""}`
               : loadingComposite
               ? `/api/requisition/batches/${compositeBatchId}/production-packaging-label-package?item_ids=${encodeURIComponent(compositeItemIds.join(","))}`
-              : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package`;
+              : `/api/requisition/supplier-orders/${supplierOrderId}/production-packaging-label-package${compositeItemIds.length ? `?item_ids=${encodeURIComponent(compositeItemIds.join(","))}` : ""}`;
           const payload = await requestJson(url, {method:"GET", signal:activeController.signal});
           if (generation !== loadGeneration) return;
           const normalized = normalizeResponse(payload);
@@ -1188,10 +1188,10 @@
         const sourceSignature = isDelivery
           ? `delivery:${deliveryId}`
           : isSupplierBatch
-            ? `supplier-batch:${supplierOrderIds.join(",")}`
+            ? `supplier-batch:${supplierOrderIds.join(",")}:${compositeItemIds.join(",")}`
           : Number.isInteger(compositeBatchId) && compositeBatchId > 0
             ? `composite:${compositeBatchId}:${compositeItemIds.join(",")}`
-            : `supplier:${supplierOrderId}`;
+            : `supplier:${supplierOrderId}:${compositeItemIds.join(",")}`;
         const signature = `${sourceSignature}|${loadedPackage.template_version}|${fingerprint}|${JSON.stringify(items)}`;
         if (!prepareAttempt || prepareAttempt.signature !== signature) {
           prepareAttempt = {signature, idempotencyKey:newIdempotencyKey("p1106-label-job"), uncertain:false};

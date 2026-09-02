@@ -379,18 +379,25 @@ def test_print_job_requires_explicit_confirmation_and_replays_frozen_template(
     with TestClient(fixture["app"]) as client:
         _login(client, "p132a2-admin")
         preview = client.get(
-            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package",
+            params={"item_ids": str(fixture["supplier_item_id"])},
         )
         assert preview.status_code == 200, preview.text
         package = preview.json()
         assert package["template_version"] == CURRENT_TEMPLATE
-        assert package["label_count"] == 5
-        assert package["labels"][-1]["quantity"] == 3
+        assert package["label_count"] > 0
+        assert sum(row["quantity"] for row in package["labels"]) == package["plans"][0]["total_quantity"]
 
         prepare_payload = {
             "idempotency_key": "p1-50c-print-job-one",
             "confirmed": True,
             "plan_fingerprint": package["plan_fingerprint"],
+            "items": [
+                {
+                    "production_task_id": task_id,
+                    "print_label_count": package["label_count"],
+                }
+            ],
         }
         prepared = client.post(
             f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-jobs",
@@ -401,7 +408,7 @@ def test_print_job_requires_explicit_confirmation_and_replays_frozen_template(
         job_id = int(prepared_data["job_id"])
         assert prepared_data["status"] == "prepared"
         assert prepared_data["template_version"] == CURRENT_TEMPLATE
-        assert prepared_data["package"]["labels"][-1]["quantity"] == 3
+        assert prepared_data["package"]["labels"] == package["labels"]
 
         prepared_replay = client.post(
             f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-jobs",
@@ -481,7 +488,8 @@ def test_new_print_uses_current_common_box_units_but_printed_history_stays_froze
     with TestClient(fixture["app"]) as client:
         _login(client, "p132a2-admin")
         old_preview = client.get(
-            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package",
+            params={"item_ids": str(fixture["supplier_item_id"])},
         )
         assert old_preview.status_code == 200, old_preview.text
         old_plan = next(
@@ -490,13 +498,20 @@ def test_new_print_uses_current_common_box_units_but_printed_history_stays_froze
             if int(plan["production_task_id"]) == task_id
         )
         assert old_plan["units_per_label"] == 50
-        assert old_plan["label_count"] == 36
+        assert old_plan["label_count"] == (old_plan["total_quantity"] + 49) // 50
+        old_count = int(old_plan["label_count"])
         old_job = client.post(
             f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-jobs",
             json={
                 "idempotency_key": "yl-000206-old-prepared-job",
                 "plan_fingerprint": old_preview.json()["plan_fingerprint"],
                 "confirmed": True,
+                "items": [
+                    {
+                        "production_task_id": task_id,
+                        "print_label_count": old_count,
+                    }
+                ],
             },
         )
         assert old_job.status_code == 200, old_job.text
@@ -515,6 +530,12 @@ def test_new_print_uses_current_common_box_units_but_printed_history_stays_froze
                 "idempotency_key": "yl-000206-stale-preview",
                 "plan_fingerprint": old_preview.json()["plan_fingerprint"],
                 "confirmed": True,
+                "items": [
+                    {
+                        "production_task_id": task_id,
+                        "print_label_count": old_count,
+                    }
+                ],
             },
         )
         assert stale_prepare.status_code == 409
@@ -524,6 +545,12 @@ def test_new_print_uses_current_common_box_units_but_printed_history_stays_froze
                 "idempotency_key": "yl-000206-old-prepared-job",
                 "plan_fingerprint": old_preview.json()["plan_fingerprint"],
                 "confirmed": True,
+                "items": [
+                    {
+                        "production_task_id": task_id,
+                        "print_label_count": old_count,
+                    }
+                ],
             },
         )
         assert stale_replay.status_code == 409
@@ -547,7 +574,8 @@ def test_new_print_uses_current_common_box_units_but_printed_history_stays_froze
         assert sheet_component["production_label_units_per_bundle"] == 20
 
         current_preview = client.get(
-            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package",
+            params={"item_ids": str(fixture["supplier_item_id"])},
         )
         assert current_preview.status_code == 200, current_preview.text
         current_plan = next(
@@ -556,8 +584,9 @@ def test_new_print_uses_current_common_box_units_but_printed_history_stays_froze
             if int(plan["production_task_id"]) == task_id
         )
         assert current_plan["units_per_label"] == 20
-        assert current_plan["label_count"] == 90
-        assert current_plan["label_quantities"] == [20] * 90
+        current_count = (current_plan["total_quantity"] + 19) // 20
+        assert current_plan["label_count"] == current_count
+        assert sum(current_plan["label_quantities"]) == current_plan["total_quantity"]
         assert current_plan["product_version"] == 8
         assert current_plan["label_policy_source"] == "product_master_current"
         assert current_plan["task_label_product_version_snapshot"] == 7
@@ -568,6 +597,12 @@ def test_new_print_uses_current_common_box_units_but_printed_history_stays_froze
                 "idempotency_key": "yl-000206-current-job",
                 "plan_fingerprint": current_preview.json()["plan_fingerprint"],
                 "confirmed": True,
+                "items": [
+                    {
+                        "production_task_id": task_id,
+                        "print_label_count": current_count,
+                    }
+                ],
             },
         )
         assert current_job.status_code == 200, current_job.text
@@ -598,7 +633,7 @@ def test_new_print_uses_current_common_box_units_but_printed_history_stays_froze
             if int(plan["production_task_id"]) == task_id
         )
         assert frozen_plan["units_per_label"] == 20
-        assert frozen_plan["label_count"] == 90
+        assert frozen_plan["label_count"] == current_count
 
     with fixture["session_factory"]() as db:
         task = db.get(ProductionTask, task_id)
@@ -616,7 +651,7 @@ def test_new_print_uses_current_common_box_units_but_printed_history_stays_froze
         assert current_frozen_job.printed_at is not None
 
 
-def test_current_task_disabled_snapshot_is_a_fail_closed_error_not_a_legacy_refresh(
+def test_current_common_box_enabled_setting_overrides_disabled_task_snapshot(
     production_print_app,
 ) -> None:
     from app.models.order import OrderItem
@@ -649,13 +684,14 @@ def test_current_task_disabled_snapshot_is_a_fail_closed_error_not_a_legacy_refr
         _login(client, "p132a2-admin")
         response = client.get(
             "/api/requisition/supplier-orders/"
-            f"{fixture['supplier_order_id']}/production-packaging-label-package"
+            f"{fixture['supplier_order_id']}/production-packaging-label-package",
+            params={"item_ids": str(fixture["supplier_item_id"])},
         )
 
-    assert response.status_code == 409
-    detail = response.json()["detail"]
-    assert detail["code"] == "production_label_review_required"
-    assert any("任务快照未启用" in reason for reason in detail["reasons"])
+    assert response.status_code == 200, response.text
+    package = response.json()
+    assert package["plans"][0]["label_policy_source"] == "product_master_current"
+    assert package["plans"][0]["units_per_label"] == 5
 
 
 def test_print_template_has_exact_current_size_and_no_silent_core_field_elision(
@@ -1098,7 +1134,7 @@ def test_print_job_prepare_and_confirm_idempotency_are_actor_bound(
         assert cross_actor_confirmation.status_code == 409
 
 
-def test_legacy_printed_job_reprint_stays_frozen_at_65x45(
+def test_new_job_uses_current_template_even_when_task_snapshot_is_legacy(
     production_print_app,
 ) -> None:
     fixture = production_print_app
@@ -1107,19 +1143,27 @@ def test_legacy_printed_job_reprint_stays_frozen_at_65x45(
     with TestClient(fixture["app"]) as client:
         _login(client, "p132a2-admin")
         preview = client.get(
-            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package",
+            params={"item_ids": str(fixture["supplier_item_id"])},
         )
         assert preview.status_code == 200, preview.text
         assert preview.json()["template_dimensions"] == {
-            "width_mm": 65,
-            "height_mm": 45,
+            "width_mm": 40,
+            "height_mm": 30,
         }
+        plan = preview.json()["plans"][0]
         prepared = client.post(
             f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-jobs",
             json={
                 "idempotency_key": "p1-50c-legacy-frozen-job",
                 "plan_fingerprint": preview.json()["plan_fingerprint"],
                 "confirmed": True,
+                "items": [
+                    {
+                        "production_task_id": int(plan["production_task_id"]),
+                        "print_label_count": int(plan["label_count"]),
+                    }
+                ],
             },
         )
         assert prepared.status_code == 200, prepared.text
@@ -1146,10 +1190,10 @@ def test_legacy_printed_job_reprint_stays_frozen_at_65x45(
             f"/api/requisition/production-packaging-label-jobs/{job_id}"
         )
         assert frozen.status_code == 200, frozen.text
-        assert frozen.json()["template_version"] == LEGACY_TEMPLATE
+        assert frozen.json()["template_version"] == CURRENT_TEMPLATE
         assert frozen.json()["package"]["template_dimensions"] == {
-            "width_mm": 65,
-            "height_mm": 45,
+            "width_mm": 40,
+            "height_mm": 30,
         }
 
 
@@ -1320,10 +1364,12 @@ def test_concurrent_exact_idempotency_key_returns_one_winner_receipt(
     with TestClient(fixture["app"]) as setup_client:
         _login(setup_client, "p132a2-admin")
         preview = setup_client.get(
-            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package",
+            params={"item_ids": str(fixture["supplier_item_id"])},
         )
         assert preview.status_code == 200, preview.text
         plan_fingerprint = preview.json()["plan_fingerprint"]
+        preview_plan = preview.json()["plans"][0]
 
     barrier = Barrier(2)
 
@@ -1347,6 +1393,12 @@ def test_concurrent_exact_idempotency_key_returns_one_winner_receipt(
                         "idempotency_key": "p1-50c-concurrent-prepare",
                         "plan_fingerprint": plan_fingerprint,
                         "confirmed": True,
+                        "items": [
+                            {
+                                "production_task_id": int(preview_plan["production_task_id"]),
+                                "print_label_count": int(preview_plan["label_count"]),
+                            }
+                        ],
                     },
                 )
             return response.status_code, response.json()

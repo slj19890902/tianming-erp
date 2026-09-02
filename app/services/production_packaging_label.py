@@ -592,16 +592,38 @@ def build_delivery_packaging_label_package(
 def build_supplier_requisition_packaging_label_package(
     db: Session,
     order: SupplierRequisitionOrder,
+    *,
+    selected_supplier_item_ids: set[int] | None = None,
+    selected_task_ids: set[int] | None = None,
 ) -> dict:
     """Project a read-only package using the current common-box label policy.
 
     A supplier order can contain cover/base rows or repeated requisition sources
     that point to the same production task.  The task id is therefore the only
     deduplication key; procurement sheet quantities are deliberately ignored.
-    Production quantity and template stay frozen on the task, while the enabled
-    flag and units-per-label come from the current Product master.  A prepared
-    print job freezes that projection; an actually printed job remains immutable.
+    Every selected requisition item is projected independently.  The enabled
+    flag, units-per-label and template come from the current Product master, and
+    the quantity comes from the current outstanding production demand.  A
+    prepared print job freezes that projection; an actually printed job remains
+    immutable.
     """
+
+    if selected_supplier_item_ids is not None and selected_task_ids is not None:
+        raise ProductionPackagingLabelError("产品标签明细与任务不能同时筛选")
+    normalized_item_ids = (
+        {int(value) for value in selected_supplier_item_ids}
+        if selected_supplier_item_ids is not None
+        else None
+    )
+    normalized_task_ids = (
+        {int(value) for value in selected_task_ids}
+        if selected_task_ids is not None
+        else None
+    )
+    if normalized_item_ids is not None and not normalized_item_ids:
+        raise ProductionPackagingLabelError("请选择需要打印标签的报料明细")
+    if normalized_task_ids is not None and not normalized_task_ids:
+        raise ProductionPackagingLabelError("请选择需要打印标签的生产任务")
 
     production_package = build_supplier_requisition_production_package(db, order)
     task_ids = {
@@ -621,13 +643,44 @@ def build_supplier_requisition_packaging_label_package(
         )
     }
 
-    task_sources: dict[int, tuple[dict, dict]] = {}
+    all_task_sources: dict[int, tuple[dict, dict]] = {}
+    item_filtered_task_sources: dict[int, tuple[dict, dict]] = {}
+    available_item_ids: set[int] = set()
     for card in production_package["cards"]:
         for component in card.get("components", []):
+            supplier_item_id = component.get("supplier_order_item_id")
+            if supplier_item_id is not None:
+                available_item_ids.add(int(supplier_item_id))
             task_id = component.get("production_task_id")
             if task_id is None:
                 continue
-            task_sources.setdefault(int(task_id), (card, component))
+            all_task_sources.setdefault(int(task_id), (card, component))
+            if (
+                normalized_item_ids is None
+                or int(supplier_item_id or 0) in normalized_item_ids
+            ):
+                item_filtered_task_sources.setdefault(
+                    int(task_id), (card, component)
+                )
+
+    if normalized_item_ids is not None:
+        missing_item_ids = sorted(normalized_item_ids - available_item_ids)
+        if missing_item_ids:
+            raise ProductionPackagingLabelError(
+                "所选报料明细不存在、已作废或已变化，请刷新后重试"
+            )
+    if normalized_task_ids is not None:
+        missing_task_ids = sorted(normalized_task_ids - set(all_task_sources))
+        if missing_task_ids:
+            raise ProductionPackagingLabelError(
+                "所选生产任务不属于当前报料单或已变化，请刷新后重试"
+            )
+
+    task_sources = {
+        task_id: source
+        for task_id, source in item_filtered_task_sources.items()
+        if normalized_task_ids is None or task_id in normalized_task_ids
+    }
 
     customer_ids = {
         int(card["customer_id"])
@@ -649,11 +702,15 @@ def build_supplier_requisition_packaging_label_package(
     # An explicitly refreshed label snapshot is allowed to be newer than the
     # requisition card.  That production-card warning must not make the frozen
     # label plan unprintable; every other review reason remains fail-closed.
-    package_review_messages = [
-        message
-        for message in (production_package.get("review_messages") or [])
-        if str(message) != "生产任务版本已变化，请核对并重打"
-    ]
+    package_review_messages = (
+        [
+            message
+            for message in (production_package.get("review_messages") or [])
+            if str(message) != "生产任务版本已变化，请核对并重打"
+        ]
+        if normalized_item_ids is None and normalized_task_ids is None
+        else []
+    )
     for task_id in sorted(task_sources):
         card, component = task_sources[task_id]
         product_code = str(
@@ -712,34 +769,12 @@ def build_supplier_requisition_packaging_label_package(
             continue
         if not bool(product.production_label_enabled):
             exclude(
-                "常用箱未启用打印标签；请在常用箱勾选并保存后，刷新该生产任务的标签计划",
+                "常用箱未启用打印标签；请在常用箱勾选并保存后刷新来料页面",
                 product_id=product_id,
+                blocks_single_order=True,
             )
             continue
-        if not bool(task.production_label_enabled_snapshot):
-            if (
-                task.status in {"waiting_material", "pending"}
-                and task.production_label_template_version_snapshot
-                == CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
-                and task.production_label_product_version_snapshot
-                == int(product.version)
-            ):
-                exclude(
-                    "当前产品已启用标签策略，但任务快照未启用；"
-                    "请停止打印并核对任务创建链路",
-                    product_id=product_id,
-                    blocks_single_order=True,
-                )
-            else:
-                exclude(
-                    "生产任务标签计划未启用；请按当前常用箱刷新标签计划",
-                    product_id=product_id,
-                )
-            continue
-
-        template_version = str(
-            task.production_label_template_version_snapshot or ""
-        ).strip()
+        template_version = CURRENT_PRODUCTION_LABEL_TEMPLATE_VERSION
         if template_version not in ALLOWED_TEMPLATE_VERSIONS:
             package_review_messages.append(
                 f"生产任务 #{task_id} 的包装标签模板版本不受支持，请核对"
@@ -748,7 +783,19 @@ def build_supplier_requisition_packaging_label_package(
         template_versions.add(template_version)
 
         units_per_label = _positive_int(product.production_label_units_per_label)
-        total_quantity = _positive_int(task.production_label_total_quantity_snapshot)
+        try:
+            # Local import avoids the module cycle: label operations use this
+            # projector when they freeze a prepared print job.
+            from app.services.production_label_operations import (
+                ProductionLabelOperationError,
+                _task_product_and_total,
+            )
+
+            _current_product, total_quantity = _task_product_and_total(db, task)
+        except ProductionLabelOperationError as error:
+            package_review_messages.append(f"生产任务 #{task_id}：{error}")
+            continue
+        total_quantity = _positive_int(total_quantity)
         label_count = ceil(total_quantity / units_per_label) if units_per_label else 0
         if not units_per_label or not total_quantity or not label_count:
             package_review_messages.append(

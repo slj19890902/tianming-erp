@@ -20800,6 +20800,22 @@ def _supplier_label_batch_order_ids(raw_value: str) -> list[int]:
     return sorted(values)
 
 
+def _supplier_label_item_ids(raw_value: str) -> set[int]:
+    values: set[int] = set()
+    for token in str(raw_value or "").split(","):
+        normalized = token.strip()
+        if not normalized:
+            continue
+        if not normalized.isdigit() or int(normalized) <= 0:
+            raise HTTPException(status_code=422, detail="供应商报料明细编号无效")
+        values.add(int(normalized))
+    if not values:
+        raise HTTPException(status_code=422, detail="请选择需要打印标签的报料明细")
+    if len(values) > 200:
+        raise HTTPException(status_code=422, detail="单次最多选择 200 条报料明细")
+    return values
+
+
 def _supplier_label_batch_orders(
     db: Session,
     *,
@@ -20834,13 +20850,69 @@ def _supplier_label_batch_package(
     db: Session,
     *,
     orders: list[SupplierRequisitionOrder],
+    selected_supplier_item_ids: set[int] | None = None,
+    selected_task_ids: set[int] | None = None,
 ) -> dict:
+    if selected_supplier_item_ids is not None and selected_task_ids is not None:
+        raise HTTPException(status_code=422, detail="标签明细与任务不能同时筛选")
     try:
-        package = combine_supplier_requisition_packaging_label_packages(
-            [
+        packages: list[dict] = []
+        matched_item_ids: set[int] = set()
+        matched_task_ids: set[int] = set()
+        for order in orders:
+            if selected_supplier_item_ids is not None:
+                order_item_ids = {int(item.id) for item in order.items}
+                order_selection = selected_supplier_item_ids & order_item_ids
+                if not order_selection:
+                    continue
+                packages.append(
+                    build_supplier_requisition_packaging_label_package(
+                        db,
+                        order,
+                        selected_supplier_item_ids=order_selection,
+                    )
+                )
+                matched_item_ids.update(order_selection)
+                continue
+            if selected_task_ids is not None:
+                full_package = build_supplier_requisition_packaging_label_package(
+                    db, order
+                )
+                order_task_ids = {
+                    int(row["production_task_id"])
+                    for key in ("plans", "excluded_items")
+                    for row in full_package.get(key) or []
+                    if row.get("production_task_id") is not None
+                }
+                order_selection = selected_task_ids & order_task_ids
+                if not order_selection:
+                    continue
+                packages.append(
+                    build_supplier_requisition_packaging_label_package(
+                        db,
+                        order,
+                        selected_task_ids=order_selection,
+                    )
+                )
+                matched_task_ids.update(order_selection)
+                continue
+            packages.append(
                 build_supplier_requisition_packaging_label_package(db, order)
-                for order in orders
-            ]
+            )
+
+        if (
+            selected_supplier_item_ids is not None
+            and matched_item_ids != selected_supplier_item_ids
+        ):
+            raise ProductionPackagingLabelError(
+                "所选报料明细不属于当前报料单或已变化，请刷新后重试"
+            )
+        if selected_task_ids is not None and matched_task_ids != selected_task_ids:
+            raise ProductionPackagingLabelError(
+                "所选生产任务不属于当前报料单或已变化，请刷新后重试"
+            )
+        package = combine_supplier_requisition_packaging_label_packages(
+            packages
         )
     except ProductionPackagingLabelLayoutError as error:
         raise HTTPException(
@@ -20900,6 +20972,7 @@ def _supplier_label_batch_audit_key(
 @router.get("/supplier-order-label-batches/package")
 def get_supplier_order_packaging_label_batch(
     order_ids: str = Query(min_length=1, max_length=600),
+    item_ids: str | None = Query(default=None, max_length=1200),
     db: Session = Depends(get_db),
     user: User = Depends(can_read_production_labels),
 ) -> dict:
@@ -20909,12 +20982,19 @@ def get_supplier_order_packaging_label_batch(
         order_ids=normalized_ids,
         user=user,
     )
-    return _supplier_label_batch_package(db, orders=orders)
+    return _supplier_label_batch_package(
+        db,
+        orders=orders,
+        selected_supplier_item_ids=(
+            _supplier_label_item_ids(item_ids) if item_ids is not None else None
+        ),
+    )
 
 
 @router.get("/supplier-orders/{order_id}/production-packaging-label-package")
 def get_supplier_order_production_packaging_label_package(
     order_id: int,
+    item_ids: str | None = Query(default=None, max_length=1200),
     db: Session = Depends(get_db),
     _user: User = Depends(can_read_production_labels),
 ) -> dict:
@@ -20931,25 +21011,35 @@ def get_supplier_order_production_packaging_label_package(
             detail="只有正式有效的报料单可以打印生产包装标签",
         )
     try:
-        package = build_supplier_requisition_packaging_label_package(db, order)
+        package = build_supplier_requisition_packaging_label_package(
+            db,
+            order,
+            selected_supplier_item_ids=(
+                _supplier_label_item_ids(item_ids)
+                if item_ids is not None
+                else None
+            ),
+        )
     except ProductionPackagingLabelLayoutError as error:
         raise HTTPException(
             status_code=409,
             detail=f"生产包装标签布局不可用：{error}",
         ) from error
+    except ProductionPackagingLabelError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     if package["review_required"]:
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "production_label_review_required",
-                "message": "生产计划已变化或标签快照不完整，请先核对并重新报料",
+                "message": "所选产品的当前标签配置或待生产数量需要核对",
                 "reasons": package["review_messages"],
             },
         )
     if not package["label_count"]:
         raise HTTPException(
             status_code=409,
-            detail="该报料单没有启用生产包装标签的任务",
+            detail="所选产品当前没有可打印的产品标签",
         )
     package["latest_printed_job"] = latest_printed_job_metadata(db, order.id)
     return package
@@ -21156,7 +21246,16 @@ def post_supplier_order_packaging_label_batch_job(
         order_ids=payload.order_ids,
         user=user,
     )
-    current_package = _supplier_label_batch_package(db, orders=orders)
+    selected_task_ids = (
+        {int(item.production_task_id) for item in payload.items}
+        if payload.items is not None
+        else None
+    )
+    current_package = _supplier_label_batch_package(
+        db,
+        orders=orders,
+        selected_task_ids=selected_task_ids,
+    )
     if current_package.get("plan_fingerprint") != payload.plan_fingerprint:
         raise HTTPException(status_code=409, detail="跨报料单标签计划已变化，请刷新预览后重试")
     requested_counts = (

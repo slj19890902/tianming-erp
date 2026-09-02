@@ -227,7 +227,8 @@ def test_api_freezes_reduced_count_replays_exactly_and_never_changes_task(
     with TestClient(fixture["app"]) as client:
         _login(client, "p132a2-admin")
         preview = client.get(
-            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package"
+            f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-package",
+            params={"item_ids": str(fixture["supplier_item_id"])},
         )
         assert preview.status_code == 200, preview.text
         plan = preview.json()["plans"][0]
@@ -249,10 +250,11 @@ def test_api_freezes_reduced_count_replays_exactly_and_never_changes_task(
         assert prepared.status_code == 200, prepared.text
         frozen = prepared.json()["package"]
         assert frozen["label_count"] == 4
-        assert frozen["system_label_count"] == plan["label_count"] == 5
+        assert frozen["system_label_count"] == plan["label_count"]
+        assert plan["label_count"] > 4
         assert [label["quantity"] for label in frozen["labels"]] == [5, 5, 5, 5]
         assert frozen["print_summary"]["print_label_count"] == 4
-        assert frozen["print_summary"]["system_label_count"] == 5
+        assert frozen["print_summary"]["system_label_count"] == plan["label_count"]
 
         replay = client.post(
             f"/api/requisition/supplier-orders/{order_id}/production-packaging-label-jobs",
@@ -324,6 +326,74 @@ def test_supplier_label_preview_names_disabled_product_instead_of_silently_skipp
     assert detail["code"] == "production_label_batch_review_required"
     assert any("P132A2" in reason for reason in detail["reasons"]), detail
     assert any("常用箱未启用打印标签" in reason for reason in detail["reasons"])
+
+
+def test_current_common_box_label_setting_prints_selected_item_without_task_refresh(
+    production_print_app,
+) -> None:
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+    from app.models.production_label_print import ProductionLabelPlanRefresh
+
+    fixture = production_print_app
+    with fixture["session_factory"]() as db:
+        task = db.scalar(
+            select(ProductionTask)
+            .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
+            .where(OrderItem.id == fixture["order_item_id"])
+        )
+        assert task is not None
+        product = db.get(Product, fixture["product_id"])
+        assert product is not None
+        product.production_label_enabled = True
+        product.production_label_units_per_label = 7
+        product.version = int(product.version) + 1
+        task.production_label_enabled_snapshot = False
+        task.production_label_units_per_label_snapshot = None
+        task.production_label_total_quantity_snapshot = 0
+        task.production_label_count_snapshot = 0
+        db.commit()
+        task_id = int(task.id)
+
+    with TestClient(fixture["app"]) as client:
+        _login(client, "p132a2-admin")
+        preview = client.get(
+            f"/api/requisition/supplier-orders/{fixture['supplier_order_id']}"
+            "/production-packaging-label-package",
+            params={"item_ids": str(fixture["supplier_item_id"])},
+        )
+        assert preview.status_code == 200, preview.text
+        package = preview.json()
+        assert [row["production_task_id"] for row in package["plans"]] == [task_id]
+        assert package["plans"][0]["label_policy_source"] == "product_master_current"
+        assert package["plans"][0]["units_per_label"] == 7
+        assert package["plans"][0]["template_version"] == "current_40x30_v2"
+
+        prepared = client.post(
+            f"/api/requisition/supplier-orders/{fixture['supplier_order_id']}"
+            "/production-packaging-label-jobs",
+            json={
+                "idempotency_key": "p1-live-common-box-selected-item",
+                "plan_fingerprint": package["plan_fingerprint"],
+                "confirmed": True,
+                "items": [
+                    {
+                        "production_task_id": task_id,
+                        "print_label_count": 1,
+                    }
+                ],
+            },
+        )
+        assert prepared.status_code == 200, prepared.text
+        assert prepared.json()["package"]["label_count"] == 1
+
+    with fixture["session_factory"]() as db:
+        task = db.get(ProductionTask, task_id)
+        assert task is not None
+        assert task.production_label_enabled_snapshot is False
+        assert task.production_label_total_quantity_snapshot == 0
+        assert db.scalar(select(func.count(ProductionLabelPlanRefresh.id))) == 0
 
 
 def test_supplier_label_batch_freezes_two_orders_and_confirms_them_atomically(

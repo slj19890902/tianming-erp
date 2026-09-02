@@ -26760,11 +26760,7 @@
             }
             const incomplete = [];
             for (const group of groups.values()) {
-              if (group.source_type === "supplier_order") {
-                const required = Number(group.rows[0]?.active_item_count || 0);
-                if (!required || group.rows.length !== required) incomplete.push(`${group.document_number || '-'}：产品标签按采购单冻结，请勾选该采购单全部 ${required || '有效'} 条有效明细`);
-                continue;
-              }
+              if (group.source_type === "supplier_order") continue;
               const parentGroups = new Map();
               for (const row of group.rows) {
                 if (row.composite_fulfillment_mode !== "parent_delivery") continue;
@@ -26795,15 +26791,18 @@
               const supplierBatchIds = unifiedSupplierBatch
                 ? [...groups.values()].map(group => Number(group.document_id)).sort((a,b) => a-b)
                 : [];
+              const selectedSupplierItemIds = unifiedSupplierBatch
+                ? [...groups.values()].flatMap(group => group.rows.map(row => Number(row.item_id))).sort((a,b) => a-b)
+                : [];
               const packages = unifiedSupplierBatch
                 ? [await (async() => {
-                    const {data}=await axios.get(`/api/requisition/supplier-order-label-batches/package?order_ids=${encodeURIComponent(supplierBatchIds.join(","))}`);
-                    return {group:null,itemIds:[],data};
+                    const {data}=await axios.get(`/api/requisition/supplier-order-label-batches/package?order_ids=${encodeURIComponent(supplierBatchIds.join(","))}&item_ids=${encodeURIComponent(selectedSupplierItemIds.join(","))}`);
+                    return {group:null,itemIds:selectedSupplierItemIds,data};
                   })()]
                 : await Promise.all([...groups.values()].map(async group => {
                     const itemIds = group.rows.map(row => Number(row.item_id)).sort((a,b) => a-b);
                     const url = group.source_type === "supplier_order"
-                      ? `/api/requisition/supplier-orders/${group.document_id}/production-packaging-label-package`
+                      ? `/api/requisition/supplier-orders/${group.document_id}/production-packaging-label-package?item_ids=${encodeURIComponent(itemIds.join(","))}`
                       : `/api/requisition/batches/${group.document_id}/production-packaging-label-package?item_ids=${encodeURIComponent(itemIds.join(","))}`;
                     const {data}=await axios.get(url);
                     return {group,itemIds,data};
@@ -26815,9 +26814,9 @@
               const recovery = [];
               packages.forEach(({group,itemIds},index) => {
                 const url=unifiedSupplierBatch
-                  ? `/production-packaging-label.html?ids=${encodeURIComponent(supplierBatchIds.join(","))}`
+                  ? `/production-packaging-label.html?ids=${encodeURIComponent(supplierBatchIds.join(","))}&item_ids=${encodeURIComponent(selectedSupplierItemIds.join(","))}`
                   : group.source_type === "supplier_order"
-                    ? `/production-packaging-label.html?id=${encodeURIComponent(group.document_id)}`
+                    ? `/production-packaging-label.html?id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent(itemIds.join(","))}`
                     : `/production-packaging-label.html?batch_id=${encodeURIComponent(group.document_id)}&item_ids=${encodeURIComponent(itemIds.join(","))}`;
                 const opened=windows[index];
                 const documentNumber = unifiedSupplierBatch ? `${supplierBatchIds.length} 张报料单` : group.document_number;

@@ -59,6 +59,10 @@ from app.services.stock_replenishment import (
     StockReplenishmentError,
     receive_replenishment_item,
 )
+from app.services.supplier_monthly_settlement import (
+    SupplierSettlementError,
+    assert_receipt_item_not_in_confirmed_statement,
+)
 from app.services.semi_finished_inventory import (
     active_semi_reserved_piece_qty,
 )
@@ -2194,6 +2198,12 @@ def revert_receipt_item(
         raise IncomingReceiptError("来料实收记录不存在", 409)
     if receipt_item.status != "posted":
         raise IncomingReceiptError("该来料实收记录已经撤销", 409)
+    try:
+        assert_receipt_item_not_in_confirmed_statement(db, receipt_item.id)
+    except SupplierSettlementError as error:
+        raise IncomingReceiptError(
+            error.message, error.status_code, code=error.code
+        ) from error
     order = locked_orders.get(receipt_item.order_id)
     if order is None:
         raise IncomingReceiptError("关联订单不存在", 409)

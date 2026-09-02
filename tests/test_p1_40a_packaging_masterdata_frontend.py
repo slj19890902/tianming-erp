@@ -385,6 +385,33 @@ if (vm.externalPurchaseCandidateNeedsPrice({{}})) throw new Error("missing produ
     _run_node(tmp_path, source)
 
 
+def test_inactive_purchase_candidate_offers_current_supplier_refresh(
+    tmp_path: Path,
+) -> None:
+    params, body = _method("externalPurchaseCandidateNeedsRefresh")
+    source = f"""
+const vm={{
+  externalPurchase:{{status:"pending"}},
+  candidate:null,
+  selectedExternalPurchaseCandidate(){{return this.candidate;}},
+}};
+vm.externalPurchaseCandidateNeedsRefresh = new Function(
+  {json.dumps(params)},
+  {json.dumps(body, ensure_ascii=False)}
+).bind(vm);
+vm.candidate={{blocked_reason:"供应商或外购产品已停用"}};
+if (!vm.externalPurchaseCandidateNeedsRefresh({{}})) throw new Error("inactive candidate refresh was hidden");
+vm.candidate={{blocked_reason:"当前没有有效价格"}};
+if (vm.externalPurchaseCandidateNeedsRefresh({{}})) throw new Error("missing price was routed to supplier refresh");
+vm.externalPurchase.status="confirmed";
+vm.candidate={{blocked_reason:"供应商或外购产品已停用"}};
+if (vm.externalPurchaseCandidateNeedsRefresh({{}})) throw new Error("confirmed purchase exposed candidate refresh");
+"""
+    _run_node(tmp_path, source)
+    assert "改用当前供应商与报价" in INDEX
+    assert "/external-packaging-purchase/refresh-candidates" in INDEX
+
+
 def test_candidate_loader_is_single_request_and_auto_defaults_one_candidate(
     tmp_path: Path,
 ) -> None:

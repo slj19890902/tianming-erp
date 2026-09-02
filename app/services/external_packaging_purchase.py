@@ -27,7 +27,12 @@ from app.models.order_external_packaging import (
     SalesOrderItemExternalComponent,
     SalesOrderItemExternalComponentCandidate,
 )
-from app.models.supplier import ExternalPackagingProduct, Supplier
+from app.models.product import Product
+from app.models.supplier import (
+    ExternalPackagingProduct,
+    Supplier,
+    SupplierSupplyCategory,
+)
 from app.models.user import User
 from app.services.order_external_packaging import DISCRETE_PURCHASE_UNITS
 from app.services.order_status_policy import (
@@ -1226,6 +1231,239 @@ def build_external_purchase_preview(
         "as_of": as_of.isoformat(),
         "history": history,
         "items": items,
+    }
+
+
+def refresh_pending_external_purchase_candidates(
+    db: Session,
+    *,
+    order_id: int,
+) -> dict[str, Any]:
+    """Append current common-box candidates to an unconfirmed direct purchase.
+
+    The original order snapshot and its historical candidates stay intact.  This
+    is an explicit pre-purchase correction path for cases where the supplier or
+    external product was replaced after the order was created.
+    """
+
+    order = claim_external_purchase_order(db, order_id)
+    if order is None:
+        raise ExternalPurchaseContractError("订单不存在", status_code=404)
+    summary = get_external_purchase_summary(db, order_id)
+    if summary["status"] != "pending":
+        raise ExternalPurchaseContractError(
+            "当前外购包材采购不是待确认状态，不能改用当前供应商"
+        )
+    if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
+        raise ExternalPurchaseContractError("订单已终止，不能改用当前供应商")
+
+    order, components = _order_components(db, order_id, lock_order=True)
+    if order is None or not components:
+        raise ExternalPurchaseContractError(
+            "该订单没有冻结的外购包装组件，不能补写或猜测旧订单"
+        )
+    order_items = _external_component_order_items(
+        db,
+        order=order,
+        components=components,
+    )
+    refreshed_components = 0
+    appended_candidates = 0
+
+    for component in components:
+        if component.source_kind != "direct_product":
+            continue
+        order_item = order_items[component.sales_order_item_id]
+        if (
+            _external_item_forward_block(order=order, order_item=order_item)
+            is not None
+        ):
+            continue
+        master = db.get(Product, order_item.product_id)
+        if master is None or not master.is_active:
+            raise ExternalPurchaseContractError(
+                f"{order_item.snapshot_product_code or order_item.snapshot_product_name}的当前常用箱已停用"
+            )
+        if master.supply_mode != "external_purchase":
+            raise ExternalPurchaseContractError(
+                f"{master.product_code}当前已不是纯外购包材，不能覆盖订单冻结供货方式"
+            )
+        if master.external_packaging_category_code != component.category_code:
+            raise ExternalPurchaseContractError(
+                f"{master.product_code}当前包材类别与订单冻结类别不一致，请新建正确订单"
+            )
+        if master.external_packaging_purchase_unit != component.consumption_unit:
+            raise ExternalPurchaseContractError(
+                f"{master.product_code}当前采购单位与订单冻结单位不一致，请新建正确订单"
+            )
+        try:
+            raw_candidates = json.loads(
+                master.external_packaging_candidate_snapshot_json or "[]"
+            )
+        except (TypeError, json.JSONDecodeError) as error:
+            raise ExternalPurchaseContractError(
+                f"{master.product_code}当前供应商候选无效，请先重新保存常用箱"
+            ) from error
+        if not isinstance(raw_candidates, list) or not raw_candidates:
+            raise ExternalPurchaseContractError(
+                f"{master.product_code}当前没有可用供应商候选，请先维护常用箱"
+            )
+        if any(not isinstance(row, dict) for row in raw_candidates):
+            raise ExternalPurchaseContractError(
+                f"{master.product_code}当前供应商候选格式无效，请重新保存常用箱"
+            )
+        default_rows = [
+            row for row in raw_candidates if bool(row.get("is_default"))
+        ]
+        if len(default_rows) != 1:
+            raise ExternalPurchaseContractError(
+                f"{master.product_code}当前必须且只能指定一个默认供应商"
+            )
+        try:
+            requested_ids = [
+                int(row["external_product_id"]) for row in raw_candidates
+            ]
+        except (KeyError, TypeError, ValueError) as error:
+            raise ExternalPurchaseContractError(
+                f"{master.product_code}当前供应商候选缺少稳定产品标识"
+            ) from error
+        if len(set(requested_ids)) != len(requested_ids):
+            raise ExternalPurchaseContractError(
+                f"{master.product_code}当前供应商候选存在重复产品"
+            )
+        products = {
+            int(row.id): row
+            for row in db.scalars(
+                select(ExternalPackagingProduct)
+                .options(joinedload(ExternalPackagingProduct.supplier))
+                .where(ExternalPackagingProduct.id.in_(requested_ids))
+            ).all()
+        }
+        if set(products) != set(requested_ids):
+            raise ExternalPurchaseContractError(
+                f"{master.product_code}当前供应商候选包含不存在的外购产品"
+            )
+
+        prepared: list[
+            tuple[dict[str, Any], ExternalPackagingProduct, str]
+        ] = []
+        for raw in raw_candidates:
+            external_product = products[int(raw["external_product_id"])]
+            supplier = external_product.supplier
+            if (
+                not external_product.is_active
+                or supplier is None
+                or not supplier.is_active
+            ):
+                raise ExternalPurchaseContractError(
+                    f"{external_product.supplier_product_code}或其供应商已停用，请先维护常用箱"
+                )
+            if external_product.category_code != component.category_code:
+                raise ExternalPurchaseContractError(
+                    f"{external_product.supplier_product_code}的包材类别与订单不一致"
+                )
+            if external_product.purchase_unit != component.consumption_unit:
+                raise ExternalPurchaseContractError(
+                    f"{external_product.supplier_product_code}的采购单位与订单不一致"
+                )
+            if external_product.customer_scope_id not in (None, order.customer_id):
+                raise ExternalPurchaseContractError(
+                    f"{external_product.supplier_product_code}属于其他客户，不能用于当前订单"
+                )
+            if not db.scalar(
+                select(func.count())
+                .select_from(SupplierSupplyCategory)
+                .where(
+                    SupplierSupplyCategory.supplier_id == supplier.id,
+                    SupplierSupplyCategory.category_code == component.category_code,
+                    SupplierSupplyCategory.is_active.is_(True),
+                )
+            ):
+                raise ExternalPurchaseContractError(
+                    f"{supplier.display_name or supplier.standard_name}未启用当前包材供货类别"
+                )
+            try:
+                frozen_version = int(raw["external_product_version"])
+                frozen_supplier_id = int(raw["supplier_id"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ExternalPurchaseContractError(
+                    f"{master.product_code}当前供应商候选版本无效，请重新保存常用箱"
+                ) from error
+            if (
+                frozen_version != external_product.version
+                or frozen_supplier_id != external_product.supplier_id
+            ):
+                raise ExternalPurchaseContractError(
+                    f"{external_product.supplier_product_code}资料已变化，请先重新保存常用箱"
+                )
+            supplier_name = str(
+                supplier.display_name or supplier.standard_name or ""
+            ).strip()
+            prepared.append((raw, external_product, supplier_name))
+
+        for candidate in component.candidates:
+            candidate.is_default = False
+        db.flush()
+
+        selected_default: SalesOrderItemExternalComponentCandidate | None = None
+        for raw, external_product, supplier_name in prepared:
+            current = next(
+                (
+                    candidate
+                    for candidate in component.candidates
+                    if candidate.external_product_id_snapshot == external_product.id
+                    and candidate.external_product_version_snapshot
+                    == external_product.version
+                    and candidate.supplier_id_snapshot == external_product.supplier_id
+                    and candidate.supplier_name_snapshot == supplier_name
+                    and candidate.supplier_product_code_snapshot
+                    == external_product.supplier_product_code
+                    and candidate.product_name_snapshot == external_product.product_name
+                    and candidate.purchase_unit_snapshot
+                    == external_product.purchase_unit
+                    and candidate.customer_scope_id_snapshot
+                    == external_product.customer_scope_id
+                ),
+                None,
+            )
+            if current is None:
+                current = SalesOrderItemExternalComponentCandidate(
+                    order_component_id=component.id,
+                    source_candidate_id=None,
+                    external_product_id_snapshot=external_product.id,
+                    is_default=False,
+                    supplier_id_snapshot=external_product.supplier_id,
+                    supplier_name_snapshot=supplier_name,
+                    supplier_product_code_snapshot=(
+                        external_product.supplier_product_code
+                    ),
+                    product_name_snapshot=external_product.product_name,
+                    purchase_unit_snapshot=external_product.purchase_unit,
+                    customer_scope_id_snapshot=external_product.customer_scope_id,
+                    external_product_version_snapshot=external_product.version,
+                )
+                db.add(current)
+                component.candidates.append(current)
+                appended_candidates += 1
+            if bool(raw.get("is_default")):
+                selected_default = current
+        db.flush()
+        if selected_default is None:
+            raise ExternalPurchaseContractError(
+                f"{master.product_code}当前没有默认供应商候选"
+            )
+        selected_default.is_default = True
+        db.flush()
+        refreshed_components += 1
+
+    if refreshed_components == 0:
+        raise ExternalPurchaseContractError(
+            "该订单没有可改用当前供应商的纯外购包材明细"
+        )
+    return {
+        "refreshed_components": refreshed_components,
+        "appended_candidates": appended_candidates,
+        "historical_candidates_preserved": True,
     }
 
 

@@ -250,8 +250,15 @@ class SupplierReceiptSettlementPriceFact(Base):
         CheckConstraint(
             "match_strategy IN "
             "('purchase_receipt_fact','stable_material_id',"
-            "'supplier_unique_material_code')",
+            "'supplier_unique_material_code','owner_authorized_finance_test_classification')",
             name="ck_supplier_receipt_price_facts_match",
+        ),
+        CheckConstraint(
+            "finance_only_test_classification IN (0,1) AND "
+            "(finance_only_test_classification = 0 OR "
+            "(fact_origin = 'historical_master_adoption' AND "
+            "match_strategy = 'owner_authorized_finance_test_classification'))",
+            name="ck_supplier_receipt_price_facts_finance_only_test",
         ),
         CheckConstraint(
             "unit_price > 0 AND source_material_version >= 1 "
@@ -351,6 +358,9 @@ class SupplierReceiptSettlementPriceFact(Base):
     shipping_fee_mode: Mapped[str] = mapped_column(String(20), nullable=False)
     fact_origin: Mapped[str] = mapped_column(String(40), nullable=False)
     match_strategy: Mapped[str] = mapped_column(String(50), nullable=False)
+    finance_only_test_classification: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     adoption_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     adoption_evidence_reference: Mapped[str | None] = mapped_column(

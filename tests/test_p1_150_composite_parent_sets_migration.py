@@ -172,7 +172,12 @@ def test_p1_150_migration_is_linear_preserves_rows_and_round_trips(
     database = tmp_path / "p1-150-round-trip.sqlite3"
     config = _config(monkeypatch, database)
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [TARGET]
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert TARGET in {
+        revision.revision
+        for revision in script.iterate_revisions(heads[0], PARENT)
+    }
     assert script.get_revision(TARGET).down_revision == PARENT
 
     command.upgrade(config, PARENT)

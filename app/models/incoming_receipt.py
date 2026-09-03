@@ -100,11 +100,18 @@ class IncomingReceiptItem(Base):
         ),
         CheckConstraint(
             "(order_id IS NOT NULL AND order_item_id IS NOT NULL "
-            "AND stock_replenishment_item_id IS NULL) "
+            "AND stock_replenishment_item_id IS NULL "
+            "AND composite_physical_purchase_group_id IS NULL) "
             "OR (order_id IS NULL AND order_item_id IS NULL "
             "AND requisition_id IS NULL AND requisition_item_id IS NULL "
             "AND supplier_order_id IS NULL AND supplier_order_item_id IS NULL "
-            "AND stock_replenishment_item_id IS NOT NULL)",
+            "AND stock_replenishment_item_id IS NOT NULL "
+            "AND composite_physical_purchase_group_id IS NULL) "
+            "OR (order_id IS NULL AND order_item_id IS NULL "
+            "AND requisition_id IS NULL AND requisition_item_id IS NULL "
+            "AND supplier_order_id IS NULL AND supplier_order_item_id IS NULL "
+            "AND stock_replenishment_item_id IS NULL "
+            "AND composite_physical_purchase_group_id IS NOT NULL)",
             name="ck_incoming_receipt_items_exactly_one_source",
         ),
         Index("ix_incoming_receipt_items_receipt", "receipt_id"),
@@ -117,6 +124,11 @@ class IncomingReceiptItem(Base):
         Index(
             "ix_incoming_receipt_items_received_inventory_lot",
             "received_inventory_lot_id",
+        ),
+        Index(
+            "ix_incoming_receipt_items_composite_physical_group",
+            "composite_physical_purchase_group_id",
+            "status",
         ),
     )
 
@@ -145,6 +157,13 @@ class IncomingReceiptItem(Base):
     )
     stock_replenishment_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("stock_replenishment_order_items.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    composite_physical_purchase_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "composite_physical_purchase_groups.id",
+            ondelete="RESTRICT",
+        ),
         nullable=True,
     )
     planned_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -183,4 +202,17 @@ class IncomingReceiptItem(Base):
             uselist=False,
             passive_deletes=True,
         )
+    )
+    composite_physical_purchase_group: Mapped[
+        "CompositePhysicalPurchaseGroup | None"
+    ] = relationship(
+        "CompositePhysicalPurchaseGroup",
+        back_populates="incoming_receipt_items",
+    )
+    composite_physical_group_receipt: Mapped[
+        "CompositePhysicalGroupReceipt | None"
+    ] = relationship(
+        "CompositePhysicalGroupReceipt",
+        back_populates="incoming_receipt_item",
+        uselist=False,
     )

@@ -136,7 +136,8 @@ def test_order_composite_requisition_preserves_frozen_spare_sheets() -> None:
     )
     assert "source.spare_sheet_quantity" in recalculate_block
     assert "line.spare_sheet_quantity" in recalculate_block
-    assert "Math.ceil(remaining / Math.max(yieldPerSheet,1)) + spareSheets" in recalculate_block
+    assert "_group_net_order_sheet_quantity = Math.ceil(totalNetPieces / yields[0])" in recalculate_block
+    assert "_group_net_order_sheet_quantity + totalSpareSheets" in recalculate_block
     assert "Math.ceil(remaining / Math.max(yieldPerSheet, 1)) + spareSheets" in recalculate_block
 
     grouped_payload_block = _block(
@@ -144,13 +145,43 @@ def test_order_composite_requisition_preserves_frozen_spare_sheets() -> None:
         "async openRequisition()",
     )
     assert "source.spare_sheet_quantity" in grouped_payload_block
-    assert "Math.ceil(remaining / Math.max(Number(source.actual_yield_per_sheet || 0) || factor,1)) + spareSheets" in grouped_payload_block
+    assert "netOrderSheets + sourceSpares.reduce" in grouped_payload_block
+    assert "orderPurposeAllocations[orderPurposeAllocations.length - 1] += netOrderSheets" in grouped_payload_block
+    assert "group_purchase_sheet_qty:confirmedTotal" in grouped_payload_block
+    assert "group_order_purpose_sheet_qty:minimumTotal" in grouped_payload_block
+    assert "confirmedOrderPurpose !== minimumTotal" in grouped_payload_block
+    assert "额外采购只能计入备库" in grouped_payload_block
 
     build_lines_block = _block(
         "buildRequisitionFormLines(row) {",
         "normalizeReceiptResolution(line)",
     )
     assert "spare_sheet_quantity:Number(component.spare_sheet_quantity || 0)" in build_lines_block
+
+
+def test_order_composite_physical_group_uses_only_server_tokens_and_keeps_singletons() -> None:
+    merge_key = _block(
+        "compositePhysicalMergeKey(line) {",
+        "groupCompositeRequisitionLines(lines) {",
+    )
+    assert "line.physical_group_key" in merge_key
+    assert "line.physical_source_fingerprint" in merge_key
+    for forbidden in ("material_display", "product_code", "order_item_id", "cardboard_len", "cardboard_width"):
+        assert forbidden not in merge_key
+
+    grouping = _block(
+        "groupCompositeRequisitionLines(lines) {",
+        "async compositePhysicalGroupFingerprint(line) {",
+    )
+    assert "line.is_composite_component_group = true" in grouping
+    assert "line._merged_component_lines = [{...line}]" in grouping
+
+    fingerprint = _block(
+        "async compositePhysicalGroupFingerprint(line) {",
+        "async openCompositeRequisition(rows)",
+    )
+    assert '"p1-150b-group-v1"' in fingerprint
+    assert 'crypto.subtle.digest("SHA-256"' in fingerprint
 
 
 def test_zero_purchase_component_plan_is_visible_but_not_supplier_printable() -> None:

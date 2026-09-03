@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.core.time_contract import (
     beijing_date_bounds_utc_naive,
@@ -28,6 +28,10 @@ from app.models.external_packaging_purchase import (
 from app.models.finance_payable import FinancePayable
 from app.models.finance_simplified import FinanceAcceptanceNote
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+from app.models.composite_purchase_group import (
+    CompositePhysicalGroupReceipt,
+    CompositePhysicalPurchaseGroup,
+)
 from app.models.purchase_receipt import (
     IncomingReceiptPurposeAllocation,
     IncomingReceiptPurposeReversal,
@@ -213,7 +217,11 @@ def _issue(
 def _paperboard_source(
     db: Session, item: IncomingReceiptItem
 ) -> tuple[
-    SupplierRequisitionOrderItem | RequisitionItem | StockReplenishmentOrderItem | None,
+    SupplierRequisitionOrderItem
+    | RequisitionItem
+    | StockReplenishmentOrderItem
+    | CompositePhysicalPurchaseGroup
+    | None,
     str,
     str,
 ]:
@@ -255,17 +263,52 @@ def _paperboard_source(
             header.order_number if header is not None else source.replenishment_order_id
         )
         return source, supplier_name, document_number
+    if item.composite_physical_purchase_group_id is not None:
+        group = db.get(
+            CompositePhysicalPurchaseGroup,
+            item.composite_physical_purchase_group_id,
+        )
+        if group is None:
+            return None, "", ""
+        if group.supplier_requisition_order_item_id is not None:
+            source = db.get(
+                SupplierRequisitionOrderItem,
+                group.supplier_requisition_order_item_id,
+            )
+            if source is None:
+                return None, "", ""
+            header = db.get(SupplierRequisitionOrder, source.supplier_order_id)
+            supplier_name = str(
+                source.supplier_name_snapshot
+                or (header.supplier_name if header is not None else "")
+                or ""
+            ).strip()
+            document_number = str(
+                header.order_number if header is not None else source.supplier_order_id
+            )
+            return source, supplier_name, document_number
+        header = db.get(Requisition, group.requisition_id)
+        supplier_name = str(
+            header.supplier_name if header is not None else ""
+        ).strip()
+        document_number = str(
+            header.requisition_number if header is not None else group.requisition_id
+        )
+        return group, supplier_name, document_number
     return None, "", ""
 
 
 def _paperboard_dimensions(
     source: SupplierRequisitionOrderItem
     | RequisitionItem
-    | StockReplenishmentOrderItem,
+    | StockReplenishmentOrderItem
+    | CompositePhysicalPurchaseGroup,
 ) -> tuple[Decimal, Decimal]:
     if isinstance(source, SupplierRequisitionOrderItem):
         length, width = source.report_length_mm, source.report_width_mm
     elif isinstance(source, StockReplenishmentOrderItem):
+        length, width = source.report_length_mm, source.report_width_mm
+    elif isinstance(source, CompositePhysicalPurchaseGroup):
         length, width = source.report_length_mm, source.report_width_mm
     else:
         length, width = source.cardboard_len, source.cardboard_width
@@ -287,12 +330,15 @@ def _scan_paperboard(
 ) -> tuple[list[SettlementCandidate], list[dict[str, Any]]]:
     frozen_start_date = utc_naive_to_beijing_date(start_utc)
     frozen_end_exclusive = utc_naive_to_beijing_date(end_utc)
+    group_purchase_fact = aliased(PurchaseReceiptFact)
     rows = db.execute(
         select(
             IncomingReceiptItem,
             IncomingReceipt,
             IncomingReceiptPurposeAllocation,
             PurchaseReceiptFact,
+            CompositePhysicalGroupReceipt,
+            group_purchase_fact,
             SupplierReceiptSettlementPriceFact,
             IncomingReceiptPurposeReversal.id,
         )
@@ -306,6 +352,16 @@ def _scan_paperboard(
             PurchaseReceiptFact,
             PurchaseReceiptFact.id
             == IncomingReceiptPurposeAllocation.purchase_receipt_fact_id,
+        )
+        .outerjoin(
+            CompositePhysicalGroupReceipt,
+            CompositePhysicalGroupReceipt.incoming_receipt_item_id
+            == IncomingReceiptItem.id,
+        )
+        .outerjoin(
+            group_purchase_fact,
+            group_purchase_fact.id
+            == CompositePhysicalGroupReceipt.purchase_receipt_fact_id,
         )
         .outerjoin(
             SupplierReceiptSettlementPriceFact,
@@ -340,10 +396,29 @@ def _scan_paperboard(
     candidates: list[SettlementCandidate] = []
     issues: list[dict[str, Any]] = []
     supplier_cache: dict[str, Supplier] = {}
-    for item, receipt, allocation, price_fact, receipt_price_fact, reversal_id in rows:
+    for (
+        item,
+        receipt,
+        allocation,
+        allocation_price_fact,
+        group_receipt,
+        group_price_fact,
+        receipt_price_fact,
+        reversal_id,
+    ) in rows:
         source_key = f"paperboard:{int(item.id)}"
         if reversal_id is not None:
             continue
+        is_group_receipt = item.composite_physical_purchase_group_id is not None
+        price_fact = (
+            group_price_fact
+            if is_group_receipt
+            else allocation_price_fact
+        )
+        if is_group_receipt:
+            # A physical-group receipt already owns an immutable native price
+            # fact.  Never let a later historical-adoption row override it.
+            receipt_price_fact = None
         source, source_supplier_name, source_document_number = _paperboard_source(db, item)
         if (
             receipt_price_fact is None
@@ -462,6 +537,19 @@ def _scan_paperboard(
                 report_length_mm=length,
                 report_width_mm=width,
             )
+            if group_receipt is not None and (
+                group_receipt.status != "posted"
+                or int(group_receipt.received_sheet_quantity)
+                != int(item.received_quantity)
+                or _six(group_receipt.actual_unit_price_per_sheet)
+                != _six(breakdown.gross_per_sheet)
+                or _money(group_receipt.total_material_cost)
+                != _money(breakdown.gross_per_sheet * quantity)
+            ):
+                raise SupplierSettlementError(
+                    "PAPERBOARD_GROUP_RECEIPT_PRICE_FACT_MISMATCH",
+                    "物理组收料的实收数量、冻结每张成本或采购价格事实不一致，已停止月结",
+                )
         except (SupplierLookupError, SupplierSettlementError, PurchaseReceiptFactValidationError) as error:
             issues.append(
                 _issue(
@@ -775,6 +863,227 @@ def _active_lines(db: Session, statement_id: int) -> list[SupplierMonthlyStateme
     )
 
 
+def _lock_statement_receipt_sources(db: Session, statement_id: int) -> None:
+    """Lock receipt sources before the statement to serialize confirm/revert."""
+
+    incoming_ids = sorted(
+        {
+            int(value)
+            for value in db.scalars(
+                select(SupplierMonthlyStatementLine.incoming_receipt_item_id).where(
+                    SupplierMonthlyStatementLine.statement_id == statement_id,
+                    SupplierMonthlyStatementLine.active_guard == 1,
+                    SupplierMonthlyStatementLine.incoming_receipt_item_id.is_not(None),
+                )
+            ).all()
+            if value is not None
+        }
+    )
+    if incoming_ids:
+        db.scalars(
+            select(IncomingReceiptItem)
+            .where(IncomingReceiptItem.id.in_(incoming_ids))
+            .order_by(IncomingReceiptItem.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).all()
+
+    external_ids = sorted(
+        {
+            int(value)
+            for value in db.scalars(
+                select(SupplierMonthlyStatementLine.external_receipt_item_id).where(
+                    SupplierMonthlyStatementLine.statement_id == statement_id,
+                    SupplierMonthlyStatementLine.active_guard == 1,
+                    SupplierMonthlyStatementLine.external_receipt_item_id.is_not(None),
+                )
+            ).all()
+            if value is not None
+        }
+    )
+    if external_ids:
+        db.scalars(
+            select(ExternalPackagingReceiptItem)
+            .where(ExternalPackagingReceiptItem.id.in_(external_ids))
+            .order_by(ExternalPackagingReceiptItem.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).all()
+
+
+def _active_line_scan_failure(
+    lines: list[SupplierMonthlyStatementLine],
+    scan_issues: list[dict[str, Any]],
+) -> tuple[SupplierMonthlyStatementLine, dict[str, Any]] | None:
+    issues_by_source: dict[str, dict[str, Any]] = {}
+    for issue in scan_issues:
+        source_key = str(issue.get("source_key") or "").strip()
+        if source_key:
+            issues_by_source.setdefault(source_key, issue)
+    for line in lines:
+        issue = issues_by_source.get(line.source_key)
+        if issue is not None:
+            return line, issue
+    return None
+
+
+def _raise_if_active_line_scan_failed(
+    lines: list[SupplierMonthlyStatementLine],
+    scan_issues: list[dict[str, Any]],
+) -> None:
+    failure = _active_line_scan_failure(lines, scan_issues)
+    if failure is None:
+        return
+    line, issue = failure
+    issue_code = str(issue.get("code") or "SUPPLIER_SOURCE_SCAN_FAILED")
+    issue_message = str(issue.get("message") or "来源扫描异常")
+    raise SupplierSettlementError(
+        "SUPPLIER_SETTLEMENT_SOURCE_SCAN_FAILED",
+        (
+            f"月结来源 {line.source_key} 当前扫描异常"
+            f"（{issue_code}）：{issue_message}；已保留原草稿，请先修复来源事实"
+        ),
+        409,
+    )
+
+
+def _append_statement_scan_failure_issue(
+    issues: list[dict[str, Any]],
+    *,
+    row: SupplierMonthlyStatement,
+    supplier_name: str,
+    lines: list[SupplierMonthlyStatementLine],
+    scan_issues: list[dict[str, Any]],
+) -> bool:
+    failure = _active_line_scan_failure(lines, scan_issues)
+    if failure is None:
+        return False
+    line, scan_issue = failure
+    issue_code = str(scan_issue.get("code") or "SUPPLIER_SOURCE_SCAN_FAILED")
+    issues.append(
+        _issue(
+            source_type="supplier_statement",
+            source_key=str(row.id),
+            receipt_number=row.statement_number,
+            supplier_name=supplier_name,
+            code="SUPPLIER_SETTLEMENT_SOURCE_SCAN_FAILED",
+            message=(
+                f"草稿来源 {line.source_key} 扫描异常（{issue_code}），"
+                "已保留原草稿，不能按来源撤销处理"
+            ),
+            recommended_action="先修复实收或冻结价格事实，再重新生成月结草稿",
+        )
+    )
+    return True
+
+
+def _assert_statement_sources_proven_inactive(
+    db: Session, row: SupplierMonthlyStatement
+) -> None:
+    """Permit an empty-draft void only when every frozen source is inactive."""
+
+    lines = _active_lines(db, row.id)
+    if not lines:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_SOURCE_STATE_UNKNOWN",
+            "当前草稿没有可核验的有效来源明细，已停止自动作废",
+            409,
+        )
+    start_utc, end_utc = _utc_period_bounds(row.period_start, row.period_end)
+    candidates, scan_issues = _scan_candidates_for_bounds(
+        db, start_utc=start_utc, end_utc=end_utc
+    )
+    _raise_if_active_line_scan_failed(lines, scan_issues)
+    candidate_source_keys = {candidate.source_key for candidate in candidates}
+
+    for line in lines:
+        if line.source_key in candidate_source_keys:
+            raise SupplierSettlementError(
+                "SUPPLIER_SETTLEMENT_SOURCE_STILL_ACTIVE",
+                f"月结来源 {line.source_key} 仍是有效实收，不能作废草稿",
+                409,
+            )
+        if line.source_type == "paperboard":
+            item = (
+                db.get(IncomingReceiptItem, line.incoming_receipt_item_id)
+                if line.incoming_receipt_item_id is not None
+                else None
+            )
+            receipt = (
+                db.get(IncomingReceipt, item.receipt_id) if item is not None else None
+            )
+            reversal_id = (
+                db.scalar(
+                    select(IncomingReceiptPurposeReversal.id)
+                    .join(
+                        IncomingReceiptPurposeAllocation,
+                        IncomingReceiptPurposeAllocation.id
+                        == IncomingReceiptPurposeReversal.incoming_receipt_purpose_allocation_id,
+                    )
+                    .where(
+                        IncomingReceiptPurposeAllocation.incoming_receipt_item_id
+                        == line.incoming_receipt_item_id
+                    )
+                    .limit(1)
+                )
+                if line.incoming_receipt_item_id is not None
+                else None
+            )
+            if reversal_id is not None or (
+                item is not None
+                and receipt is not None
+                and (item.status == "reversed" or receipt.status == "reversed")
+            ):
+                continue
+            if (
+                item is not None
+                and receipt is not None
+                and item.status == "posted"
+                and receipt.status == "posted"
+            ):
+                raise SupplierSettlementError(
+                    "SUPPLIER_SETTLEMENT_SOURCE_STILL_ACTIVE",
+                    f"纸板实收 {line.source_key} 仍有效，不能作废草稿",
+                    409,
+                )
+        elif line.source_type == "external_packaging":
+            receipt_item = (
+                db.get(ExternalPackagingReceiptItem, line.external_receipt_item_id)
+                if line.external_receipt_item_id is not None
+                else None
+            )
+            purchase_item = (
+                db.get(ExternalPackagingPurchaseItem, receipt_item.purchase_item_id)
+                if receipt_item is not None
+                else None
+            )
+            cancellation_id = (
+                db.scalar(
+                    select(ExternalPackagingPurchaseCancellation.id)
+                    .where(
+                        ExternalPackagingPurchaseCancellation.purchase_order_id
+                        == purchase_item.purchase_order_id
+                    )
+                    .limit(1)
+                )
+                if purchase_item is not None
+                else None
+            )
+            if cancellation_id is not None:
+                continue
+            if receipt_item is not None and purchase_item is not None:
+                raise SupplierSettlementError(
+                    "SUPPLIER_SETTLEMENT_SOURCE_STILL_ACTIVE",
+                    f"外购包材实收 {line.source_key} 仍有效，不能作废草稿",
+                    409,
+                )
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_SOURCE_STATE_UNKNOWN",
+            f"无法证明月结来源 {line.source_key} 已撤销或取消，已停止自动作废",
+            409,
+        )
+
+
 def _recalculate_statement(db: Session, row: SupplierMonthlyStatement) -> bool:
     erp_amount = _money(
         sum((line.erp_amount for line in _active_lines(db, row.id)), Decimal("0"))
@@ -984,6 +1293,66 @@ def _replace_draft_statement(
     return replacement, released
 
 
+def _void_empty_draft_statement(
+    db: Session,
+    *,
+    row: SupplierMonthlyStatement,
+    user: User,
+    reason: str,
+) -> int:
+    """Retire an unconfirmed draft whose current receipt candidate set is empty."""
+
+    if row.status not in ACTIVE_DRAFT_STATUSES or row.active_guard != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_REGENERATION_BLOCKED",
+            "只有未确认的当前草稿可以因来源清空而作废",
+        )
+    if row.invoices or row.payments or row.finance_payable_id is not None:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_REGENERATION_DOWNSTREAM_EXISTS",
+            "该月结已有应付、发票或付款事实，不能因来源清空而作废",
+        )
+    expected_version = int(row.version)
+    now = utc_now_naive()
+    statement_result = db.execute(
+        update(SupplierMonthlyStatement)
+        .where(
+            SupplierMonthlyStatement.id == row.id,
+            SupplierMonthlyStatement.active_guard == 1,
+            SupplierMonthlyStatement.status.in_(ACTIVE_DRAFT_STATUSES),
+            SupplierMonthlyStatement.version == expected_version,
+        )
+        .values(
+            active_guard=None,
+            status="voided",
+            supersede_reason=str(reason or "").strip() or None,
+            voided_by=user.id,
+            voided_at=now,
+            version=expected_version + 1,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if statement_result.rowcount != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_STALE",
+            "供应商月结草稿已被其他操作修改，请刷新后重试",
+            409,
+        )
+    released_result = db.execute(
+        update(SupplierMonthlyStatementLine)
+        .where(
+            SupplierMonthlyStatementLine.statement_id == row.id,
+            SupplierMonthlyStatementLine.active_guard == 1,
+        )
+        .values(active_guard=None, released_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    db.expire(row)
+    db.flush()
+    return int(released_result.rowcount or 0)
+
+
 def _supplier_candidates(
     db: Session,
     *,
@@ -1157,6 +1526,14 @@ def generate_or_refresh_settlements(
                     )
                 )
                 continue
+            if not replace_changed_drafts and _append_statement_scan_failure_issue(
+                issues,
+                row=existing,
+                supplier_name=supplier.standard_name,
+                lines=existing_lines,
+                scan_issues=scan_issues,
+            ):
+                continue
             if not replace_changed_drafts:
                 issues.append(
                     _issue(
@@ -1170,6 +1547,14 @@ def generate_or_refresh_settlements(
                     )
                 )
                 continue
+            existing = _locked_editable_statement(
+                db,
+                statement_id=int(existing.id),
+                expected_version=int(existing.version),
+            )
+            _raise_if_active_line_scan_failed(
+                _active_lines(db, existing.id), scan_issues
+            )
             replacement, released_count = _replace_draft_statement(
                 db,
                 row=existing,
@@ -1183,6 +1568,68 @@ def generate_or_refresh_settlements(
             added += len(group_candidates)
             released += released_count
             changed_statement_ids.add(replacement.id)
+
+        empty_source_statements = list(
+            db.scalars(
+                select(SupplierMonthlyStatement).where(
+                    SupplierMonthlyStatement.supplier_id == supplier.id,
+                    SupplierMonthlyStatement.settlement_month == settlement_month,
+                    SupplierMonthlyStatement.active_guard == 1,
+                )
+            ).all()
+        )
+        active_group_keys = set(groups)
+        for existing in empty_source_statements:
+            if (existing.currency, existing.tax_basis) in active_group_keys:
+                continue
+            if existing.status not in ACTIVE_DRAFT_STATUSES:
+                issues.append(
+                    _issue(
+                        source_type="supplier_statement",
+                        source_key=str(existing.id),
+                        receipt_number=existing.statement_number,
+                        supplier_name=supplier.standard_name,
+                        code="SUPPLIER_SETTLEMENT_ALREADY_CONFIRMED",
+                        message="该周期已确认应付；来源撤销不会静默改写历史",
+                        recommended_action="登记受控调整，不能重生成已确认月结",
+                    )
+                )
+                continue
+            existing_lines = _active_lines(db, existing.id)
+            if not replace_changed_drafts and _append_statement_scan_failure_issue(
+                issues,
+                row=existing,
+                supplier_name=supplier.standard_name,
+                lines=existing_lines,
+                scan_issues=scan_issues,
+            ):
+                continue
+            if not replace_changed_drafts:
+                issues.append(
+                    _issue(
+                        source_type="supplier_statement",
+                        source_key=str(existing.id),
+                        receipt_number=existing.statement_number,
+                        supplier_name=supplier.standard_name,
+                        code="SUPPLIER_SETTLEMENT_REGENERATION_REQUIRED",
+                        message="草稿来源已全部撤销，请人工核对后作废旧草稿",
+                        recommended_action="点击重生成，旧草稿和明细将完整保留",
+                    )
+                )
+                continue
+            existing = _locked_editable_statement(
+                db,
+                statement_id=int(existing.id),
+                expected_version=int(existing.version),
+            )
+            _assert_statement_sources_proven_inactive(db, existing)
+            released += _void_empty_draft_statement(
+                db,
+                row=existing,
+                user=user,
+                reason="人工重新生成：周期内有效实收来源已全部撤销",
+            )
+            changed_statement_ids.add(int(existing.id))
     if not any_closed_period:
         _start, period_end = settlement_period(settlement_month)
         raise SupplierSettlementError(
@@ -1213,7 +1660,7 @@ def regenerate_statement(
     reason: str | None,
     user: User,
 ) -> SupplierMonthlyStatement:
-    row = _editable_statement(
+    row = _locked_editable_statement(
         db, statement_id=statement_id, expected_version=expected_version
     )
     supplier = db.get(Supplier, row.supplier_id)
@@ -1228,9 +1675,11 @@ def regenerate_statement(
         settlement_day=int(supplier.settlement_day or 20),
     )
     start_utc, end_utc = _utc_period_bounds(period_start, period_end)
-    candidates, _issues = _scan_candidates_for_bounds(
+    candidates, scan_issues = _scan_candidates_for_bounds(
         db, start_utc=start_utc, end_utc=end_utc
     )
+    active_lines = _active_lines(db, row.id)
+    _raise_if_active_line_scan_failed(active_lines, scan_issues)
     selected = [
         item
         for item in candidates
@@ -1238,6 +1687,16 @@ def regenerate_statement(
         and item.currency == row.currency
         and item.tax_basis == row.tax_basis
     ]
+    if not selected:
+        _assert_statement_sources_proven_inactive(db, row)
+        _void_empty_draft_statement(
+            db,
+            row=row,
+            user=user,
+            reason=str(reason or "").strip() or "人工核对：周期内有效实收来源已全部撤销",
+        )
+        db.refresh(row)
+        return row
     desired_hash = _candidate_source_hash(selected) if selected else None
     if (
         desired_hash == row.source_hash
@@ -1595,6 +2054,69 @@ def _editable_statement(
     return row
 
 
+def _assert_statement_sources_current(
+    db: Session, row: SupplierMonthlyStatement
+) -> None:
+    start_utc, end_utc = _utc_period_bounds(row.period_start, row.period_end)
+    candidates, scan_issues = _scan_candidates_for_bounds(
+        db, start_utc=start_utc, end_utc=end_utc
+    )
+    selected = [
+        candidate
+        for candidate in candidates
+        if candidate.supplier_id == row.supplier_id
+        and candidate.currency == row.currency
+        and candidate.tax_basis == row.tax_basis
+    ]
+    active_lines = _active_lines(db, row.id)
+    _raise_if_active_line_scan_failed(active_lines, scan_issues)
+    frozen_hash = row.source_hash or (
+        _statement_line_source_hash(active_lines) if active_lines else None
+    )
+    current_hash = _candidate_source_hash(selected) if selected else None
+    if frozen_hash is None or current_hash != frozen_hash:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_SOURCE_STALE",
+            "供应商月结的实收来源已撤销或发生变化，请先刷新或重生成草稿",
+            409,
+        )
+
+
+def _locked_editable_statement(
+    db: Session, *, statement_id: int, expected_version: int
+) -> SupplierMonthlyStatement:
+    # Receipt reversal takes the receipt lock before checking its statement.
+    # Keep the same order here so confirm and reversal cannot both succeed.
+    _lock_statement_receipt_sources(db, statement_id)
+    row = db.scalar(
+        select(SupplierMonthlyStatement)
+        .where(SupplierMonthlyStatement.id == statement_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if row is None or row.active_guard != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_NOT_FOUND", "供应商月结单不存在", 404
+        )
+    if int(row.version) != int(expected_version):
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_STALE",
+            "供应商月结单已被其他人修改，请刷新后重试",
+            409,
+        )
+    return row
+
+
+def _locked_fresh_editable_statement(
+    db: Session, *, statement_id: int, expected_version: int
+) -> SupplierMonthlyStatement:
+    row = _locked_editable_statement(
+        db, statement_id=statement_id, expected_version=expected_version
+    )
+    _assert_statement_sources_current(db, row)
+    return row
+
+
 def review_statement(
     db: Session,
     *,
@@ -1605,7 +2127,7 @@ def review_statement(
     supplier_statement_amount: Decimal,
     user: User,
 ) -> SupplierMonthlyStatement:
-    row = _editable_statement(
+    row = _locked_fresh_editable_statement(
         db, statement_id=statement_id, expected_version=expected_version
     )
     if row.status not in ACTIVE_DRAFT_STATUSES:
@@ -1843,7 +2365,7 @@ def confirm_statement(
     expected_version: int,
     user: User,
 ) -> SupplierMonthlyStatement:
-    row = _editable_statement(
+    row = _locked_fresh_editable_statement(
         db, statement_id=statement_id, expected_version=expected_version
     )
     if row.status == "difference":
@@ -2655,6 +3177,8 @@ def assert_receipt_item_not_in_confirmed_statement(
             SupplierMonthlyStatementLine.active_guard == 1,
             SupplierMonthlyStatement.status.in_(CONFIRMED_STATUSES),
         )
+        .order_by(SupplierMonthlyStatement.id)
+        .with_for_update()
         .limit(1)
     )
     if statement is not None:

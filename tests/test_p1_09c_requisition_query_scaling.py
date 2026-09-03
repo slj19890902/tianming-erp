@@ -304,6 +304,7 @@ def _add_visible_inventory_shape(
 
 
 def _add_visible_bom_snapshots(factory: sessionmaker) -> None:
+    from app.models.material import Material
     from app.models.order import Order, OrderItem
     from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
@@ -316,6 +317,16 @@ def _add_visible_bom_snapshots(factory: sessionmaker) -> None:
             .order_by(OrderItem.id)
         ).all()
         assert items
+        material = Material(
+            code="A=B",
+            layer_count=3,
+            flute_type="B",
+            supplier_name="测试供应商",
+            is_active=True,
+            version=1,
+        )
+        db.add(material)
+        db.flush()
         component = Product(
             customer_id=items[0].order.customer_id,
             product_code="P1-09C-COMP",
@@ -323,6 +334,7 @@ def _add_visible_bom_snapshots(factory: sessionmaker) -> None:
             product_name="复杂报料组件",
             box_category="normal",
             box_style="模切内盒",
+            material_id=material.id,
         )
         db.add(component)
         db.flush()
@@ -346,6 +358,7 @@ def _add_visible_bom_snapshots(factory: sessionmaker) -> None:
                     snapshot_component_product_code=component.product_code,
                     snapshot_component_product_name=component.product_name,
                     snapshot_component_spec="500×300",
+                    snapshot_component_material_id=material.id,
                     snapshot_component_material="A=B",
                     snapshot_component_supplier_name="测试供应商",
                     snapshot_component_layer_count=3,

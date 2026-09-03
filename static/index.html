@@ -4568,7 +4568,7 @@
                     <td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row.cardboard_len) }}</strong></td><td class="incoming-times-cell">×</td><td class="incoming-dimension-cell"><strong>{{ incomingDimensionMm(row.cardboard_width) }}</strong></td>
                     <td class="incoming-crease-cell" :title="formatCrease(row)">{{ formatCrease(row) }}</td>
                     <td class="incoming-material-cell" :title="incomingMaterialTitle(row)"><button v-if="incomingTab==='pending' && row.purpose_status==='frozen' && hasPermission('incoming.execute')" class="incoming-material-button" type="button" @click="openPurchaseReceiptMaterialChange(row)">{{ incomingActualMaterialDisplay(row) }}</button><span v-else>{{ incomingActualMaterialDisplay(row) }}</span><small v-if="row.material_changed">原 {{ incomingReportedMaterialDisplay(row) }}</small></td>
-                    <td class="incoming-product-cell" :title="`${row.customer_name || '-'}｜${row.product_code || '-'}｜${row.product_name || '-'}｜${row.specification || '-'}`"><div class="incoming-product-identity-line"><strong>{{ incomingCustomerLabel(row) }}</strong><span>{{ row.product_code || '-' }}</span></div><div class="incoming-product-name">{{ row.product_name || '-' }}</div></td>
+                    <td class="incoming-product-cell" :title="`${row.customer_name || '-'}｜${row.product_code || '-'}｜${row.product_name || '-'}｜${row.specification || '-'}`"><div class="incoming-product-identity-line"><strong>{{ incomingCustomerLabel(row) }}</strong><span>{{ row.product_code || '-' }}</span></div><div class="incoming-product-name">{{ row.product_name || '-' }}</div><details v-if="row.composite_physical_purchase_group_id" style="margin-top:4px;white-space:normal"><summary class="muted">物理采购组｜{{ row.source_order_count || 1 }} 个订单｜{{ row.source_count || (row.source_items || []).length }} 个来源</summary><div v-for="(source,sourceIndex) in row.source_items || []" :key="source.group_source_id || sourceIndex" class="muted">{{ source.order_number || `来源${sourceIndex + 1}` }}：净需组件 {{ source.net_required_piece_quantity || 0 }} 片<span v-if="Number(source.inventory_reserved_piece_quantity || 0)>0">｜已抵扣 {{ source.inventory_reserved_piece_quantity }} 片</span></div></details></td>
                     <td class="incoming-date-cell">{{ incomingTab==='pending' ? (row.requisition_date || '-') : (row.material_received_at ? formatDateTime(row.material_received_at) : '-') }}</td>
                     <td><a v-if="row.drawing_path" class="btn small" :href="row.drawing_path" target="_blank" rel="noopener">图纸</a><span v-else>-</span></td>
                     <td class="incoming-quantity-summary">{{ row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0 }} / {{ row.cumulative_received_quantity || 0 }} / {{ row.remaining_quantity ?? 0 }}</td>
@@ -4604,8 +4604,8 @@
                               </select>
                             </template>
                             <template v-if="!incomingSurplusDispositionRequired(row) || row.surplus_disposition">
-                              <div style="margin-top:6px">预计订单用途 {{ incomingPurposeProjection(row).orderSheets }} 张｜预计片料备库 {{ incomingPurposeProjection(row).reserveSheets }} 张<template v-if="incomingPurposeProjection(row).finishedOutput!==null">｜预计形成成品 {{ incomingPurposeProjection(row).finishedOutput }} 只</template><template v-else>｜成品数量按已冻结换算确认</template></div>
-                              <div v-if="Number(incomingPurposeProjection(row).orderSheets || 0)>0 && row.finished_location_name">成品位置：{{ row.finished_location_name }}</div>
+                              <div style="margin-top:6px">预计订单用途 {{ incomingPurposeProjection(row).orderSheets }} 张｜预计片料备库 {{ incomingPurposeProjection(row).reserveSheets }} 张<template v-if="incomingPurposeProjection(row).finishedOutput!==null">｜<template v-if="row.composite_physical_purchase_group_id">预计形成真实组件 {{ incomingPurposeProjection(row).finishedOutput }} 片</template><template v-else>预计形成成品 {{ incomingPurposeProjection(row).finishedOutput }} 只</template></template><template v-else>｜数量按已冻结换算确认</template></div>
+                              <div v-if="Number(incomingPurposeProjection(row).orderSheets || 0)>0 && row.finished_location_name">{{ row.composite_physical_purchase_group_id ? '组件位置' : '成品位置' }}：{{ row.finished_location_name }}</div>
                               <div v-if="Number(incomingPurposeProjection(row).reserveSheets || 0)>0 && row.reserve_location_name">片料位置：{{ row.reserve_location_name }}</div>
                               <div v-if="row.surplus_disposition" :class="['status',incomingSelectedLocationsReady(row)?'green':'orange']" style="display:block;white-space:normal;margin-top:5px">{{ incomingSelectedLocationsReady(row) ? '所选分流库位已就绪' : '所选分流库位尚未就绪' }}</div>
                             </template>
@@ -8478,7 +8478,7 @@
                 <thead><tr><th>客户 / 存货编码 / 产品</th><th>供应商 / 材质</th><th>需求数量</th><th>库存抵扣</th><th class="purchase-qty-cell">采购总张数</th><th>订单生产用途张</th><th>客户通用片料备库张</th><th>采购长(mm)</th><th>采购宽(mm)</th><th>开料方式</th><th>备注</th></tr></thead>
                 <tbody>
                   <tr v-for="line in requisitionForm.items" :key="line._line_key || `${line.order_item_id}-${line.bom_snapshot_id || 'parent'}-${line.component_type || 'whole'}`" :class="{'warning-row':(line.cutting_mode || line.special_process)!== '一开一'}">
-                    <td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span><div v-if="line.is_composite_parent" class="status blue">父件</div><div v-else-if="line.is_composite_component_group" class="status green">已合并 {{ line._merged_component_lines.length }} 个同规格子件</div><div v-else-if="line.is_composite_component" class="status green">组件{{ line.component_type === 'cover' ? '·盖' : line.component_type === 'base' ? '·底' : '' }}</div></td>
+                    <td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span><div v-if="line.is_composite_parent" class="status blue">父件</div><div v-else-if="line.is_composite_component_group" class="status green">物理采购组｜{{ line._merged_component_lines.length }} 个来源</div><div v-else-if="line.is_composite_component" class="status green">组件{{ line.component_type === 'cover' ? '·盖' : line.component_type === 'base' ? '·底' : '' }}</div><div v-if="line.is_composite_component_group" class="muted" style="margin-top:4px;white-space:normal">组级换算：净需 {{ line._group_effective_piece_qty }} 片 ÷ 一张出 {{ line._group_yield_per_sheet }}，订单用途统一取整 {{ line._group_net_order_sheet_quantity }} 张；当前采购 {{ line.purchase_total_sheet_qty || 0 }} 张，备库 {{ line.stock_purpose_sheet_qty || 0 }} 张。</div><div v-if="line.is_composite_component_group" v-for="(source,sourceIndex) in compositeGroupSourceAllocationRows(line)" :key="`${source.order_item_id}-${source.bom_snapshot_id}-${source.component_type || 'whole'}`" class="muted" style="white-space:normal">{{ source.order_number || `来源${sourceIndex + 1}` }}：净需组件 {{ source._source_net_required_piece_quantity }} 片</div></td>
                     <td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span></td>
                     <td><strong>{{ line.required_piece_qty || line.quantity || 0 }}</strong><div class="muted">剩余 {{ line.remaining_required_piece_qty ?? line.required_piece_qty ?? line.quantity ?? 0 }}</div></td>
                     <td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><button v-if="line.is_composite_component && !line.is_composite_component_group && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="line._auto_cover_loading" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><div v-if="line._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ line._auto_cover_error }}</div></td>
@@ -20273,7 +20273,9 @@
             return Number(row.cumulative_received_quantity || 0) + Number(row.incoming_quantity || 0) - Number(row.planned_quantity ?? row.requisition_qty ?? row.quantity ?? 0);
           },
           incomingReceiptQuantityStatus(row) {
-            const surplus = this.incomingFrozenSurplusQuantity(row);
+            const surplus = row?.composite_physical_purchase_group_id || /^cg\d+$/.test(String(row?.item_id || ""))
+              ? 0
+              : this.incomingFrozenSurplusQuantity(row);
             if (surplus > 0) return {warning:true,label:`多收订单用途 ${surplus} 张`};
             const variance = this.incomingProjectedVariance(row);
             if (variance < 0) return {warning:true,label:"少收"};
@@ -20288,6 +20290,7 @@
             return Math.max(received - remainingOrder, 0);
           },
           incomingSurplusDispositionRequired(row) {
+            if (row?.composite_physical_purchase_group_id || /^cg\d+$/.test(String(row?.item_id || ""))) return false;
             return row?.purpose_status === "frozen" && this.incomingFrozenSurplusQuantity(row) > 0;
           },
           incomingPurposeProjection(row) {
@@ -20300,6 +20303,19 @@
               };
             }
             const remainingOrder = Math.max(Number(row.remaining_order_purpose_sheet_qty || 0), 0);
+            if (row?.composite_physical_purchase_group_id || /^cg\d+$/.test(String(row?.item_id || ""))) {
+              const hasFrozenReserve = Number(row.reserve_sheet_quantity || 0) > 0
+                || Number(row.remaining_reserve_purpose_sheet_qty || 0) > 0
+                || Number(row.expected_reserve_purpose_sheet_qty || 0) > 0;
+              const orderSheets = hasFrozenReserve ? Math.min(received, remainingOrder) : received;
+              const reserveSheets = hasFrozenReserve ? Math.max(received - orderSheets, 0) : 0;
+              const yieldPerSheet = Math.max(Number(row.yield_per_sheet || 1), 1);
+              return {
+                orderSheets,
+                reserveSheets,
+                finishedOutput:orderSheets * yieldPerSheet,
+              };
+            }
             const baseOrderSheets = Math.min(received, remainingOrder);
             const surplusSheets = Math.max(received - baseOrderSheets, 0);
             const selected = String(row.surplus_disposition || "");
@@ -20308,13 +20324,34 @@
             const serverProjection = selected === "finished"
               ? row.finished_disposition_expected_finished_output_qty
               : row.semi_finished_reserve_expected_finished_output_qty;
-            let finishedOutput = Number.isFinite(Number(serverProjection)) && serverProjection !== null && serverProjection !== ""
+            const serverInputSheets = Number(row.expected_order_purpose_sheet_qty || 0)
+              + Number(row.expected_reserve_purpose_sheet_qty || 0);
+            let finishedOutput = received === serverInputSheets
+              && Number.isFinite(Number(serverProjection))
+              && serverProjection !== null
+              && serverProjection !== ""
               ? Number(serverProjection)
               : null;
             if (finishedOutput === null) {
-              const baseFinished = Number(row.expected_finished_output_qty || 0);
-              const baseSheets = Number(row.expected_order_purpose_sheet_qty || 0);
-              if (orderSheets === baseSheets) finishedOutput = baseFinished;
+              const ratioCandidates = [
+                [row.expected_finished_output_qty, row.expected_order_purpose_sheet_qty],
+                [row.semi_finished_reserve_expected_finished_output_qty, row.semi_finished_reserve_expected_order_purpose_sheet_qty],
+                [row.finished_disposition_expected_finished_output_qty, row.finished_disposition_expected_order_purpose_sheet_qty],
+              ];
+              let outputPerSheet = null;
+              for (const [outputValue,sheetValue] of ratioCandidates) {
+                const output = Number(outputValue);
+                const sheets = Number(sheetValue);
+                if (Number.isFinite(output) && Number.isFinite(sheets) && sheets > 0) {
+                  outputPerSheet = output / sheets;
+                  break;
+                }
+              }
+              if (outputPerSheet === null) {
+                const explicitYield = Number(row.order_purpose_yield_per_sheet ?? row.yield_per_sheet ?? row.actual_yield_per_sheet);
+                if (Number.isFinite(explicitYield) && explicitYield > 0) outputPerSheet = explicitYield;
+              }
+              if (outputPerSheet !== null) finishedOutput = Math.floor(orderSheets * outputPerSheet + 1e-9);
             }
             return {orderSheets,reserveSheets,finishedOutput};
           },
@@ -20576,7 +20613,7 @@
               if (executionIssue) throw new Error(executionIssue);
             }
             const surplusLocation=this.incomingLocations.find(location=>Number(location.id)===Number(row.surplus_location_id));
-            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_disposition:surplusDisposition,surplus_location_id:Number(row.surplus_location_id)||null,expected_surplus_layout_version:surplusLocation?.layout_version||null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
+            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_disposition:surplusDisposition,surplus_location_id:Number(row.surplus_location_id)||null,expected_surplus_layout_version:surplusLocation?.layout_version||null,expected_group_version:row.expected_group_version ?? null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
           },
           canReceiveIncoming(row) {
             return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status) && (row.purpose_status==='legacy_unset' || row.purpose_status==='frozen') && !this.incomingReceiptExecutionIssue(row);
@@ -20694,7 +20731,11 @@
               request_payload:requestPayload,
               page:this.incomingPendingAppliedPage,
               item_ids:preparedItems.map(item => String(item.item_id)),
-              order_item_ids:rows.filter(row => row.source_type !== "stock_replenishment").map(row => String(row.item_id)),
+              order_item_ids:rows.filter(row => (
+                row.source_type !== "stock_replenishment"
+                && !row.composite_physical_purchase_group_id
+                && !/^cg\d+$/.test(String(row.item_id || ""))
+              )).map(row => String(row.item_id)),
               preparation_failures:preparationFailures,
               preparing:false,
             });
@@ -20818,7 +20859,7 @@
               if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return;
               committed=true;
               attempt.committed=true;
-              if (row.source_type !== "stock_replenishment") {
+              if (row.source_type !== "stock_replenishment" && !data.composite_physical_purchase_group_id) {
                 this.showIncomingNextStepGuide({
                   count:1,
                   pendingBalance:data.material_status === "pending",
@@ -20828,7 +20869,7 @@
               if (refreshed) {
                 if (this.incomingReceiveAttempts[attemptKey] === attempt) this.incomingReceiveAttempts[attemptKey]=null;
                 const purpose=data.purpose_allocation;
-                const purposeMessage=purpose ? `；订单用途 ${purpose.order_sheet_delta || 0} 张，片料备库 ${purpose.reserve_sheet_delta || 0} 张，形成成品 ${purpose.theoretical_finished_delta || 0} 只` : "";
+                const purposeMessage=purpose ? (data.composite_physical_purchase_group_id ? `；订单用途 ${purpose.order_purpose_sheet_qty || 0} 张，片料备库 ${purpose.reserve_purpose_sheet_qty || 0} 张，形成真实组件 ${purpose.component_output_piece_quantity || 0} 片` : `；订单用途 ${purpose.order_sheet_delta || 0} 张，片料备库 ${purpose.reserve_sheet_delta || 0} 张，形成成品 ${purpose.theoretical_finished_delta || 0} 只`) : "";
                 this.showToast((data.material_status==="pending" ? `已记录实收，仍待补 ${data.remaining_quantity} 张` : "来料入库成功") + purposeMessage);
               } else {
                 attempt.saving=false;
@@ -32550,20 +32591,30 @@
               );
               return state.committed ? state.result : {_in_flight:true};
             }
-            const requisitionError = this.validateRequisitionForm();
-            if (requisitionError) throw new Error(requisitionError);
-            if (!String(state.requestKey || "").trim()) {
-              state.requestKey = createIdempotencyKey();
-            }
-            const payload = {
-              request_key:state.requestKey,
-              supplier_name:this.requisitionForm.supplier_name,
-              items:this.requisitionForm.items.flatMap(line => this.requisitionBatchLinePayloads(line)),
-            };
-            const frozenPayload = JSON.parse(JSON.stringify(payload));
+            // Acquire the single-flight guard before hashing group tokens.  The
+            // WebCrypto call yields to the event loop, so setting this later
+            // would let a rapid double click issue two formal batch requests.
             state.saving = true;
-            state.uncertain = false;
             try {
+              await Promise.all((this.requisitionForm.items || [])
+                .filter(line => line.is_composite_component_group)
+                .map(async line => {
+                  line._group_fingerprint = await this.compositePhysicalGroupFingerprint(line);
+                  line.purpose_plan_version = 1;
+                  line.purpose_plan_fingerprint = line._group_fingerprint;
+                }));
+              const requisitionError = this.validateRequisitionForm();
+              if (requisitionError) throw new Error(requisitionError);
+              if (!String(state.requestKey || "").trim()) {
+                state.requestKey = createIdempotencyKey();
+              }
+              const payload = {
+                request_key:state.requestKey,
+                supplier_name:this.requisitionForm.supplier_name,
+                items:this.requisitionForm.items.flatMap(line => this.requisitionBatchLinePayloads(line)),
+              };
+              const frozenPayload = JSON.parse(JSON.stringify(payload));
+              state.uncertain = false;
               let data;
               try {
                 ({data} = await axios.post("/api/requisition/batches", frozenPayload));
@@ -32887,27 +32938,13 @@
             }
           },
           compositePhysicalMergeKey(line) {
-            if (!line?.is_composite_component || line.is_die_cut) return null;
-            const supplier = String(line.snapshot_supplier_name || "").trim();
-            const material = Number(line.material_id || 0) > 0
-              ? `id:${Number(line.material_id)}`
-              : String(line.material_display || "").trim();
-            const layer = Number(line.layer_count || 0);
-            const flute = String(line.flute_type || "").trim().toUpperCase();
-            const length = Number(line.cardboard_len || 0);
-            const width = Number(line.cardboard_width || 0);
-            const cutting = this.normalizeCuttingMode(line.special_process || line.cutting_mode);
-            const creaseType = String(line.crease_type || "").trim();
-            if (!supplier || !material || !layer || !flute || length <= 0 || width <= 0 || !cutting || !creaseType) return null;
-            return JSON.stringify({
-              order_item_id:Number(line.order_item_id || 0), supplier, material, layer, flute,
-              length, width, cutting,
-              remark:String(line.remark || "").trim(),
-              crease_type:creaseType,
-              crease_left_mm:line.crease_left_mm ?? null,
-              crease_middle_mm:line.crease_middle_mm ?? null,
-              crease_right_mm:line.crease_right_mm ?? null,
-            });
+            if (!line?.is_composite_component) return null;
+            const key = String(line.physical_group_key || "").trim();
+            const sourceFingerprint = String(line.physical_source_fingerprint || "").trim();
+            // Only group on the server's frozen physical identity.  Names,
+            // codes and swapped dimensions are never used as a fallback.
+            if (key.length !== 64 || sourceFingerprint.length !== 64) return null;
+            return key;
           },
           groupCompositeRequisitionLines(lines) {
             const result = [];
@@ -32921,9 +32958,11 @@
               }
               const existing = groups.get(key);
               if (!existing) {
-                line._physical_merge_key = key;
-                line._line_key = `component-group:${line.order_item_id}:${index}`;
+                line._physical_group_key = key;
+                line._line_key = `component-group:${key}`;
                 line._merged_component_lines = [{...line}];
+                line.is_composite_component_group = true;
+                line.bom_snapshot_id = null;
                 groups.set(key,line);
                 result.push(line);
                 return;
@@ -32936,14 +32975,25 @@
               for (const field of ["quantity","production_required_qty","required_piece_qty","remaining_required_piece_qty","requisition_qty","purchase_total_sheet_qty","order_purpose_sheet_qty","stock_purpose_sheet_qty","_minimum_requisition_qty","finished_inventory_reserved_qty","semi_finished_reserved_piece_qty"]) {
                 existing[field] = existing._merged_component_lines.reduce((sum,row)=>sum + Number(row[field] || 0),0);
               }
-              existing._authoritative_order_purpose_sheet_qty = existing._merged_component_lines.reduce(
-                (sum,row)=>sum + this.purchasePurposeAuthoritativeOrderQty(row),0
-              );
               existing.purpose_plan_version = null;
               existing.purpose_plan_fingerprint = null;
               existing._purchase_purpose_initialized = true;
             });
+            result.filter(line => line.is_composite_component_group)
+              .forEach(line => this.recalculateCompositeDraftLine(line));
             return result;
+          },
+          async compositePhysicalGroupFingerprint(line) {
+            const key = String(line?._physical_group_key || line?.physical_group_key || "").trim();
+            const fingerprints = (line?._merged_component_lines || [line])
+              .map(source => String(source?.physical_source_fingerprint || "").trim())
+              .sort();
+            if (key.length !== 64 || !fingerprints.length || fingerprints.some(value => value.length !== 64)) {
+              throw new Error("组件缺少服务端物理组版本，请关闭草稿并刷新后重试");
+            }
+            const bytes = new TextEncoder().encode(["p1-150b-group-v1",key,...fingerprints].join("\n"));
+            const digest = await crypto.subtle.digest("SHA-256",bytes);
+            return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2,"0")).join("");
           },
           async openCompositeRequisition(rows) {
             const confirmations = (rows || []).map(row => ({
@@ -32970,6 +33020,11 @@
             );
             const rawLines = rows.flatMap(row => this.buildRequisitionFormLines(row));
             if (!rawLines.length) { this.showToast("请勾选复合产品父件与待报料组件", true); return; }
+            const unstableComponent = rawLines.find(line => line.is_composite_component && !this.compositePhysicalMergeKey(line));
+            if (unstableComponent) {
+              this.showToast("所选组件缺少稳定材质版本或物理快照，请先完善组件资料并刷新", true);
+              return;
+            }
             const suppliers = [...new Set(rawLines.map(line => line.snapshot_supplier_name).filter(Boolean))];
             if (suppliers.length > 1) { this.showToast("所选组件包含多个供应商，请按供应商分开报料", true); return; }
             if (!suppliers[0]) { this.showToast("所选组件缺少报料供应商，请先维护组件快照", true); return; }
@@ -33007,20 +33062,27 @@
                 source.special_process = line.special_process;
                 source.cutting_mode = line.special_process;
                 const remaining = Math.max(Number(source.remaining_required_piece_qty ?? source.required_piece_qty ?? source.quantity ?? 0),0);
-                const yieldPerSheet = Number(source.actual_yield_per_sheet || 0) > 0
-                  ? Number(source.actual_yield_per_sheet)
-                  : this.cuttingModeFactor(line.special_process);
                 const spareSheets = Math.max(Number(source.spare_sheet_quantity || 0),0);
-                source._minimum_requisition_qty = remaining > 0
-                  ? Math.ceil(remaining / Math.max(yieldPerSheet,1)) + spareSheets
-                  : 0;
-                source.requisition_qty = source._minimum_requisition_qty;
-                this.initializePurchasePurposeLine(source, true);
+                source._source_spare_sheet_quantity = spareSheets;
+                source._source_net_required_piece_quantity = remaining;
               });
-              line._minimum_requisition_qty = line._merged_component_lines.reduce((sum,source)=>sum + Number(source._minimum_requisition_qty || 0),0);
-              line._authoritative_order_purpose_sheet_qty = line._merged_component_lines.reduce(
-                (sum,source)=>sum + this.purchasePurposeAuthoritativeOrderQty(source),0
+              const yields = [...new Set(line._merged_component_lines.map(source => Math.max(
+                Number(source.actual_yield_per_sheet || source.yield_per_sheet || 0)
+                  || this.cuttingModeFactor(line.special_process),1
+              )))];
+              if (yields.length !== 1) throw new Error("同物理组件的一张出几不一致，请刷新草稿");
+              const totalNetPieces = line._merged_component_lines.reduce(
+                (sum,source)=>sum + Number(source._source_net_required_piece_quantity || 0),0
               );
+              const totalSpareSheets = line._merged_component_lines.reduce(
+                (sum,source)=>sum + Number(source._source_spare_sheet_quantity || 0),0
+              );
+              line._group_yield_per_sheet = yields[0];
+              line._group_effective_piece_qty = totalNetPieces;
+              line._group_spare_sheet_quantity = totalSpareSheets;
+              line._group_net_order_sheet_quantity = Math.ceil(totalNetPieces / yields[0]);
+              line._minimum_requisition_qty = line._group_net_order_sheet_quantity + totalSpareSheets;
+              line._authoritative_order_purpose_sheet_qty = line._minimum_requisition_qty;
               line.purchase_total_sheet_qty = line._minimum_requisition_qty;
               line.order_purpose_sheet_qty = line._minimum_requisition_qty;
               line.stock_purpose_sheet_qty = 0;
@@ -33039,6 +33101,19 @@
               : 0;
             line.requisition_qty = line._minimum_requisition_qty;
             this.initializePurchasePurposeLine(line, true);
+          },
+          compositeGroupSourceAllocationRows(line) {
+            const sources = [...(line?._merged_component_lines || [])].sort((left,right) => (
+              Number(left.order_item_id || 0) - Number(right.order_item_id || 0)
+              || Number(left.bom_snapshot_id || 0) - Number(right.bom_snapshot_id || 0)
+              || String(left.component_type || "whole").localeCompare(String(right.component_type || "whole"))
+            ));
+            return sources.map(source => ({
+              ...source,
+              _source_net_required_piece_quantity:Math.max(Number(
+                source.remaining_required_piece_qty ?? source.required_piece_qty ?? source.quantity ?? 0
+              ),0),
+            }));
           },
           async autoCoverCompositeDraftLine(line) {
             const snapshotId = Number(line.bom_snapshot_id || 0);
@@ -33085,6 +33160,12 @@
               order_item_id:Number(line.order_item_id),
               component_type:line.component_type || null,
               bom_snapshot_id:line.bom_snapshot_id ? Number(line.bom_snapshot_id) : null,
+              physical_group_key:line.physical_group_key || null,
+              group_fingerprint:line.group_fingerprint || null,
+              source_fingerprint:line.source_fingerprint || null,
+              group_purchase_sheet_qty:line.group_purchase_sheet_qty ?? null,
+              group_order_purpose_sheet_qty:line.group_order_purpose_sheet_qty ?? null,
+              group_stock_purpose_sheet_qty:line.group_stock_purpose_sheet_qty ?? null,
               actual_yield_per_sheet:line.actual_yield_per_sheet ? Number(line.actual_yield_per_sheet) : null,
               inventory_deducted_qty:Number(line.inventory_deducted_qty || 0),
               requisition_qty:Number(line.purchase_total_sheet_qty || 0),
@@ -33097,19 +33178,23 @@
           },
           requisitionBatchLinePayloads(line) {
             if (!line?.is_composite_component_group) return [this.requisitionBatchLinePayload(line)];
-            const sources = line._merged_component_lines || [];
+            const sources = [...(line._merged_component_lines || [])].sort((left,right) => (
+              Number(left.order_item_id || 0) - Number(right.order_item_id || 0)
+              || Number(left.bom_snapshot_id || 0) - Number(right.bom_snapshot_id || 0)
+              || String(left.component_type || "whole").localeCompare(String(right.component_type || "whole"))
+            ));
             const cutting = this.normalizeCuttingMode(line.special_process || line.cutting_mode);
-            const factor = this.cuttingModeFactor(cutting);
-            const minimums = sources.map(source => {
-              const remaining = Math.max(Number(
-                source.remaining_required_piece_qty ?? source.required_piece_qty ?? source.quantity ?? 0
-              ),0);
-              const spareSheets = Math.max(Number(source.spare_sheet_quantity || 0),0);
-              return remaining > 0
-                ? Math.ceil(remaining / Math.max(Number(source.actual_yield_per_sheet || 0) || factor,1)) + spareSheets
-                : 0;
-            });
-            const minimumTotal = minimums.reduce((sum,value)=>sum + value,0);
+            const groupKey = String(line._physical_group_key || "").trim();
+            const groupFingerprint = String(line._group_fingerprint || "").trim();
+            if (groupKey.length !== 64 || groupFingerprint.length !== 64) {
+              throw new Error("组件缺少物理组版本，请关闭草稿并刷新后重试");
+            }
+            const yieldPerSheet = Math.max(Number(line._group_yield_per_sheet || 0),1);
+            const netOrderSheets = Math.ceil(sources.reduce((sum,source) => sum + Math.max(Number(
+              source.remaining_required_piece_qty ?? source.required_piece_qty ?? source.quantity ?? 0
+            ),0),0) / yieldPerSheet);
+            const sourceSpares = sources.map(source => Math.max(Number(source.spare_sheet_quantity || 0),0));
+            const minimumTotal = netOrderSheets + sourceSpares.reduce((sum,value)=>sum + value,0);
             const confirmedTotal = Number(line.purchase_total_sheet_qty ?? line.requisition_qty ?? 0);
             if (confirmedTotal < minimumTotal) throw new Error(`合并组件采购张数不能少于系统最低 ${minimumTotal} 张`);
             const confirmedOrderPurpose = Number(line.order_purpose_sheet_qty ?? minimumTotal);
@@ -33117,19 +33202,15 @@
             if (confirmedOrderPurpose + confirmedStockPurpose !== confirmedTotal) {
               throw new Error("合并组件订单用途张与备库张合计必须等于采购总张");
             }
-            if (confirmedOrderPurpose > minimumTotal) {
-              throw new Error(`合并组件订单用途张不能超过当前权威上限 ${minimumTotal} 张`);
+            if (confirmedOrderPurpose !== minimumTotal) {
+              throw new Error(`合并组件订单用途张必须等于当前权威数量 ${minimumTotal} 张，额外采购只能计入备库`);
             }
-            let extra = confirmedTotal - minimumTotal;
-            let remainingOrderPurpose = confirmedOrderPurpose;
-            const orderPurposeAllocations = minimums.map(minimum => {
-              const allocated = Math.min(minimum, remainingOrderPurpose);
-              remainingOrderPurpose -= allocated;
-              return allocated;
-            });
+            const extra = confirmedTotal - minimumTotal;
+            const orderPurposeAllocations = [...sourceSpares];
+            orderPurposeAllocations[orderPurposeAllocations.length - 1] += netOrderSheets;
             return sources.map((source,index) => {
-              const sourceTotal = minimums[index] + (index === sources.length - 1 ? extra : 0);
               const sourceOrderPurpose = orderPurposeAllocations[index];
+              const sourceTotal = sourceOrderPurpose + (index === sources.length - 1 ? extra : 0);
               const sourceStockPurpose = sourceTotal - sourceOrderPurpose;
               const payload = this.requisitionBatchLinePayload({
                 ...source,
@@ -33141,8 +33222,15 @@
                 purchase_total_sheet_qty:sourceTotal,
                 order_purpose_sheet_qty:sourceOrderPurpose,
                 stock_purpose_sheet_qty:sourceStockPurpose,
+                purpose_plan_version:1,
+                purpose_plan_fingerprint:groupFingerprint,
+                physical_group_key:groupKey,
+                group_fingerprint:groupFingerprint,
+                source_fingerprint:String(source.physical_source_fingerprint || ""),
+                group_purchase_sheet_qty:confirmedTotal,
+                group_order_purpose_sheet_qty:minimumTotal,
+                group_stock_purpose_sheet_qty:extra,
               });
-              if (index === sources.length - 1) extra = 0;
               return payload;
             });
           },
@@ -33259,6 +33347,11 @@
                 snapshot_report_width_mm:Number(component.report_width_mm || 0) || null,
                 snapshot_supplier_name:component.supplier_name || row.snapshot_supplier_name || "",
                 material_id:component.material_id || null,
+                material_version:component.material_version || null,
+                component_product_id:component.component_product_id || component.product_id || null,
+                component_product_version:component.component_product_version || null,
+                physical_group_key:component.physical_group_key || null,
+                physical_source_fingerprint:component.physical_source_fingerprint || null,
                 material_display:[component.material, component.flute_type].filter(Boolean).join(" / "),
                 layer_count:component.layer_count || null,
                 flute_type:component.flute_type || null,
@@ -33268,6 +33361,7 @@
                 mold_tool_id:component.mold_tool_id || null,
                 mold_max_yield_per_sheet:component.mold_max_yield_per_sheet || null,
                 actual_yield_per_sheet:component.actual_yield_per_sheet || null,
+                yield_per_sheet:Number(component.yield_per_sheet || 0) || null,
                 spare_sheet_quantity:Number(component.spare_sheet_quantity || 0),
                 crease_type:component.crease_type || "",
                 crease_left_mm:component.crease_left_mm ?? null,

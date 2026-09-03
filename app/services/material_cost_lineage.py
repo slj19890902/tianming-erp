@@ -17,6 +17,10 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.models.composite_purchase_group import (
+    CompositePhysicalGroupReceipt,
+    CompositePhysicalGroupReceiptReversal,
+)
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.material_cost import FinanceDeliveryMaterialCostFact
@@ -37,6 +41,7 @@ from app.models.warehouse_inventory import (
 
 
 COST_QUANTUM = Decimal("0.000001")
+LOT_COST_QUANTUM = Decimal("0.0001")
 MONEY_QUANTUM = Decimal("0.01")
 RATE_QUANTUM = Decimal("0.0001")
 ACTUAL_COST_SOURCE = "purchase_receipt_actual"
@@ -44,7 +49,8 @@ ACTUAL_COST_SOURCE = "purchase_receipt_actual"
 
 @dataclass(frozen=True)
 class ResolvedActualMaterialCost:
-    purpose_allocation: IncomingReceiptPurposeAllocation
+    purpose_allocation: IncomingReceiptPurposeAllocation | None
+    composite_group_receipt: CompositePhysicalGroupReceipt | None
     purchase_fact: PurchaseReceiptFact
     unit_material_cost: Decimal
     production_completion_id: int | None
@@ -179,6 +185,83 @@ def _purpose_allocation_for_lot(
     return None
 
 
+def _is_active_composite_group_receipt(
+    db: Session,
+    receipt: CompositePhysicalGroupReceipt | None,
+) -> bool:
+    if receipt is None or receipt.status != "posted":
+        return False
+    reversal_id = db.scalar(
+        select(CompositePhysicalGroupReceiptReversal.id)
+        .where(
+            CompositePhysicalGroupReceiptReversal.composite_physical_group_receipt_id
+            == receipt.id
+        )
+        .limit(1)
+    )
+    return reversal_id is None
+
+
+def _composite_group_receipt_for_lot(
+    db: Session,
+    lot: InventoryLot,
+    *,
+    visited_lot_ids: set[int] | None = None,
+) -> CompositePhysicalGroupReceipt | None:
+    visited = visited_lot_ids or set()
+    if int(lot.id) in visited:
+        return None
+    visited.add(int(lot.id))
+
+    direct_rows = list(
+        db.scalars(
+            select(CompositePhysicalGroupReceipt)
+            .where(
+                or_(
+                    CompositePhysicalGroupReceipt.component_inventory_lot_id
+                    == lot.id,
+                    CompositePhysicalGroupReceipt.reserve_inventory_lot_id == lot.id,
+                )
+            )
+            .order_by(CompositePhysicalGroupReceipt.id.desc())
+        ).all()
+    )
+    direct_active = [
+        row for row in direct_rows if _is_active_composite_group_receipt(db, row)
+    ]
+    if len(direct_active) == 1:
+        return direct_active[0]
+    if len(direct_active) > 1:
+        return None
+
+    if (
+        lot.source_ref_type == "composite_physical_group_receipt"
+        and lot.source_ref_id
+    ):
+        receipt = db.get(
+            CompositePhysicalGroupReceipt,
+            int(lot.source_ref_id),
+        )
+        if _is_active_composite_group_receipt(db, receipt):
+            return receipt
+
+    returned = db.scalar(
+        select(OrderedFinishedReceiptReturn)
+        .where(OrderedFinishedReceiptReturn.return_inventory_lot_id == lot.id)
+        .order_by(OrderedFinishedReceiptReturn.id.desc())
+        .limit(1)
+    )
+    if returned is not None:
+        source_lot = db.get(InventoryLot, returned.source_inventory_lot_id)
+        if source_lot is not None:
+            return _composite_group_receipt_for_lot(
+                db,
+                source_lot,
+                visited_lot_ids=visited,
+            )
+    return None
+
+
 def resolve_lot_actual_material_cost(
     db: Session, lot: InventoryLot
 ) -> ResolvedActualMaterialCost | None:
@@ -188,9 +271,15 @@ def resolve_lot_actual_material_cost(
     if unit_cost is None:
         return None
     allocation = _purpose_allocation_for_lot(db, lot)
-    if allocation is None:
+    group_receipt = _composite_group_receipt_for_lot(db, lot)
+    if (allocation is None) == (group_receipt is None):
         return None
-    purchase_fact = db.get(PurchaseReceiptFact, allocation.purchase_receipt_fact_id)
+    purchase_fact_id = (
+        allocation.purchase_receipt_fact_id
+        if allocation is not None
+        else group_receipt.purchase_receipt_fact_id
+    )
+    purchase_fact = db.get(PurchaseReceiptFact, purchase_fact_id)
     if purchase_fact is None:
         return None
 
@@ -201,13 +290,44 @@ def resolve_lot_actual_material_cost(
     detail_fact_id = detail.get("purchase_receipt_fact_id")
     if detail_fact_id is None or int(detail_fact_id) != int(purchase_fact.id):
         return None
+    if group_receipt is not None:
+        detail_receipt_id = detail.get("composite_physical_group_receipt_id")
+        inventory_kind = str(detail.get("composite_inventory_kind") or "")
+        if (
+            detail_receipt_id is None
+            or int(detail_receipt_id) != int(group_receipt.id)
+            or inventory_kind not in {"component_piece", "reserve_sheet"}
+        ):
+            return None
+        if inventory_kind == "component_piece":
+            expected_unit_cost = _positive_decimal(
+                group_receipt.component_unit_material_cost
+            )
+        else:
+            expected_unit_cost = _positive_decimal(
+                group_receipt.actual_unit_price_per_sheet
+            )
+        if (
+            expected_unit_cost is None
+            or expected_unit_cost.quantize(
+                LOT_COST_QUANTUM,
+                rounding=ROUND_HALF_UP,
+            )
+            != unit_cost.quantize(
+                LOT_COST_QUANTUM,
+                rounding=ROUND_HALF_UP,
+            )
+        ):
+            return None
     return ResolvedActualMaterialCost(
         purpose_allocation=allocation,
+        composite_group_receipt=group_receipt,
         purchase_fact=purchase_fact,
         unit_material_cost=unit_cost,
         production_completion_id=(
             int(allocation.production_completion_id)
-            if allocation.production_completion_id is not None
+            if allocation is not None
+            and allocation.production_completion_id is not None
             else None
         ),
     )
@@ -231,6 +351,7 @@ def resolve_completion_actual_material_cost(
         return None
     return ResolvedActualMaterialCost(
         purpose_allocation=allocation,
+        composite_group_receipt=None,
         purchase_fact=purchase_fact,
         unit_material_cost=unit_cost,
         production_completion_id=int(completion.id),
@@ -314,6 +435,18 @@ def _freeze_fact(
     total = (unit * Decimal(quantity)).quantize(
         COST_QUANTUM, rounding=ROUND_HALF_UP
     )
+    purpose_allocation_id = (
+        int(resolved.purpose_allocation.id)
+        if resolved.purpose_allocation is not None
+        else None
+    )
+    composite_group_receipt_id = (
+        int(resolved.composite_group_receipt.id)
+        if resolved.composite_group_receipt is not None
+        else None
+    )
+    if (purpose_allocation_id is None) == (composite_group_receipt_id is None):
+        raise ValueError("材料成本必须且只能关联一种收料事实")
     payload = {
         "source_kind": source_kind,
         "source_id": source_id,
@@ -321,9 +454,6 @@ def _freeze_fact(
         "delivery_item_id": int(delivery_item.id),
         "inventory_lot_id": int(inventory_lot_id) if inventory_lot_id else None,
         "production_completion_id": resolved.production_completion_id,
-        "incoming_receipt_purpose_allocation_id": int(
-            resolved.purpose_allocation.id
-        ),
         "purchase_receipt_fact_id": int(resolved.purchase_fact.id),
         "consumed_quantity": quantity,
         "quantity_unit": str(quantity_unit).strip(),
@@ -333,6 +463,14 @@ def _freeze_fact(
         "tax_included": bool(resolved.purchase_fact.tax_included),
         "tax_rate": format(Decimal(str(resolved.purchase_fact.tax_rate)), ".6f"),
     }
+    # Preserve the historical fingerprint shape for ordinary receipt facts.
+    # Group receipts use their own mutually exclusive origin key.
+    if purpose_allocation_id is not None:
+        payload["incoming_receipt_purpose_allocation_id"] = purpose_allocation_id
+    else:
+        payload["composite_physical_group_receipt_id"] = (
+            composite_group_receipt_id
+        )
     fingerprint = hashlib.sha256(
         json.dumps(
             payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -358,7 +496,8 @@ def _freeze_fact(
         ),
         inventory_lot_id=inventory_lot_id,
         production_completion_id=resolved.production_completion_id,
-        incoming_receipt_purpose_allocation_id=resolved.purpose_allocation.id,
+        incoming_receipt_purpose_allocation_id=purpose_allocation_id,
+        composite_physical_group_receipt_id=composite_group_receipt_id,
         purchase_receipt_fact_id=resolved.purchase_fact.id,
         consumed_quantity=quantity,
         quantity_unit_snapshot=str(quantity_unit).strip(),

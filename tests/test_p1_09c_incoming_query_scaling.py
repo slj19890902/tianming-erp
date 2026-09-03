@@ -188,10 +188,10 @@ def test_pending_incoming_ordinary_rows_scale_without_writes(tmp_path: Path) -> 
         not statement.startswith(("insert", "update", "delete"))
         for statement in [*small_sql, *large_sql]
     )
-    # Receipt facts, physical supplier-order lines and stock-replenishment
-    # sources are fetched in constant batches; the total must remain
-    # independent of the number of rows.
-    assert _select_count(small_sql) == 14
+    # Receipt facts, physical supplier-order lines, stock-replenishment sources
+    # and P1-150B physical groups are fetched in constant batches; the total
+    # must remain independent of the number of rows.
+    assert _select_count(small_sql) == 15
     assert _select_count(large_sql) == _select_count(small_sql)
     row = large["items"][0]
     assert {
@@ -366,9 +366,9 @@ def test_pending_incoming_receipt_and_component_rows_use_batch_summary(
         }
     # The receipt/source/component facts are fixed-size batch queries.  The
     # current strict map projection adds constant joins but must never scale
-    # with the number of rows; P0-23 also keeps the unused location projections
-    # lazy, reducing this mixed shape from the v0.22.180 baseline of 21 to 19.
-    assert _select_count(statements) <= 19
+    # with the number of rows. P0-23 keeps unused location projections lazy;
+    # P1-150B adds one fixed physical-group lookup for synthetic reserve rows.
+    assert _select_count(statements) <= 20
     assert all(
         not statement.startswith(("insert", "update", "delete"))
         for statement in statements

@@ -282,6 +282,13 @@ from app.models.purchase_receipt import (  # noqa: E402,F401
     PurchaseReceiptMaterialVariance,
     PurchaseReceiptMaterialVarianceApproval,
 )
+from app.models.composite_purchase_group import (  # noqa: E402,F401
+    CompositePhysicalGroupReceipt,
+    CompositePhysicalGroupReceiptReversal,
+    CompositePhysicalGroupReceiptSourceAllocation,
+    CompositePhysicalPurchaseGroup,
+    CompositePhysicalPurchaseGroupSource,
+)
 from app.models.warehouse_capacity import (  # noqa: E402,F401
     WarehouseCapacityForecastPlan,
 )

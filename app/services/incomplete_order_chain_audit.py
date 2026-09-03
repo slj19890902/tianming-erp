@@ -13,6 +13,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.finance import ReturnReceipt, ReturnReceiptItem
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+from app.models.composite_purchase_group import (
+    CompositePhysicalGroupReceipt,
+    CompositePhysicalPurchaseGroupSource,
+)
 from app.models.order import Order
 from app.models.order_external_packaging import SalesOrderItemExternalComponent
 from app.models.product import Product
@@ -211,7 +215,56 @@ def _posted_receipt_rows(
             )
         ).mappings()
         for row in rows:
-            result[int(row["order_item_id"])].append(dict(row))
+            payload = dict(row)
+            payload["composite_physical_group_receipt_id"] = None
+            result[int(row["order_item_id"])].append(payload)
+        group_rows = db.execute(
+            select(
+                IncomingReceiptItem.id,
+                CompositePhysicalPurchaseGroupSource.order_item_id,
+                IncomingReceiptItem.receipt_id,
+                IncomingReceiptItem.requisition_id,
+                IncomingReceiptItem.requisition_item_id,
+                IncomingReceiptItem.supplier_order_id,
+                IncomingReceiptItem.supplier_order_item_id,
+                IncomingReceiptItem.received_quantity,
+                IncomingReceiptItem.planned_quantity,
+                IncomingReceiptItem.resolution_action,
+                IncomingReceiptItem.received_inventory_lot_id,
+                IncomingReceiptItem.surplus_inventory_lot_id,
+                CompositePhysicalGroupReceipt.id.label(
+                    "composite_physical_group_receipt_id"
+                ),
+            )
+            .join(IncomingReceipt, IncomingReceipt.id == IncomingReceiptItem.receipt_id)
+            .join(
+                CompositePhysicalGroupReceipt,
+                CompositePhysicalGroupReceipt.incoming_receipt_item_id
+                == IncomingReceiptItem.id,
+            )
+            .join(
+                CompositePhysicalPurchaseGroupSource,
+                CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id
+                == CompositePhysicalGroupReceipt.composite_physical_purchase_group_id,
+            )
+            .where(
+                CompositePhysicalPurchaseGroupSource.order_item_id.in_(chunk),
+                IncomingReceipt.status == "posted",
+                IncomingReceiptItem.status == "posted",
+                CompositePhysicalGroupReceipt.status == "posted",
+            )
+            .order_by(
+                IncomingReceiptItem.id,
+                CompositePhysicalPurchaseGroupSource.order_item_id,
+            )
+        ).mappings()
+        seen_group_receipts: set[tuple[int, int]] = set()
+        for row in group_rows:
+            key = (int(row["order_item_id"]), int(row["id"]))
+            if key in seen_group_receipts:
+                continue
+            seen_group_receipts.add(key)
+            result[key[0]].append(dict(row))
     return result
 
 
@@ -1141,6 +1194,32 @@ def audit_incomplete_order_chains(
             ]
             has_frozen_formal_receipt = False
             for receipt in item_receipts:
+                active_rows = active_receipt_purpose_rows.get(int(receipt["id"]), [])
+                if receipt.get("composite_physical_group_receipt_id") is not None:
+                    has_frozen_formal_receipt = True
+                    if active_rows:
+                        findings.append(
+                            _finding(
+                                code="P015_RECEIPT_PURPOSE_ALLOCATION_UNBALANCED",
+                                severity="error",
+                                order=order,
+                                item=item,
+                                key=anonymization_key,
+                                summary="组合物理组收料错误混入普通单来源用途分流事实。",
+                                evidence={
+                                    "receipt_item_id": int(receipt["id"]),
+                                    "composite_physical_group_receipt_id": int(
+                                        receipt[
+                                            "composite_physical_group_receipt_id"
+                                        ]
+                                    ),
+                                    "active_purpose_allocation_count": len(active_rows),
+                                    "trace_kind": "composite_group_mixed_purpose_fact",
+                                },
+                                focus_terms=normalized_focus,
+                            )
+                        )
+                    continue
                 receipt_formals = []
                 if receipt["supplier_order_item_id"] is not None:
                     formal = formal_purpose_by_key.get(
@@ -1162,7 +1241,6 @@ def audit_incomplete_order_chains(
                 has_frozen_formal_receipt = (
                     has_frozen_formal_receipt or frozen_receipt_source
                 )
-                active_rows = active_receipt_purpose_rows.get(int(receipt["id"]), [])
                 allocation_contract_invalid = (
                     frozen_receipt_source and len(active_rows) != 1
                 ) or (
@@ -1510,16 +1588,23 @@ def audit_incomplete_order_chains(
                     )
                 )
             for receipt in item_receipts:
-                missing_links = [
-                    field
-                    for field in (
-                        "requisition_id",
-                        "requisition_item_id",
-                        "supplier_order_id",
-                        "supplier_order_item_id",
-                    )
-                    if receipt[field] is None
-                ]
+                is_composite_group_receipt = (
+                    receipt.get("composite_physical_group_receipt_id") is not None
+                )
+                missing_links = (
+                    []
+                    if is_composite_group_receipt
+                    else [
+                        field
+                        for field in (
+                            "requisition_id",
+                            "requisition_item_id",
+                            "supplier_order_id",
+                            "supplier_order_item_id",
+                        )
+                        if receipt[field] is None
+                    ]
+                )
                 if missing_links:
                     findings.append(
                         _finding(
@@ -1539,7 +1624,11 @@ def audit_incomplete_order_chains(
                 received_lot_id = receipt["received_inventory_lot_id"]
                 if received_lot_id is not None:
                     lot = receipt_lots.get(int(received_lot_id))
-                    if lot is not None and lot["inventory_type"] == "finished":
+                    if (
+                        not is_composite_group_receipt
+                        and lot is not None
+                        and lot["inventory_type"] == "finished"
+                    ):
                         findings.append(
                             _finding(
                                 code="P015_TRACE_LINK_BROKEN",

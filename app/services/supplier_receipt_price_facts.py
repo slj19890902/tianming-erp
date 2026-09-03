@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time_contract import utc_naive_to_beijing_date
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+from app.models.composite_purchase_group import CompositePhysicalGroupReceipt
 from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
 from app.models.material import Material
 from app.models.order import OrderItem
@@ -569,7 +570,7 @@ def freeze_stock_replenishment_price(
 
 
 def _native_price_receipt_item_ids(db: Session) -> set[int]:
-    return {
+    native_ids = {
         int(value)
         for value in db.scalars(
             select(IncomingReceiptPurposeAllocation.incoming_receipt_item_id)
@@ -580,6 +581,17 @@ def _native_price_receipt_item_ids(db: Session) -> set[int]:
             )
         ).all()
     }
+    native_ids.update(
+        int(value)
+        for value in db.scalars(
+            select(CompositePhysicalGroupReceipt.incoming_receipt_item_id).join(
+                PurchaseReceiptFact,
+                PurchaseReceiptFact.id
+                == CompositePhysicalGroupReceipt.purchase_receipt_fact_id,
+            )
+        ).all()
+    )
+    return native_ids
 
 
 def _period_items(

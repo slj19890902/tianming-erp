@@ -120,7 +120,7 @@ def _seed_composite_pending_item(session: Session):
         unit="片",
         report_length_mm=600,
         report_width_mm=400,
-        crease_type="其他",
+        crease_type="毛片",
         default_cutting_mode=normalize_cutting_mode(1),
         layer_count=5,
         flute_type="AB",
@@ -284,6 +284,15 @@ def _component_only_batch_payload(
     supplier_name: str,
 ) -> RequisitionBatchCreate:
     requirements = requisition._bom_snapshot_requirements(session, snapshot)
+    physical_group_key = str(requirements["physical_group_key"])
+    source_fingerprint = str(requirements["physical_source_fingerprint"])
+    assert len(physical_group_key) == 64
+    assert len(source_fingerprint) == 64
+    group_fingerprint = requisition._composite_physical_group_fingerprint(
+        physical_group_key,
+        [source_fingerprint],
+    )
+    purchase_sheet_quantity = int(requirements["requisition_qty"])
     return RequisitionBatchCreate(
         supplier_name=supplier_name,
         items=[
@@ -291,7 +300,18 @@ def _component_only_batch_payload(
                 order_item_id=item.id,
                 bom_snapshot_id=snapshot.id,
                 component_type="whole",
-                requisition_qty=int(requirements["requisition_qty"]),
+                physical_group_key=physical_group_key,
+                group_fingerprint=group_fingerprint,
+                source_fingerprint=source_fingerprint,
+                group_purchase_sheet_qty=purchase_sheet_quantity,
+                group_order_purpose_sheet_qty=purchase_sheet_quantity,
+                group_stock_purpose_sheet_qty=0,
+                requisition_qty=purchase_sheet_quantity,
+                purchase_total_sheet_qty=purchase_sheet_quantity,
+                order_purpose_sheet_qty=purchase_sheet_quantity,
+                stock_purpose_sheet_qty=0,
+                purpose_plan_version=1,
+                purpose_plan_fingerprint=group_fingerprint,
                 cardboard_len=Decimal(str(requirements["report_length_mm"])),
                 cardboard_width=Decimal(str(requirements["report_width_mm"])),
                 special_process=str(requirements["cutting_mode"]),

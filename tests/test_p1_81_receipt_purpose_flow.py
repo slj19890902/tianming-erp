@@ -4000,7 +4000,10 @@ def test_inactive_frozen_snapshot_keeps_only_received_plan_capacity(
 
     with session_factory() as session:
         inconsistent = receipt_purpose_summaries_by_order_item_ids(session, [1])[1]
-    assert inconsistent["automatic_finished_output_qty"] == 11
+    # The posted receipt-auto completion is the authoritative output fact;
+    # mutating only its source allocation must surface inconsistency without
+    # rewriting the already-posted finished quantity.
+    assert inconsistent["automatic_finished_output_qty"] == 10
     assert inconsistent["current_theoretical_finished_capacity_qty"] == 10
     assert inconsistent["projection_inconsistent"] is True
 

@@ -532,6 +532,12 @@
       const expanded = state.expandedIds.has(key);
       const drawingAvailable = hasDrawing(item);
       const isStockReplenishment = item.source_type === "stock_replenishment";
+      const physicalGroupSources = Array.isArray(item.source_items) ? item.source_items : [];
+      const physicalGroupSourceCount = Math.max(Number(item.source_count || 0), physicalGroupSources.length);
+      const physicalGroupOrderCount = Math.max(Number(item.source_order_count || 0), physicalGroupSources.length ? 1 : 0);
+      const physicalGroupSourceBlock = item.composite_physical_purchase_group_id
+        ? `<details class="mt-2 rounded-lg bg-violet-50 p-2 text-sm text-violet-950"><summary class="font-bold">物理采购组｜${escapeHtml(physicalGroupOrderCount)} 个订单｜${escapeHtml(physicalGroupSourceCount)} 个来源</summary>${physicalGroupSources.length ? physicalGroupSources.map((source, sourceIndex) => `<p class="mt-1 break-words">${escapeHtml(source.order_number || `来源${sourceIndex + 1}`)}：净需组件 ${escapeHtml(source.net_required_piece_quantity || 0)} 片${Number(source.inventory_reserved_piece_quantity || 0) > 0 ? `｜已抵扣 ${escapeHtml(source.inventory_reserved_piece_quantity)} 片` : ""}</p>`).join("") : `<p class="mt-1">来源明细正在刷新，请勿按单一订单理解本行。</p>`}</details>`
+        : "";
       const drawingButton = drawingAvailable
         ? `<button data-drawing="${key}" class="min-h-12 w-full rounded-lg bg-indigo-700 px-2 text-sm font-bold text-white active:bg-indigo-800">打开图纸</button>`
         : `<button disabled class="min-h-12 w-full rounded-lg bg-slate-300 px-2 text-sm font-bold text-slate-500">无图纸</button>`;
@@ -556,7 +562,7 @@
         .join("");
       const frozenPurpose = item.purpose_status !== "legacy_unset";
       const decisionBlock = !isPending ? "" : frozenPurpose
-        ? `<div class="mt-2 rounded-lg ${item.receipt_fact_ready ? "bg-green-50 text-green-900" : "bg-amber-50 text-amber-900"} p-2 text-sm"><p class="font-bold">${escapeHtml(item.receipt_fact_ready ? "用途与采购价格已冻结" : "默认按报料材质和已维护价格实收")}</p><p>预计订单用途 ${escapeHtml(item.expected_order_purpose_sheet_qty || 0)} 张</p><p>预计片料备库 ${escapeHtml(item.expected_reserve_purpose_sheet_qty || 0)} 张</p><p>预计形成成品 ${escapeHtml(item.expected_finished_output_qty || 0)} 只</p>${item.finished_location_name ? `<p>成品：${escapeHtml(item.finished_location_name)}</p>` : ""}${item.finished_capacity_warning ? `<p class="mt-1 font-bold text-amber-800">容量提醒：${escapeHtml(item.finished_capacity_warning)}</p>` : ""}${item.reserve_location_name ? `<p>片料：${escapeHtml(item.reserve_location_name)}</p>` : ""}${item.receipt_quantity_notice ? `<p class="mt-1 font-bold text-amber-800">${escapeHtml(item.receipt_quantity_notice)}</p>` : ""}</div>`
+        ? `<div class="mt-2 rounded-lg ${item.receipt_fact_ready ? "bg-green-50 text-green-900" : "bg-amber-50 text-amber-900"} p-2 text-sm"><p class="font-bold">${escapeHtml(item.receipt_fact_ready ? "用途与采购价格已冻结" : "默认按报料材质和已维护价格实收")}</p><p>预计订单用途 ${escapeHtml(item.expected_order_purpose_sheet_qty || 0)} 张</p><p>预计片料备库 ${escapeHtml(item.expected_reserve_purpose_sheet_qty || 0)} 张</p><p>${item.composite_physical_purchase_group_id ? `预计形成真实组件 ${escapeHtml(item.expected_finished_output_qty || 0)} 片` : `预计形成成品 ${escapeHtml(item.expected_finished_output_qty || 0)} 只`}</p>${item.finished_location_name ? `<p>${item.composite_physical_purchase_group_id ? "组件" : "成品"}：${escapeHtml(item.finished_location_name)}</p>` : ""}${item.finished_capacity_warning ? `<p class="mt-1 font-bold text-amber-800">容量提醒：${escapeHtml(item.finished_capacity_warning)}</p>` : ""}${item.reserve_location_name ? `<p>片料：${escapeHtml(item.reserve_location_name)}</p>` : ""}${item.receipt_quantity_notice ? `<p class="mt-1 font-bold text-amber-800">${escapeHtml(item.receipt_quantity_notice)}</p>` : ""}</div>`
         : projected < 0
           ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">还差 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">少收怎么处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等补货</option>${isStockReplenishment ? "" : `<option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按已收数结单</option>`}</select></div>`
           : projected > 0
@@ -571,7 +577,9 @@
         ? `<div class="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-900"><p class="font-bold">暂不能实收</p><p>${escapeHtml(executionIssue)}</p></div>`
         : "";
       const receivedPurposeBlock = !isPending && item.purpose_allocation
-        ? `<div class="mt-2 rounded-lg bg-indigo-50 p-2 text-sm text-indigo-950"><p class="font-bold">本次用途分流</p><p>订单用途 ${escapeHtml(item.purpose_allocation.order_sheet_delta || 0)} 张｜片料备库 ${escapeHtml(item.purpose_allocation.reserve_sheet_delta || 0)} 张｜形成成品 ${escapeHtml(item.purpose_allocation.theoretical_finished_delta || 0)} 只</p>${item.purpose_allocation.finished_location_name ? `<p>成品：${escapeHtml(item.purpose_allocation.finished_location_name)}</p>` : ""}${item.purpose_allocation.reserve_location_name ? `<p>片料：${escapeHtml(item.purpose_allocation.reserve_location_name)}</p>` : ""}${item.purpose_reversal ? `<p class="mt-1 font-bold text-red-700">本次收料已撤销</p>` : ""}</div>`
+        ? (item.composite_physical_purchase_group_id
+          ? `<div class="mt-2 rounded-lg bg-indigo-50 p-2 text-sm text-indigo-950"><p class="font-bold">本次用途分流</p><p>订单用途 ${escapeHtml(item.purpose_allocation.order_purpose_sheet_qty || 0)} 张｜片料备库 ${escapeHtml(item.purpose_allocation.reserve_purpose_sheet_qty || 0)} 张｜形成真实组件 ${escapeHtml(item.purpose_allocation.component_output_piece_quantity || 0)} 片</p>${item.purpose_reversal ? `<p class="mt-1 font-bold text-red-700">本次收料已撤销</p>` : ""}</div>`
+          : `<div class="mt-2 rounded-lg bg-indigo-50 p-2 text-sm text-indigo-950"><p class="font-bold">本次用途分流</p><p>订单用途 ${escapeHtml(item.purpose_allocation.order_sheet_delta || 0)} 张｜片料备库 ${escapeHtml(item.purpose_allocation.reserve_sheet_delta || 0)} 张｜形成成品 ${escapeHtml(item.purpose_allocation.theoretical_finished_delta || 0)} 只</p>${item.purpose_allocation.finished_location_name ? `<p>成品：${escapeHtml(item.purpose_allocation.finished_location_name)}</p>` : ""}${item.purpose_allocation.reserve_location_name ? `<p>片料：${escapeHtml(item.purpose_allocation.reserve_location_name)}</p>` : ""}${item.purpose_reversal ? `<p class="mt-1 font-bold text-red-700">本次收料已撤销</p>` : ""}</div>`)
         : "";
 
       const primaryAction = !canOperate()
@@ -613,6 +621,7 @@
             </div>
             <p class="mt-1.5 break-words text-xs text-slate-500">${escapeHtml(item.customer_name)} · ${escapeHtml(item.product_code || "未填写")} · ${escapeHtml(item.product_name)}</p>
             <p class="mt-1 text-xs text-slate-600">计划 ${planned}｜已收 ${cumulative}｜待收 ${Math.max(planned-cumulative,0)}</p>
+            ${physicalGroupSourceBlock}
             ${searchMatchBlock}
             ${decisionBlock}
             ${receiptExecutionBlock}
@@ -1042,6 +1051,7 @@
             resolution_reason: String(item.resolution_reason || "").trim() || null,
             surplus_location_id: Number(item.surplus_location_id) || null,
             expected_surplus_layout_version: surplusLocation?.layout_version || null,
+            expected_group_version: item.expected_group_version ?? null,
             purchase_purpose_source_snapshot_id: item.purchase_purpose_source_snapshot_id ?? null,
             expected_receipt_fact_version: item.expected_receipt_fact_version ?? null,
             expected_purpose_snapshot_version: item.expected_purpose_snapshot_version ?? null,
@@ -1056,7 +1066,9 @@
           state.receiveIdempotencyKeys.delete(key);
           const purpose = result.purpose_allocation;
           const purposeMessage = purpose
-            ? `；订单用途 ${purpose.order_sheet_delta || 0} 张，片料备库 ${purpose.reserve_sheet_delta || 0} 张，形成成品 ${purpose.theoretical_finished_delta || 0} 只`
+            ? (result.composite_physical_purchase_group_id
+              ? `；订单用途 ${purpose.order_purpose_sheet_qty || 0} 张，片料备库 ${purpose.reserve_purpose_sheet_qty || 0} 张，形成真实组件 ${purpose.component_output_piece_quantity || 0} 片`
+              : `；订单用途 ${purpose.order_sheet_delta || 0} 张，片料备库 ${purpose.reserve_sheet_delta || 0} 张，形成成品 ${purpose.theoretical_finished_delta || 0} 只`)
             : "";
           showToast((result.material_status === "pending" ? `已记录实收，仍待补 ${result.remaining_quantity} 张` : "入库成功") + purposeMessage);
         } else {

@@ -41,7 +41,10 @@ def test_single_receipt_guides_only_order_linked_success() -> None:
         receive.index(write),
     )
     assert receive.index(write) < receive.index(guide) < refresh_after_write
-    assert 'if (row.source_type !== "stock_replenishment")' in receive
+    assert (
+        'if (row.source_type !== "stock_replenishment" '
+        '&& !data.composite_physical_purchase_group_id)'
+    ) in receive
     assert 'pendingBalance:data.material_status === "pending"' in receive
 
 

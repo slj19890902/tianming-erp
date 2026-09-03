@@ -20,6 +20,10 @@ TABLES = (
     "supplier_monthly_statements",
 )
 DESCENDANT_TABLES = (
+    "supplier_credit_lots",
+    "supplier_payment_batches",
+    "finance_utility_expenses",
+    "finance_utility_month_modes",
     "finance_utility_readings",
     "finance_acceptance_notes",
     "finance_recurring_rules",

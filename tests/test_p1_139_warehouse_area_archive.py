@@ -330,6 +330,72 @@ def test_empty_published_area_archives_without_inventory_write_and_replays(
         engine.dispose()
 
 
+def test_three_floor_archive_does_not_require_one_floor_production_projection_database(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    baseline, _published, _draft = _isolate_layout(tmp_path, monkeypatch)
+    revision = json.loads(baseline.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
+    engine, factory = _database(tmp_path, revision=revision)
+
+    def unexpected_projection_lookup(*_args, **_kwargs):
+        raise AssertionError("3F archive must not read the 1F production projection database")
+
+    monkeypatch.setattr(
+        warehouse_api,
+        "list_production_projection_mappings",
+        unexpected_projection_lookup,
+    )
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-139-admin"))
+            assert admin is not None
+            result = _archive(db, admin, revision=revision)
+            assert result["applied"] is True
+            assert result["item"]["archived"] is True
+            assert db.scalar(select(func.count(InventoryLot.id))) == 0
+            assert db.scalar(select(func.count(InventoryPallet.id))) == 0
+    finally:
+        engine.dispose()
+
+
+def test_one_floor_archive_still_fails_closed_when_production_projection_is_unavailable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    baseline, _published, _draft = _isolate_layout(tmp_path, monkeypatch)
+    revision = json.loads(baseline.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
+    engine, factory = _database(tmp_path, revision=revision)
+
+    def unavailable_projection(*_args, **_kwargs):
+        raise warehouse_api.WarehouseTwinProductionError("isolated projection missing")
+
+    monkeypatch.setattr(
+        warehouse_api,
+        "list_production_projection_mappings",
+        unavailable_projection,
+    )
+    try:
+        with factory() as db:
+            blockers = warehouse_api._zone_asset_and_production_blockers(
+                db,
+                floor_layout={
+                    "floor_code": "1F",
+                    "layout_id": "layout-1f",
+                    "pallets": [],
+                },
+                feature={
+                    "id": "zone-1f",
+                    "feature_code": "ZONE-1F-ERP-F1",
+                },
+                area_code="F1",
+                fail_closed_on_mapping_error=True,
+            )
+            assert blockers == ["生产任务地图占用状态暂无法核对"]
+    finally:
+        engine.dispose()
+
+
 def test_published_ground_plan_blocks_archive_without_changes(
     tmp_path: Path,
     monkeypatch,

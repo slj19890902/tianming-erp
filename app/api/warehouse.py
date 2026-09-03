@@ -10628,34 +10628,39 @@ def _zone_asset_and_production_blockers(
         if feature_id in codes or feature_code in codes:
             blockers.append("区域内仍有启用或受损挂板，不能改变区域策略")
             break
-    try:
-        mappings = list_production_projection_mappings(
-            str(floor_layout.get("layout_id") or ""), floor_layout
-        )
-    except (WarehouseTwinProductionError, sqlite3.Error, OSError):
-        if fail_closed_on_mapping_error:
-            blockers.append("生产任务地图占用状态暂无法核对")
-    else:
-        pending_ids = _mapped_live_production_task_ids(db)
-        pallets = {
-            str(item.get("id")): item for item in floor_layout.get("pallets") or []
-        }
-        for mapping in mappings:
-            if int(mapping.get("source_task_id") or 0) not in pending_ids:
-                continue
-            target_matches = (
-                mapping.get("target_kind") == "zone"
-                and str(mapping.get("target_id")) == feature_id
+    # Production-task placement is an explicit 1F-only visual projection: all
+    # public mapping endpoints load the 1F layout.  Requiring its optional
+    # isolated database while archiving a 3F/4F area freezes unrelated empty
+    # warehouse areas even though no supported workflow can map tasks there.
+    if str(floor_layout.get("floor_code") or "").strip().upper() == "1F":
+        try:
+            mappings = list_production_projection_mappings(
+                str(floor_layout.get("layout_id") or ""), floor_layout
             )
-            if mapping.get("target_kind") == "pallet":
-                pallet = pallets.get(str(mapping.get("target_id"))) or {}
+        except (WarehouseTwinProductionError, sqlite3.Error, OSError):
+            if fail_closed_on_mapping_error:
+                blockers.append("生产任务地图占用状态暂无法核对")
+        else:
+            pending_ids = _mapped_live_production_task_ids(db)
+            pallets = {
+                str(item.get("id")): item for item in floor_layout.get("pallets") or []
+            }
+            for mapping in mappings:
+                if int(mapping.get("source_task_id") or 0) not in pending_ids:
+                    continue
                 target_matches = (
-                    str(pallet.get("zone_id") or "") == feature_id
-                    or str(pallet.get("zone_code") or "") == feature_code
+                    mapping.get("target_kind") == "zone"
+                    and str(mapping.get("target_id")) == feature_id
                 )
-            if target_matches:
-                blockers.append("区域内仍有待生产任务地图占用，不能改变区域策略")
-                break
+                if mapping.get("target_kind") == "pallet":
+                    pallet = pallets.get(str(mapping.get("target_id"))) or {}
+                    target_matches = (
+                        str(pallet.get("zone_id") or "") == feature_id
+                        or str(pallet.get("zone_code") or "") == feature_code
+                    )
+                if target_matches:
+                    blockers.append("区域内仍有待生产任务地图占用，不能改变区域策略")
+                    break
     return blockers
 
 

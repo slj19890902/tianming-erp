@@ -397,6 +397,123 @@ def test_line_status_progresses_only_on_formal_business_facts(status_app) -> Non
         assert _projection(db, order.id)["business_status"] == "completed"
 
 
+def test_full_semi_finished_reservation_is_pending_production_not_pending_material(
+    status_app,
+) -> None:
+    """A green direct deduction reserves input sheets; it is not finished stock."""
+
+    from app.models.production import ProductionTask
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryReservation,
+        OrderItemSemiRequirement,
+        WarehouseLocation,
+    )
+
+    _app, factory = status_app
+    with factory() as db:
+        order, item = _add_order(db, suffix="SEMI-DIRECT", quantity=102)
+        location = WarehouseLocation(
+            location_code="SEMI-DIRECT-01",
+            location_name="半成品抵扣测试位",
+            warehouse_type="semi_finished",
+        )
+        db.add(location)
+        db.flush()
+        lot = InventoryLot(
+            lot_number="LOT-P0-04-SEMI-DIRECT",
+            inventory_type="semi_finished",
+            warehouse_location_id=location.id,
+            quantity_available=0,
+            quantity_reserved=102,
+            quantity_consumed=0,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit="sheets",
+            status="active",
+            source_type="manual",
+            stock_date=date(2026, 7, 28),
+            stock_date_accuracy="exact",
+            last_movement_at=datetime(2026, 7, 28, 9, 0),
+            version=1,
+        )
+        requirement = OrderItemSemiRequirement(
+            order_item_id=item.id,
+            customer_id=order.customer_id,
+            component_type="whole",
+            board_length_mm=800,
+            board_width_mm=600,
+            material_code_snapshot="A416D",
+            normalized_material_code="A416D",
+            flute_type="B",
+            pieces_per_box=1,
+            stock_yield_per_sheet=1,
+            required_piece_quantity=102,
+        )
+        db.add_all([lot, requirement])
+        db.flush()
+        reservation = InventoryReservation(
+            reservation_number="RSV-P0-04-SEMI-DIRECT",
+            inventory_lot_id=lot.id,
+            reservation_type="semi_order",
+            order_id=order.id,
+            order_item_id=item.id,
+            semi_requirement_id=requirement.id,
+            reserved_stock_quantity=102,
+            credited_requirement_quantity=102,
+            yield_factor=1,
+            status="active",
+            reservation_group_key="p0-04-semi-direct",
+            idempotency_key="p0-04-semi-direct",
+        )
+        task = ProductionTask(
+            order_item_id=item.id,
+            status="pending",
+            planned_quantity=102,
+            finished_coverage_snapshot=0,
+            ordered_quantity_snapshot=102,
+            material_received_quantity=0,
+            material_input_quantity=0,
+            output_factor=1,
+            readiness_basis="semi_finished_inventory",
+            version=1,
+        )
+        db.add_all([reservation, task])
+        db.flush()
+
+        projection = _projection(db, order.id)
+
+        assert projection["business_status"] == "pending_production"
+        assert projection["items"][item.id]["business_status"] == "pending_production"
+        assert projection["items"][item.id]["business_status_evidence"]["basis"] == (
+            "fully_reserved_semi_finished_inventory"
+        )
+
+        db.commit()
+        with TestClient(_app) as client:
+            login = client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "123456"},
+            )
+            detail = client.get(f"/api/orders/{order.id}")
+            filtered = client.get(
+                "/api/orders", params={"status": "pending_production"}
+            )
+            dashboard = client.get("/api/dashboard/overview")
+
+        assert login.status_code == 200, login.text
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["business_status"] == "pending_production"
+        assert filtered.status_code == 200, filtered.text
+        assert [row["id"] for row in filtered.json()["items"]] == [order.id]
+        assert dashboard.status_code == 200, dashboard.text
+        assert dashboard.json()["business_status_counts"]["pending_production"] == 1
+
+        reservation.credited_requirement_quantity = 101
+        db.flush()
+        assert _projection(db, order.id)["business_status"] == "pending_material"
+
+
 def test_partial_incoming_awaiting_supplier_remains_pending_incoming(
     status_app,
 ) -> None:

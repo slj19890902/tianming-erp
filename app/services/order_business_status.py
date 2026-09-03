@@ -32,7 +32,10 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
-from app.models.warehouse_inventory import InventoryReservation
+from app.models.warehouse_inventory import (
+    InventoryReservation,
+    OrderItemSemiRequirement,
+)
 from app.services.order_status_policy import (
     MANAGEMENT_ORDER_STATUSES,
     PERSISTED_ORDER_STATUS_LABELS,
@@ -156,6 +159,8 @@ def build_order_business_statuses(
     required_external_component_ids_by_item: dict[int, set[int]] = defaultdict(set)
     task_statuses_by_item: dict[int, dict[int | None, str]] = defaultdict(dict)
     finished_coverage_by_item: dict[int, int] = defaultdict(int)
+    semi_requirement_quantity_by_id: dict[int, tuple[int, int]] = {}
+    semi_coverage_by_requirement_id: dict[int, int] = defaultdict(int)
     dispatched_rows_by_item: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
 
     for item_id_chunk in _chunks(item_ids):
@@ -332,6 +337,46 @@ def build_order_business_statuses(
                 finished_coverage_by_item[int(order_item_id)] = max(
                     int(credited_quantity or 0), 0
                 )
+        semi_requirement_rows = db.execute(
+            select(
+                OrderItemSemiRequirement.id,
+                OrderItemSemiRequirement.order_item_id,
+                OrderItemSemiRequirement.required_piece_quantity,
+            ).where(OrderItemSemiRequirement.order_item_id.in_(item_id_chunk))
+        ).all()
+        requirement_ids = [int(requirement_id) for requirement_id, *_rest in semi_requirement_rows]
+        for requirement_id, order_item_id, required_piece_quantity in semi_requirement_rows:
+            semi_requirement_quantity_by_id[int(requirement_id)] = (
+                int(order_item_id),
+                max(int(required_piece_quantity or 0), 0),
+            )
+        if requirement_ids:
+            for requirement_id, credited_quantity in db.execute(
+                select(
+                    InventoryReservation.semi_requirement_id,
+                    func.coalesce(
+                        func.sum(
+                            func.coalesce(
+                                InventoryReservation.credited_requirement_quantity,
+                                0,
+                            )
+                            - InventoryReservation.consumed_requirement_quantity
+                            - InventoryReservation.released_requirement_quantity
+                        ),
+                        0,
+                    ),
+                )
+                .where(
+                    InventoryReservation.semi_requirement_id.in_(requirement_ids),
+                    InventoryReservation.reservation_type == "semi_order",
+                    InventoryReservation.status.in_(("active", "partial")),
+                )
+                .group_by(InventoryReservation.semi_requirement_id)
+            ).all():
+                if requirement_id is not None:
+                    semi_coverage_by_requirement_id[int(requirement_id)] = max(
+                        int(credited_quantity or 0), 0
+                    )
         if include_delivery:
             for delivery_item_id, order_item_id, delivery_id, quantity in db.execute(
                 select(
@@ -455,6 +500,22 @@ def build_order_business_statuses(
         ):
             settlement_totals[int(statement_id)] = Decimal(str(amount or 0))
 
+    semi_requirement_ids_by_item: dict[int, list[int]] = defaultdict(list)
+    for requirement_id, (order_item_id, _required_piece_quantity) in (
+        semi_requirement_quantity_by_id.items()
+    ):
+        semi_requirement_ids_by_item[order_item_id].append(requirement_id)
+    fully_reserved_semi_item_ids = {
+        order_item_id
+        for order_item_id, requirement_ids in semi_requirement_ids_by_item.items()
+        if requirement_ids
+        and all(
+            semi_coverage_by_requirement_id.get(requirement_id, 0)
+            >= semi_requirement_quantity_by_id[requirement_id][1]
+            for requirement_id in requirement_ids
+        )
+    }
+
     item_projection: dict[int, dict] = {}
     for item in items:
         item_id = int(item.id)
@@ -522,6 +583,7 @@ def build_order_business_statuses(
             or item_id in closed_incoming_item_ids
         )
         has_formal_requisition = item_id in confirmed_supplier_item_ids
+        fully_reserved_semi = item_id in fully_reserved_semi_item_ids
         required_external_components = required_external_component_ids_by_item.get(
             item_id, set()
         )
@@ -719,6 +781,15 @@ def build_order_business_statuses(
                     finished_inventory_coverage=finished_coverage,
                     legacy_taskless_delivery_ready=False,
                 )
+        elif fully_reserved_semi:
+            status = "pending_production"
+            evidence = _evidence(
+                "fully_reserved_semi_finished_inventory",
+                "半成品库存已全额抵扣，等待生产确认",
+                semi_requirement_count=len(
+                    semi_requirement_ids_by_item.get(item_id, [])
+                ),
+            )
         elif has_actual_incoming:
             status = "pending_production"
             evidence = _evidence(

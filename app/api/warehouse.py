@@ -280,6 +280,10 @@ from app.services.warehouse_ground_slots import (
     occupancy_physical_quantity,
     published_ground_plan,
 )
+from app.services.warehouse_ground_plan_revision_sync import (
+    apply_ground_plan_revision_sync,
+    prepare_ground_plan_revision_sync,
+)
 from app.services.warehouse_movement_batch import (
     BATCH_AUDIT_ACTION_CODE,
     WAREHOUSE_MOVEMENT_BATCH_LOCK,
@@ -5336,6 +5340,13 @@ def publish_ground_layout(
             policy.version += 1
             policy.updated_by = user.id
             policy.updated_at = now
+            plan.preview_fingerprint = ground_preview_fingerprint(
+                area_id=area.id,
+                policy_version=policy.version,
+                map_revision=str(policy.published_map_revision or ""),
+                configuration=_ground_plan_configuration(plan),
+                slots=slots,
+            )
             append_audit_event(
                 db,
                 request=request,
@@ -10852,6 +10863,14 @@ def _publish_twin_layout_draft_locked(
     publish_snapshot = snapshot_warehouse_twin_publish_state()
     result = None
     try:
+        ground_plan_revision_sync = prepare_ground_plan_revision_sync(
+            db,
+            floor_code=floor_code,
+            current_floor_layout=load_published_warehouse_twin_floor_for_edit(
+                floor_code
+            ),
+            proposed_floor_layout=load_warehouse_twin_layout_draft(floor_code),
+        )
         result = publish_warehouse_twin_layout_draft(
             floor_code,
             expected_published_revision=payload.expected_published_revision,
@@ -10882,13 +10901,41 @@ def _publish_twin_layout_draft_locked(
             db,
             floor_code=floor_code,
             published_revision=str(result.value.get("published_revision") or ""),
-                operator_id=user.id,
-                published_features=list(
-                    load_warehouse_twin_floor(floor_code).get("features") or []
+            operator_id=user.id,
+            published_features=list(
+                load_warehouse_twin_floor(floor_code).get("features") or []
+            ),
+            defer_location_readiness_for_feature_id=(
+                defer_location_readiness_for_feature_id
+            ),
+        )
+        ground_plan_revision_sync_events = apply_ground_plan_revision_sync(
+            db,
+            sync_plan=ground_plan_revision_sync,
+            operator_id=user.id,
+            published_revision=str(result.value.get("published_revision") or ""),
+        )
+        for sync_event in ground_plan_revision_sync_events:
+            append_audit_event(
+                db,
+                request=request,
+                actor=user,
+                event_category="system",
+                result="success",
+                source="web",
+                module_code="warehouse",
+                action_code="warehouse.ground_plan.revision_sync",
+                legacy_action="GROUND_PLAN_REV_SYNC",
+                resource="WarehouseGroundLayoutPlan",
+                entity_type="warehouse_ground_layout_plan",
+                entity_id=int(sync_event["plan_id"]),
+                object_ref=(
+                    f"ground-layout:{floor_code.strip().upper()}:"
+                    f"{sync_event['area_code']}"
                 ),
-                defer_location_readiness_for_feature_id=(
-                    defer_location_readiness_for_feature_id
-                ),
+                batch_id=payload.operation_key[:64],
+                description="地图发布同步未变区域的地堆计划版本；未改变库存或货位",
+                details=sync_event,
             )
         rack_cell_sync = sync_published_rack_cells(
             db,
@@ -10923,7 +10970,10 @@ def _publish_twin_layout_draft_locked(
             getattr(published_policies, "legacy_name_update_count", 0)
         )
         formal_master_changed = bool(
-            published_policies or legacy_name_update_count or rack_master_changed
+            published_policies
+            or legacy_name_update_count
+            or rack_master_changed
+            or ground_plan_revision_sync_events
         )
         if result.applied or formal_master_changed:
             _twin_layout_asset_log(
@@ -10946,6 +10996,10 @@ def _publish_twin_layout_draft_locked(
                     for policy in published_policies
                 ],
                 "legacy_area_name_update_count": legacy_name_update_count,
+                "ground_plan_revision_sync_count": len(
+                    ground_plan_revision_sync_events
+                ),
+                "ground_plan_revision_sync": ground_plan_revision_sync_events,
                 "legacy_area_name_updated_codes": list(
                     getattr(
                         published_policies,
@@ -10983,7 +11037,11 @@ def _publish_twin_layout_draft_locked(
         finally:
             db.rollback()
         _handle_twin_layout_edit_error(error)
-    except (WarehouseAreaActivationError, WarehouseRackCellSyncError) as error:
+    except (
+        WarehouseAreaActivationError,
+        WarehouseGroundSlotError,
+        WarehouseRackCellSyncError,
+    ) as error:
         try:
             restore_warehouse_twin_publish_state(
                 publish_snapshot,
@@ -11017,6 +11075,7 @@ def _publish_twin_layout_draft_locked(
         "legacy_area_name_update_count": int(
             getattr(published_policies, "legacy_name_update_count", 0)
         ),
+        "ground_plan_revision_sync_count": len(ground_plan_revision_sync_events),
         "bound_legacy_location_ids": list(
             rack_cell_sync.bound_legacy_location_ids
         ),

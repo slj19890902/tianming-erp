@@ -205,6 +205,21 @@ def _confirm_area_payload(
 def _database(tmp_path: Path):
     engine = create_sqlite_engine(tmp_path / 'p1-47b.sqlite3')
     Base.metadata.create_all(engine)
+    # Base.metadata does not install Alembic-owned integrity triggers.  Keep
+    # this map-publication fixture aligned with the production ground-plan
+    # contract because revision synchronization temporarily verifies and
+    # restores this exact guard.
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TRIGGER trg_ground_plans_published_immutable
+            BEFORE UPDATE ON warehouse_ground_layout_plans
+            WHEN OLD.status = 'published'
+            BEGIN
+              SELECT RAISE(ABORT, 'published ground layout plan is immutable');
+            END
+            """
+        )
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     with factory() as db:
         db.add_all(

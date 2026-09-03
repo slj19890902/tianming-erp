@@ -420,12 +420,17 @@ def _price_plan(
         )
     price_unit = normalize_purchase_price_unit(material.price_unit)
     assert price_unit is not None
+    # Facts persist price and tax rate at six decimals.  Build the plan from the
+    # same frozen precision, otherwise a high-precision master quote can make
+    # the dry-run total differ from the immutable fact just created.
+    frozen_unit_price = _six(material.quote_price)
+    frozen_tax_rate = _six(material.purchase_tax_rate)
     try:
         breakdown = calculate_purchase_sheet_cost_breakdown(
-            unit_price=material.quote_price,
+            unit_price=frozen_unit_price,
             price_unit=price_unit,
             tax_included=bool(material.purchase_tax_included),
-            tax_rate=material.purchase_tax_rate,
+            tax_rate=frozen_tax_rate,
             report_length_mm=context.report_length_mm,
             report_width_mm=context.report_width_mm,
         )
@@ -445,11 +450,11 @@ def _price_plan(
         "material_id": int(material.id),
         "material_code": str(material.code or "").strip(),
         "material_version": int(material.version),
-        "unit_price": material.quote_price,
+        "unit_price": frozen_unit_price,
         "price_unit": price_unit,
         "currency": str(material.purchase_currency).strip().upper(),
         "tax_included": bool(material.purchase_tax_included),
-        "tax_rate": material.purchase_tax_rate,
+        "tax_rate": frozen_tax_rate,
         "shipping_fee_mode": CONFIRMED_SHIPPING_FEE_MODE,
         "report_length_mm": context.report_length_mm,
         "report_width_mm": context.report_width_mm,
@@ -469,11 +474,11 @@ def _price_plan(
         material_id=int(material.id),
         material_code=str(material.code or "").strip(),
         material_version=int(material.version),
-        unit_price=_six(material.quote_price),
+        unit_price=frozen_unit_price,
         price_unit=price_unit,
         currency=str(material.purchase_currency).strip().upper(),
         tax_included=bool(material.purchase_tax_included),
-        tax_rate=_six(material.purchase_tax_rate),
+        tax_rate=frozen_tax_rate,
         shipping_fee_mode=CONFIRMED_SHIPPING_FEE_MODE,
         report_length_mm=context.report_length_mm,
         report_width_mm=context.report_width_mm,

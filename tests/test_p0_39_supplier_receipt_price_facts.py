@@ -613,6 +613,64 @@ def test_finance_only_test_classification_is_the_only_quantity_override(
         assert receipt_item.received_quantity == 8
 
 
+def test_historical_plan_amount_uses_the_same_precision_as_its_fact(
+    price_fact_db,
+) -> None:
+    """A six-decimal fact must never differ from its own dry-run plan total."""
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.material import Material
+    from app.models.stock_replenishment import StockReplenishmentOrderItem
+    from app.models.user import User
+    from app.services.purchase_receipt_facts import (
+        calculate_purchase_sheet_cost_breakdown,
+    )
+    from app.services.supplier_receipt_price_facts import (
+        _fact_from_plan,
+        _price_plan,
+    )
+
+    session_factory, fixture = price_fact_db
+    with session_factory() as db:
+        receipt_item = db.get(
+            IncomingReceiptItem, fixture["stable_receipt_item_id"]
+        )
+        user = db.get(User, fixture["user_id"])
+        assert receipt_item is not None and user is not None
+        source = db.get(
+            StockReplenishmentOrderItem,
+            receipt_item.stock_replenishment_item_id,
+        )
+        assert source is not None
+        material = db.get(Material, source.material_id)
+        assert material is not None
+        material.quote_price = Decimal("2.8000004")
+        source.quantity = source.stocked_quantity = 100000
+        receipt_item.planned_quantity = 100000
+        receipt_item.received_quantity = 100000
+        receipt_item.cumulative_received_quantity = 100000
+        db.flush()
+
+        plan = _price_plan(
+            db, item=receipt_item, allow_supplier_code_fallback=True
+        )
+        fact = _fact_from_plan(plan, origin="historical_master_adoption", user=user)
+        breakdown = calculate_purchase_sheet_cost_breakdown(
+            unit_price=fact.unit_price,
+            price_unit=fact.price_unit,
+            tax_included=fact.tax_included,
+            tax_rate=fact.tax_rate,
+            report_length_mm=fact.report_length_mm,
+            report_width_mm=fact.report_width_mm,
+        )
+        assert plan.unit_price == fact.unit_price == Decimal("2.800000")
+        assert plan.erp_amount == (
+            breakdown.gross_per_sheet * fact.received_quantity_snapshot
+        ).quantize(Decimal("0.01"))
+        assert plan.tax_amount == (
+            breakdown.tax_per_sheet * fact.received_quantity_snapshot
+        ).quantize(Decimal("0.01"))
+
+
 def test_adoption_api_is_read_only_and_has_no_web_apply_route(price_fact_db) -> None:
     from app.api.deps import get_db
     from app.api.supplier_settlements import company_read, router

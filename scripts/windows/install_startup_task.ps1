@@ -1,28 +1,44 @@
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$StartBat = Join-Path $ProjectRoot "scripts\windows\start_erp.bat"
-$TaskName = "Tianming ERP Auto Start"
+$GuardScript = Join-Path $ProjectRoot "scripts\windows\ensure_erp_running.ps1"
+$TaskName = "TianmingERP"
 
-if (-not (Test-Path -LiteralPath $StartBat)) {
-    throw "Launcher not found: $StartBat"
+if (-not (Test-Path -LiteralPath $GuardScript)) {
+    throw "Health guard not found: $GuardScript"
 }
 
-$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$StartBat`""
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel LeastPrivilege
+$action = New-ScheduledTaskAction `
+    -Execute "powershell.exe" `
+    -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$GuardScript`""
+$triggers = @(
+    (New-ScheduledTaskTrigger -AtStartup),
+    (New-ScheduledTaskTrigger -AtLogOn)
+)
+$settings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -RestartCount 999 `
+    -RestartInterval (New-TimeSpan -Minutes 1)
+$principal = New-ScheduledTaskPrincipal `
+    -UserId "SYSTEM" `
+    -LogonType ServiceAccount `
+    -RunLevel Highest
 
 try {
     Register-ScheduledTask `
         -TaskName $TaskName `
         -Action $action `
-        -Trigger $trigger `
+        -Trigger $triggers `
         -Settings $settings `
         -Principal $principal `
-        -Description "Tianming ERP auto start on logon" `
+        -Description "Tianming ERP health guard: startup recovery and abnormal-exit restart" `
         -Force | Out-Null
-    Write-Host "Auto start task created: Tianming ERP Auto Start"
+    Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Write-Host "ERP health guard installed: $TaskName"
 } catch {
-    throw "Failed to create auto start task."
+    throw "Failed to install ERP health guard."
 }

@@ -54,6 +54,8 @@ $reportDir = Join-Path $projectRoot "docs\migration_reports"
 $logDir = Join-Path $projectRoot "logs"
 $releaseLog = Join-Path $logDir "erp_release.log"
 $releaseHelper = Join-Path $PSScriptRoot "release_erp.py"
+$maintenanceDir = Join-Path $projectRoot "data\runtime"
+$maintenanceLock = Join-Path $maintenanceDir "erp_maintenance.lock"
 $ErpPort = $null
 $python = $null
 $expectedBasePython = $null
@@ -63,6 +65,21 @@ function Write-Log([string]$Message, [string]$Level = "INFO") {
     Write-Host $line
     if (Test-Path -LiteralPath $logDir) {
         Add-Content -LiteralPath $releaseLog -Encoding UTF8 -Value $line
+    }
+}
+
+function Set-ErpMaintenanceLock([string]$Reason) {
+    New-Item -ItemType Directory -Path $maintenanceDir -Force | Out-Null
+    Set-Content -LiteralPath $maintenanceLock -Encoding UTF8 -NoNewline -Value (
+        "{0}|{1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Reason
+    )
+    Write-Log "ERP health guard maintenance lock enabled: $Reason"
+}
+
+function Clear-ErpMaintenanceLock {
+    if (Test-Path -LiteralPath $maintenanceLock -PathType Leaf) {
+        Remove-Item -LiteralPath $maintenanceLock -Force
+        Write-Log "ERP health guard maintenance lock cleared."
     }
 }
 
@@ -327,6 +344,7 @@ try {
             "已确认生产配置、正式路径、代码 SHA 和版本说明；" +
             "version=$($releaseMetadata.version)，准备停服。"
         )
+        Set-ErpMaintenanceLock -Reason "release_prepare"
         Stop-ErpService
 
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -363,6 +381,7 @@ try {
     )) {
         throw "发布计划不属于当前正式数据库。"
     }
+    Set-ErpMaintenanceLock -Reason "release_apply"
     Assert-ErpStopped
     $applied = Invoke-ReleaseHelper -Arguments @(
         "apply",
@@ -385,6 +404,7 @@ try {
         "验证步骤 $($verifiedRelease.verification_steps.Count) 条。"
     )
     Invoke-ReleaseHelper -Arguments @("mark-started", "--plan", $resolvedPlanPath) | Out-Null
+    Clear-ErpMaintenanceLock
     Write-Log "========== ERP 技术发布完成，服务与版本说明门禁通过 =========="
     Write-Log "人工业务验收尚未由自动门禁记录；请登录“系统备份 → 系统版本”回读。"
     Write-Log "发布报告：$resolvedPlanPath"

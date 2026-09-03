@@ -19,6 +19,7 @@ def test_windows_start_launcher_scripts_exist() -> None:
         "stop_erp.bat",
         "install_desktop_shortcut.ps1",
         "install_startup_task.ps1",
+        "ensure_erp_running.ps1",
     ):
         assert (WINDOWS_SCRIPTS / name).is_file()
 
@@ -73,7 +74,7 @@ def test_stop_launcher_confirms_before_killing_erp_port() -> None:
         assert marker in source
 
 
-def test_desktop_shortcut_and_startup_task_installers_point_to_launcher() -> None:
+def test_desktop_shortcut_and_startup_task_installs_health_guard() -> None:
     shortcut = (WINDOWS_SCRIPTS / "install_desktop_shortcut.ps1").read_text(
         encoding="utf-8"
     )
@@ -83,8 +84,20 @@ def test_desktop_shortcut_and_startup_task_installers_point_to_launcher() -> Non
 
     assert "Open Tianming ERP.lnk" in shortcut
     assert "scripts\\windows\\start_erp.bat" in shortcut
-    assert "Tianming ERP Auto Start" in startup
+    guard = (WINDOWS_SCRIPTS / "ensure_erp_running.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'TaskName = "TianmingERP"' in startup
+    assert "ensure_erp_running.ps1" in startup
+    assert "AtStartup" in startup
     assert "AtLogOn" in startup
+    assert "SYSTEM" in startup
+    assert "RestartCount 999" in startup
+    assert "erp_maintenance.lock" in guard
+    assert "Global\\TianmingErpHealthGuard" in guard
+    assert "start_erp.ps1" in guard
+    assert "alembic" not in guard.lower()
 
 
 def test_user_startup_guide_is_plain_language() -> None:
@@ -98,6 +111,8 @@ def test_user_startup_guide_is_plain_language() -> None:
         "logs\\erp_startup.log",
         "Open Tianming ERP.lnk",
         "开机自启是可选的",
+        "健康守护",
+        "erp_health_guard.log",
         ".venv",
         "data\\carton_erp.sqlite3",
     ):

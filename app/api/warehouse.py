@@ -105,6 +105,7 @@ from app.models.warehouse_inventory import (
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
     WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutPlanRetirement,
     WarehouseGroundLayoutSlot,
     WarehouseGroundOccupancy,
     WarehouseGroundOccupancySlot,
@@ -12053,6 +12054,8 @@ def delete_twin_layout_feature(
     expected_published_revision: str | None = Query(
         default=None, min_length=1, max_length=64
     ),
+    retire_ground_plan: bool = Query(default=False),
+    expected_ground_plan_version: int | None = Query(default=None, ge=1),
     request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
@@ -12064,6 +12067,10 @@ def delete_twin_layout_feature(
         expected_policy_version = None
     if not isinstance(expected_published_revision, str):
         expected_published_revision = None
+    if not isinstance(retire_ground_plan, bool):
+        retire_ground_plan = False
+    if not isinstance(expected_ground_plan_version, int):
+        expected_ground_plan_version = None
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
         normalized_floor = floor_code.strip().upper()
         request_facts = {
@@ -12073,6 +12080,8 @@ def delete_twin_layout_feature(
             "expected_version": expected_version,
             "expected_policy_version": expected_policy_version,
             "expected_published_revision": expected_published_revision,
+            "retire_ground_plan": retire_ground_plan,
+            "expected_ground_plan_version": expected_ground_plan_version,
         }
         request_hash = hashlib.sha256(
             json.dumps(
@@ -12288,15 +12297,39 @@ def delete_twin_layout_feature(
                 locations=locations,
             )]
             ground_plan = db.scalar(
-                select(WarehouseGroundLayoutPlan).where(
-                    WarehouseGroundLayoutPlan.area_id == area.id
+                select(WarehouseGroundLayoutPlan)
+                .where(WarehouseGroundLayoutPlan.area_id == area.id)
+                .options(selectinload(WarehouseGroundLayoutPlan.slots))
+            )
+            ground_plan_retirement = (
+                db.scalar(
+                    select(WarehouseGroundLayoutPlanRetirement).where(
+                        WarehouseGroundLayoutPlanRetirement.plan_id
+                        == ground_plan.id
+                    )
                 )
+                if ground_plan is not None
+                else None
             )
             if ground_plan is not None:
                 if ground_plan.status == "draft":
                     blockers.append("仍有未发布地堆排位草稿，请先放弃该草稿")
-                else:
+                elif ground_plan_retirement is not None:
+                    blockers.append("地堆排位已退役但区域仍未归档，请先完成一致性治理")
+                elif not retire_ground_plan:
                     blockers.append("仍有已发布地堆排位方案，不能直接归档，请先完成受控处置")
+                elif expected_ground_plan_version != ground_plan.version:
+                    blockers.append("地堆排位版本已变化，请刷新后重试")
+                else:
+                    location_ids = {int(row.id) for row in locations}
+                    foreign_slot_count = sum(
+                        int(slot.location_id) not in location_ids
+                        for slot in ground_plan.slots
+                    )
+                    if foreign_slot_count:
+                        blockers.append(
+                            f"地堆排位仍引用其他区域库位 {foreign_slot_count} 个"
+                        )
             if blockers:
                 raise HTTPException(
                     status_code=409,
@@ -12346,6 +12379,22 @@ def delete_twin_layout_feature(
                         "status": ground_plan.status,
                         "version": ground_plan.version,
                         "published_map_revision": ground_plan.published_map_revision,
+                        "target_slot_count": ground_plan.target_slot_count,
+                        "preview_fingerprint": ground_plan.preview_fingerprint,
+                        "slots": [
+                            {
+                                "id": int(slot.id),
+                                "location_id": int(slot.location_id),
+                                "route_sequence": int(slot.route_sequence),
+                                "row_no": int(slot.row_no),
+                                "slot_no": int(slot.slot_no),
+                                "x_mm": str(slot.x_mm),
+                                "y_mm": str(slot.y_mm),
+                                "width_mm": int(slot.width_mm),
+                                "depth_mm": int(slot.depth_mm),
+                            }
+                            for slot in ground_plan.slots
+                        ],
                     }
                 ),
                 "locations": [
@@ -12388,16 +12437,33 @@ def delete_twin_layout_feature(
                     locations=latest_locations,
                 ),
             ]
-            latest_ground_plan_count = int(
-                db.scalar(
-                    select(func.count(WarehouseGroundLayoutPlan.id)).where(
-                        WarehouseGroundLayoutPlan.area_id == area.id
-                    )
-                )
-                or 0
+            latest_ground_plan = db.scalar(
+                select(WarehouseGroundLayoutPlan)
+                .where(WarehouseGroundLayoutPlan.area_id == area.id)
+                .options(selectinload(WarehouseGroundLayoutPlan.slots))
+                .execution_options(populate_existing=True)
             )
-            if latest_ground_plan_count:
+            if ground_plan is None:
+                if latest_ground_plan is not None:
+                    latest_blockers.append(
+                        "区域地堆排位事实刚被其他操作更新，请刷新后重试"
+                    )
+            elif (
+                latest_ground_plan is None
+                or latest_ground_plan.status != "published"
+                or latest_ground_plan.id != ground_plan.id
+                or latest_ground_plan.version != expected_ground_plan_version
+                or [int(slot.id) for slot in latest_ground_plan.slots]
+                != [int(slot.id) for slot in ground_plan.slots]
+            ):
                 latest_blockers.append("区域地堆排位事实刚被其他操作更新，请刷新后重试")
+            elif db.scalar(
+                select(WarehouseGroundLayoutPlanRetirement.id).where(
+                    WarehouseGroundLayoutPlanRetirement.plan_id
+                    == latest_ground_plan.id
+                )
+            ) is not None:
+                latest_blockers.append("区域地堆排位退役事实刚被其他操作更新，请刷新后重试")
             if latest_blockers:
                 raise HTTPException(
                     status_code=409,
@@ -12406,6 +12472,31 @@ def delete_twin_layout_feature(
                 )
             try:
                 now = beijing_now_naive()
+                retired_ground_plan_id = None
+                if ground_plan is not None:
+                    retirement_operation_key = (
+                        "ground-retire-"
+                        + hashlib.sha256(operation_key.encode("utf-8")).hexdigest()
+                    )
+                    db.add(
+                        WarehouseGroundLayoutPlanRetirement(
+                            plan_id=ground_plan.id,
+                            area_id=area.id,
+                            operation_key=retirement_operation_key,
+                            request_hash=request_hash,
+                            reason="正式区域归档时退役空区域旧地堆排位",
+                            snapshot_json=json.dumps(
+                                archive_snapshot["ground_layout_plan"],
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                            retired_by=user.id,
+                            retired_at=now,
+                        )
+                    )
+                    db.flush()
+                    retired_ground_plan_id = int(ground_plan.id)
                 inactive_count = 0
                 for location in locations:
                     if not location.is_active:
@@ -12435,6 +12526,7 @@ def delete_twin_layout_feature(
                     "draft_changed": False,
                     "inventory_changed": False,
                     "published_map_changed": False,
+                    "retired_ground_plan_id": retired_ground_plan_id,
                 }
                 archive_snapshot["result"] = {
                     "item": result_item,
@@ -12499,6 +12591,7 @@ def delete_twin_layout_feature(
                         ),
                         "draft_changed": False,
                         "inventory_changed": False,
+                        "retired_ground_plan_id": retired_ground_plan_id,
                     },
                 )
                 db.commit()

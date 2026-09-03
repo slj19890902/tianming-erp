@@ -245,6 +245,7 @@ from app.models.warehouse_inventory import (  # noqa: E402,F401
     InventoryPallet,
     InventoryPalletItem,
     WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutPlanRetirement,
     WarehouseGroundLayoutSlot,
     WarehouseGroundOccupancy,
     WarehouseGroundOccupancySlot,

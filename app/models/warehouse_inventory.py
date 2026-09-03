@@ -864,6 +864,53 @@ class WarehouseGroundLayoutPlan(Base):
     )
 
 
+class WarehouseGroundLayoutPlanRetirement(Base):
+    """Immutable retirement fact for a preserved published ground layout plan."""
+
+    __tablename__ = "warehouse_ground_layout_plan_retirements"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(operation_key)) > 0 AND length(request_hash) = 64 "
+            "AND length(trim(snapshot_json)) > 0",
+            name="ck_warehouse_ground_layout_plan_retirements_request",
+        ),
+        UniqueConstraint(
+            "plan_id", name="uq_warehouse_ground_layout_plan_retirements_plan"
+        ),
+        UniqueConstraint(
+            "operation_key",
+            name="uq_warehouse_ground_layout_plan_retirements_operation",
+        ),
+        Index(
+            "ix_warehouse_ground_layout_plan_retirements_area",
+            "area_id",
+            "retired_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_ground_layout_plans.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    area_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_areas.id", ondelete="RESTRICT"), nullable=False
+    )
+    operation_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    retired_by: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    retired_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+    plan: Mapped["WarehouseGroundLayoutPlan"] = relationship()
+    area: Mapped["WarehouseArea"] = relationship()
+
+
 class WarehouseGroundLayoutSlot(Base):
     """Measured 1200x1000 footprint associated with one stable location."""
 

@@ -27,6 +27,8 @@ from app.models.warehouse_inventory import (
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
     WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutPlanRetirement,
+    WarehouseGroundLayoutSlot,
     WarehouseLocation,
     WarehouseLocationAddressMutation,
     WarehouseLocationAlias,
@@ -219,7 +221,15 @@ def _database(tmp_path: Path, *, revision: str):
     return engine, factory
 
 
-def _archive(db, admin: User, *, revision: str, operation_key: str = "p1-139-archive-zone-f1"):
+def _archive(
+    db,
+    admin: User,
+    *,
+    revision: str,
+    operation_key: str = "p1-139-archive-zone-f1",
+    retire_ground_plan: bool = False,
+    expected_ground_plan_version: int | None = None,
+):
     return warehouse_api.delete_twin_layout_feature(
         "3F",
         "zone-f1",
@@ -228,6 +238,8 @@ def _archive(db, admin: User, *, revision: str, operation_key: str = "p1-139-arc
         operation_key=operation_key,
         expected_policy_version=1,
         expected_published_revision=revision,
+        retire_ground_plan=retire_ground_plan,
+        expected_ground_plan_version=expected_ground_plan_version,
         request=_request(),
         db=db,
         user=admin,
@@ -426,6 +438,96 @@ def test_published_ground_plan_blocks_archive_without_changes(
                     OperationLog.action == "TWIN_LAYOUT_FORMAL_AREA_ARCHIVE"
                 )
             ) == 0
+            assert not draft.exists()
+    finally:
+        engine.dispose()
+
+
+def test_explicit_ground_plan_retirement_preserves_plan_and_slots_while_archiving(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    baseline, _published, _draft = _isolate_layout(tmp_path, monkeypatch)
+    revision = json.loads(baseline.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
+    engine, factory = _database(tmp_path, revision=revision)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-139-admin"))
+            area = db.scalar(select(WarehouseArea))
+            location = db.scalar(select(WarehouseLocation))
+            assert admin is not None and area is not None and location is not None
+            plan = _published_ground_plan(area=area, admin=admin, revision=revision)
+            db.add(plan)
+            db.flush()
+            db.add(
+                WarehouseGroundLayoutSlot(
+                    plan_id=plan.id,
+                    location_id=location.id,
+                    route_sequence=1,
+                    row_no=1,
+                    slot_no=1,
+                    x_mm=0,
+                    y_mm=0,
+                    width_mm=1200,
+                    depth_mm=1000,
+                )
+            )
+            db.commit()
+
+            result = _archive(
+                db,
+                admin,
+                revision=revision,
+                retire_ground_plan=True,
+                expected_ground_plan_version=1,
+            )
+            assert result["applied"] is True
+            assert result["item"]["retired_ground_plan_id"] == plan.id
+            db.expire_all()
+            retirement = db.scalar(select(WarehouseGroundLayoutPlanRetirement))
+            assert retirement is not None
+            assert retirement.plan_id == plan.id
+            assert retirement.area_id == area.id
+            assert json.loads(retirement.snapshot_json)["slots"][0]["location_id"] == location.id
+            assert db.scalar(select(func.count(WarehouseGroundLayoutPlan.id))) == 1
+            assert db.scalar(select(func.count(WarehouseGroundLayoutSlot.id))) == 1
+            assert db.scalar(select(WarehouseArea.construction_status)) == "archived"
+            assert db.scalar(select(WarehouseAreaStoragePolicy.status)) == "archived"
+            assert db.scalar(select(WarehouseLocation.is_active)) is False
+            assert db.scalar(select(func.count(InventoryLot.id))) == 0
+    finally:
+        engine.dispose()
+
+
+def test_ground_plan_retirement_refuses_stale_plan_version_without_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    baseline, _published, draft = _isolate_layout(tmp_path, monkeypatch)
+    revision = json.loads(baseline.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
+    engine, factory = _database(tmp_path, revision=revision)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-139-admin"))
+            area = db.scalar(select(WarehouseArea))
+            assert admin is not None and area is not None
+            db.add(_published_ground_plan(area=area, admin=admin, revision=revision))
+            db.commit()
+
+            with pytest.raises(HTTPException, match="地堆排位版本已变化") as caught:
+                _archive(
+                    db,
+                    admin,
+                    revision=revision,
+                    retire_ground_plan=True,
+                    expected_ground_plan_version=2,
+                )
+            assert caught.value.status_code == 409
+            db.expire_all()
+            assert db.scalar(select(WarehouseAreaStoragePolicy.status)) == "published"
+            assert db.scalar(select(WarehouseArea.construction_status)) == "enabled"
+            assert db.scalar(select(WarehouseLocation.is_active)) is True
+            assert db.scalar(select(func.count(WarehouseGroundLayoutPlanRetirement.id))) == 0
             assert not draft.exists()
     finally:
         engine.dispose()

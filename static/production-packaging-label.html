@@ -41,8 +41,6 @@
       height:var(--label-height);
       display:grid;
       grid-template-rows:5.4mm 7mm 5mm 5mm 7mm;
-      border:.3mm solid #000;
-      border-radius:.8mm;
       background:#fff;
       box-shadow:0 2px 10px rgb(15 23 42 / 14%);
       break-inside:avoid;
@@ -83,15 +81,6 @@
     html[data-template="current_40x30_v2"] .quantity-number { font-size:6.1mm; }
     html[data-template="current_40x30_v2"] .quantity-unit { font-size:3.05mm; }
     .label-card.layout-driven { position:relative; display:block; overflow:hidden; border:0; }
-    .label-card.layout-driven::after {
-      content:"";
-      position:absolute;
-      inset:0;
-      z-index:2;
-      border:.3mm solid #000;
-      border-radius:.8mm;
-      pointer-events:none;
-    }
     .layout-print-element { position:absolute; display:flex; align-items:center; min-width:0; min-height:0; overflow:hidden; line-height:1.02; overflow-wrap:anywhere; word-break:break-word; }
     .layout-print-element.align-left { justify-content:flex-start; text-align:left; }
     .layout-print-element.align-center { justify-content:center; text-align:center; }
@@ -99,7 +88,7 @@
     .layout-print-element.code { font-family:"Arial","Microsoft YaHei",sans-serif; word-break:break-all; }
     .layout-print-element.quantity { gap:.7mm; line-height:1; }
     .layout-print-element.quantity .layout-unit { font-size:.5em; font-weight:900; }
-    html[data-template="legacy_65x45_v1"] .label-card { grid-template-rows:6.4mm 9.8mm 6.3mm 6.3mm 1fr; border-width:.35mm; border-radius:1.4mm; }
+    html[data-template="legacy_65x45_v1"] .label-card { grid-template-rows:6.4mm 9.8mm 6.3mm 6.3mm 1fr; }
     html[data-template="legacy_65x45_v1"] .customer-row,
     html[data-template="legacy_65x45_v1"] .code-row,
     html[data-template="legacy_65x45_v1"] .detail-row { grid-template-columns:11mm 1fr; padding:0 1.5mm; }

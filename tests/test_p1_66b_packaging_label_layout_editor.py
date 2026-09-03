@@ -814,10 +814,11 @@ def test_print_page_exposes_visual_editor_without_arbitrary_qr_or_html() -> None
     assert "contenteditable" not in source.lower()
 
 
-def test_layout_border_does_not_reduce_the_40mm_by_30mm_editable_canvas() -> None:
+def test_layout_has_no_outer_border_and_keeps_content_dividers() -> None:
     source = PRINT_PAGE.read_text(encoding="utf-8")
     assert ".label-card.layout-driven { position:relative; display:block; overflow:hidden; border:0; }" in source
-    assert ".label-card.layout-driven::after" in source
-    assert "inset:0;" in source
-    assert "border:.3mm solid #000;" in source
-    assert "pointer-events:none;" in source
+    assert ".label-card.layout-driven::after" not in source
+    assert "border:.3mm solid #000;" not in source
+    assert ".customer-row { border-bottom:.25mm solid #000; }" in source
+    assert ".detail-row { border-bottom:.2mm solid #6b7280; }" in source
+    assert ".code-row {" in source and "border-bottom:.25mm solid #000;" in source

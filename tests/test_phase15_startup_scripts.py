@@ -29,6 +29,7 @@ def test_start_launcher_uses_project_venv_and_read_only_revision_gate() -> None:
 
     for marker in (
         '$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\\..")).Path',
+        "Set-Location -LiteralPath $ProjectRoot",
         r".venv\Scripts\python.exe",
         'Invoke-PythonCommand `',
         '"startup_revision_check"',

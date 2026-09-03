@@ -3,6 +3,7 @@ param([switch]$NoBrowser)
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+Set-Location -LiteralPath $ProjectRoot
 $ExternalHealthUrl = $null
 $LocalHealthUrl = $null
 $BrowserUrl = $null

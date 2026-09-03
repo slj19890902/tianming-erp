@@ -549,6 +549,70 @@ def test_stock_replenishment_freezes_price_and_missing_price_fails_closed(
         )
 
 
+def test_finance_only_test_classification_is_the_only_quantity_override(
+    price_fact_db,
+) -> None:
+    """A normal frozen fact still locks to raw receipt quantity; the owner flag is narrow."""
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.user import User
+    from app.services.supplier_monthly_settlement import scan_settlement_candidates
+    from app.services.supplier_receipt_price_facts import (
+        HISTORICAL_ADOPTION_REASON,
+        freeze_stock_replenishment_price,
+    )
+
+    session_factory, fixture = price_fact_db
+    with session_factory() as db:
+        user = db.get(User, fixture["user_id"])
+        receipt_item = db.get(
+            IncomingReceiptItem, fixture["live_receipt_item_id"]
+        )
+        assert user is not None and receipt_item is not None
+        fact = freeze_stock_replenishment_price(
+            db, receipt_item=receipt_item, user=user
+        )
+        fact.received_quantity_snapshot = Decimal("99")
+        db.flush()
+
+        _candidates, issues, _start, _end = scan_settlement_candidates(
+            db, settlement_month="2026-09"
+        )
+        assert any(
+            row["source_key"] == f"paperboard:{receipt_item.id}"
+            and row["code"] == "PAPERBOARD_RECEIPT_PRICE_FACT_MISMATCH"
+            for row in issues
+        )
+
+        fact.fact_origin = "historical_master_adoption"
+        fact.match_strategy = "owner_authorized_finance_test_classification"
+        fact.finance_only_test_classification = True
+        fact.adoption_reason = HISTORICAL_ADOPTION_REASON
+        fact.adoption_evidence_reference = "isolated P0-39 test"
+        fact.received_quantity_snapshot = Decimal("100")
+        fact.report_length_mm = Decimal("100")
+        fact.report_width_mm = Decimal("100")
+        fact.unit_price = Decimal("3")
+        fact.price_unit = "per_square_meter"
+        db.flush()
+
+        candidates, issues, _start, _end = scan_settlement_candidates(
+            db, settlement_month="2026-09"
+        )
+        row = next(
+            item
+            for item in candidates
+            if item.incoming_receipt_item_id == receipt_item.id
+        )
+        assert row.category_label == "瓦楞纸板（历史测试归类）"
+        assert row.received_quantity == Decimal("100")
+        assert row.erp_amount == Decimal("3.00")
+        assert not any(
+            item["source_key"] == f"paperboard:{receipt_item.id}"
+            for item in issues
+        )
+        assert receipt_item.received_quantity == 8
+
+
 def test_adoption_api_is_read_only_and_has_no_web_apply_route(price_fact_db) -> None:
     from app.api.deps import get_db
     from app.api.supplier_settlements import company_read, router

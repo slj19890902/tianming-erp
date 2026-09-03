@@ -248,7 +248,7 @@ function Initialize-ReleaseRuntime {
     New-Item -ItemType Directory -Path $logDir, $backupDir, $rehearsalDir, $reportDir -Force | Out-Null
 
     $runtimeConfig = @(
-        & $script:python -X utf8 -c "from app.core.config import load_settings; s=load_settings(); print(s.port); print(s.workers); print(s.environment); print(s.production_transport); print(s.health_url); print(s.browser_url); print(s.bind_host); print(s.database_path)" 2>&1
+        & $script:python -X utf8 -c "import base64; from app.core.config import load_settings; s=load_settings(); print(s.port); print(s.workers); print(s.environment); print(s.production_transport); print(s.health_url); print(s.browser_url); print(s.bind_host); print(base64.b64encode(str(s.database_path).encode('utf-8')).decode('ascii'))" 2>&1
     )
     if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 8) {
         $runtimeConfig | ForEach-Object { Write-Log "config: $_" "ERROR" }
@@ -261,7 +261,10 @@ function Initialize-ReleaseRuntime {
     $healthUrl = $runtimeConfig[-4].ToString().Trim()
     $browserUrl = $runtimeConfig[-3].ToString().Trim()
     $bindHost = $runtimeConfig[-2].ToString().Trim()
-    $databasePath = [System.IO.Path]::GetFullPath($runtimeConfig[-1].ToString().Trim())
+    $databasePathText = [System.Text.Encoding]::UTF8.GetString(
+        [System.Convert]::FromBase64String($runtimeConfig[-1].ToString().Trim())
+    )
+    $databasePath = [System.IO.Path]::GetFullPath($databasePathText)
 
     if ($environment -ne "production") {
         throw "正式发布要求 ERP_ENVIRONMENT=production；当前为 $environment。"

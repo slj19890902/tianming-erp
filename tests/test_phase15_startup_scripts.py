@@ -42,6 +42,8 @@ def test_start_launcher_uses_project_venv_and_read_only_revision_gate() -> None:
         '"--workers", "1"',
         "ERP must run with exactly one worker",
         "from app.core.config import load_settings",
+        "base64.b64encode",
+        "FromBase64String",
         "ERP_HEALTH_URL",
         "ERP_BROWSER_URL",
         "ERP_PRODUCTION_TRANSPORT",
@@ -137,6 +139,8 @@ def test_legacy_background_launcher_cannot_bypass_hardened_runtime_config() -> N
     assert "ERP_BROWSER_URL" in hardened
     assert "Stop-Process -Id $process.Id" in hardened
     assert "$process -and -not $process.HasExited" in hardened
+    assert "base64.b64encode" in updater
+    assert "FromBase64String" in updater
     assert "from app.core.config import load_settings" in updater
     assert "-LocalPort $ErpPort" in updater
     assert "https_proxy 正式发布要求 HTTPS ERP_HEALTH_URL 与 ERP_BROWSER_URL" in updater

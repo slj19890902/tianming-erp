@@ -120,7 +120,7 @@ try {
     }
 
     $runtimeConfig = @(
-        & $Python -X utf8 -c "from app.core.config import load_settings; s=load_settings(); print(s.bind_host); print(s.port); print(s.workers); print(s.environment); print(s.production_transport); print(s.health_url); print(s.browser_url); print(s.database_path)" 2>&1
+        & $Python -X utf8 -c "import base64; from app.core.config import load_settings; s=load_settings(); print(s.bind_host); print(s.port); print(s.workers); print(s.environment); print(s.production_transport); print(s.health_url); print(s.browser_url); print(base64.b64encode(str(s.database_path).encode('utf-8')).decode('ascii'))" 2>&1
     )
     if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 8) {
         $runtimeConfig | ForEach-Object { Write-Log $_ }
@@ -133,7 +133,10 @@ try {
     $ProductionTransport = $runtimeConfig[-4].ToString().Trim()
     $ExternalHealthUrl = $runtimeConfig[-3].ToString().Trim()
     $BrowserUrl = $runtimeConfig[-2].ToString().Trim()
-    $DatabasePath = [System.IO.Path]::GetFullPath($runtimeConfig[-1].ToString().Trim())
+    $databasePathText = [System.Text.Encoding]::UTF8.GetString(
+        [System.Convert]::FromBase64String($runtimeConfig[-1].ToString().Trim())
+    )
+    $DatabasePath = [System.IO.Path]::GetFullPath($databasePathText)
     if ($RuntimeEnvironment -ne "production") {
         throw (
             "Factory launcher requires ERP_ENVIRONMENT=production. " +

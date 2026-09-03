@@ -704,6 +704,11 @@ def test_yield_whole_sheet_multi_delivery_cancel_preserves_remaining_need(
         key="b2-yield-three",
         yield_factor=3,
     )
+    with factory() as db:
+        product = db.get(Product, 1)
+        assert product is not None
+        product.default_cutting_mode = "一开三"
+        db.commit()
     with TestClient(app) as client:
         login(client)
         item_id = create_order(

@@ -54,6 +54,12 @@ def test_factory_update_reports_current_release_version() -> None:
     assert any("本次更新｜" in item and "cg物理组" in item and "订单齐料不等待计划备库" in item for item in current_release)
     assert any("本次更新｜" in item and "纯备库" in item and "不改订单状态" in item for item in current_release)
     assert any("本次更新｜" in item and "绿色按钮" in item and "不静默预占" in item for item in current_release)
+    assert any(
+        "本次更新｜" in item
+        and "任一组件缺料" in item
+        and "全部由半成品或成品覆盖" in item
+        for item in current_release
+    )
     assert any("本次更新｜" in item and "BOM指纹" in item and "CAS" in item and "作废补库" in item for item in current_release)
     assert any("如何验证｜" in item and "v0.22.250" in item and "jq75v8x9z64" in item for item in current_release)
     prior_release_249 = [item for item in APP_CHANGELOG if item.startswith("v0.22.249：")]

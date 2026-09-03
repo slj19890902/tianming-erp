@@ -514,6 +514,188 @@ def test_full_semi_finished_reservation_is_pending_production_not_pending_materi
         assert _projection(db, order.id)["business_status"] == "pending_material"
 
 
+def test_composite_semi_projection_requires_every_component_to_be_material_ready(
+    status_app,
+) -> None:
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.models.production import ProductionTask
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryReservation,
+        OrderItemSemiRequirement,
+        WarehouseLocation,
+    )
+
+    _app, factory = status_app
+    with factory() as db:
+        order, item = _add_order(db, suffix="COMPOSITE-SEMI-GATE", quantity=10)
+        components = [
+            SalesOrderItemBomComponent(
+                sales_order_item_id=item.id,
+                component_product_id=1,
+                order_set_quantity=item.quantity,
+                quantity_per_set=Decimal("1"),
+                required_piece_quantity=Decimal(item.quantity),
+                display_order=index,
+                internal_component_code=f"SEMI-COMP-{index}",
+                is_die_cut=False,
+                spare_sheet_quantity=0,
+                display_mode="internal_only",
+                is_required=True,
+                snapshot_component_product_code=f"SEMI-COMP-{index}",
+                snapshot_component_product_name=f"匿名半成品组件{index}",
+                snapshot_component_box_category="normal",
+                snapshot_component_default_cutting_mode="一开一",
+            )
+            for index in (1, 2)
+        ]
+        db.add_all(components)
+        db.flush()
+        tasks = [
+            ProductionTask(
+                order_item_id=item.id,
+                sales_order_item_bom_component_id=component.id,
+                task_role="component_internal",
+                status="pending" if index == 0 else "waiting_material",
+                planned_quantity=item.quantity if index == 0 else 0,
+                finished_coverage_snapshot=0,
+                ordered_quantity_snapshot=item.quantity,
+                material_received_quantity=0,
+                material_input_quantity=0,
+                output_factor=1,
+                readiness_basis=(
+                    "component_semi_finished_inventory" if index == 0 else None
+                ),
+                version=1,
+            )
+            for index, component in enumerate(components)
+        ]
+        location = WarehouseLocation(
+            location_code="COMPOSITE-SEMI-GATE-01",
+            location_name="组合半成品状态门禁测试位",
+            warehouse_type="semi_finished",
+        )
+        db.add_all([*tasks, location])
+        db.flush()
+        lot = InventoryLot(
+            lot_number="LOT-P0-04-COMPOSITE-SEMI-GATE",
+            inventory_type="semi_finished",
+            warehouse_location_id=location.id,
+            quantity_available=0,
+            quantity_reserved=20,
+            quantity_consumed=0,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit="sheets",
+            status="active",
+            source_type="manual",
+            stock_date=date(2026, 7, 28),
+            stock_date_accuracy="exact",
+            last_movement_at=datetime(2026, 7, 28, 9, 0),
+            version=1,
+        )
+        first_requirement = OrderItemSemiRequirement(
+            order_item_id=item.id,
+            sales_order_item_bom_component_id=components[0].id,
+            customer_id=order.customer_id,
+            component_type="whole",
+            board_length_mm=800,
+            board_width_mm=600,
+            material_code_snapshot="A416D",
+            normalized_material_code="A416D",
+            flute_type="B",
+            pieces_per_box=1,
+            stock_yield_per_sheet=1,
+            required_piece_quantity=10,
+        )
+        db.add_all([lot, first_requirement])
+        db.flush()
+        first_reservation = InventoryReservation(
+            reservation_number="RSV-P0-04-COMPOSITE-SEMI-A",
+            inventory_lot_id=lot.id,
+            reservation_type="semi_order",
+            order_id=order.id,
+            order_item_id=item.id,
+            sales_order_item_bom_component_id=components[0].id,
+            semi_requirement_id=first_requirement.id,
+            reserved_stock_quantity=10,
+            credited_requirement_quantity=10,
+            yield_factor=1,
+            status="active",
+            reservation_group_key="p0-04-composite-semi-a",
+            idempotency_key="p0-04-composite-semi-a",
+        )
+        db.add(first_reservation)
+        db.flush()
+
+        # One fully reserved component must not hide a missing sibling component.
+        assert _projection(db, order.id)["business_status"] == "pending_material"
+
+        # A semi-finished component plus a finished-stock-covered sibling is ready.
+        tasks[1].status = "not_required"
+        tasks[1].planned_quantity = 0
+        db.flush()
+        assert _projection(db, order.id)["business_status"] == "pending_production"
+
+        second_requirement = OrderItemSemiRequirement(
+            order_item_id=item.id,
+            sales_order_item_bom_component_id=components[1].id,
+            customer_id=order.customer_id,
+            component_type="whole",
+            board_length_mm=800,
+            board_width_mm=600,
+            material_code_snapshot="A416D",
+            normalized_material_code="A416D",
+            flute_type="B",
+            pieces_per_box=1,
+            stock_yield_per_sheet=1,
+            required_piece_quantity=10,
+        )
+        db.add(second_requirement)
+        db.flush()
+        second_reservation = InventoryReservation(
+            reservation_number="RSV-P0-04-COMPOSITE-SEMI-B",
+            inventory_lot_id=lot.id,
+            reservation_type="semi_order",
+            order_id=order.id,
+            order_item_id=item.id,
+            sales_order_item_bom_component_id=components[1].id,
+            semi_requirement_id=second_requirement.id,
+            reserved_stock_quantity=10,
+            credited_requirement_quantity=10,
+            yield_factor=1,
+            status="active",
+            reservation_group_key="p0-04-composite-semi-b",
+            idempotency_key="p0-04-composite-semi-b",
+        )
+        db.add(second_reservation)
+        tasks[1].status = "pending"
+        tasks[1].planned_quantity = item.quantity
+        tasks[1].readiness_basis = "component_semi_finished_inventory"
+        db.flush()
+
+        assert _projection(db, order.id)["business_status"] == "pending_production"
+
+        first_reservation.status = "consumed"
+        first_reservation.consumed_stock_quantity = 10
+        first_reservation.consumed_requirement_quantity = 10
+        tasks[0].status = "completed"
+        db.flush()
+        assert _projection(db, order.id)["business_status"] == "pending_production"
+
+        first_reservation.status = "partial"
+        first_reservation.consumed_stock_quantity = 1
+        first_reservation.consumed_requirement_quantity = 1
+        tasks[0].status = "not_required"
+        tasks[0].planned_quantity = 0
+        db.flush()
+        assert _projection(db, order.id)["business_status"] == "pending_production"
+
+        second_reservation.credited_requirement_quantity = 9
+        db.flush()
+        assert _projection(db, order.id)["business_status"] == "pending_material"
+
+
 def test_partial_incoming_awaiting_supplier_remains_pending_incoming(
     status_app,
 ) -> None:

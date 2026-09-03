@@ -411,9 +411,15 @@ def _scan_paperboard(
                         "PAPERBOARD_SUPPLIER_MISSING",
                         "结算价格事实关联的供应商主档不存在",
                     )
+                quantity_overridden = bool(
+                    receipt_price_fact.finance_only_test_classification
+                )
                 if (
-                    Decimal(receipt_price_fact.received_quantity_snapshot)
-                    != Decimal(int(item.received_quantity))
+                    (
+                        not quantity_overridden
+                        and Decimal(receipt_price_fact.received_quantity_snapshot)
+                        != Decimal(int(item.received_quantity))
+                    )
                     or receipt_price_fact.receipt_number_snapshot
                     != receipt.receipt_number
                 ):
@@ -503,7 +509,12 @@ def _scan_paperboard(
                 purchase_document_number=document_number,
                 receipt_number=receipt_number,
                 receipt_date=receipt_date,
-                category_label="瓦楞纸板",
+                category_label=(
+                    "瓦楞纸板（历史测试归类）"
+                    if receipt_price_fact is not None
+                    and receipt_price_fact.finance_only_test_classification
+                    else "瓦楞纸板"
+                ),
                 specification_snapshot=(
                     f"{_plain_decimal(length)}×{_plain_decimal(width)}mm"
                 ),

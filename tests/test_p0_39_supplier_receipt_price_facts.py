@@ -643,11 +643,13 @@ def test_historical_plan_amount_uses_the_same_precision_as_its_fact(
         assert source is not None
         material = db.get(Material, source.material_id)
         assert material is not None
-        material.quote_price = Decimal("2.8000004")
-        source.quantity = source.stocked_quantity = 100000
-        receipt_item.planned_quantity = 100000
-        receipt_item.received_quantity = 100000
-        receipt_item.cumulative_received_quantity = 100000
+        material.quote_price = Decimal("1.9700004")
+        source.report_length_mm = 500
+        source.report_width_mm = 425
+        source.quantity = source.stocked_quantity = 200
+        receipt_item.planned_quantity = 200
+        receipt_item.received_quantity = 200
+        receipt_item.cumulative_received_quantity = 200
         db.flush()
 
         plan = _price_plan(
@@ -662,13 +664,16 @@ def test_historical_plan_amount_uses_the_same_precision_as_its_fact(
             report_length_mm=fact.report_length_mm,
             report_width_mm=fact.report_width_mm,
         )
-        assert plan.unit_price == fact.unit_price == Decimal("2.800000")
+        from scripts.admin.adopt_supplier_receipt_price_facts import _fact_amount_rows
+
+        fact_amount = _fact_amount_rows([fact])[0]
+        assert plan.unit_price == fact.unit_price == Decimal("1.970000")
+        assert plan.erp_amount == Decimal("83.73")
+        assert fact_amount["erp_amount"] == plan.erp_amount
+        assert fact_amount["tax_amount"] == plan.tax_amount
         assert plan.erp_amount == (
             breakdown.gross_per_sheet * fact.received_quantity_snapshot
-        ).quantize(Decimal("0.01"))
-        assert plan.tax_amount == (
-            breakdown.tax_per_sheet * fact.received_quantity_snapshot
-        ).quantize(Decimal("0.01"))
+        ).quantize(Decimal("0.01"), rounding="ROUND_HALF_UP")
 
 
 def test_adoption_api_is_read_only_and_has_no_web_apply_route(price_fact_db) -> None:

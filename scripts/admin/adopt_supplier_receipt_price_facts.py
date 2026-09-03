@@ -4,7 +4,7 @@ import argparse
 import csv
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
 import os
@@ -298,10 +298,10 @@ def _fact_amount_rows(
                 "received_quantity": int(quantity),
                 "erp_amount": (
                     breakdown.gross_per_sheet * quantity
-                ).quantize(Decimal("0.01")),
+                ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
                 "tax_amount": (
                     breakdown.tax_per_sheet * quantity
-                ).quantize(Decimal("0.01")),
+                ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
             }
         )
     return rows

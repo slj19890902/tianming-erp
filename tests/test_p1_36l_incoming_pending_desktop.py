@@ -438,6 +438,7 @@ global.searchDebounceTimers=new Map();
 global.pageSearchGenerations=new Map();
 global.pinyinSearchTextCache=new Map();
 global.today=()=>"2026-08-13";
+global.month=()=>"2026-08";
 global.plusDays=()=>"2026-08-20";
 global.blankReceiptReminderEditor=()=>({{}});
 global.blankFinanceProcessingSettings=()=>({{}});

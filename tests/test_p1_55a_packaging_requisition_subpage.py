@@ -316,6 +316,7 @@ const FunctionCtor=Function;
 global.latestRequestControllers=new Map();
 global.searchDebounceTimers=new Map();global.pageSearchGenerations=new Map();global.pinyinSearchTextCache=new Map();
 global.today=()=>"2026-08-14";global.plusDays=()=>"2026-08-21";
+global.month=()=>"2026-08";
 global.blankReceiptReminderEditor=()=>({{}});
 global.blankFinanceProcessingSettings=()=>({{}});
 global.blankFinanceProcessingProfile=()=>({{}});

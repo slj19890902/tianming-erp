@@ -39,6 +39,11 @@ from app.core.time_contract import (
 )
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
+from app.models.composite_purchase_group import (
+    CompositePhysicalGroupReceipt,
+    CompositePhysicalPurchaseGroup,
+    CompositePhysicalPurchaseGroupSource,
+)
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.external_packaging_purchase import ExternalPackagingPurchaseBatch
@@ -424,6 +429,121 @@ def _current_purchase_purpose_source(
     normalized = str(source_key or "").strip()
     if not normalized:
         raise HTTPException(status_code=404, detail="采购来源不存在或无权访问")
+    composite_match = re.fullmatch(r"cg([1-9]\d*)", normalized)
+    if composite_match is not None:
+        group = db.get(
+            CompositePhysicalPurchaseGroup,
+            int(composite_match.group(1)),
+        )
+        if group is None or group.status == "voided":
+            raise HTTPException(status_code=404, detail="采购来源不存在或无权访问")
+        if not has_unrestricted_customer_access(user, db):
+            allowed = customer_scope_ids(user, db)
+            if not allowed or int(group.customer_id) not in {
+                int(value) for value in allowed
+            }:
+                raise HTTPException(
+                    status_code=404,
+                    detail="采购来源不存在或无权访问",
+                )
+        group_sources = list(
+            db.scalars(
+                select(CompositePhysicalPurchaseGroupSource)
+                .where(
+                    CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id
+                    == group.id
+                )
+                .order_by(
+                    CompositePhysicalPurchaseGroupSource.source_sequence,
+                    CompositePhysicalPurchaseGroupSource.id,
+                )
+            ).all()
+        )
+        anchor = None
+        if group.supplier_requisition_order_item_id is not None:
+            supplier_anchor_id = int(group.supplier_requisition_order_item_id)
+            matching_sources = []
+            for row in group_sources:
+                row_snapshot = (
+                    db.get(
+                        PurchasePurposeSourceSnapshot,
+                        int(row.purchase_purpose_source_snapshot_id),
+                    )
+                    if row.purchase_purpose_source_snapshot_id is not None
+                    else None
+                )
+                if (
+                    row_snapshot is not None
+                    and row_snapshot.supplier_requisition_order_item_id
+                    == supplier_anchor_id
+                ):
+                    matching_sources.append(row)
+            if len(matching_sources) != 1:
+                raise _purchase_receipt_fact_error(
+                    "PURCHASE_PURPOSE_SNAPSHOT_INVALID",
+                    "物理采购组供应商价格锚点不唯一，请先修复采购事实。",
+                )
+            anchor = matching_sources[0]
+        else:
+            anchor = next(
+                (
+                    row
+                    for row in group_sources
+                    if int(row.allocated_order_purpose_sheet_quantity or 0) > 0
+                ),
+                group_sources[0] if group_sources else None,
+            )
+        if (
+            anchor is None
+            or anchor.purchase_purpose_source_snapshot_id is None
+            or int(anchor.purchase_purpose_source_snapshot_id) != int(snapshot_id)
+        ):
+            raise _purchase_receipt_fact_error(
+                "PURCHASE_PURPOSE_SNAPSHOT_INVALID",
+                "物理采购组价格锚点已变化，请刷新待收料列表。",
+            )
+        snapshot = db.get(
+            PurchasePurposeSourceSnapshot,
+            anchor.purchase_purpose_source_snapshot_id,
+        )
+        if snapshot is None:
+            raise _purchase_receipt_fact_error(
+                "PURCHASE_PURPOSE_SNAPSHOT_INVALID",
+                "物理采购组缺少价格用途快照，请先修复采购事实。",
+            )
+        if snapshot.supplier_requisition_order_item_id is not None:
+            source = db.get(
+                SupplierRequisitionOrderItem,
+                snapshot.supplier_requisition_order_item_id,
+            )
+            header = (
+                db.get(SupplierRequisitionOrder, source.supplier_order_id)
+                if source is not None
+                else None
+            )
+            if source is None or source.status != "active" or header is None or header.status != "confirmed":
+                raise HTTPException(status_code=404, detail="采购来源不存在或无权访问")
+        elif snapshot.material_requisition_item_id is not None:
+            source = db.get(RequisitionItem, snapshot.material_requisition_item_id)
+            # A composite group's anchor row becomes ``已入库`` as soon as its
+            # exact component demand is covered, while planned reserve sheets
+            # may still arrive in a later batch.  Keep the cg-only price route
+            # available for that later immutable receipt fact; ordinary r/so
+            # routes retain their existing stricter status contract below.
+            if (
+                source is None
+                or str(source.status or "").strip().lower()
+                in INACTIVE_REQUISITION_ITEM_STATUSES
+            ):
+                raise HTTPException(status_code=404, detail="采购来源不存在或无权访问")
+        else:
+            raise HTTPException(status_code=404, detail="采购来源不存在或无权访问")
+        if source.purpose_contract_status != "frozen":
+            raise _purchase_receipt_fact_error(
+                "PURCHASE_PURPOSE_SNAPSHOT_INVALID",
+                "正式采购来源与用途快照状态不一致，请先修复采购事实。",
+            )
+        return snapshot, source
     statement = (
         select(PurchasePurposeSourceSnapshot).where(
             PurchasePurposeSourceSnapshot.id == int(snapshot_id),
@@ -1143,6 +1263,12 @@ class RequisitionLinePayload(BaseModel):
     order_item_id: int
     component_type: str | None = None
     bom_snapshot_id: int | None = Field(default=None, gt=0)
+    physical_group_key: str | None = Field(default=None, min_length=64, max_length=64)
+    group_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    source_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    group_purchase_sheet_qty: int | None = Field(default=None, gt=0)
+    group_order_purpose_sheet_qty: int | None = Field(default=None, gt=0)
+    group_stock_purpose_sheet_qty: int | None = Field(default=None, ge=0)
     actual_yield_per_sheet: int | None = Field(default=None, gt=0, strict=True)
     inventory_deducted_qty: int = Field(default=0, ge=0)
     requisition_qty: int | None = Field(default=None, ge=0)
@@ -1175,6 +1301,20 @@ class RequisitionLinePayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_bom_component_selection(self):
+        group_values = (
+            self.physical_group_key,
+            self.group_fingerprint,
+            self.source_fingerprint,
+            self.group_purchase_sheet_qty,
+            self.group_order_purpose_sheet_qty,
+            self.group_stock_purpose_sheet_qty,
+        )
+        if any(value is not None for value in group_values):
+            if self.bom_snapshot_id is None:
+                raise ValueError("物理采购组只能用于真实 BOM 组件")
+            # Cross-field completeness and arithmetic are intentionally
+            # checked again under row locks in the write service, producing a
+            # transactional 409 instead of accepting client-side group facts.
         return self
 
 
@@ -2091,8 +2231,13 @@ class _PendingRequisitionReadContext:
         self._bom_active_order_purpose_by_snapshot_component: dict[
             tuple[int, str], int
         ] = {}
+        self._bom_active_physical_group_source_components: set[
+            tuple[int, str]
+        ] = set()
         self._bom_parent_active_order_purpose_by_item_id: dict[int, int] = {}
         self._bom_component_products_by_id: dict[int, Product] = {}
+        self._bom_materials_by_id: dict[int, Material] = {}
+        self._inventory_lot_version_by_id: dict[int, int] = {}
         self._bom_batch_supported_item_ids: set[int] = set()
         self._semi_requirements_by_item_component: dict[
             tuple[int, str], OrderItemSemiRequirement
@@ -2158,6 +2303,18 @@ class _PendingRequisitionReadContext:
                     select(Product).where(Product.id.in_(component_product_ids))
                 ).all()
             }
+        component_material_ids = {
+            int(snapshot.snapshot_component_material_id)
+            for snapshot in bom_snapshots
+            if snapshot.snapshot_component_material_id is not None
+        }
+        if component_material_ids:
+            self._bom_materials_by_id = {
+                int(material.id): material
+                for material in db.scalars(
+                    select(Material).where(Material.id.in_(component_material_ids))
+                ).all()
+            }
         complex_item_ids = set(self._bom_snapshots_by_item_id)
         # Telescoping lid boxes have two independent cover/base requirements.
         # Their aggregate values cannot use the ordinary whole-item formula.
@@ -2206,6 +2363,20 @@ class _PendingRequisitionReadContext:
                 InventoryReservation.status != "cancelled",
             )
         ).all()
+        reservation_lot_ids = {
+            int(reservation.inventory_lot_id)
+            for reservation in reservations
+            if reservation.inventory_lot_id is not None
+        }
+        if reservation_lot_ids:
+            self._inventory_lot_version_by_id = {
+                int(lot_id): int(version or 0)
+                for lot_id, version in db.execute(
+                    select(InventoryLot.id, InventoryLot.version).where(
+                        InventoryLot.id.in_(reservation_lot_ids)
+                    )
+                ).all()
+            }
         for reservation in reservations:
             order_item_id = int(reservation.order_item_id or 0)
             if not order_item_id:
@@ -2237,6 +2408,38 @@ class _PendingRequisitionReadContext:
 
         adjustment_totals: dict[int, tuple[int, int]] = {}
         if snapshot_ids:
+            self._bom_active_physical_group_source_components = {
+                (
+                    int(snapshot_id),
+                    str(component_type or "whole").strip().lower(),
+                )
+                for snapshot_id, component_type in db.execute(
+                    select(
+                        CompositePhysicalPurchaseGroupSource.sales_order_item_bom_component_id,
+                        CompositePhysicalPurchaseGroupSource.component_type_snapshot,
+                    )
+                    .join(
+                        CompositePhysicalPurchaseGroup,
+                        CompositePhysicalPurchaseGroup.id
+                        == CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+                    )
+                    .join(
+                        RequisitionItem,
+                        RequisitionItem.id
+                        == CompositePhysicalPurchaseGroupSource.requisition_item_id,
+                    )
+                    .where(
+                        CompositePhysicalPurchaseGroupSource.sales_order_item_bom_component_id.in_(
+                            snapshot_ids
+                        ),
+                        CompositePhysicalPurchaseGroup.status != "voided",
+                        func.lower(RequisitionItem.status).notin_(
+                            INACTIVE_REQUISITION_ITEM_STATUSES
+                        ),
+                    )
+                ).all()
+                if snapshot_id is not None
+            }
             adjustment_totals = {
                 int(snapshot_id): (int(delta_sets or 0), int(delta_pieces or 0))
                 for snapshot_id, delta_sets, delta_pieces in db.execute(
@@ -2621,6 +2824,82 @@ class _PendingRequisitionReadContext:
             "total_piece_quantity": finished + semi,
         }
 
+    def _bom_inventory_fingerprint_facts(
+        self,
+        snapshot: SalesOrderItemBomComponent,
+        component: str,
+    ) -> list[dict[str, object]]:
+        normalized = str(component or "whole").strip().lower()
+        facts: list[dict[str, object]] = []
+        reservations = sorted(
+            self._bom_reservations_by_snapshot_id.get(int(snapshot.id), []),
+            key=lambda row: int(row[0].id),
+        )
+        for reservation, requirement in reservations:
+            requirement_component = (
+                requirement.component_type if requirement is not None else None
+            )
+            if reservation.reservation_type == "semi_order":
+                accepted = (
+                    {None, "whole"}
+                    if normalized == "whole"
+                    else {None, "whole", normalized}
+                )
+                if requirement_component not in accepted:
+                    continue
+            facts.append(
+                {
+                    "reservation_id": int(reservation.id),
+                    "lot_id": int(reservation.inventory_lot_id),
+                    "lot_version": self._inventory_lot_version_by_id.get(
+                        int(reservation.inventory_lot_id), 0
+                    ),
+                    "reservation_type": reservation.reservation_type,
+                    "status": reservation.status,
+                    "reserved_stock_quantity": int(
+                        reservation.reserved_stock_quantity or 0
+                    ),
+                    "credited_requirement_quantity": int(
+                        reservation.credited_requirement_quantity or 0
+                    ),
+                    "consumed_requirement_quantity": int(
+                        reservation.consumed_requirement_quantity or 0
+                    ),
+                    "released_requirement_quantity": int(
+                        reservation.released_requirement_quantity or 0
+                    ),
+                    "requirement_snapshot_id": int(
+                        requirement.sales_order_item_bom_component_id or 0
+                    )
+                    if requirement is not None
+                    else 0,
+                }
+            )
+        return facts
+
+    def _bom_physical_group_preview_facts(
+        self,
+        item: OrderItem,
+        snapshot: SalesOrderItemBomComponent,
+        component: str,
+    ) -> dict[str, object]:
+        material = (
+            self._bom_materials_by_id.get(
+                int(snapshot.snapshot_component_material_id)
+            )
+            if snapshot.snapshot_component_material_id is not None
+            else None
+        )
+        order = self._order_by_item_id.get(int(item.id))
+        return {
+            "customer_id": int(order.customer_id) if order is not None else None,
+            "material": material,
+            "inventory_facts": self._bom_inventory_fingerprint_facts(
+                snapshot,
+                component,
+            ),
+        }
+
     def _bom_active_order_purpose_sheet_qty(
         self,
         snapshot: SalesOrderItemBomComponent,
@@ -2637,6 +2916,24 @@ class _PendingRequisitionReadContext:
                     (int(snapshot.id), accepted_component), 0
                 )
             )
+            for accepted_component in accepted
+        )
+
+    def _bom_has_active_physical_group_source(
+        self,
+        snapshot: SalesOrderItemBomComponent,
+        component: str,
+    ) -> bool:
+        normalized = str(component or "whole").strip().lower()
+        accepted = (
+            {normalized, "whole"}
+            if normalized in {"cover", "base"}
+            else {"whole"}
+        )
+        snapshot_id = int(snapshot.id)
+        return any(
+            (snapshot_id, accepted_component)
+            in self._bom_active_physical_group_source_components
             for accepted_component in accepted
         )
 
@@ -2666,6 +2963,11 @@ class _PendingRequisitionReadContext:
                     inventory_coverage_override=self._bom_inventory_coverage(
                         snapshot, component
                     ),
+                    physical_group_preview_facts=self._bom_physical_group_preview_facts(
+                        item,
+                        snapshot,
+                        component,
+                    ),
                 )
                 requirement["source_kind"] = "component"
                 requirement["source_key"] = (
@@ -2673,8 +2975,16 @@ class _PendingRequisitionReadContext:
                 )
                 requirement["parent_order_item_id"] = item.id
                 authoritative_order_sheet_qty = int(requirement["requisition_qty"])
+                grouped = self._bom_has_active_physical_group_source(
+                    snapshot,
+                    component,
+                )
                 requirement["already_requisitioned"] = (
-                    self._bom_active_order_purpose_sheet_qty(snapshot, component)
+                    authoritative_order_sheet_qty
+                    if grouped
+                    else self._bom_active_order_purpose_sheet_qty(
+                        snapshot, component
+                    )
                 )
                 requirement["authoritative_order_sheet_qty"] = (
                     authoritative_order_sheet_qty
@@ -3024,6 +3334,7 @@ def _bom_snapshot_requirements(
     effective_sets_override: int | None = None,
     required_piece_quantity_override: int | None = None,
     inventory_coverage_override: dict[str, int] | None = None,
+    physical_group_preview_facts: dict[str, object] | None = None,
 ) -> dict:
     """Return one immutable BOM snapshot physical source requirement."""
     component = _bom_snapshot_component_type(snapshot, component_type)
@@ -3161,9 +3472,10 @@ def _bom_snapshot_requirements(
         if is_base
         else snapshot.snapshot_component_report_notes
     )
-    return {
+    result = {
         "snapshot_id": snapshot.id,
         "product_id": snapshot.component_product_id,
+        "component_product_id": snapshot.component_product_id,
         "product_version": (
             component_product.version
             if (
@@ -3210,6 +3522,352 @@ def _bom_snapshot_requirements(
         "crease_middle_mm": crease_middle_mm,
         "crease_right_mm": crease_right_mm,
         "remark": snapshot.remark or report_notes,
+    }
+    result.update(
+        _bom_physical_group_preview_tokens(
+            db,
+            snapshot=snapshot,
+            requirements=result,
+            preview_facts=physical_group_preview_facts,
+        )
+    )
+    return result
+
+
+_COMPOSITE_PHYSICAL_GROUP_KEY_VERSION = "p1-150b-physical-key-v1"
+_COMPOSITE_PHYSICAL_SOURCE_VERSION = "p1-150b-source-v1"
+_COMPOSITE_PHYSICAL_GROUP_FINGERPRINT_VERSION = "p1-150b-group-v1"
+
+
+def _component_sheet_type(crease_type: str | None) -> str | None:
+    normalized = {"净": "净料", "毛": "毛片"}.get(
+        str(crease_type or "").strip(),
+        str(crease_type or "").strip(),
+    )
+    return {
+        "毛片": "raw_board",
+        "净料": "net_sheet",
+        "压线": "creased_sheet",
+    }.get(normalized)
+
+
+def _bom_inventory_fingerprint_facts(
+    db: Session,
+    *,
+    snapshot_id: int,
+    component_type: str,
+) -> list[dict[str, object]]:
+    """Freeze the live inventory rows that contributed to component coverage.
+
+    The quantity fingerprint already catches most stale drafts.  Including the
+    reservation identity and lot CAS version also rejects a same-quantity lot
+    swap instead of silently accepting a preview made against another batch.
+    """
+
+    component = str(component_type or "whole").strip().lower()
+    rows = db.execute(
+        select(
+            InventoryReservation,
+            InventoryLot.version,
+            OrderItemSemiRequirement.component_type,
+            OrderItemSemiRequirement.sales_order_item_bom_component_id,
+        )
+        .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
+        .outerjoin(
+            OrderItemSemiRequirement,
+            OrderItemSemiRequirement.id == InventoryReservation.semi_requirement_id,
+        )
+        .where(
+            InventoryReservation.status != "cancelled",
+            or_(
+                InventoryReservation.sales_order_item_bom_component_id
+                == snapshot_id,
+                OrderItemSemiRequirement.sales_order_item_bom_component_id
+                == snapshot_id,
+            ),
+        )
+        .order_by(InventoryReservation.id)
+    ).all()
+    result: list[dict[str, object]] = []
+    for reservation, lot_version, requirement_component, requirement_snapshot_id in rows:
+        if reservation.reservation_type == "semi_order":
+            accepted = (
+                {None, "whole"}
+                if component == "whole"
+                else {None, "whole", component}
+            )
+            if requirement_component not in accepted:
+                continue
+        result.append(
+            {
+                "reservation_id": int(reservation.id),
+                "lot_id": int(reservation.inventory_lot_id),
+                "lot_version": int(lot_version or 0),
+                "reservation_type": reservation.reservation_type,
+                "status": reservation.status,
+                "reserved_stock_quantity": int(
+                    reservation.reserved_stock_quantity or 0
+                ),
+                "credited_requirement_quantity": int(
+                    reservation.credited_requirement_quantity or 0
+                ),
+                "consumed_requirement_quantity": int(
+                    reservation.consumed_requirement_quantity or 0
+                ),
+                "released_requirement_quantity": int(
+                    reservation.released_requirement_quantity or 0
+                ),
+                "requirement_snapshot_id": int(requirement_snapshot_id or 0),
+            }
+        )
+    return result
+
+
+def _bom_physical_group_preview_tokens(
+    db: Session,
+    *,
+    snapshot: SalesOrderItemBomComponent,
+    requirements: dict,
+    preview_facts: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Return server-originated strict grouping and staleness tokens.
+
+    Missing stable material identity deliberately yields no group key.  Such a
+    row remains independently reviewable, but the browser cannot guess a merge
+    from a material label, component name/code, or swapped dimensions.
+    """
+
+    if preview_facts is None:
+        customer_id = db.scalar(
+            select(Order.customer_id)
+            .join(OrderItem, OrderItem.order_id == Order.id)
+            .where(OrderItem.id == snapshot.sales_order_item_id)
+        )
+        material = (
+            db.get(Material, int(snapshot.snapshot_component_material_id))
+            if snapshot.snapshot_component_material_id is not None
+            else None
+        )
+        inventory_facts = None
+    else:
+        customer_id = preview_facts.get("customer_id")
+        material = preview_facts.get("material")
+        inventory_facts = preview_facts.get("inventory_facts")
+    sheet_type = _component_sheet_type(requirements.get("crease_type"))
+    required_facts = (
+        customer_id,
+        snapshot.component_product_id,
+        snapshot.snapshot_component_material_id,
+        str(snapshot.snapshot_component_material or "").strip(),
+        getattr(material, "version", None),
+        requirements.get("layer_count"),
+        str(requirements.get("flute_type") or "").strip().upper(),
+        requirements.get("report_length_mm"),
+        requirements.get("report_width_mm"),
+        str(requirements.get("crease_type") or "").strip(),
+        str(requirements.get("cutting_mode") or "").strip(),
+        requirements.get("yield_per_sheet"),
+        sheet_type,
+    )
+    if any(value in (None, "", 0) for value in required_facts):
+        return {
+            "physical_group_key": None,
+            "physical_source_fingerprint": None,
+            "material_version": (
+                int(material.version) if material is not None else None
+            ),
+            "sheet_type": sheet_type,
+        }
+    physical_facts = {
+        "version": _COMPOSITE_PHYSICAL_GROUP_KEY_VERSION,
+        "customer_id": int(customer_id),
+        "component_product_id": int(snapshot.component_product_id),
+        "material_id": int(snapshot.snapshot_component_material_id),
+        "material_version": int(material.version),
+        "material_code_snapshot": normalize_material_code(
+            str(snapshot.snapshot_component_material)
+        ),
+        "layer_count": int(requirements["layer_count"]),
+        "flute_type": str(requirements["flute_type"]).strip().upper(),
+        "report_length_mm": int(requirements["report_length_mm"]),
+        "report_width_mm": int(requirements["report_width_mm"]),
+        "crease_type": str(requirements["crease_type"]).strip(),
+        "crease_left_mm": requirements.get("crease_left_mm"),
+        "crease_middle_mm": requirements.get("crease_middle_mm"),
+        "crease_right_mm": requirements.get("crease_right_mm"),
+        "sheet_type": sheet_type,
+        "cutting_mode": str(requirements["cutting_mode"]),
+        "yield_per_sheet": int(requirements["yield_per_sheet"]),
+        "is_die_cut": bool(requirements.get("is_die_cut")),
+        "mold_tool_id": requirements.get("mold_tool_id"),
+        "mold_max_yield_per_sheet": snapshot.mold_max_yield_per_sheet,
+    }
+    group_key = canonical_purchase_purpose_hash(physical_facts)
+    source_fingerprint = canonical_purchase_purpose_hash(
+        {
+            "version": _COMPOSITE_PHYSICAL_SOURCE_VERSION,
+            "physical_group_key": group_key,
+            "order_item_id": int(snapshot.sales_order_item_id),
+            "bom_snapshot_id": int(snapshot.id),
+            "component_type": str(requirements["component_type"]),
+            "product_bom_component_id": snapshot.product_bom_component_id,
+            "parent_product_version": snapshot.parent_product_version,
+            "component_product_version": snapshot.component_product_version,
+            "snapshot_schema_version": snapshot.snapshot_schema_version,
+            "effective_set_quantity": int(
+                requirements["effective_set_quantity"]
+            ),
+            "quantity_per_set": str(requirements["quantity_per_set"]),
+            "physical_pieces_per_component": int(
+                requirements["physical_pieces_per_component"]
+            ),
+            "required_piece_quantity": int(
+                requirements["required_piece_quantity"]
+            ),
+            "inventory_covered_piece_qty": int(
+                requirements["inventory_covered_piece_qty"]
+            ),
+            "remaining_required_piece_qty": int(
+                requirements["remaining_required_piece_qty"]
+            ),
+            "spare_sheet_quantity": int(
+                requirements["spare_sheet_quantity"]
+            ),
+            "inventory_facts": (
+                inventory_facts
+                if inventory_facts is not None
+                else _bom_inventory_fingerprint_facts(
+                    db,
+                    snapshot_id=int(snapshot.id),
+                    component_type=str(requirements["component_type"]),
+                )
+            ),
+        }
+    )
+    return {
+        "physical_group_key": group_key,
+        "physical_source_fingerprint": source_fingerprint,
+        "material_version": int(material.version),
+        "sheet_type": sheet_type,
+        "physical_group_facts": physical_facts,
+    }
+
+
+def _composite_physical_group_fingerprint(
+    physical_group_key: str,
+    source_fingerprints: list[str],
+) -> str:
+    material = "\n".join(
+        [
+            _COMPOSITE_PHYSICAL_GROUP_FINGERPRINT_VERSION,
+            str(physical_group_key),
+            *sorted(str(value) for value in source_fingerprints),
+        ]
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _composite_physical_group_storage_keys(
+    request_key: str,
+    physical_group_key: str,
+) -> tuple[str, str]:
+    """Derive bounded, stable database keys without embedding client input."""
+
+    digest = hashlib.sha256(
+        "\n".join(
+            [
+                "p1-150b-storage-v1",
+                str(request_key),
+                str(physical_group_key),
+            ]
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"cg:{digest}", f"cg-idem:{digest}"
+
+
+def _aggregate_composite_physical_group(
+    sources: list[dict[str, object]],
+    *,
+    purchase_sheet_quantity: int | None = None,
+) -> dict[str, object]:
+    """Aggregate immutable component-piece demand, then ceil exactly once."""
+
+    if not sources:
+        raise ValueError("物理采购组至少需要一个真实组件来源")
+    ordered = sorted(
+        sources,
+        key=lambda row: (
+            int(row["order_item_id"]),
+            int(row["bom_snapshot_id"]),
+            str(row["component_type"]),
+        ),
+    )
+    group_keys = {str(row["physical_group_key"]) for row in ordered}
+    yields = {int(row["yield_per_sheet"]) for row in ordered}
+    if len(group_keys) != 1 or "" in group_keys:
+        raise ValueError("物理采购组来源的冻结物理事实不一致")
+    if len(yields) != 1 or next(iter(yields)) <= 0:
+        raise ValueError("物理采购组来源的一张出几不一致")
+    source_fingerprints = [
+        str(row["source_fingerprint"]) for row in ordered
+    ]
+    if any(len(value) != 64 for value in source_fingerprints):
+        raise ValueError("物理采购组来源指纹不完整")
+    total_required = sum(int(row["required_piece_quantity"]) for row in ordered)
+    total_inventory = sum(
+        int(row["inventory_reserved_piece_quantity"]) for row in ordered
+    )
+    net_required = sum(int(row["net_required_piece_quantity"]) for row in ordered)
+    if total_required - total_inventory != net_required or net_required <= 0:
+        raise ValueError("物理采购组组件片需求不守恒")
+    spare_sheets = sum(int(row["spare_sheet_quantity"]) for row in ordered)
+    if spare_sheets < 0:
+        raise ValueError("物理采购组备料张数不能为负数")
+    yield_per_sheet = next(iter(yields))
+    net_order_sheets = (net_required + yield_per_sheet - 1) // yield_per_sheet
+    order_purpose_sheets = net_order_sheets + spare_sheets
+    purchase_sheets = (
+        order_purpose_sheets
+        if purchase_sheet_quantity is None
+        else int(purchase_sheet_quantity)
+    )
+    if purchase_sheets < order_purpose_sheets:
+        raise ValueError(
+            f"物理采购组采购总张数不能少于系统最低 {order_purpose_sheets} 张"
+        )
+    reserve_sheets = purchase_sheets - order_purpose_sheets
+    order_allocations = [int(row["spare_sheet_quantity"]) for row in ordered]
+    order_allocations[-1] += net_order_sheets
+    purchase_allocations = list(order_allocations)
+    purchase_allocations[-1] += reserve_sheets
+    cumulative: list[tuple[int, int]] = []
+    allocated_before = 0
+    for allocated in order_allocations:
+        allocated_after = allocated_before + allocated
+        cumulative.append((allocated_before, allocated_after))
+        allocated_before = allocated_after
+    return {
+        "physical_group_key": next(iter(group_keys)),
+        "group_fingerprint": _composite_physical_group_fingerprint(
+            next(iter(group_keys)), source_fingerprints
+        ),
+        "sources": ordered,
+        "source_count": len(ordered),
+        "total_required_piece_quantity": total_required,
+        "total_inventory_reserved_piece_quantity": total_inventory,
+        "net_required_piece_quantity": net_required,
+        "spare_sheet_quantity": spare_sheets,
+        "yield_per_sheet": yield_per_sheet,
+        "net_order_sheet_quantity": net_order_sheets,
+        "order_purpose_sheet_quantity": order_purpose_sheets,
+        "reserve_sheet_quantity": reserve_sheets,
+        "purchase_sheet_quantity": purchase_sheets,
+        "cutting_remainder_piece_quantity": (
+            net_order_sheets * yield_per_sheet - net_required
+        ),
+        "source_order_purpose_allocations": order_allocations,
+        "source_purchase_allocations": purchase_allocations,
+        "source_cumulative_order_allocations": cumulative,
     }
 
 
@@ -3438,6 +4096,15 @@ def _bom_snapshot_is_fully_requisitioned(
         )
         if int(requirements["remaining_required_piece_qty"]) == 0:
             continue
+        if _bom_snapshot_has_active_physical_group_source(
+            db,
+            snapshot.id,
+            component_type=component,
+        ):
+            # A physical group owns the single rounded sheet quantity.  A
+            # contributing order may intentionally have a zero-sheet source,
+            # but its component-piece demand is still formally covered.
+            continue
         active_order_purpose = _bom_snapshot_active_order_purpose_sheet_qty(
             db,
             snapshot.id,
@@ -3448,6 +4115,73 @@ def _bom_snapshot_is_fully_requisitioned(
     return True
 
 
+def _bom_snapshot_has_active_physical_group_source(
+    db: Session,
+    snapshot_id: int,
+    *,
+    component_type: str = "whole",
+) -> bool:
+    component = str(component_type or "whole").strip().lower()
+    accepted_types = (
+        [component, "whole"] if component in {"cover", "base"} else ["whole"]
+    )
+    return (
+        db.scalar(
+            select(CompositePhysicalPurchaseGroupSource.id)
+            .join(
+                CompositePhysicalPurchaseGroup,
+                CompositePhysicalPurchaseGroup.id
+                == CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+            )
+            .join(
+                RequisitionItem,
+                RequisitionItem.id
+                == CompositePhysicalPurchaseGroupSource.requisition_item_id,
+            )
+            .where(
+                CompositePhysicalPurchaseGroupSource.sales_order_item_bom_component_id
+                == int(snapshot_id),
+                CompositePhysicalPurchaseGroupSource.component_type_snapshot.in_(
+                    accepted_types
+                ),
+                CompositePhysicalPurchaseGroup.status != "voided",
+                func.lower(RequisitionItem.status).notin_(
+                    INACTIVE_REQUISITION_ITEM_STATUSES
+                ),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _active_physical_group_for_order_item(
+    db: Session,
+    order_item_id: int,
+) -> CompositePhysicalPurchaseGroup | None:
+    return db.scalar(
+        select(CompositePhysicalPurchaseGroup)
+        .join(
+            CompositePhysicalPurchaseGroupSource,
+            CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id
+            == CompositePhysicalPurchaseGroup.id,
+        )
+        .join(
+            RequisitionItem,
+            RequisitionItem.id
+            == CompositePhysicalPurchaseGroupSource.requisition_item_id,
+        )
+        .where(
+            CompositePhysicalPurchaseGroupSource.order_item_id
+            == int(order_item_id),
+            CompositePhysicalPurchaseGroup.status != "voided",
+            func.lower(RequisitionItem.status).notin_(
+                INACTIVE_REQUISITION_ITEM_STATUSES
+            ),
+        )
+        .order_by(CompositePhysicalPurchaseGroup.id)
+        .limit(1)
+    )
 def _bom_parent_has_active_requisition(
     db: Session,
     order_item_id: int,
@@ -3518,8 +4252,15 @@ def _bom_pending_component_requirements(
             )
             requirements["parent_order_item_id"] = item.id
             authoritative_order_sheet_qty = int(requirements["requisition_qty"])
+            grouped = _bom_snapshot_has_active_physical_group_source(
+                db,
+                snapshot.id,
+                component_type=component_type,
+            )
             requirements["already_requisitioned"] = (
-                _bom_snapshot_active_order_purpose_sheet_qty(
+                authoritative_order_sheet_qty
+                if grouped
+                else _bom_snapshot_active_order_purpose_sheet_qty(
                     db, snapshot.id, component_type=component_type
                 )
             )
@@ -8805,7 +9546,20 @@ def _create_supplier_order_for_pending_entries(
         )
         db.add(supplier_item)
         db.flush()
-        source_kind = "requisition_item" if req_item is not None else "order_item"
+        bom_source = (
+            db.scalar(
+                select(RequisitionItemBomSource).where(
+                    RequisitionItemBomSource.requisition_item_id == req_item.id
+                )
+            )
+            if req_item is not None
+            else None
+        )
+        source_kind = (
+            "bom_component"
+            if bom_source is not None
+            else "requisition_item" if req_item is not None else "order_item"
+        )
         source_key = str(
             entry.get("source_key")
             or (
@@ -8814,28 +9568,62 @@ def _create_supplier_order_for_pending_entries(
                 else f"order_item:{order_item.id}:{component_type}"
             )
         )
-        db.add(
-            PurchasePurposeSourceSnapshot(
+        existing_bom_purpose = (
+            db.scalar(
+                select(PurchasePurposeSourceSnapshot).where(
+                    PurchasePurposeSourceSnapshot.source_bom_requisition_source_id
+                    == bom_source.id
+                )
+            )
+            if bom_source is not None
+            else None
+        )
+        if existing_bom_purpose is not None:
+            # Supplier conversion changes only the formal purchase container.
+            # Keep the frozen BOM identity and quantity-per-set denominator in
+            # the same immutable purpose row instead of manufacturing a second
+            # order-item identity for the component.
+            existing_bom_purpose.supplier_requisition_order_item_id = (
+                supplier_item.id
+            )
+            existing_bom_purpose.material_requisition_item_id = None
+            purpose_snapshot = existing_bom_purpose
+        else:
+            purpose_snapshot = PurchasePurposeSourceSnapshot(
                 snapshot_key=f"supplier_item:{supplier_item.id}:{source_key}",
                 allocation_group_key=str(entry["purpose_plan_fingerprint"]),
                 supplier_requisition_order_item_id=supplier_item.id,
                 material_requisition_item_id=None,
                 source_kind=source_kind,
                 source_key=source_key,
-                source_order_item_id=order_item.id,
-                source_requisition_item_id=(
-                    req_item.id if req_item is not None else None
+                source_order_item_id=(
+                    None if bom_source is not None else order_item.id
                 ),
-                source_bom_requisition_source_id=None,
+                source_requisition_item_id=(
+                    req_item.id
+                    if req_item is not None and bom_source is None
+                    else None
+                ),
+                source_bom_requisition_source_id=(
+                    bom_source.id if bom_source is not None else None
+                ),
                 customer_id=int(entry["customer"].id),
                 customer_name_snapshot=entry["customer"].name,
                 component_type=component_type,
                 source_finished_qty_snapshot=int(
-                    entry["production_required_qty"] or 0
+                    bom_source.order_set_quantity
+                    if bom_source is not None
+                    else entry["production_required_qty"] or 0
                 ),
-                pieces_per_finished_snapshot=int(entry["pieces_per_box"] or 1),
+                pieces_per_finished_snapshot=int(
+                    bom_source.quantity_per_set
+                    if bom_source is not None
+                    else entry["pieces_per_box"] or 1
+                ),
                 source_required_piece_qty_snapshot=int(
-                    entry["required_piece_qty"] or 0
+                    bom_source.required_piece_quantity
+                    if bom_source is not None
+                    else entry["required_piece_qty"] or 0
                 ),
                 source_semi_reserved_piece_qty_snapshot=int(
                     entry.get("semi_finished_reserved_piece_qty") or 0
@@ -8867,7 +9655,34 @@ def _create_supplier_order_for_pending_entries(
                 request_hash=str(entry["request_hash"]),
                 created_by=user.id,
             )
-        )
+            db.add(purpose_snapshot)
+        if bom_source is not None:
+            physical_source = db.scalar(
+                select(CompositePhysicalPurchaseGroupSource).where(
+                    CompositePhysicalPurchaseGroupSource.requisition_item_bom_source_id
+                    == bom_source.id
+                )
+            )
+            if physical_source is not None:
+                db.flush()
+                physical_source.purchase_purpose_source_snapshot_id = (
+                    purpose_snapshot.id
+                )
+                if int(
+                    physical_source.allocated_order_purpose_sheet_quantity or 0
+                ) > 0:
+                    physical_group = db.get(
+                        CompositePhysicalPurchaseGroup,
+                        physical_source.composite_physical_purchase_group_id,
+                    )
+                    if (
+                        physical_group is not None
+                        and physical_group.supplier_requisition_order_item_id
+                        is None
+                    ):
+                        physical_group.supplier_requisition_order_item_id = (
+                            supplier_item.id
+                        )
         entries_by_order_item.setdefault(order_item.id, []).append(entry)
         if req_item is not None:
             merge_remaining = entry.get("merge_plan_remaining_after_qty")
@@ -12272,6 +13087,355 @@ def _confirmed_composite_requisition_qty(
     return requested
 
 
+def _line_has_physical_group_submission(line: RequisitionLinePayload) -> bool:
+    return line.physical_group_key is not None
+
+
+def _prepare_composite_physical_purchase_groups(
+    db: Session,
+    *,
+    lines_by_order_item: dict[int, list[RequisitionLinePayload]],
+    locked_rows_by_item_id: dict[
+        int, tuple[OrderItem, Product, Order, Customer]
+    ],
+) -> tuple[list[dict[str, object]], dict[tuple[int, int, str], dict[str, object]]]:
+    """Lock and re-evaluate every submitted BOM source before any write."""
+
+    bom_lines = [
+        line
+        for lines in lines_by_order_item.values()
+        for line in lines
+        if line.bom_snapshot_id is not None
+    ]
+    if not bom_lines:
+        return [], {}
+    snapshot_ids = sorted({int(line.bom_snapshot_id) for line in bom_lines})
+    snapshots = list(
+        db.scalars(
+            select(SalesOrderItemBomComponent)
+            .where(SalesOrderItemBomComponent.id.in_(snapshot_ids))
+            .order_by(SalesOrderItemBomComponent.id)
+            .with_for_update()
+        ).all()
+    )
+    snapshots_by_id = {int(row.id): row for row in snapshots}
+    if len(snapshots_by_id) != len(snapshot_ids):
+        raise HTTPException(status_code=409, detail="组合 BOM 来源已变化，请刷新草稿后重试")
+
+    material_ids = sorted(
+        {
+            int(snapshot.snapshot_component_material_id)
+            for snapshot in snapshots
+            if snapshot.snapshot_component_material_id is not None
+        }
+    )
+    if material_ids:
+        db.execute(
+            select(Material.id)
+            .where(Material.id.in_(material_ids))
+            .order_by(Material.id)
+            .with_for_update()
+        ).all()
+
+    reservation_rows = db.execute(
+        select(InventoryReservation.inventory_lot_id)
+        .outerjoin(
+            OrderItemSemiRequirement,
+            OrderItemSemiRequirement.id == InventoryReservation.semi_requirement_id,
+        )
+        .where(
+            InventoryReservation.status != "cancelled",
+            or_(
+                InventoryReservation.sales_order_item_bom_component_id.in_(
+                    snapshot_ids
+                ),
+                OrderItemSemiRequirement.sales_order_item_bom_component_id.in_(
+                    snapshot_ids
+                ),
+            ),
+        )
+        .order_by(InventoryReservation.id)
+        .with_for_update()
+    ).all()
+    lot_ids = sorted({int(row[0]) for row in reservation_rows if row[0] is not None})
+    if lot_ids:
+        db.execute(
+            select(InventoryLot.id)
+            .where(InventoryLot.id.in_(lot_ids))
+            .order_by(InventoryLot.id)
+            .with_for_update()
+        ).all()
+
+    candidates_by_physical_key: dict[str, list[dict[str, object]]] = {}
+    for line in bom_lines:
+        item_row = locked_rows_by_item_id.get(int(line.order_item_id))
+        snapshot = snapshots_by_id.get(int(line.bom_snapshot_id or 0))
+        if (
+            item_row is None
+            or snapshot is None
+            or int(snapshot.sales_order_item_id) != int(line.order_item_id)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="组合 BOM 来源订单或快照已变化，请刷新草稿后重试",
+            )
+        item, product, order, customer = item_row
+        component_type = _bom_snapshot_component_type(
+            snapshot,
+            line.component_type,
+        )
+        requirements = _bom_snapshot_requirements(
+            db,
+            snapshot,
+            component_type=component_type,
+            cutting_mode=line.special_process,
+            actual_yield_per_sheet=line.actual_yield_per_sheet,
+        )
+        if int(requirements["remaining_required_piece_qty"]) <= 0:
+            raise HTTPException(
+                status_code=409,
+                detail="组合组件净需求已变化，请刷新草稿后重试",
+            )
+        if _bom_snapshot_has_active_requisition(
+            db,
+            int(snapshot.id),
+            component_type=component_type,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="组合组件已存在有效报料来源，请刷新后重试",
+            )
+        physical_group_key = str(
+            requirements.get("physical_group_key") or ""
+        )
+        source_fingerprint = str(
+            requirements.get("physical_source_fingerprint") or ""
+        )
+        if not physical_group_key or not source_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="组件缺少稳定材质版本或物理事实，不能生成正式报料",
+            )
+        authoritative_length = Decimal(requirements["report_length_mm"])
+        authoritative_width = Decimal(requirements["report_width_mm"])
+        if (
+            Decimal(line.cardboard_len) != authoritative_length
+            or Decimal(line.cardboard_width) != authoritative_width
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="组件有方向采购长宽已变化，请刷新草稿后重试",
+            )
+        required_piece_quantity = int(requirements["required_piece_quantity"])
+        inventory_reserved_piece_quantity = int(
+            requirements["inventory_covered_piece_qty"]
+        )
+        net_required_piece_quantity = int(
+            requirements["remaining_required_piece_qty"]
+        )
+        source_key = f"bom_component:{snapshot.id}:{component_type}"
+        quantity_per_set = int(requirements["quantity_per_set"]) * int(
+            requirements["physical_pieces_per_component"]
+        )
+        demand_basis = (
+            "order_sets"
+            if required_piece_quantity
+            == int(requirements["effective_set_quantity"]) * quantity_per_set
+            else "order_specific_pieces"
+        )
+        source = {
+            "line": line,
+            "item": item,
+            "product": product,
+            "order": order,
+            "customer": customer,
+            "snapshot": snapshot,
+            "requirements": requirements,
+            "source_key": source_key,
+            "order_item_id": int(item.id),
+            "bom_snapshot_id": int(snapshot.id),
+            "component_type": component_type,
+            "physical_group_key": physical_group_key,
+            "source_fingerprint": source_fingerprint,
+            "parent_set_quantity": int(requirements["effective_set_quantity"]),
+            "quantity_per_set": quantity_per_set,
+            "demand_basis": demand_basis,
+            "required_piece_quantity": required_piece_quantity,
+            "inventory_reserved_piece_quantity": inventory_reserved_piece_quantity,
+            "net_required_piece_quantity": net_required_piece_quantity,
+            "spare_sheet_quantity": int(requirements["spare_sheet_quantity"]),
+            "yield_per_sheet": int(requirements["yield_per_sheet"]),
+        }
+        candidates_by_physical_key.setdefault(physical_group_key, []).append(source)
+
+    plans: list[dict[str, object]] = []
+    source_plan_by_key: dict[tuple[int, int, str], dict[str, object]] = {}
+    for physical_group_key, sources in sorted(candidates_by_physical_key.items()):
+        submitted = [
+            source
+            for source in sources
+            if _line_has_physical_group_submission(source["line"])
+        ]
+        if len(submitted) != len(sources):
+            raise HTTPException(
+                status_code=409,
+                detail="同一物理组件必须整组提交，请刷新组合报料草稿",
+            )
+        first_line: RequisitionLinePayload = submitted[0]["line"]
+        try:
+            plan = _aggregate_composite_physical_group(
+                sources,
+                purchase_sheet_quantity=int(
+                    first_line.group_purchase_sheet_qty or 0
+                ),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        expected_fingerprint = str(plan["group_fingerprint"])
+        order_allocations = list(plan["source_order_purpose_allocations"])
+        purchase_allocations = list(plan["source_purchase_allocations"])
+        for index, source in enumerate(plan["sources"]):
+            line: RequisitionLinePayload = source["line"]
+            expected_order = int(order_allocations[index])
+            expected_purchase = int(purchase_allocations[index])
+            expected_stock = expected_purchase - expected_order
+            if (
+                str(line.physical_group_key or "") != physical_group_key
+                or str(line.group_fingerprint or "") != expected_fingerprint
+                or str(line.source_fingerprint or "")
+                != str(source["source_fingerprint"])
+                or int(line.group_purchase_sheet_qty or 0)
+                != int(plan["purchase_sheet_quantity"])
+                or int(line.group_order_purpose_sheet_qty or 0)
+                != int(plan["order_purpose_sheet_quantity"])
+                or int(line.group_stock_purpose_sheet_qty or 0)
+                != int(plan["reserve_sheet_quantity"])
+                or int(line.requisition_qty or 0) != expected_purchase
+                or int(line.purchase_total_sheet_qty or 0) != expected_purchase
+                or int(line.order_purpose_sheet_qty or 0) != expected_order
+                or int(line.stock_purpose_sheet_qty or 0) != expected_stock
+                or int(line.purpose_plan_version or 0)
+                != _PURCHASE_PURPOSE_PLAN_VERSION
+                or str(line.purpose_plan_fingerprint or "")
+                != expected_fingerprint
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="物理采购组键、张数、来源或用途分配已变化，请刷新后重试",
+                )
+            source["source_sequence"] = index + 1
+            source["is_last_source"] = index == len(plan["sources"]) - 1
+            source["allocated_order_purpose_sheet_quantity"] = expected_order
+            source["allocated_purchase_sheet_quantity"] = expected_purchase
+            source["allocated_reserve_sheet_quantity"] = expected_stock
+            source["cumulative_order_before"], source[
+                "cumulative_order_after"
+            ] = plan["source_cumulative_order_allocations"][index]
+            source["group_plan"] = plan
+            source_plan_by_key[
+                (
+                    int(source["order_item_id"]),
+                    int(source["bom_snapshot_id"]),
+                    str(source["component_type"]),
+                )
+            ] = source
+        plans.append(plan)
+    return plans, source_plan_by_key
+
+
+def _persist_composite_physical_purchase_groups(
+    db: Session,
+    *,
+    batch: Requisition,
+    request_key: str,
+    request_hash: str,
+    plans: list[dict[str, object]],
+    user: User,
+) -> None:
+    for plan in plans:
+        first_source = plan["sources"][0]
+        snapshot: SalesOrderItemBomComponent = first_source["snapshot"]
+        requirements: dict = first_source["requirements"]
+        physical_facts = dict(requirements["physical_group_facts"])
+        group_request_hash = canonical_purchase_purpose_hash(
+            {
+                "request_hash": request_hash,
+                "group_fingerprint": plan["group_fingerprint"],
+                "purchase_sheet_quantity": plan["purchase_sheet_quantity"],
+                "order_purpose_sheet_quantity": plan[
+                    "order_purpose_sheet_quantity"
+                ],
+                "reserve_sheet_quantity": plan["reserve_sheet_quantity"],
+            }
+        )
+        group_key, group_idempotency_key = (
+            _composite_physical_group_storage_keys(
+                request_key,
+                str(plan["physical_group_key"]),
+            )
+        )
+        group = CompositePhysicalPurchaseGroup(
+            group_key=group_key,
+            requisition_id=batch.id,
+            customer_id=int(physical_facts["customer_id"]),
+            component_product_id=int(physical_facts["component_product_id"]),
+            supplier_requisition_order_item_id=None,
+            material_id=int(physical_facts["material_id"]),
+            material_version_snapshot=int(physical_facts["material_version"]),
+            material_code_snapshot=str(
+                physical_facts["material_code_snapshot"]
+            ),
+            layer_count_snapshot=int(physical_facts["layer_count"]),
+            flute_type_snapshot=str(physical_facts["flute_type"]),
+            report_length_mm=int(physical_facts["report_length_mm"]),
+            report_width_mm=int(physical_facts["report_width_mm"]),
+            crease_type_snapshot=str(
+                physical_facts.get("crease_type") or ""
+            ).strip()
+            or None,
+            crease_left_mm=physical_facts.get("crease_left_mm"),
+            crease_middle_mm=physical_facts.get("crease_middle_mm"),
+            crease_right_mm=physical_facts.get("crease_right_mm"),
+            sheet_type_snapshot=str(physical_facts["sheet_type"]),
+            cutting_mode_snapshot=str(physical_facts["cutting_mode"]),
+            yield_per_sheet=int(plan["yield_per_sheet"]),
+            is_die_cut_snapshot=bool(physical_facts["is_die_cut"]),
+            mold_tool_id=physical_facts.get("mold_tool_id"),
+            mold_max_yield_per_sheet_snapshot=physical_facts.get(
+                "mold_max_yield_per_sheet"
+            ),
+            source_count=int(plan["source_count"]),
+            total_required_piece_quantity=int(
+                plan["total_required_piece_quantity"]
+            ),
+            total_inventory_reserved_piece_quantity=int(
+                plan["total_inventory_reserved_piece_quantity"]
+            ),
+            net_required_piece_quantity=int(
+                plan["net_required_piece_quantity"]
+            ),
+            spare_sheet_quantity=int(plan["spare_sheet_quantity"]),
+            order_purpose_sheet_quantity=int(
+                plan["order_purpose_sheet_quantity"]
+            ),
+            reserve_sheet_quantity=int(plan["reserve_sheet_quantity"]),
+            purchase_sheet_quantity=int(plan["purchase_sheet_quantity"]),
+            cutting_remainder_piece_quantity=int(
+                plan["cutting_remainder_piece_quantity"]
+            ),
+            physical_snapshot_hash=str(plan["physical_group_key"]),
+            status="active",
+            version=1,
+            idempotency_key=group_idempotency_key,
+            request_hash=group_request_hash,
+            created_by=user.id,
+            updated_by=user.id,
+        )
+        db.add(group)
+        db.flush()
+        plan["model"] = group
+
+
 def _material_requisition_purpose_values(
     *,
     line: RequisitionLinePayload,
@@ -12411,9 +13575,13 @@ def _add_material_requisition_purpose_snapshot(
     component_type: str,
     semi_reserved_piece_qty: int,
     source_bom_requisition_source_id: int | None = None,
-) -> None:
-    db.add(
-        PurchasePurposeSourceSnapshot(
+    source_finished_qty_snapshot: int | None = None,
+    pieces_per_finished_snapshot: int | None = None,
+    group_effective_piece_qty: int | None = None,
+    group_authoritative_order_sheet_qty: int | None = None,
+    preview_fingerprint: str | None = None,
+) -> PurchasePurposeSourceSnapshot:
+    snapshot = PurchasePurposeSourceSnapshot(
             snapshot_key=f"material_item:{batch_item.id}:{source_key}",
             allocation_group_key=purpose["purpose_plan_fingerprint"],
             supplier_requisition_order_item_id=None,
@@ -12428,9 +13596,18 @@ def _add_material_requisition_purpose_snapshot(
             customer_id=customer.id,
             customer_name_snapshot=customer.name,
             component_type=component_type,
-            source_finished_qty_snapshot=int(order_item.quantity or 0),
+            source_finished_qty_snapshot=int(
+                source_finished_qty_snapshot
+                if source_finished_qty_snapshot is not None
+                else order_item.quantity or 0
+            ),
             pieces_per_finished_snapshot=max(
-                int(batch_item.pieces_per_box or 1), 1
+                int(
+                    pieces_per_finished_snapshot
+                    if pieces_per_finished_snapshot is not None
+                    else batch_item.pieces_per_box or 1
+                ),
+                1,
             ),
             source_required_piece_qty_snapshot=int(
                 batch_item.required_piece_qty or 0
@@ -12444,10 +13621,14 @@ def _add_material_requisition_purpose_snapshot(
             ),
             yield_per_sheet_snapshot=int(purpose["yield_per_sheet"]),
             group_effective_piece_qty_snapshot=int(
-                purpose["effective_piece_qty"]
+                group_effective_piece_qty
+                if group_effective_piece_qty is not None
+                else purpose["effective_piece_qty"]
             ),
             group_authoritative_order_sheet_qty_snapshot=int(
-                purpose["authoritative_order_sheet_qty"]
+                group_authoritative_order_sheet_qty
+                if group_authoritative_order_sheet_qty is not None
+                else purpose["authoritative_order_sheet_qty"]
             ),
             purchase_sheet_qty=int(purpose["purchase_sheet_qty"]),
             order_purpose_sheet_qty=int(
@@ -12458,11 +13639,14 @@ def _add_material_requisition_purpose_snapshot(
             ),
             calculation_rule_version="p1-80-v1",
             snapshot_version=1,
-            preview_fingerprint=purpose["purpose_plan_fingerprint"],
+            preview_fingerprint=(
+                preview_fingerprint or purpose["purpose_plan_fingerprint"]
+            ),
             request_hash=request_hash,
             created_by=user.id,
-        )
     )
+    db.add(snapshot)
+    return snapshot
 
 
 @router.post("/batches", status_code=status.HTTP_201_CREATED)
@@ -12563,6 +13747,41 @@ def _create_batch_locked(
         supplier_name = (payload.supplier_name or "").strip()
         if supplier_name:
             supplier_name = _require_active_supplier(db, supplier_name)
+        lines_by_order_item: dict[int, list[RequisitionLinePayload]] = {}
+        for line in payload.items:
+            lines_by_order_item.setdefault(line.order_item_id, []).append(line)
+        locked_rows = db.execute(
+            select(OrderItem, Product, Order, Customer)
+            .join(Product, Product.id == OrderItem.product_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .join(Customer, Customer.id == Order.customer_id)
+            .where(OrderItem.id.in_(sorted(lines_by_order_item)))
+            .order_by(OrderItem.id)
+            .with_for_update()
+        ).all()
+        locked_rows_by_item_id = {
+            int(item.id): (item, product, order, customer)
+            for item, product, order, customer in locked_rows
+        }
+        if len(locked_rows_by_item_id) != len(lines_by_order_item):
+            raise HTTPException(
+                status_code=409,
+                detail="订单来源已变化，请刷新组合报料草稿后重试",
+            )
+        for item, _product, _order, _customer in locked_rows_by_item_id.values():
+            _require_order_item_customer_access(db, item, user)
+            if _active_requisition_hold(db, item.id) is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="订单明细正在等候报料，请先恢复到待报料",
+                )
+        physical_group_plans, physical_source_plan_by_key = (
+            _prepare_composite_physical_purchase_groups(
+                db,
+                lines_by_order_item=lines_by_order_item,
+                locked_rows_by_item_id=locked_rows_by_item_id,
+            )
+        )
         batch = Requisition(
             requisition_number=_next_number(db, requisition_date),
             request_key=request_key,
@@ -12575,18 +13794,18 @@ def _create_batch_locked(
         )
         db.add(batch)
         db.flush()
+        _persist_composite_physical_purchase_groups(
+            db,
+            batch=batch,
+            request_key=request_key,
+            request_hash=request_hash,
+            plans=physical_group_plans,
+            user=user,
+        )
         response_items = []
-        lines_by_order_item: dict[int, list[RequisitionLinePayload]] = {}
-        for line in payload.items:
-            lines_by_order_item.setdefault(line.order_item_id, []).append(line)
-        batch_preflight_rows = db.execute(
-            select(OrderItem, Product)
-            .join(Product, Product.id == OrderItem.product_id)
-            .where(OrderItem.id.in_(list(lines_by_order_item)))
-        ).all()
         batch_preflight_by_item_id = {
             int(item.id): (item, product)
-            for item, product in batch_preflight_rows
+            for item, product, _order, _customer in locked_rows
         }
         batch_component_source_specs: list[
             tuple[OrderItem, RequisitionItem | None, str]
@@ -12621,14 +13840,7 @@ def _create_batch_locked(
         )
 
         for order_item_id, lines in lines_by_order_item.items():
-            row = db.execute(
-                select(OrderItem, Product, Order, Customer)
-                .join(Product, Product.id == OrderItem.product_id)
-                .join(Order, Order.id == OrderItem.order_id)
-                .join(Customer, Customer.id == Order.customer_id)
-                .where(OrderItem.id == order_item_id)
-                .with_for_update()
-            ).one_or_none()
+            row = locked_rows_by_item_id.get(int(order_item_id))
             if row is None:
                 raise HTTPException(status_code=404, detail="订单明细不存在")
             item, product, order, customer = row
@@ -12918,43 +14130,59 @@ def _create_batch_locked(
                             detail="该复合产品组件已由半成品库存全额抵扣，无需报料",
                         )
                     component_yield = int(requirements["yield_per_sheet"])
-                    component_active_order_purpose = (
-                        _bom_snapshot_active_order_purpose_sheet_qty(
-                            db,
-                            snapshot.id,
-                            component_type=component_type,
-                        )
+                    physical_source_plan = physical_source_plan_by_key.get(
+                        (int(item.id), int(snapshot.id), component_type)
                     )
-                    component_minimum_qty = max(
-                        int(requirements["requisition_qty"])
-                        - component_active_order_purpose,
-                        0,
-                    )
-                    if component_minimum_qty <= 0:
-                        raise HTTPException(
-                            status_code=409,
-                            detail="该复合产品物理料订单用途已报足，不能重复创建",
+                    if physical_source_plan is not None:
+                        component_minimum_qty = int(
+                            physical_source_plan[
+                                "allocated_order_purpose_sheet_quantity"
+                            ]
                         )
-                    net_required_sheets = (
-                        int(requirements["remaining_required_piece_qty"])
-                        + component_yield
-                        - 1
-                    ) // component_yield
-                    component_effective_piece_qty = max(
-                        int(requirements["remaining_required_piece_qty"])
-                        - min(
-                            component_active_order_purpose,
-                            net_required_sheets,
+                        component_effective_piece_qty = int(
+                            physical_source_plan["net_required_piece_quantity"]
                         )
-                        * component_yield,
-                        0,
-                    )
-                    component_confirmed_qty = (
-                        _confirmed_composite_requisition_qty(
-                            line,
-                            component_minimum_qty,
+                        component_confirmed_qty = int(
+                            physical_source_plan["allocated_purchase_sheet_quantity"]
                         )
-                    )
+                    else:
+                        component_active_order_purpose = (
+                            _bom_snapshot_active_order_purpose_sheet_qty(
+                                db,
+                                snapshot.id,
+                                component_type=component_type,
+                            )
+                        )
+                        component_minimum_qty = max(
+                            int(requirements["requisition_qty"])
+                            - component_active_order_purpose,
+                            0,
+                        )
+                        if component_minimum_qty <= 0:
+                            raise HTTPException(
+                                status_code=409,
+                                detail="该复合产品物理料订单用途已报足，不能重复创建",
+                            )
+                        net_required_sheets = (
+                            int(requirements["remaining_required_piece_qty"])
+                            + component_yield
+                            - 1
+                        ) // component_yield
+                        component_effective_piece_qty = max(
+                            int(requirements["remaining_required_piece_qty"])
+                            - min(
+                                component_active_order_purpose,
+                                net_required_sheets,
+                            )
+                            * component_yield,
+                            0,
+                        )
+                        component_confirmed_qty = (
+                            _confirmed_composite_requisition_qty(
+                                line,
+                                component_minimum_qty,
+                            )
+                        )
                     cardboard_len = Decimal(
                         requirements["report_length_mm"]
                         or line.cardboard_len
@@ -13060,16 +14288,36 @@ def _create_batch_locked(
                     bom_source_key = (
                         f"bom_component:{snapshot.id}:{component_type}"
                     )
-                    component_purpose = _material_requisition_purpose_values(
-                        line=line,
-                        purchase_sheet_qty=component_confirmed_qty,
-                        authoritative_order_sheet_qty=component_minimum_qty,
-                        effective_piece_qty=component_effective_piece_qty,
-                        yield_per_sheet=component_yield,
-                        source_key=bom_source_key,
-                        customer_id=customer.id,
-                    )
-                    _add_material_requisition_purpose_snapshot(
+                    if physical_source_plan is not None:
+                        group_plan = physical_source_plan["group_plan"]
+                        component_purpose = {
+                            "purchase_sheet_qty": component_confirmed_qty,
+                            "order_purpose_sheet_qty": component_minimum_qty,
+                            "reserve_purpose_sheet_qty": int(
+                                physical_source_plan[
+                                    "allocated_reserve_sheet_quantity"
+                                ]
+                            ),
+                            "purpose_plan_fingerprint": str(
+                                group_plan["group_fingerprint"]
+                            ),
+                            "effective_piece_qty": component_effective_piece_qty,
+                            "yield_per_sheet": component_yield,
+                            "authoritative_order_sheet_qty": int(
+                                group_plan["order_purpose_sheet_quantity"]
+                            ),
+                        }
+                    else:
+                        component_purpose = _material_requisition_purpose_values(
+                            line=line,
+                            purchase_sheet_qty=component_confirmed_qty,
+                            authoritative_order_sheet_qty=component_minimum_qty,
+                            effective_piece_qty=component_effective_piece_qty,
+                            yield_per_sheet=component_yield,
+                            source_key=bom_source_key,
+                            customer_id=customer.id,
+                        )
+                    purpose_snapshot = _add_material_requisition_purpose_snapshot(
                         db,
                         batch_item=batch_item,
                         line=line,
@@ -13087,7 +14335,107 @@ def _create_batch_locked(
                             ]
                         ),
                         source_bom_requisition_source_id=bom_source.id,
+                        source_finished_qty_snapshot=int(
+                            bom_source.order_set_quantity
+                        ),
+                        pieces_per_finished_snapshot=int(
+                            bom_source.quantity_per_set
+                        ),
+                        group_effective_piece_qty=(
+                            int(group_plan["net_required_piece_quantity"])
+                            if physical_source_plan is not None
+                            else None
+                        ),
+                        group_authoritative_order_sheet_qty=(
+                            int(group_plan["order_purpose_sheet_quantity"])
+                            if physical_source_plan is not None
+                            else None
+                        ),
+                        preview_fingerprint=(
+                            str(group_plan["group_fingerprint"])
+                            if physical_source_plan is not None
+                            else None
+                        ),
                     )
+                    if physical_source_plan is not None:
+                        db.flush()
+                        group_model: CompositePhysicalPurchaseGroup = group_plan[
+                            "model"
+                        ]
+                        db.add(
+                            CompositePhysicalPurchaseGroupSource(
+                                composite_physical_purchase_group_id=group_model.id,
+                                source_key=bom_source_key,
+                                requisition_item_id=batch_item.id,
+                                requisition_item_bom_source_id=bom_source.id,
+                                purchase_purpose_source_snapshot_id=(
+                                    purpose_snapshot.id
+                                ),
+                                order_item_id=item.id,
+                                sales_order_item_bom_component_id=snapshot.id,
+                                source_sequence=int(
+                                    physical_source_plan["source_sequence"]
+                                ),
+                                source_count_snapshot=int(
+                                    group_plan["source_count"]
+                                ),
+                                is_last_source=bool(
+                                    physical_source_plan["is_last_source"]
+                                ),
+                                demand_basis=str(
+                                    physical_source_plan["demand_basis"]
+                                ),
+                                component_type_snapshot=component_type,
+                                parent_set_quantity=int(
+                                    physical_source_plan["parent_set_quantity"]
+                                ),
+                                quantity_per_set=int(
+                                    physical_source_plan["quantity_per_set"]
+                                ),
+                                required_piece_quantity=int(
+                                    physical_source_plan[
+                                        "required_piece_quantity"
+                                    ]
+                                ),
+                                inventory_reserved_piece_quantity=int(
+                                    physical_source_plan[
+                                        "inventory_reserved_piece_quantity"
+                                    ]
+                                ),
+                                net_required_piece_quantity=int(
+                                    physical_source_plan[
+                                        "net_required_piece_quantity"
+                                    ]
+                                ),
+                                spare_sheet_quantity=int(
+                                    physical_source_plan[
+                                        "spare_sheet_quantity"
+                                    ]
+                                ),
+                                allocated_order_purpose_sheet_quantity=int(
+                                    physical_source_plan[
+                                        "allocated_order_purpose_sheet_quantity"
+                                    ]
+                                ),
+                                cumulative_allocated_sheet_quantity_before=int(
+                                    physical_source_plan[
+                                        "cumulative_order_before"
+                                    ]
+                                ),
+                                cumulative_allocated_sheet_quantity_after=int(
+                                    physical_source_plan[
+                                        "cumulative_order_after"
+                                    ]
+                                ),
+                                group_order_purpose_sheet_quantity_snapshot=int(
+                                    group_plan["order_purpose_sheet_quantity"]
+                                ),
+                                source_fingerprint=str(
+                                    physical_source_plan["source_fingerprint"]
+                                ),
+                                created_by=user.id,
+                            )
+                        )
                 db.flush()
                 item.inventory_deducted_qty = 0
                 item.requisition_qty = int(
@@ -13464,6 +14812,15 @@ def edit_requisition(
 ) -> dict:
     item = _item_or_404(db, item_id)
     _require_order_item_customer_access(db, item, user)
+    physical_group = _active_physical_group_for_order_item(db, item.id)
+    if physical_group is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"该报料由物理采购组 cg{physical_group.id} 锁定，"
+                "不能通过旧编辑入口修改张数或尺寸"
+            ),
+        )
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细禁止修改报料")
     if item.requisition_status == "未报料":
@@ -13576,6 +14933,15 @@ def cancel_requisition(
     reason = (payload.reason or "").strip() or "取消报料并退回待报料（系统记录）"
     item = _item_or_404(db, item_id)
     _require_order_item_customer_access(db, item, user)
+    physical_group = _active_physical_group_for_order_item(db, item.id)
+    if physical_group is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"该订单属于物理采购组 cg{physical_group.id}，"
+                f"请从组合报料批次 {physical_group.requisition_id} 整组作废"
+            ),
+        )
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细禁止修改报料")
     if item.requisition_status == "未报料":
@@ -13723,7 +15089,7 @@ def _refresh_bom_order_item_requisition_state(
         )
         else "未报料"
     )
-    if active_total == 0:
+    if active_total == 0 and item.requisition_status == "未报料":
         item.requisition_date = None
         item.supplier_delivery_time = None
         item.supplier_order_number = None
@@ -13759,6 +15125,39 @@ def void_composite_requisition_item(
     )
 
 
+def _expand_composite_requisition_void_scope(
+    *,
+    seed_order_item_ids: list[int],
+    group_source_links: list[tuple[int, int]],
+) -> tuple[list[int], list[int]]:
+    """Return the connected order-item / physical-group cancellation scope."""
+    groups_by_order_item: dict[int, set[int]] = {}
+    order_items_by_group: dict[int, set[int]] = {}
+    for group_id, source_order_item_id in group_source_links:
+        groups_by_order_item.setdefault(int(source_order_item_id), set()).add(
+            int(group_id)
+        )
+        order_items_by_group.setdefault(int(group_id), set()).add(
+            int(source_order_item_id)
+        )
+
+    connected_order_item_ids = {int(value) for value in seed_order_item_ids}
+    connected_group_ids: set[int] = set()
+    pending_order_item_ids = list(connected_order_item_ids)
+    while pending_order_item_ids:
+        current_order_item_id = pending_order_item_ids.pop()
+        for group_id in groups_by_order_item.get(current_order_item_id, set()):
+            if group_id in connected_group_ids:
+                continue
+            connected_group_ids.add(group_id)
+            for source_order_item_id in order_items_by_group.get(group_id, set()):
+                if source_order_item_id in connected_order_item_ids:
+                    continue
+                connected_order_item_ids.add(source_order_item_id)
+                pending_order_item_ids.append(source_order_item_id)
+    return sorted(connected_order_item_ids), sorted(connected_group_ids)
+
+
 @router.put("/batches/{batch_id}/void")
 def void_composite_requisition_batch(
     batch_id: int,
@@ -13782,7 +15181,50 @@ def void_composite_requisition_batch(
     ]
     if not target_rows:
         raise HTTPException(status_code=404, detail="该组合报料单中不存在指定父件组")
-    requisition_item_ids = [row.id for row in target_rows]
+    seed_order_item_ids = sorted({int(row.order_item_id) for row in target_rows})
+    group_source_links = [
+        (int(group_id), int(source_order_item_id))
+        for group_id, source_order_item_id in db.execute(
+            select(
+                CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+                CompositePhysicalPurchaseGroupSource.order_item_id,
+            )
+            .join(
+                CompositePhysicalPurchaseGroup,
+                CompositePhysicalPurchaseGroup.id
+                == CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+            )
+            .where(CompositePhysicalPurchaseGroup.requisition_id == batch.id)
+        ).all()
+    ]
+    connected_order_item_ids, physical_group_ids = (
+        _expand_composite_requisition_void_scope(
+            seed_order_item_ids=seed_order_item_ids,
+            group_source_links=group_source_links,
+        )
+    )
+    physical_groups = (
+        list(
+            db.scalars(
+                select(CompositePhysicalPurchaseGroup)
+                .where(CompositePhysicalPurchaseGroup.id.in_(physical_group_ids))
+                .order_by(CompositePhysicalPurchaseGroup.id)
+                .with_for_update()
+            ).all()
+        )
+        if physical_group_ids
+        else []
+    )
+    if physical_group_ids:
+        # A group can span orders and one order can contribute to several
+        # groups.  Cancel the whole connected parent/component scope so no
+        # real parent line, zero-sheet source, or sibling group is orphaned.
+        target_rows = [
+            row
+            for row in batch.items
+            if int(row.order_item_id) in connected_order_item_ids
+        ]
+    requisition_item_ids = [int(row.id) for row in target_rows]
     bom_sources = (
         db.scalars(
             select(RequisitionItemBomSource).where(
@@ -13800,7 +15242,11 @@ def void_composite_requisition_batch(
             detail="只有组合 BOM 报料单可在此整单作废",
         )
     target_order_item_ids = sorted({int(row.order_item_id) for row in target_rows})
-    if order_item_id is None and len(target_order_item_ids) > 1:
+    if (
+        not physical_group_ids
+        and order_item_id is None
+        and len(target_order_item_ids) > 1
+    ):
         raise HTTPException(
             status_code=409,
             detail="该报料批次包含多个组合父单，请从父单行选择要撤销的整组",
@@ -13834,6 +15280,22 @@ def void_composite_requisition_batch(
             status_code=409,
             detail="该组合报料单已有实际收货，必须先撤销来料实收",
         )
+    if physical_group_ids:
+        posted_group_receipt = db.scalar(
+            select(CompositePhysicalGroupReceipt.id)
+            .where(
+                CompositePhysicalGroupReceipt.composite_physical_purchase_group_id.in_(
+                    physical_group_ids
+                ),
+                CompositePhysicalGroupReceipt.status == "posted",
+            )
+            .limit(1)
+        )
+        if posted_group_receipt is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="该物理采购组已有正式收料，必须先撤销组收料事实",
+            )
     order_item_ids = target_order_item_ids
     order_items = db.scalars(
         select(OrderItem).where(OrderItem.id.in_(order_item_ids))
@@ -13888,6 +15350,11 @@ def void_composite_requisition_batch(
 
     for row in target_rows:
         row.status = "已取消"
+    for physical_group in physical_groups:
+        physical_group.status = "voided"
+        physical_group.version = int(physical_group.version or 0) + 1
+        physical_group.updated_by = user.id
+        physical_group.updated_at = utc_now_naive()
     batch.status = (
         "已取消"
         if all(
@@ -17923,8 +19390,146 @@ def print_batch(
         )
         .order_by(RequisitionItem.id)
     ).all()
+    requisition_item_ids = [int(row.id) for row, *_ in rows]
+    physical_source_rows = (
+        db.execute(
+            select(
+                CompositePhysicalPurchaseGroupSource,
+                CompositePhysicalPurchaseGroup,
+            )
+            .join(
+                CompositePhysicalPurchaseGroup,
+                CompositePhysicalPurchaseGroup.id
+                == CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+            )
+            .where(
+                CompositePhysicalPurchaseGroupSource.requisition_item_id.in_(
+                    requisition_item_ids
+                ),
+                CompositePhysicalPurchaseGroup.status != "voided",
+            )
+            .order_by(
+                CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+                CompositePhysicalPurchaseGroupSource.source_sequence,
+            )
+        ).all()
+        if requisition_item_ids
+        else []
+    )
+    physical_by_requisition_item_id = {
+        int(source.requisition_item_id): (source, group)
+        for source, group in physical_source_rows
+    }
+    physical_members_by_group_id: dict[int, list[tuple]] = {}
+    row_by_requisition_item_id = {
+        int(row.id): (row, order_item, material, bom_source, bom_snapshot)
+        for row, order_item, material, bom_source, bom_snapshot in rows
+    }
+    for source, group in physical_source_rows:
+        member = row_by_requisition_item_id.get(int(source.requisition_item_id))
+        if member is not None:
+            physical_members_by_group_id.setdefault(int(group.id), []).append(member)
     print_items = []
     for row, order_item, material, bom_source, bom_snapshot in rows:
+        physical = physical_by_requisition_item_id.get(int(row.id))
+        if physical is not None:
+            physical_source, physical_group = physical
+            if int(physical_source.source_sequence) != 1:
+                continue
+            member_rows = physical_members_by_group_id.get(
+                int(physical_group.id), []
+            )
+            product_codes = list(
+                dict.fromkeys(
+                    str(member_row.product_code_snapshot or "").strip()
+                    for member_row, *_ in member_rows
+                    if str(member_row.product_code_snapshot or "").strip()
+                )
+            )
+            product_names = list(
+                dict.fromkeys(
+                    str(member_row.product_name_snapshot or "").strip()
+                    for member_row, *_ in member_rows
+                    if str(member_row.product_name_snapshot or "").strip()
+                )
+            )
+            notes: list[str] = []
+            production_notes: list[str] = []
+            for member_row, member_order_item, _member_material, _member_source, member_snapshot in member_rows:
+                for note in (
+                    member_row.remark,
+                    (
+                        _bom_snapshot_report_notes(
+                            member_snapshot,
+                            _member_source.component_type,
+                        )
+                        if member_snapshot is not None and _member_source is not None
+                        else None
+                    ),
+                ):
+                    if str(note or "").strip():
+                        notes.append(str(note).strip())
+                production_note = (
+                    member_snapshot.snapshot_component_production_process
+                    if member_snapshot is not None
+                    else member_order_item.snapshot_production_notes
+                    if member_order_item is not None
+                    else None
+                )
+                if str(production_note or "").strip():
+                    production_notes.append(str(production_note).strip())
+            if (
+                physical_group.crease_type_snapshot == "压线"
+                and physical_group.crease_middle_mm is not None
+            ):
+                crease_display = (
+                    f"{physical_group.crease_left_mm or 0}+"
+                    f"{physical_group.crease_middle_mm}+"
+                    f"{physical_group.crease_right_mm or 0}"
+                )
+            elif physical_group.crease_type_snapshot == "毛片":
+                crease_display = "毛"
+            elif physical_group.crease_type_snapshot == "净料":
+                crease_display = "净"
+            else:
+                crease_display = physical_group.crease_type_snapshot or ""
+            print_items.append(
+                {
+                    "product_code": " / ".join(product_codes),
+                    "product_name": " / ".join(product_names),
+                    "product_codes": product_codes,
+                    "product_names": product_names,
+                    "source_count": int(physical_group.source_count),
+                    "physical_group_key": f"cg{physical_group.id}",
+                    "material": _format_supplier_material(
+                        physical_group.material_code_snapshot,
+                        physical_group.layer_count_snapshot,
+                        physical_group.flute_type_snapshot,
+                        fallback_text=physical_group.material_code_snapshot,
+                    ),
+                    "material_code": _clean_supplier_material_code(
+                        physical_group.material_code_snapshot,
+                        physical_group.layer_count_snapshot,
+                    ),
+                    "flute_type": _clean_supplier_flute(
+                        physical_group.flute_type_snapshot
+                    ),
+                    "specification": (
+                        f"{physical_group.report_length_mm}×"
+                        f"{physical_group.report_width_mm}"
+                    ),
+                    "crease_display": crease_display,
+                    "quantity": int(physical_group.purchase_sheet_quantity),
+                    "special_process": physical_group.cutting_mode_snapshot,
+                    "cutting_mode": physical_group.cutting_mode_snapshot,
+                    "production_notes": "；".join(
+                        dict.fromkeys(production_notes)
+                    )
+                    or None,
+                    "report_remark": "；".join(dict.fromkeys(notes)),
+                }
+            )
+            continue
         order_layer_count = (
             bom_snapshot.snapshot_component_layer_count
             if bom_snapshot is not None
@@ -18039,7 +19644,7 @@ def print_batch(
         "supplier_name": batch.supplier_name,
         "sender": _company_sender(db),
         "items": print_items,
-        "total_quantity": sum(row.requisition_qty for row, *_ in rows),
+        "total_quantity": sum(int(row.get("quantity") or 0) for row in print_items),
     }
 
 
@@ -18252,9 +19857,226 @@ def _supplier_order_purchase_lines(
             else []
         )
     }
+    physical_members_by_supplier_item_id: dict[
+        int,
+        tuple[
+            CompositePhysicalPurchaseGroupSource,
+            CompositePhysicalPurchaseGroup,
+            PurchasePurposeSourceSnapshot,
+        ],
+    ] = {}
+    physical_members_by_group_id: dict[
+        int,
+        list[
+            tuple[
+                CompositePhysicalPurchaseGroupSource,
+                PurchasePurposeSourceSnapshot,
+            ]
+        ],
+    ] = {}
+    if active_item_ids:
+        physical_rows = db.execute(
+            select(
+                CompositePhysicalPurchaseGroupSource,
+                CompositePhysicalPurchaseGroup,
+                PurchasePurposeSourceSnapshot,
+            )
+            .join(
+                CompositePhysicalPurchaseGroup,
+                CompositePhysicalPurchaseGroup.id
+                == CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+            )
+            .join(
+                PurchasePurposeSourceSnapshot,
+                PurchasePurposeSourceSnapshot.id
+                == CompositePhysicalPurchaseGroupSource.purchase_purpose_source_snapshot_id,
+            )
+            .where(
+                PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.in_(
+                    active_item_ids
+                ),
+                CompositePhysicalPurchaseGroup.status != "voided",
+            )
+            .order_by(
+                CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+                CompositePhysicalPurchaseGroupSource.source_sequence,
+            )
+        ).all()
+        for physical_source, physical_group, purpose_snapshot in physical_rows:
+            supplier_item_id = int(
+                purpose_snapshot.supplier_requisition_order_item_id
+            )
+            physical_members_by_supplier_item_id[supplier_item_id] = (
+                physical_source,
+                physical_group,
+                purpose_snapshot,
+            )
+            physical_members_by_group_id.setdefault(
+                int(physical_group.id), []
+            ).append((physical_source, purpose_snapshot))
+    supplier_items_by_id = {
+        int(item.id): item for item in order.items if item.status == "active"
+    }
     line_map: dict[str, dict] = {}
     for item in order.items:
         if item.status != "active":
+            continue
+        physical_context = physical_members_by_supplier_item_id.get(int(item.id))
+        if physical_context is not None:
+            _physical_source, physical_group, _purpose_snapshot = physical_context
+            if int(physical_group.supplier_requisition_order_item_id or 0) != int(
+                item.id
+            ):
+                # The immutable GroupSource remains queryable internally, but
+                # the supplier document must contain exactly one authoritative
+                # physical line and never a second zero-sheet line.
+                continue
+            group_members = physical_members_by_group_id.get(
+                int(physical_group.id), []
+            )
+            purpose_rows = [purpose for _source, purpose in group_members]
+            source_items = []
+            for group_source, purpose in group_members:
+                source_supplier_item = supplier_items_by_id.get(
+                    int(purpose.supplier_requisition_order_item_id or 0)
+                )
+                source_items.append(
+                    {
+                        "id": (
+                            source_supplier_item.id
+                            if source_supplier_item is not None
+                            else None
+                        ),
+                        "order_item_id": group_source.order_item_id,
+                        "component_type": group_source.component_type_snapshot,
+                        "order_number": (
+                            source_supplier_item.order_number
+                            if source_supplier_item is not None
+                            else None
+                        ),
+                        "product_code": (
+                            source_supplier_item.product_code
+                            if source_supplier_item is not None
+                            else None
+                        ),
+                        "product_name": (
+                            source_supplier_item.product_name
+                            if source_supplier_item is not None
+                            else None
+                        ),
+                        "requisition_qty": int(
+                            group_source.allocated_order_purpose_sheet_quantity
+                        ),
+                        "order_purpose_sheet_qty": int(
+                            group_source.allocated_order_purpose_sheet_quantity
+                        ),
+                        "source_required_piece_qty": int(
+                            group_source.required_piece_quantity
+                        ),
+                        "source_effective_piece_qty": int(
+                            group_source.net_required_piece_quantity
+                        ),
+                        "internal_trace_only": True,
+                    }
+                )
+            crease_display = (
+                f"{physical_group.crease_left_mm or 0}+"
+                f"{physical_group.crease_middle_mm}+"
+                f"{physical_group.crease_right_mm or 0}"
+                if physical_group.crease_type_snapshot == "压线"
+                and physical_group.crease_middle_mm is not None
+                else "毛"
+                if physical_group.crease_type_snapshot == "毛片"
+                else "净"
+                if physical_group.crease_type_snapshot == "净料"
+                else physical_group.crease_type_snapshot or "-"
+            )
+            line_map[f"composite_physical_group:{physical_group.id}"] = {
+                "line_key": f"composite_physical_group:{physical_group.id}",
+                "physical_group_key": f"cg{physical_group.id}",
+                "component_type": "whole",
+                "material_id": physical_group.material_id,
+                "material_code": _clean_supplier_material_code(
+                    physical_group.material_code_snapshot,
+                    physical_group.layer_count_snapshot,
+                ),
+                "material_display": _format_supplier_material(
+                    physical_group.material_code_snapshot,
+                    physical_group.layer_count_snapshot,
+                    physical_group.flute_type_snapshot,
+                    fallback_text=physical_group.material_code_snapshot,
+                ),
+                "layer_count": physical_group.layer_count_snapshot,
+                "flute_type": _clean_supplier_flute(
+                    physical_group.flute_type_snapshot
+                ),
+                "report_length_mm": physical_group.report_length_mm,
+                "report_width_mm": physical_group.report_width_mm,
+                "crease_type": physical_group.crease_type_snapshot,
+                "crease_left_mm": physical_group.crease_left_mm,
+                "crease_middle_mm": physical_group.crease_middle_mm,
+                "crease_right_mm": physical_group.crease_right_mm,
+                "crease_display": crease_display,
+                "cutting_mode": physical_group.cutting_mode_snapshot,
+                "remark": order.remark or "",
+                "dimension_warnings": _supplier_dimension_warnings(
+                    order.supplier_name,
+                    physical_group.report_length_mm,
+                    physical_group.report_width_mm,
+                    physical_group.cutting_mode_snapshot,
+                ),
+                "quantity": sum(
+                    int(source.parent_set_quantity)
+                    for source, _purpose in group_members
+                ),
+                "production_required_qty": sum(
+                    int(source.parent_set_quantity)
+                    for source, _purpose in group_members
+                ),
+                "required_piece_qty": int(
+                    physical_group.total_required_piece_quantity
+                ),
+                "stock_deduction_qty": int(
+                    physical_group.total_inventory_reserved_piece_quantity
+                ),
+                "inventory_deducted_qty": int(
+                    physical_group.total_inventory_reserved_piece_quantity
+                ),
+                "requisition_qty": int(physical_group.purchase_sheet_quantity),
+                "purchase_total_sheet_qty": int(
+                    physical_group.purchase_sheet_quantity
+                ),
+                "order_purpose_sheet_qty": int(
+                    physical_group.order_purpose_sheet_quantity
+                ),
+                "stock_purpose_sheet_qty": int(
+                    physical_group.reserve_sheet_quantity
+                ),
+                "purpose_status": "frozen",
+                "purpose_plan_version": 1,
+                "purpose_plan_fingerprint": (
+                    purpose_rows[0].preview_fingerprint
+                    if purpose_rows
+                    else None
+                ),
+                "purpose_allocations": [
+                    {
+                        "id": purpose.id,
+                        "customer_id": purpose.customer_id,
+                        "customer_name": purpose.customer_name_snapshot,
+                        "source_kind": purpose.source_kind,
+                        "source_key": purpose.source_key,
+                        "component_type": purpose.component_type,
+                        "purchase_total_sheet_qty": purpose.purchase_sheet_qty,
+                        "order_purpose_sheet_qty": purpose.order_purpose_sheet_qty,
+                        "stock_purpose_sheet_qty": purpose.reserve_purpose_sheet_qty,
+                        "purpose_plan_version": purpose.snapshot_version,
+                        "purpose_plan_fingerprint": purpose.preview_fingerprint,
+                    }
+                    for purpose in purpose_rows
+                ],
+                "source_items": source_items,
+            }
             continue
         order_item = (
             order_items_by_id.get(int(item.order_item_id))
@@ -21200,6 +23022,39 @@ def _build_reported_documents(
         if legacy_requisition_item_ids
         else set()
     )
+    received_physical_group_rows = (
+        db.execute(
+            select(
+                CompositePhysicalPurchaseGroupSource.requisition_item_id,
+                CompositePhysicalPurchaseGroup.requisition_id,
+            )
+            .join(
+                CompositePhysicalPurchaseGroup,
+                CompositePhysicalPurchaseGroup.id
+                == CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+            )
+            .join(
+                CompositePhysicalGroupReceipt,
+                CompositePhysicalGroupReceipt.composite_physical_purchase_group_id
+                == CompositePhysicalPurchaseGroup.id,
+            )
+            .where(
+                CompositePhysicalPurchaseGroup.requisition_id.in_(
+                    [batch.id for batch in legacy_batches]
+                ),
+                CompositePhysicalGroupReceipt.status == "posted",
+            )
+        ).all()
+        if legacy_batches
+        else []
+    )
+    received_physical_group_requisition_item_ids = {
+        int(requisition_item_id)
+        for requisition_item_id, _batch_id in received_physical_group_rows
+    }
+    received_physical_group_batch_ids = {
+        int(batch_id) for _requisition_item_id, batch_id in received_physical_group_rows
+    }
     legacy_order_rows = (
         {
             item_id: (order, customer)
@@ -21351,13 +23206,21 @@ def _build_reported_documents(
                     "received_qty": None,
                     "remaining_qty": None,
                     "unit": "张",
-                    "status": "已收料" if item.id in received_requisition_item_ids else item.status,
+                    "status": (
+                        "已收料"
+                        if item.id in received_requisition_item_ids
+                        or item.id
+                        in received_physical_group_requisition_item_ids
+                        else item.status
+                    ),
                     "source_item_status": item.status,
                     "can_void": (
                         is_composite_bom
                         and batch.status == "已报料"
                         and item.status == "有效"
                         and item.id not in received_requisition_item_ids
+                        and item.id
+                        not in received_physical_group_requisition_item_ids
                     ),
                 }
             )
@@ -21369,6 +23232,7 @@ def _build_reported_documents(
                 item.id not in received_requisition_item_ids
                 for item in batch.items
             )
+            and batch.id not in received_physical_group_batch_ids
         )
         documents.append(
             {
@@ -23824,6 +25688,207 @@ def _supplier_requisition_item_void_response(
     }
 
 
+def _physical_groups_for_supplier_items(
+    db: Session,
+    supplier_item_ids: list[int] | set[int],
+    *,
+    lock: bool = False,
+) -> list[CompositePhysicalPurchaseGroup]:
+    """Resolve every physical group that owns one of the supplier lines."""
+
+    normalized_item_ids = sorted({int(value) for value in supplier_item_ids})
+    if not normalized_item_ids:
+        return []
+    group_ids = {
+        int(value)
+        for value in db.scalars(
+            select(
+                CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id
+            )
+            .join(
+                PurchasePurposeSourceSnapshot,
+                PurchasePurposeSourceSnapshot.id
+                == CompositePhysicalPurchaseGroupSource.purchase_purpose_source_snapshot_id,
+            )
+            .where(
+                PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id.in_(
+                    normalized_item_ids
+                )
+            )
+            .distinct()
+        ).all()
+    }
+    group_ids.update(
+        int(value)
+        for value in db.scalars(
+            select(CompositePhysicalPurchaseGroup.id).where(
+                CompositePhysicalPurchaseGroup.supplier_requisition_order_item_id.in_(
+                    normalized_item_ids
+                )
+            )
+        ).all()
+    )
+    if not group_ids:
+        return []
+    statement = (
+        select(CompositePhysicalPurchaseGroup)
+        .where(CompositePhysicalPurchaseGroup.id.in_(sorted(group_ids)))
+        .order_by(CompositePhysicalPurchaseGroup.id)
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return list(db.scalars(statement).all())
+
+
+def _posted_physical_group_receipt_id(
+    db: Session,
+    groups: list[CompositePhysicalPurchaseGroup],
+) -> int | None:
+    group_ids = [int(group.id) for group in groups]
+    if not group_ids:
+        return None
+    return db.scalar(
+        select(CompositePhysicalGroupReceipt.id)
+        .where(
+            CompositePhysicalGroupReceipt.composite_physical_purchase_group_id.in_(
+                group_ids
+            ),
+            CompositePhysicalGroupReceipt.status == "posted",
+        )
+        .order_by(CompositePhysicalGroupReceipt.id)
+        .limit(1)
+    )
+
+
+def _physical_group_sources_for_supplier_order_void(
+    db: Session,
+    *,
+    order_id: int,
+    groups: list[CompositePhysicalPurchaseGroup],
+) -> list[CompositePhysicalPurchaseGroupSource]:
+    """Fail closed unless every immutable group source belongs to this order."""
+
+    group_ids = [int(group.id) for group in groups]
+    if not group_ids:
+        return []
+    source_rows = list(
+        db.scalars(
+            select(CompositePhysicalPurchaseGroupSource)
+            .where(
+                CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id.in_(
+                    group_ids
+                )
+            )
+            .order_by(
+                CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+                CompositePhysicalPurchaseGroupSource.source_sequence,
+            )
+        ).all()
+    )
+    snapshot_ids = {
+        int(row.purchase_purpose_source_snapshot_id)
+        for row in source_rows
+        if row.purchase_purpose_source_snapshot_id is not None
+    }
+    snapshots = (
+        {
+            int(row.id): row
+            for row in db.scalars(
+                select(PurchasePurposeSourceSnapshot).where(
+                    PurchasePurposeSourceSnapshot.id.in_(sorted(snapshot_ids))
+                )
+            ).all()
+        }
+        if snapshot_ids
+        else {}
+    )
+    supplier_item_ids: set[int] = set()
+    for row in source_rows:
+        snapshot_id = row.purchase_purpose_source_snapshot_id
+        snapshot = snapshots.get(int(snapshot_id)) if snapshot_id is not None else None
+        if snapshot is None or snapshot.supplier_requisition_order_item_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"物理采购组 cg{row.composite_physical_purchase_group_id} 的供应商来源不完整，"
+                    "已停止整单作废"
+                ),
+            )
+        supplier_item_ids.add(int(snapshot.supplier_requisition_order_item_id))
+    supplier_items = (
+        {
+            int(row.id): row
+            for row in db.scalars(
+                select(SupplierRequisitionOrderItem).where(
+                    SupplierRequisitionOrderItem.id.in_(sorted(supplier_item_ids))
+                )
+            ).all()
+        }
+        if supplier_item_ids
+        else {}
+    )
+    if len(supplier_items) != len(supplier_item_ids) or any(
+        int(item.supplier_order_id) != int(order_id)
+        for item in supplier_items.values()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="物理采购组跨供应商报料单或来源缺失，已停止整单作废",
+        )
+    for row in source_rows:
+        snapshot = snapshots[int(row.purchase_purpose_source_snapshot_id)]
+        supplier_item = supplier_items[
+            int(snapshot.supplier_requisition_order_item_id)
+        ]
+        if (
+            supplier_item.order_item_id is None
+            or int(supplier_item.order_item_id) != int(row.order_item_id)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="物理采购组供应商来源与订单明细不一致，已停止整单作废",
+            )
+    if any(
+        group.supplier_requisition_order_item_id is None
+        or int(group.supplier_requisition_order_item_id) not in supplier_item_ids
+        for group in groups
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="物理采购组供应商价格锚点不完整，已停止整单作废",
+        )
+    return source_rows
+
+
+def _refresh_material_requisition_statuses_after_supplier_void(
+    db: Session,
+    requisition_ids: set[int],
+) -> None:
+    for requisition_id in sorted(requisition_ids):
+        batch = db.get(Requisition, requisition_id)
+        if batch is None:
+            continue
+        active_statuses = [
+            str(value or "").strip()
+            for value in db.scalars(
+                select(RequisitionItem.status).where(
+                    RequisitionItem.requisition_id == requisition_id,
+                    func.lower(RequisitionItem.status).notin_(
+                        INACTIVE_REQUISITION_ITEM_STATUSES
+                    ),
+                )
+            ).all()
+        ]
+        if not active_statuses:
+            batch.status = "已取消"
+        elif all(value == "supplier_requisition_created" for value in active_statuses):
+            batch.status = "supplier_requisition_created"
+        elif all(value == "有效" for value in active_statuses):
+            batch.status = "已报料"
+        else:
+            batch.status = "merged_pending"
+
+
 def _recompute_supplier_order_after_item_void(
     db: Session,
     order: SupplierRequisitionOrder,
@@ -23935,6 +26000,36 @@ def void_supplier_requisition_item(
             if order is None:
                 raise HTTPException(status_code=409, detail="供应商报料单不存在")
             _require_supplier_order_customer_access(order, user, db)
+
+            physical_groups = _physical_groups_for_supplier_items(db, {item.id})
+            if physical_groups:
+                posted_group_receipt = _posted_physical_group_receipt_id(
+                    db, physical_groups
+                )
+                if posted_group_receipt is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"该明细所属物理采购组已有正式收料 #{posted_group_receipt}，"
+                            "请先撤销组收料事实"
+                        ),
+                    )
+                active_group = next(
+                    (
+                        group
+                        for group in physical_groups
+                        if group.status != "voided"
+                    ),
+                    None,
+                )
+                if active_group is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"该明细属于物理采购组 cg{active_group.id}，"
+                            "不能逐明细撤销，请整张作废供应商报料单"
+                        ),
+                    )
 
             existing_key_item = db.scalar(
                 select(SupplierRequisitionOrderItem).where(
@@ -24137,6 +26232,42 @@ def void_supplier_order(
     if order.status == "voided":
         raise HTTPException(status_code=400, detail="该报料单已作废")
 
+    supplier_item_ids = {int(item.id) for item in order.items}
+    physical_groups = _physical_groups_for_supplier_items(
+        db,
+        supplier_item_ids,
+        lock=True,
+    )
+    posted_group_receipt = _posted_physical_group_receipt_id(db, physical_groups)
+    if posted_group_receipt is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"该报料单所属物理采购组已有正式收料 #{posted_group_receipt}，"
+                "请先撤销组收料事实"
+            ),
+        )
+    physical_group_sources = _physical_group_sources_for_supplier_order_void(
+        db,
+        order_id=order.id,
+        groups=physical_groups,
+    )
+    physical_requisition_item_ids = {
+        int(source.requisition_item_id) for source in physical_group_sources
+    }
+    physical_requisition_ids = (
+        {
+            int(value)
+            for value in db.scalars(
+                select(RequisitionItem.requisition_id).where(
+                    RequisitionItem.id.in_(sorted(physical_requisition_item_ids))
+                )
+            ).all()
+        }
+        if physical_requisition_item_ids
+        else set()
+    )
+
     order_item_ids = {
         int(item.order_item_id)
         for item in order.items
@@ -24180,6 +26311,29 @@ def void_supplier_order(
     affected_items: list[dict[str, object]] = []
     order.status = "voided"
     order.voided_at = beijing_now_naive()
+    for physical_group in physical_groups:
+        if physical_group.status == "voided":
+            continue
+        physical_group.status = "voided"
+        physical_group.version = int(physical_group.version or 0) + 1
+        physical_group.updated_by = user.id
+        physical_group.updated_at = utc_now_naive()
+    if physical_requisition_item_ids:
+        for requisition_item in db.scalars(
+            select(RequisitionItem).where(
+                RequisitionItem.id.in_(sorted(physical_requisition_item_ids))
+            )
+        ).all():
+            requisition_item.status = "已取消"
+        db.execute(
+            update(RequisitionItemBomSource)
+            .where(
+                RequisitionItemBomSource.requisition_item_id.in_(
+                    sorted(physical_requisition_item_ids)
+                )
+            )
+            .values(active_guard=None)
+        )
 
     for item in order.items:
         if item.order_item_id:
@@ -24245,6 +26399,10 @@ def void_supplier_order(
                 )
                 .values(active_guard=None)
             )
+            _refresh_material_requisition_statuses_after_supplier_void(
+                db,
+                physical_requisition_ids,
+            )
             release_active_finished_reservations_for_items(
                 db,
                 order_item_ids=sorted(order_item_ids),
@@ -24292,6 +26450,12 @@ def void_supplier_order(
                     "customer_ids": customer_ids,
                     "customer_names": customer_names,
                     "affected_items": affected_items,
+                    "voided_physical_group_ids": [
+                        int(group.id) for group in physical_groups
+                    ],
+                    "voided_physical_source_requisition_item_ids": sorted(
+                        physical_requisition_item_ids
+                    ),
                 },
             )
         db.commit()

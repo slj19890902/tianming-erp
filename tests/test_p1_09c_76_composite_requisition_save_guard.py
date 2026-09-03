@@ -69,8 +69,9 @@ global.axios={{post:(url,payload)=>new Promise((resolve,reject)=>pending.push({{
 global.window={{open:(url,target)=>{{printCalls.push({{url,target}});return {{}};}}}};
 const vm={{
   compositeRequisitionSaveState:{{saving:false,committed:false,uncertain:false,result:null,requestKey:"",draftSignature:""}},
-  requisitionForm:{{supplier_name:"鸣朋",items:[{{order_item_id:1,component_type:"whole",bom_snapshot_id:3,requisition_qty:10,cardboard_len:800,cardboard_width:600,special_process:"一开二",remark:""}}]}},
+  requisitionForm:{{supplier_name:"鸣朋",items:[{{order_item_id:1,component_type:"whole",bom_snapshot_id:3,requisition_qty:10,cardboard_len:800,cardboard_width:600,special_process:"一开二",remark:"",is_composite_component_group:true,_merged_component_lines:[{{physical_source_fingerprint:"a".repeat(64)}}]}}]}},
   requisitionSelected:{{a:true}},selectedPendingKeys:["a"],selectedBomSnapshotIds:["3:whole"],modal:{{type:"requisition"}},
+  compositePhysicalGroupFingerprint:async()=>"b".repeat(64),
   validateRequisitionForm(){{return "";}},requisitionBatchLinePayloads(line){{return [{{...line}}];}},
   loadRequisition:async()=>true,showToast(message,isError){{toasts.push({{message,isError}});}}
 }};
@@ -90,7 +91,7 @@ def test_composite_same_draft_is_single_flight_and_committed_result_is_reused(
 (async()=>{
   const first=vm.saveCompositeRequisitionDraft();
   const secondPromise=vm.saveCompositeRequisitionDraft();
-  await Promise.resolve();
+  await new Promise(resolve=>setImmediate(resolve));
   expect(pending.length===1,"double submit sent more than one batch POST");
   const second=await secondPromise;
   expect(second?._in_flight===true,"second call was not marked in flight");
@@ -115,6 +116,7 @@ def test_composite_success_survives_refresh_and_print_failures(tmp_path: Path) -
   vm.loadRequisition=async()=>{throw new Error("刷新失败");};
   window.open=()=>null;
   const request=vm.saveCompositeRequisitionDraft();
+  await new Promise(resolve=>setImmediate(resolve));
   pending[0].resolve({data:{id:32,requisition_number:"BL-32"}});
   const result=await request;
   expect(result._refresh_failed===true&&result._print_failed===true,"post-success auxiliary failures were hidden");

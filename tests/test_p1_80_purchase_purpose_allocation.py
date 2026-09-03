@@ -17,6 +17,7 @@ from tests.test_n039_composite_bom_requisition import (
     _component_payload,
     _login as _login_composite,
     _parent_payload,
+    _pending_components,
     composite_requisition_app,
 )
 
@@ -2043,31 +2044,11 @@ def test_composite_bom_void_refreshes_parent_from_order_purpose_only(
     from app.models.product_bom import RequisitionItemBomSource
     from app.models.requisition import RequisitionItem
     from app.models.supplier_requisition_order import PurchasePurposeSourceSnapshot
-    from app.services.purchase_purpose_allocation import (
-        canonical_purchase_purpose_hash,
-    )
-
     app, session_factory = composite_requisition_app
-    component_fingerprint = canonical_purchase_purpose_hash(
-        {
-            "version": 1,
-            "source_key": "bom_component:1:whole",
-            "customer_id": 1,
-            "effective_piece_qty": 20,
-            "yield_per_sheet": 1,
-            "authoritative_order_sheet_qty": 20,
-        }
-    )
-    component_a = {
-        **_component_payload(1, requisition_qty=25),
-        PURCHASE_TOTAL: 25,
-        ORDER_PURPOSE: 20,
-        STOCK_PURPOSE: 5,
-        PURPOSE_VERSION: 1,
-        PURPOSE_FINGERPRINT: component_fingerprint,
-    }
     with TestClient(app) as client:
         _login_composite(client)
+        component_rows = _pending_components(client)
+        component_a = _component_payload(component_rows[0], requisition_qty=25)
         first = client.post(
             "/api/requisition/batches",
             json={
@@ -2082,7 +2063,7 @@ def test_composite_bom_void_refreshes_parent_from_order_purpose_only(
             json={
                 "request_key": "p180-bom-void-second",
                 "supplier_name": "N039 供应商",
-                "items": [_component_payload(2)],
+                "items": [_component_payload(component_rows[1])],
             },
         )
         assert second.status_code == 201, second.text
@@ -2399,31 +2380,13 @@ def test_a3_legacy_direct_rejects_ambiguous_overrides_but_defaults_authoritative
 def test_composite_bom_partial_order_purpose_is_rejected_without_writes(
     composite_requisition_app,
 ) -> None:
-    from app.services.purchase_purpose_allocation import (
-        canonical_purchase_purpose_hash,
-    )
-
     app, session_factory = composite_requisition_app
-    fingerprint = canonical_purchase_purpose_hash(
-        {
-            "version": 1,
-            "source_key": "bom_component:1:whole",
-            "customer_id": 1,
-            "effective_piece_qty": 20,
-            "yield_per_sheet": 1,
-            "authoritative_order_sheet_qty": 20,
-        }
-    )
-    partial_component = {
-        **_component_payload(1, requisition_qty=19),
-        PURCHASE_TOTAL: 19,
-        ORDER_PURPOSE: 19,
-        STOCK_PURPOSE: 0,
-        PURPOSE_VERSION: 1,
-        PURPOSE_FINGERPRINT: fingerprint,
-    }
     with TestClient(app) as client:
         _login_composite(client)
+        component = next(
+            row for row in _pending_components(client) if row["snapshot_id"] == 1
+        )
+        partial_component = _component_payload(component, requisition_qty=19)
         before_submit = _legacy_batch_write_counts(session_factory)
         rejected = client.post(
             "/api/requisition/batches",
@@ -2434,8 +2397,8 @@ def test_composite_bom_partial_order_purpose_is_rejected_without_writes(
             },
         )
 
-    assert rejected.status_code == 400, rejected.text
-    assert "不能少于库存抵扣后的系统最低 20 张" in rejected.json()["detail"]
+    assert rejected.status_code == 409, rejected.text
+    assert "物理采购组采购总张数不能少于系统最低 20 张" in rejected.json()["detail"]
     assert _legacy_batch_write_counts(session_factory) == before_submit
 
 
@@ -2498,12 +2461,15 @@ def test_composite_bom_snapshot_freezes_real_semi_reservation_quantity(
 
     with TestClient(app) as client:
         _login_composite(client)
+        component = next(
+            row for row in _pending_components(client) if row["snapshot_id"] == 1
+        )
         created = client.post(
             "/api/requisition/batches",
             json={
                 "request_key": "p180-bom-semi-snapshot",
                 "supplier_name": "N039 供应商",
-                "items": [_parent_payload(), _component_payload(1)],
+                "items": [_parent_payload(), _component_payload(component)],
             },
         )
 

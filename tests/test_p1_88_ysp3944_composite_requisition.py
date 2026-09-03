@@ -51,6 +51,7 @@ def test_composite_double_splice_parent_uses_two_sheets_per_carton(
         pending = client.get("/api/requisition/pending")
         assert pending.status_code == 200, pending.text
         parent = pending.json()["items"][0]["parent_requirement"]
+        components = pending.json()["items"][0]["component_requirements"]
         assert parent["required_piece_quantity"] == 20
         assert parent["remaining_required_piece_qty"] == 20
         assert parent["requisition_qty"] == 20
@@ -61,8 +62,7 @@ def test_composite_double_splice_parent_uses_two_sheets_per_carton(
                 "supplier_name": "N039 供应商",
                 "items": [
                     _parent_payload(),
-                    _component_payload(1),
-                    _component_payload(2),
+                    *(_component_payload(component) for component in components),
                 ],
             },
         )
@@ -80,7 +80,7 @@ def test_composite_double_splice_parent_uses_two_sheets_per_carton(
         assert parent_line.requisition_qty == 20
 
 
-def test_supplier_print_merges_identical_component_physical_lines_but_keeps_sources(
+def test_supplier_print_keeps_distinct_component_products_as_separate_physical_groups(
     composite_requisition_app,
 ) -> None:
     from app.models.product_bom import (
@@ -110,14 +110,18 @@ def test_supplier_print_merges_identical_component_physical_lines_but_keeps_sour
 
     with TestClient(app) as client:
         _login(client)
+        pending = client.get("/api/requisition/pending")
+        assert pending.status_code == 200, pending.text
+        components = pending.json()["items"][0]["component_requirements"]
+        assert len(components) == 2
+        assert len({row["physical_group_key"] for row in components}) == 2
         created = client.post(
             "/api/requisition/batches",
             json={
                 "supplier_name": "N039 供应商",
                 "items": [
                     _parent_payload(),
-                    _component_payload(1),
-                    _component_payload(2),
+                    *(_component_payload(component) for component in components),
                 ],
             },
         )
@@ -126,12 +130,17 @@ def test_supplier_print_merges_identical_component_physical_lines_but_keeps_sour
         assert printed.status_code == 200, printed.text
 
     items = printed.json()["items"]
-    assert len(items) == 2
-    parent, components = items
+    assert len(items) == 3
+    parent = next(row for row in items if row["quantity"] == 10)
+    component_lines = [row for row in items if row is not parent]
     assert parent["quantity"] == 10
-    assert components["quantity"] == 50
-    assert components["source_count"] == 2
-    assert {"COMP-A", "COMP-B"}.issubset(set(components["product_codes"]))
+    assert sorted(row["quantity"] for row in component_lines) == [20, 30]
+    assert all(row["source_count"] == 1 for row in component_lines)
+    assert {
+        code
+        for row in component_lines
+        for code in row["product_codes"]
+    } == {"COMP-A", "COMP-B"}
     with session_factory() as session:
         assert len(session.scalars(select(RequisitionItem)).all()) == 3
         sources = session.scalars(
@@ -143,9 +152,18 @@ def test_supplier_print_merges_identical_component_physical_lines_but_keeps_sour
 def _composite_grouping_helpers() -> str:
     start = INDEX_HTML.index("compositePhysicalMergeKey(line) {")
     end = INDEX_HTML.index("async openCompositeRequisition(rows)", start)
+    recalculate_start = INDEX_HTML.index("recalculateCompositeDraftLine(line) {", end)
+    recalculate_end = INDEX_HTML.index(
+        "compositeGroupSourceAllocationRows(line)",
+        recalculate_start,
+    )
     payload_start = INDEX_HTML.index("requisitionBatchLinePayload(line) {", end)
     payload_end = INDEX_HTML.index("async openRequisition()", payload_start)
-    return INDEX_HTML[start:end] + INDEX_HTML[payload_start:payload_end]
+    return (
+        INDEX_HTML[start:end]
+        + INDEX_HTML[recalculate_start:recalculate_end]
+        + INDEX_HTML[payload_start:payload_end]
+    )
 
 
 def test_browser_groups_same_physical_components_and_expands_traceable_payloads() -> (
@@ -168,20 +186,22 @@ const context = {{
 }};
 const base = {{
   is_composite_component:true, is_die_cut:false, order_item_id:9,
-  snapshot_supplier_name:'同一供应商', material_id:7, material_display:'K=A / AB',
+  snapshot_supplier_name:'同一供应商', material_id:7, material_version:3, material_display:'K=A / AB',
   layer_count:5, flute_type:'AB', cardboard_len:730, cardboard_width:610,
   crease_type:'毛片', crease_left_mm:null, crease_middle_mm:null, crease_right_mm:null,
   special_process:'一开一', cutting_mode:'一开一', component_type:'whole',
   finished_inventory_reserved_qty:0, semi_finished_reserved_piece_qty:0,
 }};
 const sourceLines = [
-  {{...base,bom_snapshot_id:11,product_code:'YSP3944-A',product_name:'圆衬板',required_piece_qty:30,remaining_required_piece_qty:30,requisition_qty:30,purchase_total_sheet_qty:30,order_purpose_sheet_qty:30,stock_purpose_sheet_qty:0,_minimum_requisition_qty:30,_authoritative_order_purpose_sheet_qty:30,purpose_plan_version:1,purpose_plan_fingerprint:'a'.repeat(64)}},
-  {{...base,bom_snapshot_id:12,product_code:'YSP3944-B',product_name:'纸护角',required_piece_qty:120,remaining_required_piece_qty:120,requisition_qty:120,purchase_total_sheet_qty:120,order_purpose_sheet_qty:120,stock_purpose_sheet_qty:0,_minimum_requisition_qty:120,_authoritative_order_purpose_sheet_qty:120,purpose_plan_version:1,purpose_plan_fingerprint:'b'.repeat(64)}},
+  {{...base,bom_snapshot_id:11,component_product_id:71,physical_group_key:'a'.repeat(64),physical_source_fingerprint:'b'.repeat(64),product_code:'YSP3944-A',product_name:'圆衬板',required_piece_qty:30,remaining_required_piece_qty:30,requisition_qty:30,purchase_total_sheet_qty:30,order_purpose_sheet_qty:30,stock_purpose_sheet_qty:0,_minimum_requisition_qty:30,_authoritative_order_purpose_sheet_qty:30,purpose_plan_version:1,purpose_plan_fingerprint:'b'.repeat(64)}},
+  {{...base,bom_snapshot_id:12,component_product_id:71,physical_group_key:'a'.repeat(64),physical_source_fingerprint:'c'.repeat(64),product_code:'YSP3944-B',product_name:'纸护角',required_piece_qty:120,remaining_required_piece_qty:120,requisition_qty:120,purchase_total_sheet_qty:120,order_purpose_sheet_qty:120,stock_purpose_sheet_qty:0,_minimum_requisition_qty:120,_authoritative_order_purpose_sheet_qty:120,purpose_plan_version:1,purpose_plan_fingerprint:'c'.repeat(64)}},
 ];
 const fresh = () => sourceLines.map(row => ({{...row}}));
+;(async()=>{{
 const grouped = context.groupCompositeRequisitionLines(fresh());
 if (grouped.length !== 1) throw new Error(`expected one row, got ${{grouped.length}}`);
 if (grouped[0].purchase_total_sheet_qty !== 150 || grouped[0].required_piece_qty !== 150) throw new Error('quantity not conserved');
+grouped[0]._group_fingerprint = await context.compositePhysicalGroupFingerprint(grouped[0]);
 grouped[0].purchase_total_sheet_qty = 155;
 grouped[0].order_purpose_sheet_qty = 150;
 grouped[0].stock_purpose_sheet_qty = 5;
@@ -190,6 +210,9 @@ const differentSize = fresh(); differentSize[1].cardboard_width = 611;
 const missingCrease = fresh(); missingCrease[1].crease_type = '';
 const differentMaterial = fresh(); differentMaterial[1].material_id = 8;
 const differentSourceRole = fresh(); differentSourceRole[1].component_type = 'cover';
+const differentComponentProduct = fresh(); differentComponentProduct[1].component_product_id = 72; differentComponentProduct[1].physical_group_key = 'd'.repeat(64);
+const missingServerToken = fresh(); delete missingServerToken[1].physical_source_fingerprint;
+const localOnly = fresh(); localOnly.forEach(row => {{ delete row.physical_group_key; delete row.physical_source_fingerprint; }});
 console.log(JSON.stringify({{
   grouped:grouped.length,
   sourceCount:grouped[0]._merged_component_lines.length,
@@ -202,28 +225,36 @@ console.log(JSON.stringify({{
   missingCreaseRows:context.groupCompositeRequisitionLines(missingCrease).length,
   differentMaterialRows:context.groupCompositeRequisitionLines(differentMaterial).length,
   differentSourceRoleRows:context.groupCompositeRequisitionLines(differentSourceRole).length,
+  differentComponentProductRows:context.groupCompositeRequisitionLines(differentComponentProduct).length,
+  missingServerTokenRows:context.groupCompositeRequisitionLines(missingServerToken).length,
+  localOnlyRows:context.groupCompositeRequisitionLines(localOnly).length,
 }}));
+}})().catch(error=>{{ console.error(error); process.exit(1); }});
 """
     completed = subprocess.run(
         ["node", "-e", script],
         cwd=ROOT,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         encoding="utf-8",
     )
+    assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout) == {
         "grouped": 1,
         "sourceCount": 2,
         "payloadCount": 2,
-        "requisitionQty": [30, 125],
-        "orderPurposeQty": [30, 120],
+        "requisitionQty": [0, 155],
+        "orderPurposeQty": [0, 150],
         "stockPurposeQty": [0, 5],
         "snapshots": [11, 12],
-        "differentSizeRows": 2,
-        "missingCreaseRows": 2,
-        "differentMaterialRows": 2,
+        "differentSizeRows": 1,
+        "missingCreaseRows": 1,
+        "differentMaterialRows": 1,
         "differentSourceRoleRows": 1,
+        "differentComponentProductRows": 2,
+        "missingServerTokenRows": 2,
+        "localOnlyRows": 2,
     }
 
 

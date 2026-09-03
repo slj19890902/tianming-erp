@@ -91,6 +91,18 @@ from app.services.incoming_receipts import (
     supplier_order_item_component_type,
     supplier_order_item_key,
 )
+from app.services.composite_physical_group_receipts import (
+    coalesce_pending_group_rows,
+    group_customer_id_for_receipt_item,
+    group_customer_id_for_route,
+    group_receipt_history_rows,
+    group_receipt_response,
+    is_composite_physical_group_key,
+    receive_composite_physical_group,
+    require_group_receipt_route,
+    revert_composite_physical_group_receipt,
+    without_composite_group_source_history_rows,
+)
 from app.services.production_workflow import (
     ProductionWorkflowError,
     cutting_output_factor,
@@ -1151,6 +1163,7 @@ class ReceiveRequest(BaseModel):
     surplus_disposition: Literal["finished", "semi_finished_reserve"] | None = None
     surplus_location_id: int | None = Field(default=None, gt=0)
     expected_surplus_layout_version: int | None = Field(default=None, gt=0)
+    expected_group_version: int | None = Field(default=None, gt=0)
     expected_receipt_fact_version: int | None = Field(default=None, gt=0)
     purchase_purpose_source_snapshot_id: int | None = Field(default=None, gt=0)
     expected_purpose_snapshot_version: int | None = Field(default=None, gt=0)
@@ -1180,6 +1193,7 @@ class BatchReceiveLine(BaseModel):
     surplus_disposition: Literal["finished", "semi_finished_reserve"] | None = None
     surplus_location_id: int | None = Field(default=None, gt=0)
     expected_surplus_layout_version: int | None = Field(default=None, gt=0)
+    expected_group_version: int | None = Field(default=None, gt=0)
     expected_receipt_fact_version: int | None = Field(default=None, gt=0)
     purchase_purpose_source_snapshot_id: int | None = Field(default=None, gt=0)
     expected_purpose_snapshot_version: int | None = Field(default=None, gt=0)
@@ -1499,6 +1513,11 @@ def _preflight_item_customer_access(
     item_id: int | str,
     user: User,
 ) -> None:
+    if is_composite_physical_group_key(item_id):
+        customer_id = group_customer_id_for_route(db, item_id)
+        if customer_id is not None:
+            require_customer_access(customer_id, user, db)
+        return
     if _is_stock_replenishment_key(item_id):
         customer_id = db.scalar(
             select(StockReplenishmentOrderItem.customer_id).where(
@@ -2063,7 +2082,11 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
         stock_row["customer_name"] = stock_row.get("customer_name") or ""
         stock_row["delivery_date"] = None
         rows.append(stock_row)
-    return rows
+    return coalesce_pending_group_rows(
+        db,
+        rows,
+        visible_customer_ids=visible_customer_ids,
+    )
 
 
 def dashboard_pending_incoming_rows(db: Session, user: User) -> list[dict]:
@@ -2599,6 +2622,13 @@ def _rows(
         row.update(summary)
         row["incoming_quantity"] = summary["remaining_quantity"]
     rows.extend(stock_replenishment_rows)
+    _decorate_rows_with_receipt_purpose(db, rows)
+    if received_since is None:
+        rows = coalesce_pending_group_rows(
+            db,
+            rows,
+            visible_customer_ids=visible_customer_ids,
+        )
     if selected_route_ids is not None:
         rows_by_id = {row["item_id"]: row for row in rows}
         rows = [
@@ -2606,7 +2636,6 @@ def _rows(
             for item_id in selected_route_ids
             if item_id in rows_by_id
         ]
-    _decorate_rows_with_receipt_purpose(db, rows)
     return rows
 
 
@@ -3342,8 +3371,12 @@ def _receipt_fact_rows(
                     RequisitionItemBomSource.active_guard == 1,
                 )
             ).all()
-        }
+    }
     for fact in history_facts:
+        if fact.composite_physical_purchase_group_id is not None:
+            # Group receipts are serialized below through their authoritative
+            # group receipt/allocation facts, never as a legacy order line.
+            continue
         if fact.stock_replenishment_item_id is not None:
             stock_row = _stock_replenishment_receipt_row(db, fact)
             if stock_row is None:
@@ -3611,17 +3644,31 @@ def _received_rows(
         for row in facts
         if row.get("order_item_id") is not None
     }
-    legacy = [
-        row for row in _rows(db, user=user, received_since=received_since)
-        if str(row["item_id"]) not in fact_keys
-        and int(
-            row.get("order_item_id")
-            or (row.get("item_id") if isinstance(row.get("item_id"), int) else 0)
-            or 0
-        )
-        not in fact_order_item_ids
-    ]
-    combined = [*facts, *legacy]
+    legacy = without_composite_group_source_history_rows(
+        db,
+        [
+            row for row in _rows(db, user=user, received_since=received_since)
+            if str(row["item_id"]) not in fact_keys
+            and int(
+                row.get("order_item_id")
+                or (
+                    row.get("item_id")
+                    if isinstance(row.get("item_id"), int)
+                    else 0
+                )
+                or 0
+            )
+            not in fact_order_item_ids
+        ],
+    )
+    group_rows = group_receipt_history_rows(
+        db,
+        received_since=received_since,
+        include_reversed=include_reversed,
+        visible_customer_ids=_visible_customer_ids(user, db),
+        can_view_cost=has_permission(user, "cost.view"),
+    )
+    combined = [*facts, *group_rows, *legacy]
     combined.sort(
         key=lambda row: (
             row.get("material_received_at") or datetime.min,
@@ -4455,6 +4502,15 @@ def _new_receipt_response(
     allocation_payloads: dict[int, dict] | None = None,
     reversal_by_receipt: dict[int, IncomingReceiptPurposeReversal] | None = None,
 ) -> dict:
+    if fact.composite_physical_purchase_group_id is not None:
+        try:
+            return group_receipt_response(
+                db,
+                fact,
+                can_view_cost=can_view_cost,
+            )
+        except IncomingReceiptError as error:
+            _raise_receipt_error(error)
     if fact.stock_replenishment_item_id is not None:
         response = _stock_replenishment_receipt_row(db, fact)
         if response is None:
@@ -4541,6 +4597,11 @@ def _preflight_receipt_item_customer_access(
 ) -> None:
     fact = db.get(IncomingReceiptItem, receipt_item_id)
     if fact is not None:
+        if fact.composite_physical_purchase_group_id is not None:
+            customer_id = group_customer_id_for_receipt_item(db, receipt_item_id)
+            if customer_id is not None:
+                require_customer_access(customer_id, user, db)
+            return
         if fact.stock_replenishment_item_id is not None:
             item = db.get(
                 StockReplenishmentOrderItem,
@@ -4556,6 +4617,95 @@ def _preflight_receipt_item_customer_access(
         )
 
 
+def _receive_routed_item(
+    db: Session,
+    *,
+    user: User,
+    item_key: int | str,
+    payload: ReceiveRequest | BatchReceiveLine | None,
+    request: Request | None,
+    batch_id: str | None = None,
+) -> IncomingReceiptItem:
+    audit_context = {
+        "request": request,
+        **({"batch_id": batch_id} if batch_id is not None else {}),
+    }
+    if is_composite_physical_group_key(item_key):
+        if payload is None:
+            raise IncomingReceiptError(
+                "物理采购组收料必须提交数量、版本、价格事实和幂等键。",
+                409,
+                code="COMPOSITE_GROUP_RECEIPT_CONTRACT_REQUIRED",
+            )
+        if (
+            str(payload.resolution_action or "").strip()
+            or str(payload.resolution_reason or "").strip()
+            or payload.surplus_location_id is not None
+            or payload.expected_surplus_layout_version is not None
+        ):
+            raise IncomingReceiptError(
+                "物理采购组用途和库位由冻结计划自动决定，不能提交人工差异用途或库位。",
+                409,
+                code="COMPOSITE_GROUP_RECEIPT_PAYLOAD_INVALID",
+            )
+        return receive_composite_physical_group(
+            db,
+            user=user,
+            item_key=item_key,
+            received_quantity=payload.received_quantity,
+            surplus_disposition=payload.surplus_disposition,
+            expected_group_version=payload.expected_group_version,
+            expected_receipt_fact_version=payload.expected_receipt_fact_version,
+            purchase_purpose_source_snapshot_id=(
+                payload.purchase_purpose_source_snapshot_id
+            ),
+            expected_purpose_snapshot_version=(
+                payload.expected_purpose_snapshot_version
+            ),
+            receipt_plan_fingerprint=payload.receipt_plan_fingerprint,
+            expected_actual_material_version=(
+                payload.expected_actual_material_version
+            ),
+            actual_material_fingerprint=payload.actual_material_fingerprint,
+            idempotency_key=payload.idempotency_key,
+            audit_context=audit_context,
+        )
+    require_group_receipt_route(db, item_key)
+    return receive_one(
+        db,
+        user=user,
+        item_key=item_key,
+        received_quantity=(payload.received_quantity if payload is not None else None),
+        resolution_action=(payload.resolution_action if payload else None),
+        resolution_reason=(payload.resolution_reason if payload else None),
+        surplus_disposition=(payload.surplus_disposition if payload else None),
+        surplus_location_id=(payload.surplus_location_id if payload else None),
+        expected_surplus_layout_version=(
+            payload.expected_surplus_layout_version if payload else None
+        ),
+        expected_receipt_fact_version=(
+            payload.expected_receipt_fact_version if payload else None
+        ),
+        purchase_purpose_source_snapshot_id=(
+            payload.purchase_purpose_source_snapshot_id if payload else None
+        ),
+        expected_purpose_snapshot_version=(
+            payload.expected_purpose_snapshot_version if payload else None
+        ),
+        receipt_plan_fingerprint=(
+            payload.receipt_plan_fingerprint if payload else None
+        ),
+        expected_actual_material_version=(
+            payload.expected_actual_material_version if payload else None
+        ),
+        actual_material_fingerprint=(
+            payload.actual_material_fingerprint if payload else None
+        ),
+        idempotency_key=(payload.idempotency_key if payload else None),
+        audit_context=audit_context,
+    )
+
+
 @router.put("/receive/{item_id}")
 def receive_item(
     item_id: str,
@@ -4566,40 +4716,12 @@ def receive_item(
 ) -> dict:
     _preflight_item_customer_access(db, item_id=item_id, user=user)
     try:
-        fact = receive_one(
+        fact = _receive_routed_item(
             db,
             user=user,
             item_key=item_id,
-            received_quantity=(
-                payload.received_quantity if payload is not None else None
-            ),
-            resolution_action=(payload.resolution_action if payload else None),
-            resolution_reason=(payload.resolution_reason if payload else None),
-            surplus_disposition=(payload.surplus_disposition if payload else None),
-            surplus_location_id=(payload.surplus_location_id if payload else None),
-            expected_surplus_layout_version=(
-                payload.expected_surplus_layout_version if payload else None
-            ),
-            expected_receipt_fact_version=(
-                payload.expected_receipt_fact_version if payload else None
-            ),
-            purchase_purpose_source_snapshot_id=(
-                payload.purchase_purpose_source_snapshot_id if payload else None
-            ),
-            expected_purpose_snapshot_version=(
-                payload.expected_purpose_snapshot_version if payload else None
-            ),
-            receipt_plan_fingerprint=(
-                payload.receipt_plan_fingerprint if payload else None
-            ),
-            expected_actual_material_version=(
-                payload.expected_actual_material_version if payload else None
-            ),
-            actual_material_fingerprint=(
-                payload.actual_material_fingerprint if payload else None
-            ),
-            idempotency_key=(payload.idempotency_key if payload else None),
-            audit_context={"request": request},
+            payload=payload,
+            request=request,
         )
         response = _new_receipt_response(
             db, fact, can_view_cost=has_permission(user, "cost.view")
@@ -4659,7 +4781,14 @@ def batch_receive_items(
         if has_unrestricted_customer_access(user, db)
         else sorted(customer_scope_ids(user, db))
     )
-    scope_hash = canonical_purchase_receipt_hash({"customer_scope": scope_value})
+    can_view_cost = has_permission(user, "cost.view")
+    scope_hash = canonical_purchase_receipt_hash(
+        {
+            "customer_scope": scope_value,
+            "auth_version": int(user.auth_version),
+            "can_view_cost": can_view_cost,
+        }
+    )
     if batch_key:
         replay = db.scalar(
             select(IncomingReceiptBatchFact).where(
@@ -4701,34 +4830,13 @@ def batch_receive_items(
         seen.add(line.item_id)
         try:
             with db.begin_nested():
-                fact = receive_one(
+                fact = _receive_routed_item(
                     db,
                     user=user,
                     item_key=line.item_id,
-                    received_quantity=line.received_quantity,
-                    resolution_action=line.resolution_action,
-                    resolution_reason=line.resolution_reason,
-                    surplus_disposition=line.surplus_disposition,
-                    surplus_location_id=line.surplus_location_id,
-                    expected_surplus_layout_version=(
-                        line.expected_surplus_layout_version
-                    ),
-                    expected_receipt_fact_version=(
-                        line.expected_receipt_fact_version
-                    ),
-                    purchase_purpose_source_snapshot_id=(
-                        line.purchase_purpose_source_snapshot_id
-                    ),
-                    expected_purpose_snapshot_version=(
-                        line.expected_purpose_snapshot_version
-                    ),
-                    receipt_plan_fingerprint=line.receipt_plan_fingerprint,
-                    expected_actual_material_version=(
-                        line.expected_actual_material_version
-                    ),
-                    actual_material_fingerprint=line.actual_material_fingerprint,
-                    idempotency_key=line.idempotency_key,
-                    audit_context={"request": request, "batch_id": batch_id},
+                    payload=line,
+                    request=request,
+                    batch_id=batch_id,
                 )
             results.append(
                 {
@@ -4792,7 +4900,6 @@ def batch_receive_items(
     reversal_by_receipt = {
         int(row.incoming_receipt_item_id): row for row in reversals
     }
-    can_view_cost = has_permission(user, "cost.view")
     for row in results:
         fact = row.pop("_fact", None)
         if fact is not None:
@@ -4875,6 +4982,16 @@ def accept_short_receipt_item(
         user=user,
     )
     try:
+        existing = db.get(IncomingReceiptItem, receipt_item_id)
+        if (
+            existing is not None
+            and existing.composite_physical_purchase_group_id is not None
+        ):
+            raise IncomingReceiptError(
+                "物理采购组支持继续部分收料，不能按单一来源短收结单。",
+                409,
+                code="COMPOSITE_GROUP_SHORT_ACCEPT_FORBIDDEN",
+            )
         fact = accept_short(
             db,
             user=user,
@@ -4915,20 +5032,39 @@ def revert_new_receipt_item(
     if replay is not None:
         return replay
     try:
-        fact = revert_receipt_item(
-            db,
-            user=user,
-            receipt_item_id=receipt_item_id,
-            reason=payload.reason,
-            idempotency_key=idempotency_key,
-            audit_context={"request": request},
-        )
+        existing = db.get(IncomingReceiptItem, receipt_item_id)
+        if (
+            existing is not None
+            and existing.composite_physical_purchase_group_id is not None
+        ):
+            fact = revert_composite_physical_group_receipt(
+                db,
+                user=user,
+                receipt_item_id=receipt_item_id,
+                reason=_material_revert_reason(payload.reason),
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                audit_context={"request": request},
+            )
+        else:
+            fact = revert_receipt_item(
+                db,
+                user=user,
+                receipt_item_id=receipt_item_id,
+                reason=payload.reason,
+                idempotency_key=idempotency_key,
+                audit_context={"request": request},
+            )
         response = _new_receipt_response(
             db, fact, can_view_cost=has_permission(user, "cost.view")
         )
-        purpose_reversal = db.scalar(
-            select(IncomingReceiptPurposeReversal).where(
-                IncomingReceiptPurposeReversal.incoming_receipt_item_id == fact.id
+        purpose_reversal = (
+            None
+            if fact.composite_physical_purchase_group_id is not None
+            else db.scalar(
+                select(IncomingReceiptPurposeReversal).where(
+                    IncomingReceiptPurposeReversal.incoming_receipt_item_id == fact.id
+                )
             )
         )
         response = _record_reversal_fact(

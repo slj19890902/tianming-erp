@@ -10,6 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import utc_naive_to_api
+from app.models.composite_purchase_group import (
+    CompositePhysicalGroupReceipt,
+    CompositePhysicalGroupReceiptSourceAllocation,
+    CompositePhysicalPurchaseGroup,
+    CompositePhysicalPurchaseGroupSource,
+)
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.finance import (
     Invoice,
@@ -128,6 +134,18 @@ TRACE_TARGETS = {
     "supplier_requisition_void": ("requisition", "报料管理", "submitted", "已报料历史"),
     "incoming_receipt": ("incoming", "仓库来料入库", "history", "入库历史"),
     "incoming_receipt_reversal": ("incoming", "仓库来料入库", "history", "入库历史"),
+    "composite_physical_group_receipt": (
+        "incoming",
+        "仓库来料入库",
+        "history",
+        "组合组件入库",
+    ),
+    "composite_physical_group_receipt_reversal": (
+        "incoming",
+        "仓库来料入库",
+        "history",
+        "组合组件入库历史",
+    ),
     "production_task": ("production", "生产确认", "pending", "待生产"),
     "production_completion": ("production", "生产确认", "history", "完工历史"),
     "production_completion_reversal": ("production", "生产确认", "history", "完工历史"),
@@ -345,6 +363,26 @@ def build_order_item_document_trace(
     )
 
     if "requisition.view" in permissions:
+        physical_group_source_rows = db.execute(
+            select(
+                CompositePhysicalPurchaseGroupSource,
+                CompositePhysicalPurchaseGroup,
+            )
+            .join(
+                CompositePhysicalPurchaseGroup,
+                CompositePhysicalPurchaseGroup.id
+                == CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+            )
+            .where(CompositePhysicalPurchaseGroupSource.order_item_id == item.id)
+            .order_by(
+                CompositePhysicalPurchaseGroup.created_at,
+                CompositePhysicalPurchaseGroupSource.source_sequence,
+            )
+        ).all()
+        physical_group_source_by_requisition_item_id = {
+            int(source.requisition_item_id): (source, group)
+            for source, group in physical_group_source_rows
+        }
         requisition_rows = db.execute(
             select(RequisitionItem, Requisition)
             .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
@@ -352,6 +390,21 @@ def build_order_item_document_trace(
             .order_by(Requisition.created_at, RequisitionItem.id)
         ).all()
         for requisition_item, requisition in requisition_rows:
+            physical_source_and_group = (
+                physical_group_source_by_requisition_item_id.get(
+                    int(requisition_item.id)
+                )
+            )
+            physical_source = (
+                physical_source_and_group[0]
+                if physical_source_and_group is not None
+                else None
+            )
+            physical_group = (
+                physical_source_and_group[1]
+                if physical_source_and_group is not None
+                else None
+            )
             effective = str(requisition_item.status or "").strip().lower() not in {
                 "已取消",
                 "已作废",
@@ -372,10 +425,40 @@ def build_order_item_document_trace(
                 details={
                     "supplier_name": requisition.supplier_name,
                     "order_item_id": item.id,
+                    **(
+                        {
+                            "composite_physical_purchase_group_id": (
+                                physical_group.id
+                            ),
+                            "physical_group_key": physical_group.group_key,
+                            "group_purchase_sheet_quantity": (
+                                physical_group.purchase_sheet_quantity
+                            ),
+                            "group_order_purpose_sheet_quantity": (
+                                physical_group.order_purpose_sheet_quantity
+                            ),
+                            "group_reserve_sheet_quantity": (
+                                physical_group.reserve_sheet_quantity
+                            ),
+                            "source_sequence": physical_source.source_sequence,
+                            "source_count": physical_group.source_count,
+                            "source_component_type": (
+                                physical_source.component_type_snapshot
+                            ),
+                            "source_net_required_piece_quantity": (
+                                physical_source.net_required_piece_quantity
+                            ),
+                            "source_allocated_order_purpose_sheet_quantity": (
+                                physical_source.allocated_order_purpose_sheet_quantity
+                            ),
+                        }
+                        if physical_source is not None and physical_group is not None
+                        else {}
+                    ),
                 },
             )
 
-        supplier_rows = db.execute(
+        direct_supplier_rows = db.execute(
             select(SupplierRequisitionOrderItem, SupplierRequisitionOrder)
             .join(
                 SupplierRequisitionOrder,
@@ -388,7 +471,68 @@ def build_order_item_document_trace(
                 SupplierRequisitionOrderItem.id,
             )
         ).all()
-        for supplier_item, supplier_order in supplier_rows:
+        supplier_trace_rows: dict[
+            int,
+            tuple[
+                SupplierRequisitionOrderItem,
+                SupplierRequisitionOrder,
+                CompositePhysicalPurchaseGroup | None,
+                list[CompositePhysicalPurchaseGroupSource],
+            ],
+        ] = {
+            int(supplier_item.id): (
+                supplier_item,
+                supplier_order,
+                None,
+                [],
+            )
+            for supplier_item, supplier_order in direct_supplier_rows
+        }
+        group_supplier_rows = db.execute(
+            select(
+                SupplierRequisitionOrderItem,
+                SupplierRequisitionOrder,
+                CompositePhysicalPurchaseGroup,
+                CompositePhysicalPurchaseGroupSource,
+            )
+            .join(
+                CompositePhysicalPurchaseGroup,
+                CompositePhysicalPurchaseGroup.supplier_requisition_order_item_id
+                == SupplierRequisitionOrderItem.id,
+            )
+            .join(
+                CompositePhysicalPurchaseGroupSource,
+                CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id
+                == CompositePhysicalPurchaseGroup.id,
+            )
+            .join(
+                SupplierRequisitionOrder,
+                SupplierRequisitionOrder.id
+                == SupplierRequisitionOrderItem.supplier_order_id,
+            )
+            .where(CompositePhysicalPurchaseGroupSource.order_item_id == item.id)
+            .order_by(
+                SupplierRequisitionOrder.created_at,
+                SupplierRequisitionOrderItem.id,
+                CompositePhysicalPurchaseGroupSource.source_sequence,
+            )
+        ).all()
+        for supplier_item, supplier_order, physical_group, physical_source in (
+            group_supplier_rows
+        ):
+            existing = supplier_trace_rows.get(int(supplier_item.id))
+            sources = list(existing[3]) if existing is not None else []
+            sources.append(physical_source)
+            supplier_trace_rows[int(supplier_item.id)] = (
+                supplier_item,
+                supplier_order,
+                physical_group,
+                sources,
+            )
+        for supplier_item, supplier_order, physical_group, physical_sources in sorted(
+            supplier_trace_rows.values(),
+            key=lambda row: (row[1].created_at, row[0].id),
+        ):
             effective = (
                 supplier_order.status != "voided"
                 and supplier_item.status == "active"
@@ -404,13 +548,39 @@ def build_order_item_document_trace(
                     else supplier_order.status
                 ),
                 occurred_at=supplier_order.created_at,
-                quantity=supplier_item.requisition_qty,
+                quantity=(
+                    physical_group.purchase_sheet_quantity
+                    if physical_group is not None
+                    else supplier_item.requisition_qty
+                ),
                 unit="张",
                 is_effective=effective,
                 details={
                     "supplier_name": supplier_order.supplier_name,
                     "supplier_order_id": supplier_order.id,
                     "order_item_id": item.id,
+                    **(
+                        {
+                            "composite_physical_purchase_group_id": (
+                                physical_group.id
+                            ),
+                            "group_order_purpose_sheet_quantity": (
+                                physical_group.order_purpose_sheet_quantity
+                            ),
+                            "group_reserve_sheet_quantity": (
+                                physical_group.reserve_sheet_quantity
+                            ),
+                            "order_source_component_piece_quantity": sum(
+                                int(source.net_required_piece_quantity)
+                                for source in physical_sources
+                            ),
+                            "order_source_ids": [
+                                int(source.id) for source in physical_sources
+                            ],
+                        }
+                        if physical_group is not None
+                        else {}
+                    ),
                 },
             )
             item_voided_at = supplier_item.voided_at or supplier_order.voided_at
@@ -523,11 +693,202 @@ def build_order_item_document_trace(
                     is_reversal=True,
                 )
 
+        order_group_sources = list(
+            db.scalars(
+                select(CompositePhysicalPurchaseGroupSource)
+                .where(CompositePhysicalPurchaseGroupSource.order_item_id == item.id)
+                .order_by(
+                    CompositePhysicalPurchaseGroupSource.composite_physical_purchase_group_id,
+                    CompositePhysicalPurchaseGroupSource.source_sequence,
+                )
+            ).all()
+        )
+        sources_by_group_id: dict[
+            int, list[CompositePhysicalPurchaseGroupSource]
+        ] = {}
+        for source in order_group_sources:
+            sources_by_group_id.setdefault(
+                int(source.composite_physical_purchase_group_id), []
+            ).append(source)
+        group_ids = sorted(sources_by_group_id)
+        group_receipt_rows = (
+            db.execute(
+                select(
+                    CompositePhysicalGroupReceipt,
+                    IncomingReceiptItem,
+                    IncomingReceipt,
+                )
+                .join(
+                    IncomingReceiptItem,
+                    IncomingReceiptItem.id
+                    == CompositePhysicalGroupReceipt.incoming_receipt_item_id,
+                )
+                .join(
+                    IncomingReceipt,
+                    IncomingReceipt.id == IncomingReceiptItem.receipt_id,
+                )
+                .where(
+                    CompositePhysicalGroupReceipt.composite_physical_purchase_group_id.in_(
+                        group_ids
+                    )
+                )
+                .order_by(
+                    IncomingReceipt.received_at,
+                    CompositePhysicalGroupReceipt.id,
+                )
+            ).all()
+            if group_ids
+            else []
+        )
+        group_receipt_ids = [
+            int(group_receipt.id)
+            for group_receipt, _receipt_item, _receipt in group_receipt_rows
+        ]
+        group_source_allocations = (
+            list(
+                db.scalars(
+                    select(CompositePhysicalGroupReceiptSourceAllocation)
+                    .where(
+                        CompositePhysicalGroupReceiptSourceAllocation.composite_physical_group_receipt_id.in_(
+                            group_receipt_ids
+                        ),
+                        CompositePhysicalGroupReceiptSourceAllocation.order_item_id
+                        == item.id,
+                    )
+                    .order_by(
+                        CompositePhysicalGroupReceiptSourceAllocation.composite_physical_group_receipt_id,
+                        CompositePhysicalGroupReceiptSourceAllocation.allocation_sequence,
+                    )
+                ).all()
+            )
+            if group_receipt_ids
+            else []
+        )
+        group_allocations_by_receipt_id: dict[
+            int, list[CompositePhysicalGroupReceiptSourceAllocation]
+        ] = {}
+        for allocation in group_source_allocations:
+            group_allocations_by_receipt_id.setdefault(
+                int(allocation.composite_physical_group_receipt_id), []
+            ).append(allocation)
+        for group_receipt, receipt_item, receipt in group_receipt_rows:
+            group_id = int(group_receipt.composite_physical_purchase_group_id)
+            relevant_sources = sources_by_group_id[group_id]
+            allocations = group_allocations_by_receipt_id.get(
+                int(group_receipt.id), []
+            )
+            allocated_by_source_id = {
+                int(allocation.composite_physical_purchase_group_source_id): int(
+                    allocation.allocated_reserved_component_piece_quantity
+                )
+                for allocation in allocations
+            }
+            if group_receipt.component_inventory_lot_id is not None:
+                lot_ids.add(int(group_receipt.component_inventory_lot_id))
+            if group_receipt.reserve_inventory_lot_id is not None:
+                lot_ids.add(int(group_receipt.reserve_inventory_lot_id))
+            source_details = [
+                {
+                    "group_source_id": int(source.id),
+                    "bom_snapshot_id": int(
+                        source.sales_order_item_bom_component_id
+                    ),
+                    "component_type": source.component_type_snapshot,
+                    "net_required_piece_quantity": int(
+                        source.net_required_piece_quantity
+                    ),
+                    "allocated_component_piece_quantity": int(
+                        allocated_by_source_id.get(int(source.id), 0)
+                    ),
+                }
+                for source in relevant_sources
+            ]
+            details: dict[str, Any] = {
+                "composite_physical_purchase_group_id": group_id,
+                "receipt_sequence": group_receipt.receipt_sequence,
+                "order_purpose_sheet_quantity": (
+                    group_receipt.order_purpose_received_sheet_quantity
+                ),
+                "reserve_sheet_quantity": (
+                    group_receipt.reserve_received_sheet_quantity
+                ),
+                "component_output_piece_quantity": (
+                    group_receipt.component_output_piece_quantity
+                ),
+                "order_allocated_component_piece_quantity": sum(
+                    int(row["allocated_component_piece_quantity"])
+                    for row in source_details
+                ),
+                "component_inventory_lot_id": (
+                    group_receipt.component_inventory_lot_id
+                ),
+                "reserve_inventory_lot_id": group_receipt.reserve_inventory_lot_id,
+                "sources": source_details,
+            }
+            if "cost.view" in permissions:
+                details.update(
+                    {
+                        "purchase_receipt_fact_id": (
+                            group_receipt.purchase_receipt_fact_id
+                        ),
+                        "order_purpose_cost": (
+                            group_receipt.order_purpose_material_cost
+                        ),
+                        "reserve_purpose_cost": (
+                            group_receipt.reserve_material_cost
+                        ),
+                        "total_cost": group_receipt.total_material_cost,
+                    }
+                )
+            effective = (
+                receipt.status == "posted"
+                and receipt_item.status == "posted"
+                and group_receipt.status == "posted"
+            )
+            add_event(
+                stage="incoming",
+                source_type="composite_physical_group_receipt",
+                source_id=group_receipt.id,
+                document_number=receipt.receipt_number,
+                status=group_receipt.status,
+                occurred_at=receipt.received_at,
+                quantity=group_receipt.received_sheet_quantity,
+                unit="张",
+                is_effective=effective,
+                details=details,
+            )
+            reversal = group_receipt.reversal
+            reversed_at = (
+                reversal.reversed_at
+                if reversal is not None
+                else receipt_item.reversed_at or receipt.reversed_at
+            )
+            if reversed_at is not None:
+                add_event(
+                    stage="incoming",
+                    source_type="composite_physical_group_receipt_reversal",
+                    source_id=group_receipt.id,
+                    document_number=receipt.receipt_number,
+                    status="reversed",
+                    occurred_at=reversed_at,
+                    quantity=group_receipt.received_sheet_quantity,
+                    unit="张",
+                    is_effective=False,
+                    is_reversal=True,
+                    details={
+                        "composite_physical_purchase_group_id": group_id,
+                        "reversed_component_piece_quantity": (
+                            reversal.reversed_component_output_piece_quantity
+                            if reversal is not None
+                            else group_receipt.component_output_piece_quantity
+                        ),
+                    },
+                )
+
     production_tasks = db.scalars(
         select(ProductionTask)
         .where(
             ProductionTask.order_item_id == item.id,
-            ProductionTask.task_role == "order_main",
         )
         .order_by(ProductionTask.created_at, ProductionTask.id)
     ).all()
@@ -540,8 +901,14 @@ def build_order_item_document_trace(
             status=task.status,
             occurred_at=task.ready_at or task.created_at,
             quantity=task.planned_quantity,
-            unit="只",
-            details={"readiness_basis": task.readiness_basis},
+            unit=("片" if task.task_role == "component_internal" else "只"),
+            details={
+                "readiness_basis": task.readiness_basis,
+                "task_role": task.task_role,
+                "sales_order_item_bom_component_id": (
+                    task.sales_order_item_bom_component_id
+                ),
+            },
         )
 
     completion_rows = db.scalars(

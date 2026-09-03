@@ -9,17 +9,16 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 
 @pytest.fixture()
-def a3_surround_app(tmp_path: Path):
+def a3_surround_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.incoming import router as incoming_router
@@ -33,6 +32,7 @@ def a3_surround_app(tmp_path: Path):
         UserPermissionOverride,
     )
     from app.models.customer import Customer
+    from app.models.material import Material
     from app.models.order import Order, OrderItem
     from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
@@ -79,6 +79,22 @@ def a3_surround_app(tmp_path: Path):
             customer_code="P113C-OTHER",
             name="P1-13C 其他匿名客户",
         )
+        supplier = Supplier(
+            standard_name="匿名供应商",
+            normalized_name="匿名供应商",
+            display_name="匿名供应商",
+            sort_order=10,
+            is_active=True,
+            version=1,
+        )
+        material = Material(
+            code="A=A",
+            layer_count=5,
+            flute_type="AB",
+            supplier_name=supplier.standard_name,
+            is_active=True,
+            version=1,
+        )
         db.add_all(
             [
                 user,
@@ -86,14 +102,8 @@ def a3_surround_app(tmp_path: Path):
                 scoped_user,
                 customer,
                 other_customer,
-                Supplier(
-                    standard_name="匿名供应商",
-                    normalized_name="匿名供应商",
-                    display_name="匿名供应商",
-                    sort_order=10,
-                    is_active=True,
-                    version=1,
-                ),
+                supplier,
+                material,
             ]
         )
         db.flush()
@@ -179,6 +189,9 @@ def a3_surround_app(tmp_path: Path):
                 SalesOrderItemBomComponent(
                     sales_order_item_id=item.id,
                     component_product_id=a3.id,
+                    parent_product_version=parent.version,
+                    component_product_version=a3.version,
+                    snapshot_schema_version=3,
                     order_set_quantity=10,
                     quantity_per_set=Decimal("1"),
                     required_piece_quantity=Decimal("10"),
@@ -192,6 +205,7 @@ def a3_surround_app(tmp_path: Path):
                     snapshot_component_product_name=a3.product_name,
                     snapshot_component_spec="A3",
                     snapshot_component_material="A=A",
+                    snapshot_component_material_id=material.id,
                     snapshot_component_supplier_name="匿名供应商",
                     snapshot_component_layer_count=5,
                     snapshot_component_flute_type="AB",
@@ -210,6 +224,9 @@ def a3_surround_app(tmp_path: Path):
                 SalesOrderItemBomComponent(
                     sales_order_item_id=item.id,
                     component_product_id=surround.id,
+                    parent_product_version=parent.version,
+                    component_product_version=surround.version,
+                    snapshot_schema_version=3,
                     order_set_quantity=10,
                     quantity_per_set=Decimal("1"),
                     required_piece_quantity=Decimal("10"),
@@ -223,6 +240,7 @@ def a3_surround_app(tmp_path: Path):
                     snapshot_component_product_name=surround.product_name,
                     snapshot_component_spec="围板双拼",
                     snapshot_component_material="A=A",
+                    snapshot_component_material_id=material.id,
                     snapshot_component_supplier_name="匿名供应商",
                     snapshot_component_layer_count=5,
                     snapshot_component_flute_type="AB",
@@ -238,6 +256,24 @@ def a3_surround_app(tmp_path: Path):
                 ),
             ]
         )
+        db.commit()
+
+    from tests.test_p1_81_receipt_purpose_flow import (
+        _seed_material_and_staging,
+        _use_p181_published_map_identity,
+    )
+
+    _use_p181_published_map_identity(monkeypatch)
+    _seed_material_and_staging(factory)
+    with factory() as db:
+        material = db.scalar(select(Material).where(Material.code == "A=A"))
+        item = db.get(OrderItem, 1)
+        parent = db.get(Product, item.product_id)
+        assert material is not None and item is not None and parent is not None
+        item.material_id = material.id
+        item.snapshot_material = material.code
+        item.snapshot_supplier_name = material.supplier_name
+        parent.material_id = material.id
         db.commit()
 
     app = FastAPI()
@@ -269,44 +305,108 @@ def _login(
     assert response.status_code == 200, response.text
 
 
-def _source_payload(snapshot_id: int, component_type: str) -> dict:
+def _source_payload(source: dict) -> dict:
+    from app.api.requisition import _composite_physical_group_fingerprint
+
+    group_key = str(source["physical_group_key"])
+    source_fingerprint = str(source["physical_source_fingerprint"])
+    group_fingerprint = _composite_physical_group_fingerprint(
+        group_key,
+        [source_fingerprint],
+    )
+    quantity = int(source["requisition_qty"])
     return {
-        "order_item_id": 1,
-        "bom_snapshot_id": snapshot_id,
-        "component_type": component_type,
-        "cardboard_len": 1,
-        "cardboard_width": 1,
-        "special_process": "一开一",
+        "order_item_id": int(source.get("order_item_id") or 1),
+        "bom_snapshot_id": int(source["snapshot_id"]),
+        "component_type": source["component_type"],
+        "physical_group_key": group_key,
+        "group_fingerprint": group_fingerprint,
+        "source_fingerprint": source_fingerprint,
+        "group_purchase_sheet_qty": quantity,
+        "group_order_purpose_sheet_qty": quantity,
+        "group_stock_purpose_sheet_qty": 0,
+        "requisition_qty": quantity,
+        "purchase_total_sheet_qty": quantity,
+        "order_purpose_sheet_qty": quantity,
+        "stock_purpose_sheet_qty": 0,
+        "purpose_plan_version": 1,
+        "purpose_plan_fingerprint": group_fingerprint,
+        "cardboard_len": source["report_length_mm"],
+        "cardboard_width": source["report_width_mm"],
+        "special_process": source["cutting_mode"],
     }
 
 
-def _mark_material_requisition_items_as_legacy(
+def _pending_sources(client: TestClient) -> dict[tuple[int, str], dict]:
+    response = client.get("/api/requisition/pending")
+    assert response.status_code == 200, response.text
+    sources = response.json()["items"][0]["component_requirements"]
+    return {
+        (int(source["snapshot_id"]), str(source["component_type"])): source
+        for source in sources
+        if source["can_requisition"]
+    }
+
+
+def _source_payloads(
+    client: TestClient,
+    *source_keys: tuple[int, str],
+) -> list[dict]:
+    pending = _pending_sources(client)
+    return [_source_payload(pending[source_key]) for source_key in source_keys]
+
+
+def _incoming_groups(client: TestClient) -> dict[str, dict]:
+    response = client.get("/api/incoming/pending")
+    assert response.status_code == 200, response.text
+    groups: dict[str, dict] = {}
+    for row in response.json()["items"]:
+        if not str(row["item_id"]).startswith("cg"):
+            continue
+        source_types = {
+            str(source["component_type"]) for source in row["source_items"]
+        }
+        assert len(source_types) == 1
+        groups[next(iter(source_types))] = row
+    return groups
+
+
+def _receive_group(
+    client: TestClient,
     factory,
-    requisition_item_ids: list[int] | None = None,
-) -> None:
-    """Turn API-created rows into explicit pre-P1-80 compatibility fixtures.
+    group_row: dict,
+    *,
+    quantity: int,
+    idempotency_key: str,
+    receipt_fact: dict | None = None,
+):
+    from tests.test_p1_150b_composite_physical_group_receipts import (
+        _freeze_direct_group_receipt_fact,
+        _group_receive_payload,
+    )
 
-    Modern formal rows must use the P1-81 frozen receipt flow. These older
-    regression cases intentionally exercise the legacy incoming endpoints.
-    """
-    from app.models.requisition import RequisitionItem
-    from app.models.supplier_requisition_order import PurchasePurposeSourceSnapshot
-
-    with factory() as db:
-        query = select(RequisitionItem)
-        if requisition_item_ids is not None:
-            query = query.where(RequisitionItem.id.in_(requisition_item_ids))
-        rows = db.scalars(query).all()
-        ids = [row.id for row in rows]
-        if ids:
-            db.execute(
-                delete(PurchasePurposeSourceSnapshot).where(
-                    PurchasePurposeSourceSnapshot.material_requisition_item_id.in_(ids)
-                )
-            )
-        for row in rows:
-            row.purpose_contract_status = "legacy_unset"
-        db.commit()
+    if receipt_fact is None:
+        receipt_fact = _freeze_direct_group_receipt_fact(
+            client,
+            factory,
+            group_row,
+            idempotency_key=f"{idempotency_key}-price",
+        )
+    refreshed = next(
+        row
+        for row in client.get("/api/incoming/pending").json()["items"]
+        if row["item_id"] == group_row["item_id"]
+    )
+    response = client.put(
+        f"/api/incoming/receive/{refreshed['item_id']}",
+        json=_group_receive_payload(
+            refreshed,
+            receipt_fact,
+            quantity=quantity,
+            idempotency_key=idempotency_key,
+        ),
+    )
+    return response, receipt_fact
 
 
 def test_pending_expands_exactly_cover_base_and_double_surround(
@@ -354,7 +454,7 @@ def test_bom_component_print_and_reported_list_use_component_crease_snapshot(
             "/api/requisition/batches",
             json={
                 "supplier_name": "匿名供应商",
-                "items": [_source_payload(2, "whole")],
+                "items": _source_payloads(client, (2, "whole")),
             },
         )
         assert created.status_code == 201, created.text
@@ -382,12 +482,11 @@ def test_bom_component_print_and_reported_list_use_component_crease_snapshot(
     assert line["flute_type"] == "AB"
 
 
-def test_bom_component_surplus_inventory_uses_component_physical_snapshot(
+def test_bom_component_group_freezes_component_physical_snapshot(
     a3_surround_app,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.models.product_bom import RequisitionItemBomSource
-    from app.services import incoming_receipts
+    from app.models.composite_purchase_group import CompositePhysicalPurchaseGroup
+    from app.models.product import Product
 
     app, factory = a3_surround_app
     with TestClient(app) as client:
@@ -396,54 +495,25 @@ def test_bom_component_surplus_inventory_uses_component_physical_snapshot(
             "/api/requisition/batches",
             json={
                 "supplier_name": "匿名供应商",
-                "items": [_source_payload(2, "whole")],
+                "items": _source_payloads(client, (2, "whole")),
             },
         )
     assert created.status_code == 201, created.text
 
     with factory() as db:
-        source = db.scalar(select(RequisitionItemBomSource))
-        assert source is not None
-        target = incoming_receipts._target(
-            db,
-            f"r{source.requisition_item_id}",
+        group = db.scalar(select(CompositePhysicalPurchaseGroup))
+        surround_id = db.scalar(
+            select(Product.id).where(Product.product_code == "SURROUND-COMPONENT")
         )
-        assert target.bom_snapshot is not None
-        assert target.bom_snapshot.id == 2
-
-    captured: dict[str, object] = {}
-    sentinel = object()
-
-    def fake_manual_semi_finished_in(_db, **kwargs):
-        captured.update(kwargs)
-        return sentinel
-
-    monkeypatch.setattr(
-        incoming_receipts,
-        "manual_semi_finished_in",
-        fake_manual_semi_finished_in,
-    )
-    receipt_item = SimpleNamespace(
-        id=1,
-        receipt=SimpleNamespace(received_at=datetime(2026, 8, 10, 1, 0)),
-    )
-
-    result = incoming_receipts._create_surplus_lot(
-        object(),
-        target=target,
-        receipt_item=receipt_item,
-        surplus=2,
-        location_id=1,
-        user_id=1,
-        reason="组合子件超收",
-    )
-
-    assert result is sentinel
-    assert captured["material_code"] == "A=A"
-    assert captured["layer_count"] == 5
-    assert captured["flute_type"] == "AB"
-    assert captured["crease_type"] == "毛片"
-    assert captured["sheet_type"] == "raw_board"
+        assert group is not None
+        assert group.component_product_id == surround_id
+        assert group.material_code_snapshot == "A=A"
+        assert group.layer_count_snapshot == 5
+        assert group.flute_type_snapshot == "AB"
+        assert (group.report_length_mm, group.report_width_mm) == (800, 300)
+        assert group.crease_type_snapshot == "毛片"
+        assert group.sheet_type_snapshot == "raw_board"
+        assert group.source_count == 1
 
 
 @pytest.mark.parametrize(
@@ -503,11 +573,12 @@ def test_report_receive_and_replay_keep_three_physical_sources_independent(
     app, factory = a3_surround_app
     with TestClient(app) as client:
         _login(client)
+        cover_payload = _source_payloads(client, (1, "cover"))
         cover = client.post(
             "/api/requisition/batches",
             json={
                 "supplier_name": "匿名供应商",
-                "items": [_source_payload(1, "cover")],
+                "items": cover_payload,
             },
         )
         pending_after_cover = client.get("/api/requisition/pending")
@@ -515,17 +586,18 @@ def test_report_receive_and_replay_keep_three_physical_sources_independent(
             "/api/requisition/batches",
             json={
                 "supplier_name": "匿名供应商",
-                "items": [_source_payload(1, "cover")],
+                "items": cover_payload,
             },
         )
         remaining = client.post(
             "/api/requisition/batches",
             json={
                 "supplier_name": "匿名供应商",
-                "items": [
-                    _source_payload(1, "base"),
-                    _source_payload(2, "whole"),
-                ],
+                "items": _source_payloads(
+                    client,
+                    (1, "base"),
+                    (2, "whole"),
+                ),
             },
         )
         incoming = client.get("/api/incoming/pending")
@@ -592,14 +664,12 @@ def test_report_receive_and_replay_keep_three_physical_sources_independent(
         db.get(RequisitionItem, 2).product_name_snapshot = "A3 物理料乙"
         db.commit()
 
-    _mark_material_requisition_items_as_legacy(factory)
-
     by_component = {
         source.component_type: source.requisition_item_id for source in sources
     }
     with TestClient(app) as client:
         _login(client)
-        stable_identity_rows = client.get("/api/incoming/pending")
+        stable_identity_groups = _incoming_groups(client)
         cancelled_base = client.put(
             f"/api/requisition/batch-items/{by_component['base']}/void",
             json={"reason": "P1-13C 单独撤销底片"},
@@ -608,42 +678,37 @@ def test_report_receive_and_replay_keep_three_physical_sources_independent(
             f"/api/requisition/batch-items/{by_component['base']}/void",
             json={"reason": "P1-13C 幂等重放"},
         )
-        pending_after_cancel = client.get("/api/incoming/pending")
-        received_cover = client.put(
-            f"/api/incoming/receive/r{by_component['cover']}"
+        pending_after_cancel = _incoming_groups(client)
+        received_cover, _ = _receive_group(
+            client,
+            factory,
+            stable_identity_groups["cover"],
+            quantity=int(stable_identity_groups["cover"]["planned_quantity"]),
+            idempotency_key="p1-13c-cover-receipt",
         )
-        pending_after_receive_cover = client.get("/api/incoming/pending")
-        received_surround = client.put(
-            f"/api/incoming/receive/r{by_component['whole']}"
+        pending_after_receive_cover = _incoming_groups(client)
+        received_surround, _ = _receive_group(
+            client,
+            factory,
+            pending_after_receive_cover["whole"],
+            quantity=int(pending_after_receive_cover["whole"]["planned_quantity"]),
+            idempotency_key="p1-13c-surround-receipt",
         )
         void_received_cover = client.put(
             f"/api/requisition/batch-items/{by_component['cover']}/void",
             json={"reason": "已收货行应拒绝"},
         )
 
-    assert stable_identity_rows.status_code == 200, stable_identity_rows.text
-    assert {
-        row["item_id"]: row["component_type"]
-        for row in stable_identity_rows.json()["items"]
-    } == {
-        f"r{by_component['cover']}": "cover",
-        f"r{by_component['base']}": "base",
-        f"r{by_component['whole']}": "whole",
-    }
+    assert set(stable_identity_groups) == {"cover", "base", "whole"}
+    assert all(
+        str(row["item_id"]).startswith("cg")
+        for row in stable_identity_groups.values()
+    )
     assert cancelled_base.status_code == 409, cancelled_base.text
     assert cancel_replay.status_code == 409, cancel_replay.text
-    assert {
-        row["item_id"] for row in pending_after_cancel.json()["items"]
-    } == {
-        f"r{by_component['cover']}",
-        f"r{by_component['base']}",
-        f"r{by_component['whole']}",
-    }
+    assert set(pending_after_cancel) == {"cover", "base", "whole"}
     assert received_cover.status_code == 200, received_cover.text
-    assert {
-        row["item_id"]
-        for row in pending_after_receive_cover.json()["items"]
-    } == {f"r{by_component['base']}", f"r{by_component['whole']}"}
+    assert set(pending_after_receive_cover) == {"base", "whole"}
     assert received_surround.status_code == 200, received_surround.text
     assert void_received_cover.status_code == 409, void_received_cover.text
     with factory() as db:
@@ -675,11 +740,12 @@ def test_each_physical_source_can_short_receive_revert_and_receive_again(
             "/api/requisition/batches",
             json={
                 "supplier_name": "匿名供应商",
-                "items": [
-                    _source_payload(1, "cover"),
-                    _source_payload(1, "base"),
-                    _source_payload(2, "whole"),
-                ],
+                "items": _source_payloads(
+                    client,
+                    (1, "cover"),
+                    (1, "base"),
+                    (2, "whole"),
+                ),
             },
         )
     assert created.status_code == 201, created.text
@@ -693,17 +759,15 @@ def test_each_physical_source_can_short_receive_revert_and_receive_again(
         assert source is not None
         requisition_item_id = source.requisition_item_id
 
-    _mark_material_requisition_items_as_legacy(factory)
-
     with TestClient(app) as client:
         _login(client)
-        short_received = client.put(
-            f"/api/incoming/receive/r{requisition_item_id}",
-            json={
-                "received_quantity": short_quantity,
-                "resolution_action": "await_supplier",
-                "resolution_reason": "P1-13C 参数化短收",
-            },
+        group_row = _incoming_groups(client)[component_type]
+        short_received, receipt_fact = _receive_group(
+            client,
+            factory,
+            group_row,
+            quantity=short_quantity,
+            idempotency_key=f"p1-13c-{component_type}-short",
         )
         blocked_void = client.put(
             f"/api/requisition/batch-items/{requisition_item_id}/void",
@@ -713,15 +777,17 @@ def test_each_physical_source_can_short_receive_revert_and_receive_again(
         reverted = client.put(
             "/api/incoming/receipt-items/"
             f"{short_received.json()['receipt_item_id']}/revert",
-            json={"reason": "P1-13C 参数化撤销实收"},
-        )
-        received_again = client.put(
-            f"/api/incoming/receive/r{requisition_item_id}",
             json={
-                "received_quantity": short_quantity,
-                "resolution_action": "await_supplier",
-                "resolution_reason": "P1-13C 参数化重新短收",
+                "idempotency_key": f"p1-13c-{component_type}-revert",
             },
+        )
+        received_again, _ = _receive_group(
+            client,
+            factory,
+            _incoming_groups(client)[component_type],
+            quantity=short_quantity,
+            idempotency_key=f"p1-13c-{component_type}-again",
+            receipt_fact=receipt_fact,
         )
 
     assert blocked_void.status_code == 409, blocked_void.text
@@ -1045,10 +1111,11 @@ def test_inventory_covered_cover_needs_only_base_and_surround_receipts(
             "/api/requisition/batches",
             json={
                 "supplier_name": "匿名供应商",
-                "items": [
-                    _source_payload(1, "base"),
-                    _source_payload(2, "whole"),
-                ],
+                "items": _source_payloads(
+                    client,
+                    (1, "base"),
+                    (2, "whole"),
+                ),
             },
         )
         incoming = client.get("/api/incoming/pending")
@@ -1069,23 +1136,24 @@ def test_inventory_covered_cover_needs_only_base_and_surround_receipts(
         item = db.get(OrderItem, 1)
         assert item is not None
         assert item.requisition_status == "已报料"
-        sources = db.scalars(
-            select(RequisitionItemBomSource).order_by(
-                RequisitionItemBomSource.id
-            )
-        ).all()
-        source_ids = {
-            source.component_type: source.requisition_item_id
-            for source in sources
-        }
-
-    _mark_material_requisition_items_as_legacy(factory)
 
     with TestClient(app) as client:
         _login(client)
-        base = client.put(f"/api/incoming/receive/r{source_ids['base']}")
-        surround = client.put(
-            f"/api/incoming/receive/r{source_ids['whole']}"
+        groups = _incoming_groups(client)
+        base, _ = _receive_group(
+            client,
+            factory,
+            groups["base"],
+            quantity=int(groups["base"]["planned_quantity"]),
+            idempotency_key="p1-13c-covered-base",
+        )
+        remaining_groups = _incoming_groups(client)
+        surround, _ = _receive_group(
+            client,
+            factory,
+            remaining_groups["whole"],
+            quantity=int(remaining_groups["whole"]["planned_quantity"]),
+            idempotency_key="p1-13c-covered-whole",
         )
     assert base.status_code == 200, base.text
     assert surround.status_code == 200, surround.text
@@ -1110,7 +1178,7 @@ def test_database_guard_blocks_duplicate_active_source_and_allows_rereport(
             "/api/requisition/batches",
             json={
                 "supplier_name": "匿名供应商",
-                "items": [_source_payload(1, "cover")],
+                "items": _source_payloads(client, (1, "cover")),
             },
         )
     assert created.status_code == 201, created.text
@@ -1185,7 +1253,7 @@ def test_database_guard_blocks_duplicate_active_source_and_allows_rereport(
             "/api/requisition/batches",
             json={
                 "supplier_name": "匿名供应商",
-                "items": [_source_payload(1, "cover")],
+                "items": _source_payloads(client, (1, "cover")),
             },
         )
     assert voided.status_code == 200, voided.text
@@ -1211,11 +1279,12 @@ def test_partial_receipt_blocks_batch_and_order_level_void(
             "/api/requisition/batches",
             json={
                 "supplier_name": "匿名供应商",
-                "items": [
-                    _source_payload(1, "cover"),
-                    _source_payload(1, "base"),
-                    _source_payload(2, "whole"),
-                ],
+                "items": _source_payloads(
+                    client,
+                    (1, "cover"),
+                    (1, "base"),
+                    (2, "whole"),
+                ),
             },
         )
     assert created.status_code == 201, created.text
@@ -1227,17 +1296,14 @@ def test_partial_receipt_blocks_batch_and_order_level_void(
         )
         assert cover_source is not None
 
-    _mark_material_requisition_items_as_legacy(factory)
-
     with TestClient(app) as client:
         _login(client)
-        partial = client.put(
-            f"/api/incoming/receive/r{cover_source.requisition_item_id}",
-            json={
-                "received_quantity": 5,
-                "resolution_action": "await_supplier",
-                "resolution_reason": "剩余盖片待补",
-            },
+        partial, _ = _receive_group(
+            client,
+            factory,
+            _incoming_groups(client)["cover"],
+            quantity=5,
+            idempotency_key="p1-13c-partial-cover",
         )
         batch_void = client.put(
             f"/api/requisition/batches/{created.json()['id']}/void",
@@ -1285,11 +1351,12 @@ def test_direct_void_ids_enforce_permission_and_customer_scope(
             "/api/requisition/batches",
             json={
                 "supplier_name": "匿名供应商",
-                "items": [
-                    _source_payload(1, "cover"),
-                    _source_payload(1, "base"),
-                    _source_payload(2, "whole"),
-                ],
+                "items": _source_payloads(
+                    client,
+                    (1, "cover"),
+                    (1, "base"),
+                    (2, "whole"),
+                ),
             },
         )
     assert created.status_code == 201, created.text

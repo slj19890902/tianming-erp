@@ -75,6 +75,13 @@ class FinanceDeliveryMaterialCostFact(Base):
             "tax_rate_snapshot >= 0 AND tax_rate_snapshot <= 1",
             name="ck_finance_delivery_material_cost_facts_tax_rate",
         ),
+        CheckConstraint(
+            "((incoming_receipt_purpose_allocation_id IS NOT NULL "
+            "AND composite_physical_group_receipt_id IS NULL) OR "
+            "(incoming_receipt_purpose_allocation_id IS NULL "
+            "AND composite_physical_group_receipt_id IS NOT NULL))",
+            name="ck_finance_delivery_material_cost_facts_receipt_source",
+        ),
         UniqueConstraint(
             "delivery_inventory_allocation_id",
             "snapshot_version",
@@ -106,6 +113,10 @@ class FinanceDeliveryMaterialCostFact(Base):
         Index(
             "ix_finance_delivery_material_cost_facts_receipt_fact",
             "purchase_receipt_fact_id",
+        ),
+        Index(
+            "ix_finance_delivery_material_cost_facts_composite_receipt",
+            "composite_physical_group_receipt_id",
         ),
     )
 
@@ -140,11 +151,17 @@ class FinanceDeliveryMaterialCostFact(Base):
     production_completion_id: Mapped[int | None] = mapped_column(
         ForeignKey("production_completions.id", ondelete="RESTRICT"), nullable=True
     )
-    incoming_receipt_purpose_allocation_id: Mapped[int] = mapped_column(
+    incoming_receipt_purpose_allocation_id: Mapped[int | None] = mapped_column(
         ForeignKey(
             "incoming_receipt_purpose_allocations.id", ondelete="RESTRICT"
         ),
-        nullable=False,
+        nullable=True,
+    )
+    composite_physical_group_receipt_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "composite_physical_group_receipts.id", ondelete="RESTRICT"
+        ),
+        nullable=True,
     )
     purchase_receipt_fact_id: Mapped[int] = mapped_column(
         ForeignKey("purchase_receipt_facts.id", ondelete="RESTRICT"),

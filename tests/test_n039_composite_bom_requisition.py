@@ -25,6 +25,7 @@ def composite_requisition_app(tmp_path: Path):
     from app.core.security import hash_password
     from app.models import Base
     from app.models.customer import Customer
+    from app.models.material import Material
     from app.models.order import Order, OrderItem
     from app.models.product import Product
     from app.models.product_bom import ProductBomComponent, SalesOrderItemBomComponent
@@ -87,6 +88,14 @@ def composite_requisition_app(tmp_path: Path):
             is_active=True,
             version=1,
         )
+        material = Material(
+            code="K616K",
+            layer_count=5,
+            flute_type="AB",
+            supplier_name=supplier.standard_name,
+            is_active=True,
+            version=1,
+        )
         staging_location = WarehouseLocation(
             location_code="F1-DISPATCH-01",
             location_name="一楼待送区",
@@ -107,6 +116,7 @@ def composite_requisition_app(tmp_path: Path):
                 component_a,
                 component_b,
                 supplier,
+                material,
                 staging_location,
             ]
         )
@@ -168,6 +178,9 @@ def composite_requisition_app(tmp_path: Path):
                     sales_order_item_id=item.id,
                     product_bom_component_id=None,
                     component_product_id=component.id,
+                    parent_product_version=parent.version,
+                    component_product_version=component.version,
+                    snapshot_schema_version=3,
                     order_set_quantity=10,
                     quantity_per_set=Decimal(per_set),
                     required_piece_quantity=Decimal(10 * per_set),
@@ -183,6 +196,7 @@ def composite_requisition_app(tmp_path: Path):
                     snapshot_component_product_name=component.product_name,
                     snapshot_component_spec=f"{length}×{width}",
                     snapshot_component_material="K616K",
+                    snapshot_component_material_id=material.id,
                     snapshot_component_supplier_name="N039 供应商",
                     snapshot_component_layer_count=5,
                     snapshot_component_flute_type="AB",
@@ -191,6 +205,9 @@ def composite_requisition_app(tmp_path: Path):
                     snapshot_component_default_cutting_mode="一开一",
                     snapshot_component_report_length_mm=length,
                     snapshot_component_report_width_mm=width,
+                    snapshot_component_crease_type="毛片",
+                    snapshot_component_splice_mode="single",
+                    snapshot_component_pieces_per_box=1,
                 )
             )
         session.commit()
@@ -220,11 +237,56 @@ def _login(client: TestClient) -> None:
 
 
 def _component_payload(
-    snapshot_id: int,
+    component: int | dict,
     *,
     actual_yield_per_sheet=None,
     requisition_qty: int | None = None,
 ) -> dict:
+    if isinstance(component, dict):
+        from app.api.requisition import _composite_physical_group_fingerprint
+
+        snapshot_id = int(component["snapshot_id"])
+        group_key = str(component["physical_group_key"])
+        source_fingerprint = str(component["physical_source_fingerprint"])
+        group_fingerprint = _composite_physical_group_fingerprint(
+            group_key,
+            [source_fingerprint],
+        )
+        minimum_quantity = int(component["requisition_qty"])
+        confirmed_quantity = (
+            minimum_quantity if requisition_qty is None else int(requisition_qty)
+        )
+        payload = {
+            "order_item_id": int(component.get("order_item_id") or 1),
+            "component_type": component["component_type"],
+            "bom_snapshot_id": snapshot_id,
+            "physical_group_key": group_key,
+            "group_fingerprint": group_fingerprint,
+            "source_fingerprint": source_fingerprint,
+            "group_purchase_sheet_qty": confirmed_quantity,
+            "group_order_purpose_sheet_qty": minimum_quantity,
+            "group_stock_purpose_sheet_qty": max(
+                confirmed_quantity - minimum_quantity,
+                0,
+            ),
+            "requisition_qty": confirmed_quantity,
+            "purchase_total_sheet_qty": confirmed_quantity,
+            "order_purpose_sheet_qty": minimum_quantity,
+            "stock_purpose_sheet_qty": max(
+                confirmed_quantity - minimum_quantity,
+                0,
+            ),
+            "purpose_plan_version": 1,
+            "purpose_plan_fingerprint": group_fingerprint,
+            "cardboard_len": component["report_length_mm"],
+            "cardboard_width": component["report_width_mm"],
+            "special_process": component["cutting_mode"],
+        }
+        if actual_yield_per_sheet is not None:
+            payload["actual_yield_per_sheet"] = actual_yield_per_sheet
+        return payload
+
+    snapshot_id = component
     payload = {
         "order_item_id": 1,
         "bom_snapshot_id": snapshot_id,
@@ -237,6 +299,23 @@ def _component_payload(
     if requisition_qty is not None:
         payload["requisition_qty"] = requisition_qty
     return payload
+
+
+def _pending_components(client: TestClient, *, order_item_id: int = 1) -> list[dict]:
+    response = client.get("/api/requisition/pending")
+    assert response.status_code == 200, response.text
+    row = next(
+        item
+        for item in response.json()["items"]
+        if int(item["item_id"]) == int(order_item_id)
+    )
+    components = row["component_requirements"]
+    assert components
+    assert all(component["physical_group_key"] for component in components)
+    assert all(
+        component["physical_source_fingerprint"] for component in components
+    )
+    return components
 
 
 def _parent_payload(*, requisition_qty: int | None = None) -> dict:
@@ -458,8 +537,8 @@ def test_same_code_component_stays_distinct_in_requisition_and_incoming(
                 "supplier_name": "N039 供应商",
                 "items": [
                     _parent_payload(),
-                    _component_payload(component_rows[0]["snapshot_id"]),
-                    _component_payload(component_rows[1]["snapshot_id"]),
+                    _component_payload(component_rows[0]),
+                    _component_payload(component_rows[1]),
                 ],
             },
         )
@@ -487,6 +566,7 @@ def test_composite_requires_snapshot_and_creates_one_source_per_component(
     app, session_factory = composite_requisition_app
     with TestClient(app) as client:
         _login(client)
+        components = _pending_components(client)
         rejected = client.post(
             "/api/requisition/batches",
             json={
@@ -500,8 +580,7 @@ def test_composite_requires_snapshot_and_creates_one_source_per_component(
                 "supplier_name": "N039 供应商",
                 "items": [
                     _parent_payload(),
-                    _component_payload(1),
-                    _component_payload(2),
+                    *(_component_payload(component) for component in components),
                 ],
             },
         )
@@ -509,7 +588,7 @@ def test_composite_requires_snapshot_and_creates_one_source_per_component(
             "/api/requisition/batches",
             json={
                 "supplier_name": "N039 供应商",
-                "items": [_component_payload(1)],
+                "items": [_component_payload(components[0])],
             },
         )
 
@@ -564,29 +643,13 @@ def test_composite_reviewed_quantity_above_minimum_is_preserved(
             ),
         }
     )
-    component_line = _component_payload(1, requisition_qty=25)
-    component_line.update(
-        {
-            "purchase_total_sheet_qty": 25,
-            "order_purpose_sheet_qty": 20,
-            "stock_purpose_sheet_qty": 5,
-            "purpose_plan_version": 1,
-            "purpose_plan_fingerprint": canonical_purchase_purpose_hash(
-                {
-                    "version": 1,
-                    "source_key": "bom_component:1:whole",
-                    "customer_id": 1,
-                    "effective_piece_qty": 20,
-                    "yield_per_sheet": 1,
-                    "authoritative_order_sheet_qty": 20,
-                }
-            ),
-        }
-    )
-
     app, session_factory = composite_requisition_app
     with TestClient(app) as client:
         _login(client)
+        component_line = _component_payload(
+            _pending_components(client)[0],
+            requisition_qty=25,
+        )
         created = client.post(
             "/api/requisition/batches",
             json={
@@ -615,18 +678,19 @@ def test_composite_reviewed_quantity_cannot_hide_uncovered_shortage(
     app, session_factory = composite_requisition_app
     with TestClient(app) as client:
         _login(client)
+        component = _pending_components(client)[0]
         rejected = client.post(
             "/api/requisition/batches",
             json={
                 "supplier_name": "N039 供应商",
                 "items": [
                     _parent_payload(requisition_qty=10),
-                    _component_payload(1, requisition_qty=19),
+                    _component_payload(component, requisition_qty=19),
                 ],
             },
         )
 
-    assert rejected.status_code == 400, rejected.text
+    assert rejected.status_code == 409, rejected.text
     assert "系统最低 20 张" in rejected.json()["detail"]
     with session_factory() as session:
         assert session.scalar(select(Requisition.id)) is None
@@ -962,11 +1026,12 @@ def test_composite_uses_snapshot_linked_semi_reservation_before_purchase(
     with TestClient(app) as client:
         _login(client)
         pending = client.get("/api/requisition/pending")
+        component = pending.json()["items"][0]["component_requirements"][0]
         created = client.post(
             "/api/requisition/batches",
             json={
                 "supplier_name": "N039 供应商",
-                "items": [_parent_payload(), _component_payload(1)],
+                "items": [_parent_payload(), _component_payload(component)],
             },
         )
 
@@ -1045,6 +1110,7 @@ def test_component_one_open_two_completion_consumes_ten_sheets_for_twenty_pieces
         db.add(
             SemiFinishedInventoryDetail(
                 inventory_lot_id=lot.id,
+                material_id=1,
                 supplier_name="N039 供应商",
                 owner_customer_id=1,
                 owner_customer_name_snapshot="N039 测试客户",
@@ -1058,6 +1124,7 @@ def test_component_one_open_two_completion_consumes_ten_sheets_for_twenty_pieces
                 pieces_per_box=1,
                 stock_yield_per_sheet=2,
                 sheet_type="raw_board",
+                crease_type="毛片",
             )
         )
         db.add(
@@ -1361,6 +1428,7 @@ def test_component_finished_release_invalidates_task_and_stale_completion(
         db.add(
             SemiFinishedInventoryDetail(
                 inventory_lot_id=semi_lot.id,
+                material_id=1,
                 supplier_name="N039 供应商",
                 owner_customer_id=1,
                 owner_customer_name_snapshot="N039 测试客户",
@@ -1374,6 +1442,7 @@ def test_component_finished_release_invalidates_task_and_stale_completion(
                 pieces_per_box=1,
                 stock_yield_per_sheet=2,
                 sheet_type="raw_board",
+                crease_type="毛片",
             )
         )
         db.add(
@@ -1742,6 +1811,7 @@ def test_component_inventory_auto_cover_uses_only_safe_exact_stock(
         db.add(
             SemiFinishedInventoryDetail(
                 inventory_lot_id=semi_lot.id,
+                material_id=1,
                 supplier_name="N039 供应商",
                 owner_customer_id=1,
                 owner_customer_name_snapshot="N039 测试客户",
@@ -1755,6 +1825,7 @@ def test_component_inventory_auto_cover_uses_only_safe_exact_stock(
                 pieces_per_box=1,
                 stock_yield_per_sheet=2,
                 sheet_type="raw_board",
+                crease_type="毛片",
             )
         )
         db.add(
@@ -1973,6 +2044,7 @@ def test_t250_order_specific_demand_expands_parent_and_component_with_cutting_mo
     assert sources[1]["cutting_mode"] == "一开二"
     assert sources[1]["yield_per_sheet"] == 2
     assert sources[1]["requisition_qty"] == 1350
+    pending_component = rows[0]["component_requirements"][0]
 
     with TestClient(app) as client:
         _login(client)
@@ -1987,7 +2059,7 @@ def test_t250_order_specific_demand_expands_parent_and_component_with_cutting_mo
                         "cardboard_width": 600,
                     },
                     {
-                        **_component_payload(1),
+                        **_component_payload(pending_component),
                         "cardboard_len": 575,
                         "cardboard_width": 550,
                         "special_process": "一开二",
@@ -1999,7 +2071,7 @@ def test_t250_order_specific_demand_expands_parent_and_component_with_cutting_mo
             "/api/requisition/batches",
             json={
                 "supplier_name": "N039 供应商",
-                "items": [_component_payload(1)],
+                "items": [_component_payload(pending_component)],
             },
         )
         blocked_history_change = client.put(
@@ -2078,6 +2150,7 @@ def test_t250_order_specific_demand_expands_parent_and_component_with_cutting_mo
     assert voided.status_code == 200, voided.text
     assert voided.json()["status"] == "已取消"
     assert voided_replay.status_code == 200, voided_replay.text
+    assert voided_replay.json()["status"] == "已取消"
     assert pending_after_void.status_code == 200, pending_after_void.text
     pending_rows = pending_after_void.json()["items"]
     assert len(pending_rows) == 1
@@ -2121,6 +2194,7 @@ def test_t250_order_specific_demand_expands_parent_and_component_with_cutting_mo
         other_demand = effective_component_demands(session, other_item_id)[0]
     assert [row.requisition_qty for row in items] == [3000, 1350]
     assert [row.status for row in items] == ["已取消", "已取消"]
+    assert source.active_guard is None
     assert int(source.required_piece_quantity) == 2700
     assert int(source.calculated_purchase_quantity) == 1350
     assert len(adjustments) == 3

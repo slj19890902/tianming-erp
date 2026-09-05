@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { EditorCanvas, type CanvasFocusTarget } from "./EditorCanvas";
 import { filterOperationalFeatures } from "./operationalView.mjs";
 import {
@@ -874,6 +874,8 @@ const DEFAULT_LAYERS: LayerVisibility = {
 
 const noop = () => undefined;
 const EMPTY_CANVAS_POINTS: number[][] = [];
+const EMPTY_CANVAS_IDS: string[] = [];
+const CALIBRATION_POINT_LABELS = ["门1", "门2", "内"];
 const EMPTY_PRODUCTION_PROJECTIONS: ProductionTaskProjection[] = [];
 
 function apiErrorMessage(body: unknown, status: number) {
@@ -1710,6 +1712,13 @@ export function WarehouseTwinApp() {
     setZoneGeometryDrafts(next);
   };
   const [layoutMapToolsOpen, setLayoutMapToolsOpen] = useState(false);
+  const [mapHelpOpen, setMapHelpOpen] = useState(false);
+  const [objectActions, setObjectActions] = useState<{
+    entity: NonNullable<SelectedEntity>; clientX: number; clientY: number;
+  } | null>(null);
+  const objectActionsRef = useRef<HTMLDivElement>(null);
+  const objectActionTriggerRef = useRef<HTMLElement | null>(null);
+  const inspectorRef = useRef<HTMLElement>(null);
   const [layoutMapTool, setLayoutMapTool] = useState<"adjust" | "zone" | "aisle">("adjust");
   const [featureContextMenu, setFeatureContextMenu] = useState<{
     featureId: string;
@@ -2146,9 +2155,27 @@ export function WarehouseTwinApp() {
     ),
     [locationProjectionFeatures, visualLocations, floorCode, standardPallet, layout?.id, locationEditMode]
   );
+  // Preview only: real location writes still use the published coordinate frame.
+  const planningPreviewPallets = useMemo(
+    () => mapMode === "planning" ? buildMappedLocationPallets(
+      planningVisibleFeatures, visualLocations, floorCode, standardPallet, layout?.id, locationEditMode
+    ) : mappedLocationPallets,
+    [mapMode, planningVisibleFeatures, visualLocations, floorCode, standardPallet, layout?.id, locationEditMode, mappedLocationPallets]
+  );
+  const previewOnlyLocationIds = useMemo(() => {
+    const publishedById = new Map(locationProjectionFeatures.map((feature) => [feature.id, feature]));
+    const changedZones = new Set(planningVisibleFeatures.filter((feature) => {
+      if (feature.feature_kind !== "zone") return false;
+      const published = publishedById.get(feature.id);
+      // Coordinates are millimetres; tolerate sub-millimetre round trips only.
+      return !published || feature.points.length !== published.points.length || feature.points.some((point, index) =>
+        Math.abs(point[0] - published.points[index][0]) > 0.1 || Math.abs(point[1] - published.points[index][1]) > 0.1);
+    }).map((feature) => feature.id));
+    return new Set(planningPreviewPallets.filter((item) => changedZones.has(item.zone_id)).map((item) => item.id));
+  }, [planningVisibleFeatures, locationProjectionFeatures, planningPreviewPallets]);
   const planningCollisionPallets = useMemo(
-    () => mappedLocationPallets.filter((item) => item.is_planning_location_slot),
-    [mappedLocationPallets]
+    () => planningPreviewPallets.filter((item) => item.is_planning_location_slot),
+    [planningPreviewPallets]
   );
   const operationalColumnConflicts = useMemo(
     () => layout ? findPalletColumnConflicts(
@@ -2398,7 +2425,7 @@ export function WarehouseTwinApp() {
       // The operational map renders only ERP inventory projections.  Historical
       // editor/demo pallets remain in the measured source for provenance, but can
       // never become a second pallet-size or inventory truth on this screen.
-      pallets: groundCandidatePallets,
+      pallets: mapMode === "planning" ? planningPreviewPallets : groundCandidatePallets,
       violations: [
         ...layout.violations,
         ...displayedLocationConflicts.map((item) => ({
@@ -2413,7 +2440,7 @@ export function WarehouseTwinApp() {
         }))
       ]
     } : null,
-    [layout, planningVisibleFeatures, rackDrafts, groundCandidatePallets, displayedLocationConflicts, floorCode]
+    [layout, planningVisibleFeatures, rackDrafts, groundCandidatePallets, planningPreviewPallets, mapMode, displayedLocationConflicts, floorCode]
   );
   const searchProductGroups = useMemo(
     () => groupSearchProducts(searchResponse?.items || []),
@@ -2791,13 +2818,14 @@ export function WarehouseTwinApp() {
       .filter((entry): entry is [number, number] => Number.isInteger(entry[1]))
       .map(([locationId, version]) => [locationId, Number(version)])
   );
-  const locationPointEditPalletIds = locationEditMode
+  const locationPointEditPalletIds = useMemo(() => locationEditMode
     ? visualLocations
       .filter((item) => item.floor_code === floorCode
         && item.position_status === "mapped"
+        && !previewOnlyLocationIds.has(`erp-location-${item.location_id}`)
         && (!locationPointEditAreaCode || item.area_code === locationPointEditAreaCode))
       .map((item) => `erp-location-${item.location_id}`)
-    : [];
+    : EMPTY_CANVAS_IDS, [locationEditMode, visualLocations, floorCode, previewOnlyLocationIds, locationPointEditAreaCode]);
   const locationPointDraftCount = locationPointEditAreaCode
     ? Object.values(locationDrafts).filter((draft) => dashboard?.locations.some(
       (location) => location.location_id === draft.location_id && location.floor_code === floorCode && location.area_code === locationPointEditAreaCode
@@ -3521,6 +3549,10 @@ export function WarehouseTwinApp() {
 
   const moveLocationDraft = (palletId: string, xMm: number, yMm: number) => {
     if (!locationEditMode || layoutMapToolsOpen) return;
+    if (previewOnlyLocationIds.has(palletId)) {
+      setLocationEditMessage("当前货位按区域草稿预览；区域几何与已发布版本不同，请先处理该区域草稿，再调整真实货位。库存位置未改变。");
+      return;
+    }
     const locationId = Number(palletId.replace("erp-location-", ""));
     const location = visualLocations.find((item) => item.location_id === locationId);
     if (locationPointEditAreaCode && location?.area_code !== locationPointEditAreaCode) {
@@ -3788,21 +3820,25 @@ export function WarehouseTwinApp() {
     if (!moveDrafts.length || moveBatchBusy) return;
     setMoveBatchBusy(true);
     setWarehouseOperationMessage("");
+    let moveAcknowledged = false;
     try {
       await mutateJson(
         "/api/warehouse/twin-operations/move-batches",
         "POST",
         buildMoveBatchPayload(moveBatchIdempotencyKey, moveDrafts)
       );
-      await refreshDashboard();
+      moveAcknowledged = true;
       setMoveDrafts([]);
       setMoveSource(null);
       setMoveQuantity("");
       setMoveDraftTargetLocationId("");
       setMoveBatchIdempotencyKey(operationKey("warehouse-move-batch"));
+      await refreshDashboard();
       setWarehouseOperationMessage("整批移货已成功；地图已刷新。 ");
     } catch (reason) {
-      setWarehouseOperationMessage(`整批提交失败：${(reason as Error).message}。页面草稿与本次幂等键已保留，可核对后重试。`);
+      setWarehouseOperationMessage(moveAcknowledged
+        ? `移货已完成，但地图刷新失败：${(reason as Error).message}。当前画面尚未核验，请刷新页面；不要重复提交移货。`
+        : `整批提交失败：${(reason as Error).message}。页面草稿与本次幂等键已保留，可核对后重试。`);
     } finally {
       setMoveBatchBusy(false);
     }
@@ -3899,6 +3935,8 @@ export function WarehouseTwinApp() {
     }
     setLocationEditBusy(true);
     setLocationEditMessage("");
+    const savedLocationIds = new Set<number>();
+    let positionsAcknowledged = false;
     try {
       const grouped = new Map<string, LocationLayoutGeometry[]>();
       drafts.forEach((draft) => {
@@ -3923,8 +3961,9 @@ export function WarehouseTwinApp() {
             idempotency_key: locationLayoutIdempotencyKey
           } : {})
         });
+        slots.forEach((slot) => savedLocationIds.add(slot.location_id));
       }
-      const savedLocationIds = new Set(drafts.map((draft) => draft.location_id));
+      positionsAcknowledged = true;
       setLocationDrafts((current) => Object.fromEntries(
         Object.entries(current).filter(([locationId]) => !savedLocationIds.has(Number(locationId)))
       ));
@@ -3935,7 +3974,16 @@ export function WarehouseTwinApp() {
       if (locationPointEditAreaCode) setLocationPointEditAreaCode(null);
       setLocationEditMessage(`已保存并固定 ${drafts.length} 个现场货位；查货、移货、盘点和空货位显示将统一使用这组位置，库存、栈板和数量未改变。`);
     } catch (reason) {
-      setLocationEditMessage((reason as Error).message);
+      if (savedLocationIds.size) {
+        setLocationDrafts((current) => Object.fromEntries(
+          Object.entries(current).filter(([locationId]) => !savedLocationIds.has(Number(locationId)))
+        ));
+      }
+      setLocationEditMessage(positionsAcknowledged
+        ? `已保存并固定 ${savedLocationIds.size} 个货位，但回读失败：${(reason as Error).message}。当前画面尚未核验，请刷新页面重读；不要重复保存。`
+        : savedLocationIds.size
+          ? `已保存 ${savedLocationIds.size} 个货位，其余保存未完成：${(reason as Error).message}。已保存项不会重复提交，请刷新核对后处理剩余项。`
+          : (reason as Error).message);
     } finally {
       setLocationEditBusy(false);
     }
@@ -4424,7 +4472,7 @@ export function WarehouseTwinApp() {
         ? "检测到旧草稿：员工仍看已发布地图；当前区域无改动时可继续确认。"
         : raw.draft_control.has_other_floor_drafts
           ? `区域规划已开启；${(raw.draft_control.dirty_floor_codes || []).filter((code) => code !== floorCode).join("、") || "其他楼层"} 的草稿会独立保留，不影响当前楼层保存、校验和发布。`
-          : "区域规划：选区域，核对后确认。"
+          : ""
       );
     } catch (reason) {
       const message = (reason as Error).message;
@@ -4501,7 +4549,7 @@ export function WarehouseTwinApp() {
   };
 
   const enterWarehouseMoveMode = async () => {
-    if (traceReadOnly || (!canExecuteWarehouse && !canStocktake) || spatialEditBusy) return;
+    if (traceReadOnly || (!canExecuteWarehouse && !canStocktake) || spatialEditBusy) return false;
     setSpatialEditBusy(true);
     try {
       if (locationEditMode || mapMode === "planning") await refreshPublishedTwinFloor();
@@ -4523,8 +4571,10 @@ export function WarehouseTwinApp() {
         ? `已回到移货 / 盘点，保留 ${stocktakeDrafts.length} 条盘点草稿；尚未写入。`
         : "移货 / 盘点已开启：每个操作先形成页面草稿，底部一次确认后才提交。"
       );
+      return true;
     } catch (reason) {
       setWarehouseOperationMessage(`进入移货 / 盘点失败：${(reason as Error).message}`);
+      return false;
     } finally {
       setSpatialEditBusy(false);
     }
@@ -4695,6 +4745,7 @@ export function WarehouseTwinApp() {
   const publishLayoutDraft = async () => {
     if (!layout || layoutDraftControl?.status !== "validated") return;
     setSpatialEditBusy(true);
+    let publicationAcknowledged = false;
     try {
       const bindingConfirmation = await prepareLegacyRackBindingConfirmation(layout.source_sha256);
       if (bindingConfirmation === null) return;
@@ -4711,6 +4762,7 @@ export function WarehouseTwinApp() {
         }
       );
       if (!result) return;
+      publicationAcknowledged = true;
       await refreshPublishedTwinFloor();
       setMapMode("lookup");
       setSearchPanelOpen(true);
@@ -4723,7 +4775,12 @@ export function WarehouseTwinApp() {
       setLegacyRackBindingSelections({});
       setLocationEditMessage(`${floorCode} 仓库地图已发布；旧地图备份为 ${result.backup_name}，库存数量未改变。${result.bound_legacy_location_ids?.length ? ` 已保留并绑定 ${result.bound_legacy_location_ids.length} 个旧货位。` : ""}${result.mold_location_reassignment_count ? ` ${result.mold_location_reassignment_count} 件失效模具位置已自动归入首个可用格，并记录移动流水。` : ""}${result.remaining_draft_floor_codes?.length ? ` ${result.remaining_draft_floor_codes.join("、")} 草稿仍独立保留。` : ""}`);
     } catch (reason) {
-      setLocationEditMessage(`发布布局失败：${(reason as Error).message}`);
+      if (publicationAcknowledged) {
+        setLayoutDraftControl(null);
+        setLocationEditMessage(`布局已发布，但地图回读失败：${(reason as Error).message}。当前画面尚未核验，请切回查货重读；不要重复发布。`);
+      } else {
+        setLocationEditMessage(`发布布局失败：${(reason as Error).message}`);
+      }
     } finally {
       setSpatialEditBusy(false);
     }
@@ -4735,6 +4792,7 @@ export function WarehouseTwinApp() {
       return;
     }
     setSpatialEditBusy(true);
+    let publicationAcknowledged = false;
     try {
       const validation = await mutateJson<LayoutDraftValidationResponse>(
         `/api/warehouse/twin-layout/floors/${floorCode}/draft/validate`,
@@ -4774,6 +4832,7 @@ export function WarehouseTwinApp() {
         }
       );
       if (!result) return;
+      publicationAcknowledged = true;
       await refreshPublishedTwinFloor();
       setMapMode("lookup");
       setSearchPanelOpen(true);
@@ -4787,7 +4846,12 @@ export function WarehouseTwinApp() {
       setLegacyRackBindingSelections({});
       setLocationEditMessage(`${floorCode} 区域和货架已发布；旧地图备份为 ${result.backup_name}，库存数量未改变。${result.bound_legacy_location_ids?.length ? ` 已保留并绑定 ${result.bound_legacy_location_ids.length} 个旧货位。` : ""}`);
     } catch (reason) {
-      setLocationEditMessage(`预览并发布失败：${(reason as Error).message}`);
+      if (publicationAcknowledged) {
+        setLayoutDraftControl(null);
+        setLocationEditMessage(`布局已发布，但地图回读失败：${(reason as Error).message}。当前画面尚未核验，请切回查货重读；不要重复发布。`);
+      } else {
+        setLocationEditMessage(`预览并发布失败：${(reason as Error).message}`);
+      }
     } finally {
       setSpatialEditBusy(false);
     }
@@ -4801,12 +4865,14 @@ export function WarehouseTwinApp() {
     }
     if (!window.confirm(`确认只放弃 ${floorCode} 的布局草稿吗？其他楼层草稿、已发布地图和库存不会改变。`)) return;
     setSpatialEditBusy(true);
+    let discardAcknowledged = false;
     try {
       await mutateJson(
         `/api/warehouse/twin-layout/floors/${floorCode}/draft/discard`,
         "POST",
         { expected_revision: layout.source_sha256 }
       );
+      discardAcknowledged = true;
       await refreshPublishedTwinFloor();
       setMapMode("lookup");
       setSearchPanelOpen(true);
@@ -4817,7 +4883,10 @@ export function WarehouseTwinApp() {
       replaceZoneGeometryDrafts({});
       setLocationEditMessage(`${floorCode} 布局草稿已放弃；其他楼层草稿、已发布地图和库存均未改变。`);
     } catch (reason) {
-      setLocationEditMessage(`放弃草稿失败：${(reason as Error).message}`);
+      if (discardAcknowledged) setLayoutDraftControl(null);
+      setLocationEditMessage(discardAcknowledged
+        ? `草稿已放弃，但地图回读失败：${(reason as Error).message}。请切回查货重读；当前画面尚未核验。`
+        : `放弃草稿失败：${(reason as Error).message}`);
     } finally {
       setSpatialEditBusy(false);
     }
@@ -5106,6 +5175,7 @@ export function WarehouseTwinApp() {
     }
     setSpatialEditBusy(true);
     setLocationEditMessage("正在确认并启用区域…");
+    let areaAcknowledged = false;
     try {
       const result = await mutateJson<OneStepAreaConfirmResponse>(
         `/api/warehouse/twin-layout/floors/${floorCode}/zones/${selectedAreaFeature.id}/confirm-area`,
@@ -5125,6 +5195,7 @@ export function WarehouseTwinApp() {
         }
       );
       if (!result) return;
+      areaAcknowledged = true;
       setPlanningPublishedRevision(result.published_revision);
       await Promise.all([refreshPlanningTwinFloor(), refreshDashboard()]);
       setZonePolicyDrafts({});
@@ -5135,7 +5206,9 @@ export function WarehouseTwinApp() {
         (result.advanced_draft_preserved ? "原有高级维护草稿已保留，没有随本次确认发布。" : "")
       );
     } catch (reason) {
-      setLocationEditMessage(`区域未启用：${(reason as Error).message}`);
+      setLocationEditMessage(areaAcknowledged
+        ? `区域已启用，但回读失败：${(reason as Error).message}。当前画面尚未核验，请刷新页面重读；不要重复确认。`
+        : `区域未启用：${(reason as Error).message}`);
     } finally {
       setSpatialEditBusy(false);
     }
@@ -5477,6 +5550,86 @@ export function WarehouseTwinApp() {
     setWarehouseOperationMessage(`来源 ${moveSource.inventory_code} 仍保留；请在 ${nextFloorCode} 地图点选区域，再点具体空货位。`);
   };
 
+  const closeObjectActions = (restoreFocus = true) => {
+    setObjectActions(null);
+    if (restoreFocus) {
+      const trigger = objectActionTriggerRef.current;
+      const target = trigger?.isConnected ? trigger : document.querySelector<HTMLElement>(".twin-map-pane canvas");
+      if (target) { target.tabIndex = Math.max(0, target.tabIndex); target.focus({ preventScroll: true }); }
+    }
+  };
+  const openObjectActions = (entity: NonNullable<SelectedEntity>, clientX: number, clientY: number, trigger?: HTMLElement) => {
+    if (mapMode === "planning" || locationEditMode || spatialEditBusy || loading) return false;
+    const supported = entity.kind === "feature"
+      ? features.some((item) => item.id === entity.id && item.feature_kind === "zone")
+      : entity.kind === "rack"
+        ? Boolean(layout?.racks.some((item) => item.id === entity.id))
+        : entity.kind === "pallet" && (
+          visualLocations.some((item) => entity.id === `erp-location-${item.location_id}`)
+          || dispatchStagingPallets.some((item) => entity.id === `erp-dispatch-pallet-${item.pallet_id}`)
+        );
+    if (!supported) return false;
+    // Opening a menu selects the card only, never a move source or destination.
+    objectActionTriggerRef.current = trigger || document.querySelector<HTMLElement>(".twin-map-pane canvas");
+    setSelected(entity);
+    setObjectActions({ entity, clientX, clientY });
+    return true;
+  };
+  const runObjectAction = async (action: "view" | "relocate" | "stocktake") => {
+    if (!objectActions || spatialEditBusy || loading || mapMode === "planning" || locationEditMode) return;
+    const entity = objectActions.entity;
+    if (action !== "view") {
+      if (traceReadOnly || (action === "relocate" ? !canExecuteWarehouse : !canStocktake)) return;
+      if (!await enterWarehouseMoveMode()) return;
+      setMoveAction(action);
+      setMoveSource(null);
+      setMoveQuantity("");
+      setMoveDraftTargetLocationId("");
+      setWarehouseOperationMessage(action === "relocate"
+        ? "请选择一块栈板或一个批次，再选择目标货位；尚未移货。"
+        : "请核对具体货位和产品后填写盘点数量；尚未写入。");
+    } else {
+      setLocationDetailOpen(true);
+      if (entity.kind === "rack") setRackFocusId(entity.id);
+    }
+    setSelected(entity);
+    closeObjectActions(false);
+    requestAnimationFrame(() => {
+      inspectorRef.current?.focus({ preventScroll: true });
+      inspectorRef.current?.scrollIntoView({ block: "nearest" });
+    });
+  };
+  useLayoutEffect(() => {
+    const menu = objectActionsRef.current;
+    if (!objectActions || !menu) return;
+    const bounds = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(objectActions.clientX, window.innerWidth - bounds.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(objectActions.clientY, window.innerHeight - bounds.height - 8))}px`;
+    menu.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }, [objectActions]);
+  useEffect(() => {
+    if (!objectActions) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!objectActionsRef.current?.contains(event.target as Node)) closeObjectActions(false);
+    };
+    const close = () => closeObjectActions(false);
+    document.addEventListener("pointerdown", dismiss);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("resize", close);
+    };
+  }, [objectActions]);
+  useEffect(() => { setObjectActions(null); }, [floorCode, mapMode, viewMode]);
+  useEffect(() => {
+    setObjectActions((current) => current?.entity.id === selected?.id && current?.entity.kind === selected?.kind ? current : null);
+  }, [selected?.id, selected?.kind]);
+  const objectActionsButton = selected && mapMode !== "planning" && !locationEditMode
+    ? <button type="button" className="twin-object-actions-trigger" aria-haspopup="menu" aria-expanded={Boolean(objectActions)} disabled={spatialEditBusy || loading} onClick={(event) => {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      openObjectActions(selected, bounds.left, bounds.bottom + 4, event.currentTarget);
+    }}>操作</button> : null;
+
   useEffect(() => {
     if (!embedded || window.parent === window) return;
     window.parent.postMessage({
@@ -5516,6 +5669,21 @@ export function WarehouseTwinApp() {
   }, [embedded, floorCode, locationPointEditAreaCode, mapMode, moveSource]);
 
   return <main className={`warehouse-twin-shell ${embedded ? "embedded-shell" : ""} ${uiMode === "large" ? "large-text" : ""} ${mapMode === "move" ? "move-mode" : ""}`}>
+    {objectActions && <div ref={objectActionsRef} className="twin-object-actions-menu" role="menu" aria-label="所选对象操作" style={{ left: objectActions.clientX, top: objectActions.clientY }} onKeyDown={(event) => {
+      if (event.key === "Escape") { event.preventDefault(); closeObjectActions(); return; }
+      if (event.key === "Tab") { closeObjectActions(); return; }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+      const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (current + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next]?.focus();
+    }}>
+      <button type="button" role="menuitem" onClick={() => void runObjectAction("view")}>查看详情</button>
+      {!traceReadOnly && canExecuteWarehouse && <button type="button" role="menuitem" disabled={spatialEditBusy || loading} onClick={() => void runObjectAction("relocate")}>移货</button>}
+      {!traceReadOnly && canStocktake && <button type="button" role="menuitem" disabled={spatialEditBusy || loading} onClick={() => void runObjectAction("stocktake")}>盘点</button>}
+      <button type="button" role="menuitem" onClick={() => closeObjectActions()}>关闭</button>
+    </div>}
     <header className={`twin-command-bar ${embedded ? "embedded" : ""}`}>
       <div className="twin-brand"><div><h1>仓库地图</h1></div><nav className="twin-floor-switch" aria-label="楼层切换">
         <button type="button" className={floorCode === "1F" ? "active" : ""} onClick={() => switchWarehouseFloor("1F")}><b>1F</b><span>生产车间</span></button>
@@ -5565,6 +5733,7 @@ export function WarehouseTwinApp() {
         {canStocktake && <button type="button" role="tab" aria-selected={moveAction === "stocktake"} className={moveAction === "stocktake" ? "active" : ""} onClick={() => { setMoveAction("stocktake"); setMoveSource(null); setWarehouseOperationMessage(stocktakeDrafts.length ? `已切到盘点调整；保留 ${stocktakeDrafts.length} 条草稿。` : "请选择正式货位进行盘点调整。"); }}>盘点调整</button>}
       </div>}
       <div className="twin-toolbar-view-tools" role="group" aria-label="地图显示工具">
+      <button type="button" aria-expanded={mapHelpOpen} aria-controls="warehouse-map-help" onClick={() => setMapHelpOpen((value) => !value)}>帮助</button>
       <button type="button" className={`twin-layer-toggle ${layerPanelOpen ? "active" : ""}`} aria-expanded={layerPanelOpen} onClick={() => setLayerPanelOpen((value) => !value)}>图层</button>
       <div className="twin-segmented" aria-label="视图模式">
         <button type="button" className={viewMode === "2d" ? "active" : ""} onClick={() => setViewMode("2d")}>二维平面</button>
@@ -5597,7 +5766,6 @@ export function WarehouseTwinApp() {
           ["zones", "区域"], ["aisles", "通道"], ["racks", "货架"], ["equipment", "设备"],
           ["structures", "原始墙柱"], ["customStructures", "补充墙柱门窗"], ["noGo", "禁放区"], ["pallets", "库位 / 栈板"], ["production", "生产投影"]
         ] as Array<[keyof LayerVisibility, string]>).map(([key, label]) => <button type="button" key={key} className={layers[key] ? "active" : ""} onClick={() => toggleLayer(key)}><i /><span>{label}</span></button>)}
-        <div className="twin-rail-safety"><b>数据边界</b><p>{mapMode === "planning" ? "排位保存只生成预览；发布只建立标准地堆位置，不移动库存、栈板或产品。" : mapMode === "move" ? moveAction === "ground" ? "候选和点选都不写入；只有最后一次保存调用权威库存事务，取消始终零写入。" : moveAction === "stocktake" ? "新增与调减只形成页面草稿；不拖动、不改地图结构。底部一次确认后才写正式盘点流水。" : moveAction === "merge" ? "多选只形成页面草稿；不建档、不入仓、不增减、不盘点。明确目标后底部一次提交整批合并。" : "拖动和选择只形成页面草稿；不提供建档、入仓、增减、移除或盘点。底部一次确认后才提交整批移货。" : "当前是查货模式，只读真实库存和地图位置，不执行入库、移货、盘点或布局写入。"}</p></div>
       </aside>}
 
       {searchPanelOpen && <aside className="twin-context-rail">
@@ -5657,7 +5825,7 @@ export function WarehouseTwinApp() {
           palletSnapThresholdMm={0}
           drawMode={layoutDrawKind}
           drawPoints={floor4CalibrationMode ? floor4CalibrationPoints : layoutDrawPoints}
-          drawPointLabels={floor4CalibrationMode ? ["门1", "门2", "内"] : []}
+          drawPointLabels={floor4CalibrationMode ? CALIBRATION_POINT_LABELS : EMPTY_CANVAS_IDS}
           calibrationMode={floor4CalibrationMode}
           measureMode={false}
           measurePoints={EMPTY_CANVAS_POINTS}
@@ -5667,6 +5835,7 @@ export function WarehouseTwinApp() {
           onMovePallet={warehouseMoveModeActive ? draftMoveFromDrag : moveLocationDraft}
           onMoveFeature={moveAreaBoundaryDraft}
           onFeatureContextMenu={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust" ? openFeatureContextMenu : undefined}
+          onEntityContextMenu={mapMode !== "planning" && viewMode === "2d" ? openObjectActions : undefined}
           onDropAsset={noop}
           onDropRack={noop}
           onDropPallet={noop}
@@ -5681,7 +5850,7 @@ export function WarehouseTwinApp() {
           featureEditingEnabled={locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"}
           mapPanLocked={floor4CalibrationMode || (locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust")}
           allowPalletSelection={viewMode === "25d" || locationEditMode || canEditLocations || canExecuteWarehouse || canStocktake}
-          draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : layoutMapToolsOpen ? [] : locationPointEditPalletIds}
+          draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : layoutMapToolsOpen ? EMPTY_CANVAS_IDS : locationPointEditPalletIds}
           readOnly={!locationEditMode && !warehouseMoveModeActive}
           visualTheme="warehouse"
           showInternalCodes={mapMode === "planning" && canEditLocations}
@@ -5699,7 +5868,7 @@ export function WarehouseTwinApp() {
               <small>{feature.formal_policy_status === "published" ? "仅空闲正式区域可归档" : "从当前规划草稿删除"}</small>
             </div> : null;
           })()}
-          {focusedRack && <div className="twin-rack-map-callout"><span>地图所选</span><b>{moldRackEmployeeName(focusedRack)}</b></div>}
+          {focusedRack && <div className="twin-rack-map-callout"><span>地图所选</span><b>{moldRackEmployeeName(focusedRack)}</b>{objectActionsButton}</div>}
         </div>
         {focusedRack?.mold_rack_code ? <MoldRackElevation
           rack={focusedRack}
@@ -5728,7 +5897,19 @@ export function WarehouseTwinApp() {
         />}
       </div>
 
-      <aside className="twin-inspector">
+      <aside className="twin-inspector" ref={inspectorRef} tabIndex={-1}>
+        <div className="twin-location-readonly-note" role="status">
+          <b>{!layout ? "地图尚未读取" : mapMode === "planning" ? layoutDraftControl?.has_draft ? "草稿预览 · 查货使用已发布版" : "规划预览" : "已发布地图"}</b>
+          {mapMode === "planning" && (activeLocationDraftCount > 0 || Object.keys(zoneGeometryDrafts).length > 0 || Object.keys(rackDrafts).length > 0 || Object.keys(zonePolicyDrafts).length > 0) && <span>有未保存调整</span>}
+          {mapMode === "planning" && previewOnlyLocationIds.size > 0 && <span>部分货位随区域草稿预览，真实库存位置未改变；处理区域草稿后才能调整这些货位。</span>}
+        </div>
+        {mapHelpOpen && <section id="warehouse-map-help" className="twin-location-readonly-note">
+          <b>地图帮助</b>
+          <p>区域和通道的几何保存为管理员草稿，发布后才影响查货地图。货位“保存并固定”直接保存现场位置，不改变库存数量或栈板绑定。</p>
+          <p>规划画面会预览区域草稿中的货位位置；区域几何与已发布版不同时，预览不能直接用作真实货位坐标。</p>
+          <p>移货、盘点和合并中的选择先保留在页面，提交结果以各自的保存状态为准。权限限制、冲突和失败原因仍显示在对应操作处。</p>
+          <button type="button" onClick={() => setMapHelpOpen(false)}>关闭帮助</button>
+        </section>}
         {floor1CandidatePlan && <section className="twin-floor1-candidate-panel">
           <div className="twin-floor1-candidate-title"><div><small>1F · 实测地图候选</small><b>一次确认区域与库位</b></div><button type="button" disabled={floor1CandidateBusy} onClick={() => setFloor1CandidatePlan(null)}>关闭</button></div>
           <div className="twin-floor1-candidate-summary"><span><b>{floor1CandidatePlan.candidate_count}</b> 个区域</span><span><b>{floor1CandidatePlan.long_term_pallet_capacity}</b> 个长期栈板位</span><span><b>{floor1CandidatePlan.formal_location_count}</b> 个正式库存库位</span></div>
@@ -5915,6 +6096,7 @@ export function WarehouseTwinApp() {
           {dashboard.delayed_dispatch_relocation.candidate_count > 0 && dashboard.delayed_dispatch_relocation.available_target_count === 0 && <p className="twin-dispatch-weather-note">三楼左区目前没有通过实测地图门禁的空栈板位，因此只提示、不允许形成移货草稿。</p>}
         </section>}
         {selectedDispatchPallet && dispatchStagingLocation && <section className="twin-location-card twin-dispatch-board">
+          {objectActionsButton}
           {(() => {
             const summary = dashboardPalletSummary(selectedDispatchPallet);
             return <>
@@ -5962,6 +6144,7 @@ export function WarehouseTwinApp() {
           {warehouseOperationMessage && <div className="twin-location-message">{warehouseOperationMessage}</div>}
         </section>}
         {selectedLocation && <section className="twin-location-card">
+          {objectActionsButton}
           <div className="twin-location-card-title"><div><small>当前位置</small><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em></div>
           {selectedLocation.has_unmatched_inventory_observation && <div className="twin-unmatched-observation"><b>现场有货但系统未匹配 · 待管理员核对</b>{(selectedLocation.unmatched_inventory_observations || []).map((item) => <p key={item.id}><strong>{item.inventory_keyword}</strong>{item.customer_keyword ? ` · ${item.customer_keyword}` : ""}{item.reported_quantity ? ` · 约 ${item.reported_quantity}${item.reported_unit || ""}` : ""}<span>{item.reason}</span></p>)}</div>}
           {selectedLocation.has_location_discrepancy && <div className="twin-unmatched-observation"><b>现场位置与系统登记不符 · 持续标红</b>{(selectedLocation.location_discrepancies || []).map((item) => <p key={item.id}><strong>{item.lot.inventory_code || item.lot.lot_number || `批次 ${item.lot.lot_id}`}</strong>{item.reported_quantity ? ` · ${formatNumber(item.reported_quantity)} ${inventoryUnitLabel(item.lot.unit)}` : ""}<span>{item.reason}</span></p>)}</div>}
@@ -6098,6 +6281,7 @@ export function WarehouseTwinApp() {
           </div>}
         </section>}
         {(selectedFeature || (locationEditMode && selectedRack)) && <section className="twin-inventory-card">
+          {objectActionsButton}
           {selectedAreaFeature ? <>
             <div className="twin-inventory-title"><div><small>{locationEditMode && canEditLocations ? `当前规划区域 · ${selectedAreaCode || selectedAreaFeature.feature_code}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b></div><span>{selectedAreaActivationLabel}</span></div>
             <div className="twin-selection-summary area"><span><small>区域状态</small><b>{selectedAreaActivationLabel}</b></span><span><small>最大容量</small><b>{selectedAreaCapacitySummary}</b></span><span><small>{selectedAreaIsMold ? "当前模具" : "当前库存"}</small><b>{selectedAreaIsMold ? `${moldAreaResponse?.total || 0} 件` : selectedAreaQuantitySummary === "0" ? "0 · 当前无货" : selectedAreaQuantitySummary}</b></span></div>

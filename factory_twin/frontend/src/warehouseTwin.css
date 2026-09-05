@@ -1270,6 +1270,12 @@ body.warehouse-twin-page {
 .twin-feature-context-menu button { min-height: 34px; border: 1px solid #d7a2a2; border-radius: 3px; color: #9f2d2d; background: #fff5f5; font: 800 11px/1.2 inherit; cursor: pointer; }
 .twin-feature-context-menu button:disabled { opacity: .5; cursor: not-allowed; }
 .twin-feature-context-menu small { color: #60747d; font-size: 8px; line-height: 1.4; }
+.warehouse-twin-shell .twin-object-actions-menu { position: fixed; z-index: 100; width: 208px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; display: grid; gap: 4px; padding: 6px; border: 1px solid var(--twin-line); border-radius: 6px; background: #fff; box-shadow: 0 6px 20px rgb(20 46 53 / 20%); }
+.warehouse-twin-shell .twin-object-actions-menu button { min-height: 44px; padding: 8px 12px; text-align: left; font: inherit; color: inherit; background: #fff; border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
+.warehouse-twin-shell .twin-object-actions-menu button:hover,
+.warehouse-twin-shell .twin-object-actions-menu button:focus-visible { border-color: var(--twin-blue); background: #eef6ff; outline: 2px solid var(--twin-blue); outline-offset: -2px; }
+.warehouse-twin-shell .twin-object-actions-menu button:disabled { opacity: .5; cursor: not-allowed; }
+.warehouse-twin-shell .twin-object-actions-trigger { min-height: 44px; margin-bottom: 6px; padding: 6px 16px; font: inherit; cursor: pointer; }
 .twin-zone-geometry-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
 .twin-layout-map-tools > p,
 .twin-layout-draft-note { margin: 0; color: #60747d; font-size: 8px; line-height: 1.45; }

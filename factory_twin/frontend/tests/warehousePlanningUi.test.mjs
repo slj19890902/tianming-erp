@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
+import ts from "typescript";
+import * as inventory from "../src/warehouseInventory.mjs";
 
 const source = readFileSync(new URL("../src/WarehouseTwinApp.tsx", import.meta.url), "utf8");
 const editorSource = readFileSync(new URL("../src/EditorCanvas.tsx", import.meta.url), "utf8");
@@ -8,13 +11,292 @@ const sceneSource = readFileSync(new URL("../src/industrialScene.ts", import.met
 const inventorySource = readFileSync(new URL("../src/warehouseInventory.mjs", import.meta.url), "utf8");
 const cssSource = readFileSync(new URL("../src/warehouseTwin.css", import.meta.url), "utf8");
 
+// Execute the component's actual selectors/handlers without mounting a second UI.
+// This catches wiring errors which tests of the projection utility alone miss.
+const syntax = ts.createSourceFile("WarehouseTwinApp.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+function componentValue(name, context, optional = false) {
+  let initializer;
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(syntax) === name) initializer = node.initializer;
+    ts.forEachChild(node, visit);
+  }
+  visit(syntax);
+  if (!initializer && optional) return undefined;
+  assert.ok(initializer, `component declaration ${name}`);
+  const javascript = ts.transpileModule(`globalThis.value = (${initializer.getText(syntax)});`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
+  }).outputText;
+  const sandbox = { ...context };
+  vm.runInNewContext(javascript, sandbox);
+  return sandbox.value;
+}
+
+test("object context menu only selects a known card without choosing a source or target", () => {
+  for (const mode of ["lookup", "move", "planning"]) {
+    const changes = [];
+    const trigger = {};
+    const handler = componentValue("openObjectActions", {
+      mapMode: mode, locationEditMode: false, spatialEditBusy: false, loading: false,
+      features: [{ id: "area-1", feature_kind: "zone" }], layout: { racks: [] },
+      visualLocations: [{ location_id: 10 }], dispatchStagingPallets: [],
+      objectActionTriggerRef: { current: null },
+      document: { querySelector: () => trigger },
+      setSelected: value => changes.push(["selected", value.id]),
+      setObjectActions: value => changes.push(["menu", value.entity.id]),
+    });
+    assert.equal(handler({ kind: "pallet", id: "unknown" }, 100, 100), false);
+    assert.equal(changes.length, 0);
+    assert.equal(handler({ kind: "pallet", id: "erp-location-10" }, 100, 100), mode !== "planning");
+    assert.deepEqual(changes, mode === "planning" ? [] : [["selected", "erp-location-10"], ["menu", "erp-location-10"]]);
+  }
+});
+
+test("object operations preserve explicit source selection and respect failed mode entry and permissions", async () => {
+  for (const action of ["relocate", "stocktake"]) {
+    for (const permitted of [false, true]) {
+      for (const entered of [false, true]) {
+        const changes = [];
+        let entries = 0;
+        await componentValue("runObjectAction", {
+          objectActions: { entity: { kind: "pallet", id: "erp-location-10" } },
+          spatialEditBusy: false, loading: false, mapMode: "lookup", locationEditMode: false,
+          traceReadOnly: false, canExecuteWarehouse: permitted, canStocktake: permitted,
+          enterWarehouseMoveMode: async () => { entries++; return entered; },
+          setMoveAction: value => changes.push(["mode", value]),
+          setMoveSource: value => { assert.equal(value, null); changes.push(["source", null]); },
+          setMoveQuantity: value => assert.equal(value, ""),
+          setMoveDraftTargetLocationId: value => assert.equal(value, ""),
+          setWarehouseOperationMessage: value => assert.match(value, /尚未/),
+          setSelected: value => changes.push(["selected", value.id]),
+          closeObjectActions: () => changes.push(["closed"]),
+          requestAnimationFrame: () => {},
+        })(action);
+        assert.equal(entries, permitted ? 1 : 0);
+        assert.deepEqual(changes, permitted && entered ? [["mode", action], ["source", null], ["selected", "erp-location-10"], ["closed"]] : []);
+      }
+    }
+  }
+});
+
+test("acknowledged warehouse moves are not offered again when dashboard refresh fails", async () => {
+  for (const failure of ["write", "readback", null]) {
+    let drafts = [{ client_item_id: "move-one", source_location_id: 1, target_location_id: 2 }];
+    let source = { source_key: "pallet:1" };
+    let busy = false;
+    const messages = [];
+    const key = "same-request";
+    let activeKey = key;
+    let reads = 0;
+    await componentValue("confirmMoveDrafts", {
+      moveDrafts: drafts, moveBatchBusy: false, moveBatchIdempotencyKey: key,
+      setMoveBatchBusy: value => { busy = value; },
+      setWarehouseOperationMessage: value => messages.push(value),
+      buildMoveBatchPayload: (idempotencyKey, items) => ({ idempotencyKey, items }),
+      mutateJson: async (_url, _method, payload) => {
+        assert.equal(payload.idempotencyKey, key);
+        assert.equal(payload.items.length, 1);
+        if (failure === "write") throw new Error("写入未确认");
+        return { applied: true };
+      },
+      refreshDashboard: async () => { reads++; if (failure === "readback") throw new Error("刷新中断"); },
+      setMoveDrafts: value => { drafts = value; },
+      setMoveSource: value => { source = value; },
+      setMoveQuantity: () => {}, setMoveDraftTargetLocationId: () => {},
+      setMoveBatchIdempotencyKey: value => { activeKey = value; },
+      operationKey: () => "next-request"
+    })();
+    assert.equal(busy, false);
+    if (failure === "write") {
+      assert.equal(drafts.length, 1);
+      assert.equal(source.source_key, "pallet:1");
+      assert.equal(activeKey, key, "uncertain write retains idempotency protection");
+      assert.equal(reads, 0);
+    } else {
+      assert.equal(drafts.length, 0, "acknowledged move is no longer a pending preview");
+      assert.equal(source, null);
+      assert.equal(activeKey, "next-request");
+      assert.equal(reads, 1);
+      assert.match(messages.at(-1), failure === "readback" ? /移货已完成.*刷新失败.*不要重复提交/ : /移货已成功/);
+    }
+  }
+});
+
+test("planning renders a moved draft zone and its inventory in the same frame without changing operational positions", () => {
+  const zone = { id: "zone-map-test", feature_code: "ZONE-3F-TEST", feature_kind: "zone", erp_area_code: "TEST", version: 1,
+    points: [[0, 0], [6000, 0], [6000, 4000], [0, 4000]] };
+  const empty = { ...zone, id: "zone-empty", erp_area_code: "EMPTY", points: [[0, 5000], [3000, 5000], [3000, 7000], [0, 7000]] };
+  const aisle = { id: "aisle-test", feature_code: "AISLE-TEST", feature_kind: "aisle", points: [[7000, 0], [7000, 8000]], width_mm: 1000 };
+  const draft = { ...zone, version: 2, points: [[10000, 1000], [16000, 1000], [16000, 5000], [10000, 5000]] };
+  const locations = [{ location_id: 151, location_code: "TEST-01", floor_code: "3F", area_code: "TEST", source_version: "TWIN_V1", storage_type: "ground", map_feature_id: zone.id,
+    occupancy_status: "occupied", position_status: "mapped", map_position: { left_pct: 10, top_pct: 10, width_pct: 20, height_pct: 25, version: 4, z_index: 0 },
+    pallet: null, loose_items: [{ lot_id: 951, quantity: 100, quantity_available: 100, inventory_type: "semi_finished", unit: "sheets" }] }];
+  const original = JSON.stringify(locations);
+  const published = [zone, empty, aisle];
+  function render(mode, localPoints = null) {
+    const features = mode === "planning" ? [draft, empty, aisle] : published;
+    const context = { ...inventory, useMemo: (callback) => callback(), EMPTY_CANVAS_IDS: componentValue("EMPTY_CANVAS_IDS", {}), mapMode: mode, features,
+      planningPublishedFeatures: published, zoneGeometryDrafts: localPoints ? { [zone.id]: localPoints } : {},
+      visualLocations: locations, floorCode: "3F", standardPallet: { contract_version: "standard-pallet-v1", width_mm: 1200, depth_mm: 1000, height_mm: 150 },
+      layout: { id: "test-3f", features, racks: [], violations: [] }, locationEditMode: mode === "planning", locationPointEditAreaCode: null,
+      moveDrafts: [], moveAction: "pallet", groundCandidates: null, groundPrimaryLocationId: null, groundSecondaryLocationId: null,
+      rackDrafts: {}, displayedLocationConflicts: [] };
+    for (const name of ["locationProjectionFeatures", "planningVisibleFeatures", "mappedLocationPallets", "planningPreviewPallets", "previewOnlyLocationIds", "locationPointEditPalletIds", "movePreviewPallets", "groundCandidatePallets", "visualLayout"]) {
+      const value = componentValue(name, context);
+      if (value !== undefined) context[name] = value;
+    }
+    return context;
+  }
+  const lookup = render("lookup");
+  const planning = render("planning");
+  const before = lookup.visualLayout.pallets[0];
+  const after = planning.visualLayout.pallets[0];
+  assert.ok(before && after, "the same real inventory remains visible");
+  assert.equal(after.id, before.id);
+  assert.equal(planning.previewOnlyLocationIds.has(after.id), true);
+  assert.equal(planning.locationPointEditPalletIds.includes(after.id), false, "preview-only geometry cannot be dragged in the canvas");
+  assert.equal(lookup.previewOnlyLocationIds.size, 0);
+  assert.ok(Math.abs(after.x_mm - before.x_mm - 10000) < 0.1, "draft preview follows its zone's X translation");
+  assert.ok(Math.abs(after.y_mm - before.y_mm - 1000) < 0.1, "draft preview follows its zone's Y translation");
+  for (const key of ["id", "zone_id", "x_mm", "y_mm", "rotation_deg", "width_mm", "depth_mm"]) {
+    assert.equal(planning.mappedLocationPallets[0][key], lookup.mappedLocationPallets[0][key], `operational ${key} stays published`);
+  }
+  assert.deepEqual(Array.from(planning.visualLayout.features, item => item.id), [zone.id, empty.id, aisle.id]);
+  const unsaved = render("planning", draft.points.map(([x, y]) => [x + 500, y]));
+  assert.ok(Math.abs(unsaved.visualLayout.pallets[0].x_mm - after.x_mm - 500) < 0.1);
+  const resized = render("planning", [[10000, 1000], [22000, 1000], [22000, 5000], [10000, 5000]]);
+  assert.ok(Math.abs(resized.visualLayout.pallets[0].x_mm - 12400) < 0.1);
+  assert.equal(resized.visualLayout.pallets[0].planning_slot_width_mm, 1200, "standard physical footprint does not scale with a zone");
+  assert.equal(JSON.stringify(locations), original, "preview does not mutate quantity, identity, version or warehouse records");
+  assert.equal(render("lookup").visualLayout.pallets[0].x_mm, before.x_mm, "cancel/mode switch returns to published geometry");
+});
+
+test("draft-frame location dragging cannot write published-frame coordinates", () => {
+  const messages = [];
+  componentValue("moveLocationDraft", {
+    locationEditMode: true, layoutMapToolsOpen: false,
+    previewOnlyLocationIds: new Set(["erp-location-151"]),
+    setLocationEditMessage: value => messages.push(value),
+    setLocationDrafts: () => assert.fail("preview cannot become a location write")
+  })("erp-location-151", 12000, 1000);
+  assert.match(messages[0], /草稿预览.*库存位置未改变/);
+});
+
+test("location save distinguishes failed readback, rejected writes and partial area success", async () => {
+  for (const failure of ["readback", "write", "second-area"]) {
+    let drafts = { 151: { location_id: 151 }, ...(failure === "second-area" ? { 152: { location_id: 152 } } : {}) };
+    const messages = [];
+    let writes = 0;
+    let reads = 0;
+    const noop = () => {};
+    await componentValue("saveLocationDrafts", {
+      layoutMapToolsOpen: false, locationDrafts: drafts, locationPointEditAreaCode: null, floorCode: "3F",
+      dashboard: { locations: [{ location_id: 151, area_code: "TEST", floor_code: "3F" }, { location_id: 152, area_code: "OTHER", floor_code: "3F" }] },
+      planningGeometryConflicts: [], setLocationEditBusy: noop, setLocationEditMessage: value => messages.push(value),
+      requestJson: async () => ({ available_actions: ["published_layout"], published_map_revision: "p1", policy_version: 1, ground_plan_version: 1 }),
+      mutateJson: async () => { writes++; if (failure === "write" || failure === "second-area" && writes === 2) throw new Error("simulated rejection"); return {}; },
+      setLocationDrafts: value => { drafts = value(drafts); }, setSwapSourceLocationId: noop,
+      locationLayoutIdempotencyKey: "test-once", operationKey: () => "test-next", setLocationLayoutIdempotencyKey: noop,
+      refreshDashboard: async () => { reads++; throw new Error("simulated readback unavailable"); },
+      reloadAreaLocationManagement: noop, selectedAreaCode: "TEST", setLocationPointEditAreaCode: noop
+    })();
+    if (failure === "readback") {
+      assert.match(messages.at(-1), /已保存并固定 1 个货位，但回读失败/);
+      assert.equal(Object.keys(drafts).length, 0);
+      assert.equal(reads, 1);
+    } else if (failure === "write") {
+      assert.equal(messages.at(-1), "simulated rejection");
+      assert.deepEqual(Object.keys(drafts), ["151"]);
+      assert.equal(reads, 0);
+    } else {
+      assert.match(messages.at(-1), /已保存 1 个货位，其余保存未完成/);
+      assert.deepEqual(Object.keys(drafts), ["152"]);
+    }
+  }
+});
+
+test("cancelled or rejected publication retains the draft and performs no readback", async () => {
+  for (const confirm of [false, true]) {
+    let writes = 0;
+    const messages = [];
+    await componentValue("publishLayoutDraft", {
+      layout: { source_sha256: "d2" }, layoutDraftControl: { status: "validated", published_revision: "p1" }, floorCode: "3F",
+      setSpatialEditBusy: () => {}, prepareLegacyRackBindingConfirmation: async () => ({ summary: "", request: {} }),
+      window: { confirm: () => confirm }, operationKey: () => "test-publish",
+      mutateJson: async () => { writes++; throw new Error("simulated version conflict"); },
+      refreshPublishedTwinFloor: () => assert.fail("no readback without acknowledgment"),
+      setLayoutDraftControl: () => assert.fail("keep unsaved draft on cancellation/rejection"),
+      setLocationEditMessage: message => messages.push(message)
+    })();
+    assert.equal(writes, confirm ? 1 : 0);
+    if (confirm) assert.match(messages.at(-1), /^发布布局失败：simulated version conflict$/);
+    else assert.deepEqual(messages, []);
+  }
+});
+
+test("all map commit-and-readback actions keep acknowledged success distinct from read failure", async () => {
+  for (const name of ["previewAndPublishLayout", "discardLayoutDraft", "confirmSelectedAreaOnce"]) {
+    const messages = [];
+    let commits = 0;
+    const noop = () => {};
+    await componentValue(name, {
+      layout: { source_sha256: "d2" }, floorCode: "3F", layoutDraftControl: { has_draft: true, status: "validated", published_revision: "p1" },
+      selectedAreaFeature: { id: "zone-test", version: 1 }, simpleAreaCapacity: "1", formalAreaCodeDraft: "TEST", formalAreaNameDraft: "测试区",
+      formalAreaOptions: [], selectedExistingAreaId: "", simpleAreaUsage: "semi_finished", simpleAreaLayout: "pallet_ground", planningPublishedRevision: "p1",
+      setSpatialEditBusy: noop, setLocationEditMessage: message => messages.push(message), setLayoutDraftControl: noop,
+      setPlanningPublishedRevision: noop, operationKey: () => "test-once", window: { confirm: () => true },
+      prepareLegacyRackBindingConfirmation: async () => ({ summary: "", request: {} }),
+      mutateJson: async path => path.endsWith("validate")
+        ? { status: "validated", draft_revision: "d2", warnings: [], blockers: [] }
+        : (commits++, { backup_name: "test-backup", published_revision: "p2" }),
+      refreshPublishedTwinFloor: async () => { throw new Error("simulated readback unavailable"); },
+      refreshPlanningTwinFloor: async () => { throw new Error("simulated readback unavailable"); }, refreshDashboard: async () => {},
+    })();
+    assert.equal(commits, 1, name);
+    assert.match(messages.at(-1), /已发布.*回读失败|草稿已放弃.*回读失败|区域已启用.*回读失败/, name);
+  }
+});
+
+test("warehouse help is explicitly opened while draft and failure states stay visible", () => {
+  assert.match(source, /aria-expanded=\{mapHelpOpen\} aria-controls="warehouse-map-help"/);
+  assert.match(source, /mapHelpOpen && <section id="warehouse-map-help"/);
+  assert.match(source, /role="status"/);
+  assert.match(source, /草稿预览 · 查货使用已发布版/);
+  assert.match(source, /有未保存调整/);
+  assert.match(source, /locationEditMessage && <div/);
+  assert.doesNotMatch(source, /区域规划：选区域，核对后确认。|排位保存只生成预览/);
+});
+
+test("acknowledged publication with failed readback does not report a failed write or allow a stale draft to publish again", async () => {
+  const messages = [];
+  let publishCalls = 0;
+  let control = { status: "validated", published_revision: "p1" };
+  let mode = "planning";
+  const noop = () => {};
+  const context = { layout: { source_sha256: "d2" }, floorCode: "3F", layoutDraftControl: control,
+    setSpatialEditBusy: noop, prepareLegacyRackBindingConfirmation: async () => ({ summary: "", request: {} }),
+    window: { confirm: () => true }, operationKey: () => "test-publish-once",
+    mutateJson: async () => { publishCalls++; return { backup_name: "test-backup" }; },
+    refreshPublishedTwinFloor: async () => { throw new Error("simulated readback unavailable"); },
+    setMapMode: value => { mode = value; }, setSearchPanelOpen: noop, setLocationEditMode: noop, setAreaPolicyEditMode: noop,
+    setRackDrafts: noop, setZonePolicyDrafts: noop, replaceZoneGeometryDrafts: noop,
+    setLegacyRackBindingPreview: noop, setLegacyRackBindingSelections: noop,
+    setLayoutDraftControl: value => { control = typeof value === "function" ? value(control) : value; },
+    setLocationEditMessage: value => messages.push(value) };
+  await componentValue("publishLayoutDraft", context)();
+  assert.equal(publishCalls, 1);
+  assert.equal(mode, "planning", "unverified readback must not display a new lookup layout");
+  assert.match(messages.at(-1), /已发布.*回读失败/);
+  assert.doesNotMatch(messages.at(-1), /^发布布局失败/);
+  assert.notEqual(control?.status, "validated", "old validated revision cannot be submitted again");
+});
+
 test("ordinary area planning exposes a current-area-only point editing workflow", () => {
   assert.doesNotMatch(source, />拖动并保存现场货位</);
   assert.match(source, />保存并固定/);
   assert.match(source, />取消点位调整/);
   assert.match(source, /只有点击区域空白处才选择区域/);
   assert.match(source, /location\?\.area_code !== locationPointEditAreaCode/);
-  assert.match(source, /draggablePalletIds=\{warehouseMoveModeActive \? movablePalletIds : layoutMapToolsOpen \? \[\] : locationPointEditPalletIds\}/);
+  assert.match(source, /draggablePalletIds=\{warehouseMoveModeActive \? movablePalletIds : layoutMapToolsOpen \? EMPTY_CANVAS_IDS : locationPointEditPalletIds\}/);
   assert.match(source, /mergePublishedFeatureGeometry/);
 });
 
@@ -176,7 +458,7 @@ test("map adjustment and location placement are mutually exclusive", () => {
   assert.match(source, /features: planningVisibleFeatures\.map/);
   assert.doesNotMatch(source, /locationEditMode && !layoutMapToolsOpen \? locationProjectionFeatures : layout\.features/);
   assert.match(source, /setLayoutMapToolsOpen\(false\)/);
-  assert.match(source, /layoutMapToolsOpen \? \[\] : locationPointEditPalletIds/);
+  assert.match(source, /layoutMapToolsOpen \? EMPTY_CANVAS_IDS : locationPointEditPalletIds/);
   assert.match(source, /!locationPointEditAreaCode && layoutMapTool === "adjust"/);
   assert.match(source, /activeLocationDraftCount > 0/);
   assert.match(source, /if \(layoutMapToolsOpen\)/);

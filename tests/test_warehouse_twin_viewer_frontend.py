@@ -77,7 +77,7 @@ def test_operational_twin_uses_erp_session_for_real_production_and_manual_mappin
     assert "确认投影到地图" in SOURCE
     assert "productionProjections={productionProjection?.items || EMPTY_PRODUCTION_PROJECTIONS}" in SOURCE
     assert "raw.pallets || []" in SOURCE
-    assert "pallets: groundCandidatePallets" in SOURCE
+    assert 'pallets: mapMode === "planning" ? planningPreviewPallets : groundCandidatePallets' in SOURCE
     assert "pallets: [...layout.pallets, ...movePreviewPallets]" not in SOURCE
 
 
@@ -88,7 +88,7 @@ def test_operational_twin_declutters_labels_and_keeps_details_in_the_inspector()
     assert "filterOperationalFeatures(raw.floor_code, raw.bounds_mm" in SOURCE
     assert 'onSelect={selectOperationalEntity}' in SOURCE
     assert "库存与库位" not in SOURCE
-    assert '<aside className="twin-inspector">' in SOURCE
+    assert '<aside className="twin-inspector" ref={inspectorRef} tabIndex={-1}>' in SOURCE
     assert 'className="twin-location-card"' in SOURCE
     assert 'if (layers.labels) {' in CANVAS
     assert "warehouseFrustumDivisor(layout.floor_code, visualTheme)" in CANVAS
@@ -285,7 +285,7 @@ def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location
     assert "const mappedLocationPallets = useMemo(" in SOURCE
     assert "const movePreviewPallets = useMemo(() =>" in SOURCE
     assert "if (mapMode !== \"move\" || !moveDrafts.length) return mappedLocationPallets" in SOURCE
-    assert "pallets: groundCandidatePallets" in SOURCE
+    assert 'pallets: mapMode === "planning" ? planningPreviewPallets : groundCandidatePallets' in SOURCE
 
 
 def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
@@ -312,7 +312,7 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert "高级维护" in SOURCE
     assert '<aside className="twin-context-rail">' in SOURCE
     assert "库存与库位" not in SOURCE
-    assert '<aside className="twin-inspector">' in SOURCE
+    assert '<aside className="twin-inspector" ref={inspectorRef} tabIndex={-1}>' in SOURCE
     assert "twin-stage-footer" not in SOURCE
     assert "twin-system-footer" not in SOURCE
 
@@ -381,7 +381,7 @@ def test_p1_47a_uses_typed_map_search_and_one_unified_read_only_entry() -> None:
     assert 'requested === "move" || requested === "planning"' in SOURCE
     assert "查货模式 · 只读" in SOURCE
     assert "P1-47C 独立阶段启用" not in SOURCE
-    assert 'setCanExecuteWarehouse(value.permissions.includes("warehouse.execute"))' in SOURCE
+    assert 'setCanExecuteWarehouse(!traceReadOnly && value.permissions.includes("warehouse.execute"))' in SOURCE
     assert '(canExecuteWarehouse || canStocktake) && <button type="button" className={mapMode === "move" ? "active" : ""} disabled={spatialEditBusy} onClick={enterWarehouseMoveMode}' in SOURCE
     assert "区域规划" in SOURCE
     assert "P1-47B 独立阶段启用" not in SOURCE
@@ -417,7 +417,7 @@ def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> Non
     assert "系统按区域自动生成内部唯一编码" in SOURCE
     assert "/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable" in SOURCE
     assert 'palletEditingOnly={locationEditMode || warehouseMoveModeActive}' in SOURCE
-    assert "draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : layoutMapToolsOpen ? [] : locationPointEditPalletIds}" in SOURCE
+    assert "draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : layoutMapToolsOpen ? EMPTY_CANVAS_IDS : locationPointEditPalletIds}" in SOURCE
     assert 'readOnly={!locationEditMode && !warehouseMoveModeActive}' in SOURCE
     assert 'rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}' in SOURCE
     assert 'featureEditingEnabled={locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"}' in SOURCE
@@ -480,8 +480,8 @@ def test_phase2c9_admin_operations_and_read_only_locating_share_the_measured_map
     assert 'const entity = { kind: "pallet" as const, id: `erp-location-${pendingLocationId}` }' in SOURCE
     assert 'setCameraFocusTarget({ entity, token: cameraFocusSequenceRef.current, source: "search" })' in SOURCE
     assert "只读定位" in SOURCE
-    assert "当前是查货模式，只读真实库存和地图位置" in SOURCE
-    assert "不执行入库、移货、盘点或布局写入" in SOURCE
+    assert "查货模式 · 只读" in SOURCE
+    assert 'mapHelpOpen && <section id="warehouse-map-help"' in SOURCE
 
 
 def test_phase2c9_right_side_selection_summarizes_location_and_collapses_secondary_facts() -> None:

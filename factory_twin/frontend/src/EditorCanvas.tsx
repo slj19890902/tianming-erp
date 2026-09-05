@@ -72,6 +72,7 @@ interface Props {
   onMovePallet: (id: string, xMm: number, yMm: number) => void;
   onMoveFeature: (id: string, deltaXmm: number, deltaYmm: number) => void;
   onFeatureContextMenu?: (id: string, clientX: number, clientY: number) => void;
+  onEntityContextMenu?: (entity: NonNullable<SelectedEntity>, clientX: number, clientY: number) => boolean;
   onDropAsset: (templateId: string, xMm: number, yMm: number) => void;
   onDropRack: (rack: Record<string, unknown>, xMm: number, yMm: number) => void;
   onDropPallet: (pallet: Record<string, unknown>, xMm: number, yMm: number) => void;
@@ -408,6 +409,7 @@ export function EditorCanvas({
   onMovePallet,
   onMoveFeature,
   onFeatureContextMenu,
+  onEntityContextMenu,
   onDropAsset,
   onDropRack,
   onDropPallet,
@@ -428,10 +430,10 @@ export function EditorCanvas({
   const selectedRef = useRef<SelectedEntity>(selected);
   const focusTargetRef = useRef<CanvasFocusTarget | null>(focusTarget);
   const lastFocusKeyRef = useRef("");
-  const handlersRef = useRef({ onSelect, onMoveEquipment, onMoveRack, onMovePallet, onMoveFeature, onFeatureContextMenu, onDropAsset, onDropRack, onDropPallet, onDrawPoint, onMeasurePoint });
+  const handlersRef = useRef({ onSelect, onMoveEquipment, onMoveRack, onMovePallet, onMoveFeature, onFeatureContextMenu, onEntityContextMenu, onDropAsset, onDropRack, onDropPallet, onDrawPoint, onMeasurePoint });
   selectedRef.current = selected;
   focusTargetRef.current = focusTarget;
-  handlersRef.current = { onSelect, onMoveEquipment, onMoveRack, onMovePallet, onMoveFeature, onFeatureContextMenu, onDropAsset, onDropRack, onDropPallet, onDrawPoint, onMeasurePoint };
+  handlersRef.current = { onSelect, onMoveEquipment, onMoveRack, onMovePallet, onMoveFeature, onFeatureContextMenu, onEntityContextMenu, onDropAsset, onDropRack, onDropPallet, onDrawPoint, onMeasurePoint };
   const cameraStateRef = useRef<{
     position: [number, number, number];
     target: [number, number, number];
@@ -443,7 +445,7 @@ export function EditorCanvas({
     const container = containerRef.current;
     const canvasMount = canvasMountRef.current;
     if (!container || !canvasMount) return;
-    const width = Math.max(container.clientWidth, 400);
+    const width = Math.max(container.clientWidth, 1);
     const height = Math.max(container.clientHeight, 420);
     const bounds = layout.bounds_mm;
     const centerX = (bounds.min_x + bounds.max_x) / 2;
@@ -508,6 +510,7 @@ export function EditorCanvas({
       });
     };
     if (viewMode === "2d") {
+      controls.touches.ONE = THREE.TOUCH.PAN;
       controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
       controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
       controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
@@ -588,7 +591,7 @@ export function EditorCanvas({
     const updateOverlay = () => {
       const visibleWidthMm = (camera.right - camera.left) / camera.zoom;
       const scaleLengthMm = niceScaleLengthMm(visibleWidthMm * 0.16);
-      const currentWidth = Math.max(container.clientWidth, 400);
+      const currentWidth = Math.max(container.clientWidth, 1);
       const barWidthPx = Math.max(44, Math.min(180, (scaleLengthMm / visibleWidthMm) * currentWidth));
       if (scaleBarRef.current) scaleBarRef.current.style.width = `${barWidthPx}px`;
       if (scaleLabelRef.current) scaleLabelRef.current.textContent = scaleLengthMm >= 1000
@@ -1256,6 +1259,20 @@ export function EditorCanvas({
       }
     };
     const onContextMenu = (event: MouseEvent) => {
+      if (handlersRef.current.onEntityContextMenu) {
+        setPointer(event);
+        const root = raycaster.intersectObjects(interactive, !warehouseTheme)
+          .map((intersection) => entityNode(intersection.object))
+          .find((candidate) => Boolean(candidate));
+        if (!root) return;
+        const entity = { kind: root.userData.entityKind, id: String(root.userData.entityId) } as NonNullable<SelectedEntity>;
+        if (handlersRef.current.onEntityContextMenu(entity, event.clientX, event.clientY)) {
+          event.preventDefault();
+          renderer.domElement.tabIndex = 0;
+          renderer.domElement.focus({ preventScroll: true });
+        }
+        return;
+      }
       if (!featureEditingEnabled || !handlersRef.current.onFeatureContextMenu) return;
       setPointer(event);
       const featureRoot = raycaster.intersectObjects(interactive, !warehouseTheme)
@@ -1472,7 +1489,7 @@ export function EditorCanvas({
     updateOverlay();
     requestRender();
     const resizeObserver = new ResizeObserver(() => {
-      const nextWidth = Math.max(container.clientWidth, 400);
+      const nextWidth = Math.max(container.clientWidth, 1);
       const nextHeight = Math.max(container.clientHeight, 420);
       camera.left = (-span * nextWidth) / nextHeight / frustumDivisor;
       camera.right = (span * nextWidth) / nextHeight / frustumDivisor;

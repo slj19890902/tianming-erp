@@ -28,6 +28,7 @@ from app.core.time_contract import utc_now_naive
 from app.services.warehouse_floor1_candidate_planner import (
     Floor1CandidatePlanningError,
     measured_pallet_slots_for_zone,
+    _percent_geometry_to_slot,
 )
 from app.services.warehouse_area_activation import (
     WarehouseAreaActivationError,
@@ -416,7 +417,46 @@ def occupancy_physical_quantity(occupancy: WarehouseGroundOccupancy) -> int:
     return total
 
 
-def ground_slots_adjacent(left: WarehouseGroundLayoutSlot, right: WarehouseGroundLayoutSlot) -> bool:
+def effective_ground_slot_geometries(plan, floor_layout: dict) -> dict[int, dict]:
+    """Read applied millimetres and expose the same zone-relative projection."""
+    feature_id = plan.area.storage_policy.map_feature_id
+    feature = next((item for item in floor_layout.get("features", [])
+                    if item.get("id") == feature_id), None)
+    if feature is None:
+        raise WarehouseGroundSlotError("GROUND_MAP_FEATURE_MISSING", "已应用地图缺少所属区域，请重新读取地图。")
+    points = feature["points"]
+    left, right = min(p[0] for p in points), max(p[0] for p in points)
+    bottom, top = min(p[1] for p in points), max(p[1] for p in points)
+    width, height = right - left, top - bottom
+    if width <= 0 or height <= 0:
+        raise WarehouseGroundSlotError("GROUND_MAP_GEOMETRY_INVALID", "所属区域尺寸无效。")
+    saved = {int(item["location_id"]): item
+             for item in (feature.get("ground_location_draft") or {}).get("slots", [])}
+    result = {}
+    for slot in plan.slots:
+        layout = slot.location.floor3_layout
+        if layout is None or not slot.location.is_active:
+            continue
+        relative = {key: float(getattr(layout, key)) for key in
+                    ("left_pct", "top_pct", "width_pct", "height_pct")}
+        absolute = saved.get(slot.location_id)
+        if absolute is not None:
+            absolute = {key: float(absolute[key]) for key in
+                        ("x_mm", "y_mm", "width_mm", "depth_mm")}
+            relative = dict(
+                left_pct=(absolute["x_mm"] - left) / width * 100,
+                top_pct=(top - absolute["y_mm"] - absolute["depth_mm"]) / height * 100,
+                width_pct=absolute["width_mm"] / width * 100,
+                height_pct=absolute["depth_mm"] / height * 100,
+            )
+        else:
+            absolute = _percent_geometry_to_slot({**relative, "layout_kind": layout.layout_kind}, points)
+        result[slot.location_id] = {**relative, **absolute}
+    return result
+
+
+def ground_slots_adjacent(left: WarehouseGroundLayoutSlot, right: WarehouseGroundLayoutSlot,
+                          *, positions: dict[int, dict] | None = None) -> bool:
     if left.plan_id != right.plan_id or left.location_id == right.location_id:
         return False
     lx, ly = float(left.x_mm), float(left.y_mm)
@@ -424,7 +464,13 @@ def ground_slots_adjacent(left: WarehouseGroundLayoutSlot, right: WarehouseGroun
     lw, ld = float(left.width_mm), float(left.depth_mm)
     rw, rd = float(right.width_mm), float(right.depth_mm)
     left_location, right_location = getattr(left, 'location', None), getattr(right, 'location', None)
-    if left_location is not None or right_location is not None:
+    if positions is not None:
+        a, b = positions.get(left.location_id), positions.get(right.location_id)
+        if a is None or b is None:
+            return False
+        lx, ly, lw, ld = (float(a[key]) for key in ("x_mm", "y_mm", "width_mm", "depth_mm"))
+        rx, ry, rw, rd = (float(b[key]) for key in ("x_mm", "y_mm", "width_mm", "depth_mm"))
+    elif left_location is not None or right_location is not None:
         a = getattr(left_location, 'floor3_layout', None)
         b = getattr(right_location, 'floor3_layout', None)
         if a is None or b is None:
@@ -528,8 +574,10 @@ def ground_candidate_rows(
     product_id: int,
     incoming_quantity: int,
     can_view_occupied_details: bool,
+    floor_layout: dict,
 ) -> list[dict]:
     rows: list[dict] = []
+    positions = effective_ground_slot_geometries(plan, floor_layout)
     location_ids = [slot.location_id for slot in plan.slots]
     area_sequence_by_location = {
         int(location_id): sequence
@@ -653,7 +701,7 @@ def ground_candidate_rows(
         adjacent_ids = []
         if status == "empty":
             for other in plan.slots:
-                if ground_slots_adjacent(slot, other):
+                if ground_slots_adjacent(slot, other, positions=positions):
                     other_occupancy = occupancy_by_location_id.get(other.location_id)
                     other_has_inventory = (
                         other.location_id in current_pallet_location_ids
@@ -689,10 +737,8 @@ def ground_candidate_rows(
                 "current_product": current_product,
                 "adjacent_location_ids": sorted(adjacent_ids),
                 "geometry": {
-                    "left_pct": layout.left_pct if layout is not None else None,
-                    "top_pct": layout.top_pct if layout is not None else None,
-                    "width_pct": layout.width_pct if layout is not None else None,
-                    "height_pct": layout.height_pct if layout is not None else None,
+                    key: positions.get(location.id, {}).get(key)
+                    for key in ("left_pct", "top_pct", "width_pct", "height_pct")
                 },
             }
         )

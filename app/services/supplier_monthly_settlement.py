@@ -1153,8 +1153,15 @@ def _begin_settlement_write_snapshot(db: Session) -> None:
         try:
             connection.exec_driver_sql("BEGIN IMMEDIATE")
         except OperationalError as error:
-            sqlite_code = getattr(error.orig, "sqlite_errorcode", 0)
-            if sqlite_code & 0xFF in {5, 6}:
+            sqlite_code = getattr(error.orig, "sqlite_errorcode", None)
+            sqlite_message = str(error.orig).casefold()
+            is_busy = (
+                isinstance(sqlite_code, int) and sqlite_code & 0xFF in {5, 6}
+            ) or any(
+                marker in sqlite_message
+                for marker in ("database is locked", "database table is locked")
+            )
+            if is_busy:
                 raise SupplierSettlementError(
                     "SUPPLIER_SETTLEMENT_CONCURRENT_WRITE",
                     "实收或财务数据正在更新，请稍后重试月结操作",

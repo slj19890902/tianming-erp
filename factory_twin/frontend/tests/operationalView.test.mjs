@@ -93,6 +93,24 @@ test("warehouse passage follows the wall envelope instead of the rectangular imp
   assert.ok(Math.min(...envelope.map(([x]) => x)) >= 1000);
 });
 
+test("warehouse passage bridges short exterior wall gaps without following an inside wall", () => {
+  const wall = (points) => ({ kind: "wall", geometry: { type: "polyline", closed: true, points } });
+  const envelope = warehousePassageEnvelope(
+    { min_x: 0, min_y: 0, max_x: 10000, max_y: 10000 },
+    [
+      wall([[1000, 0], [1200, 0], [1200, 4000], [1000, 4000]]),
+      wall([[1000, 5200], [1200, 5200], [1200, 10000], [1000, 10000]]),
+      wall([[4000, 0], [4200, 0], [4200, 10000], [4000, 10000]]),
+      wall([[8800, 0], [9000, 0], [9000, 10000], [8800, 10000]])
+    ],
+    40
+  );
+  const leftHalf = envelope.slice(0, envelope.length / 2);
+  const gapRows = leftHalf.filter(([, y]) => y >= 4000 && y <= 5200);
+  assert.ok(gapRows.length >= 4);
+  assert.ok(Math.max(...gapRows.map(([x]) => x)) <= 1200);
+});
+
 test("warehouse uses the floor envelope as passage and hides legacy drawn aisles", () => {
   const aisle = { id: "legacy-aisle", feature_kind: "aisle", points: [[0, 0], [1000, 0]] };
   const zone = { id: "zone", feature_kind: "zone", points: [[0, 0], [1000, 0], [1000, 1000], [0, 1000]] };

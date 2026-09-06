@@ -86,18 +86,83 @@ export function warehousePassageEnvelope(bounds, structures, sliceCount = 224) {
   const maxX = Number(bounds?.max_x);
   if (![minX, minY, maxX, maxY].every(Number.isFinite) || maxX <= minX || maxY <= minY) return [];
   const slices = Math.max(16, Math.min(512, Math.round(sliceCount)));
-  const rows = [];
+  const sampledRows = [];
   for (let index = 0; index <= slices; index += 1) {
     const y = minY + ((maxY - minY) * index) / slices;
     const xs = horizontalWallIntersections(structures, y)
       .filter((value) => value >= minX - 1 && value <= maxX + 1);
-    if (xs.length < 2) continue;
-    rows.push([Math.min(...xs), y, Math.max(...xs)]);
+    sampledRows.push(xs.length < 2 ? null : [Math.min(...xs), y, Math.max(...xs)]);
   }
+  const maximumGapRows = Math.max(3, Math.floor(slices * 0.1));
+  for (let index = 0; index < sampledRows.length;) {
+    if (sampledRows[index]) {
+      index += 1;
+      continue;
+    }
+    const start = index;
+    while (index < sampledRows.length && !sampledRows[index]) index += 1;
+    const end = index - 1;
+    const before = sampledRows[start - 1];
+    const after = sampledRows[index];
+    if (!before || !after || end - start + 1 > maximumGapRows) continue;
+    for (let gapIndex = start; gapIndex <= end; gapIndex += 1) {
+      const y = minY + ((maxY - minY) * gapIndex) / slices;
+      sampledRows[gapIndex] = [
+        Math.min(before[0], after[0]),
+        y,
+        Math.max(before[2], after[2])
+      ];
+    }
+  }
+  const rows = sampledRows.filter(Boolean);
   if (rows.length < Math.max(4, Math.floor(slices * 0.2))) return [];
+  const jumpThreshold = Math.max(600, (maxX - minX) * 0.02);
+  const returnTolerance = jumpThreshold * 0.35;
+  const repairShortInwardExcursion = (sideIndex, inwardDirection) => {
+    for (let index = 1; index < rows.length; index += 1) {
+      const previous = rows[index - 1][sideIndex];
+      const current = rows[index][sideIndex];
+      if ((current - previous) * inwardDirection < jumpThreshold) continue;
+      const limit = Math.min(rows.length - 1, index + maximumGapRows);
+      let returnIndex = -1;
+      for (let candidate = index + 1; candidate <= limit; candidate += 1) {
+        const returned = (rows[candidate][sideIndex] - previous) * inwardDirection;
+        if (returned <= returnTolerance) {
+          returnIndex = candidate;
+          break;
+        }
+      }
+      if (returnIndex < 0) continue;
+      const outside = inwardDirection > 0
+        ? Math.min(previous, rows[returnIndex][sideIndex])
+        : Math.max(previous, rows[returnIndex][sideIndex]);
+      for (let repair = index; repair < returnIndex; repair += 1) {
+        rows[repair][sideIndex] = outside;
+      }
+      index = returnIndex;
+    }
+  };
+  repairShortInwardExcursion(0, 1);
+  repairShortInwardExcursion(2, -1);
+  const steppedRows = [rows[0]];
+  for (let index = 1; index < rows.length; index += 1) {
+    const previous = rows[index - 1];
+    const current = rows[index];
+    if (
+      Math.abs(current[0] - previous[0]) >= jumpThreshold
+      || Math.abs(current[2] - previous[2]) >= jumpThreshold
+    ) {
+      const transitionY = (previous[1] + current[1]) / 2;
+      steppedRows.push(
+        [previous[0], transitionY, previous[2]],
+        [current[0], transitionY, current[2]]
+      );
+    }
+    steppedRows.push(current);
+  }
   return [
-    ...rows.map(([left, y]) => [left, y]),
-    ...rows.slice().reverse().map(([, y, right]) => [right, y])
+    ...steppedRows.map(([left, y]) => [left, y]),
+    ...steppedRows.slice().reverse().map(([, y, right]) => [right, y])
   ];
 }
 

@@ -1,0 +1,11 @@
+........................................................................ [ 60%]
+...............................................                          [100%]
+============================== warnings summary ===============================
+tests/test_p0_45_paid_statement_guard.py::test_received_payment_blocks_uninvoiced_statement_dispute_without_writes[reopen-40.00]
+  D:\纸箱厂erp软件搭建\.venv\Lib\site-packages\reportlab\lib\rl_safe_eval.py:12: DeprecationWarning: ast.NameConstant is deprecated and will be removed in Python 3.14; use ast.Constant instead
+    haveNameConstant = hasattr(ast,'NameConstant')
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: D:\tm-worktrees\erp-p0-45-finance-release-20260907\data\p0_45_verification\regression.xml -
+119 passed, 1 warning in 202.55s (0:03:22)
+Regression gate passed. No business database was scanned; use --database for the read-only data gate.

@@ -20,7 +20,7 @@
 
 ## 已完成的真实快照只读检查
 
-来源为工厂2026-09-06 07:30:54导出的 `factory-20260906-073054-315ae1f9` 标准包；这代表导出时点，不是当前工厂实时数据。只将SQLite快照复制到本任务 `data/p0_45_snapshot/finance_20260906_isolated.sqlite3`，未复制或修改地图草稿。
+来源为工厂2026-09-06 07:30:54导出的 `factory-20260906-073054-315ae1f9` 标准包；这代表导出时点，不是当前工厂实时数据。只将SQLite快照复制到 `D:/tm-worktrees/erp-p0-45-finance-followup-20260907/data/p0_45_snapshot/finance_20260906_isolated.sqlite3`，未复制或修改地图草稿。下文数据清单相对路径均以该财务独立工作区为根，发布集成工作区不另拷贝数据库。
 
 - 219,447,296字节；SHA-256：`7bdf61307cf76a2cddfaedf2035b6855b95fcb54bb2540eb2f92d423872c5ea5`，与工厂回执一致。
 - revision=`kq75v8x9z64`，integrity_check=`ok`，外键异常=0。

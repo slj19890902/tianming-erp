@@ -31,6 +31,22 @@ function componentValue(name, context, optional = false) {
   return sandbox.value;
 }
 
+test("a rejected pallet cannot become a move source even when it has a version", () => {
+  const declaration = syntax.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "palletMoveSource");
+  assert.ok(declaration);
+  const javascript = ts.transpileModule(declaration.getText(syntax) + "\nglobalThis.make = palletMoveSource;", {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
+  }).outputText;
+  const sandbox = { employeeCustomerName: () => "客户", singleLocationPallet: location => location.pallets[0] };
+  vm.runInNewContext(javascript, sandbox);
+  const pallet = { pallet_id: 3, version: 2, items: [{}], move_eligible: false, move_block_reason: "历史关联未通过整板核验" };
+  const location = { location_id: 1, floor_code: "3F", pallets: [pallet] };
+  assert.equal(sandbox.make(location, pallet), null);
+  assert.equal(sandbox.make(location), null);
+  assert.equal(sandbox.make(location, { ...pallet, move_eligible: true }).pallet_id, 3);
+  assert.equal(sandbox.make(location, { ...pallet, move_eligible: true, version: 0 }), null);
+});
+
 test("object context menu only selects a known card without choosing a source or target", () => {
   for (const mode of ["lookup", "move", "planning"]) {
     const changes = [];

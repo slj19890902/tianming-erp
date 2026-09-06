@@ -66,7 +66,7 @@ from app.services.supplier_monthly_settlement import (
 )
 from app.services.supplier_receipt_price_facts import (
     SupplierReceiptPriceFactError,
-    freeze_stock_replenishment_price,
+    freeze_receipt_settlement_price,
     stock_replenishment_uses_paperboard_price,
 )
 from app.services.semi_finished_inventory import (
@@ -1676,7 +1676,7 @@ def _receive_stock_replenishment_one(
     receipt.items.append(receipt_item)
     db.flush()
     try:
-        settlement_price_fact = freeze_stock_replenishment_price(
+        settlement_price_fact = freeze_receipt_settlement_price(
             db,
             receipt_item=receipt_item,
             user=user,
@@ -1992,6 +1992,19 @@ def receive_one(
     receipt.items.append(receipt_item)
     db.flush()
     purpose_allocation = None
+    try:
+        settlement_price_fact = freeze_receipt_settlement_price(
+            db,
+            receipt_item=receipt_item,
+            user=user,
+            purchase_receipt_fact=(
+                purpose_context.receipt_fact if purpose_context is not None else None
+            ),
+        )
+    except SupplierReceiptPriceFactError as error:
+        raise IncomingReceiptError(
+            error.message, error.status_code, code=error.code
+        ) from error
     if purpose_context is not None:
         try:
             purpose_allocation = post_receipt_purpose_allocation(
@@ -2052,6 +2065,7 @@ def receive_one(
             "variance_quantity": variance,
             "resolution_action": action,
             "surplus_inventory_lot_id": receipt_item.surplus_inventory_lot_id,
+            "supplier_receipt_price_fact_id": settlement_price_fact.id,
             "purpose_allocation_id": (
                 purpose_allocation.id if purpose_allocation is not None else None
             ),

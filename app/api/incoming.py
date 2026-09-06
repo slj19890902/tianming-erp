@@ -4526,10 +4526,25 @@ def _new_receipt_response(
     return response
 
 
-def _raise_receipt_error(error: IncomingReceiptError) -> None:
+def _receipt_price_recovery(code: str | None, user: User | None) -> dict[str, str]:
+    if not code or not (
+        code.startswith("SUPPLIER_RECEIPT_")
+        or code in {"PAPERBOARD_PURCHASE_SOURCE_MISSING", "PURCHASE_RECEIPT_FACT_REQUIRED", "MATERIAL_MASTER_PRICE_REQUIRED"}
+    ):
+        return {}
+    if user is not None and user.role == "admin":
+        return {
+            "action_url": "/?page=products&subpage=materials&incoming_price_return=1",
+            "action_label": "前往供应商材质报价",
+            "action_hint": "核对采购来源和报价，保存后返回原收料页重新确认。",
+        }
+    return {"action_hint": "请联系管理员核对采购来源并补齐供应商材质报价，再重新确认收料。"}
+
+
+def _raise_receipt_error(error: IncomingReceiptError, user: User | None = None) -> None:
     detail: str | dict[str, str] = str(error)
     if error.code:
-        detail = {"code": error.code, "message": str(error)}
+        detail = {"code": error.code, "message": str(error), **_receipt_price_recovery(error.code, user)}
     raise HTTPException(status_code=error.status_code, detail=detail) from error
 
 
@@ -4608,7 +4623,7 @@ def receive_item(
         return response
     except IncomingReceiptError as error:
         db.rollback()
-        _raise_receipt_error(error)
+        _raise_receipt_error(error, user)
     except HTTPException:
         db.rollback()
         raise
@@ -4747,6 +4762,11 @@ def batch_receive_items(
                     "message": str(
                         error.detail if isinstance(error, HTTPException) else error
                     ),
+                    **(
+                        {"code": error.code, **_receipt_price_recovery(error.code, user)}
+                        if isinstance(error, IncomingReceiptError) and error.code
+                        else {}
+                    ),
                 }
             )
         except Exception:
@@ -4855,6 +4875,9 @@ def batch_receive_items(
             )
             db.flush()
         db.commit()
+    except IncomingReceiptError as error:
+        db.rollback()
+        _raise_receipt_error(error, user)
     except Exception:
         db.rollback()
         raise

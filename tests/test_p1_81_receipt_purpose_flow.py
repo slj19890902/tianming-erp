@@ -759,11 +759,13 @@ def _business_counts(session_factory) -> dict[str, int]:
     from app.models.audit import OperationLog
     from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
     from app.models.production import ProductionCompletion, ProductionTask
+    from app.models.supplier_settlement import SupplierReceiptSettlementPriceFact
     from app.models.warehouse_inventory import InventoryLot, InventoryMovement
 
     models = {
         "receipt": IncomingReceipt,
         "receipt_item": IncomingReceiptItem,
+        "settlement_price": SupplierReceiptSettlementPriceFact,
         "task": ProductionTask,
         "completion": ProductionCompletion,
         "lot": InventoryLot,
@@ -2378,6 +2380,12 @@ def test_receipt_fact_uses_formal_price_not_master_quote_and_binds_idempotency(
         )
     assert Decimal(str(allocation["receipt_total_cost"])) == Decimal("25.0000")
     assert Decimal(str(allocation["receipt_total_cost"])) != Decimal("999.9000")
+    from app.models.supplier_settlement import SupplierReceiptSettlementPriceFact
+    with session_factory() as session:
+        settlement = session.scalar(select(SupplierReceiptSettlementPriceFact))
+        assert settlement.match_strategy == "purchase_receipt_fact"
+        assert settlement.unit_price == Decimal("2.5")
+        assert settlement.received_quantity_snapshot == 10
 
 
 def test_square_meter_price_uses_frozen_dimensions_and_cost_conserves(

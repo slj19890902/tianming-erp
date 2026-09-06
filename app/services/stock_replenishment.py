@@ -1439,6 +1439,28 @@ def receive_replenishment_item(
             "本次实收超过补库单剩余待收数量；请核对后另建补库单处理超收。",
             409,
         )
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.services.supplier_receipt_price_facts import (
+        SupplierReceiptPriceFactError,
+        assert_receipt_settlement_price,
+        stock_replenishment_uses_paperboard_price,
+    )
+
+    if stock_replenishment_uses_paperboard_price(db, item):
+        receipt_item = db.get(IncomingReceiptItem, receipt_item_id)
+        if (
+            source_ref_type != "stock_replenishment_receipt"
+            or receipt_item is None
+            or receipt_item.stock_replenishment_item_id != item.id
+            or receipt_item.received_quantity != inventory_quantity
+        ):
+            raise StockReplenishmentError(
+                "纸板补库必须从来料实收入口冻结供应商结算价后入库，不能直接入库。", 409
+            )
+        try:
+            assert_receipt_settlement_price(db, receipt_item=receipt_item)
+        except SupplierReceiptPriceFactError as error:
+            raise StockReplenishmentError(str(error), error.status_code) from error
     finished_product = (
         db.get(Product, item.product_id)
         if item.target_inventory_type == "finished" and item.product_id is not None

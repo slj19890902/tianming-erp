@@ -700,7 +700,7 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
         assert "location_id" not in ignored_v11_item.json()["items"][0]
 
 
-def test_historical_replenishment_is_read_only_but_existing_order_can_close(
+def test_historical_replenishment_requires_priced_receipt_instead_of_direct_stock(
     stock_replenishment_app,
 ) -> None:
     app, session_factory = stock_replenishment_app
@@ -781,6 +781,7 @@ def test_historical_replenishment_is_read_only_but_existing_order_can_close(
                 target_inventory_type="semi_finished",
                 customer_id=1,
                 product_name_snapshot="21301010 历史纸板",
+                material_id=1,
                 material_code_snapshot="A416D",
                 normalized_material_code="A416D",
                 layer_count=5,
@@ -813,16 +814,21 @@ def test_historical_replenishment_is_read_only_but_existing_order_can_close(
         stocked = client.post(
             f"/api/requisition/stock-replenishment/orders/{legacy_order_id}/stock"
         )
-        assert stocked.status_code == 200
-        assert stocked.json()["status"] == "stocked"
-        assert stocked.json()["stocked_quantity"] == 30
-        lot_id = stocked.json()["items"][0]["inventory_lot"]["id"]
-
-        repeated = client.post(
-            f"/api/requisition/stock-replenishment/orders/{legacy_order_id}/stock"
-        )
-        assert repeated.status_code == 200
-        assert repeated.json()["items"][0]["inventory_lot"]["id"] == lot_id
+        assert stocked.status_code == 409, stocked.text
+        assert "冻结供应商结算价" in stocked.json()["detail"]
+        from app.models.incoming_receipt import IncomingReceiptItem
+        from app.models.supplier_settlement import SupplierReceiptSettlementPriceFact
+        from app.models.warehouse_inventory import InventoryLot
+        with session_factory() as session:
+            for model in (IncomingReceiptItem, SupplierReceiptSettlementPriceFact, InventoryLot):
+                assert session.scalar(select(func.count(model.id))) == 0
+            assert session.get(StockReplenishmentOrder, legacy_order_id).status == "confirmed"
+        source_id = order["items"][0]["id"]
+        payload = {"received_quantity": 30, "idempotency_key": "p045-legacy-stock"}
+        received = client.put(f"/api/incoming/receive/sr{source_id}", json=payload)
+        assert received.status_code == 200, received.text
+        repeated = client.put(f"/api/incoming/receive/sr{source_id}", json=payload)
+        assert repeated.status_code == 200, repeated.text
 
         policies = client.get(
             "/api/requisition/stock-policies?warning_only=true"
@@ -836,8 +842,9 @@ def test_historical_replenishment_is_read_only_but_existing_order_can_close(
         lot = session.scalar(select(InventoryLot))
         assert lot is not None
         assert lot.source_type == "replenishment"
-        assert lot.source_ref_type == "stock_replenishment_item"
+        assert lot.source_ref_type == "stock_replenishment_receipt"
         assert lot.quantity_available == 30
+        assert session.scalar(select(func.count(SupplierReceiptSettlementPriceFact.id))) == 1
 
 
 def test_stock_warning_finished_replenishment_cannot_write_inventory_directly(

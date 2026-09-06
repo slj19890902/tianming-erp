@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 import pytest
@@ -37,8 +38,6 @@ def _error_code(response) -> str:
 
 
 def _paperboard_receipt(client: TestClient, session_factory) -> int:
-    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
-
     _seed_material_and_staging(session_factory)
     source = _create_frozen_sources(
         client,
@@ -57,23 +56,18 @@ def _paperboard_receipt(client: TestClient, session_factory) -> int:
         tax_rate="0.13",
     )
     assert frozen.status_code == 200, frozen.text
-    received = _receive(
-        client,
-        source,
-        frozen.json(),
-        quantity=10,
-        idempotency_key="p132-paperboard-receipt",
-    )
+    # Freeze the clock before receipt and price are created together. Rewriting
+    # only received_at afterwards would move quantity without its immutable price.
+    with patch("app.services.incoming_receipts.utc_now_naive", return_value=datetime(2026, 8, 15, 3, 0, 0)):
+        received = _receive(
+            client,
+            source,
+            frozen.json(),
+            quantity=10,
+            idempotency_key="p132-paperboard-receipt",
+        )
     assert received.status_code == 200, received.text
     receipt_item_id = int(received.json()["receipt_item_id"])
-    with session_factory() as db:
-        item = db.get(IncomingReceiptItem, receipt_item_id)
-        assert item is not None
-        receipt = db.get(IncomingReceipt, item.receipt_id)
-        assert receipt is not None
-        # 2026-08 means 2026-07-21 through 2026-08-20 Beijing time.
-        receipt.received_at = datetime(2026, 8, 15, 3, 0, 0)
-        db.commit()
     return receipt_item_id
 
 

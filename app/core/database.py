@@ -11,6 +11,7 @@ from time import perf_counter
 
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
+from app.core.receipt_price_guard import ReceiptPriceGuardSession
 
 from app.core.backup_retention import auto_cleanup_regular_backups
 from app.core.config import Settings, load_settings, normalize_path, settings
@@ -127,6 +128,7 @@ engine = create_sqlite_engine(
 )
 SessionLocal = sessionmaker(
     bind=engine,
+    class_=ReceiptPriceGuardSession,
     autoflush=False,
     autocommit=False,
     expire_on_commit=False,

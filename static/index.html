@@ -3605,6 +3605,7 @@
                 <pager :page="pages.suppliers" :total="filteredSuppliers.length" :page-size="pageSize" @change="pages.suppliers=$event"></pager>
               </data-panel>
               <data-panel v-else-if="productTab === 'materials'" :empty="false">
+                <div v-if="incomingPriceReturn && canAdmin" class="status blue" style="display:block;margin-bottom:8px" role="status">报价保存后，请返回原收料标签页，核对数量后重新点击确认入库。原数量和收料凭证已保留。<button class="btn small" type="button" @click="returnToIncomingPriceRequest">返回原收料页</button></div>
                 <!-- 供应商筛选（第一级：在层数按钮上方） -->
                 <div class="toolbar" style="margin-bottom:4px">
                   <div class="order-status-tabs">
@@ -4575,6 +4576,11 @@
                     <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" @input="onIncomingQuantityChanged(row)" /><strong v-else>{{ row.received_quantity_this_time ?? row.incoming_quantity ?? 0 }}</strong></td>
                     <td class="incoming-action-cell">
                       <template v-if="incomingTab==='pending'">
+                        <div v-if="incomingPriceRecovery[String(row.item_id)]" class="status orange" style="display:block;white-space:normal;margin:5px 0" role="alert">
+                          <div>{{ incomingPriceRecovery[String(row.item_id)].message }}</div>
+                          <a v-if="canAdmin && pageAllowed('products')" class="btn small" href="/?page=products&amp;subpage=materials&amp;incoming_price_return=1" target="_blank" rel="noopener">前往供应商材质报价</a>
+                          <div>{{ canAdmin ? '保存报价后返回本页，原数量和收料凭证已保留，请重新确认入库。' : '请联系管理员核对采购来源并补齐供应商材质报价，再重新确认收料。' }}</div>
+                        </div>
                         <span :class="['status',incomingReceiptQuantityStatus(row).warning?'orange':'green']">{{ incomingReceiptQuantityStatus(row).label }}</span>
                         <details class="incoming-action-menu">
                           <summary>操作</summary>
@@ -9942,7 +9948,7 @@
             statementDisputeForm:{reason:"",target_month:"",remove:{},add:{}}, statementDisputeCandidates:[], statementDisputeState:{loading:false,saving:false,error:""},
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: DESKTOP_LIST_PAGE_SIZE_STANDARD,
             pages: { customers: 1, productCustomers: 1, products: 1, suppliers: 1, materials: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, externalPurchaseHistory: 1, incomingPending: 1, incomingReceived: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, productionPlacement: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1, financeCosts: 1 },
-            productTab: "products", modal: null,
+            productTab: "products", incomingPriceReturn: false, incomingPriceRecovery: {}, modal: null,
             materialCandidateItems: [], materialCandidateLoading: false,
             materialCandidateFilter: { customer_id:null, q:"", include_inactive:false },
             materialCandidateForm: blankMaterialCandidate(),
@@ -14323,6 +14329,15 @@
             const subpage = new URLSearchParams(window.location.search).get("subpage") || "";
             return subpage === "external-packaging" ? "external-packaging" : "board";
           },
+          applyInitialMaterialPriceRoute() {
+            const query = new URLSearchParams(window.location.search);
+            this.incomingPriceReturn = this.activePage === "products" && this.canAdmin && query.get("incoming_price_return") === "1";
+            if (this.activePage === "products" && this.pageAllowed("products") && query.get("subpage") === "materials") this.productTab = "materials";
+          },
+          returnToIncomingPriceRequest() {
+            window.close();
+            this.showToast("请切回原收料标签页，核对数量后重新确认入库");
+          },
           initialIncomingWorkspaceFromLocation(page) {
             if (page !== "incoming") return "board";
             const subpage = new URLSearchParams(window.location.search).get("subpage") || "";
@@ -14403,6 +14418,7 @@
               if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
               this.requisitionWorkspace = this.initialRequisitionWorkspaceFromLocation(this.activePage);
               this.incomingWorkspace = this.initialIncomingWorkspaceFromLocation(this.activePage);
+              this.applyInitialMaterialPriceRoute();
               if (!await this.loadInitialPageResources()) return;
               if (this.user?.must_change_password) this.openChangePassword(true);
             } catch (error) {
@@ -14452,6 +14468,7 @@
               if (!this.pageAllowed(this.activePage)) this.activePage = this.firstAllowedPage();
               this.requisitionWorkspace = this.initialRequisitionWorkspaceFromLocation(this.activePage);
               this.incomingWorkspace = this.initialIncomingWorkspaceFromLocation(this.activePage);
+              this.applyInitialMaterialPriceRoute();
               const initialResourcesReady = await this.loadInitialPageResources();
               if (!requestIsCurrent() || !initialResourcesReady) return;
               if (this.user?.must_change_password) this.openChangePassword(true, currentPassword);
@@ -14666,6 +14683,8 @@
             this.pages.incomingPending = 1;
             this.incomingSelected = {};
             this.incomingReceiveAttempts = {};
+            this.incomingPriceRecovery = {};
+            this.incomingPriceReturn = false;
             this.incomingBatchReceiveAttempt = null;
             this.incomingReceived = [];
             this.incomingReceivedTotal = 0;
@@ -19776,6 +19795,10 @@
           applyIncomingPendingResponse(data, {requestedPage=1, clearSelection=false}={}) {
             const previousPage = this.incomingPendingAppliedPage;
             this.incomingPending=(Array.isArray(data?.items) ? data.items : []).map(row=>({...row,incoming_quantity:Number(row.remaining_quantity ?? row.incoming_quantity ?? row.requisition_qty ?? row.quantity ?? 0),resolution_action:"",resolution_reason:"",surplus_disposition:"",surplus_location_id:null}));
+            this.incomingPending.forEach(row => {
+              const recovery=this.incomingPriceRecovery?.[String(row.item_id)];
+              if (recovery) Object.assign(row,recovery.draft,{_receipt_price_retry_key:recovery.idempotencyKey});
+            });
             this.incomingPendingTotal=Number(data?.total ?? this.incomingPending.length);
             this.pages.incomingPending=Math.max(1, Number(data?.page || requestedPage || 1));
             this.incomingPendingAppliedPage=this.pages.incomingPending;
@@ -20396,6 +20419,16 @@
               if (this.canReceiveIncoming(row)) this.incomingSelected[row.item_id] = checked;
             });
           },
+          recordIncomingPriceError(row, error, idempotencyKey="") {
+            const detail=error?.response?.data?.detail || error?.detail || error;
+            const code=String(detail?.code || "");
+            if (!code.startsWith("SUPPLIER_RECEIPT_") && !["PAPERBOARD_PURCHASE_SOURCE_MISSING","PURCHASE_RECEIPT_FACT_REQUIRED","MATERIAL_MASTER_PRICE_REQUIRED"].includes(code)) return false;
+            const draft={};
+            for (const field of ["incoming_quantity","resolution_action","resolution_reason","surplus_disposition","surplus_location_id"]) draft[field]=row[field];
+            const key=String(row.item_id);
+            this.incomingPriceRecovery[key]={message:String(detail.message || this.errorMessage(error)),draft,idempotencyKey:idempotencyKey || row._receipt_price_retry_key || ""};
+            return true;
+          },
           async batchReceiveIncoming() {
             const previousAttempt=this.incomingBatchReceiveAttempt;
             if (previousAttempt?.saving) return;
@@ -20454,6 +20487,7 @@
                   preparedItems.push(item);
                   rows.push(row);
                 } catch(error) {
+                  this.recordIncomingPriceError?.(row,error);
                   preparationFailures.push({item_id:String(row.item_id),label,message:this.errorMessage(error)});
                 }
               }
@@ -20468,7 +20502,7 @@
             }
             const requestPayload=replayablePreviousAttempt ? previousAttempt.request_payload : {
               idempotency_key:createIdempotencyKey(),
-              items:preparedItems.map(item => ({...item,idempotency_key:createIdempotencyKey()})),
+              items:preparedItems.map(item => ({...item,idempotency_key:this.incomingPriceRecovery?.[String(item.item_id)]?.idempotencyKey || createIdempotencyKey()})),
             };
             if (!Array.isArray(requestPayload?.items) || !requestPayload.items.length) {
               if (this.incomingBatchReceiveAttempt === previousAttempt || this.incomingBatchReceiveAttempt === preparation) this.incomingBatchReceiveAttempt=null;
@@ -20496,6 +20530,13 @@
               attempt.committed=true;
               const successfulResults = (data.results || []).filter(result => result.success);
               const successfulItemIds = new Set(successfulResults.map(result => String(result.item_id)));
+              for (const result of data.results || []) {
+                const key=String(result.item_id);
+                if (result.success) { if (this.incomingPriceRecovery) delete this.incomingPriceRecovery[key]; continue; }
+                const row=this.incomingPending.find(item=>String(item.item_id)===key);
+                const sent=requestPayload.items.find(item=>String(item.item_id)===key);
+                if (row && sent) this.recordIncomingPriceError?.({...row,incoming_quantity:sent.received_quantity},result,sent.idempotency_key);
+              }
               const successfulOrderItemIds = new Set(
                 (attempt.order_item_ids || []).filter(itemId => successfulItemIds.has(String(itemId)))
               );
@@ -20574,11 +20615,12 @@
               nextPayload=singleReceivePayload;
             } catch(error) {
               preparation.saving=false;
+              this.recordIncomingPriceError?.(row,error);
               if (!previousAttempt && this.incomingReceiveAttempts[attemptKey] === preparation) this.incomingReceiveAttempts[attemptKey]=null;
               this.showToast(this.errorMessage(error),true);
               return;
             }
-            const idempotencyKey=previousAttempt?.idempotencyKey || createIdempotencyKey();
+            const idempotencyKey=previousAttempt?.idempotencyKey || row._receipt_price_retry_key || createIdempotencyKey();
             nextPayload.idempotency_key=idempotencyKey;
             const signature=JSON.stringify(nextPayload);
             if (previousAttempt && previousAttempt.signature !== signature) {
@@ -20604,6 +20646,7 @@
               if (authGeneration !== this.authGeneration || userId !== (this.user?.id ?? null)) return;
               committed=true;
               attempt.committed=true;
+              if (this.incomingPriceRecovery) delete this.incomingPriceRecovery[attemptKey];
               if (row.source_type !== "stock_replenishment") {
                 this.showIncomingNextStepGuide({
                   count:1,
@@ -20624,7 +20667,8 @@
               attempt.saving=false;
               const status=Number(error?.response?.status || 0);
               if (!committed && status > 0 && status < 500) {
-                if (this.incomingReceiveAttempts[attemptKey] === attempt) this.incomingReceiveAttempts[attemptKey]=null;
+                const priceBlocked=this.recordIncomingPriceError?.(row,error,attempt.idempotencyKey);
+                if (!priceBlocked && this.incomingReceiveAttempts[attemptKey] === attempt) this.incomingReceiveAttempts[attemptKey]=null;
                 this.showToast(this.errorMessage(error),true);
               } else {
                 this.showToast(

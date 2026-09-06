@@ -384,6 +384,7 @@
           : `请求失败（HTTP ${response.status}）`;
         const apiError = new Error(detail || fallback);
         apiError.status = response.status;
+        apiError.detail = data.detail;
         throw apiError;
       }
       return data;
@@ -529,6 +530,9 @@
       const disabled = state.busyItemIds.has(key);
       const executionIssue = isPending ? receiptExecutionIssue(item) : "";
       const receiveDisabled = disabled || Boolean(executionIssue);
+      const priceRecovery = isPending && item._receipt_price_error
+        ? `<div class="mt-2 rounded-lg bg-orange-50 p-3 text-sm text-orange-900" role="alert"><p>${escapeHtml(item._receipt_price_error)}</p>${state.user?.role === "admin" ? '<a class="mt-2 block rounded-lg bg-blue-700 px-3 py-3 text-center font-bold text-white" href="/?page=products&amp;subpage=materials&amp;incoming_price_return=1" target="_blank" rel="noopener">前往供应商材质报价</a><p class="mt-2">保存报价后返回本页，原数量和收料凭证已保留，请重新确认入库。</p>' : '<p class="mt-2 font-bold">请联系管理员核对采购来源并补齐供应商材质报价，再重新确认收料。</p>'}</div>`
+        : "";
       const expanded = state.expandedIds.has(key);
       const drawingAvailable = hasDrawing(item);
       const isStockReplenishment = item.source_type === "stock_replenishment";
@@ -619,6 +623,7 @@
             ${receiptLocationBlock}
             ${receivedPurposeBlock}
             ${primaryAction ? `<div class="mt-1.5">${primaryAction}</div>` : ""}
+            ${priceRecovery}
             <p class="mt-1 text-center text-xs text-slate-400">${expanded ? "点击卡片收起" : "点击卡片查看更多详情"}</p>
             ${expandedSection}
           </article>`;
@@ -991,6 +996,13 @@
       item.actual_material_fingerprint = String(fact.actual_material_fingerprint || "");
     }
 
+    function recordReceiptPriceError(item, error) {
+      const code = String(error?.detail?.code || "");
+      if (!code.startsWith("SUPPLIER_RECEIPT_") && !["PAPERBOARD_PURCHASE_SOURCE_MISSING", "PURCHASE_RECEIPT_FACT_REQUIRED", "MATERIAL_MASTER_PRICE_REQUIRED"].includes(code)) return false;
+      item._receipt_price_error = String(error.detail.message || toChineseMessage(error));
+      return true;
+    }
+
     async function receive(itemId) {
       const key = String(itemId);
       if (state.busyItemIds.has(key)) return;
@@ -1063,6 +1075,7 @@
           showToast("入库已提交，但列表刷新失败；请点击刷新，勿重复录入", true);
         }
       } catch (error) {
+        recordReceiptPriceError(item, error);
         showToast(toChineseMessage(error), true);
       } finally {
         state.busyItemIds.delete(key);

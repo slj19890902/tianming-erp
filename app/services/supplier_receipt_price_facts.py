@@ -1,17 +1,13 @@
-"""Immutable supplier-settlement price facts for legacy and replenishment receipts.
+"""Freeze supplier payable prices in the receiving transaction.
 
-Normal P1-81 order receipts keep using ``PurchaseReceiptFact``.  This module
-only closes the two paths which do not have that direct receipt link:
-
-* a newly posted stock-replenishment receipt freezes the current, uniquely
-  identified material price in the same transaction; and
-* an old posted receipt may be adopted later through an explicit, hash-guarded
-  plan without pretending the snapshot existed at receipt time.
+New receipts all get a per-receipt snapshot. Modern order receipts copy their
+approved PurchaseReceiptFact, never internal purpose costs or a newer quote.
+Historical adoption remains an explicit, separate hash-guarded operation.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 import re
@@ -337,7 +333,7 @@ def _resolve_material(
     if not allow_supplier_code_fallback:
         raise SupplierReceiptPriceFactError(
             "SUPPLIER_RECEIPT_STABLE_MATERIAL_REQUIRED",
-            "补库收料没有与供应商一致的有效稳定材质，已阻止收料，避免月结猜价",
+            "收料没有与供应商一致的有效稳定材质，已阻止收料，避免月结猜价",
             422,
         )
     codes = set(_candidate_material_codes(context.material_code))
@@ -377,6 +373,7 @@ def _price_plan(
     *,
     item: IncomingReceiptItem,
     allow_supplier_code_fallback: bool,
+    purchase_receipt_fact: PurchaseReceiptFact | None = None,
 ) -> ReceiptPriceAdoptionPlan:
     context = _receipt_source_context(db, item)
     try:
@@ -387,18 +384,41 @@ def _price_plan(
         )
     except SupplierLookupError as error:
         raise SupplierReceiptPriceFactError(error.code, error.message, 422) from error
+    if purchase_receipt_fact is not None:
+        native = purchase_receipt_fact
+        if not (
+            (item.supplier_order_item_id is not None
+             and native.supplier_requisition_order_item_id == item.supplier_order_item_id)
+            or (item.supplier_order_item_id is None
+                and item.requisition_item_id is not None
+                and native.material_requisition_item_id == item.requisition_item_id)
+        ):
+            raise SupplierReceiptPriceFactError(
+                "SUPPLIER_RECEIPT_PRICE_SOURCE_MISMATCH", "冻结采购价不属于本次收料来源"
+            )
+        context = replace(context, material_id=native.actual_material_id)
     material, strategy = _resolve_material(
         db,
         context=context,
         supplier=supplier,
         allow_supplier_code_fallback=allow_supplier_code_fallback,
     )
+    native = purchase_receipt_fact
+    unit_price = native.unit_price if native is not None else material.quote_price
+    price_unit = native.price_unit if native is not None else material.price_unit
+    currency = native.currency if native is not None else material.purchase_currency
+    tax_included = native.tax_included if native is not None else material.purchase_tax_included
+    tax_rate = native.tax_rate if native is not None else material.purchase_tax_rate
+    material_version = native.actual_material_version if native is not None else material.version
+    material_code = native.actual_material_code_snapshot if native is not None else material.code
+    if native is not None:
+        strategy = "purchase_receipt_fact"
     issues = purchase_price_contract_issues(
-        quote_price=material.quote_price,
-        price_unit=material.price_unit,
-        purchase_currency=material.purchase_currency,
-        purchase_tax_included=material.purchase_tax_included,
-        purchase_tax_rate=material.purchase_tax_rate,
+        quote_price=unit_price,
+        price_unit=price_unit,
+        purchase_currency=currency,
+        purchase_tax_included=tax_included,
+        purchase_tax_rate=tax_rate,
     )
     if issues:
         raise SupplierReceiptPriceFactError(
@@ -407,10 +427,10 @@ def _price_plan(
             422,
         )
     if (
-        str(material.purchase_currency or "").strip().upper()
+        str(currency or "").strip().upper()
         != CONFIRMED_PURCHASE_CURRENCY
-        or material.purchase_tax_included is not CONFIRMED_PURCHASE_TAX_INCLUDED
-        or Decimal(str(material.purchase_tax_rate))
+        or tax_included is not CONFIRMED_PURCHASE_TAX_INCLUDED
+        or Decimal(str(tax_rate))
         != CONFIRMED_PURCHASE_TAX_RATE
     ):
         raise SupplierReceiptPriceFactError(
@@ -418,18 +438,18 @@ def _price_plan(
             "当前材质采购价必须是人民币、含13%税且含运的最终供应商价格",
             422,
         )
-    price_unit = normalize_purchase_price_unit(material.price_unit)
+    price_unit = normalize_purchase_price_unit(price_unit)
     assert price_unit is not None
     # Facts persist price and tax rate at six decimals.  Build the plan from the
     # same frozen precision, otherwise a high-precision master quote can make
     # the dry-run total differ from the immutable fact just created.
-    frozen_unit_price = _six(material.quote_price)
-    frozen_tax_rate = _six(material.purchase_tax_rate)
+    frozen_unit_price = _six(unit_price)
+    frozen_tax_rate = _six(tax_rate)
     try:
         breakdown = calculate_purchase_sheet_cost_breakdown(
             unit_price=frozen_unit_price,
             price_unit=price_unit,
-            tax_included=bool(material.purchase_tax_included),
+            tax_included=bool(tax_included),
             tax_rate=frozen_tax_rate,
             report_length_mm=context.report_length_mm,
             report_width_mm=context.report_width_mm,
@@ -448,18 +468,21 @@ def _price_plan(
         "supplier_id": int(supplier.id),
         "supplier_name": _display_name(supplier),
         "material_id": int(material.id),
-        "material_code": str(material.code or "").strip(),
-        "material_version": int(material.version),
+        "material_code": str(material_code or "").strip(),
+        "material_version": int(material_version),
         "unit_price": frozen_unit_price,
         "price_unit": price_unit,
-        "currency": str(material.purchase_currency).strip().upper(),
-        "tax_included": bool(material.purchase_tax_included),
+        "currency": str(currency).strip().upper(),
+        "tax_included": bool(tax_included),
         "tax_rate": frozen_tax_rate,
         "shipping_fee_mode": CONFIRMED_SHIPPING_FEE_MODE,
         "report_length_mm": context.report_length_mm,
         "report_width_mm": context.report_width_mm,
         "match_strategy": strategy,
     }
+    if native is not None:
+        source_payload["purchase_receipt_fact_id"] = native.id
+        source_payload["purchase_receipt_fact_hash"] = native.request_hash
     quantity = Decimal(context.received_quantity)
     return ReceiptPriceAdoptionPlan(
         incoming_receipt_item_id=context.receipt_item_id,
@@ -472,12 +495,12 @@ def _price_plan(
         supplier_id=int(supplier.id),
         supplier_name=_display_name(supplier),
         material_id=int(material.id),
-        material_code=str(material.code or "").strip(),
-        material_version=int(material.version),
+        material_code=str(material_code or "").strip(),
+        material_version=int(material_version),
         unit_price=frozen_unit_price,
         price_unit=price_unit,
-        currency=str(material.purchase_currency).strip().upper(),
-        tax_included=bool(material.purchase_tax_included),
+        currency=str(currency).strip().upper(),
+        tax_included=bool(tax_included),
         tax_rate=frozen_tax_rate,
         shipping_fee_mode=CONFIRMED_SHIPPING_FEE_MODE,
         report_length_mm=context.report_length_mm,
@@ -544,6 +567,17 @@ def freeze_stock_replenishment_price(
             "当前收料不是补库来源",
             422,
         )
+    return freeze_receipt_settlement_price(db, receipt_item=receipt_item, user=user)
+
+
+def freeze_receipt_settlement_price(
+    db: Session,
+    *,
+    receipt_item: IncomingReceiptItem,
+    user: User,
+    purchase_receipt_fact: PurchaseReceiptFact | None = None,
+) -> SupplierReceiptSettlementPriceFact:
+    """Common gate, called before inventory, progress and audit are posted."""
     existing = db.scalar(
         select(SupplierReceiptSettlementPriceFact).where(
             SupplierReceiptSettlementPriceFact.incoming_receipt_item_id
@@ -559,13 +593,14 @@ def freeze_stock_replenishment_price(
         ):
             raise SupplierReceiptPriceFactError(
                 "SUPPLIER_RECEIPT_PRICE_FACT_CONFLICT",
-                "该补库实收已有不同的结算价格事实，已阻止重复入账",
+                "该实收已有不同的结算价格事实，已阻止重复入账",
             )
         return existing
     plan = _price_plan(
         db,
         item=receipt_item,
         allow_supplier_code_fallback=False,
+        purchase_receipt_fact=purchase_receipt_fact,
     )
     fact = _fact_from_plan(plan, origin="receipt_frozen", user=user)
     db.add(fact)
@@ -585,6 +620,29 @@ def _native_price_receipt_item_ids(db: Session) -> set[int]:
             )
         ).all()
     }
+
+
+def assert_receipt_settlement_price(
+    db: Session, *, receipt_item: IncomingReceiptItem
+) -> SupplierReceiptSettlementPriceFact:
+    """Validate a new/restored receipt without ever adopting or repairing it."""
+    fact = db.scalar(select(SupplierReceiptSettlementPriceFact).where(
+        SupplierReceiptSettlementPriceFact.incoming_receipt_item_id == receipt_item.id
+    ))
+    context = _receipt_source_context(db, receipt_item)
+    if fact is None or (
+        fact.fact_origin != "receipt_frozen"
+        or fact.finance_only_test_classification
+        or Decimal(fact.received_quantity_snapshot) != Decimal(context.received_quantity)
+        or fact.receipt_number_snapshot != context.receipt_number
+        or fact.receipt_date_snapshot != context.receipt_date
+        or fact.source_kind != context.source_kind
+        or fact.purchase_document_number_snapshot != context.purchase_document_number
+    ):
+        raise SupplierReceiptPriceFactError(
+            "SUPPLIER_RECEIPT_PRICE_FACT_REQUIRED", "本次有效实收必须有匹配的不可变供应商结算价"
+        )
+    return fact
 
 
 def _period_items(

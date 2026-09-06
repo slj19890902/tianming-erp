@@ -63,6 +63,9 @@ from app.services.location_candidates import (
 )
 from app.services.audit_log import append_audit_event
 from app.services.warehouse_area_activation import WarehouseAreaActivationError
+from app.services.warehouse_relocation_pending import (
+    claim_pending_relocation_source, is_pending_relocation_location,
+)
 from app.services.warehouse_ground_plan_materialization import (
     ensure_one_step_ground_plan,
 )
@@ -108,6 +111,7 @@ def _claim_inventory_transfer_locations(
     target_location_id: int,
     expected_source_layout_version: int | None,
     expected_target_layout_version: int | None,
+    require_pending_source: bool = False,
 ) -> None:
     """Serialize both sides of a move in one stable floor/location order.
 
@@ -138,6 +142,10 @@ def _claim_inventory_transfer_locations(
             int(item.id),
         ),
     ):
+        if require_pending_source and int(row.id) == int(source_location_id):
+            if not claim_pending_relocation_source(db, int(row.id)):
+                raise WarehouseInventoryError("来源已不是盘点待归位，请刷新后重试", 409)
+            continue
         _claim_inventory_destination(
             db,
             int(row.id),
@@ -192,15 +200,18 @@ def _claim_inventory_transfer_locations(
             ).all()
         )
         for occupancy_id in occupancy_ids:
+            # Occupancy facts only permit release/restore transitions, including
+            # rejecting no-op UPDATEs. The floor/location claims above already
+            # hold SQLite's writer lock; row-locking backends use FOR UPDATE.
             db.execute(
-                update(WarehouseGroundOccupancy)
+                select(WarehouseGroundOccupancy)
                 .where(
                     WarehouseGroundOccupancy.id == int(occupancy_id),
                     WarehouseGroundOccupancy.status == "active",
                 )
-                .values(version=WarehouseGroundOccupancy.version)
-                .execution_options(synchronize_session=False)
-            )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).scalar_one_or_none()
     except OperationalError as error:
         raise WarehouseInventoryError(
             "来源或目标位置正在被其他盘点、移位或布局操作使用，请稍后重试",
@@ -577,10 +588,23 @@ def _ensure_finished_projection_postcondition(
                     "地堆位置现场容量不足，不能增加成品数量",
                     409,
                 )
-            existing_occupancy.capacity_quantity = pallet_physical_quantity
-            existing_occupancy.version = int(existing_occupancy.version or 1) + 1
-            db.flush()
-        return current_pallet
+            if operator_id is None:
+                raise WarehouseInventoryError("更新自动空间投影必须记录操作人", 409)
+            secondary_ids = active_location_ids - {int(location.id)}
+            if (len(secondary_ids) > 1 or existing_occupancy.footprint_kind
+                    != ("double" if secondary_ids else "single")):
+                raise WarehouseInventoryError("现有空间占用范围不完整，请先核对", 409)
+            existing_secondary_id = next(iter(secondary_ids), None)
+            if ground_secondary_location_id is not None and int(ground_secondary_location_id) != existing_secondary_id:
+                raise WarehouseInventoryError("补入货物不能改变现有空间占用范围", 409)
+            # This legacy automatic projection was sized from stock, not an
+            # operator-confirmed capacity. Keep its immutable fact and the same
+            # occupied slots, then create the replacement below in this transaction.
+            from app.services.warehouse_ground_slots import release_ground_occupancy_for_pallet
+            release_ground_occupancy_for_pallet(db, pallet_id=current_pallet.id, operator_id=operator_id)
+            ground_secondary_location_id = existing_secondary_id
+        else:
+            return current_pallet
     if not create_missing:
         raise WarehouseInventoryError(
             "已完成的地堆成品缺少活动空间占用，请先核对历史数据",
@@ -1888,6 +1912,7 @@ def _transfer_finished_lot_location(
     operator_id: int | None,
     idempotency_key: str,
     require_staging_source: bool,
+    require_pending_source: bool = False,
     require_empty_target: bool = False,
     expected_source_location_id: int | None = None,
     expected_source_address_version: int | None = None,
@@ -1935,12 +1960,17 @@ def _transfer_finished_lot_location(
         ground_secondary_location_id=ground_secondary_location_id,
         ground_capacity_quantity=ground_capacity_quantity,
     )
+    if require_pending_source:
+        request_hash = sha256(("recount-placement:" + request_hash).encode()).hexdigest()
+        compatible_legacy_hashes = ()
     repeated = db.scalar(
         select(InventoryLotTransfer).where(
             InventoryLotTransfer.idempotency_key == key
         )
     )
     if repeated is not None:
+        if require_pending_source and repeated.transferred_by != operator_id:
+            raise WarehouseInventoryError("该归位请求已由其他操作员使用", 409)
         return _replayed_finished_location_transfer(
             db,
             repeated=repeated,
@@ -1973,6 +2003,7 @@ def _transfer_finished_lot_location(
         target_location_id=location_id,
         expected_source_layout_version=expected_source_layout_version,
         expected_target_layout_version=expected_target_layout_version,
+        require_pending_source=require_pending_source,
     )
 
     # A contender may have completed this key while this transaction waited on
@@ -1983,6 +2014,8 @@ def _transfer_finished_lot_location(
         .execution_options(populate_existing=True)
     )
     if repeated is not None:
+        if require_pending_source and repeated.transferred_by != operator_id:
+            raise WarehouseInventoryError("该归位请求已由其他操作员使用", 409)
         return _replayed_finished_location_transfer(
             db,
             repeated=repeated,
@@ -2020,7 +2053,9 @@ def _transfer_finished_lot_location(
         raise WarehouseInventoryError("只有一楼待送区的有效成品批次可以转入库位", 409)
     if require_staging_source and lot.pallet_item is not None:
         raise WarehouseInventoryError("该待送批次已绑定物理栈板，请刷新后重试", 409)
-    if not require_staging_source:
+    if require_pending_source and not is_pending_relocation_location(source_location):
+        raise WarehouseInventoryError("来源已不是盘点待归位，请刷新后重试", 409)
+    if not require_staging_source and not require_pending_source:
         source_issue = operational_location_issue(
             db,
             source_location,
@@ -2037,14 +2072,15 @@ def _transfer_finished_lot_location(
         raise WarehouseInventoryError("该批次仍有报损或报废数量，不能直接移位", 409)
 
     target_location = _location(db, location_id, "finished")
-    _validate_transfer_location_snapshot(
-        db,
-        location=source_location,
-        role="来源",
-        expected_address_version=expected_source_address_version,
-        expected_layout_version=expected_source_layout_version,
-        expected_map_revision=expected_source_map_revision,
-    )
+    if not require_pending_source:
+        _validate_transfer_location_snapshot(
+            db,
+            location=source_location,
+            role="来源",
+            expected_address_version=expected_source_address_version,
+            expected_layout_version=expected_source_layout_version,
+            expected_map_revision=expected_source_map_revision,
+        )
     _validate_transfer_location_snapshot(
         db,
         location=target_location,
@@ -2309,6 +2345,7 @@ def _transfer_finished_lot_location(
                         expected_version=source_pallet.version,
                         remarks="库存批次全部移出，释放空栈板",
                         operator_id=operator_id,
+                        require_pending_source=require_pending_source,
                         idempotency_key=_transfer_key(
                             "location-transfer", key, "source-pallet-clear"
                         ),
@@ -2401,6 +2438,19 @@ def _transfer_finished_lot_location(
         )
     db.flush()
     return FinishedLotLocationTransferResult(transfer, lot, target_lot, False)
+
+
+def transfer_pending_finished_lot(
+    db: Session, *, lot_id: int, expected_version: int, quantity: int,
+    location_id: int, operator_id: int | None, idempotency_key: str,
+    expected_target_layout_version: int,
+) -> FinishedLotLocationTransferResult:
+    return _transfer_finished_lot_location(
+        db, lot_id=lot_id, expected_version=expected_version, quantity=quantity,
+        location_id=location_id, operator_id=operator_id, idempotency_key=idempotency_key,
+        require_staging_source=False, require_pending_source=True,
+        expected_target_layout_version=expected_target_layout_version,
+    )
 
 
 def transfer_staging_finished_lot(

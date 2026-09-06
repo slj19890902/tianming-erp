@@ -36,6 +36,7 @@ from app.models.warehouse_inventory import (
     WarehouseFloor,
     WarehouseGroundLayoutPlan,
     WarehouseGroundLayoutSlot,
+    WarehouseGroundOccupancy,
     WarehouseLocation,
 )
 
@@ -645,6 +646,139 @@ def test_move_batch_requires_execute_permission_confirmation_and_disjoint_items(
             ),
         )
         assert client.post(MOVE_BATCH_URL, json=duplicate_ids).status_code == 422
+
+
+def test_transfer_claim_keeps_immutable_ground_occupancy_unchanged(move_batch_app):
+    import importlib.util
+    from sqlalchemy import text
+    from app.services.warehouse_inventory import _claim_inventory_transfer_locations
+
+    _app, factory, ids, _database = move_batch_app
+    path = FRONTEND.parents[3] / "alembic/versions/jm71v8x9z60_delivery_ground_occupancy_restore.py"
+    spec = importlib.util.spec_from_file_location("occupancy_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with factory() as db:
+        lot = db.get(InventoryLot, ids["normal_lot"])
+        detail = lot.finished_detail
+        actor = db.scalar(select(User).where(User.username == "p147c-admin"))
+        occupancy = WarehouseGroundOccupancy(pallet_id=ids["normal_pallet"],
+            primary_location_id=ids["floor1_source"], customer_id=detail.owner_customer_id,
+            product_id=detail.product_id, footprint_kind="single", capacity_quantity=999,
+            created_by=actor.id)
+        db.add(occupancy)
+        db.commit()
+        db.execute(text(migration._occupancy_guard_sql(allow_restore=True)))
+        db.commit()
+        before = db.execute(text("SELECT * FROM warehouse_ground_occupancies ORDER BY id")).all()
+        _claim_inventory_transfer_locations(db, source_location_id=ids["floor1_source"],
+            target_location_id=ids["floor1_target"], expected_source_layout_version=1,
+            expected_target_layout_version=1)
+        db.commit()
+        assert db.execute(text("SELECT * FROM warehouse_ground_occupancies ORDER BY id")).all() == before
+
+
+def test_pending_reset_rejects_pallet_stock_outside_the_confirmed_floor_scope(move_batch_app):
+    app, factory, ids, _database = move_batch_app
+    prefix = "/api/warehouse/twin-operations/pending-relocation"
+    with factory() as db:
+        db.get(WarehouseLocation, ids["floor1_target"]).warehouse_floor = 2
+        db.get(InventoryLot, ids["normal_lot"]).warehouse_location_id = ids["floor1_target"]
+        db.commit()
+        totals = _inventory_totals(db)
+    with TestClient(app) as client:
+        _login(client, "p147c-admin")
+        preview = client.get(prefix + "/preview").json()
+        response = client.post(prefix + "/reset", json={
+            "expected_fingerprint": preview["fingerprint"], "idempotency_key": "outside-scope", "confirmed": True,
+        })
+        assert response.status_code == 409, response.text
+        assert "范围外" in response.json()["detail"]
+    with factory() as db:
+        assert _inventory_totals(db) == totals
+        assert db.get(InventoryPallet, ids["normal_pallet"]).location_id == ids["floor1_source"]
+        assert db.get(InventoryLot, ids["normal_lot"]).warehouse_location_id == ids["floor1_target"]
+        assert db.scalar(select(func.count(InventoryLocationMovement.id))) == 0
+        assert db.scalar(select(WarehouseLocation.id).where(WarehouseLocation.location_code == "RECOUNT-PENDING")) is None
+
+
+def test_pending_reset_and_partial_placement_keep_reservations_and_replay(move_batch_app):
+    app, factory, ids, _database = move_batch_app
+    import importlib.util
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    path = FRONTEND.parents[3] / "alembic/versions/rp06v8x9z65_recount_pending_location.py"
+    spec = importlib.util.spec_from_file_location("recount_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with factory() as db:
+        engine = db.get_bind()
+    with engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.upgrade()
+            migration.downgrade()
+            migration.upgrade()
+    prefix = "/api/warehouse/twin-operations/pending-relocation"
+    with factory() as db:
+        totals, reserved = _inventory_totals(db), _remaining_reserved(db)
+    with TestClient(app) as client:
+        _login(client, "p147c-viewer")
+        assert client.get(prefix + "/preview").status_code == 403
+        _login(client, "p147c-admin")
+        preview = client.get(prefix + "/preview")
+        assert preview.status_code == 200, preview.text
+        reset = {"expected_fingerprint": preview.json()["fingerprint"],
+                 "idempotency_key": "pending-reset", "confirmed": True}
+        assert client.post(prefix + "/reset", json={**reset, "confirmed": False}).status_code == 422
+        assert client.post(prefix + "/reset", json={**reset, "expected_fingerprint": "0" * 64}).status_code == 409
+        response = client.post(prefix + "/reset", json=reset)
+        assert response.status_code == 200, response.text
+        assert client.post(prefix + "/reset", json=reset).json()["replayed"] is True
+        with engine.begin() as connection:
+            with Operations.context(MigrationContext.configure(connection)):
+                with pytest.raises(RuntimeError, match="before downgrade"):
+                    migration.downgrade()
+        with factory() as db:
+            # An ordinary unplaced location cannot inherit the recount exception.
+            ordinary = WarehouseLocation(location_code="ORDINARY-UNPLACED", location_name="未完成",
+                warehouse_type="shared", placement_status="unplaced", is_active=True)
+            db.add(ordinary)
+            db.commit()
+            db.get(InventoryLot, ids["loose_lot"]).warehouse_location_id = ordinary.id
+            with pytest.raises(IntegrityError, match="active placed location"):
+                db.flush()
+            db.rollback()
+            pending_id = response.json()["pending_location_id"]
+            with pytest.raises(IntegrityError, match="cannot represent"):
+                db.execute(text("UPDATE warehouse_locations SET source_version='OTHER' WHERE id=:id"), {"id": pending_id})
+            db.rollback()
+        with factory() as db:
+            lot = db.get(InventoryLot, ids["loose_lot"])
+            amount = int(lot.quantity_available) + 1
+            payload = {"location_id": ids["floor1_target"], "expected_layout_version": 1,
+                       "expected_version": lot.version, "quantity": amount,
+                       "idempotency_key": "pending-partial-place", "confirmed": True}
+        url = f'/api/warehouse/twin-operations/pending-lots/{ids["loose_lot"]}/place'
+        bad = client.post(url, json={**payload, "quantity": 999999})
+        assert bad.status_code == 409, bad.text
+        placed = client.post(url, json=payload)
+        assert placed.status_code == 200, placed.text
+        assert client.post(url, json=payload).json()["replayed"] is True
+        assert client.post(url, json={**payload, "quantity": amount + 1}).status_code == 409
+        with factory() as db:
+            whole = db.get(InventoryLot, ids["normal_lot"])
+            whole_payload = {**payload, "location_id": ids["floor1_target_2"],
+                             "expected_version": whole.version, "quantity": whole.quantity_available,
+                             "idempotency_key": "pending-whole-place"}
+        whole_response = client.post(f'/api/warehouse/twin-operations/pending-lots/{ids["normal_lot"]}/place', json=whole_payload)
+        assert whole_response.status_code == 200, whole_response.text
+    with factory() as db:
+        assert _inventory_totals(db) == totals
+        assert _remaining_reserved(db) == reserved
+        assert db.get(InventoryLot, placed.json()["target_lot_id"]).warehouse_location_id == ids["floor1_target"]
 
 
 def test_batch_moves_dispatch_system_pallet_and_partial_lot_with_full_conservation(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
@@ -23,6 +23,7 @@ from app.models.user import User
 from app.models.warehouse_inventory import (
     Floor3LocationLayout,
     InventoryLot,
+    FinishedGoodsInventoryDetail,
     InventoryPallet,
     InventoryPalletItem,
     InventoryLotTransfer,
@@ -844,6 +845,54 @@ def test_map_candidates_colocation_and_two_slot_occupancy_keep_lots_separate(
         assert db.scalar(select(func.count(InventoryPalletItem.id))) == 3
         assert db.scalar(select(func.count(WarehouseGroundOccupancy.id))) == 2
         assert db.scalar(select(func.count(WarehouseGroundOccupancySlot.id))) == 3
+
+
+@pytest.mark.parametrize("double", [False, True])
+def test_auto_projection_growth_preserves_immutable_occupancy_history(p187_app, double):
+    import importlib.util
+    from pathlib import Path
+    from sqlalchemy import text
+    from app.services.warehouse_inventory import _ensure_finished_projection_postcondition
+
+    app, factory, ids = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        slots = _publish_six_slots(client)["slots"]
+    path = Path(__file__).resolve().parents[1] / "alembic/versions/jm71v8x9z60_delivery_ground_occupancy_restore.py"
+    spec = importlib.util.spec_from_file_location("occupancy_guards", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with factory() as db:
+        lot = InventoryLot(lot_number="AUTO-PROJECTION", inventory_type="finished", unit="boxes",
+            warehouse_location_id=slots[0]["location_id"], quantity_available=10,
+            quantity_reserved=0, quantity_consumed=0, quantity_damaged=0, quantity_scrapped=0,
+            status="active", source_type="production_completion", stock_date=date(2026, 9, 6),
+            stock_date_accuracy="exact", last_movement_at=datetime(2026, 9, 6), version=1)
+        lot.finished_detail = FinishedGoodsInventoryDetail(owner_customer_id=ids["customer"],
+            owner_customer_name_snapshot="测试客户", product_id=ids["product"],
+            product_name_snapshot="测试成品", inventory_code_snapshot="AUTO-PROJECTION", is_general=False)
+        db.add(lot)
+        db.flush()
+        _ensure_finished_projection_postcondition(db, lot=lot, operator_id=ids["admin"], create_missing=True,
+            ground_secondary_location_id=slots[1]["location_id"] if double else None)
+        db.commit()
+        original = db.scalar(select(WarehouseGroundOccupancy))
+        original_id, original_capacity = original.id, original.capacity_quantity
+        original_slots = {s.location_id for s in original.slots}
+        db.execute(text(migration._occupancy_guard_sql(allow_restore=True)))
+        db.execute(text(migration._slot_guard_sql(allow_restore=True)))
+        db.commit()
+        lot.quantity_available = 15
+        db.flush()
+        _ensure_finished_projection_postcondition(db, lot=lot, operator_id=ids["admin"], create_missing=True)
+        db.commit()
+        old = db.get(WarehouseGroundOccupancy, original_id)
+        active = db.scalar(select(WarehouseGroundOccupancy).where(WarehouseGroundOccupancy.status == "active"))
+        assert old.status == "released" and old.capacity_quantity == original_capacity
+        assert old.version == 2 and all(s.status == "released" for s in old.slots)
+        assert active.id != old.id and active.capacity_quantity == 15
+        assert {s.location_id for s in active.slots} == original_slots
+        assert active.footprint_kind == ("double" if double else "single")
 
 
 def test_ground_lot_transfer_is_conservative_replayable_and_blocks_legacy_bypass(

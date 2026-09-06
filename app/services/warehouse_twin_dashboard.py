@@ -46,6 +46,7 @@ from app.services.location_candidates import (
 )
 from app.services.product_specification import dimension_specification
 from app.services.warehouse_movement_batch import pallet_move_source_issue
+from app.services.warehouse_relocation_pending import is_pending_relocation_location
 
 
 AGE_BUCKETS = (
@@ -1446,6 +1447,10 @@ def build_warehouse_twin_dashboard(
         )
         != "mapped"
     ]
+    unexpectedly_unresolved_lots = [
+        row for row in unresolved_lots
+        if not is_pending_relocation_location(locations_by_id.get(row.warehouse_location_id))
+    ]
     finished_lots_on_current_pallet = [
         row
         for row in finished_current_lots
@@ -1605,6 +1610,7 @@ def build_warehouse_twin_dashboard(
                     else "尚未绑定正式位置"
                 ),
                 "position_status": position_status,
+                "pending_relocation": is_pending_relocation_location(locations_by_id.get(row.warehouse_location_id)),
                 "unlocated_reason": (
                     location_payload.get("map_issue")
                     if location_payload is not None
@@ -1999,10 +2005,10 @@ def build_warehouse_twin_dashboard(
                     {
                         "code": "unlocated_inventory",
                         "level": "error",
-                        "message": f"有 {len(unresolved_lots)} 个成品库存批次缺少已发布实测格位；已列入待定位清单，不会借用其他区域坐标。",
+                        "message": f"有 {len(unexpectedly_unresolved_lots)} 个成品库存批次缺少已发布实测格位；已列入待定位清单，不会借用其他区域坐标。",
                     }
                 ]
-                if unresolved_lots
+                if unexpectedly_unresolved_lots
                 else []
             ),
         ],

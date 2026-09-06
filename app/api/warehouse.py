@@ -1009,6 +1009,12 @@ class TwinStagingPlacementPayload(BaseModel):
         return text
 
 
+class PendingRelocationResetPayload(BaseModel):
+    expected_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=1, max_length=100)
+    confirmed: Literal[True]
+
+
 class TwinTemporaryFinishedInboundPayload(BaseModel):
     """Explicit temporary product creation and first stock placement by an admin."""
 
@@ -7764,6 +7770,60 @@ def twin_location_product_candidates(
         "total": len(items),
         "message": "从当前空货位选择已完工未送货产品；确认后只移动原库存，不增加数量。",
     }
+
+
+@router.get("/twin-operations/pending-relocation/preview")
+def preview_twin_pending_relocation(db: Session = Depends(get_db), user: User = Depends(admin_only)) -> dict:
+    from app.services.warehouse_relocation_pending import preview_pending_relocation
+    return preview_pending_relocation(db)
+
+
+@router.post("/twin-operations/pending-relocation/reset")
+def reset_twin_pending_relocation(payload: PendingRelocationResetPayload, request: Request,
+                                 db: Session = Depends(get_db), user: User = Depends(admin_only)) -> dict:
+    from app.services.warehouse_relocation_pending import PendingRelocationError, reset_to_pending_relocation
+    try:
+        result = reset_to_pending_relocation(db, actor=user, request=request,
+            expected_fingerprint=payload.expected_fingerprint, operation_key=payload.idempotency_key)
+        db.commit()
+        return result
+    except PendingRelocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/twin-operations/pending-lots/{lot_id}/place")
+def place_twin_pending_lot(lot_id: int, payload: TwinStagingPlacementPayload, request: Request,
+                           db: Session = Depends(get_db), user: User = Depends(admin_only)) -> dict:
+    from app.services.warehouse_inventory import transfer_pending_finished_lot
+    target = _twin_finished_target_location(db, payload.location_id)
+    source = _require_lot_customer_access(db, lot_id, user)
+    before = _inventory_lot_audit_state(source)
+    try:
+        result = transfer_pending_finished_lot(db, lot_id=lot_id, expected_version=payload.expected_version,
+            quantity=payload.quantity, location_id=target.id, operator_id=user.id,
+            idempotency_key=payload.idempotency_key, expected_target_layout_version=payload.expected_layout_version)
+        if not result.replayed:
+            append_audit_event(db, request=request, actor=user, event_category="business", result="success",
+                source="web", module_code="warehouse", action_code="warehouse.recount.pending.place",
+                resource="InventoryLotTransfer", entity_id=result.transfer.id,
+                description="待归位已有货物放入所选货位，未新增库存",
+                details={"before": before, "source_after": _inventory_lot_audit_state(result.source_lot),
+                         "target_after": _inventory_lot_audit_state(result.target_lot),
+                         "idempotency_key": payload.idempotency_key})
+        db.commit()
+        return {"message": "已归位，库存总数未增加", "replayed": result.replayed,
+                "target_lot_id": result.target_lot.id, "target_location_id": target.id,
+                "quantity": payload.quantity}
+    except (WarehouseInventoryError, Floor3LocationError) as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/twin-operations/staging-lots/{lot_id}/place")

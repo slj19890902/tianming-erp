@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import (
@@ -78,11 +79,13 @@ CONFIRMED_STATUSES = frozenset(
 
 
 class SupplierSettlementError(ValueError):
-    def __init__(self, code: str, message: str, status_code: int = 409) -> None:
+    def __init__(self, code: str, message: str, status_code: int = 409,
+                 *, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.details = details or {}
 
 
 @dataclass(frozen=True)
@@ -188,6 +191,7 @@ def _issue(
     code: str,
     message: str,
     supplier_name: str | None = None,
+    supplier_id: int | None = None,
     purchase_document_number: str | None = None,
     missing_fields: list[str] | None = None,
     recommended_action: str | None = None,
@@ -201,6 +205,8 @@ def _issue(
     }
     if supplier_name:
         payload["supplier_name"] = supplier_name
+    if supplier_id is not None:
+        payload["supplier_id"] = supplier_id
     if purchase_document_number:
         payload["purchase_document_number"] = purchase_document_number
     if missing_fields:
@@ -476,6 +482,10 @@ def _scan_paperboard(
                     receipt_number=receipt.receipt_number,
                     code=getattr(error, "code", "PAPERBOARD_PRICE_INVALID"),
                     message=str(error),
+                    supplier_id=(
+                        int(receipt_price_fact.supplier_id)
+                        if receipt_price_fact is not None else None
+                    ),
                     supplier_name=(
                         receipt_price_fact.supplier_name_snapshot
                         if receipt_price_fact is not None
@@ -612,6 +622,7 @@ def _scan_external_packaging(
                     receipt_number=receipt.receipt_number,
                     code="EXTERNAL_PACKAGING_SUPPLIER_MISSING",
                     message="外购包材采购单的供应商主档不存在，未计入月结草稿",
+                    supplier_id=int(purchase.supplier_id),
                 )
             )
             continue
@@ -995,6 +1006,79 @@ def _replace_draft_statement(
     return replacement, released
 
 
+def _supplier_scan_issues(
+    db: Session, *, supplier: Supplier, issues: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Scope missing facts by stable supplier identity, never fuzzy name matching.
+
+    An unresolvable owner cannot safely be assumed to belong to another supplier;
+    leave that issue blocking until its source identity can be established.
+    """
+    selected = []
+    for issue in issues:
+        owner_id = issue.get("supplier_id")
+        if owner_id is not None and db.get(Supplier, owner_id) is not None:
+            if owner_id == supplier.id:
+                selected.append(issue)
+            continue
+        try:
+            owner = resolve_supplier(db, issue.get("supplier_name"), require_active=False)
+        except SupplierLookupError:
+            selected.append(issue)
+        else:
+            if owner.id == supplier.id:
+                selected.append(issue)
+    return selected
+
+
+def _blocked_period(
+    *, supplier: Supplier, settlement_month: str, start: date, end: date,
+    issues: list[dict[str, Any]],
+) -> dict[str, Any]:
+    receipt_numbers = list(dict.fromkeys(str(row.get("receipt_number") or "") for row in issues))
+    first_receipt = next((value for value in receipt_numbers if value), "来源待核对")
+    return {
+        "status": "blocked", "code": "SUPPLIER_SETTLEMENT_INCOMPLETE",
+        "supplier_id": supplier.id, "supplier_name": supplier.standard_name,
+        "settlement_month": settlement_month, "period_start": start, "period_end": end,
+        "issue_count": len(issues),
+        "source_keys": list(dict.fromkeys(str(row.get("source_key") or "") for row in issues)),
+        "receipt_numbers": receipt_numbers,
+        "message": (
+            f"{supplier.standard_name} {start.isoformat()} 至 {end.isoformat()} "
+            f"有 {len(issues)} 条实收价格或来源待处理（{first_receipt}）；"
+            "该账期已停止生成或确认，请处理后重生成"
+        ),
+    }
+
+
+def settlement_completeness_summary(blocked_periods: list[dict[str, Any]]) -> dict[str, Any]:
+    issue_count = len({key for row in blocked_periods for key in row["source_keys"]})
+    return {
+        "status": "blocked" if blocked_periods else "complete",
+        "blocked_supplier_count": len({row["supplier_id"] for row in blocked_periods}),
+        "issue_count": issue_count,
+        "message": (
+            f"有 {len(blocked_periods)} 个供应商账期存在 {issue_count} 条实收缺口，已停止生成；请处理后重试"
+            if blocked_periods else "本次检查账期的实收价格和来源完整"
+        ),
+    }
+
+
+def _require_complete_period(
+    db: Session, *, supplier: Supplier, settlement_month: str, start: date, end: date,
+    issues: list[dict[str, Any]],
+) -> None:
+    blocking = _supplier_scan_issues(db, supplier=supplier, issues=issues)
+    if blocking:
+        summary = _blocked_period(supplier=supplier, settlement_month=settlement_month,
+                                  start=start, end=end, issues=blocking)
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_INCOMPLETE", summary["message"],
+            details={"completeness": summary, "issues": blocking},
+        )
+
+
 def _supplier_candidates(
     db: Session,
     *,
@@ -1013,7 +1097,7 @@ def _supplier_candidates(
     )
     return (
         [item for item in candidates if item.supplier_id == supplier.id],
-        issues,
+        _supplier_scan_issues(db, supplier=supplier, issues=issues),
         start,
         end,
     )
@@ -1041,6 +1125,11 @@ def supplier_settlement_overview(
                 "settlement_day": int(supplier.settlement_day or 20),
                 "period_start": start,
                 "period_end": end,
+                "completeness": (
+                    _blocked_period(supplier=supplier, settlement_month=settlement_month,
+                                    start=start, end=end, issues=supplier_issues)
+                    if supplier_issues else {"status": "complete"}
+                ),
             }
         )
         for issue in supplier_issues:
@@ -1055,6 +1144,24 @@ def supplier_settlement_overview(
     )
 
 
+def _begin_settlement_write_snapshot(db: Session) -> None:
+    # pysqlite's legacy SELECT starts only a SQLAlchemy virtual transaction.
+    # Reserve the SQLite writer before scanning so new receipts cannot commit
+    # between the source snapshot and the draft/confirmed payable write.
+    connection = db.connection()
+    if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
+        try:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        except OperationalError as error:
+            sqlite_code = getattr(error.orig, "sqlite_errorcode", 0)
+            if sqlite_code & 0xFF in {5, 6}:
+                raise SupplierSettlementError(
+                    "SUPPLIER_SETTLEMENT_CONCURRENT_WRITE",
+                    "实收或财务数据正在更新，请稍后重试月结操作",
+                ) from error
+            raise
+
+
 def generate_or_refresh_settlements(
     db: Session,
     *,
@@ -1065,6 +1172,7 @@ def generate_or_refresh_settlements(
     replace_changed_drafts: bool = True,
     supplier_ids: set[int] | None = None,
 ) -> dict[str, Any]:
+    _begin_settlement_write_snapshot(db)
     business_today = business_date or beijing_today()
     if generation_origin not in {"automatic", "manual"}:
         raise SupplierSettlementError(
@@ -1084,6 +1192,7 @@ def generate_or_refresh_settlements(
     released = 0
     changed_statement_ids: set[int] = set()
     supplier_periods: list[dict[str, Any]] = []
+    blocked_periods: list[dict[str, Any]] = []
     any_closed_period = False
 
     for supplier in suppliers:
@@ -1108,6 +1217,13 @@ def generate_or_refresh_settlements(
             if key not in issue_keys:
                 issue_keys.add(key)
                 issues.append(issue)
+
+        if scan_issues:
+            blocked_periods.append(_blocked_period(
+                supplier=supplier, settlement_month=settlement_month,
+                start=period_start, end=period_end, issues=scan_issues,
+            ))
+            continue
 
         groups: dict[tuple[str, str], list[SettlementCandidate]] = {}
         for candidate in candidates:
@@ -1203,6 +1319,11 @@ def generate_or_refresh_settlements(
         )
     db.flush()
     period_start, period_end = settlement_period(settlement_month)
+    items = list_statement_responses(db, settlement_month=settlement_month)
+    blocked_by_supplier = {row["supplier_id"]: row for row in blocked_periods}
+    for item in items:
+        if item["status"] in ACTIVE_DRAFT_STATUSES and item["supplier_id"] in blocked_by_supplier:
+            item["completeness"] = blocked_by_supplier[item["supplier_id"]]
     return {
         "settlement_month": settlement_month,
         "period_start": period_start,
@@ -1211,8 +1332,10 @@ def generate_or_refresh_settlements(
         "added_line_count": added,
         "released_line_count": released,
         "changed_statement_count": len(changed_statement_ids),
+        "blocked_periods": blocked_periods,
+        "completeness": settlement_completeness_summary(blocked_periods),
         "issues": issues,
-        "items": list_statement_responses(db, settlement_month=settlement_month),
+        "items": items,
     }
 
 
@@ -1224,6 +1347,7 @@ def regenerate_statement(
     reason: str | None,
     user: User,
 ) -> SupplierMonthlyStatement:
+    _begin_settlement_write_snapshot(db)
     row = _editable_statement(
         db, statement_id=statement_id, expected_version=expected_version
     )
@@ -1239,9 +1363,11 @@ def regenerate_statement(
         settlement_day=int(supplier.settlement_day or 20),
     )
     start_utc, end_utc = _utc_period_bounds(period_start, period_end)
-    candidates, _issues = _scan_candidates_for_bounds(
+    candidates, issues = _scan_candidates_for_bounds(
         db, start_utc=start_utc, end_utc=end_utc
     )
+    _require_complete_period(db, supplier=supplier, settlement_month=row.settlement_month,
+                             start=period_start, end=period_end, issues=issues)
     selected = [
         item
         for item in candidates
@@ -1297,10 +1423,18 @@ def generate_due_supplier_settlements(
                 supplier_ids=ids,
             )
         )
+    blocked_periods = [period for result in results for period in result["blocked_periods"]]
+    issues = {
+        (issue.get("source_key"), issue.get("code")): issue
+        for result in results for issue in result["issues"]
+    }
     return {
         "business_date": today,
         "generated_months": sorted(grouped),
         "results": results,
+        "blocked_periods": blocked_periods,
+        "completeness": settlement_completeness_summary(blocked_periods),
+        "issues": list(issues.values()),
         "changed_statement_count": sum(
             int(item["changed_statement_count"]) for item in results
         ),
@@ -1551,7 +1685,8 @@ def statement_response(db: Session, row: SupplierMonthlyStatement) -> dict[str, 
 
 
 def list_statement_responses(
-    db: Session, *, settlement_month: str
+    db: Session, *, settlement_month: str,
+    supplier_periods: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows = db.scalars(
         select(SupplierMonthlyStatement)
@@ -1565,7 +1700,15 @@ def list_statement_responses(
             SupplierMonthlyStatement.tax_basis,
         )
     ).all()
-    return [statement_response(db, row) for row in rows]
+    items = [statement_response(db, row) for row in rows]
+    completeness_by_supplier = {
+        period["supplier_id"]: period["completeness"] for period in (supplier_periods or [])
+        if period.get("completeness", {}).get("status") == "blocked"
+    }
+    for item in items:
+        if item["status"] in ACTIVE_DRAFT_STATUSES and item["supplier_id"] in completeness_by_supplier:
+            item["completeness"] = completeness_by_supplier[item["supplier_id"]]
+    return items
 
 
 def list_statement_history_responses(
@@ -1854,6 +1997,7 @@ def confirm_statement(
     expected_version: int,
     user: User,
 ) -> SupplierMonthlyStatement:
+    _begin_settlement_write_snapshot(db)
     row = _editable_statement(
         db, statement_id=statement_id, expected_version=expected_version
     )
@@ -1878,6 +2022,20 @@ def confirm_statement(
         raise SupplierSettlementError(
             "SUPPLIER_SETTLEMENT_DIFFERENCE_UNRESOLVED",
             "供应商账单金额仍与调整后金额不一致，请先处理差异",
+        )
+    supplier = db.get(Supplier, row.supplier_id)
+    if supplier is None:
+        raise SupplierSettlementError("SUPPLIER_NOT_FOUND", "供应商主数据不存在，不能确认月结", 404)
+    start_utc, end_utc = _utc_period_bounds(row.period_start, row.period_end)
+    candidates, issues = _scan_candidates_for_bounds(db, start_utc=start_utc, end_utc=end_utc)
+    _require_complete_period(db, supplier=supplier, settlement_month=row.settlement_month,
+                             start=row.period_start, end=row.period_end, issues=issues)
+    selected = [item for item in candidates if item.supplier_id == row.supplier_id
+                and item.currency == row.currency and item.tax_basis == row.tax_basis]
+    if _candidate_source_hash(selected) != _statement_line_source_hash(_active_lines(db, row.id)):
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_REGENERATION_REQUIRED",
+            "账期实收来源已变化，请先重生成并核对新草稿后再确认应付",
         )
     now = utc_now_naive()
     payable = FinancePayable(

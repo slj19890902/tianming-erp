@@ -50,6 +50,7 @@ from app.services.supplier_monthly_settlement import (
     regenerate_statement,
     reopen_statement,
     review_statement,
+    settlement_completeness_summary,
     settlement_period,
     settlement_period_utc_bounds,
     statement_response,
@@ -327,7 +328,7 @@ def _translate(
 ) -> HTTPException:
     return HTTPException(
         status_code=error.status_code,
-        detail={"code": error.code, "message": error.message},
+        detail=jsonable_encoder({**getattr(error, "details", {}), "code": error.code, "message": error.message}),
     )
 
 
@@ -434,14 +435,20 @@ def list_supplier_settlements(
         db, settlement_month=selected
     )
     period_start, period_end = settlement_period(selected)
+    blocked_periods = [
+        period["completeness"] for period in supplier_periods
+        if period.get("completeness", {}).get("status") == "blocked"
+    ]
     return {
         "settlement_month": selected,
         "period_start": period_start,
         "period_end": period_end,
         "default_month": default_closed_settlement_month(),
         "supplier_periods": supplier_periods,
-        "items": list_statement_responses(db, settlement_month=selected),
+        "items": list_statement_responses(db, settlement_month=selected, supplier_periods=supplier_periods),
         "issues": issues,
+        "blocked_periods": blocked_periods,
+        "completeness": settlement_completeness_summary(blocked_periods),
     }
 
 

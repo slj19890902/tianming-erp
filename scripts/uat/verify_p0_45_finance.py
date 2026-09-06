@@ -15,6 +15,11 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTS = [
+    "tests/test_p0_45_monthly_completeness_gate.py",
+    "tests/test_p0_45_monthly_completeness_frontend.py",
+    "tests/test_p0_45_monthly_transaction_guard.py",
+    "tests/test_p0_45_paid_statement_guard.py",
+    "tests/test_p0_45_payable_link_guard.py",
     "tests/test_p0_45_receipt_price_gate.py",
     "tests/test_p0_45_supplier_receipt_price_health.py",
     "tests/test_p0_45_receipt_price_frontend.py",
@@ -54,6 +59,8 @@ def main() -> int:
             ERP_SECRET_KEY_FILE=str(Path(scratch) / "secret.key"),
             ERP_SECRET_KEY="p045-disposable-regression-only",
             ERP_ENVIRONMENT="test",
+            PYTHONUTF8="1",
+            PYTHONIOENCODING="utf-8",
         )
         result = subprocess.run([
             sys.executable, "-m", "pytest", *TESTS, "-q", "--tb=short",

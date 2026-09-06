@@ -6310,6 +6310,35 @@ def _statement_adjustment_log(
     )
 
 
+def _lock_unpaid_statement_for_dispute(
+    db: Session, *, statement_id: int, expected_version: int
+) -> None:
+    # Claim the row in the same transaction as the adjustment. A read-only
+    # payment check could otherwise race the manual settlement CAS update.
+    claimed = db.scalar(
+        update(Statement)
+        .where(
+            Statement.id == statement_id,
+            Statement.version == expected_version,
+            Statement.settled_amount == 0,
+            ~select(SettlementRecord.id)
+            .where(SettlementRecord.statement_id == Statement.id)
+            .exists(),
+        )
+        .values(version=Statement.version)
+        .returning(Statement.id)
+        .execution_options(synchronize_session=False)
+    )
+    if claimed is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "STATEMENT_DISPUTE_PRECONDITION_FAILED",
+                "message": "对账单已有收款记录、收款金额或版本已变化，不能直接重开或调整；请刷新核对，并先按受控流程处理收款。",
+            },
+        )
+
+
 @router.post("/statements/{statement_id}/reopen")
 def reopen_statement_for_dispute(
     statement_id: int,
@@ -6327,6 +6356,9 @@ def reopen_statement_for_dispute(
                     "current_version": statement.version,
                 },
             )
+        _lock_unpaid_statement_for_dispute(
+            db, statement_id=statement.id, expected_version=payload.expected_version
+        )
         issued_invoice = db.scalar(
             select(Invoice.id).where(
                 Invoice.statement_id == statement.id,
@@ -6503,6 +6535,9 @@ def adjust_statement_dispute(
                     "current_version": statement.version,
                 },
             )
+        _lock_unpaid_statement_for_dispute(
+            db, statement_id=statement.id, expected_version=payload.expected_version
+        )
         if statement.confirmation_status not in {"draft", "confirmed"}:
             raise HTTPException(status_code=409, detail="当前对账状态不能调整异议明细")
         tasks = db.scalars(
@@ -6979,9 +7014,23 @@ def _transition_payable(
     action: str,
     user: User,
 ) -> dict:
+    from app.models.supplier_settlement import SupplierMonthlyStatement
+
     row = db.get(FinancePayable, payable_id)
     if row is None:
         raise HTTPException(status_code=404, detail="应付/支出记录不存在")
+    if db.scalar(
+        select(SupplierMonthlyStatement.id)
+        .where(SupplierMonthlyStatement.finance_payable_id == row.id)
+        .limit(1)
+    ) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "FINANCE_PAYABLE_MANAGED_BY_SUPPLIER_SETTLEMENT",
+                "message": "该应付由供应商月结管理，请前往供应商月结登记付款或进行受控调整，不能直接变更应付状态。",
+            },
+        )
     if row.version != payload.expected_version:
         raise HTTPException(
             status_code=409,

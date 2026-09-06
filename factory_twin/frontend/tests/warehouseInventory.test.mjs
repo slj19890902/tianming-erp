@@ -337,7 +337,7 @@ test("full delivery leaves a mapped empty location while partial reserved and da
   assert.deepEqual(mapped.map((item) => item.visual_status), ["empty", "waiting", "waiting", "waiting"]);
   assert.deepEqual(mapped.map((item) => item.visual_kind), ["location_anchor", "physical_pallet", "physical_pallet", "physical_pallet"]);
   assert.deepEqual(rows.map((item) => item.occupancy_status), ["empty", "occupied", "occupied", "occupied"]);
-  assert.deepEqual(mapped.map((item) => item.candidate_status_color), ["#16a34a", "#2563eb", "#2563eb", "#2563eb"]);
+  assert.deepEqual(mapped.map((item) => item.candidate_status_color), ["#fff8e7", "#16a34a", "#16a34a", "#16a34a"]);
 });
 
 test("area planning renders every mapped empty location as a full draggable slot", () => {
@@ -395,7 +395,7 @@ test("area planning renders every mapped empty location as a full draggable slot
   assert.equal(planned[0].planning_slot_depth_mm, 1000);
   assert.equal(planned[0].width_mm, 0);
   assert.equal(planned[0].depth_mm, 0);
-  assert.deepEqual(planned.map((item) => item.candidate_status_color), ["#16a34a", "#2563eb"]);
+  assert.deepEqual(planned.map((item) => item.candidate_status_color), ["#fff8e7", "#16a34a"]);
 });
 
 test("unmatched goods and known-location discrepancies keep formal positions red", () => {
@@ -958,8 +958,8 @@ test("operational column count keeps the formal eight-location baseline", () => 
   assert.equal(operational.length, 8);
   assert.equal(uniquePalletConflictCount(operational), 8);
   assert.equal(uniquePalletConflictCount([...operational, operational[0]]), 8);
-  assert.equal(planning.filter((item) => item.column_id === aisle.id).length, 8);
-  assert.ok(planning.length > operational.length);
+  assert.equal(planning.filter((item) => item.column_id === aisle.id).length, 0);
+  assert.equal(planning.length, operational.length);
 });
 
 test("operational conflicts isolate planning-only geometry categories", () => {
@@ -988,7 +988,7 @@ test("operational conflicts isolate planning-only geometry categories", () => {
   );
   assert.ok(planningCategories.has("location"));
   assert.ok(planningCategories.has("zone-boundary"));
-  assert.ok(planningCategories.has("aisle-planning"));
+  assert.ok(!planningCategories.has("aisle-planning"));
   assert.ok(planningCategories.has("no-go-planning"));
 });
 
@@ -1018,7 +1018,7 @@ test("empty planning slots use their visible pallet footprint for column conflic
   ]);
 });
 
-test("planning conflict preview includes aisles before the authoritative save", () => {
+test("legacy drawn aisles do not conflict because zone boundaries define automatic passages", () => {
   const pallet = {
     id: "erp-location-153",
     x_mm: 2000,
@@ -1033,9 +1033,13 @@ test("planning conflict preview includes aisles before the authoritative save", 
     points: [[2000, 0], [2000, 6000]],
     width_mm: 800
   };
-  assert.deepEqual(findPalletPlanningConflicts([pallet], [], [aisle]), [
-    { pallet_id: "erp-location-153", column_id: "aisle-d1" }
-  ]);
+  const zone = {
+    id: "zone-d1",
+    feature_kind: "zone",
+    points: [[1000, 2000], [3000, 2000], [3000, 4000], [1000, 4000]]
+  };
+  pallet.zone_id = zone.id;
+  assert.deepEqual(findPalletPlanningConflicts([pallet], [], [aisle, zone]), []);
 });
 
 test("planning conflict preview marks both overlapping locations in the same area", () => {
@@ -1153,7 +1157,7 @@ test("planning conflict preview rejects zone overflow and confirmed equipment", 
   );
 });
 
-test("shared occupied ground locations keep a full planning footprint", () => {
+test("empty and shared ground locations have the same footprint and status color in every mode", () => {
   const zone = {
     id: "zone-d1",
     feature_kind: "zone",
@@ -1184,6 +1188,20 @@ test("shared occupied ground locations keep a full planning footprint", () => {
   assert.equal(planned.is_planning_location_slot, true);
   assert.equal(planned.planning_slot_width_mm, 1200);
   assert.equal(planned.planning_slot_depth_mm, 1000);
+  const [lookup] = buildMappedLocationPallets([zone], [location], "3F", STANDARD_PALLET, "layout-3f", false);
+  assert.deepEqual(lookup, planned);
+  assert.equal(lookup.color, "#16a34a");
+  const empty = {...location, occupancy_status: "empty", pallets: [], pallet: null};
+  const [emptyLookup] = buildMappedLocationPallets([zone], [empty], "3F", STANDARD_PALLET, "layout-3f", false);
+  const [emptyPlanning] = buildMappedLocationPallets([zone], [empty], "3F", STANDARD_PALLET, "layout-3f", true);
+  assert.deepEqual(emptyLookup, emptyPlanning);
+  assert.equal(emptyLookup.color, "#fff8e7");
+  assert.equal(emptyLookup.is_planning_location_slot, true);
+  assert.equal(emptyLookup.planning_slot_width_mm, 1200);
+  assert.equal(emptyLookup.planning_slot_depth_mm, 1000);
+  assert.equal(emptyLookup.id, lookup.id);
+  assert.equal(emptyLookup.x_mm, lookup.x_mm);
+  assert.equal(emptyLookup.y_mm, lookup.y_mm);
 });
 
 test("move targets are the intersection of empty API candidates and mapped dashboard locations", () => {

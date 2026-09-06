@@ -215,7 +215,7 @@ def test_publish_confirmation_reuses_real_location_ids_and_keeps_inventory(
         occupied = next(row for row in original if row.location_code == "F1-S2-06")
         preview = preview_legacy_rack_cell_bindings(db, floor_layout=_layout())
 
-        with pytest.raises(WarehouseRackCellSyncError, match="尚未确认对应货架"):
+        with pytest.raises(WarehouseRackCellSyncError, match="有货旧货位"):
             sync_published_rack_cells(db, floor_layout=_layout(), operator_id=1)
         db.rollback()
 
@@ -269,6 +269,49 @@ def test_publish_confirmation_reuses_real_location_ids_and_keeps_inventory(
                 )
             )
         } == {2}
+
+
+def test_empty_third_floor_f_cells_retire_before_new_racks_are_created(
+    legacy_rack_factory,
+) -> None:
+    with legacy_rack_factory() as db:
+        pallet = db.scalar(
+            select(InventoryPallet).where(
+                InventoryPallet.pallet_code == "P1-133-F1-S2-06"
+            )
+        )
+        pallet.is_current = False
+        pallet.status = "closed"
+        db.commit()
+
+        old_rows = list(
+            db.scalars(
+                select(WarehouseLocation).where(
+                    WarehouseLocation.map_rack_id.is_(None),
+                    WarehouseLocation.address_kind == "rack_slot",
+                )
+            )
+        )
+        old_ids = {row.id for row in old_rows}
+        result = sync_published_rack_cells(
+            db, floor_layout=_layout(), operator_id=1
+        )
+        db.commit()
+
+        assert old_ids == set(result.disabled_location_ids)
+        assert all(
+            db.get(WarehouseLocation, row_id).is_active is False
+            for row_id in old_ids
+        )
+        assert len(result.created_location_ids) == 24
+        assert len(
+            db.scalars(
+                select(WarehouseLocation).where(
+                    WarehouseLocation.map_rack_id.is_not(None),
+                    WarehouseLocation.is_active.is_(True),
+                )
+            ).all()
+        ) == 24
 
 
 def test_out_of_range_or_stale_binding_is_fail_closed(legacy_rack_factory) -> None:

@@ -112,7 +112,7 @@ export function mergePublishedFeatureGeometry(activeFeatures = [], publishedFeat
   });
 }
 
-export function locationLayoutGeometry(zone, location, xMm, yMm) {
+export function locationLayoutGeometry(zone, location, xMm, yMm, { clampToZone = true } = {}) {
   const position = location.map_position;
   if (!zone?.points?.length || !position || !location.location_id || !Number(position.version)) return null;
   const widthPct = Number(position.width_pct);
@@ -135,8 +135,8 @@ export function locationLayoutGeometry(zone, location, xMm, yMm) {
   return {
     location_id: Number(location.location_id),
     expected_version: Number(position.version),
-    left_pct: rounded(Math.max(0, Math.min(100 - widthPct, left))),
-    top_pct: rounded(Math.max(0, Math.min(100 - heightPct, top))),
+    left_pct: rounded(clampToZone ? Math.max(0, Math.min(100 - widthPct, left)) : left),
+    top_pct: rounded(clampToZone ? Math.max(0, Math.min(100 - heightPct, top)) : top),
     width_pct: rounded(widthPct),
     height_pct: rounded(heightPct),
     z_index: Number(position.z_index || 0)
@@ -453,7 +453,9 @@ export function buildMappedLocationPallets(
         position?.layout_kind === "physical_pallet"
         || location.storage_type === "ground"
       );
-      const isPlanningLocationSlot = renderEmptyPlanningSlots && isGroundLocation;
+      // A measured ground location has the same footprint in every map mode.
+      // This is a location outline, not an extra physical pallet or stock record.
+      const isPlanningLocationSlot = isGroundLocation;
       const isLogicalAnchor = locationPallets.length !== 1;
       // The measured rectangle remains authoritative for the location centre and
       // orientation.  A physical pallet never inherits or scales to that legacy
@@ -478,14 +480,14 @@ export function buildMappedLocationPallets(
         depth_mm: renderedDepthMm,
         height_mm: isLogicalAnchor ? 0 : standard.height_mm,
         rotation_deg: rotation,
-        color: hasRedInventoryIssue ? "#b91c1c" : occupied ? "#2563eb" : "#16a34a",
-        candidate_status_color: hasRedInventoryIssue ? "#b91c1c" : occupied ? "#2563eb" : "#16a34a",
+        color: hasRedInventoryIssue ? "#b91c1c" : occupied ? "#16a34a" : "#fff8e7",
+        candidate_status_color: hasRedInventoryIssue ? "#b91c1c" : occupied ? "#16a34a" : "#fff8e7",
         visual_status: occupied ? "waiting" : "empty",
         status_note: `${hasRedInventoryIssue ? `现场库存待核对 · ${unmatchedObservationCount || 1} 条红色异常 · ` : ""}${actualPalletCode
           ? `ERP正式库位 · ${actualPalletCode}`
           : palletSummary
             ? `ERP正式共享位置 · ${palletSummary} · 请在右侧逐块选择`
-            : "ERP正式空库位"}${isLogicalAnchor ? " · 逻辑位置标记（非实物占地）" : ""}`,
+            : "ERP正式空库位"}${isLogicalAnchor ? isGroundLocation ? " · 货位范围（不新增实物栈板）" : " · 逻辑位置标记（非实物占地）" : ""}`,
         visual_kind: isLogicalAnchor ? "location_anchor" : "physical_pallet",
         display_label: readableLocationName,
         operational_group_id: `location:${location.location_id}`,
@@ -692,7 +694,7 @@ export function findPalletPlanningConflicts(
     });
   }
   for (const feature of features) {
-    if (feature.feature_kind === "aisle" || (feature.feature_kind === "structure" && feature.subtype === "custom_column")) {
+    if (feature.feature_kind === "structure" && feature.subtype === "custom_column") {
       for (let index = 0; index < (feature.points?.length || 0) - 1; index += 1) {
         const bounds = segmentBounds(feature.points[index], feature.points[index + 1], feature.width_mm);
         if (bounds) columnBounds.push({ column_id: feature.id, ...bounds });

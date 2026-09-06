@@ -57,6 +57,147 @@ TWIN_SOURCE = (
 ).read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize('fail_rebase', [False, True])
+def test_apply_zone_geometry_preserves_other_drafts_and_rolls_back_atomically(tmp_path, monkeypatch, fail_rebase):
+    from copy import deepcopy
+    published, draft_path = _isolate_layout_paths(tmp_path, monkeypatch)
+    _add_floor_one_to_published_layout(published)
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(warehouse_api, 'list_production_projection_mappings', lambda *a, **k: [])
+    monkeypatch.setattr(warehouse_api, 'load_warehouse_twin_floor',
+                        lambda code: json.loads(runtime.read_text(encoding='utf8'))['floors'][code.upper()])
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            warehouse_api.confirm_twin_zone_area('3F', 'zone-f1',
+                _confirm_area_payload(revision=_revision(published), operation_key='scoped-initial-ground', capacity=24),
+                _request(), db, admin)
+            pub_before = runtime.read_bytes()
+            current = json.loads(pub_before)['floors']['3F']
+            feature = current['features'][0]
+            row = db.scalar(select(WarehouseLocation).where(WarehouseLocation.is_active.is_(True)))
+            before_position = (row.floor3_layout.left_pct, row.floor3_layout.top_pct, row.floor3_layout.version)
+            plan = db.scalar(select(WarehouseGroundLayoutPlan))
+            plan_facts = [(s.id, s.location_id, s.x_mm, s.y_mm) for s in plan.slots]
+            saved = warehouse_api.update_twin_layout_feature_geometry('3F', 'zone-f1',
+                warehouse_api.TwinLayoutFeatureGeometryPayload(expected_revision=current['revision'],
+                    expected_version=feature['version'], operation_key='scoped-capture-position', points=feature['points']),
+                _request(), db, admin)
+            slot = saved['item']['ground_location_draft']['slots'][0]
+            saved = warehouse_api.update_twin_layout_feature_geometry('3F', 'zone-f1',
+                warehouse_api.TwinLayoutFeatureGeometryPayload(expected_revision=saved['revision'],
+                    expected_version=saved['item']['version'], operation_key='scoped-move-position', points=feature['points'],
+                    ground_locations=[dict(location_id=slot['location_id'], expected_version=slot['expected_version'],
+                                           x_mm=slot['x_mm']+100, y_mm=slot['y_mm'])]),
+                _request(), db, admin)
+            editor.update_warehouse_twin_zone_geometry('1F', 'zone-1f',
+                expected_revision=_revision(runtime, '1F'), expected_version=1,
+                operation_key='scoped-keep-other-floor', points=[[500,500],[7500,500],[7500,7500],[500,7500]])
+            editor.create_warehouse_twin_rack('3F', expected_revision=saved['revision'],
+                operation_key='scoped-keep-other-rack', area_feature_id='zone-f1',
+                values=dict(name='未确认货架', x_mm=1000, y_mm=1000, width_mm=2000, depth_mm=1000,
+                    height_mm=2000, levels=2, level_heights_mm=[1000], level_cell_counts=[0,0],
+                    cargo_rows=3, bays=1, rotation_deg=0, access_side='south', min_aisle_width_mm=1500))
+            draft_before = draft_path.read_bytes()
+            advanced = json.loads(draft_before)
+            payload = warehouse_api.TwinZoneGeometryApplyPayload(
+                expected_revision=advanced['floors']['3F']['revision'], expected_published_revision=current['revision'],
+                expected_version=saved['item']['version'], operation_key='scoped-apply-position')
+            if fail_rebase:
+                def failed(*a, **k):
+                    raise RuntimeError('injected rebase failure')
+                monkeypatch.setattr(warehouse_api, 'rebase_warehouse_twin_advanced_draft_after_one_step', failed)
+                with pytest.raises(RuntimeError, match='injected'):
+                    warehouse_api.apply_twin_zone_geometry('3F', 'zone-f1', payload, _request(), db, admin)
+                assert runtime.read_bytes() == pub_before
+                assert draft_path.read_bytes() == draft_before
+                db.expire_all()
+                assert (row.floor3_layout.left_pct, row.floor3_layout.top_pct, row.floor3_layout.version) == before_position
+                return
+            applied = warehouse_api.apply_twin_zone_geometry('3F', 'zone-f1', payload, _request(), db, admin)
+            assert applied['applied'] and applied['other_drafts_preserved']
+            live = json.loads(runtime.read_bytes())
+            preserved = json.loads(draft_path.read_bytes())
+            assert live['floors']['3F']['racks'] == current['racks'] == []
+            assert preserved['floors']['3F']['racks'] == advanced['floors']['3F']['racks']
+            assert preserved['floors']['1F'] == advanced['floors']['1F']
+            assert live['floors']['1F'] == json.loads(pub_before)['floors']['1F']
+            assert live['floors']['3F']['features'][0]['ground_location_draft']['slots'][0]['x_mm'] == slot['x_mm']+100
+            assert row.floor3_layout.left_pct == before_position[0]+Decimal('1')
+            assert row.floor3_layout.top_pct == before_position[1]
+            assert row.floor3_layout.version == before_position[2]+1
+            assert [(s.id,s.location_id,s.x_mm,s.y_mm) for s in plan.slots] == plan_facts
+            from app.services.warehouse_ground_map_application import load_map_applications, application_matches
+            db.expire_all()
+            receipt = load_map_applications(db, [plan.id])[plan.id]
+            assert len(receipt['locations']) == 24
+            assert receipt['coordinate_adjustment_count'] == 24
+            assert application_matches(receipt, plan_id=plan.id, plan_version=plan.version,
+                area_id=plan.area_id, policy=plan.area.storage_policy,
+                revision=live['floors']['3F']['revision'], location=row, layout=row.floor3_layout)
+            after_files = runtime.read_bytes(), draft_path.read_bytes()
+            replay = warehouse_api.apply_twin_zone_geometry('3F', 'zone-f1', payload, _request(), db, admin)
+            assert replay['idempotent_replay'] and not replay['applied']
+            assert (runtime.read_bytes(), draft_path.read_bytes()) == after_files
+            from fastapi import HTTPException
+            with pytest.raises(HTTPException) as error:
+                warehouse_api.apply_twin_zone_geometry('3F','zone-f1',payload.model_copy(update={'expected_version':99}),_request(),db,admin)
+            assert error.value.status_code == 409
+            assert db.scalar(select(func.count(InventoryLot.id))) == 0
+    finally:
+        engine.dispose()
+
+
+def test_apply_zone_boundary_without_ground_locations_becomes_the_only_operational_geometry(tmp_path, monkeypatch):
+    published, _draft_path = _isolate_layout_paths(tmp_path, monkeypatch)
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(warehouse_api, 'list_production_projection_mappings', lambda *a, **k: [])
+    monkeypatch.setattr(warehouse_api, 'load_warehouse_twin_floor',
+                        lambda code: json.loads(runtime.read_text(encoding='utf8'))['floors'][code.upper()])
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            confirmed = warehouse_api.confirm_twin_zone_area(
+                '3F', 'zone-f1',
+                _confirm_area_payload(
+                    revision=_revision(published), operation_key='boundary-only-confirm',
+                    storage_layout='rack', capacity=0,
+                ),
+                _request(), db, admin,
+            )
+            before = json.loads(runtime.read_text(encoding='utf8'))['floors']['3F']
+            feature = next(item for item in before['features'] if item['id'] == 'zone-f1')
+            points = [[250, 250], [9_750, 250], [9_750, 9_750], [250, 9_750]]
+            saved = warehouse_api.update_twin_layout_feature_geometry(
+                '3F', 'zone-f1',
+                warehouse_api.TwinLayoutFeatureGeometryPayload(
+                    expected_revision=before['revision'], expected_version=feature['version'],
+                    operation_key='boundary-only-save', points=points,
+                ),
+                _request(), db, admin,
+            )
+            assert saved['item'].get('ground_location_draft') is None
+            applied = warehouse_api.apply_twin_zone_geometry(
+                '3F', 'zone-f1',
+                warehouse_api.TwinZoneGeometryApplyPayload(
+                    expected_revision=saved['revision'],
+                    expected_published_revision=confirmed['published_revision'],
+                    expected_version=saved['item']['version'],
+                    operation_key='boundary-only-apply',
+                ),
+                _request(), db, admin,
+            )
+            assert applied['applied'] is True
+            live = json.loads(runtime.read_text(encoding='utf8'))['floors']['3F']
+            assert next(item for item in live['features'] if item['id'] == 'zone-f1')['points'] == points
+            assert db.scalar(select(func.count(WarehouseLocation.id))) == 0
+            assert db.scalar(select(func.count(InventoryLot.id))) == 0
+    finally:
+        engine.dispose()
+
+
 def _published_layout(path: Path, *, locked: bool = False) -> Path:
     floor = {
         "layout_id": "layout-3f-p1-47b",
@@ -5552,7 +5693,8 @@ def test_simple_planning_uses_one_contextual_map_operation_workflow() -> None:
     assert 'aria-label="地图操作"' in TWIN_SOURCE
     assert '<option value="adjust">调整布局</option>' in TWIN_SOURCE
     assert '<option value="zone">新增区域</option>' in TWIN_SOURCE
-    assert '<option value="aisle">新增通道</option>' in TWIN_SOURCE
+    assert '<option value="aisle">新增通道</option>' not in TWIN_SOURCE
+    assert '区域外自动作为通道' in TWIN_SOURCE
     assert 'drawMode={layoutDrawKind}' in TWIN_SOURCE
     assert 'onDrawPoint={handleLayoutDrawPoint}' in TWIN_SOURCE
     assert 'createLayoutFeature' in TWIN_SOURCE

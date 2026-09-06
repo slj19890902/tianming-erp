@@ -17,6 +17,33 @@ export function warehouseAisleColor(
   fallback: string
 ): string;
 
+export function warehouseZoneColor(
+  visualTheme: "editor" | "warehouse",
+  fallback: string
+): string;
+
+export function warehousePassageEnvelope(
+  bounds: Bounds,
+  structures: Array<{
+    kind?: string;
+    geometry?: { type?: string; closed?: boolean; points?: number[][] };
+  }>,
+  sliceCount?: number
+): number[][];
+
+export function warehousePassageSurfaceStyle(
+  visualTheme: "editor" | "warehouse"
+): {
+  visible: boolean;
+  color: string;
+  elevationMm: number;
+};
+
+export function effectiveMapFeatures(
+  visualTheme: "editor" | "warehouse",
+  features?: LayoutFeature[]
+): LayoutFeature[];
+
 export function aisleSurfaceStyle(visualTheme: "editor" | "warehouse"): {
   transparent: boolean;
   opacity: number;

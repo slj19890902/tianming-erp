@@ -454,8 +454,9 @@ def test_region_planning_ui_and_label_page_are_explicit() -> None:
     )
     for text in (">编辑</button>", ">货位/货架</button>", ">发布</button>"):
         assert text in source
-    for floor in ("2F", "4F", "5F"):
-        assert f'<b>{floor}</b>' in source
+    assert '<b>4F</b>' in source
+    for floor in ("2F", "5F"):
+        assert f'<b>{floor}</b>' not in source
     assert "规划中" in source
     assert "rack_level_80x40_v1" not in source
     assert "打印正式层标签" not in source

@@ -182,10 +182,12 @@ from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditNotFoundError,
     WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK,
     apply_warehouse_twin_archived_area_tombstones,
+    begin_warehouse_twin_one_step_rack_publish,
     begin_warehouse_twin_one_step_publish,
     calibrate_floor4_freight_elevator,
     create_warehouse_twin_feature,
     create_warehouse_twin_rack,
+    number_warehouse_twin_area_racks,
     delete_warehouse_twin_feature,
     delete_warehouse_twin_rack,
     discard_warehouse_twin_layout_draft,
@@ -195,6 +197,7 @@ from app.services.warehouse_twin_layout_editor import (
     publish_warehouse_twin_layout_draft,
     rebuild_stale_warehouse_twin_layout_draft,
     rebase_warehouse_twin_advanced_draft_after_one_step,
+    rebase_warehouse_twin_advanced_rack_after_one_step,
     restore_warehouse_twin_layout_draft,
     restore_warehouse_twin_publish_state,
     snapshot_warehouse_twin_layout_draft,
@@ -9727,11 +9730,19 @@ class TwinLayoutFeatureCreatePayload(BaseModel):
     direction: Literal["one_way", "two_way"] | None = None
 
 
+class TwinGroundLocationDraftPoint(BaseModel):
+    location_id: int = Field(ge=1)
+    expected_version: int = Field(ge=1)
+    x_mm: float = Field(allow_inf_nan=False)
+    y_mm: float = Field(allow_inf_nan=False)
+
+
 class TwinLayoutFeatureGeometryPayload(BaseModel):
     expected_revision: str = Field(min_length=1, max_length=64)
     expected_version: int = Field(ge=1)
     operation_key: str = Field(min_length=8, max_length=120)
     points: list[tuple[float, float]] = Field(min_length=2, max_length=64)
+    ground_locations: list[TwinGroundLocationDraftPoint] | None = Field(default=None, max_length=500)
 
 
 class TwinZoneStoragePolicyPayload(BaseModel):
@@ -9859,6 +9870,13 @@ class TwinLayoutDraftPublishPayload(BaseModel):
         return self
 
 
+class TwinZoneGeometryApplyPayload(BaseModel):
+    expected_revision: str = Field(min_length=1, max_length=64)
+    expected_published_revision: str = Field(min_length=1, max_length=64)
+    expected_version: int = Field(ge=1)
+    operation_key: str = Field(min_length=8, max_length=110)
+
+
 class RackLevelLabelPrintPayload(BaseModel):
     floor_code: str = Field(min_length=2, max_length=30)
     map_rack_id: str = Field(min_length=1, max_length=80)
@@ -9876,6 +9894,11 @@ class RackLevelLabelPrintPayload(BaseModel):
     @classmethod
     def normalize_label_identity(cls, value: str) -> str:
         return value.strip()
+
+
+class TwinAreaRackNumberingPayload(BaseModel):
+    expected_revision: str = Field(min_length=1, max_length=64)
+    operation_key: str = Field(min_length=8, max_length=120)
 
 
 class TwinLayoutDraftDiscardPayload(BaseModel):
@@ -10350,6 +10373,11 @@ def _formal_location_zone_geometry_blockers(
             return ["正式地图缺失，无法核对已有正式货位的绝对坐标"]
     else:
         published = published_layout
+    from app.services.warehouse_location_geometry_draft import validate_adjustments
+    try:
+        checked_adjustments = validate_adjustments(db, floor_code=normalized, draft=draft, published=published)
+    except (WarehouseTwinLayoutEditError, Floor1CandidatePlanningError) as error:
+        return [str(error)]
     draft_features = {
         str(item.get("id") or ""): item
         for item in draft.get("features") or []
@@ -10379,6 +10407,8 @@ def _formal_location_zone_geometry_blockers(
         published_feature = published_features.get(policy.map_feature_id)
         draft_feature = draft_features.get(policy.map_feature_id)
         if published_feature is None or draft_feature is None:
+            continue
+        if policy.map_feature_id in checked_adjustments:
             continue
         if not _map_feature_points_match(published_feature, draft_feature):
             blockers.append(
@@ -10863,6 +10893,223 @@ def preview_twin_layout_legacy_rack_bindings(
     return preview_legacy_rack_cell_bindings(db, floor_layout=floor_layout)
 
 
+@router.post("/twin-layout/floors/{floor_code}/zones/{feature_id}/apply-geometry")
+def apply_twin_zone_geometry(
+    floor_code: str, feature_id: str, payload: TwinZoneGeometryApplyPayload,
+    request: Request, db: Session = Depends(get_db), user: User = Depends(admin_only),
+) -> dict:
+    """Apply one saved ground-zone geometry without publishing unrelated drafts."""
+    from app.services.warehouse_location_geometry_draft import (
+        verify_adjustment, rebase_verified_adjustments,
+    )
+    floor_code = floor_code.strip().upper()
+    request_hash = hashlib.sha256(json.dumps({
+        **payload.model_dump(), 'floor_code': floor_code, 'feature_id': feature_id,
+    }, sort_keys=True).encode()).hexdigest()
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        replay = db.scalar(select(OperationLog).where(
+            OperationLog.action_code == 'warehouse.zone_geometry.apply',
+            OperationLog.request_id == payload.operation_key,
+        ))
+        if replay:
+            details = json.loads(replay.details or '{}')
+            if details.get('request_hash') != request_hash or replay.user_id != user.id:
+                raise HTTPException(status_code=409, detail='同一应用编号不能用于不同调整')
+            return {**details['result'], 'applied': False, 'idempotent_replay': True}
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+        snapshot = snapshot_warehouse_twin_publish_state()
+        result = None
+        try:
+            published = load_published_warehouse_twin_floor_for_edit(floor_code)
+            draft = load_warehouse_twin_layout_draft(floor_code)
+            if (published['revision'] != payload.expected_published_revision
+                    or draft['revision'] != payload.expected_revision):
+                raise HTTPException(status_code=409, detail='地图版本已变化，未应用；请刷新核对')
+            feature = next((f for f in draft['features'] if f['id'] == feature_id), None)
+            if not feature or feature.get('feature_kind') != 'zone':
+                raise HTTPException(status_code=404, detail='区域不存在')
+            if int(feature.get('version') or 1) != payload.expected_version:
+                raise HTTPException(status_code=409, detail='区域版本已变化，未应用；请刷新核对')
+            pending = {}
+            for item in draft['features']:
+                value = verify_adjustment(db, floor_code=floor_code, feature=item, published=published)
+                if value:
+                    pending[item['id']] = value
+            published_feature = next(
+                (item for item in published['features'] if item.get('id') == feature_id),
+                None,
+            )
+            boundary_changed = bool(
+                published_feature
+                and feature.get('points') != published_feature.get('points')
+            )
+            if feature_id not in pending and not boundary_changed:
+                raise HTTPException(status_code=409, detail='本区域没有已保存的位置调整；请先调整区域或货位')
+            policies = list(db.scalars(select(WarehouseAreaStoragePolicy).join(WarehouseArea).join(WarehouseFloor)
+                .where(WarehouseFloor.floor_code == floor_code)))
+            metadata_fields = {'version', 'published_map_revision', 'updated_at', 'updated_by', 'published_at', 'published_by'}
+            def policy_facts():
+                return {p.id: {c.name: getattr(p, c.name) for c in WarehouseAreaStoragePolicy.__table__.columns
+                               if c.name not in metadata_fields} for p in policies}
+            policy_before = policy_facts()
+            context = begin_warehouse_twin_one_step_publish(
+                floor_code, feature_id, expected_effective_revision=payload.expected_revision,
+                expected_published_revision=payload.expected_published_revision, geometry_only=True,
+            )
+            validation = validate_warehouse_twin_layout_draft(
+                floor_code, expected_revision=context.published_floor_revision,
+            )
+            if validation.value.get('blockers'):
+                raise HTTPException(status_code=409, detail='本区域调整未应用：' + '；'.join(validation.value['blockers'][:5]))
+            result = _publish_twin_layout_draft_locked(
+                floor_code=floor_code, payload=TwinLayoutDraftPublishPayload(
+                    expected_published_revision=payload.expected_published_revision,
+                    expected_draft_revision=context.published_floor_revision,
+                    operation_key=payload.operation_key + '-zone',
+                ), request=request, db=db, user=user, commit=False, floor_projection_claimed=True,
+            )
+            if policy_facts() != policy_before:
+                raise HTTPException(status_code=409, detail='当前还涉及区域用途变更，位置调整未应用；请先核对用途草稿')
+            pending.pop(feature_id, None)
+            remaining = rebase_verified_adjustments(db, floor_code=floor_code,
+                remaining=pending, published=load_published_warehouse_twin_floor_for_edit(floor_code))
+            preserved = rebase_warehouse_twin_advanced_draft_after_one_step(
+                context, floor_code, feature_id, geometry_only=True, remaining_location_drafts=remaining,
+            )
+            result = {**result, 'feature_id': feature_id, 'other_drafts_preserved': preserved,
+                      'inventory_changed': False, 'scope': 'zone_geometry'}
+            db.add(OperationLog(user_id=user.id, username=user.username, role=user.role,
+                action='UPDATE', resource=f'warehouse/{floor_code}/zones/{feature_id}/geometry',
+                entity_type='warehouse_zone_geometry', description='应用当前区域与货位几何，保留其他草稿',
+                action_code='warehouse.zone_geometry.apply', request_id=payload.operation_key,
+                details=json.dumps({'request_hash': request_hash, 'result': result}, ensure_ascii=False)))
+            db.commit()
+            return result
+        except Exception as error:
+            db.rollback()
+            restore_warehouse_twin_publish_state(snapshot, backup_name=result.get('backup_name') if result else None)
+            if isinstance(error, WarehouseTwinLayoutEditError):
+                _handle_twin_layout_edit_error(error)
+            raise
+
+
+@router.post("/twin-layout/floors/{floor_code}/racks/{rack_id}/apply")
+def apply_twin_rack_layout(
+    floor_code: str,
+    rack_id: str,
+    payload: TwinZoneGeometryApplyPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Apply one saved rack and its formal cells without publishing other drafts."""
+
+    floor_code = floor_code.strip().upper()
+    request_hash = hashlib.sha256(
+        json.dumps(
+            {**payload.model_dump(), "floor_code": floor_code, "rack_id": rack_id},
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        replay = db.scalar(
+            select(OperationLog).where(
+                OperationLog.action_code == "warehouse.rack.apply",
+                OperationLog.request_id == payload.operation_key,
+            )
+        )
+        if replay:
+            details = json.loads(replay.details or "{}")
+            if details.get("request_hash") != request_hash or replay.user_id != user.id:
+                raise HTTPException(status_code=409, detail="同一应用编号不能用于不同货架调整")
+            return {**details["result"], "applied": False, "idempotent_replay": True}
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+        snapshot = snapshot_warehouse_twin_publish_state()
+        result = None
+        try:
+            published = load_published_warehouse_twin_floor_for_edit(floor_code)
+            draft = load_warehouse_twin_layout_draft(floor_code)
+            if (
+                published["revision"] != payload.expected_published_revision
+                or draft["revision"] != payload.expected_revision
+            ):
+                raise HTTPException(status_code=409, detail="地图版本已变化，货架未应用；请刷新核对")
+            rack = next((item for item in draft.get("racks") or [] if item.get("id") == rack_id), None)
+            if not rack:
+                raise HTTPException(status_code=404, detail="货架不存在")
+            if int(rack.get("version") or 1) != payload.expected_version:
+                raise HTTPException(status_code=409, detail="货架版本已变化，未应用；请刷新核对")
+            published_rack = next(
+                (item for item in published.get("racks") or [] if item.get("id") == rack_id),
+                None,
+            )
+            if published_rack == rack:
+                raise HTTPException(status_code=409, detail="本货架没有已保存的调整")
+            context = begin_warehouse_twin_one_step_rack_publish(
+                floor_code,
+                rack_id,
+                expected_effective_revision=payload.expected_revision,
+                expected_published_revision=payload.expected_published_revision,
+            )
+            validation = validate_warehouse_twin_layout_draft(
+                floor_code, expected_revision=context.published_floor_revision,
+            )
+            if validation.value.get("blockers"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="本货架调整未应用：" + "；".join(validation.value["blockers"][:5]),
+                )
+            result = _publish_twin_layout_draft_locked(
+                floor_code=floor_code,
+                payload=TwinLayoutDraftPublishPayload(
+                    expected_published_revision=payload.expected_published_revision,
+                    expected_draft_revision=context.published_floor_revision,
+                    operation_key=payload.operation_key + "-rack",
+                ),
+                request=request,
+                db=db,
+                user=user,
+                commit=False,
+                floor_projection_claimed=True,
+            )
+            preserved = rebase_warehouse_twin_advanced_rack_after_one_step(
+                context, floor_code, rack_id,
+            )
+            result = {
+                **result,
+                "rack_id": rack_id,
+                "other_drafts_preserved": preserved,
+                "inventory_changed": False,
+                "scope": "rack_layout",
+            }
+            db.add(
+                OperationLog(
+                    user_id=user.id,
+                    username=user.username,
+                    role=user.role,
+                    action="UPDATE",
+                    resource=f"warehouse/{floor_code}/racks/{rack_id}/layout",
+                    entity_type="warehouse_rack_layout",
+                    description="应用当前货架布局并保留其他草稿",
+                    action_code="warehouse.rack.apply",
+                    request_id=payload.operation_key,
+                    details=json.dumps(
+                        {"request_hash": request_hash, "result": result}, ensure_ascii=False,
+                    ),
+                )
+            )
+            db.commit()
+            return result
+        except Exception as error:
+            db.rollback()
+            restore_warehouse_twin_publish_state(
+                snapshot, backup_name=result.get("backup_name") if result else None,
+            )
+            if isinstance(error, WarehouseTwinLayoutEditError):
+                _handle_twin_layout_edit_error(error)
+            raise
+
+
 @router.post("/twin-layout/floors/{floor_code}/draft/publish")
 def publish_twin_layout_draft(
     floor_code: str,
@@ -10935,6 +11182,7 @@ def _publish_twin_layout_draft_locked(
             detail="正式区域尚未完成：" + "；".join(blockers[:5]),
         )
     published_floor_before = load_published_warehouse_twin_floor_for_edit(floor_code)
+    coordinate_draft = load_warehouse_twin_layout_draft(floor_code)
     publish_snapshot = snapshot_warehouse_twin_publish_state()
     result = None
     try:
@@ -10964,6 +11212,12 @@ def _publish_twin_layout_draft_locked(
                     source="layout_publish",
                     note=f"地图发布自动归位：{relocation.reason}",
                 )
+        coordinate_adjustments = []
+        if result.applied:
+            from app.services.warehouse_location_geometry_draft import apply_adjustments
+            coordinate_adjustments = apply_adjustments(db, floor_code=floor_code.upper(),
+                draft=coordinate_draft, published=published_floor_before,
+                new_revision=str(result.value.get("published_revision") or ""))
         published_policies = publish_floor_area_policies(
             db,
             floor_code=floor_code,
@@ -11009,6 +11263,7 @@ def _publish_twin_layout_draft_locked(
         ground_map_application_count = record_map_applications(
             db, floor_layout=load_warehouse_twin_floor(floor_code), actor=user,
             operation_key=payload.operation_key, request=request, previous_floor_layout=published_floor_before,
+            coordinate_adjustments=coordinate_adjustments,
         )
         legacy_name_update_count = int(
             getattr(published_policies, "legacy_name_update_count", 0)
@@ -11028,6 +11283,7 @@ def _publish_twin_layout_draft_locked(
             details={
                 **result.value,
                 "ground_map_application_count": ground_map_application_count,
+                "location_coordinate_adjustments": coordinate_adjustments,
                 "formal_area_count": len(published_policies),
                 "formal_areas": [
                     {
@@ -11543,6 +11799,20 @@ def update_twin_layout_feature_geometry(
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         mutation = None
         try:
+            from app.services.warehouse_location_geometry_draft import prepare_adjustment, adjust_slot_positions
+            published_geometry = load_published_warehouse_twin_floor_for_edit(floor_code)
+
+            def prepare_ground(feature):
+                adjustment = prepare_adjustment(db, floor_code=floor_code.upper(),
+                    feature=feature, published=published_geometry)
+                if payload.ground_locations is not None:
+                    if adjustment is None:
+                        raise WarehouseTwinLayoutEditConflictError("区域没有可调整的正式地堆货位")
+                    adjustment = adjust_slot_positions(adjustment,
+                        [point.model_dump() for point in payload.ground_locations],
+                        floor_bounds=published_geometry['bounds_mm'])
+                return adjustment
+
             mutation = update_warehouse_twin_feature_geometry(
                 floor_code,
                 feature_id,
@@ -11550,6 +11820,8 @@ def update_twin_layout_feature_geometry(
                 expected_version=payload.expected_version,
                 operation_key=payload.operation_key,
                 points=[list(point) for point in payload.points],
+                prepare_ground=prepare_ground,
+                request_hash=ground_canonical_hash(payload.model_dump(mode="json")),
             )
             if mutation.applied:
                 _twin_layout_asset_log(
@@ -12824,6 +13096,36 @@ def create_twin_layout_rack(
             "revision": mutation.floor_revision,
             "applied": mutation.applied,
         }
+
+
+@router.post("/twin-layout/floors/{floor_code}/zones/{feature_id}/number-racks")
+def number_twin_area_racks(
+    floor_code: str, feature_id: str, payload: TwinAreaRackNumberingPayload,
+    request: Request, db: Session = Depends(get_db), user: User = Depends(admin_only),
+) -> dict:
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+        _assert_twin_feature_not_archived(db, floor_code=floor_code, feature_id=feature_id)
+        snapshot = snapshot_warehouse_twin_layout_draft()
+        mutation = None
+        try:
+            mutation = number_warehouse_twin_area_racks(floor_code,
+                expected_revision=payload.expected_revision, operation_key=payload.operation_key,
+                area_feature_id=feature_id)
+            if mutation.applied:
+                _twin_layout_asset_log(db, request=request, user=user,
+                    action="TWIN_RACK_NUMBER_AREA", entity_type="twin_area_layout",
+                    entity_id=feature_id, description="按区域从左到右编号货架显示名称，仅保存草稿",
+                    details={"floor_code": floor_code, **mutation.value, "inventory_changed": False})
+                db.commit()
+        except Exception as error:
+            db.rollback()
+            if mutation is not None and mutation.applied:
+                restore_warehouse_twin_layout_draft(snapshot)
+            if isinstance(error, WarehouseTwinLayoutEditError):
+                _handle_twin_layout_edit_error(error)
+            raise
+        return {"item": mutation.value, "revision": mutation.floor_revision, "applied": mutation.applied}
 
 
 @router.patch("/twin-layout/floors/{floor_code}/racks/{rack_id}")

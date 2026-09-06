@@ -250,7 +250,8 @@ export function locationLayoutGeometry(
   zone: { points: number[][] },
   location: InventoryProjectionLocation,
   xMm: number,
-  yMm: number
+  yMm: number,
+  options?: { clampToZone?: boolean }
 ): {
   location_id: number;
   expected_version: number;

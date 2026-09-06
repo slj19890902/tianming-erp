@@ -3,10 +3,14 @@ import test from "node:test";
 
 import {
   aisleSurfaceStyle,
+  effectiveMapFeatures,
   filterOperationalFeatures,
   operationalEntitySelectable,
   warehouseAisleColor,
   warehouseFrustumDivisor,
+  warehousePassageEnvelope,
+  warehousePassageSurfaceStyle,
+  warehouseZoneColor,
   wallSurfaceStyle
 } from "../src/operationalView.mjs";
 
@@ -62,6 +66,43 @@ test("warehouse aisles use a pale green surface and reserve strong green for emp
   assert.equal(warehouseAisleColor("1F", "warehouse", "#22c55e"), "#dcefe3");
   assert.equal(warehouseAisleColor("3F", "warehouse", "#f59e0b"), "#dcefe3");
   assert.equal(warehouseAisleColor("1F", "editor", "#22c55e"), "#22c55e");
+});
+
+test("warehouse zones use one color across historical left and right area sources", () => {
+  assert.equal(warehouseZoneColor("warehouse", "#eab308"), "#60a5fa");
+  assert.equal(warehouseZoneColor("warehouse", "#8b5cf6"), "#60a5fa");
+  assert.equal(warehouseZoneColor("editor", "#eab308"), "#eab308");
+});
+
+test("warehouse passage follows the wall envelope instead of the rectangular import bounds", () => {
+  const wall = (points) => ({ kind: "wall", geometry: { type: "polyline", closed: true, points } });
+  const envelope = warehousePassageEnvelope(
+    { min_x: 0, min_y: 0, max_x: 10000, max_y: 10000 },
+    [
+      wall([[1000, 0], [1200, 0], [1200, 10000], [1000, 10000]]),
+      wall([[8000, 0], [8200, 0], [8200, 6000], [8000, 6000]]),
+      wall([[6000, 6000], [6200, 6000], [6200, 10000], [6000, 10000]])
+    ],
+    20
+  );
+  assert.ok(envelope.length >= 8);
+  const lower = envelope.filter(([, y]) => y < 5000).map(([x]) => x);
+  const upper = envelope.filter(([, y]) => y > 7000).map(([x]) => x);
+  assert.ok(Math.max(...lower) >= 8000);
+  assert.ok(Math.max(...upper) <= 6200);
+  assert.ok(Math.min(...envelope.map(([x]) => x)) >= 1000);
+});
+
+test("warehouse uses the floor envelope as passage and hides legacy drawn aisles", () => {
+  const aisle = { id: "legacy-aisle", feature_kind: "aisle", points: [[0, 0], [1000, 0]] };
+  const zone = { id: "zone", feature_kind: "zone", points: [[0, 0], [1000, 0], [1000, 1000], [0, 1000]] };
+  assert.deepEqual(warehousePassageSurfaceStyle("warehouse"), {
+    visible: true,
+    color: "#dcefe3",
+    elevationMm: 0
+  });
+  assert.deepEqual(effectiveMapFeatures("warehouse", [aisle, zone]), [zone]);
+  assert.deepEqual(effectiveMapFeatures("editor", [aisle, zone]), [aisle, zone]);
 });
 
 test("warehouse aisle intersections use one opaque depth-writing surface", () => {

@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, selectinload
 
 from app.api import warehouse as warehouse_api
 from app.api.auth import router as auth_router
@@ -1137,3 +1137,140 @@ def test_ground_inbound_audit_failure_rolls_back_every_business_fact(
         assert db.scalar(select(func.count(InventoryLot.id))) == 0
         assert db.scalar(select(func.count(InventoryPallet.id))) == 0
         assert db.scalar(select(func.count(WarehouseGroundOccupancy.id))) == 0
+
+
+def test_area_location_draft_preserves_positions_and_allows_conflict_until_application(p187_app):
+    from copy import deepcopy
+    from app.services.warehouse_location_geometry_draft import (
+        prepare_adjustment, adjust_slot_positions, validate_adjustments, apply_adjustments, KEY,
+    )
+    from app.services.warehouse_floor1_candidate_planner import Floor1CandidatePlanningError
+    app, factory, ids = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        _publish_six_slots(client)
+    published = _measured_layout()
+    published['bounds_mm']['max_x'] = 8000
+    feature = deepcopy(published['features'][0])
+    with factory() as db:
+        before = {r.id: (r.floor3_layout.left_pct, r.floor3_layout.top_pct, r.floor3_layout.version)
+                  for r in db.scalars(select(WarehouseLocation).options(selectinload(WarehouseLocation.floor3_layout)))
+                  if r.floor3_layout}
+        feature[KEY] = prepare_adjustment(db, floor_code='3F', feature=feature, published=published)
+        original_slots = deepcopy(feature[KEY]['slots'])
+        feature['points'] = [[x+1000,y] for x,y in feature['points']]
+        draft = {**published, 'features': [feature]}
+        assert feature[KEY]['slots'] == original_slots
+        with pytest.raises(Floor1CandidatePlanningError, match='超出'):
+            validate_adjustments(db, floor_code='3F', draft=draft, published=published)
+        assert before == {r.id: (r.floor3_layout.left_pct, r.floor3_layout.top_pct, r.floor3_layout.version)
+                          for r in db.scalars(select(WarehouseLocation).options(selectinload(WarehouseLocation.floor3_layout)))
+                          if r.floor3_layout}
+        changes = [dict(location_id=s['location_id'], expected_version=s['expected_version'],
+                        x_mm=s['x_mm']+1000, y_mm=s['y_mm']) for s in original_slots]
+        feature[KEY] = adjust_slot_positions(feature[KEY], changes, floor_bounds=published['bounds_mm'])
+        assert len(validate_adjustments(db, floor_code='3F', draft=draft, published=published)) == 1
+        plan = db.scalar(select(WarehouseGroundLayoutPlan))
+        version = plan.version
+        addresses = [(s.location_id, s.row_no, s.slot_no, s.route_sequence) for s in plan.slots]
+        from sqlalchemy import text
+        db.execute(text("CREATE TRIGGER test_immutable_plan BEFORE UPDATE ON warehouse_ground_layout_plans BEGIN SELECT RAISE(ABORT, 'published ground layout plan is immutable'); END"))
+        db.execute(text("CREATE TRIGGER test_immutable_slot BEFORE UPDATE ON warehouse_ground_layout_slots BEGIN SELECT RAISE(ABORT, 'published ground slot is immutable'); END"))
+        logs = apply_adjustments(db, floor_code='3F', draft=draft, published=published, new_revision='adjusted-map')
+        assert len(logs) == 6
+        assert plan.version == version
+        assert plan.published_map_revision == published['revision']
+        assert addresses == [(s.location_id, s.row_no, s.slot_no, s.route_sequence) for s in plan.slots]
+        assert all(s.width_mm == 1200 and s.depth_mm == 1000 for s in plan.slots)
+        from app.services.warehouse_ground_map_application import record_map_applications
+        actor = db.get(User, ids['admin'])
+        policy = db.scalar(select(WarehouseAreaStoragePolicy))
+        policy.published_map_revision = 'adjusted-map'
+        applied = {**draft, 'revision': 'adjusted-map'}
+        assert record_map_applications(db, floor_layout=applied, actor=actor,
+            operation_key='coordinate-proof', previous_floor_layout=published, coordinate_adjustments=logs) == 1
+        db.rollback()
+        assert db.get(WarehouseGroundLayoutPlan, plan.id).version == version
+
+
+def test_area_location_draft_rejects_concurrent_position_change(p187_app):
+    from copy import deepcopy
+    from app.services.warehouse_location_geometry_draft import prepare_adjustment, verify_adjustment, KEY
+    from app.services.warehouse_twin_layout_editor import WarehouseTwinLayoutEditConflictError
+    app, factory, ids = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        _publish_six_slots(client)
+    published = _measured_layout()
+    feature = deepcopy(published['features'][0])
+    with factory() as db:
+        feature[KEY] = prepare_adjustment(db, floor_code='3F', feature=feature, published=published)
+        row = db.get(WarehouseLocation, feature[KEY]['slots'][0]['location_id'])
+        row.floor3_layout.version += 1
+        with pytest.raises(WarehouseTwinLayoutEditConflictError, match='其他操作'):
+            verify_adjustment(db, floor_code='3F', feature=feature, published=published)
+        db.rollback()
+
+
+def test_scoped_application_requires_admin_before_accessing_layout(p187_app):
+    app, _, _ = p187_app
+    with TestClient(app) as client:
+        payload = dict(expected_revision='draft',expected_published_revision='published',expected_version=1,operation_key='scoped-auth-check')
+        url = '/api/warehouse/twin-layout/floors/3F/zones/ZONE-3F-A01/apply-geometry'
+        assert client.post(url,json=payload).status_code in (401,403)
+        _login_workshop(client)
+        assert client.post(url,json=payload).status_code == 403
+
+
+def test_scoped_application_rebases_other_location_drafts_without_moving_them(p187_app):
+    from copy import deepcopy
+    from app.services.warehouse_location_geometry_draft import prepare_adjustment, rebase_verified_adjustments
+    from app.services.warehouse_twin_layout_editor import WarehouseTwinLayoutEditConflictError
+    app, factory, _ = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        _publish_six_slots(client)
+    published = _measured_layout()
+    feature = deepcopy(published['features'][0])
+    with factory() as db:
+        original = prepare_adjustment(db, floor_code='3F', feature=feature, published=published)
+        original['slots'][0]['x_mm'] += 123
+        original_copy = deepcopy(original)
+        policy = db.scalar(select(WarehouseAreaStoragePolicy))
+        policy.version += 1
+        next_map = {**published, 'revision':'other-zone-published'}
+        rebased = rebase_verified_adjustments(db, floor_code='3F', remaining={feature['id']:original}, published=next_map)[feature['id']]
+        assert rebased['base_revision'] == next_map['revision']
+        assert rebased['policy_version'] == policy.version
+        assert rebased['slots'] == original['slots']
+        assert original == original_copy
+        location = db.get(WarehouseLocation, original['slots'][0]['location_id'])
+        location.floor3_layout.version += 1
+        with pytest.raises(WarehouseTwinLayoutEditConflictError, match='其他区域'):
+            rebase_verified_adjustments(db, floor_code='3F', remaining={feature['id']:original}, published=next_map)
+        db.rollback()
+
+
+def test_adjacent_ground_locations_follow_current_positions_not_immutable_plan(p187_app):
+    from app.services.warehouse_ground_slots import ground_slots_adjacent
+    app, factory, _ = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        _publish_six_slots(client)
+    with factory() as db:
+        plan = db.scalar(select(WarehouseGroundLayoutPlan))
+        left, right = plan.slots[0], plan.slots[1]
+        assert ground_slots_adjacent(left, right)
+        original = (right.x_mm, right.y_mm, right.location.location_code)
+        # Keep within the same valid zone but pull the second location away.
+        right.location.floor3_layout.left_pct += Decimal('8')
+        assert not ground_slots_adjacent(left, right)
+        assert original == (right.x_mm, right.y_mm, right.location.location_code)
+        right.location.floor3_layout.left_pct -= Decimal('8')
+        assert ground_slots_adjacent(left, right)
+        # Enlarging the boundary changes percentages, not the physical contact.
+        for slot in (left, right):
+            slot.location.floor3_layout.left_pct /= 2
+            slot.location.floor3_layout.width_pct /= 2
+        assert ground_slots_adjacent(left, right)
+        db.rollback()

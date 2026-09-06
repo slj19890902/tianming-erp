@@ -448,6 +448,100 @@ def _login(client: TestClient, username: str) -> None:
     assert response.status_code == 200, response.text
 
 
+def test_map_pallet_move_eligibility_includes_nonvisible_historical_items(
+    twin_dashboard_app,
+) -> None:
+    from sqlalchemy import event, select
+    from app.api.deps import get_db
+    from app.api.warehouse import _twin_dashboard_source_rows
+    from app.models.user import User
+    from app.models.warehouse_inventory import (
+        FinishedGoodsInventoryDetail, InventoryLot, InventoryPallet,
+        InventoryPalletItem,
+    )
+    from app.services.warehouse_movement_batch import (
+        WarehouseMovementBatchError, load_movable_pallet, pallet_move_source_issue,
+    )
+
+    app, _ids = twin_dashboard_app
+    dependency = app.dependency_overrides[get_db]()
+    db = next(dependency)
+    try:
+        pallet = db.scalar(select(InventoryPallet).order_by(InventoryPallet.id))
+        original = pallet.items[0]
+        pallet_id = pallet.id
+        with TestClient(app) as client:
+            _login(client, "twin-admin")
+            before = client.get("/api/warehouse/twin-dashboard/overview").json()
+            shown_before = next(
+                p for row in before["locations"] for p in row["pallets"]
+                if p["pallet_id"] == pallet_id
+            )
+            assert shown_before["move_eligible"] is True
+            spent = InventoryLot(
+                lot_number="MAP-MOVE-SPENT-HISTORY",
+                inventory_type="finished",
+                warehouse_location_id=pallet.location_id,
+                quantity_available=0, quantity_reserved=0,
+                quantity_damaged=0, quantity_scrapped=10,
+                status="active", unit="boxes", source_type="manual",
+                stock_date=original.inventory_lot.stock_date,
+                last_movement_at=original.inventory_lot.last_movement_at,
+            )
+            db.add(spent)
+            db.flush()
+            db.add(FinishedGoodsInventoryDetail(
+                inventory_lot_id=spent.id,
+                owner_customer_id=original.customer_id,
+                product_id=original.product_id,
+                inventory_code_snapshot=original.inventory_lot.finished_detail.inventory_code_snapshot,
+                product_name_snapshot=original.inventory_lot.finished_detail.product_name_snapshot,
+            ))
+            db.add(InventoryPalletItem(
+                pallet_id=pallet.id, inventory_lot_id=spent.id,
+                customer_id=original.customer_id, product_id=original.product_id,
+                item_type="finished", quantity=10, unit="boxes", match_status="matched",
+            ))
+            db.commit()
+            db.expire_all()
+            with pytest.raises(WarehouseMovementBatchError) as denied:
+                load_movable_pallet(db, pallet_id)
+            after = client.get("/api/warehouse/twin-dashboard/overview").json()
+        shown_after = next(
+            p for row in after["locations"] for p in row["pallets"]
+            if p["pallet_id"] == pallet_id
+        )
+        assert shown_after["items"] == shown_before["items"]
+        assert shown_after["item_count"] == shown_before["item_count"]
+        assert shown_after["move_eligible"] is False
+        assert shown_after["move_block_reason"] == str(denied.value)
+        assert db.get(InventoryLot, spent.id).quantity_scrapped == 10
+        admin = db.scalar(select(User).where(User.username == "twin-admin"))
+        lots, locations, pallets, _floors, _scope = _twin_dashboard_source_rows(db, admin)
+        lot_map = {row.id: row for row in lots}
+        location_map = {row.id: row for row in locations}
+        statements = []
+
+        def capture_statement(*args):
+            statements.append(args[2])
+
+        engine = db.get_bind()
+        event.listen(engine, "before_cursor_execute", capture_statement)
+        try:
+            issues = {
+                row.id: pallet_move_source_issue(
+                    row, location_map.get(row.location_id), lots_by_id=lot_map,
+                )
+                for row in pallets
+            }
+        finally:
+            event.remove(engine, "before_cursor_execute", capture_statement)
+        assert issues[pallet_id] == str(denied.value)
+        assert statements == [], "Map source eligibility must reuse the loaded dashboard facts"
+    finally:
+        dependency.close()
+
+
 def test_dashboard_keeps_native_units_and_hides_unconfirmed_capacity_metrics(
     twin_dashboard_app,
 ) -> None:

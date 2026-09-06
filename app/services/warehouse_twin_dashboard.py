@@ -45,6 +45,7 @@ from app.services.location_candidates import (
     warehouse_location_projection,
 )
 from app.services.product_specification import dimension_specification
+from app.services.warehouse_movement_batch import pallet_move_source_issue
 
 
 AGE_BUCKETS = (
@@ -815,6 +816,7 @@ def _location_payload(
     allowed_inventory_types: list[str] | None = None,
     composite_projections: dict[int, dict] | None = None,
     stocktake_decrease_issues: dict[int, str | None] | None = None,
+    pallet_move_issues: dict[int, str | None] | None = None,
 ) -> dict:
     context = projection_context or {}
     floor = context.get("floor")
@@ -896,6 +898,12 @@ def _location_payload(
                 "needs_relocation": pallet.needs_relocation,
                 "item_count": len(items),
                 "items": items,
+                "move_eligible": (
+                    pallet_move_issues[pallet.id] is None
+                    if pallet_move_issues is not None and pallet.id in pallet_move_issues
+                    else None
+                ),
+                "move_block_reason": (pallet_move_issues or {}).get(pallet.id),
             }
         )
     loose_items = [
@@ -1153,6 +1161,16 @@ def build_warehouse_twin_dashboard(
         for row in scoped_current_pallets
         if _pallet_has_projectable_physical_goods(row, positive_lots_by_id)
     ]
+    all_lots_by_id = {int(row.id): row for row in lots}
+    locations_by_id = {int(row.id): row for row in locations}
+    pallet_move_issues = {
+        int(pallet.id): pallet_move_source_issue(
+            pallet,
+            locations_by_id.get(pallet.location_id),
+            lots_by_id=all_lots_by_id,
+        )
+        for pallet in visible_pallets
+    }
     empty_current_pallet_residues = [
         row
         for row in scoped_current_pallets
@@ -1274,6 +1292,7 @@ def build_warehouse_twin_dashboard(
             allowed_inventory_types=policy_types_by_area.get(location_key, []),
             composite_projections=composite_projections,
             stocktake_decrease_issues=stocktake_decrease_issues,
+            pallet_move_issues=pallet_move_issues,
         )
         open_observations = unmatched_by_location.get(int(location.id), [])
         payload["has_unmatched_inventory_observation"] = bool(open_observations)

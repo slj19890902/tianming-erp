@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from hashlib import sha256
 import json
 from threading import RLock
@@ -135,13 +136,37 @@ def load_movable_pallet(db: Session, pallet_id: int) -> InventoryPallet:
     pallet = db.scalar(_pallet_query().where(InventoryPallet.id == pallet_id))
     if pallet is None:
         raise WarehouseMovementBatchError("栈板不存在", 404)
+    source = db.get(WarehouseLocation, pallet.location_id) if pallet.location_id is not None else None
+    _assert_movable_pallet_source(pallet, source)
+    return pallet
+
+
+def pallet_move_source_issue(
+    pallet: InventoryPallet,
+    source: WarehouseLocation | None,
+    *,
+    lots_by_id: Mapping[int, InventoryLot],
+) -> str | None:
+    """Project the existing source guard from already loaded facts, without queries."""
+    try:
+        _assert_movable_pallet_source(pallet, source, lots_by_id=lots_by_id)
+    except WarehouseMovementBatchError as error:
+        return str(error)
+    return None
+
+
+def _assert_movable_pallet_source(
+    pallet: InventoryPallet,
+    source: WarehouseLocation | None,
+    *,
+    lots_by_id: Mapping[int, InventoryLot] | None = None,
+) -> None:
     if (
         pallet.status != "active"
         or not pallet.is_current
         or pallet.location_id is None
     ):
         raise WarehouseMovementBatchError("栈板当前不在有效货位，不能移货", 409)
-    source = db.get(WarehouseLocation, pallet.location_id)
     if source is None:
         raise WarehouseMovementBatchError("栈板所在库位不存在", 409)
     if source.warehouse_floor not in {1, 3, 4}:
@@ -168,7 +193,11 @@ def load_movable_pallet(db: Session, pallet_id: int) -> InventoryPallet:
     if not pallet.items:
         raise WarehouseMovementBatchError("空栈板不能通过库存移货模式移动", 409)
     for pallet_item in pallet.items:
-        lot = pallet_item.inventory_lot
+        lot = (
+            lots_by_id.get(pallet_item.inventory_lot_id)
+            if lots_by_id is not None
+            else pallet_item.inventory_lot
+        )
         if (
             pallet_item.item_type != "finished"
             or lot is None
@@ -198,7 +227,6 @@ def load_movable_pallet(db: Session, pallet_id: int) -> InventoryPallet:
                 "栈板内容与正式库存客户或产品归属不一致",
                 409,
             )
-    return pallet
 
 
 def _preflight_item_source(

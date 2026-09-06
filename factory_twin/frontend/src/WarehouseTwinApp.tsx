@@ -250,6 +250,8 @@ interface DashboardPallet {
   version: number;
   item_count: number;
   items: InventoryItem[];
+  move_eligible?: boolean | null;
+  move_block_reason?: string | null;
 }
 
 interface DashboardLocation {
@@ -980,7 +982,7 @@ function employeeCustomerName(item: { customer_id?: number | null; customer_name
 
 function palletMoveSource(location: DashboardLocation, pallet?: DashboardPallet | null): WarehouseMoveSource | null {
   const selectedPallet = pallet || singleLocationPallet(location) as DashboardPallet | null;
-  if (!selectedPallet?.pallet_id || !selectedPallet.version) return null;
+  if (!selectedPallet?.pallet_id || !selectedPallet.version || selectedPallet.move_eligible === false) return null;
   const firstItem = selectedPallet.items[0];
   return {
     source_key: `pallet:${selectedPallet.pallet_id}`,
@@ -6209,11 +6211,11 @@ export function WarehouseTwinApp() {
                     : { compatible: true, error: null };
                   const disabled = moveAction === "merge"
                     ? !mergeCandidate.candidate || (!mergeSelected && !mergeCompatibility.compatible) || mergeBatchBusy
-                    : !pallet.version;
-                  return <button type="button" aria-pressed={moveAction === "merge" ? mergeSelected : undefined} title={moveAction === "merge" ? mergeCandidate.error || mergeCompatibility.error || "" : ""} className={moveAction === "merge" ? mergeSelected ? "selected merge-selected" : disabled ? "merge-ineligible" : "" : moveSource?.source_key === `pallet:${pallet.pallet_id}` ? "selected" : ""} disabled={disabled} key={`move-pallet-${pallet.pallet_id}`} onClick={() => moveAction === "merge" ? toggleMergeSource(selectedLocation, pallet) : chooseMoveSource(palletMoveSource(selectedLocation, pallet))}>
+                    : !pallet.version || pallet.move_eligible === false;
+                  return <button type="button" aria-pressed={moveAction === "merge" ? mergeSelected : undefined} title={moveAction === "merge" ? mergeCandidate.error || mergeCompatibility.error || "" : pallet.move_block_reason || ""} className={moveAction === "merge" ? mergeSelected ? "selected merge-selected" : disabled ? "merge-ineligible" : "" : moveSource?.source_key === `pallet:${pallet.pallet_id}` ? "selected" : ""} disabled={disabled} key={`move-pallet-${pallet.pallet_id}`} onClick={() => moveAction === "merge" ? toggleMergeSource(selectedLocation, pallet) : chooseMoveSource(palletMoveSource(selectedLocation, pallet))}>
                     <b>{moveAction === "merge" ? mergeSelected ? "已选合并货物" : "加入合并集合" : "整栈移动"} · {employeeCustomerName(firstItem)}</b>
                     <span>{firstItem?.inventory_code || "存货编码待补充"} · {firstItem?.product_name || "产品名称待补充"}{productCount > 1 ? ` 等 ${productCount} 款` : ""}</span>
-                    <small>{mergeCandidate.candidate ? `${mergeCandidate.candidate.lot_count} 个正式批次 · 合计 ${formatNumber(mergeCandidate.candidate.total_quantity)} ${inventoryUnitLabel(mergeCandidate.candidate.unit)} · ${mergeCandidate.candidate.inventory_status === "frozen" ? "冻结" : "可用"}` : mergeCandidate.error || `${pallet.item_count ?? pallet.items.length} 条库存明细 · 合计 ${formatNumber(totalQuantity)} ${inventoryUnitLabel(firstItem?.unit)}`}</small>
+                    <small>{moveAction !== "merge" && pallet.move_eligible === false ? pallet.move_block_reason || "当前不能整板移货，请刷新核对" : mergeCandidate.candidate ? `${mergeCandidate.candidate.lot_count} 个正式批次 · 合计 ${formatNumber(mergeCandidate.candidate.total_quantity)} ${inventoryUnitLabel(mergeCandidate.candidate.unit)} · ${mergeCandidate.candidate.inventory_status === "frozen" ? "冻结" : "可用"}` : mergeCandidate.error || `${pallet.item_count ?? pallet.items.length} 条库存明细 · 合计 ${formatNumber(totalQuantity)} ${inventoryUnitLabel(firstItem?.unit)}`}</small>
                   </button>;
                 })}
               </div>

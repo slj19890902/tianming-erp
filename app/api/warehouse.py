@@ -182,6 +182,7 @@ from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditNotFoundError,
     WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK,
     apply_warehouse_twin_archived_area_tombstones,
+    begin_warehouse_twin_no_go_removal_publish,
     begin_warehouse_twin_one_step_rack_publish,
     begin_warehouse_twin_one_step_publish,
     calibrate_floor4_freight_elevator,
@@ -197,6 +198,7 @@ from app.services.warehouse_twin_layout_editor import (
     publish_warehouse_twin_layout_draft,
     rebuild_stale_warehouse_twin_layout_draft,
     rebase_warehouse_twin_advanced_draft_after_one_step,
+    rebase_warehouse_twin_advanced_draft_after_no_go_removal,
     rebase_warehouse_twin_advanced_rack_after_one_step,
     restore_warehouse_twin_layout_draft,
     restore_warehouse_twin_publish_state,
@@ -9877,6 +9879,21 @@ class TwinZoneGeometryApplyPayload(BaseModel):
     operation_key: str = Field(min_length=8, max_length=110)
 
 
+class TwinNoGoRemovalPayload(BaseModel):
+    expected_revision: str = Field(min_length=1, max_length=64)
+    expected_published_revision: str = Field(min_length=1, max_length=64)
+    feature_ids: list[str] = Field(min_length=1, max_length=100)
+    operation_key: str = Field(min_length=8, max_length=110)
+
+    @field_validator("feature_ids")
+    @classmethod
+    def normalize_feature_ids(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(str(item or "").strip() for item in values))
+        if any(not item for item in normalized):
+            raise ValueError("禁放区对象编号不能为空")
+        return normalized
+
+
 class RackLevelLabelPrintPayload(BaseModel):
     floor_code: str = Field(min_length=2, max_length=30)
     map_rack_id: str = Field(min_length=1, max_length=80)
@@ -10989,6 +11006,115 @@ def apply_twin_zone_geometry(
         except Exception as error:
             db.rollback()
             restore_warehouse_twin_publish_state(snapshot, backup_name=result.get('backup_name') if result else None)
+            if isinstance(error, WarehouseTwinLayoutEditError):
+                _handle_twin_layout_edit_error(error)
+            raise
+
+
+@router.post("/twin-layout/floors/{floor_code}/no-go-features/remove")
+def remove_twin_no_go_features(
+    floor_code: str,
+    payload: TwinNoGoRemovalPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    """Remove explicit no-go overlays without publishing unrelated drafts."""
+
+    floor_code = floor_code.strip().upper()
+    request_hash = hashlib.sha256(
+        json.dumps(
+            {**payload.model_dump(), "floor_code": floor_code},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+        replay = db.scalar(
+            select(OperationLog).where(
+                OperationLog.action_code == "warehouse.no_go.remove",
+                OperationLog.request_id == payload.operation_key,
+            )
+        )
+        if replay is not None:
+            details = json.loads(replay.details or "{}")
+            if details.get("request_hash") != request_hash or replay.user_id != user.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="同一清理编号不能用于不同禁放区清单",
+                )
+            return {
+                **details["result"],
+                "applied": False,
+                "idempotent_replay": True,
+            }
+
+        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+        snapshot = snapshot_warehouse_twin_publish_state()
+        result = None
+        try:
+            context = begin_warehouse_twin_no_go_removal_publish(
+                floor_code,
+                payload.feature_ids,
+                expected_effective_revision=payload.expected_revision,
+                expected_published_revision=payload.expected_published_revision,
+            )
+            validation = validate_warehouse_twin_layout_draft(
+                floor_code,
+                expected_revision=context.published_floor_revision,
+            )
+            if validation.value.get("blockers"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="禁放区未删除："
+                    + "；".join(validation.value["blockers"][:5]),
+                )
+            published = publish_warehouse_twin_layout_draft(
+                floor_code,
+                expected_published_revision=payload.expected_published_revision,
+                expected_draft_revision=context.published_floor_revision,
+                operation_key=payload.operation_key + "-publish",
+            )
+            result = {**published.value, "applied": published.applied}
+            preserved = rebase_warehouse_twin_advanced_draft_after_no_go_removal(
+                context,
+                floor_code,
+            )
+            response = {
+                **result,
+                "floor_code": floor_code,
+                "removed_feature_ids": list(context.removed_feature_ids),
+                "removed_feature_count": len(context.removed_feature_ids),
+                "other_drafts_preserved": preserved,
+                "inventory_changed": False,
+                "scope": "no_go_features",
+            }
+            db.add(
+                OperationLog(
+                    user_id=user.id,
+                    username=user.username,
+                    role=user.role,
+                    action="DELETE",
+                    resource=f"warehouse/{floor_code}/no-go-features",
+                    entity_type="warehouse_no_go_features",
+                    description="受控删除指定禁放区，保留其他管理员草稿",
+                    action_code="warehouse.no_go.remove",
+                    request_id=payload.operation_key,
+                    details=json.dumps(
+                        {"request_hash": request_hash, "result": response},
+                        ensure_ascii=False,
+                    ),
+                )
+            )
+            db.commit()
+            return response
+        except Exception as error:
+            db.rollback()
+            restore_warehouse_twin_publish_state(
+                snapshot,
+                backup_name=result.get("backup_name") if result else None,
+            )
             if isinstance(error, WarehouseTwinLayoutEditError):
                 _handle_twin_layout_edit_error(error)
             raise

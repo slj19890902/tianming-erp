@@ -12,6 +12,7 @@ from app.services.warehouse_twin_layout_editor import (
     WarehouseTwinLayoutEditError,
     WarehouseTwinLayoutEditNotFoundError,
     _floor_revision,
+    begin_warehouse_twin_no_go_removal_publish,
     begin_warehouse_twin_one_step_rack_publish,
     create_warehouse_twin_rack,
     delete_warehouse_twin_rack,
@@ -19,6 +20,7 @@ from app.services.warehouse_twin_layout_editor import (
     load_warehouse_twin_layout_draft,
     publish_warehouse_twin_layout_draft,
     rebuild_stale_warehouse_twin_layout_draft,
+    rebase_warehouse_twin_advanced_draft_after_no_go_removal,
     rebase_warehouse_twin_advanced_rack_after_one_step,
     update_warehouse_twin_rack,
     update_warehouse_twin_zone_policy,
@@ -347,6 +349,120 @@ def test_one_step_rack_publish_consumes_only_selected_rack(
     active = load_warehouse_twin_layout_draft("3F")
     assert [rack["name"] for rack in active["racks"]] == ["一号架", "二号架"]
     assert active["draft_control"]["status"] == "draft"
+
+
+def test_no_go_removal_publishes_only_targets_and_preserves_other_drafts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published = _asset(tmp_path / "published.json")
+    draft = tmp_path / "runtime" / "layout.draft.json"
+    backups = tmp_path / "backups"
+    document = json.loads(published.read_text(encoding="utf8"))
+    floor = document["floors"]["3F"]
+    floor["features"].extend(
+        [
+            {
+                "id": "no-go-a",
+                "feature_code": "NO-GO-3F-A",
+                "name": "红色禁放区A",
+                "feature_kind": "no_go",
+                "subtype": "door_clearance",
+                "points": [[100, 100], [200, 100], [200, 200], [100, 200]],
+            },
+            {
+                "id": "no-go-b",
+                "feature_code": "NO-GO-3F-B",
+                "name": "红色禁放区B",
+                "feature_kind": "no_go",
+                "subtype": "electrical_box",
+                "points": [[300, 100], [400, 100], [400, 200], [300, 200]],
+            },
+        ]
+    )
+    floor["revision"] = _floor_revision(floor)
+    published.write_text(json.dumps(document, ensure_ascii=False), encoding="utf8")
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", published)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_DRAFT_PATH", draft)
+    monkeypatch.setattr(editor, "TWIN_LAYOUT_BACKUP_DIR", backups)
+
+    published_revision = floor["revision"]
+    advanced = editor._new_draft_document(published)
+    advanced_floor = advanced["floors"]["3F"]
+    advanced_floor["features"].append(
+        {
+            "id": "draft-aisle",
+            "feature_code": "AISLE-3F-DRAFT",
+            "name": "尚未发布的通道",
+            "feature_kind": "aisle",
+            "subtype": "main_aisle",
+            "points": [[500, 500], [600, 500], [600, 600], [500, 600]],
+        }
+    )
+    advanced_floor["revision"] = _floor_revision(advanced_floor)
+    editor._mark_draft_changed(advanced, "3F")
+    editor._write_document(draft, advanced)
+    advanced_revision = advanced_floor["revision"]
+
+    context = begin_warehouse_twin_no_go_removal_publish(
+        "3F",
+        ["no-go-a", "no-go-b"],
+        expected_effective_revision=advanced_revision,
+        expected_published_revision=published_revision,
+    )
+    isolated = load_warehouse_twin_layout_draft("3F")
+    assert {item["id"] for item in isolated["features"]} == {"zone-f1"}
+    assert {item["id"] for item in isolated["retired_features"]} == {
+        "no-go-a",
+        "no-go-b",
+    }
+    assert validate_warehouse_twin_layout_draft(
+        "3F", expected_revision=context.published_floor_revision
+    ).value["blockers"] == []
+    publish_warehouse_twin_layout_draft(
+        "3F",
+        expected_published_revision=published_revision,
+        expected_draft_revision=context.published_floor_revision,
+        operation_key="remove-no-go-publish",
+    )
+    assert rebase_warehouse_twin_advanced_draft_after_no_go_removal(
+        context, "3F"
+    ) is True
+
+    published_floor = json.loads(published.read_text(encoding="utf8"))["floors"]["3F"]
+    assert {item["id"] for item in published_floor["features"]} == {"zone-f1"}
+    assert {item["id"] for item in published_floor["retired_features"]} == {
+        "no-go-a",
+        "no-go-b",
+    }
+    active = load_warehouse_twin_layout_draft("3F")
+    assert {item["id"] for item in active["features"]} == {
+        "zone-f1",
+        "draft-aisle",
+    }
+    assert {item["id"] for item in active["retired_features"]} == {
+        "no-go-a",
+        "no-go-b",
+    }
+    assert active["draft_control"]["status"] == "draft"
+
+
+def test_no_go_removal_rejects_non_no_go_without_writing(tmp_path: Path) -> None:
+    published = _asset(tmp_path / "published.json")
+    draft = tmp_path / "layout.draft.json"
+    revision = json.loads(published.read_text(encoding="utf8"))["floors"]["3F"]["revision"]
+    before = published.read_bytes()
+    with pytest.raises(WarehouseTwinLayoutEditConflictError):
+        begin_warehouse_twin_no_go_removal_publish(
+            "3F",
+            ["zone-f1"],
+            expected_effective_revision=revision,
+            expected_published_revision=revision,
+            published_path=published,
+            draft_path=draft,
+        )
+    assert published.read_bytes() == before
+    assert not draft.exists()
 
 
 def test_default_publish_keeps_static_baseline_read_only_and_versions_runtime_backups(

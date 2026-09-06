@@ -122,6 +122,16 @@ class LayoutOneStepDraftContext:
     published_feature_version: int
 
 
+@dataclass(frozen=True)
+class LayoutNoGoRemovalContext:
+    """A suspended advanced draft around one scoped no-go removal publish."""
+
+    draft_snapshot: LayoutDraftSnapshot
+    had_active_draft: bool
+    published_floor_revision: str
+    removed_feature_ids: tuple[str, ...]
+
+
 _ZONE_POLICY_FIELDS = (
     "allowed_inventory_types",
     "storage_layout",
@@ -593,6 +603,223 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
             draft_target.unlink(missing_ok=True)
             return False
 
+        meta = advanced.get("draft_meta")
+        if not isinstance(meta, dict):
+            raise WarehouseTwinLayoutEditError("高级维护草稿元数据缺失")
+        meta["status"] = "draft"
+        meta["updated_at"] = _utc_iso()
+        meta["base_published_sha256"] = _path_sha256(published_source)
+        meta["base_floor_revisions"] = {
+            code: str(item.get("revision") or "")
+            for code, item in published.get("floors", {}).items()
+            if isinstance(item, dict)
+        }
+        for key in (
+            "validated_at",
+            "validated_floor_revisions",
+            "validation_blockers",
+            "validation_warnings",
+            "published_at",
+            "last_publish",
+        ):
+            meta.pop(key, None)
+        _write_document(draft_target, advanced)
+        return True
+
+
+def begin_warehouse_twin_no_go_removal_publish(
+    floor_code: str,
+    feature_ids: list[str],
+    *,
+    expected_effective_revision: str,
+    expected_published_revision: str,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> LayoutNoGoRemovalContext:
+    """Build an isolated draft that removes only explicit no-go features."""
+
+    normalized = _normalize_floor_code(floor_code)
+    published_source = _published_layout_paths(published_path).source
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    requested = tuple(dict.fromkeys(str(item or "").strip() for item in feature_ids))
+    if not requested or any(not item for item in requested):
+        raise WarehouseTwinLayoutEditError("禁放区清单不能为空")
+    requested_set = set(requested)
+
+    with _LAYOUT_EDIT_LOCK:
+        published = _read_document(published_source)
+        published_floor = published["floors"].get(normalized)
+        if not isinstance(published_floor, dict):
+            raise WarehouseTwinLayoutEditNotFoundError(
+                f"数字孪生平面缺少 {normalized}"
+            )
+        published_revision = str(published_floor.get("revision") or "")
+        if published_revision != str(expected_published_revision or ""):
+            raise WarehouseTwinLayoutEditConflictError(
+                "正式地图已更新，请刷新后重新清理禁放区"
+            )
+        draft_snapshot = snapshot_warehouse_twin_layout_draft(
+            draft_path=draft_target
+        )
+        active_draft = _active_draft_document_unlocked(
+            published_path=published_source,
+            draft_path=draft_target,
+            create=False,
+        )
+        effective_floor = published_floor
+        if active_draft is not None:
+            candidate = active_draft["floors"].get(normalized)
+            if not isinstance(candidate, dict):
+                raise WarehouseTwinLayoutEditError(f"布局草稿缺少 {normalized}")
+            effective_floor = candidate
+        if str(effective_floor.get("revision") or "") != str(
+            expected_effective_revision or ""
+        ):
+            raise WarehouseTwinLayoutEditConflictError(
+                "地图或草稿已被其他操作更新，请刷新后重新清理禁放区"
+            )
+
+        published_by_id = {
+            str(item.get("id") or ""): item
+            for item in published_floor.get("features") or []
+        }
+        missing = sorted(requested_set - set(published_by_id))
+        if missing:
+            raise WarehouseTwinLayoutEditNotFoundError(
+                "正式地图中的禁放区已经变化，请刷新后重试"
+            )
+        wrong_kind = [
+            item_id
+            for item_id in requested
+            if str(published_by_id[item_id].get("feature_kind") or "") != "no_go"
+        ]
+        if wrong_kind:
+            raise WarehouseTwinLayoutEditConflictError(
+                "清单包含非禁放区对象，已停止删除"
+            )
+        effective_by_id = {
+            str(item.get("id") or ""): item
+            for item in effective_floor.get("features") or []
+        }
+        changed_kind = [
+            item_id
+            for item_id in requested
+            if item_id in effective_by_id
+            and str(effective_by_id[item_id].get("feature_kind") or "") != "no_go"
+        ]
+        if changed_kind:
+            raise WarehouseTwinLayoutEditConflictError(
+                "管理员草稿中的对象类型已变化，请刷新后核对"
+            )
+
+        isolated = _new_draft_document(published_source)
+        isolated_floor = isolated["floors"][normalized]
+        isolated_floor["features"] = [
+            item
+            for item in isolated_floor.get("features") or []
+            if str(item.get("id") or "") not in requested_set
+        ]
+        retired = list(isolated_floor.get("retired_features") or [])
+        retired_ids = {str(item.get("id") or "") for item in retired}
+        for item_id in requested:
+            if item_id in retired_ids:
+                continue
+            item = deepcopy(published_by_id[item_id])
+            item["retired_at"] = _utc_iso()
+            item["retired_reason"] = (
+                "管理员受控清理禁放区；库存、库位、区域和通道未改变"
+            )
+            retired.append(item)
+        isolated_floor["retired_features"] = retired
+        isolated_floor["layout_edited_at"] = _utc_iso()
+        isolated_floor["revision"] = _floor_revision(isolated_floor)
+        isolated["generated_at"] = isolated_floor["layout_edited_at"]
+        _mark_draft_changed(isolated, normalized)
+        _write_document(draft_target, isolated)
+        return LayoutNoGoRemovalContext(
+            draft_snapshot=draft_snapshot,
+            had_active_draft=active_draft is not None,
+            published_floor_revision=str(isolated_floor["revision"]),
+            removed_feature_ids=requested,
+        )
+
+
+def rebase_warehouse_twin_advanced_draft_after_no_go_removal(
+    context: LayoutNoGoRemovalContext,
+    floor_code: str,
+    *,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> bool:
+    """Remove the same no-go objects while restoring every unrelated draft."""
+
+    if not context.had_active_draft:
+        return False
+    if not context.draft_snapshot.existed or context.draft_snapshot.content is None:
+        raise WarehouseTwinLayoutEditError("高级维护草稿快照缺失")
+    normalized = _normalize_floor_code(floor_code)
+    published_source = _published_layout_paths(published_path).source
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    removed_ids = set(context.removed_feature_ids)
+
+    with _LAYOUT_EDIT_LOCK:
+        try:
+            advanced = json.loads(context.draft_snapshot.content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise WarehouseTwinLayoutEditError("高级维护草稿快照无法读取") from error
+        published = _read_document(published_source)
+        advanced_floor = (advanced.get("floors") or {}).get(normalized)
+        published_floor = (published.get("floors") or {}).get(normalized)
+        if not isinstance(advanced_floor, dict) or not isinstance(
+            published_floor, dict
+        ):
+            raise WarehouseTwinLayoutEditError(f"地图草稿缺少 {normalized}")
+
+        advanced_floor["features"] = [
+            item
+            for item in advanced_floor.get("features") or []
+            if str(item.get("id") or "") not in removed_ids
+        ]
+        retired = list(advanced_floor.get("retired_features") or [])
+        retired_ids = {str(item.get("id") or "") for item in retired}
+        published_retired = {
+            str(item.get("id") or ""): item
+            for item in published_floor.get("retired_features") or []
+            if str(item.get("id") or "") in removed_ids
+        }
+        for item_id in context.removed_feature_ids:
+            if item_id in retired_ids:
+                continue
+            item = published_retired.get(item_id)
+            if not isinstance(item, dict):
+                raise WarehouseTwinLayoutEditError(
+                    "正式地图缺少已删除禁放区的归档记录"
+                )
+            retired.append(deepcopy(item))
+            retired_ids.add(item_id)
+        advanced_floor["retired_features"] = retired
+        advanced_floor["erp_area_codes"] = sorted(
+            {
+                str(item.get("erp_area_code") or "").strip().upper()
+                for item in advanced_floor["features"]
+                if str(item.get("erp_area_code") or "").strip()
+            }
+        )
+        advanced_floor["revision"] = _floor_revision(advanced_floor)
+        advanced["generated_at"] = _utc_iso()
+
+        def semantic_floors(document: dict[str, Any]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for code, floor in (document.get("floors") or {}).items():
+                normalized_floor = deepcopy(floor)
+                for key in ("revision", "layout_edited_at", "layout_edit_receipts"):
+                    normalized_floor.pop(key, None)
+                result[str(code)] = normalized_floor
+            return result
+
+        if semantic_floors(advanced) == semantic_floors(published):
+            draft_target.unlink(missing_ok=True)
+            return False
         meta = advanced.get("draft_meta")
         if not isinstance(meta, dict):
             raise WarehouseTwinLayoutEditError("高级维护草稿元数据缺失")

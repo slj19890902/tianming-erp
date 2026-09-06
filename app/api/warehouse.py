@@ -10967,6 +10967,7 @@ def apply_twin_zone_geometry(
                     expected_draft_revision=context.published_floor_revision,
                     operation_key=payload.operation_key + '-zone',
                 ), request=request, db=db, user=user, commit=False, floor_projection_claimed=True,
+                allow_archived_tombstone_cleanup=True,
             )
             if policy_facts() != policy_before:
                 raise HTTPException(status_code=409, detail='当前还涉及区域用途变更，位置调整未应用；请先核对用途草稿')
@@ -11071,6 +11072,7 @@ def apply_twin_rack_layout(
                 user=user,
                 commit=False,
                 floor_projection_claimed=True,
+                allow_archived_tombstone_cleanup=True,
             )
             preserved = rebase_warehouse_twin_advanced_rack_after_one_step(
                 context, floor_code, rack_id,
@@ -11138,6 +11140,7 @@ def _publish_twin_layout_draft_locked(
     commit: bool = True,
     defer_location_readiness_for_feature_id: str | None = None,
     floor_projection_claimed: bool = False,
+    allow_archived_tombstone_cleanup: bool = False,
 ) -> dict:
     if not floor_projection_claimed:
         _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
@@ -11149,7 +11152,8 @@ def _publish_twin_layout_draft_locked(
             expected_revision=payload.expected_draft_revision,
         )
     )
-    if tombstone_projection is not None:
+    effective_draft_revision = payload.expected_draft_revision
+    if tombstone_projection is not None and not allow_archived_tombstone_cleanup:
         db.rollback()
         raise HTTPException(
             status_code=409,
@@ -11157,6 +11161,22 @@ def _publish_twin_layout_draft_locked(
                 "归档区域已从当前地图草稿剔除；请按新版本重新校验后发布。"
                 f"新草稿版本：{sanitized_revision}"
             ),
+        )
+    if tombstone_projection is not None:
+        cleanup_validation = validate_warehouse_twin_layout_draft(
+            floor_code,
+            expected_revision=sanitized_revision,
+        )
+        if cleanup_validation.value.get("blockers"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "归档区域已清理，但当前区域仍未通过校验："
+                    + "；".join(cleanup_validation.value["blockers"][:5])
+                ),
+            )
+        effective_draft_revision = str(
+            cleanup_validation.value.get("draft_revision") or sanitized_revision
         )
 
     mold_relocations = []
@@ -11189,7 +11209,7 @@ def _publish_twin_layout_draft_locked(
         result = publish_warehouse_twin_layout_draft(
             floor_code,
             expected_published_revision=payload.expected_published_revision,
-            expected_draft_revision=payload.expected_draft_revision,
+            expected_draft_revision=effective_draft_revision,
             operation_key=payload.operation_key,
             additional_warnings=mold_relocation_warnings,
             mold_location_reassignment_count=len(mold_relocations),
@@ -13775,6 +13795,7 @@ def _ensure_one_step_pallet_locations(
                 area_code=area.area_code,
                 target_count=target_count,
                 operator_id=operator_id,
+                allow_empty_historical_retirement=target_count == 0,
             )
             _sync_formal_area_location_count(
                 db,
@@ -13795,6 +13816,7 @@ def _ensure_one_step_pallet_locations(
                 area_code=area.area_code,
                 target_count=target_count,
                 operator_id=operator_id,
+                allow_empty_historical_retirement=target_count == 0,
             )
         reflow_result = _reflow_area_locations(
             db,
@@ -13907,6 +13929,7 @@ def _ensure_one_step_ground_plan(
     location_count: int,
     operation_key: str,
     operator_id: int,
+    allow_reconfigure_existing: bool = False,
 ) -> dict:
     """Materialize real one-step ground positions in the canonical plan ledger.
 
@@ -13937,11 +13960,27 @@ def _ensure_one_step_ground_plan(
             "location_readiness_issue": None,
         }
     if location_count <= 0:
-        if existing_plan is not None:
+        if existing_plan is not None and not allow_reconfigure_existing:
             raise WarehouseAreaActivationError(
                 "该区域已有正式地堆排位，不能从一次确认清空或停用其库位",
                 status_code=409,
             )
+        if existing_plan is not None:
+            if db.scalar(
+                select(WarehouseGroundLayoutPlanRetirement.id).where(
+                    WarehouseGroundLayoutPlanRetirement.plan_id == existing_plan.id
+                )
+            ) is not None:
+                raise WarehouseAreaActivationError(
+                    "该区域地堆排位已经退役，不能继续修改容量",
+                    status_code=409,
+                )
+            return {
+                "available_location_count": 0,
+                "ground_plan_id": int(existing_plan.id),
+                "ground_plan_status": "retained_empty",
+                "location_readiness_issue": None,
+            }
         return {
             "available_location_count": 0,
             "ground_plan_id": None,
@@ -14154,10 +14193,69 @@ def _ensure_one_step_ground_plan(
                 "ground_plan_status": "published",
                 "location_readiness_issue": None,
             }
-        raise WarehouseAreaActivationError(
-            "该区域已有其他或已漂移的地堆排位事实，已停止一次确认以避免覆盖真实位置",
-            status_code=409,
+        if not allow_reconfigure_existing:
+            raise WarehouseAreaActivationError(
+                "该区域已有其他或已漂移的地堆排位事实，已停止一次确认以避免覆盖真实位置",
+                status_code=409,
+            )
+        if db.scalar(
+            select(WarehouseGroundLayoutPlanRetirement.id).where(
+                WarehouseGroundLayoutPlanRetirement.plan_id == existing_plan.id
+            )
+        ) is not None:
+            raise WarehouseAreaActivationError(
+                "该区域地堆排位已经退役，不能继续修改容量",
+                status_code=409,
+            )
+        existing_plan.slots.clear()
+        db.flush()
+        for slot in matched_slots:
+            existing_plan.slots.append(
+                WarehouseGroundLayoutSlot(
+                    location_id=int(slot["existing_location_id"]),
+                    route_sequence=int(slot["route_sequence"]),
+                    row_no=int(slot["row_no"]),
+                    slot_no=int(slot["slot_no"]),
+                    x_mm=Decimal(str(slot["x_mm"])),
+                    y_mm=Decimal(str(slot["y_mm"])),
+                    width_mm=int(slot["width_mm"]),
+                    depth_mm=int(slot["depth_mm"]),
+                )
+            )
+        existing_plan.target_slot_count = len(rows)
+        existing_plan.numbering_origin = configuration["numbering_origin"]
+        existing_plan.row_direction = configuration["row_direction"]
+        existing_plan.slot_direction = configuration["slot_direction"]
+        existing_plan.row_start_no = configuration["row_start_no"]
+        existing_plan.slot_start_no = configuration["slot_start_no"]
+        existing_plan.draft_map_revision = current_revision
+        existing_plan.published_map_revision = current_revision
+        existing_plan.preview_fingerprint = fingerprint
+        existing_plan.version += 1
+        existing_plan.publish_idempotency_key = (
+            "one-step-ground:"
+            + hashlib.sha256(operation_key.encode("utf-8")).hexdigest()
         )
+        existing_plan.publish_request_hash = ground_canonical_hash(
+            {
+                "operation_key": operation_key,
+                "area_id": area.id,
+                "map_revision": current_revision,
+                "preview_fingerprint": fingerprint,
+            }
+        )
+        now = beijing_now_naive()
+        existing_plan.updated_by = operator_id
+        existing_plan.published_by = operator_id
+        existing_plan.updated_at = now
+        existing_plan.published_at = now
+        db.flush()
+        return {
+            "available_location_count": len(rows),
+            "ground_plan_id": int(existing_plan.id),
+            "ground_plan_status": "published",
+            "location_readiness_issue": None,
+        }
 
     idempotency_key = (
         "one-step-ground:"
@@ -14307,6 +14405,7 @@ def confirm_twin_zone_area(
                 commit=False,
                 defer_location_readiness_for_feature_id=feature_id,
                 floor_projection_claimed=True,
+                allow_archived_tombstone_cleanup=True,
             )
             advanced_draft_preserved = rebase_warehouse_twin_advanced_draft_after_one_step(
                 one_step_context,
@@ -14351,29 +14450,17 @@ def confirm_twin_zone_area(
                     WarehouseGroundLayoutPlan.area_id == area.id
                 )
             )
-            if existing_ground_plan_id is not None:
-                # A published plan is already the physical ledger.  Validate
-                # the exact current state before any legacy count/reflow code
-                # can touch its member locations; an exact replay is a no-op.
-                ground_readiness = _ensure_one_step_ground_plan(
-                    db,
-                    floor_layout=published_floor_layout,
-                    feature_id=feature_id,
-                    area=area,
-                    storage_layout=payload.storage_layout,
-                    location_count=payload.max_pallet_capacity,
-                    operation_key=payload.operation_key,
-                    operator_id=user.id,
+            active_location_count = sum(
+                1
+                for row in formal_area_location_rows(
+                    db, floor=area.floor, area=area
                 )
-                created_locations = []
-                planned_location_count = payload.max_pallet_capacity
-                location_layout_result = {
-                    "source_version": AREA_LOCATION_SOURCE_VERSION,
-                    "enabled_ids": [],
-                    "disabled_ids": [],
-                    "reflow": None,
-                }
-            else:
+                if row.is_active
+            )
+            if (
+                existing_ground_plan_id is None
+                or active_location_count != payload.max_pallet_capacity
+            ):
                 (
                     created_locations,
                     planned_location_count,
@@ -14388,16 +14475,26 @@ def confirm_twin_zone_area(
                     target_count=payload.max_pallet_capacity,
                     operator_id=user.id,
                 )
-                ground_readiness = _ensure_one_step_ground_plan(
-                    db,
-                    floor_layout=published_floor_layout,
-                    feature_id=feature_id,
-                    area=area,
-                    storage_layout=payload.storage_layout,
-                    location_count=planned_location_count,
-                    operation_key=payload.operation_key,
-                    operator_id=user.id,
-                )
+            else:
+                created_locations = []
+                planned_location_count = active_location_count
+                location_layout_result = {
+                    "source_version": AREA_LOCATION_SOURCE_VERSION,
+                    "enabled_ids": [],
+                    "disabled_ids": [],
+                    "reflow": None,
+                }
+            ground_readiness = _ensure_one_step_ground_plan(
+                db,
+                floor_layout=published_floor_layout,
+                feature_id=feature_id,
+                area=area,
+                storage_layout=payload.storage_layout,
+                location_count=planned_location_count,
+                operation_key=payload.operation_key,
+                operator_id=user.id,
+                allow_reconfigure_existing=existing_ground_plan_id is not None,
+            )
             available_location_count = int(
                 ground_readiness["available_location_count"]
             )

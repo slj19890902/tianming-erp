@@ -400,7 +400,7 @@ test("location draft save permits conflicts and distinguishes write, apply readb
         return {revision:`d${writes+1}`,item:features[writes-1]};
       },
       setLayout:noop,rememberServerDraft:noop,setLocationDrafts:fn=>{drafts=fn(drafts)},
-      locationLayoutIdempotencyKey:"test-once",operationKey:()=>"next",setLocationLayoutIdempotencyKey:noop,
+      locationLayoutOperationRef:{current:null},operationKey:()=>"next",
       planningPublishedLayout:{source_sha256:"p1"},publishedFloorRevision:"p1",
       setLocationPointEditAreaCode:noop,setKeyboardLocationEditActive:noop,
       refreshPlanningTwinFloor:async()=>{reads++;},
@@ -411,6 +411,33 @@ test("location draft save permits conflicts and distinguishes write, apply readb
     else if(failure==="readback") {assert.equal(Object.keys(drafts).length,0);assert.equal(reads,2);assert.match(messages.at(-1),/已应用 1 个货位调整.*回读失败/);}
     else {assert.equal(Object.keys(drafts).length,0);assert.equal(reads,1);assert.match(messages.at(-1),/已保存并应用 1 个货位调整/);}
   }
+});
+
+test("location save retries reuse a key only while the coordinate request is unchanged", async () => {
+  const points = [[0,0],[6000,0],[6000,4000],[0,4000]];
+  const feature = {id:"TEST",erp_area_code:"TEST",feature_kind:"zone",version:1,points};
+  const operationRef = {current:null};
+  const sentKeys = [];
+  let keyNo = 0;
+  let drafts = {151:{location_id:151,expected_version:1,left_pct:0,top_pct:0,height_pct:25,width_pct:20}};
+  const invoke = () => componentValue("saveLocationDrafts", {
+    layout:{source_sha256:"d1",features:[feature]},layoutMapToolsOpen:false,locationEditBusy:false,
+    locationDrafts:drafts,locationPointEditAreaCode:null,floorCode:"3F",
+    dashboard:{locations:[{location_id:151,area_code:"TEST"}]},locationProjectionFeatures:[feature],
+    pointsBoundsMm:()=>({centerXmm:3000,centerYmm:2000,widthMm:6000,heightMm:4000}),
+    setLocationEditBusy:()=>{},setLocationEditMessage:()=>{},setLayout:()=>{},rememberServerDraft:()=>{},
+    setLocationDrafts:fn=>{drafts=fn(drafts)},planningPublishedLayout:{source_sha256:"p1"},publishedFloorRevision:"p1",
+    setLocationPointEditAreaCode:()=>{},setKeyboardLocationEditActive:()=>{},refreshPlanningTwinFloor:async()=>{},
+    applySavedAreaGeometryRevision:async()=>{},locationLayoutOperationRef:operationRef,
+    operationKey:()=>`retry-${++keyNo}`,
+    mutateJson:async(_url,_method,payload)=>{sentKeys.push(payload.operation_key);throw new Error("retry");}
+  })();
+  await invoke();
+  await invoke();
+  drafts = {151:{...drafts[151],left_pct:10}};
+  await invoke();
+  assert.equal(sentKeys[0],sentKeys[1]);
+  assert.notEqual(sentKeys[1],sentKeys[2]);
 });
 
 test("cancelled or rejected publication retains the draft and performs no readback", async () => {
@@ -573,10 +600,11 @@ test("lookup has one entry and area planning uses short adaptive actions", () =>
   assert.doesNotMatch(toolbar, /twin-warehouse-search-toggle/);
   assert.match(source, /<header><h2>查货<\/h2><\/header>/);
   assert.match(source, /<b>用途与容量<\/b>/);
-  assert.match(source, /: "确认"\}<\/button>/);
+  assert.match(source, /: "保存区域设置"\}<\/button>/);
   assert.match(source, />编辑<\/button>/);
   assert.match(source, />货位\/货架<\/button>/);
-  assert.match(source, />发布<\/button>/);
+  assert.match(source, /: "保存并应用当前区域"\}<\/button>/);
+  assert.doesNotMatch(source, /className="twin-region-planning-actions"[\s\S]{0,800}>发布<\/button>/);
   assert.doesNotMatch(source, />确认并启用此区域<\/button>/);
 });
 
@@ -628,7 +656,7 @@ test("aligned floor 4 keeps one compact three-point recalibration action", () =>
 
 test("planning exits to lookup and map geometry tools open only on demand", () => {
   assert.match(source, /setMapMode\("lookup"\);[\s\S]*setSearchPanelOpen\(true\)/);
-  assert.match(source, /\{layoutMapToolsOpen \? "完成地图调整" : "调整地图"\}<\/button>/);
+  assert.match(source, /\{layoutMapToolsOpen \? "退出地图调整" : "调整地图"\}<\/button>/);
   assert.match(source, /setLayoutMapToolsOpen\(\(current\) => !current\)/);
   assert.match(source, /mapMode === "planning" && locationEditMode && canEditLocations && layoutMapToolsOpen && <section className="twin-layout-map-tools">/);
   assert.match(source, /featureEditingEnabled=\{!spatialEditBusy && locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"\}/);

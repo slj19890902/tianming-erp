@@ -452,7 +452,11 @@ def test_region_planning_ui_and_label_page_are_explicit() -> None:
     label = (ROOT / "static/warehouse-rack-level-label.html").read_text(
         encoding="utf-8"
     )
-    for text in (">编辑</button>", ">货位/货架</button>", ">发布</button>"):
+    for text in (
+        ">编辑</button>",
+        ">货位/货架</button>",
+        ">完成并应用本层地图</button>",
+    ):
         assert text in source
     assert '<b>4F</b>' in source
     for floor in ("2F", "5F"):

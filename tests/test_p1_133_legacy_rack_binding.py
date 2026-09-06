@@ -373,7 +373,7 @@ def test_region_planning_reuses_publish_action_for_legacy_binding() -> None:
     )
     assert "旧货位对应当前货架" in source
     assert "legacy_rack_bindings_confirmed: true" in source
-    assert "再次点“发布”" in source
+    assert "再次点“完成并应用”" in source
     assert 'priorSelections[group.binding_key] || ""' in source
     assert "priorSelections[group.binding_key] || group.suggested_map_rack_id" not in source
     assert "legacy_rack_code}架 →" in source

@@ -56,8 +56,8 @@ def test_mold_rack_planning_and_lookup_use_the_live_mold_ledger() -> None:
     assert "同一格可登记多件模具" in SOURCE
     assert "关联产品</dt>" in SOURCE
     assert "直接选择货架，设置层数和每层格数" in SOURCE
-    assert "保存层格到草稿" in SOURCE
-    assert "发布成功后失效位置统一归入首个可用格并写移动流水" in SOURCE
+    assert "保存并应用货架" in SOURCE
+    assert "件失效模具位置已自动归入首个可用格，并记录移动流水" in SOURCE
     assert 'min="1" max="20" value={selectedRackEditDraft.levels}' in SOURCE
     assert "mold_location_reassignment_count" in SOURCE
     assert "!locationEditMode && selectedAreaMoldRacks.length > 0" in SOURCE
@@ -220,9 +220,9 @@ def test_unbound_measured_zone_does_not_offer_a_disconnected_capacity_review() -
     assert "尚未绑定正式区域" in SOURCE
     assert "直接使用下方简化表单确认用途、形式和容量" in SOURCE
     assert "选用现有未绑定区域" in SOURCE
-    assert ': "确认"}</button>' in SOURCE
+    assert ': "保存区域设置"}</button>' in SOURCE
     assert "selectedAreaFeature.formal_binding_status === 'draft'" in SOURCE
-    assert "区域绑定草稿待处理" in SOURCE
+    assert "区域设置尚未应用" in SOURCE
 
 
 def test_floor1_candidate_blockers_offer_direct_actions_and_recheck() -> None:
@@ -254,7 +254,15 @@ def test_existing_area_picker_keeps_confirmed_a2_and_rejects_unsafe_candidates()
 
 
 def test_existing_area_picker_empty_layout_dependencies_are_stable() -> None:
-    assert 'import {\n  clearFormalAreaOptions,\n  formalAreaOptionsEffectEnabled,\n  stableTwinFeatures\n} from "./formalAreaOptions.mjs"' in SOURCE
+    assert '} from "./formalAreaOptions.mjs"' in SOURCE
+    for helper in (
+        "clearFormalAreaOptions",
+        "formalAreaOptionsEffectEnabled",
+        "filterPlanningPublishedFeatures",
+        "removeZoneHierarchy",
+        "stableTwinFeatures",
+    ):
+        assert helper in SOURCE
     assert "const features = stableTwinFeatures(layout) as TwinFeature[]" in SOURCE
     assert "setFormalAreaOptions(clearFormalAreaOptions)" in SOURCE
     assert "const shouldLoadFormalAreaOptions = formalAreaOptionsEffectEnabled" in SOURCE
@@ -293,8 +301,8 @@ def test_operational_twin_uses_cross_floor_search_highlights_and_mapped_location
 def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert "<span>用途</span>" in SOURCE
     assert "<span>形式</span>" in SOURCE
-    assert "<span>最大栈板数</span>" in SOURCE
-    assert ': "确认"}</button>' in SOURCE
+    assert 'simpleAreaLayout === "pallet_ground" ? "栈板货位数" : "最大栈板数"' in SOURCE
+    assert ': "保存区域设置"}</button>' in SOURCE
     assert "保存设置，不改库存" in SOURCE
     assert "/confirm-area`" in SOURCE
     assert 'primary_inventory_type: simpleAreaUsage' in SOURCE
@@ -667,7 +675,7 @@ def test_built_twin_entry_uses_versioned_assets() -> None:
     assert "/factory-twin-assets/assets/" in BUILT
 
 
-def test_mold_rack_move_mode_reuses_guarded_location_move_and_exposes_publish_steps() -> None:
+def test_mold_rack_move_mode_reuses_guarded_location_move_and_one_step_apply() -> None:
     assert "移动该模具" in SOURCE
     assert '"/api/warehouse/molds/location-options"' in SOURCE
     assert '"/api/warehouse/molds/location-movement/preview"' in SOURCE
@@ -676,12 +684,11 @@ def test_mold_rack_move_mode_reuses_guarded_location_move_and_exposes_publish_st
     assert 'idempotency_key: moveIdempotencyKey' in SOURCE
     assert "确认实物已搬动并保存" in SOURCE
     assert "当前正式层格" in SOURCE
-    assert "当前草稿层格" in SOURCE
-    assert "① 保存层格到草稿" in SOURCE
-    assert "② 校验当前楼层草稿" in SOURCE
-    assert "③ 发布当前楼层地图" in SOURCE
-    assert "其他楼层草稿会独立保留" in SOURCE
-    assert "只有第③步发布完成" in SOURCE
+    assert "准备应用的层格" in SOURCE
+    assert "保存并应用货架" in SOURCE
+    assert "其他楼层修改不会一起应用" in SOURCE
+    assert "当前草稿层格" not in SOURCE
+    assert "① 保存层格到草稿" not in SOURCE
     assert "货架总层数（含设备占用层）" in SOURCE
     assert ".twin-mold-rack-planner-actions button:disabled" in TWIN_CSS
     assert ".twin-mold-move-panel" in TWIN_CSS

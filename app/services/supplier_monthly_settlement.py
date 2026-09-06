@@ -2032,10 +2032,16 @@ def confirm_statement(
                              start=row.period_start, end=row.period_end, issues=issues)
     selected = [item for item in candidates if item.supplier_id == row.supplier_id
                 and item.currency == row.currency and item.tax_basis == row.tax_basis]
-    if _candidate_source_hash(selected) != _statement_line_source_hash(_active_lines(db, row.id)):
+    lines = _active_lines(db, row.id)
+    current_hash = _candidate_source_hash(selected)
+    if (
+        not lines
+        or current_hash != _statement_line_source_hash(lines)
+        or (row.source_hash is not None and current_hash != row.source_hash)
+    ):
         raise SupplierSettlementError(
             "SUPPLIER_SETTLEMENT_REGENERATION_REQUIRED",
-            "账期实收来源已变化，请先重生成并核对新草稿后再确认应付",
+            "账期实收来源已撤销、新增或变化，请先重生成并核对新草稿后再确认应付",
         )
     now = utc_now_naive()
     payable = FinancePayable(
@@ -2582,9 +2588,9 @@ def post_payment_batch(
             raise SupplierSettlementError(
                 "ACCEPTANCE_NOTE_STALE", "承兑票据状态已变化，请刷新后重试"
             )
-        if payment_date < acceptance.received_date:
+        if not acceptance.received_date <= payment_date <= acceptance.maturity_date:
             raise SupplierSettlementError(
-                "ACCEPTANCE_ENDORSE_DATE_INVALID", "背书日期不能早于承兑收到日期", 422
+                "ACCEPTANCE_ENDORSE_DATE_INVALID", "背书日期必须在承兑收到日与到期日之间", 422
             )
         acceptance_face = _money(acceptance.amount)
         acceptance_applied = _money(

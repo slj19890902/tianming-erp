@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   clearFormalAreaOptions,
   formalAreaOptionsEffectEnabled,
+  filterPlanningPublishedFeatures,
+  removeZoneHierarchy,
   stableTwinFeatures
 } from "../src/formalAreaOptions.mjs";
 
@@ -46,4 +48,38 @@ test("clearing non-empty options changes state once and then preserves identity"
   const cleared = clearFormalAreaOptions([{ id: 28 }]);
   assert.deepEqual(cleared, []);
   assert.equal(clearFormalAreaOptions(cleared), cleared);
+});
+
+test("planning published base omits a zone removed from the active draft", () => {
+  const published = {
+    features: [
+      { id: "zone-old", feature_kind: "zone" },
+      { id: "zone-keep", feature_kind: "zone" },
+      { id: "aisle-old", feature_kind: "aisle" }
+    ]
+  };
+  const draft = { features: [{ id: "zone-keep", feature_kind: "zone" }] };
+  assert.deepEqual(filterPlanningPublishedFeatures(published, draft).map((row) => row.id), ["zone-keep"]);
+});
+
+test("removing a zone also removes its stale rack and pallet overlays", () => {
+  const layout = {
+    features: [
+      { id: "zone-old", feature_code: "ZONE-E2", erp_area_code: "E2" },
+      { id: "zone-keep", feature_code: "ZONE-E3", erp_area_code: "E3" }
+    ],
+    racks: [
+      { id: "rack-old", area_feature_id: "zone-old", area_code: "E2" },
+      { id: "rack-keep", area_feature_id: "zone-keep", area_code: "E3" }
+    ],
+    pallets: [
+      { id: "slot-old", zone_id: "zone-old", zone_code: "E2" },
+      { id: "slot-keep", zone_id: "zone-keep", zone_code: "E3" }
+    ]
+  };
+  const result = removeZoneHierarchy(layout, "zone-old", "E2");
+  assert.deepEqual(result.features.map((row) => row.id), ["zone-keep"]);
+  assert.deepEqual(result.racks.map((row) => row.id), ["rack-keep"]);
+  assert.deepEqual(result.pallets.map((row) => row.id), ["slot-keep"]);
+  assert.equal(layout.features.length, 2);
 });

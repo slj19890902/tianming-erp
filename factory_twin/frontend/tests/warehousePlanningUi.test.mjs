@@ -31,6 +31,33 @@ function componentValue(name, context, optional = false) {
   return sandbox.value;
 }
 
+test("stocktake keeps an acknowledged receipt when readback fails and retains only unacknowledged drafts", async () => {
+  for (const acknowledged of [false, true]) {
+    const state = { drafts: [{ operation: "add", quantity: 1 }], key: "same-request", receipt: [], refresh: false, calls: 0, message: "" };
+    const context = {
+      stocktakeDrafts: state.drafts, stocktakeBatchBusy: false, stocktakeRefreshRequired: false,
+      stocktakeBatchIdempotencyKey: state.key, window: { confirm: () => true }, inventoryUnitLabel: () => "箱",
+      buildStocktakeBatchPayload: key => ({ idempotency_key: key }),
+      mutateJson: async () => { state.calls++; if (!acknowledged) throw Error("write response unavailable"); return { items: [{ operation: "add", lot_id: 7 }] }; },
+      refreshDashboard: async () => { throw Error("read unavailable"); }, clearStocktakeDrafts: () => [], operationKey: () => "next-request",
+      setStocktakeBatchBusy: () => {}, setStocktakeDrafts: v => { state.drafts = v; },
+      setStocktakeLastResult: v => { state.receipt = v; }, setStocktakeLotId: () => {}, setStocktakeDecreaseQuantity: () => {},
+      setStocktakeBatchIdempotencyKey: v => { state.key = v; }, setStocktakeRefreshRequired: v => { state.refresh = v; },
+      setWarehouseOperationMessage: v => { state.message = v; }, stocktakeBlockResolution: v => v,
+    };
+    await componentValue("confirmStocktakeDrafts", context)();
+    assert.equal(state.drafts.length, acknowledged ? 0 : 1);
+    assert.equal(state.receipt.length, acknowledged ? 1 : 0);
+    assert.equal(state.key, acknowledged ? "next-request" : "same-request");
+    assert.equal(state.refresh, acknowledged);
+    assert.match(state.message, acknowledged ? /已写入.*刷新失败/ : /结果未确认/);
+    if (acknowledged) {
+      await componentValue("confirmStocktakeDrafts", { ...context, stocktakeDrafts: state.drafts, stocktakeRefreshRequired: state.refresh })();
+      assert.equal(state.calls, 1);
+    }
+  }
+});
+
 test("a rejected pallet cannot become a move source even when it has a version", () => {
   const declaration = syntax.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "palletMoveSource");
   assert.ok(declaration);
@@ -45,6 +72,31 @@ test("a rejected pallet cannot become a move source even when it has a version",
   assert.equal(sandbox.make(location), null);
   assert.equal(sandbox.make(location, { ...pallet, move_eligible: true }).pallet_id, 3);
   assert.equal(sandbox.make(location, { ...pallet, move_eligible: true, version: 0 }), null);
+});
+
+test("pending placement separates acknowledged write from refresh failure and blocks another submit", async () => {
+  const calls = [], changes = [];
+  const context = {
+    pendingPlacementRef: { current: { busy: false, signature: "", key: "" } },
+    pendingRefreshRequired: false, canEditLocations: true,
+    selectedLocation: { location_id: 10, map_position: { version: 2 } },
+    selectedPendingItem: { lot_id: 8, version: 3, available_quantity: 10, unit: "boxes" },
+    selectedLocationFinishedAddBlockReason: null, pendingQuantity: "4",
+    movableLotQuantity: item => item.available_quantity,
+    operationKey: () => "pending-key", employeeLocationName: () => "目标货位", inventoryUnitLabel: () => "箱",
+    mutateJson: async (...args) => { calls.push(args); },
+    refreshDashboard: async () => { throw new Error("回读中断"); },
+    setPendingPlacementBusy: () => {}, setPendingRefreshRequired: value => { context.pendingRefreshRequired = value; },
+    setRecountLotId: value => changes.push(value), setPendingQuantity: value => changes.push(value),
+    setWarehouseOperationMessage: value => changes.push(value),
+  };
+  await componentValue("placePendingInventory", context)();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][2].quantity, 4);
+  assert.equal(context.pendingRefreshRequired, true);
+  assert(changes.some(value => typeof value === "string" && value.includes("货物已归位，但地图刷新失败")));
+  await componentValue("placePendingInventory", context)();
+  assert.equal(calls.length, 1);
 });
 
 test("object context menu only selects a known card without choosing a source or target", () => {
@@ -527,10 +579,11 @@ test("logical map positions keep a small renderer anchor", () => {
   assert.match(sceneSource, /pallet\.is_logical_anchor \? 180 : 400/);
 });
 
-test("unlocated finished blocker renders the complete backend list with physical quantities", () => {
+test("unexpected unlocated blocker stays complete while deliberate recount uses its own list", () => {
   assert.match(source, /unlocatedFinishedItems\.map\(\(item\)/);
   assert.doesNotMatch(source, /unlocatedFinishedItems\.slice\(/);
-  assert.match(source, /unlocated_inventory \|\| \[\]\)\.filter\(\(item\) => inventoryHasPhysicalQuantity\(item\)\)/);
+  assert.match(source, /unlocated_inventory \|\| \[\]\)\.filter\(\(item\) => !item.pending_relocation && inventoryHasPhysicalQuantity\(item\)\)/);
+  assert.match(source, /unlocated_inventory \|\| \[\]\)\.filter\(\(item\) => item.pending_relocation && inventoryHasPhysicalQuantity\(item\)\)/);
   assert.match(source, /inventoryPhysicalQuantity\(item\)/);
 });
 

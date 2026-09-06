@@ -2412,3 +2412,10 @@ body.warehouse-twin-page {
   .twin-rack-focus-panel.twin-rack-stage { border-top: 1px solid var(--erp-line); border-left: 0; }
   .twin-rack-focus-panel .twin-rack-content { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
 }
+
+/* Recount placement stays within the existing warehouse card. */
+.twin-pending-placement { min-width: 0; margin: 8px 0; padding: 10px; border: 1px solid #d4dce8; border-radius: 8px; }
+.twin-pending-placement legend { font-weight: 600; }
+.twin-pending-placement .twin-search-result-list { max-height: 240px; overflow-y: auto; }
+.twin-pending-placement button { min-height: 40px; overflow-wrap: anywhere; }
+.twin-pending-placement button[aria-pressed="true"] { outline: 2px solid #2563eb; outline-offset: -2px; }

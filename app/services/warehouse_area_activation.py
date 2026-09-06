@@ -1238,6 +1238,18 @@ def publish_floor_area_policies(
         feature_policy = policies_by_feature.get(feature_id)
         area_code = str(feature.get("erp_area_code") or "").strip().upper()
         if not area_code:
+            if (
+                feature_policy is None
+                and feature.get("subtype") == "functional_no_storage"
+                and feature.get("no_stacking") is True
+                and feature.get("storage_layout") == "functional"
+                and not feature.get("allowed_inventory_types")
+                and all(feature.get(key) in (None, "") for key in (
+                    "formal_area_id", "formal_floor_id", "formal_area_name"))
+            ):
+                # An explicitly non-storage operation polygon remains on the
+                # map, but does not invent a stock area or selectable location.
+                continue
             has_partial_json_policy = any(
                 feature.get(key) is not None
                 for key in (

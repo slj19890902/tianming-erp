@@ -41,6 +41,31 @@ def _factory(tmp_path: Path):
     return engine, sessionmaker(bind=engine, expire_on_commit=False)
 
 
+@pytest.mark.parametrize("conflict", [{}, {"allowed_inventory_types": ["finished"]},
+    {"formal_area_id": 1}, {"no_stacking": False}, {"subtype": "storage"}])
+def test_unbound_no_storage_operation_zone_needs_no_inventory_identity(tmp_path, conflict):
+    engine, factory = _factory(tmp_path)
+    feature = {"id": "operation-zone", "feature_kind": "zone", "name": "操作区（非存货）",
+        "subtype": "functional_no_storage", "no_stacking": True,
+        "storage_layout": "functional", "erp_area_code": None, **conflict}
+    try:
+        with factory() as db:
+            db.add(WarehouseFloor(floor_code="3F", floor_name="三楼", floor_number=3,
+                construction_status="enabled"))
+            db.flush()
+            kwargs = dict(floor_code="3F", published_revision="operation-test", operator_id=1,
+                published_features=[feature])
+            if conflict:
+                with pytest.raises(WarehouseAreaActivationError, match="正式编号与策略不完整"):
+                    publish_floor_area_policies(db, **kwargs)
+            else:
+                assert publish_floor_area_policies(db, **kwargs) == []
+            assert list(db.scalars(select(WarehouseArea))) == []
+            assert list(db.scalars(select(WarehouseLocation))) == []
+    finally:
+        engine.dispose()
+
+
 def _seed_area(
     db,
     *,

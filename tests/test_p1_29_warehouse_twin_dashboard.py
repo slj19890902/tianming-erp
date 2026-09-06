@@ -448,6 +448,51 @@ def _login(client: TestClient, username: str) -> None:
     assert response.status_code == 200, response.text
 
 
+def test_recount_pending_preserves_stock_and_identities_and_replays(twin_dashboard_app):
+    from sqlalchemy import select
+    from app.api.deps import get_db
+    from app.models.user import User
+    from app.models.warehouse_inventory import InventoryLot, InventoryPalletItem, WarehouseLocation
+    from app.services.warehouse_relocation_pending import preview_pending_relocation, reset_to_pending_relocation
+
+    app, _ = twin_dashboard_app
+    dependency = app.dependency_overrides[get_db]()
+    db = next(dependency)
+    try:
+        user = db.scalar(select(User).where(User.username == "twin-admin"))
+        before = {r.id: (r.quantity_available, r.quantity_reserved, r.quantity_damaged,
+                        r.quantity_scrapped, r.quantity_consumed, r.source_type, r.source_ref_id)
+                  for r in db.scalars(select(InventoryLot))}
+        items = [(r.id, r.inventory_lot_id, r.pallet_id, r.quantity)
+                 for r in db.scalars(select(InventoryPalletItem).order_by(InventoryPalletItem.id))]
+        preview = preview_pending_relocation(db)
+        result = reset_to_pending_relocation(db, actor=user, expected_fingerprint=preview["fingerprint"],
+                                            operation_key="test-recount-all-floors")
+        db.commit()
+        db.expire_all()
+        assert result["lot_count"] > 0
+        assert {r.id: (r.quantity_available, r.quantity_reserved, r.quantity_damaged,
+                      r.quantity_scrapped, r.quantity_consumed, r.source_type, r.source_ref_id)
+                for r in db.scalars(select(InventoryLot))} == before
+        assert [(r.id, r.inventory_lot_id, r.pallet_id, r.quantity)
+                for r in db.scalars(select(InventoryPalletItem).order_by(InventoryPalletItem.id))] == items
+        pending = db.get(WarehouseLocation, result["pending_location_id"])
+        assert pending.warehouse_floor is None and pending.placement_status == "unplaced"
+        with TestClient(app) as client:
+            _login(client, "twin-admin")
+            dashboard = client.get("/api/warehouse/twin-dashboard/overview")
+            assert dashboard.status_code == 200, dashboard.text
+            assert any(item.get("pending_relocation") for item in dashboard.json()["unlocated_inventory"])
+            assert all(row["occupancy_status"] == "empty" for row in dashboard.json()["locations"]
+                       if row["floor_code"] in {"1F", "3F", "4F"})
+        assert preview_pending_relocation(db)["lot_count"] == 0
+        assert reset_to_pending_relocation(db, actor=user, expected_fingerprint=preview["fingerprint"],
+                                          operation_key="test-recount-all-floors")["replayed"] is True
+        db.rollback()
+    finally:
+        dependency.close()
+
+
 def test_map_pallet_move_eligibility_includes_nonvisible_historical_items(
     twin_dashboard_app,
 ) -> None:

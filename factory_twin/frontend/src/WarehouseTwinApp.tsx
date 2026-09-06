@@ -425,6 +425,7 @@ interface SearchItem extends InventoryItem {
   location_name: string;
   position_status: string;
   unlocated_reason?: string | null;
+  pending_relocation?: boolean;
 }
 
 interface SearchResponse {
@@ -1781,6 +1782,7 @@ export function WarehouseTwinApp() {
   const [stocktakeDrafts, setStocktakeDrafts] = useState<WarehouseStocktakeDraft[]>([]);
   const [stocktakeBatchIdempotencyKey, setStocktakeBatchIdempotencyKey] = useState(() => operationKey("warehouse-stocktake-batch"));
   const [stocktakeBatchBusy, setStocktakeBatchBusy] = useState(false);
+  const [stocktakeRefreshRequired, setStocktakeRefreshRequired] = useState(false);
   const [stocktakeInventoryType, setStocktakeInventoryType] = useState<StocktakeInventoryType>("finished");
   const [stocktakeSourceKind, setStocktakeSourceKind] = useState<"existing_stocktake" | "partner_transfer">("existing_stocktake");
   const [stocktakeCustomerQuery, setStocktakeCustomerQuery] = useState("");
@@ -1794,6 +1796,12 @@ export function WarehouseTwinApp() {
   const [stocktakeStockDate, setStocktakeStockDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [rackFocusId, setRackFocusId] = useState<string | null>(null);
   const [stocktakeLotId, setStocktakeLotId] = useState<number | null>(null);
+  const [pendingQuery, setPendingQuery] = useState("");
+  const [recountLotId, setRecountLotId] = useState<number | null>(null);
+  const [pendingQuantity, setPendingQuantity] = useState("");
+  const [pendingPlacementBusy, setPendingPlacementBusy] = useState(false);
+  const [pendingRefreshRequired, setPendingRefreshRequired] = useState(false);
+  const pendingPlacementRef = useRef<{ busy: boolean; signature: string; key: string }>({ busy: false, signature: "", key: "" });
   const [stocktakeDecreaseQuantity, setStocktakeDecreaseQuantity] = useState("");
   const [stocktakeLastResult, setStocktakeLastResult] = useState<StocktakeBatchResultItem[]>([]);
   const [groundLayoutTargetCount, setGroundLayoutTargetCount] = useState("1");
@@ -2448,7 +2456,12 @@ export function WarehouseTwinApp() {
     () => groupSearchProducts(searchResponse?.items || []),
     [searchResponse?.items]
   );
-  const unlocatedFinishedItems = (dashboard?.unlocated_inventory || []).filter((item) => inventoryHasPhysicalQuantity(item));
+  const pendingRelocationItems = (dashboard?.unlocated_inventory || []).filter((item) => item.pending_relocation && inventoryHasPhysicalQuantity(item));
+  const matchingPendingItems = pendingRelocationItems.filter((item) =>
+    !pendingQuery.trim() || [item.inventory_code, item.product_name, item.customer_name, item.lot_number].some((text) => String(text || "").toLowerCase().includes(pendingQuery.trim().toLowerCase())));
+  const selectedPendingItem = pendingRelocationItems.find((item) => item.lot_id === recountLotId);
+  const pendingProductExists = pendingRelocationItems.some((item) => String(item.customer_id) === stocktakeCustomerId && String(item.product_id) === stocktakeProductId);
+  const unlocatedFinishedItems = (dashboard?.unlocated_inventory || []).filter((item) => !item.pending_relocation && inventoryHasPhysicalQuantity(item));
   const unlocatedFinishedCount = unlocatedFinishedItems.length;
   const focusedSearchProduct = useMemo(
     () => searchProductGroups.find((item) => item.key === focusedSearchProductKey) || null,
@@ -2690,7 +2703,9 @@ export function WarehouseTwinApp() {
   const selectedLocationHasColumnConflict = Boolean(
     selectedLocation && operationalColumnConflictIds.has(`erp-location-${selectedLocation.location_id}`)
   );
-  const selectedLocationStocktakeBlockReason = !selectedLocation
+  const selectedLocationStocktakeBlockReason = stocktakeRefreshRequired
+    ? "盘点已写入，请先刷新核对地图。"
+    : !selectedLocation
     ? "请先在地图选择正式货位。"
     : locationDrafts[selectedLocation.location_id]
       ? "该货位仍有未发布的布局草稿，不能加入盘点草稿。"
@@ -4239,12 +4254,38 @@ export function WarehouseTwinApp() {
     );
   };
 
+  const placePendingInventory = async () => {
+    if (pendingPlacementRef.current.busy || pendingRefreshRequired) return;
+    if (!canEditLocations || !selectedLocation || !selectedPendingItem || selectedLocationFinishedAddBlockReason) return;
+    const quantity = Number(pendingQuantity);
+    if (!Number.isInteger(quantity) || quantity <= 0 || quantity > movableLotQuantity(selectedPendingItem)) {
+      setWarehouseOperationMessage("请填写不超过该批待归位数量的正整数。"); return;
+    }
+    const payload = { location_id: selectedLocation.location_id, expected_layout_version: Number(selectedLocation.map_position?.version),
+      expected_version: selectedPendingItem.version, quantity, confirmed: true };
+    const signature = JSON.stringify([selectedPendingItem.lot_id, payload]);
+    if (pendingPlacementRef.current.signature !== signature) pendingPlacementRef.current = { busy: false, signature, key: operationKey("pending-place") };
+    pendingPlacementRef.current.busy = true; setPendingPlacementBusy(true);
+    let written = false;
+    try {
+      await mutateJson(`/api/warehouse/twin-operations/pending-lots/${selectedPendingItem.lot_id}/place`, "POST", { ...payload, idempotency_key: pendingPlacementRef.current.key });
+      written = true; setRecountLotId(null); setPendingQuantity("");
+      await refreshDashboard();
+      setWarehouseOperationMessage(`已归位到 ${employeeLocationName(selectedLocation)}：${quantity} ${inventoryUnitLabel(selectedPendingItem.unit)}，库存总数未增加。`);
+    } catch (error) {
+      if (written) setPendingRefreshRequired(true);
+      setWarehouseOperationMessage(written ? "货物已归位，但地图刷新失败；请刷新核对，不要重复提交。" : `归位结果未确认：${(error as Error).message}`);
+    } finally {
+      pendingPlacementRef.current.busy = false; setPendingPlacementBusy(false);
+    }
+  };
+
   const queueStocktakeAddDraft = () => {
     if (!canEditLocations) {
       setWarehouseOperationMessage("盘点补录会增加正式库存，只能由管理员确认；普通盘点人员可先定位或移入现有库存。");
       return;
     }
-    if (stocktakeOutsideAreaLocations.length && !stocktakeSupplementConfirmed) {
+    if ((stocktakeOutsideAreaLocations.length || pendingProductExists) && !stocktakeSupplementConfirmed) {
       setWarehouseOperationMessage("仓库其他区域已有该产品，请先移入现有库存；确认现存数量仍不足后，才能补录缺少部分。");
       return;
     }
@@ -4317,27 +4358,33 @@ export function WarehouseTwinApp() {
   };
 
   const confirmStocktakeDrafts = async () => {
-    if (!stocktakeDrafts.length || stocktakeBatchBusy) return;
+    if (!stocktakeDrafts.length || stocktakeBatchBusy || stocktakeRefreshRequired) return;
     const preview = stocktakeDrafts.slice(0, 6).map((item) => `${item.operation === "add" ? "新增" : "调减"} · ${item.location_name} · ${item.inventory_code} · ${item.quantity} ${inventoryUnitLabel(item.unit)}`).join("\n");
     if (!window.confirm(`确认一次提交 ${stocktakeDrafts.length} 条盘点调整吗？\n${preview}${stocktakeDrafts.length > 6 ? "\n……" : ""}\n\n提交成功后才会写入正式库存流水；调减到零只隐藏空卡，不删除历史。`)) return;
     setStocktakeBatchBusy(true);
     setWarehouseOperationMessage("");
+    let written = false;
     try {
       const result = await mutateJson(
         "/api/warehouse/twin-operations/stocktake-batches",
         "POST",
         buildStocktakeBatchPayload(stocktakeBatchIdempotencyKey, stocktakeDrafts)
       ) as StocktakeBatchResult | null;
-      await refreshDashboard();
+      written = true;
+      setStocktakeRefreshRequired(true);
       setStocktakeDrafts(clearStocktakeDrafts());
       setStocktakeLastResult((result?.items || []).filter((item) => item.operation === "add"));
       setStocktakeLotId(null);
       setStocktakeDecreaseQuantity("");
       setStocktakeBatchIdempotencyKey(operationKey("warehouse-stocktake-batch"));
+      await refreshDashboard();
+      setStocktakeRefreshRequired(false);
       setWarehouseOperationMessage("盘点调整已整批成功，地图已刷新；新增成品可立即打印位置和产品标签。");
     } catch (reason) {
       const message = (reason as Error).message;
-      setWarehouseOperationMessage(`盘点整批提交失败：${message}。解决方法：${stocktakeBlockResolution(message)} 页面草稿与本次幂等键已保留，可核对后重试。`);
+      setWarehouseOperationMessage(written
+        ? "盘点已写入，但地图刷新失败；已提交草稿已清除，请刷新核对，不要重复补录。"
+        : `盘点结果未确认：${message}。解决方法：${stocktakeBlockResolution(message)} 页面草稿与本次幂等键已保留，可核对后重试。`);
     } finally {
       setStocktakeBatchBusy(false);
     }
@@ -5774,6 +5821,7 @@ export function WarehouseTwinApp() {
         <header><h2>查货</h2></header>
         <section className="twin-global-search">
           <div className="twin-context-heading"><b>统一查货</b>{search && <button type="button" onClick={() => { setSearch(""); setSearchResponse(null); setSearchError(""); setFocusedSearchItem(null); setFocusedSearchProductKey(null); setFocusedResource(null); setCameraFocusTarget(null); setAreaInventorySearch(""); }}>清除</button>}</div>
+          {pendingRelocationItems.length > 0 && <div className="twin-location-message">盘点待归位 {pendingRelocationItems.length} 批 · 点选货位后“添加货物”</div>}
           {unlocatedFinishedCount > 0 && <div className="twin-unlocated-finished-blocker">
             <div><b>待定位成品 {unlocatedFinishedCount} 批</b><span>账上有货，但没有已发布实测格位；不会借用其他区域坐标。</span></div>
             <div className="twin-unlocated-finished-list">
@@ -6147,6 +6195,7 @@ export function WarehouseTwinApp() {
         </section>}
         {selectedLocation && <section className="twin-location-card">
           {objectActionsButton}
+          {!traceReadOnly && canStocktake && !locationEditMode && <button type="button" className="twin-primary-action" disabled={loading || pendingPlacementBusy} onClick={() => { setMapMode("move"); setMoveAction("stocktake"); setSearchPanelOpen(true); }}>添加货物</button>}
           <div className="twin-location-card-title"><div><small>当前位置</small><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em></div>
           {selectedLocation.has_unmatched_inventory_observation && <div className="twin-unmatched-observation"><b>现场有货但系统未匹配 · 待管理员核对</b>{(selectedLocation.unmatched_inventory_observations || []).map((item) => <p key={item.id}><strong>{item.inventory_keyword}</strong>{item.customer_keyword ? ` · ${item.customer_keyword}` : ""}{item.reported_quantity ? ` · 约 ${item.reported_quantity}${item.reported_unit || ""}` : ""}<span>{item.reason}</span></p>)}</div>}
           {selectedLocation.has_location_discrepancy && <div className="twin-unmatched-observation"><b>现场位置与系统登记不符 · 持续标红</b>{(selectedLocation.location_discrepancies || []).map((item) => <p key={item.id}><strong>{item.lot.inventory_code || item.lot.lot_number || `批次 ${item.lot.lot_id}`}</strong>{item.reported_quantity ? ` · ${formatNumber(item.reported_quantity)} ${inventoryUnitLabel(item.lot.unit)}` : ""}<span>{item.reason}</span></p>)}</div>}
@@ -6245,7 +6294,21 @@ export function WarehouseTwinApp() {
           </section>}
           {canStocktake && mapMode === "move" && moveAction === "stocktake" && viewMode === "2d" && !locationEditMode && selectedLocationBaseReceivable && <section className="twin-formal-operation twin-stocktake-operation">
             <div className="twin-formal-operation-title"><b>正式货位盘点调整</b><span>{selectedLocation.floor_code} · {selectedLocation.area_code || "未分区"} · {selectedLocation.location_name}</span></div>
-            <p className="twin-map-pick-hint">这里只加入页面草稿；底部一次确认后，整批写正式盘点流水。无需填写原因，不会新建客户或产品。</p>
+            {canEditLocations && <fieldset className="twin-pending-placement" disabled={pendingPlacementBusy}>
+              <legend>优先添加待归位货物</legend>
+              <label><span>查找待归位货物</span><input value={pendingQuery} onChange={(event) => setPendingQuery(event.target.value)} placeholder="存货编码、产品或客户" /></label>
+              <div className="twin-search-result-list">{matchingPendingItems.slice(0, 20).map((item) => <button type="button" key={item.lot_id} aria-pressed={recountLotId === item.lot_id} disabled={item.status !== "active" || !item.version || Number(item.damaged_quantity || 0) > 0 || pendingRefreshRequired} onClick={() => { setRecountLotId(item.lot_id); setPendingQuantity(String(movableLotQuantity(item))); }}>
+                <b>{item.inventory_code} · {item.product_name}</b><span>{employeeCustomerName(item)} · 待归位 {formatNumber(movableLotQuantity(item))} {inventoryUnitLabel(item.unit)}</span><small>{item.lot_number}{item.status !== "active" ? " · 当前冻结，暂不能归位" : ""}</small>
+              </button>)}</div>
+              {matchingPendingItems.length > 20 && <small>符合 {matchingPendingItems.length} 批，显示前20批，可继续输入缩小范围。</small>}
+              {!matchingPendingItems.length && <p>待归位中没有匹配货物，可在下方补录实际新增库存。</p>}
+              {selectedPendingItem && <div className="twin-correction-form"><b>{selectedPendingItem.product_name} → {employeeLocationName(selectedLocation)}</b><label><span>本次归位数量（{inventoryUnitLabel(selectedPendingItem.unit)}）</span><input type="number" min="1" max={movableLotQuantity(selectedPendingItem)} step="1" value={pendingQuantity} onChange={(event) => setPendingQuantity(event.target.value)} /></label>
+                {selectedLocationFinishedAddBlockReason && <small>{selectedLocationFinishedAddBlockReason}</small>}
+                <button type="button" className="twin-primary-action" disabled={pendingRefreshRequired || Boolean(selectedLocationFinishedAddBlockReason) || !Number.isInteger(Number(pendingQuantity)) || Number(pendingQuantity) <= 0 || Number(pendingQuantity) > movableLotQuantity(selectedPendingItem)} onClick={() => void placePendingInventory()}>{pendingPlacementBusy ? "正在归位…" : "确认归位"}</button>
+                <button type="button" onClick={() => { setRecountLotId(null); setPendingQuantity(""); }}>取消选择</button></div>}
+              {pendingRefreshRequired && <button type="button" onClick={() => void refreshDashboard().then(() => setPendingRefreshRequired(false)).catch((error) => setWarehouseOperationMessage(`刷新仍未完成：${error.message}`))}>刷新核对归位结果</button>}
+            </fieldset>}
+            <div className="twin-formal-divider"><span>待归位没有的货物：新增库存</span></div>
             <div className="twin-map-inbound-type" role="tablist" aria-label="盘点新增库存类型">
               <button type="button" className={stocktakeInventoryType === "finished" ? "active" : ""} disabled={Boolean(selectedLocationFinishedAddBlockReason)} title={selectedLocationFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>成品 · 固定单位箱</button>
               <button type="button" className={stocktakeInventoryType === "semi_finished" ? "active" : ""} disabled={Boolean(selectedLocationSemiFinishedAddBlockReason)} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("semi_finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>半成品 · 固定单位张</button>
@@ -6269,8 +6332,8 @@ export function WarehouseTwinApp() {
             </div>}
             <div className="twin-formal-operation-grid"><label><span>本次需处理数量（{stocktakeInventoryType === "finished" ? "箱" : "张"}）</span><input type="number" min="1" step="1" value={stocktakeAddQuantity} onChange={(event) => { setStocktakeAddQuantity(event.target.value); setStocktakeSupplementConfirmed(false); }} /></label><label><span>库存日期</span><input type="date" value={stocktakeStockDate} onChange={(event) => setStocktakeStockDate(event.target.value)} /></label></div>
             {!canEditLocations && <p className="twin-stocktake-block-reason">盘点补录会增加正式库存，只能由管理员确认；你仍可定位现有库存并按权限移货或调减。</p>}
-            {canEditLocations && stocktakeOutsideAreaLocations.length > 0 && !stocktakeSupplementConfirmed && <button type="button" className="twin-stocktake-supplement-toggle" onClick={() => setStocktakeSupplementConfirmed(true)}>现存数量仍不足，补录缺少部分</button>}
-            {canEditLocations && (!stocktakeOutsideAreaLocations.length || stocktakeSupplementConfirmed) && <button type="button" className="twin-primary-action" title={selectedLocationAddBlockReason || ""} disabled={!selectedStocktakeCustomer || !selectedStocktakeProduct || !stocktakeAddQuantity || !stocktakeStockDate || !selectedLocationCanReceiveStocktakeProduct} onClick={queueStocktakeAddDraft}>加入盘点补录草稿</button>}
+            {canEditLocations && (stocktakeOutsideAreaLocations.length > 0 || pendingProductExists) && !stocktakeSupplementConfirmed && <button type="button" className="twin-stocktake-supplement-toggle" onClick={() => setStocktakeSupplementConfirmed(true)}>现存数量仍不足，补录缺少部分</button>}
+            {canEditLocations && ((!stocktakeOutsideAreaLocations.length && !pendingProductExists) || stocktakeSupplementConfirmed) && <button type="button" className="twin-primary-action" title={selectedLocationAddBlockReason || ""} disabled={!selectedStocktakeCustomer || !selectedStocktakeProduct || !stocktakeAddQuantity || !stocktakeStockDate || !selectedLocationCanReceiveStocktakeProduct} onClick={queueStocktakeAddDraft}>加入盘点补录草稿</button>}
             {canEditLocations && <small className="twin-stocktake-resolution">补录会建立独立的盘点库存批次，不挂到已有订单；库存总数和地图位置仍进入同一正式台账。</small>}
             {selectedLocationItems.length > 0 && <div className="twin-formal-divider"><span>调减当前真实批次</span></div>}
             {selectedStocktakeItem?.version ? <div className="twin-correction-form"><b>{selectedStocktakeItem.inventory_code || selectedStocktakeItem.lot_number} · 可用 {formatNumber(selectedStocktakeItem.available_quantity)} {inventoryUnitLabel(selectedStocktakeItem.unit)}</b><label><span>本次调减数量</span><input type="number" min="1" max={selectedStocktakeItem.available_quantity || undefined} step="1" value={stocktakeDecreaseQuantity} onChange={(event) => setStocktakeDecreaseQuantity(event.target.value)} /></label>{selectedStocktakeDecreaseBlockReason && <><small className="twin-stocktake-block-reason">不可盘点调减：{selectedStocktakeDecreaseBlockReason}</small><small className="twin-stocktake-resolution">解决方法：{stocktakeBlockResolution(selectedStocktakeDecreaseBlockReason)}</small></>}<button type="button" title={selectedStocktakeDecreaseBlockReason || ""} disabled={Boolean(selectedStocktakeDecreaseBlockReason) || !stocktakeDecreaseQuantity || Number(stocktakeDecreaseQuantity) > Number(selectedStocktakeItem.available_quantity || 0)} onClick={queueStocktakeDecreaseDraft}>加入盘点调减草稿</button><small>调减至零后地图只隐藏空卡；批次、流水和审计历史保留。</small></div> : selectedLocationItems.length > 0 && <p className="twin-correction-hint">点击上方一个可盘点调减的真实产品卡，再输入调减数量；不能大于当前可用量。</p>}
@@ -6449,7 +6512,7 @@ export function WarehouseTwinApp() {
           <small>{formatNumber(item.quantity)} {inventoryUnitLabel(item.unit)}{item.operation === "decrease" && item.quantity === item.quantity_before ? " · 调减至零后仅隐藏空卡" : ""}</small>
           <button type="button" disabled={stocktakeBatchBusy} onClick={() => removeStocktakeDraftItem(item.client_item_id)}>撤销</button>
         </article>)}</div>
-        <div className="twin-move-draft-actions"><button type="button" disabled={!stocktakeDrafts.length || stocktakeBatchBusy} onClick={cancelStocktakeDrafts}>取消全部草稿</button><button type="button" className="confirm" disabled={!stocktakeDrafts.length || stocktakeBatchBusy} onClick={confirmStocktakeDrafts}>{stocktakeBatchBusy ? "正在一次提交…" : `一次确认 ${stocktakeDrafts.length || ""} 条`}</button></div>
+        <div className="twin-move-draft-actions"><button type="button" disabled={!stocktakeDrafts.length || stocktakeBatchBusy} onClick={cancelStocktakeDrafts}>取消全部草稿</button><button type="button" className="confirm" disabled={!stocktakeDrafts.length || stocktakeBatchBusy || stocktakeRefreshRequired} onClick={confirmStocktakeDrafts}>{stocktakeBatchBusy ? "正在一次提交…" : `一次确认 ${stocktakeDrafts.length || ""} 条`}</button>{stocktakeRefreshRequired && <button type="button" disabled={stocktakeBatchBusy} onClick={() => void refreshDashboard().then(() => { setStocktakeRefreshRequired(false); setWarehouseOperationMessage("盘点已写入，地图已刷新核对。"); }).catch((error) => setWarehouseOperationMessage(`盘点已写入，刷新仍未完成：${error.message}`))}>刷新核对盘点结果</button>}</div>
         {stocktakeLastResult.length > 0 && <div className="twin-stocktake-label-results"><b>本次新增已入账，可贴标签</b>{stocktakeLastResult.map((item) => <span key={`stocktake-label-${item.lot_id}`}><button type="button" onClick={() => window.open(`/static/location-label.html?location_id=${encodeURIComponent(item.location_id)}`, "_blank", "noopener")}>打印位置标签</button>{item.inventory_type === "finished" && <button type="button" onClick={() => window.open(`/static/finished-goods-label.html?lot_id=${encodeURIComponent(item.lot_id)}&version=${encodeURIComponent(item.version_after)}`, "_blank", "noopener")}>打印产品标签</button>}</span>)}</div>}
       </> : moveAction === "merge" ? <>
         <div className="twin-move-draft-heading"><b>{mergeSources.length ? `已选 ${mergeSources.length} 块` : "请选择货位"}</b></div>

@@ -54,6 +54,15 @@ def _rack_cell_counts(rack: dict) -> list[int] | None:
     return normalized
 
 
+def _is_rebuilt_third_floor_f_area(*, floor_code: str, area_code: str) -> bool:
+    return floor_code.upper() == "3F" and area_code.upper() in {
+        "F1",
+        "F2",
+        "F3",
+        "F4",
+    }
+
+
 def _preview_rack_area(
     db: Session,
     *,
@@ -342,6 +351,22 @@ def apply_confirmed_legacy_rack_cell_bindings(
                 )
         return ()
     if groups and (not expected_fingerprint or not requested):
+        if all(
+            _is_rebuilt_third_floor_f_area(
+                floor_code=str(preview["floor_code"]),
+                area_code=str(group["area_code"]),
+            )
+            for group in groups.values()
+        ):
+            occupied_count = sum(
+                int(group["occupied_location_count"]) for group in groups.values()
+            )
+            if occupied_count:
+                raise WarehouseRackCellSyncError(
+                    f"三楼 F 区还有 {occupied_count} 个有货旧货位；"
+                    "请先转入盘点待归位，再发布新货架。"
+                )
+            return ()
         raise WarehouseRackCellSyncError(
             "当前发布仍有旧货位尚未确认对应货架，请先逐架核对。"
         )
@@ -695,10 +720,36 @@ def sync_published_rack_cells(
                 row for row in generic_rows if row.address_kind == "rack_slot"
             ]
             if unconfirmed_rack_cells:
-                raise WarehouseRackCellSyncError(
-                    f"{area.area_name} 有 {len(unconfirmed_rack_cells)} 个旧货架层格尚未确认对应货架；"
-                    "请先预览并由管理员一次确认绑定。"
+                occupied_unconfirmed = _occupied_location_ids(
+                    db, [row.id for row in unconfirmed_rack_cells]
                 )
+                can_retire_empty_f_cells = _is_rebuilt_third_floor_f_area(
+                    floor_code=floor.floor_code,
+                    area_code=area.area_code,
+                )
+                if can_retire_empty_f_cells and not occupied_unconfirmed:
+                    # The third-floor F areas are being rebuilt from the
+                    # physical rack plan.  Empty legacy cells no longer map to
+                    # a real rack, so keep their history but stop exposing them
+                    # as selectable destinations before creating the new cells.
+                    retired_ids = {row.id for row in unconfirmed_rack_cells}
+                    for row in unconfirmed_rack_cells:
+                        row.is_active = False
+                        row.updated_at = beijing_now_naive()
+                        disabled.append(row.id)
+                    generic_rows = [
+                        row for row in generic_rows if row.id not in retired_ids
+                    ]
+                elif can_retire_empty_f_cells:
+                    raise WarehouseRackCellSyncError(
+                        f"{area.area_name} 有 {len(occupied_unconfirmed)} 个有货旧货位；"
+                        "请先转入盘点待归位，再发布新货架。"
+                    )
+                else:
+                    raise WarehouseRackCellSyncError(
+                        f"{area.area_name} 有 {len(unconfirmed_rack_cells)} 个旧货架层格尚未确认对应货架；"
+                        "请先预览并由管理员一次确认绑定。"
+                    )
             occupied_generic = _occupied_location_ids(
                 db, [row.id for row in generic_rows]
             )

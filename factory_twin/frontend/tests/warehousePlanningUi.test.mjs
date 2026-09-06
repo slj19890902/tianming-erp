@@ -31,6 +31,34 @@ function componentValue(name, context, optional = false) {
   return sandbox.value;
 }
 
+test("scoped geometry apply keeps its retry key and distinguishes commit from readback", async () => {
+  for (const stage of ["write-fails", "read-fails", "success"]) {
+    const calls = [], messages = [], modes = [];
+    const requestRef = {current:null};
+    const context = {
+      layout:{source_sha256:"saved-draft"}, selectedAreaFeature:{id:"zone-d1",version:7},
+      spatialEditBusy:false, locationEditBusy:false, activeLocationDraftCount:0,
+      zoneGeometryDrafts:{},rackDrafts:{},zonePolicyDrafts:{}, floorCode:"3F",
+      planningPublishedLayout:{source_sha256:"published-before"},publishedFloorRevision:"published-before",
+      geometryApplyRequestRef:requestRef,operationKey:()=>"stable-zone-apply-key",
+      setSpatialEditBusy:()=>{}, setLocationEditMessage:m=>messages.push(m),
+      mutateJson:async(url,method,payload)=>{calls.push({url,method,payload});if(stage==="write-fails")throw Error("network");return {applied:true};},
+      refreshPlanningTwinFloor:async()=>{if(stage==="read-fails")throw Error("readback");},
+      refreshDashboard:async()=>{},setMapMode:m=>modes.push(m),setSearchPanelOpen:()=>{},
+      setLocationEditMode:()=>{},setAreaPolicyEditMode:()=>{},setAdvancedAreaMaintenanceOpen:()=>{},
+      setLocationPointEditAreaCode:()=>{},setLayoutMapToolsOpen:()=>{},
+    };
+    context.applySavedAreaGeometryRevision = componentValue("applySavedAreaGeometryRevision", context);
+    const handler = componentValue("applySelectedAreaGeometry",context);
+    await handler();
+    assert.equal(calls[0].url,"/api/warehouse/twin-layout/floors/3F/zones/zone-d1/apply-geometry");
+    assert.equal(calls[0].payload.expected_revision,"saved-draft");
+    if(stage==="success") {assert.deepEqual(modes,["lookup"]);assert.equal(requestRef.current,null);}
+    else {assert.deepEqual(modes,[]);assert(requestRef.current);await handler();assert.equal(calls[0].payload.operation_key,calls[1].payload.operation_key);}
+    assert.match(messages[0],stage==="write-fails"?/尚未应用/:stage==="read-fails"?/已应用.*回读未完成/:/已应用.*已刷新/);
+  }
+});
+
 test("stocktake keeps an acknowledged receipt when readback fails and retains only unacknowledged drafts", async () => {
   for (const acknowledged of [false, true]) {
     const state = { drafts: [{ operation: "add", quantity: 1 }], key: "same-request", receipt: [], refresh: false, calls: 0, message: "" };
@@ -56,6 +84,76 @@ test("stocktake keeps an acknowledged receipt when readback fails and retains on
       assert.equal(state.calls, 1);
     }
   }
+});
+
+test("new racks use entered dimensions and explicit cells for three and four levels", async () => {
+  for (const levels of [3, 4]) {
+    const calls = [], messages = [];
+    const context = {
+      layout: { source_sha256: "draft" }, selectedAreaFeature: { id: "area" }, spatialEditBusy: false,
+      newRackSettings: { width: "1200", depth: "500", height: "2000", levels: String(levels), cells: "2" },
+      featureCenter: () => ({ x: 200, y: 300 }), featureAreaCode: () => "C4", floorCode: "3F",
+      setSpatialEditBusy: () => {}, operationKey: () => "rack-new",
+      mutateJson: async (url, method, payload) => { calls.push({ url, method, payload }); return { revision: "saved", item: { id: "new", rack_code: "stable" } }; },
+      setLayout: () => {}, rememberServerDraft: () => {}, setRackDrafts: () => {}, rackDraft: r => r,
+      setSelected: () => {}, setNewRackFormOpen: () => {}, setLocationEditMessage: v => messages.push(v),
+    };
+    await componentValue("addRackToSelectedArea", context)();
+    assert.equal(calls.length, 1);
+    const p = calls[0].payload;
+    assert.equal(p.width_mm, 1200); assert.equal(p.depth_mm, 500); assert.equal(p.height_mm, 2000);
+    assert.equal(p.levels, levels); assert.deepEqual(Array.from(p.level_cell_counts), Array(levels).fill(2));
+    assert.equal(p.level_heights_mm.length, levels - 1);
+    assert.equal(p.area_feature_id, "area"); assert.match(messages.at(-1), /草稿/);
+    calls.length = 0; context.newRackSettings.cells = "";
+    await componentValue("addRackToSelectedArea", context)();
+    assert.equal(calls.length, 0); assert.match(messages.at(-1), /实际/);
+  }
+});
+
+test("rack save applies only the current rack and reloads the operational map", async () => {
+  const calls = [], messages = [];
+  const rack = { id: "rack-1", name: "C1 01号架", version: 1, levels: 3, level_cell_counts: [4,4,4] };
+  const context = {
+    layout: { source_sha256: "draft-before", racks: [rack] }, spatialEditBusy: false,
+    planningPublishedLayout: { source_sha256: "published-before" }, publishedFloorRevision: "published-before",
+    floorCode: "3F", rackApplyRequestRef: { current: null }, operationKey: name => `stable-${name}`,
+    rackMutationPayload: value => value, setSpatialEditBusy: () => {}, rememberServerDraft: () => {},
+    setLayout: () => {}, setRackDrafts: () => {}, setLocationEditMessage: value => messages.push(value),
+    mutateJson: async (url, method, payload) => {
+      calls.push({ url, method, payload });
+      if (method === "PATCH") return { revision: "draft-saved", item: { ...rack, version: 2 } };
+      return { applied: true, scope: "rack_layout" };
+    },
+    refreshPlanningTwinFloor: async () => {}, refreshDashboard: async () => {},
+  };
+  context.applySavedRackRevision = componentValue("applySavedRackRevision", context);
+  await componentValue("saveRackDraftImmediately", context)(rack.id, rack);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].url, /racks\/rack-1$/);
+  assert.equal(calls[0].method, "PATCH");
+  assert.match(calls[1].url, /racks\/rack-1\/apply$/);
+  assert.equal(calls[1].payload.expected_published_revision, "published-before");
+  assert.equal(context.rackApplyRequestRef.current, null);
+  assert.match(messages.at(-1), /已保存并应用.*三种模式/);
+  assert.doesNotMatch(source, /保存到草稿<\/button>/);
+  assert.match(source, />保存并应用货架<\/button>/);
+});
+
+test("area numbering saves only selected racks and blocks unsaved dimension changes", async () => {
+  let layout = { source_sha256: "before", racks: [{ id: "a", name: "old", width_mm: 1200 }, { id: "other", name: "keep" }] };
+  const calls = [], context = {
+    layout, selectedAreaFeature: { id: "area" }, spatialEditBusy: false, selectedAreaRacks: [layout.racks[0]], rackDrafts: {},
+    rackMutationPayload: r => r, rackDraft: r => r, floorCode: "3F", operationKey: () => "number-racks",
+    setSpatialEditBusy: () => {}, setLocationEditMessage: () => {}, rememberServerDraft: () => {},
+    setLayout: fn => { layout = fn(layout); }, setRackDrafts: () => {},
+    mutateJson: async (url, method, payload) => { calls.push({ url, method, payload }); return { revision: "after", item: { racks: [{ id: "a", name: "Area 01号架", width_mm: 1200 }] } }; },
+  };
+  await componentValue("numberSelectedAreaRacks", context)();
+  assert.equal(calls.length, 1); assert.match(calls[0].url, /zones\/area\/number-racks$/);
+  assert.equal(layout.racks[1].name, "keep"); assert.equal(layout.racks[0].id, "a");
+  calls.length = 0; context.rackDrafts = { a: { ...context.layout.racks[0], width_mm: 1400 } };
+  await componentValue("numberSelectedAreaRacks", context)(); assert.equal(calls.length, 0);
 });
 
 test("both map publish entrances reload warehouse records before claiming the new map is ready", async () => {
@@ -214,7 +312,7 @@ test("acknowledged warehouse moves are not offered again when dashboard refresh 
   }
 });
 
-test("planning renders a moved draft zone and its inventory in the same frame without changing operational positions", () => {
+test("moving a draft boundary preserves real location coordinates and keeps locations editable", () => {
   const zone = { id: "zone-map-test", feature_code: "ZONE-3F-TEST", feature_kind: "zone", erp_area_code: "TEST", version: 1,
     points: [[0, 0], [6000, 0], [6000, 4000], [0, 4000]] };
   const empty = { ...zone, id: "zone-empty", erp_area_code: "EMPTY", points: [[0, 5000], [3000, 5000], [3000, 7000], [0, 7000]] };
@@ -225,9 +323,12 @@ test("planning renders a moved draft zone and its inventory in the same frame wi
     pallet: null, loose_items: [{ lot_id: 951, quantity: 100, quantity_available: 100, inventory_type: "semi_finished", unit: "sheets" }] }];
   const original = JSON.stringify(locations);
   const published = [zone, empty, aisle];
-  function render(mode, localPoints = null) {
+  function render(mode, localPoints = null, preview = mode === "planning") {
     const features = mode === "planning" ? [draft, empty, aisle] : published;
     const context = { ...inventory, useMemo: (callback) => callback(), EMPTY_CANVAS_IDS: componentValue("EMPTY_CANVAS_IDS", {}), mapMode: mode, features,
+      planningPreviewActive: preview, activeEditingFeatureId: preview ? zone.id : null,
+      displayBaseLayout: { features: published, racks: [] },
+      stableTwinFeatures: (layout) => layout.features, planningCollisionRacks: [],
       planningPublishedFeatures: published, zoneGeometryDrafts: localPoints ? { [zone.id]: localPoints } : {},
       visualLocations: locations, floorCode: "3F", standardPallet: { contract_version: "standard-pallet-v1", width_mm: 1200, depth_mm: 1000, height_mm: 150 },
       layout: { id: "test-3f", features, racks: [], violations: [] }, locationEditMode: mode === "planning", locationPointEditAreaCode: null,
@@ -241,69 +342,72 @@ test("planning renders a moved draft zone and its inventory in the same frame wi
   }
   const lookup = render("lookup");
   const planning = render("planning");
+  const browsing = render("planning", null, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(browsing.visualLayout.features)), JSON.parse(JSON.stringify(lookup.visualLayout.features)), "ordinary planning uses the same published geometry as lookup even with a saved draft");
   const before = lookup.visualLayout.pallets[0];
   const after = planning.visualLayout.pallets[0];
   assert.ok(before && after, "the same real inventory remains visible");
   assert.equal(after.id, before.id);
-  assert.equal(planning.previewOnlyLocationIds.has(after.id), true);
-  assert.equal(planning.locationPointEditPalletIds.includes(after.id), false, "preview-only geometry cannot be dragged in the canvas");
+  assert.equal(planning.previewOnlyLocationIds.has(after.id), false);
+  assert.equal(planning.locationPointEditPalletIds.includes(after.id), true, "locations remain editable after moving the boundary");
   assert.equal(lookup.previewOnlyLocationIds.size, 0);
-  assert.ok(Math.abs(after.x_mm - before.x_mm - 10000) < 0.1, "draft preview follows its zone's X translation");
-  assert.ok(Math.abs(after.y_mm - before.y_mm - 1000) < 0.1, "draft preview follows its zone's Y translation");
+  assert.ok(Math.abs(after.x_mm - before.x_mm) < 0.1, "location X remains physically fixed");
+  assert.ok(Math.abs(after.y_mm - before.y_mm) < 0.1, "location Y remains physically fixed");
   for (const key of ["id", "zone_id", "x_mm", "y_mm", "rotation_deg", "width_mm", "depth_mm"]) {
     assert.equal(planning.mappedLocationPallets[0][key], lookup.mappedLocationPallets[0][key], `operational ${key} stays published`);
   }
-  assert.deepEqual(Array.from(planning.visualLayout.features, item => item.id), [zone.id, empty.id, aisle.id]);
+  assert.deepEqual(Array.from(planning.visualLayout.features, item => item.id), [zone.id, empty.id], "legacy aisle lines stay out of the automatic-passage view");
   const unsaved = render("planning", draft.points.map(([x, y]) => [x + 500, y]));
-  assert.ok(Math.abs(unsaved.visualLayout.pallets[0].x_mm - after.x_mm - 500) < 0.1);
+  assert.ok(Math.abs(unsaved.visualLayout.pallets[0].x_mm - after.x_mm) < 0.1);
   const resized = render("planning", [[10000, 1000], [22000, 1000], [22000, 5000], [10000, 5000]]);
-  assert.ok(Math.abs(resized.visualLayout.pallets[0].x_mm - 12400) < 0.1);
+  assert.ok(Math.abs(resized.visualLayout.pallets[0].x_mm - before.x_mm) < 0.1);
   assert.equal(resized.visualLayout.pallets[0].planning_slot_width_mm, 1200, "standard physical footprint does not scale with a zone");
   assert.equal(JSON.stringify(locations), original, "preview does not mutate quantity, identity, version or warehouse records");
   assert.equal(render("lookup").visualLayout.pallets[0].x_mm, before.x_mm, "cancel/mode switch returns to published geometry");
 });
 
-test("draft-frame location dragging cannot write published-frame coordinates", () => {
-  const messages = [];
-  componentValue("moveLocationDraft", {
-    locationEditMode: true, layoutMapToolsOpen: false,
-    previewOnlyLocationIds: new Set(["erp-location-151"]),
-    setLocationEditMessage: value => messages.push(value),
-    setLocationDrafts: () => assert.fail("preview cannot become a location write")
-  })("erp-location-151", 12000, 1000);
-  assert.match(messages[0], /草稿预览.*库存位置未改变/);
+test("location draft can retain an out-of-zone move without clamping it back", () => {
+  const zone = { points: [[0,0],[6000,0],[6000,4000],[0,4000]] };
+  const location = { location_id: 1, map_position: { left_pct: 0, top_pct: 0, width_pct: 20, height_pct: 25, version: 1 } };
+  const original = JSON.stringify(location);
+  const draft = inventory.locationLayoutGeometry(zone, location, -600, 4500, { clampToZone: false });
+  assert.equal(draft.left_pct, -20);
+  assert.equal(draft.top_pct, -25);
+  assert.equal(draft.width_pct, 20);
+  assert.equal(JSON.stringify(location), original);
 });
 
-test("location save distinguishes failed readback, rejected writes and partial area success", async () => {
-  for (const failure of ["readback", "write", "second-area"]) {
-    let drafts = { 151: { location_id: 151 }, ...(failure === "second-area" ? { 152: { location_id: 152 } } : {}) };
-    const messages = [];
-    let writes = 0;
-    let reads = 0;
-    const noop = () => {};
+test("location draft save permits conflicts and distinguishes write, apply readback and multi-area failures", async () => {
+  for (const failure of ["readback", "write", "multiple", "success"]) {
+    const points = [[0,0],[6000,0],[6000,4000],[0,4000]];
+    const features = ["TEST", "OTHER"].map(code => ({id:code, erp_area_code:code, feature_kind:"zone", version:1, points}));
+    let drafts = { 151: {location_id:151, expected_version:1, left_pct:-10, top_pct:0, height_pct:25, width_pct:20} };
+    if (failure === "multiple") drafts[152] = {...drafts[151],location_id:152};
+    let writes=0, reads=0; const messages=[]; const noop=()=>{};
     await componentValue("saveLocationDrafts", {
-      layoutMapToolsOpen: false, locationDrafts: drafts, locationPointEditAreaCode: null, floorCode: "3F",
-      dashboard: { locations: [{ location_id: 151, area_code: "TEST", floor_code: "3F" }, { location_id: 152, area_code: "OTHER", floor_code: "3F" }] },
-      planningGeometryConflicts: [], setLocationEditBusy: noop, setLocationEditMessage: value => messages.push(value),
-      requestJson: async () => ({ available_actions: ["published_layout"], published_map_revision: "p1", policy_version: 1, ground_plan_version: 1 }),
-      mutateJson: async () => { writes++; if (failure === "write" || failure === "second-area" && writes === 2) throw new Error("simulated rejection"); return {}; },
-      setLocationDrafts: value => { drafts = value(drafts); }, setSwapSourceLocationId: noop,
-      locationLayoutIdempotencyKey: "test-once", operationKey: () => "test-next", setLocationLayoutIdempotencyKey: noop,
-      refreshDashboard: async () => { reads++; throw new Error("simulated readback unavailable"); },
-      reloadAreaLocationManagement: noop, selectedAreaCode: "TEST", setLocationPointEditAreaCode: noop
+      layout: {source_sha256:"d1",features}, locationEditBusy:false,
+      layoutMapToolsOpen:false, locationDrafts:drafts, locationPointEditAreaCode:null, floorCode:"3F",
+      dashboard:{locations:[{location_id:151,area_code:"TEST"},{location_id:152,area_code:"OTHER"}]},
+      locationProjectionFeatures:features, pointsBoundsMm:()=>({centerXmm:3000,centerYmm:2000,widthMm:6000,heightMm:4000}),
+      planningGeometryConflicts:[{pallet_id:"erp-location-151"}],
+      setLocationEditBusy:noop, setLocationEditMessage:v=>messages.push(v),
+      mutateJson:async(url,method,payload)=>{
+        writes++; assert.match(url,/features\/(TEST|OTHER)\/geometry$/);
+        assert.equal(payload.ground_locations[0].x_mm,-600);
+        if(failure==="write") throw new Error("simulated rejection");
+        return {revision:`d${writes+1}`,item:features[writes-1]};
+      },
+      setLayout:noop,rememberServerDraft:noop,setLocationDrafts:fn=>{drafts=fn(drafts)},
+      locationLayoutIdempotencyKey:"test-once",operationKey:()=>"next",setLocationLayoutIdempotencyKey:noop,
+      planningPublishedLayout:{source_sha256:"p1"},publishedFloorRevision:"p1",
+      setLocationPointEditAreaCode:noop,setKeyboardLocationEditActive:noop,
+      refreshPlanningTwinFloor:async()=>{reads++;},
+      applySavedAreaGeometryRevision:async()=>{reads++;if(failure==="readback"){const error=new Error("simulated readback unavailable");error.applicationWritten=true;throw error;}}
     })();
-    if (failure === "readback") {
-      assert.match(messages.at(-1), /已保存并固定 1 个货位，但回读失败/);
-      assert.equal(Object.keys(drafts).length, 0);
-      assert.equal(reads, 1);
-    } else if (failure === "write") {
-      assert.equal(messages.at(-1), "simulated rejection");
-      assert.deepEqual(Object.keys(drafts), ["151"]);
-      assert.equal(reads, 0);
-    } else {
-      assert.match(messages.at(-1), /已保存 1 个货位，其余保存未完成/);
-      assert.deepEqual(Object.keys(drafts), ["152"]);
-    }
+    if(failure==="write") {assert.deepEqual(Object.keys(drafts),["151"]);assert.equal(reads,0);assert.match(messages.at(-1),/未确认保存/);}
+    else if(failure==="multiple") {assert.deepEqual(Object.keys(drafts).sort(),["151","152"]);assert.equal(writes,0);assert.match(messages.at(-1),/一次只能保存并应用一个区域/);}
+    else if(failure==="readback") {assert.equal(Object.keys(drafts).length,0);assert.equal(reads,2);assert.match(messages.at(-1),/已应用 1 个货位调整.*回读失败/);}
+    else {assert.equal(Object.keys(drafts).length,0);assert.equal(reads,1);assert.match(messages.at(-1),/已保存并应用 1 个货位调整/);}
   }
 });
 
@@ -353,7 +457,7 @@ test("warehouse help is explicitly opened while draft and failure states stay vi
   assert.match(source, /aria-expanded=\{mapHelpOpen\} aria-controls="warehouse-map-help"/);
   assert.match(source, /mapHelpOpen && <section id="warehouse-map-help"/);
   assert.match(source, /role="status"/);
-  assert.match(source, /草稿预览 · 查货使用已发布版/);
+  assert.match(source, /activeObjectPreview \? "当前对象编辑预览" : "已应用地图"/);
   assert.match(source, /有未保存调整/);
   assert.match(source, /locationEditMessage && <div/);
   assert.doesNotMatch(source, /区域规划：选区域，核对后确认。|排位保存只生成预览/);
@@ -385,17 +489,17 @@ test("acknowledged publication with failed readback does not report a failed wri
 
 test("ordinary area planning exposes a current-area-only point editing workflow", () => {
   assert.doesNotMatch(source, />拖动并保存现场货位</);
-  assert.match(source, />保存并固定/);
+  assert.match(source, />保存货位调整/);
   assert.match(source, />取消点位调整/);
-  assert.match(source, /只有点击区域空白处才选择区域/);
   assert.match(source, /location\?\.area_code !== locationPointEditAreaCode/);
   assert.match(source, /draggablePalletIds=\{warehouseMoveModeActive \? movablePalletIds : layoutMapToolsOpen \? EMPTY_CANVAS_IDS : locationPointEditPalletIds\}/);
   assert.match(source, /mergePublishedFeatureGeometry/);
 });
 
 test("point save is the single explicit action and keeps inventory outside the write scope", () => {
-  assert.match(source, /有货货位请先按现场实际核对/);
-  assert.match(source, /保存会同步权威排位，但不改库存、栈板绑定或数量/);
+  assert.match(source, /红色冲突可先保存；系统会尝试应用/);
+  assert.match(source, /库存数量与栈板绑定不变/);
+  assert.match(source, /保存通过校验后，查货、移货和盘点立即使用同一位置/);
   assert.doesNotMatch(source, /确认保存并固定/);
   assert.doesNotMatch(source, /occupiedDraftCount/);
 });
@@ -411,9 +515,9 @@ test("area planning gives a clicked location priority over its enclosing area", 
 
 test("area planning shows every ground location with a full colored slot footprint", () => {
   assert.match(source, /layout\?\.id,\s*locationEditMode/);
-  assert.match(source, /区域规划会按已发布容量显示全部正式货位/);
-  assert.match(source, /绿色为空货位，蓝色为有货货位/);
-  assert.match(inventorySource, /renderEmptyPlanningSlots && isGroundLocation/);
+  assert.match(source, /区域规划按已应用地图显示全部正式货位/);
+  assert.match(source, /奶白色为空货位，绿色为有货货位/);
+  assert.match(inventorySource, /const isPlanningLocationSlot = isGroundLocation/);
   assert.match(inventorySource, /planning_slot_width_mm: isPlanningLocationSlot \? standard\.width_mm/);
   assert.match(inventorySource, /planning_slot_depth_mm: isPlanningLocationSlot \? standard\.depth_mm/);
   assert.match(sceneSource, /pallet\.is_planning_location_slot/);
@@ -422,21 +526,21 @@ test("area planning shows every ground location with a full colored slot footpri
 
 test("operational column conflicts stay separate from planning geometry hints", () => {
   assert.match(source, /const operationalColumnConflicts = useMemo\([\s\S]*findPalletColumnConflicts\(/);
-  assert.match(source, /const planningGeometryConflicts = useMemo\([\s\S]*locationEditMode && layout \? findPalletPlanningConflicts\(/);
-  assert.match(source, /const displayedLocationConflicts = locationEditMode\s*\? planningGeometryConflicts\s*:\s*operationalColumnConflicts/);
+  assert.match(source, /const planningGeometryConflicts = useMemo\([\s\S]*layout \? findPalletPlanningConflicts\(/);
+  assert.match(source, /const displayedLocationConflicts = planningGeometryConflicts/);
   assert.match(source, /!operationalColumnConflictIds\.has\(`erp-location-\$\{location\.location_id\}`\)/);
   assert.match(source, /column_conflicts: operationalColumnConflictCount/);
   assert.match(source, /uniquePalletConflictCount\(operationalColumnConflicts\)/);
   assert.match(source, /findPalletPlanningConflicts\([\s\S]*prospectivePallets/);
-  assert.match(source, /const conflictingAreaLocationIds = new Set\(planningGeometryConflicts\.filter/);
+  assert.doesNotMatch(componentValue("saveLocationDrafts", {}).toString(), /conflictingAreaLocationIds/);
 });
 
-test("published ground positions use the dedicated atomic save contract", () => {
-  assert.match(source, /available_actions\.includes\("published_layout"\)/);
-  assert.match(source, /ground-layout\/floors\/\$\{encodeURIComponent\(floorCode\)\}\/areas\/\$\{encodeURIComponent\(areaCode\)\}\/published-positions/);
-  assert.match(source, /expected_plan_version: management\.ground_plan_version/);
-  assert.match(source, /idempotency_key: locationLayoutIdempotencyKey/);
-  assert.match(source, /查货、移货、盘点和空货位显示将统一使用这组位置/);
+test("planning location saves use versioned map drafts instead of operational position writes", () => {
+  const body = componentValue("saveLocationDrafts", {}).toString();
+  assert.match(body, /ground_locations/);
+  assert.match(body, /expected_revision: workingLayout.source_sha256/);
+  assert.match(body, /expected_version: feature.version/);
+  assert.doesNotMatch(body, /published-positions/);
 });
 
 test("map-first toolbar hides empty delayed dispatch and consolidates selective merge", () => {
@@ -482,7 +586,7 @@ test("area planning keeps short inputs in compact rows", () => {
   assert.match(source, /className="twin-mold-rack-fields"/);
   assert.match(cssSource, /\.twin-zone-primary-fields,[\s\S]*\.twin-mold-rack-fields\s*\{[\s\S]*repeat\(auto-fit, minmax\(100px, 1fr\)\)/);
   assert.match(cssSource, /\.twin-zone-geometry-grid\s*\{[\s\S]*repeat\(4, minmax\(0, 1fr\)\)/);
-  assert.match(cssSource, /\.twin-ground-layout-grid\s*\{[\s\S]*repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.doesNotMatch(source, /地堆排、位编号|编号起点|起始排号|起始位号/);
 });
 
 test("planning dimensions save the latest input and adjustment locks map panning", () => {
@@ -525,22 +629,22 @@ test("planning exits to lookup and map geometry tools open only on demand", () =
   assert.match(source, /\{layoutMapToolsOpen \? "完成地图调整" : "调整地图"\}<\/button>/);
   assert.match(source, /setLayoutMapToolsOpen\(\(current\) => !current\)/);
   assert.match(source, /mapMode === "planning" && locationEditMode && canEditLocations && layoutMapToolsOpen && <section className="twin-layout-map-tools">/);
-  assert.match(source, /featureEditingEnabled=\{locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"\}/);
+  assert.match(source, /featureEditingEnabled=\{!spatialEditBusy && locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"\}/);
   assert.match(source, /layoutDrawKind = locationEditMode && layoutMapToolsOpen && layoutMapTool !== "adjust"/);
 });
 
-test("planning moves empty zones but locks boundaries that own formal locations", () => {
+test("planning moves boundaries without moving formal locations", () => {
   assert.match(editorSource, /planningFeatureEditable[\s\S]*\["zone", "aisle"\]\.includes\(feature\.feature_kind\)/);
   assert.doesNotMatch(
     editorSource.slice(editorSource.indexOf("const planningFeatureEditable"), editorSource.indexOf("group.userData =", editorSource.indexOf("const planningFeatureEditable"))),
     /feature\.is_locked/
   );
   assert.match(source, /mapPanLocked=\{floor4CalibrationMode \|\| \(locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"\)\}/);
-  assert.match(source, /rackEditingEnabled=\{locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen\}/);
+  assert.match(source, /rackEditingEnabled=\{locationEditMode && Boolean\(selectedRackEditDraft\) && !spatialEditBusy\}/);
   assert.match(editorSource, /preferredPlanningFeature[\s\S]*candidate\.userData\.entityKind === "feature" && candidate\.userData\.draggable/);
   assert.match(source, /featureHasMappedGroundLocations/);
-  assert.match(source, /区域边界已锁定，不能带着货位一起移动或缩放/);
-  assert.match(source, /disabled=\{spatialEditBusy \|\| selectedAreaBoundaryLocked\}/);
+  assert.match(source, /区域移动不带动货位/);
+  assert.doesNotMatch(componentValue("moveAreaBoundaryDraft", {}).toString(), /featureHasMappedGroundLocations/);
 });
 
 test("map adjustment and location placement are mutually exclusive", () => {
@@ -554,7 +658,7 @@ test("map adjustment and location placement are mutually exclusive", () => {
   assert.match(source, /layoutMapToolsOpen \? EMPTY_CANVAS_IDS : locationPointEditPalletIds/);
   assert.match(source, /!locationPointEditAreaCode && layoutMapTool === "adjust"/);
   assert.match(source, /activeLocationDraftCount > 0/);
-  assert.match(source, /if \(layoutMapToolsOpen\)/);
+  assert.match(source, /if \(!layout \|\| layoutMapToolsOpen \|\| locationEditBusy\)/);
 });
 
 test("warehouse racks use exact footprint picking and only horizontal or vertical direction", () => {
@@ -579,20 +683,57 @@ test("rack focus keeps the map visible beside an ERP styled elevation", () => {
   assert.match(cssSource, /@media \(max-width: 880px\)[\s\S]*\.twin-stage\.rack-focused\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/);
 });
 
-test("planning uses one contextual delete action for selected zones or aisles", () => {
+test("saving geometry preserves the area's warehouse binding used by quantity controls", async () => {
+  const original = { id: "zone-d1", feature_kind: "zone", version: 3, formal_area_id: 9, formal_policy_status: "published", points: [[0, 0]] };
+  let layout = { source_sha256: "before", features: [original] };
+  let drafts = { "zone-d1": [[1, 0]] };
+  const context = { layout, spatialEditBusy: false, floorCode: "3F", operationKey: () => "test",
+    planningPublishedLayout: { source_sha256: "published" }, publishedFloorRevision: "published",
+    setSpatialEditBusy: () => {}, setLocationEditMessage: () => {}, rememberServerDraft: () => {},
+    mutateJson: async () => ({ revision: "after", item: { id: "zone-d1", feature_kind: "zone", version: 4, points: [[1, 0]] } }),
+    applySavedAreaGeometryRevision: async () => ({ applied: true }),
+    setLayout: (update) => { layout = update(layout); }, replaceZoneGeometryDrafts: (update) => { drafts = update(drafts); } };
+  await componentValue("saveLayoutFeatureGeometry", context)(original, [[1, 0]]);
+  assert.equal(layout.features[0].formal_area_id, 9);
+  assert.equal(layout.features[0].formal_policy_status, "published");
+  assert.equal(layout.features[0].version, 4);
+  assert.equal(layout.features[0].points[0][0], 1);
+  assert.equal(Object.keys(drafts).length, 0);
+});
+
+test("warehouse floor switch exposes only operational floors", () => {
+  assert.match(source, /switchWarehouseFloor\("1F"\)/);
+  assert.match(source, /switchWarehouseFloor\("3F"\)/);
+  assert.match(source, /switchWarehouseFloor\("4F"\)/);
+  assert.doesNotMatch(source, />2F<\/b>/);
+  assert.doesNotMatch(source, />5F<\/b>/);
+});
+
+test("rack elevation warns only for occupied unbound legacy locations", () => {
+  assert.match(source, /location\.occupancy_status === "occupied" \|\| rackLocationInventoryItems\(location\)\.length > 0/);
+  assert.match(source, /个有货旧货位未绑定货架层格，请先转入盘点待归位/);
+  assert.doesNotMatch(source, /个旧货位未绑定货架层格，未纳入本货架正视图/);
+});
+
+test("planning derives passages from floor space outside zones and keeps legacy aisles hidden", () => {
   assert.match(source, /deleteSelectedLayoutFeature/);
   assert.match(source, /deleteSelectedLayoutFeature = \(\) => deleteLayoutFeature\(selectedLayoutFeature\)/);
   assert.match(source, /\/features\/\$\{feature\.id\}\?\$\{query\.toString\(\)\}/);
   assert.match(source, /className="twin-feature-context-menu"/);
   assert.match(source, /onFeatureContextMenu=\{locationEditMode/);
-  assert.match(source, /selectedLayoutFeature\.feature_kind === "aisle" \? "删除通道" : "删除区域"/);
+  assert.match(source, /selectedLayoutFeature\?\.feature_kind === "zone"/);
+  assert.match(source, /aisleEditingEnabled=\{false\}/);
+  assert.match(source, /filter\(\(feature\) => feature\.feature_kind !== "aisle"\)/);
+  assert.match(source, /区域外自动作为通道/);
   assert.doesNotMatch(source, />新增区域<\/button>/);
   assert.doesNotMatch(source, />新增通道<\/button>/);
+  assert.doesNotMatch(source, /<option value="aisle">新增通道<\/option>/);
+  assert.doesNotMatch(source, /selectedAisle/);
 });
 
 test("ordinary planning no longer offers tight automatic pallet packing", () => {
   assert.doesNotMatch(source, />自动均匀排布空闲系统货位</);
-  assert.match(source, /系统不再强制把栈板紧贴均匀排布/);
+  assert.match(source, /系统不强制紧贴均匀排布/);
 });
 
 test("count changes send the complete location snapshot even when it is empty", () => {

@@ -423,6 +423,26 @@ def ground_slots_adjacent(left: WarehouseGroundLayoutSlot, right: WarehouseGroun
     rx, ry = float(right.x_mm), float(right.y_mm)
     lw, ld = float(left.width_mm), float(left.depth_mm)
     rw, rd = float(right.width_mm), float(right.depth_mm)
+    left_location, right_location = getattr(left, 'location', None), getattr(right, 'location', None)
+    if left_location is not None or right_location is not None:
+        a = getattr(left_location, 'floor3_layout', None)
+        b = getattr(right_location, 'floor3_layout', None)
+        if a is None or b is None:
+            return False
+        # Original published slots are immutable history. Current percentages
+        # share one zone frame; infer its scale from the unchanged footprints.
+        # Translation and Y reflection do not affect adjacency.
+        if min(float(a.width_pct), float(a.height_pct), float(b.width_pct), float(b.height_pct)) <= 0:
+            return False
+        aw, bw = lw * 100 / float(a.width_pct), rw * 100 / float(b.width_pct)
+        ah, bh = ld * 100 / float(a.height_pct), rd * 100 / float(b.height_pct)
+        if abs(aw-bw) > max(1.0, max(aw,bw)*0.0001) or abs(ah-bh) > max(1.0, max(ah,bh)*0.0001):
+            return False
+        scale_x, scale_y = (aw+bw)/200, (ah+bh)/200
+        lx, ly = float(a.left_pct)*scale_x, float(a.top_pct)*scale_y
+        rx, ry = float(b.left_pct)*scale_x, float(b.top_pct)*scale_y
+        lw, ld = float(a.width_pct)*scale_x, float(a.height_pct)*scale_y
+        rw, rd = float(b.width_pct)*scale_x, float(b.height_pct)*scale_y
     vertical_edge = (isclose(lx + lw, rx, abs_tol=1.0) or isclose(rx + rw, lx, abs_tol=1.0)) and (
         min(ly + ld, ry + rd) - max(ly, ry) > 1.0
     )

@@ -274,12 +274,21 @@ def _segment_obstacle_bounds(points: list, width_mm: float) -> list[dict]:
     for index in range(len(points) - 1):
         first = points[index]
         second = points[index + 1]
+        dx = float(second[0]) - float(first[0])
+        dy = float(second[1]) - float(first[1])
+        length = math.hypot(dx, dy)
+        if length < 1:
+            continue
+        # Match the rendered segment: width extends along its normal only,
+        # never beyond its endpoints along the direction of travel.
+        pad_x = abs(dy / length * half)
+        pad_y = abs(dx / length * half)
         bounds.append(
             {
-                "min_x": min(float(first[0]), float(second[0])) - half,
-                "max_x": max(float(first[0]), float(second[0])) + half,
-                "min_y": min(float(first[1]), float(second[1])) - half,
-                "max_y": max(float(first[1]), float(second[1])) + half,
+                "min_x": min(float(first[0]), float(second[0])) - pad_x,
+                "max_x": max(float(first[0]), float(second[0])) + pad_x,
+                "min_y": min(float(first[1]), float(second[1])) - pad_y,
+                "max_y": max(float(first[1]), float(second[1])) + pad_y,
             }
         )
     return bounds
@@ -345,7 +354,11 @@ def _physical_obstacle_bounds(floor_layout: dict) -> list[dict]:
         kind = feature.get("feature_kind")
         subtype = feature.get("subtype")
         points = feature.get("points") or []
-        if kind == "aisle" or (kind == "structure" and subtype == "custom_column"):
+        # The measured floor envelope is the passage surface. Zones carve out
+        # storage space, so legacy drawn aisle lines no longer block locations
+        # that are validly contained by their own zone. Keep those source
+        # features in the layout for history and rollback.
+        if kind == "structure" and subtype == "custom_column":
             obstacles.extend(
                 _segment_obstacle_bounds(points, float(feature.get("width_mm") or 0))
             )
@@ -822,7 +835,7 @@ def validate_capacity_layout_slots_for_zone(
             for obstacle in obstacles
         ):
             raise Floor1CandidatePlanningError(
-                f"货位 {slot.get('location_id') or ''} 与柱子、通道或其他禁放设施冲突",
+                f"货位 {slot.get('location_id') or ''} 与柱子、设备、货架或其他禁放设施冲突",
                 status_code=409,
             )
         for previous in physical:

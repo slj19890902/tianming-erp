@@ -300,6 +300,7 @@ def begin_warehouse_twin_one_step_publish(
     *,
     expected_effective_revision: str,
     expected_published_revision: str,
+    geometry_only: bool = False,
     published_path: Path | None = None,
     draft_path: Path | None = None,
 ) -> LayoutOneStepDraftContext:
@@ -384,7 +385,26 @@ def begin_warehouse_twin_one_step_publish(
 
         one_step_floor_revision = published_revision
         one_step_feature = published_feature
-        if active_draft is not None and published_feature is None:
+        if geometry_only:
+            if active_draft is None or published_feature is None or draft_feature is None:
+                raise WarehouseTwinLayoutEditConflictError("当前区域没有可应用的已保存调整")
+            isolated = _new_draft_document(published_source)
+            isolated_floor = isolated["floors"][normalized]
+            isolated_feature = deepcopy(published_feature)
+            for key in ("points", "ground_location_draft"):
+                if key in draft_feature:
+                    isolated_feature[key] = deepcopy(draft_feature[key])
+            isolated_feature["version"] = max(int(draft_feature.get("version") or 1), int(published_feature.get("version") or 1))
+            isolated_floor["features"] = [isolated_feature if f.get("id") == feature_id else f
+                                          for f in isolated_floor["features"]]
+            isolated_floor["layout_edited_at"] = _utc_iso()
+            isolated_floor["revision"] = _floor_revision(isolated_floor)
+            isolated["generated_at"] = isolated_floor["layout_edited_at"]
+            _mark_draft_changed(isolated, normalized)
+            _write_document(draft_target, isolated)
+            one_step_floor_revision = str(isolated_floor["revision"])
+            one_step_feature = isolated_feature
+        elif active_draft is not None and published_feature is None:
             # A newly drawn zone exists only in the administrator's advanced
             # draft.  Build a disposable draft from the published map and
             # inject only that selected zone.  Publishing the full advanced
@@ -459,6 +479,8 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
     floor_code: str,
     feature_id: str,
     *,
+    geometry_only: bool = False,
+    remaining_location_drafts: dict[str, Any] | None = None,
     published_path: Path | None = None,
     draft_path: Path | None = None,
 ) -> bool:
@@ -507,7 +529,7 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
         # but consume the selected zone's storage-policy draft.  The freshly
         # published policy is authoritative for these fields.
         rebased_feature = deepcopy(advanced_features[advanced_index])
-        for key in _ZONE_POLICY_FIELDS:
+        for key in (("points", "ground_location_draft") if geometry_only else _ZONE_POLICY_FIELDS):
             if key in published_feature:
                 rebased_feature[key] = deepcopy(published_feature[key])
             else:
@@ -517,6 +539,9 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
             int(published_feature.get("version") or 1),
         )
         advanced_features[advanced_index] = rebased_feature
+        for item in advanced_features:
+            if item.get("id") in (remaining_location_drafts or {}):
+                item["ground_location_draft"] = deepcopy(remaining_location_drafts[item["id"]])
         advanced_floor["features"] = advanced_features
         advanced_floor["erp_area_codes"] = sorted(
             {
@@ -586,6 +611,150 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
             "validation_warnings",
             "published_at",
             "last_publish",
+        ):
+            meta.pop(key, None)
+        _write_document(draft_target, advanced)
+        return True
+
+
+def begin_warehouse_twin_one_step_rack_publish(
+    floor_code: str,
+    rack_id: str,
+    *,
+    expected_effective_revision: str,
+    expected_published_revision: str,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> LayoutOneStepDraftContext:
+    """Publish one saved rack without consuming unrelated administrator edits."""
+
+    normalized = _normalize_floor_code(floor_code)
+    published_source = _published_layout_paths(published_path).source
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        published = _read_document(published_source)
+        published_floor = published["floors"].get(normalized)
+        if not isinstance(published_floor, dict):
+            raise WarehouseTwinLayoutEditNotFoundError(f"数字孪生平面缺少 {normalized}")
+        published_revision = str(published_floor.get("revision") or "")
+        if published_revision != str(expected_published_revision or ""):
+            raise WarehouseTwinLayoutEditConflictError("正式地图已更新，请刷新后重新确认")
+        draft_snapshot = snapshot_warehouse_twin_layout_draft(draft_path=draft_target)
+        active_draft = _active_draft_document_unlocked(
+            published_path=published_source, draft_path=draft_target, create=False,
+        )
+        if active_draft is None:
+            raise WarehouseTwinLayoutEditConflictError("当前货架没有可应用的已保存调整")
+        effective_floor = active_draft["floors"].get(normalized)
+        if not isinstance(effective_floor, dict):
+            raise WarehouseTwinLayoutEditError(f"布局草稿缺少 {normalized}")
+        if str(effective_floor.get("revision") or "") != str(expected_effective_revision or ""):
+            raise WarehouseTwinLayoutEditConflictError("地图或货架已被其他操作更新，请刷新后重新确认")
+        draft_rack = next(
+            (item for item in effective_floor.get("racks") or [] if str(item.get("id") or "") == rack_id),
+            None,
+        )
+        if not isinstance(draft_rack, dict):
+            raise WarehouseTwinLayoutEditNotFoundError("货架不存在或已从草稿删除")
+        published_rack = next(
+            (item for item in published_floor.get("racks") or [] if str(item.get("id") or "") == rack_id),
+            None,
+        )
+        if published_rack == draft_rack:
+            raise WarehouseTwinLayoutEditConflictError("当前货架没有可应用的已保存调整")
+
+        isolated = _new_draft_document(published_source)
+        isolated_floor = isolated["floors"][normalized]
+        isolated_racks = list(isolated_floor.get("racks") or [])
+        index = next(
+            (i for i, item in enumerate(isolated_racks) if str(item.get("id") or "") == rack_id),
+            None,
+        )
+        if index is None:
+            isolated_racks.append(deepcopy(draft_rack))
+        else:
+            isolated_racks[index] = deepcopy(draft_rack)
+        isolated_floor["racks"] = isolated_racks
+        isolated_floor["layout_edited_at"] = _utc_iso()
+        isolated_floor["revision"] = _floor_revision(isolated_floor)
+        isolated["generated_at"] = isolated_floor["layout_edited_at"]
+        _mark_draft_changed(isolated, normalized)
+        _write_document(draft_target, isolated)
+        return LayoutOneStepDraftContext(
+            draft_snapshot=draft_snapshot,
+            had_active_draft=True,
+            published_floor_revision=str(isolated_floor["revision"]),
+            published_feature_version=int(draft_rack.get("version") or 1),
+        )
+
+
+def rebase_warehouse_twin_advanced_rack_after_one_step(
+    context: LayoutOneStepDraftContext,
+    floor_code: str,
+    rack_id: str,
+    *,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> bool:
+    """Consume one applied rack and restore every unrelated saved edit."""
+
+    if not context.draft_snapshot.existed or context.draft_snapshot.content is None:
+        raise WarehouseTwinLayoutEditError("高级维护草稿快照缺失")
+    normalized = _normalize_floor_code(floor_code)
+    published_source = _published_layout_paths(published_path).source
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        try:
+            advanced = json.loads(context.draft_snapshot.content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise WarehouseTwinLayoutEditError("高级维护草稿快照无法读取") from error
+        published = _read_document(published_source)
+        advanced_floor = (advanced.get("floors") or {}).get(normalized)
+        published_floor = (published.get("floors") or {}).get(normalized)
+        if not isinstance(advanced_floor, dict) or not isinstance(published_floor, dict):
+            raise WarehouseTwinLayoutEditError(f"地图草稿缺少 {normalized}")
+        published_rack = next(
+            (item for item in published_floor.get("racks") or [] if str(item.get("id") or "") == rack_id),
+            None,
+        )
+        advanced_racks = list(advanced_floor.get("racks") or [])
+        advanced_index = next(
+            (i for i, item in enumerate(advanced_racks) if str(item.get("id") or "") == rack_id),
+            None,
+        )
+        if not isinstance(published_rack, dict) or advanced_index is None:
+            raise WarehouseTwinLayoutEditError("货架应用后身份回读失败")
+        advanced_racks[advanced_index] = deepcopy(published_rack)
+        advanced_floor["racks"] = advanced_racks
+        advanced_floor["revision"] = _floor_revision(advanced_floor)
+        advanced["generated_at"] = _utc_iso()
+
+        def semantic_floors(document: dict[str, Any]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for code, floor in (document.get("floors") or {}).items():
+                normalized_floor = deepcopy(floor)
+                for key in ("revision", "layout_edited_at", "layout_edit_receipts"):
+                    normalized_floor.pop(key, None)
+                result[str(code)] = normalized_floor
+            return result
+
+        if semantic_floors(advanced) == semantic_floors(published):
+            draft_target.unlink(missing_ok=True)
+            return False
+        meta = advanced.get("draft_meta")
+        if not isinstance(meta, dict):
+            raise WarehouseTwinLayoutEditError("高级维护草稿元数据缺失")
+        meta["status"] = "draft"
+        meta["updated_at"] = _utc_iso()
+        meta["base_published_sha256"] = _path_sha256(published_source)
+        meta["base_floor_revisions"] = {
+            code: str(item.get("revision") or "")
+            for code, item in published.get("floors", {}).items()
+            if isinstance(item, dict)
+        }
+        for key in (
+            "validated_at", "validated_floor_revisions", "validation_blockers",
+            "validation_warnings", "published_at", "last_publish",
         ):
             meta.pop(key, None)
         _write_document(draft_target, advanced)
@@ -1900,6 +2069,39 @@ def create_warehouse_twin_rack(
     )
 
 
+def number_warehouse_twin_area_racks(
+    floor_code: str, *, expected_revision: str, operation_key: str,
+    area_feature_id: str, path: Path | None = None,
+) -> LayoutMutation:
+    """Number display names in the fixed XY plan; retain every physical identity."""
+    def mutate(floor: dict[str, Any]) -> dict[str, Any]:
+        zone = _feature(floor, area_feature_id)
+        if zone.get("feature_kind") != "zone":
+            raise WarehouseTwinLayoutEditError("请选择仓储区域")
+        area_code = _feature_area_code(zone)
+        racks = [r for r in floor.get("racks", []) if
+                 r.get("area_feature_id") == area_feature_id or
+                 (not r.get("area_feature_id") and r.get("area_code") == area_code)]
+        if not racks:
+            raise WarehouseTwinLayoutEditError("当前区域没有货架")
+        if any(r.get("is_locked") or r.get("mold_rack_code") for r in racks):
+            raise WarehouseTwinLayoutEditConflictError("区域含锁定货架或专项模具架，不能批量改号")
+        racks.sort(key=lambda r: (float(r["x_mm"]), -float(r["y_mm"]), str(r["id"])))
+        prefix = str(zone.get("formal_area_name") or zone.get("name") or area_code)[:80]
+        for index, rack in enumerate(racks, 1):
+            name = f"{prefix} {index:02d}号架"
+            if rack.get("name") != name:
+                rack["name"] = name
+                rack["version"] = int(rack.get("version") or 1) + 1
+                rack["status"] = "candidate"
+        return {"area_feature_id": area_feature_id, "racks": [dict(r) for r in racks]}
+    result = _apply_mutation(floor_code, expected_revision=expected_revision,
+        operation_key=operation_key, action="rack.number_area", mutate=mutate, path=path)
+    if result.value.get("area_feature_id") != area_feature_id:
+        raise WarehouseTwinLayoutEditConflictError("该操作键已用于其他区域编号")
+    return result
+
+
 def update_warehouse_twin_rack(
     floor_code: str,
     rack_id: str,
@@ -2334,6 +2536,8 @@ def update_warehouse_twin_feature_geometry(
     expected_kind: str | None = None,
     action: str = "feature.geometry.update",
     path: Path | None = None,
+    prepare_ground: Callable[[dict[str, Any]], dict | None] | None = None,
+    request_hash: str | None = None,
 ) -> LayoutMutation:
     def mutate(floor: dict[str, Any]) -> dict[str, Any]:
         feature = _feature(floor, feature_id)
@@ -2359,6 +2563,12 @@ def update_warehouse_twin_feature_geometry(
             normalized_points,
             label="区域边界" if feature_kind == "zone" else "通道",
         )
+        if prepare_ground is not None and feature_kind == 'zone':
+            ground = prepare_ground(feature)
+            if ground is not None:
+                feature['ground_location_draft'] = ground
+        if request_hash is not None:
+            feature['geometry_request_hash'] = request_hash
         feature['points'] = normalized_points
         feature['area_mm2'] = (
             _zone_area_mm2(normalized_points)
@@ -2385,6 +2595,8 @@ def update_warehouse_twin_feature_geometry(
     ]
     if not mutation.applied and mutation.value.get('points') != normalized_replay_points:
         raise WarehouseTwinLayoutEditConflictError('该操作键已用于不同的区域边界')
+    if not mutation.applied and request_hash is not None and mutation.value.get('geometry_request_hash') != request_hash:
+        raise WarehouseTwinLayoutEditConflictError('该操作键已用于不同的货位调整')
     return mutation
 
 

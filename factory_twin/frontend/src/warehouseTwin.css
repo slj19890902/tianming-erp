@@ -1287,6 +1287,14 @@ body.warehouse-twin-page {
 .twin-selected-aisle small,
 .twin-rack-direction small { color: #687d85; font-size: 8px; line-height: 1.35; }
 .twin-zone-geometry-grid input { min-height: 31px; font-size: 10px; }
+.twin-zone-geometry-grid label,
+.twin-rack-primary-fields label { min-width: 0; }
+.twin-zone-geometry-grid input,
+.twin-rack-primary-fields input,
+.twin-rack-primary-fields select { min-width: 0; width: 100%; box-sizing: border-box; }
+@media (max-width: 560px) {
+  .twin-workspace.location-editing .twin-inspector { width: calc(100vw - 16px); right: 7px; box-sizing: border-box; }
+}
 .twin-selected-aisle { padding: 7px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 6px; border: 1px solid #bfd5d1; border-radius: 3px; background: #fff; }
 .twin-selected-aisle > span { color: #0f665f; font-size: 9px; font-weight: 800; }
 .twin-selected-aisle small { grid-column: 1 / -1; }
@@ -2180,14 +2188,7 @@ body.warehouse-twin-page {
 }
 
 .warehouse-twin-shell .twin-layout-map-tools,
-.warehouse-twin-shell .twin-ground-layout-panel,
 .warehouse-twin-shell .twin-mold-rack-planner { margin: 7px; padding: 8px; gap: 6px; }
-.warehouse-twin-shell .twin-ground-layout-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.warehouse-twin-shell .twin-ground-layout-grid label { gap: 3px; }
-.warehouse-twin-shell .twin-ground-layout-grid input,
-.warehouse-twin-shell .twin-ground-layout-grid select { height: 32px; padding: 0 7px; font-size: var(--warehouse-min-readable-size); }
-.warehouse-twin-shell .twin-ground-layout-actions { gap: 6px; }
-.warehouse-twin-shell .twin-ground-layout-actions button { min-height: 32px; }
 .warehouse-twin-shell .twin-mold-rack-structure-editor { padding: 7px; gap: 6px; }
 .warehouse-twin-shell .twin-mold-rack-structure-editor input { min-height: 32px; font-size: var(--warehouse-min-readable-size); }
 .warehouse-twin-shell .twin-location-point-planner { padding: 7px; gap: 6px; }
@@ -2195,8 +2196,7 @@ body.warehouse-twin-page {
 
 @media (max-width: 560px) {
   .twin-layout-map-tools-top { grid-template-columns: minmax(0, 1fr); }
-  .twin-zone-geometry-grid,
-  .warehouse-twin-shell .twin-ground-layout-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .twin-zone-geometry-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .twin-zone-primary-fields,
   .twin-zone-policy-fields,
   .twin-rack-primary-fields,
@@ -2236,7 +2236,10 @@ body.warehouse-twin-page {
   overflow: hidden;
   background: #f7f8fa;
 }
-.twin-map-pane .editor-canvas { width: 100%; height: 100%; min-height: 0; }
+.twin-map-pane { display: flex; flex-direction: column; }
+.twin-map-pane .twin-stage-heading { position: static; flex: 0 0 auto; gap: 8px; padding: 4px 8px; }
+.twin-map-pane .twin-effective-map-status { flex: 0 0 auto; }
+.twin-map-pane .editor-canvas { width: 100%; height: auto; flex: 1 1 0; min-height: 0; }
 .twin-stage.rack-focused {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr);
@@ -2419,3 +2422,17 @@ body.warehouse-twin-page {
 .twin-pending-placement .twin-search-result-list { max-height: 240px; overflow-y: auto; }
 .twin-pending-placement button { min-height: 40px; overflow-wrap: anywhere; }
 .twin-pending-placement button[aria-pressed="true"] { outline: 2px solid #2563eb; outline-offset: -2px; }
+
+.twin-area-rack-numbering { display: grid; gap: 6px; margin: 8px 0; min-width: 0; }
+.twin-area-rack-numbering ol { margin: 0; padding-left: 24px; max-height: 220px; overflow-y: auto; }
+.twin-area-rack-numbering li { padding: 4px 0; }
+.twin-area-rack-numbering li span { display: block; font-size: 12px; color: #52677c; }
+.twin-area-rack-numbering button { min-height: 36px; max-width: 100%; overflow-wrap: anywhere; }
+.twin-effective-map-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 6px 10px; background: #fffaf0; color: #594b2b; font-size: 13px; }
+.twin-location-legend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; color: #334155; }
+.twin-location-legend i { display: inline-block; width: 12px; height: 10px; border: 1px solid #9b927d; margin-left: 6px; }
+.twin-location-legend .occupied { background: #16a34a; }
+.twin-location-legend .empty { background: #fff8e7; }
+.twin-location-legend .located { background: #2563eb; }
+.twin-location-legend .selected { background: #7c3aed; }
+.twin-location-legend .conflict { background: #dc2626; }

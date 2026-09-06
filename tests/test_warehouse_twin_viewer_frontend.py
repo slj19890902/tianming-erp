@@ -93,6 +93,8 @@ def test_operational_twin_declutters_labels_and_keeps_details_in_the_inspector()
     assert 'if (layers.labels) {' in CANVAS
     assert "warehouseFrustumDivisor(layout.floor_code, visualTheme)" in CANVAS
     assert "aisleSurfaceStyle(visualTheme)" in CANVAS
+    assert "warehousePassageSurfaceStyle(visualTheme)" in CANVAS
+    assert "effectiveMapFeatures(visualTheme, layout.features)" in CANVAS
 
 
 def test_phase2c15_uses_low_cost_warehouse_rendering_on_factory_computers() -> None:
@@ -302,11 +304,11 @@ def test_area_planning_defaults_to_one_result_oriented_confirmation() -> None:
     assert "原有高级维护草稿已保留，没有随本次确认发布" in SOURCE
     assert 'palletEditingOnly={locationEditMode || warehouseMoveModeActive}' in SOURCE
     assert "拖动并保存现场货位" not in SOURCE
-    assert "只有点击区域空白处才选择区域" in SOURCE
-    assert "系统不再强制把栈板紧贴均匀排布" in SOURCE
-    assert "主动留出通行、货物外伸和操作间距" in SOURCE
+    assert "点空白选区域" in SOURCE
+    assert "系统不强制紧贴均匀排布" in SOURCE
+    assert "区域外自动作为通道" in SOURCE
     assert "逻辑货位点（非实尺度）" in SOURCE
-    assert 'rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && Boolean(selectedRackEditDraft) && !spatialEditBusy}' in SOURCE
     assert '<b>用途与容量</b>' in SOURCE
     assert "advancedAreaMaintenanceOpen && <div className=\"twin-layout-draft-workflow\"" in SOURCE
     assert "高级维护" in SOURCE
@@ -419,8 +421,8 @@ def test_phase2c8_keeps_location_layout_editing_in_2d_and_25d_read_only() -> Non
     assert 'palletEditingOnly={locationEditMode || warehouseMoveModeActive}' in SOURCE
     assert "draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : layoutMapToolsOpen ? EMPTY_CANVAS_IDS : locationPointEditPalletIds}" in SOURCE
     assert 'readOnly={!locationEditMode && !warehouseMoveModeActive}' in SOURCE
-    assert 'rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}' in SOURCE
-    assert 'featureEditingEnabled={locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && Boolean(selectedRackEditDraft) && !spatialEditBusy}' in SOURCE
+    assert 'featureEditingEnabled={!spatialEditBusy && locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"}' in SOURCE
     assert "选择区域或设备" not in SOURCE
 
 
@@ -428,13 +430,13 @@ def test_phase2c13_uses_2d_layout_mode_for_rack_and_area_spatial_modeling() -> N
     assert 'if (locationEditMode)' in SOURCE
     assert 'setRackFocusId(null)' in SOURCE
     assert 'onMoveRack={moveRackDraft}' in SOURCE
-    assert 'rackEditingEnabled={locationEditMode && layoutMapToolsOpen && advancedAreaMaintenanceOpen}' in SOURCE
+    assert 'rackEditingEnabled={locationEditMode && Boolean(selectedRackEditDraft) && !spatialEditBusy}' in SOURCE
     assert 'className="twin-rack-layout-editor"' in SOURCE
     assert "逐层设置" in SOURCE
     assert "层格数" in SOURCE
     assert "本层尚未分格" in SOURCE
     assert "level_cell_counts" in SOURCE
-    assert "发布后，成品和半成品货架会同步为稳定层格" in SOURCE
+    assert "保存并应用后，成品和半成品货架会同步为稳定层格" in SOURCE
     assert "添加货架" in SOURCE
     assert "删除货架" in SOURCE
     assert "区域设置" in SOURCE
@@ -443,7 +445,7 @@ def test_phase2c13_uses_2d_layout_mode_for_rack_and_area_spatial_modeling() -> N
     assert "货架＋栈板混合区" in SOURCE
     assert "/api/warehouse/twin-layout/floors/${floorCode}/racks" in SOURCE
     assert "/storage-policy" in SOURCE
-    assert "员工地图、库存数量、栈板和正式库位均不改变" in SOURCE
+    assert "库存数量不变" in SOURCE
     assert "rackEditingEnabled?: boolean" in CANVAS
 
 
@@ -452,10 +454,10 @@ def test_p1_34c_layout_edits_use_admin_draft_validation_and_explicit_publish() -
     assert "/draft/validate" in SOURCE
     assert "/draft/publish" in SOURCE
     assert "/draft/discard" in SOURCE
-    assert "保存到布局草稿" in SOURCE
+    assert "当前对象编辑预览" in SOURCE
     assert "校验草稿" in SOURCE
     assert "发布布局" in SOURCE
-    assert "员工仍看已发布地图" in SOURCE
+    assert "当前只显示已发布地图" in SOURCE
     assert "raw.revision || raw.source_sha256" in SOURCE
 
 
@@ -597,8 +599,8 @@ def test_phase2c10_flags_column_conflicts_and_blocks_conflicting_layout_drafts()
     assert "该货位与固定柱子冲突" in SOURCE
     assert "planningGeometryConflicts" in SOURCE
     assert "柱子冲突" in ERP_INDEX
-    assert "货位越界，或与其他货位、柱子、通道、设备、货架、禁放区冲突" in SOURCE
-    assert "已阻止整区保存" in SOURCE
+    assert "货位越界，或与其他货位、柱子、设备、货架、禁放区冲突" in SOURCE
+    assert "红色冲突可先保存" in SOURCE
     assert "EMPTY_CANVAS_POINTS" in SOURCE
 
 

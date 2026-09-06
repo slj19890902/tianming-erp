@@ -16,10 +16,14 @@ import { snapPalletPosition } from "./palletSnap.mjs";
 import { palletStatusInfo } from "./palletStatus";
 import {
   aisleSurfaceStyle,
+  effectiveMapFeatures,
   operationalEntitySelectable,
   wallSurfaceStyle,
   warehouseAisleColor,
-  warehouseFrustumDivisor
+  warehouseFrustumDivisor,
+  warehousePassageEnvelope,
+  warehousePassageSurfaceStyle,
+  warehouseZoneColor
 } from "./operationalView.mjs";
 import { transformReferencePoint } from "./referenceOverlay.mjs";
 import type {
@@ -56,6 +60,7 @@ interface Props {
   palletEditingOnly?: boolean;
   rackEditingEnabled?: boolean;
   featureEditingEnabled?: boolean;
+  aisleEditingEnabled?: boolean;
   mapPanLocked?: boolean;
   allowPalletSelection?: boolean;
   palletSnapEnabled: boolean;
@@ -71,6 +76,10 @@ interface Props {
   onMoveRack: (id: string, xMm: number, yMm: number) => void;
   onMovePallet: (id: string, xMm: number, yMm: number) => void;
   onMoveFeature: (id: string, deltaXmm: number, deltaYmm: number) => void;
+  onNudgeFeature?: (id: string, deltaXmm: number, deltaYmm: number) => void;
+  onFinishFeatureNudge?: () => void;
+  onNudgePallet?: (id: string, deltaXmm: number, deltaYmm: number) => void;
+  onFinishPalletNudge?: () => void;
   onFeatureContextMenu?: (id: string, clientX: number, clientY: number) => void;
   onEntityContextMenu?: (entity: NonNullable<SelectedEntity>, clientX: number, clientY: number) => boolean;
   onDropAsset: (templateId: string, xMm: number, yMm: number) => void;
@@ -161,7 +170,7 @@ function syncEntityHighlights(runtime: CanvasRuntime, selected: SelectedEntity, 
   }
   if (focusTarget) {
     const focusedObject = runtime.entityNodes.get(focusedKey!);
-    if (focusedObject) addEntityHighlight(runtime.searchHighlight, focusedObject, 0x7c3aed, 160);
+    if (focusedObject) addEntityHighlight(runtime.searchHighlight, focusedObject, 0x2563eb, 160);
   }
   runtime.requestRender();
 }
@@ -170,11 +179,11 @@ function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], pall
   clearHighlightGroup(runtime.resultHighlight);
   for (const id of featureIds) {
     const object = runtime.entityNodes.get(`feature:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, 0x7c3aed, 120);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, 0x2563eb, 120);
   }
   for (const id of palletIds) {
     const object = runtime.entityNodes.get(`pallet:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, 0x7c3aed, 100);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, 0x2563eb, 100);
   }
   runtime.requestRender();
 }
@@ -321,6 +330,27 @@ function warehouseRackPickProxy(rack: Rack) {
   return proxy;
 }
 
+function passageGeometryFromEnvelope(envelope: number[][], centerX: number, centerY: number) {
+  const rowCount = Math.floor(envelope.length / 2);
+  if (rowCount < 2) return null;
+  const positions: number[] = [];
+  const point = ([x, y]: number[]) => [x - centerX, 0, -(y - centerY)];
+  for (let index = 0; index < rowCount - 1; index += 1) {
+    const leftTop = point(envelope[index]);
+    const leftBottom = point(envelope[index + 1]);
+    const rightTop = point(envelope[envelope.length - 1 - index]);
+    const rightBottom = point(envelope[envelope.length - 2 - index]);
+    positions.push(
+      ...leftTop, ...rightTop, ...leftBottom,
+      ...leftBottom, ...rightTop, ...rightBottom
+    );
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
 type WarehousePalletInstance = {
   pallet: Pallet;
   position: THREE.Vector3;
@@ -393,6 +423,7 @@ export function EditorCanvas({
   palletEditingOnly = false,
   rackEditingEnabled = false,
   featureEditingEnabled = true,
+  aisleEditingEnabled = true,
   mapPanLocked = false,
   allowPalletSelection = false,
   palletSnapEnabled,
@@ -408,6 +439,10 @@ export function EditorCanvas({
   onMoveRack,
   onMovePallet,
   onMoveFeature,
+  onNudgeFeature,
+  onFinishFeatureNudge,
+  onNudgePallet,
+  onFinishPalletNudge,
   onFeatureContextMenu,
   onEntityContextMenu,
   onDropAsset,
@@ -428,6 +463,49 @@ export function EditorCanvas({
   const coordinateRef = useRef<HTMLElement>(null);
   const runtimeRef = useRef<CanvasRuntime | null>(null);
   const selectedRef = useRef<SelectedEntity>(selected);
+  const nudgeHandlers = useRef({ onNudgeFeature, onFinishFeatureNudge, onNudgePallet, onFinishPalletNudge, featureEditingEnabled });
+  nudgeHandlers.current = { onNudgeFeature, onFinishFeatureNudge, onNudgePallet, onFinishPalletNudge, featureEditingEnabled };
+  useEffect(() => {
+    if (readOnly || viewMode !== "2d") return;
+    let started = 0;
+    let changed: "feature" | "pallet" | null = null;
+    const finish = () => {
+      started = 0;
+      const kind = changed; changed = null;
+      if (kind) requestAnimationFrame(() => {
+        if (kind === "feature") nudgeHandlers.current.onFinishFeatureNudge?.();
+        else nudgeHandlers.current.onFinishPalletNudge?.();
+      });
+    };
+    const down = (event: KeyboardEvent) => {
+      if (!/^Arrow(Up|Down|Left|Right)$/.test(event.key) || event.altKey || event.ctrlKey || event.metaKey) return;
+      if ((event.target as HTMLElement)?.closest?.("input,select,textarea,[contenteditable=true],[role=dialog]")) return;
+      const selection = selectedRef.current;
+      const runtime = runtimeRef.current;
+      if (!runtime || (selection?.kind !== "feature" && selection?.kind !== "pallet")) return;
+      const callback = selection.kind === "feature"
+        ? nudgeHandlers.current.featureEditingEnabled && nudgeHandlers.current.onNudgeFeature
+        : nudgeHandlers.current.onNudgePallet;
+      if (!callback) return;
+      const entity = runtime.entityNodes.get(`${selection.kind}:${selection.id}`);
+      if (!entity?.userData.draggable) return;
+      event.preventDefault();
+      if (!event.repeat || !started) started = performance.now();
+      const held = performance.now() - started;
+      const step = held >= 2000 ? 100 : held >= 600 ? 10 : 1;
+      const direction = new THREE.Vector3(event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0,
+        event.key === "ArrowUp" ? 1 : event.key === "ArrowDown" ? -1 : 0, 0).applyQuaternion(runtime.camera.quaternion);
+      const length = Math.hypot(direction.x, direction.z);
+      if (length < .001) return;
+      changed = selection.kind;
+      callback(selection.id, direction.x / length * step, -direction.z / length * step);
+    };
+    const up = (event: KeyboardEvent) => { if (/^Arrow(Up|Down|Left|Right)$/.test(event.key)) finish(); };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", finish);
+    return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); window.removeEventListener("blur", finish); };
+  }, [readOnly, viewMode]);
   const focusTargetRef = useRef<CanvasFocusTarget | null>(focusTarget);
   const lastFocusKeyRef = useRef("");
   const handlersRef = useRef({ onSelect, onMoveEquipment, onMoveRack, onMovePallet, onMoveFeature, onFeatureContextMenu, onEntityContextMenu, onDropAsset, onDropRack, onDropPallet, onDrawPoint, onMeasurePoint });
@@ -545,13 +623,31 @@ export function EditorCanvas({
     floor.position.y = -4;
     floor.receiveShadow = true;
     scene.add(floor);
+    const passageStyle = warehousePassageSurfaceStyle(visualTheme);
+    if (passageStyle.visible) {
+      const passageEnvelope = warehousePassageEnvelope(bounds, layout.structures);
+      const envelopeGeometry = passageGeometryFromEnvelope(passageEnvelope, centerX, centerY);
+      const passageSurface = new THREE.Mesh(
+        envelopeGeometry
+          ? envelopeGeometry
+          : new THREE.PlaneGeometry(
+              Math.max(bounds.max_x - bounds.min_x, 1),
+              Math.max(bounds.max_y - bounds.min_y, 1)
+            ),
+        new THREE.MeshBasicMaterial({ color: passageStyle.color, side: THREE.DoubleSide })
+      );
+      if (!envelopeGeometry) passageSurface.rotation.x = -Math.PI / 2;
+      passageSurface.position.y = passageStyle.elevationMm;
+      passageSurface.userData = { visualKind: "automatic_passage_surface" };
+      scene.add(passageSurface);
+    }
     const grid = new THREE.GridHelper(
       span * 2.2,
       40,
       warehouseTheme ? 0x9fb2ba : 0xcbd5e1,
       warehouseTheme ? 0xd2dce1 : 0xe2e8f0
     );
-    grid.position.y = -2;
+    grid.position.y = warehouseTheme ? 2 : -2;
     scene.add(grid);
     const worldPoint = (xMm: number, yMm: number, elevation = 0) =>
       new THREE.Vector3(xMm - centerX, elevation, -(yMm - centerY));
@@ -717,7 +813,7 @@ export function EditorCanvas({
       }
     }
 
-    for (const feature of layout.features) {
+    for (const feature of effectiveMapFeatures(visualTheme, layout.features)) {
       if (
         calibrationMode
         && layout.floor_code.toUpperCase() === "4F"
@@ -734,11 +830,14 @@ export function EditorCanvas({
         ? "#dc2626"
         : feature.feature_kind === "aisle"
             ? warehouseAisleColor(layout.floor_code, visualTheme, feature.color)
-            : feature.color;
+            : feature.feature_kind === "zone"
+              ? warehouseZoneColor(visualTheme, feature.color)
+              : feature.color;
       const group = new THREE.Group();
       const planningFeatureEditable = !readOnly
         && featureEditingEnabled
         && ["zone", "aisle"].includes(feature.feature_kind)
+        && (feature.feature_kind !== "aisle" || aisleEditingEnabled)
         && feature.subtype !== "dxf_hidden"
         && !protectedAnchor;
       group.userData = {
@@ -1532,7 +1631,7 @@ export function EditorCanvas({
       });
       renderer.dispose();
     };
-  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, mapPanLocked, allowPalletSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, effectiveDrawMode, drawPoints, drawPointLabels, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
+  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, aisleEditingEnabled, mapPanLocked, allowPalletSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, effectiveDrawMode, drawPoints, drawPointLabels, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

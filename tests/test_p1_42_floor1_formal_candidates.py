@@ -33,6 +33,47 @@ from app.services.warehouse_twin_layout import load_warehouse_twin_floor
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("points, expected", [
+    ([[10406, 8539], [16566, 8539]], (10406, 16566, 7789, 9289)),
+    ([[8539, 10406], [8539, 16566]], (7789, 9289, 10406, 16566)),
+])
+def test_aisle_width_does_not_extend_past_rendered_endpoints(points, expected):
+    from app.services.warehouse_floor1_candidate_planner import _segment_obstacle_bounds
+
+    bounds = _segment_obstacle_bounds(points, 1500)[0]
+    assert tuple(bounds[key] for key in ("min_x", "max_x", "min_y", "max_y")) == expected
+    assert _segment_obstacle_bounds(list(reversed(points)), 1500) == [bounds]
+
+
+def test_legacy_drawn_aisles_are_not_physical_obstacles_but_columns_remain_blocked():
+    from app.services.warehouse_floor1_candidate_planner import _physical_obstacle_bounds
+
+    floor = {
+        "structures": [],
+        "placements": [],
+        "racks": [],
+        "features": [
+            {
+                "id": "legacy-aisle",
+                "feature_kind": "aisle",
+                "points": [[0, 0], [5000, 0]],
+                "width_mm": 1500,
+            },
+            {
+                "id": "column",
+                "feature_kind": "structure",
+                "subtype": "custom_column",
+                "points": [[1000, 1000], [1300, 1000]],
+                "width_mm": 300,
+            },
+        ],
+    }
+    obstacles = _physical_obstacle_bounds(floor)
+    assert len(obstacles) == 1
+    assert obstacles[0]["min_x"] == 1000
+    assert obstacles[0]["max_x"] == 1300
+
+
 def _factory(tmp_path: Path):
     engine = create_sqlite_engine(tmp_path / "floor1-formal-candidates.sqlite3")
     Base.metadata.create_all(engine)
@@ -78,7 +119,9 @@ def test_floor1_candidate_plan_uses_confirmed_map_geometry() -> None:
     }
     assert plan["obstacle_count"] > 0
     assert plan["formal_location_count"] == 16
-    assert plan["long_term_pallet_capacity"] == 41
+    # Regions are the storage envelope. Legacy drawn aisle ribbons no longer
+    # remove otherwise valid positions inside a confirmed region.
+    assert plan["long_term_pallet_capacity"] == 51
     by_code = {row["area_code"]: row for row in plan["candidates"]}
     assert {"FIN-001", "FIN-002", "FIN-003"}.isdisjoint(by_code)
     dispatch_features = [

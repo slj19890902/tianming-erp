@@ -6,6 +6,7 @@ which unchanged location snapshots were verified during map application.
 from __future__ import annotations
 
 from hashlib import sha256
+from decimal import Decimal
 import json
 
 from sqlalchemy import func, select
@@ -30,8 +31,8 @@ def location_signature(location, layout):
               location.area_code, location.address_area_id, location.source_version,
               location.address_kind, location.ground_row_no, location.slot_no,
               location.placement_status, location.storage_type, layout.version,
-              str(layout.left_pct), str(layout.top_pct), str(layout.width_pct),
-              str(layout.height_pct), layout.layout_kind]
+              *(format(Decimal(str(getattr(layout, key))) or Decimal(0), '.4f') for key in
+                ('left_pct', 'top_pct', 'width_pct', 'height_pct')), layout.layout_kind]
     return sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -56,7 +57,7 @@ def application_matches(receipt, *, plan_id, plan_version, area_id, policy,
         and receipt.get("locations", {}).get(str(location.id)) == location_signature(location, layout))
 
 
-def record_map_applications(db, *, floor_layout, actor, operation_key, request=None, previous_floor_layout=None):
+def record_map_applications(db, *, floor_layout, actor, operation_key, request=None, previous_floor_layout=None, coordinate_adjustments=None):
     plans = list(db.scalars(select(WarehouseGroundLayoutPlan)
         .join(WarehouseArea, WarehouseArea.id == WarehouseGroundLayoutPlan.area_id)
         .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
@@ -68,6 +69,7 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
                  .selectinload(WarehouseLocation.floor3_layout))))
     previous = load_map_applications(db, [p.id for p in plans])
     changed = 0
+    adjustment_by_location = {row['location_id']: row for row in (coordinate_adjustments or [])}
     for plan in plans:
         policy = plan.area.storage_policy
         if not policy or policy.status != "published" or policy.storage_layout not in {"pallet_ground", "mixed"}:
@@ -108,20 +110,49 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
                 and all(abs(float(getattr(original, key)) - float(actual[key])) <= tolerance
                         for key in ("x_mm", "width_mm", "depth_mm"))
                 for original, actual in zip(slots, measured, strict=True))
-        if not direct and not legacy_reflected:
+        # An explicit coordinate draft was checked against the source map and
+        # every active location signature in this same publish transaction.
+        # Old plans/slots are immutable; verify the complete after-image here.
+        authorized_adjustment = bool(slots) and all(
+            (proof := adjustment_by_location.get(original.location_id)) is not None
+            and proof['feature_id'] == policy.map_feature_id
+            and proof['source_map_revision'] == (previous_floor_layout or {}).get('revision')
+            and proof['target_map_revision'] == floor_layout['revision']
+            and proof['after_version'] == original.location.floor3_layout.version
+            and all(abs(float(getattr(original.location.floor3_layout, key))-float(proof['after'][key])) < 0.00001
+                    for key in ('left_pct','top_pct','width_pct','height_pct'))
+            and all(abs(float(actual[key])-float(proof['absolute'][key])) <= tolerance
+                    for key in ('x_mm','y_mm','width_mm','depth_mm'))
+            for original, actual in zip(slots, measured, strict=True))
+        prior = previous.get(plan.id) or {}
+        previously_verified = bool(previous_floor_layout and previous_feature
+            and previous_feature['points'] == feature['points']
+            and prior.get('plan_id') == plan.id and prior.get('plan_version') == plan.version
+            and prior.get('area_id') == plan.area_id and prior.get('map_feature_id') == policy.map_feature_id
+            and prior.get('map_revision') == previous_floor_layout.get('revision')
+            and prior.get('locations') == {str(s.location_id): location_signature(s.location, s.location.floor3_layout) for s in slots})
+        if not direct and not legacy_reflected and not authorized_adjustment and not previously_verified:
             raise WarehouseAreaActivationError(
                 f"区域 {plan.area.area_code} 保留货位与原排位物理坐标不一致，不能随地图应用", status_code=409)
         details = {"plan_id": plan.id, "plan_version": plan.version, "area_id": plan.area_id,
             "original_map_revision": plan.published_map_revision, "map_revision": floor_layout["revision"],
             "legacy_y_reflection": bool(legacy_reflected),
+            # Detailed before/after coordinates are in TWIN_LAYOUT_PUBLISH.
+            # Keep the operational receipt small enough for the audit serializer.
+            "coordinate_adjustment_count": len(slots) if authorized_adjustment else 0,
+            "coordinate_adjustments_sha256": sha256(json.dumps(
+                [adjustment_by_location[s.location_id] for s in slots] if authorized_adjustment else [],
+                sort_keys=True, default=str).encode()).hexdigest(),
             "policy_version": policy.version, "map_feature_id": policy.map_feature_id,
             "locations": {str(s.location_id): location_signature(s.location, s.location.floor3_layout) for s in slots}}
         if previous.get(plan.id) == details:
             continue
-        append_audit_event(db, actor=actor, request=request, event_category="business", result="success",
+        saved = append_audit_event(db, actor=actor, request=request, event_category="business", result="success",
             source="web", module_code="warehouse", action_code=ACTION,
             resource="WarehouseGroundLayoutPlan", entity_type="warehouse_ground_layout_plan", entity_id=plan.id,
             request_id=sha256(f"{operation_key}:{plan.id}".encode()).hexdigest(),
             description="应用地图时核验保留货位；原排位、编号及库存未改写", details=details)
+        if json.loads(saved.details or '{}') != details:
+            raise WarehouseAreaActivationError('地图应用回执未完整保存，已撤回本次应用；草稿保留', status_code=409)
         changed += 1
     return changed

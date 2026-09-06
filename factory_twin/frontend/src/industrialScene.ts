@@ -340,12 +340,12 @@ export function buildPalletMarkerVisual(pallet: Pallet, viewMode: ViewMode, viol
       const geometry = new THREE.BoxGeometry(spec.width, height, spec.depth);
       const fill = new THREE.Mesh(
         geometry,
-        new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.3 })
+        new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.9 })
       );
       fill.position.y = height / 2;
       const outline = new THREE.LineSegments(
         new THREE.EdgesGeometry(geometry),
-        new THREE.LineBasicMaterial({ color: markerColor, transparent: true, opacity: 0.95 })
+        new THREE.LineBasicMaterial({ color: violated ? 0xdc2626 : pallet.visual_status === "empty" ? 0x9b927d : markerColor, transparent: true, opacity: 0.95 })
       );
       outline.position.copy(fill.position);
       group.add(fill, outline);

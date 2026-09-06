@@ -67,7 +67,10 @@ def pending_adjustment(feature, published):
     # Applied metadata remains an audit trail in the map; it is not a new draft.
     if value == original.get(KEY):
         return None
-    _fail('货位调整所依据的已应用地图已变化，请重读草稿核对')
+    # A floor revision also changes for unrelated zones and background features.
+    # Let verify_adjustment compare this area's source points, location signatures,
+    # storage policy and ground-plan versions before accepting the saved positions.
+    return value
 
 
 def prepare_adjustment(db, *, floor_code, feature, published):
@@ -84,13 +87,22 @@ def prepare_adjustment(db, *, floor_code, feature, published):
     if not original:
         _fail('原区域坐标缺失，无法保留货位实际位置')
     x, y, w, h = _bounds(original['points'])
+    applied_slots = {
+        int(slot['location_id']): slot
+        for slot in (original.get(KEY) or {}).get('slots', [])
+        if slot.get('location_id') is not None
+    }
     slots = []
     for row in rows:
         layout = row.floor3_layout
-        sw, sh = w*float(layout.width_pct)/100, h*float(layout.height_pct)/100
+        applied = applied_slots.get(row.id)
+        sw = float(applied['width_mm']) if applied else w*float(layout.width_pct)/100
+        sh = float(applied['depth_mm']) if applied else h*float(layout.height_pct)/100
         slots.append(dict(location_id=row.id, source_signature=location_signature(row, layout),
-            expected_version=layout.version, x_mm=x+w*float(layout.left_pct)/100,
-            y_mm=y+h-h*float(layout.top_pct)/100-sh, width_mm=sw, depth_mm=sh,
+            expected_version=layout.version,
+            x_mm=float(applied['x_mm']) if applied else x+w*float(layout.left_pct)/100,
+            y_mm=float(applied['y_mm']) if applied else y+h-h*float(layout.top_pct)/100-sh,
+            width_mm=sw, depth_mm=sh,
             z_index=layout.z_index, layout_kind=layout.layout_kind))
     plans = list(db.scalars(select(WarehouseGroundLayoutPlan).where(
         WarehouseGroundLayoutPlan.area_id == policy.area_id,
@@ -181,7 +193,12 @@ def validate_adjustments(db, *, floor_code, draft, published):
         if not value:
             continue
         slots = relative_slots(feature, value)
-        validate_capacity_layout_slots_for_zone(draft, feature_id=feature['id'], slots=slots)
+        validate_capacity_layout_slots_for_zone(
+            draft,
+            feature_id=feature['id'],
+            slots=slots,
+            allow_spatial_conflicts=True,
+        )
         result[feature['id']] = (value, slots)
     return result
 
@@ -203,10 +220,18 @@ def apply_adjustments(db, *, floor_code, draft, published, new_revision):
             row = by_id[slot['location_id']]
             layout = row.floor3_layout
             before = {k: float(getattr(layout, k)) for k in ('left_pct','top_pct','width_pct','height_pct')}
-            for k in before:
-                setattr(layout, k, Decimal(str(slot[k])))
-            layout.version += 1
-            layout.source_type = 'manual'
+            fits_zone = (
+                0 <= float(slot['left_pct'])
+                and 0 <= float(slot['top_pct'])
+                and float(slot['left_pct']) + float(slot['width_pct']) <= 100
+                and float(slot['top_pct']) + float(slot['height_pct']) <= 100
+            )
+            if fits_zone:
+                for k in before:
+                    setattr(layout, k, Decimal(str(slot[k])))
+                layout.version += 1
+                layout.source_type = 'manual'
+            after = {k: float(getattr(layout, k)) for k in before}
             ground = plan_slots.get(row.id)
             original_ground = None
             if ground:
@@ -215,9 +240,10 @@ def apply_adjustments(db, *, floor_code, draft, published, new_revision):
                     abs(ground.depth_mm-slot['depth_mm']) > tolerance):
                     _fail('货位实际占地尺寸发生变化，未应用调整')
             audit.append(dict(location_id=row.id, feature_id=feature_id,
-                before=before, after={k:slot[k] for k in before},
+                before=before, after=after,
                 after_version=layout.version, source_signature=slot['source_signature'],
                 source_map_revision=published['revision'], target_map_revision=new_revision,
+                operational_relative_updated=fits_zone,
                 absolute={k:slot[k] for k in ('x_mm','y_mm','width_mm','depth_mm')},
                 original_ground=original_ground))
     db.flush()

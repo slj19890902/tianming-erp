@@ -4573,6 +4573,7 @@ def _validate_current_area_layout(
     floor_code: str,
     area_code: str,
     source_version: str,
+    allow_spatial_conflicts: bool = False,
 ) -> list[dict]:
     floor, area, policy = _area_layout_context(
         db, floor_code=floor_code, area_code=area_code
@@ -4608,6 +4609,7 @@ def _validate_current_area_layout(
             floor_layout,
             feature_id=policy.map_feature_id,
             slots=slots,
+            allow_spatial_conflicts=allow_spatial_conflicts,
         )
     except (Floor1CandidatePlanningError, WarehouseTwinLayoutNotFoundError, ValueError) as error:
         status_code = getattr(error, "status_code", 409)
@@ -4619,6 +4621,7 @@ def _validate_published_area_layouts_for_floor(
     *,
     floor_code: str,
     deferred_feature_id: str | None = None,
+    allow_spatial_conflicts_for_feature_ids: set[str] | None = None,
 ) -> None:
     floor = warehouse_floor_for_code(db, floor_code)
     if floor is None:
@@ -4668,6 +4671,9 @@ def _validate_published_area_layouts_for_floor(
             floor_code=floor.floor_code,
             area_code=area.area_code,
             source_version=next(iter(sources)),
+            allow_spatial_conflicts=policy.map_feature_id in (
+                allow_spatial_conflicts_for_feature_ids or set()
+            ),
         )
 
 
@@ -11404,6 +11410,9 @@ def _publish_twin_layout_draft_locked(
             db,
             floor_code=floor_code,
             deferred_feature_id=defer_location_readiness_for_feature_id,
+            allow_spatial_conflicts_for_feature_ids={
+                str(item.get("feature_id") or "") for item in coordinate_adjustments
+            },
         )
         from app.services.warehouse_ground_map_application import record_map_applications
         ground_map_application_count = record_map_applications(

@@ -841,6 +841,42 @@ def test_server_side_validation_rejects_invalid_manual_layouts(
         )
 
 
+def test_admin_map_adjustment_can_keep_visible_conflicts_inside_the_floor() -> None:
+    layout = _layout()
+    conflicting = [
+        {
+            "location_id": 1,
+            "left_pct": 45,
+            "top_pct": 45,
+            "width_pct": 10,
+            "height_pct": 10,
+            "layout_kind": "physical_pallet",
+        },
+        {
+            "location_id": 2,
+            "left_pct": 47,
+            "top_pct": 47,
+            "width_pct": 10,
+            "height_pct": 10,
+            "layout_kind": "physical_pallet",
+        },
+    ]
+    measured = validate_capacity_layout_slots_for_zone(
+        layout,
+        feature_id="ZONE-TEST",
+        slots=conflicting,
+        allow_spatial_conflicts=True,
+    )
+    assert [item["location_id"] for item in measured] == [1, 2]
+    with pytest.raises(Floor1CandidatePlanningError, match="整层地图范围"):
+        validate_capacity_layout_slots_for_zone(
+            layout,
+            feature_id="ZONE-TEST",
+            slots=[{**conflicting[0], "left_pct": 105}],
+            allow_spatial_conflicts=True,
+        )
+
+
 def test_reflow_preserves_occupied_and_manual_fixed_locations(
     tmp_path, monkeypatch
 ) -> None:

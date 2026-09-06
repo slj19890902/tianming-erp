@@ -1139,12 +1139,11 @@ def test_ground_inbound_audit_failure_rolls_back_every_business_fact(
         assert db.scalar(select(func.count(WarehouseGroundOccupancy.id))) == 0
 
 
-def test_area_location_draft_preserves_positions_and_allows_conflict_until_application(p187_app):
+def test_area_location_draft_preserves_positions_and_allows_visible_conflict_after_application(p187_app):
     from copy import deepcopy
     from app.services.warehouse_location_geometry_draft import (
         prepare_adjustment, adjust_slot_positions, validate_adjustments, apply_adjustments, KEY,
     )
-    from app.services.warehouse_floor1_candidate_planner import Floor1CandidatePlanningError
     app, factory, ids = p187_app
     with TestClient(app) as client:
         _login(client)
@@ -1161,8 +1160,7 @@ def test_area_location_draft_preserves_positions_and_allows_conflict_until_appli
         feature['points'] = [[x+1000,y] for x,y in feature['points']]
         draft = {**published, 'features': [feature]}
         assert feature[KEY]['slots'] == original_slots
-        with pytest.raises(Floor1CandidatePlanningError, match='超出'):
-            validate_adjustments(db, floor_code='3F', draft=draft, published=published)
+        assert len(validate_adjustments(db, floor_code='3F', draft=draft, published=published)) == 1
         assert before == {r.id: (r.floor3_layout.left_pct, r.floor3_layout.top_pct, r.floor3_layout.version)
                           for r in db.scalars(select(WarehouseLocation).options(selectinload(WarehouseLocation.floor3_layout)))
                           if r.floor3_layout}
@@ -1193,6 +1191,45 @@ def test_area_location_draft_preserves_positions_and_allows_conflict_until_appli
         assert db.get(WarehouseGroundLayoutPlan, plan.id).version == version
 
 
+def test_out_of_area_location_keeps_absolute_map_position_without_invalid_relative_write(p187_app):
+    from copy import deepcopy
+    from app.services.warehouse_location_geometry_draft import prepare_adjustment, apply_adjustments, KEY
+    from app.services.warehouse_ground_map_application import record_map_applications
+    app, factory, ids = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        _publish_six_slots(client)
+    published = _measured_layout()
+    published['bounds_mm']['max_x'] = 8000
+    feature = deepcopy(published['features'][0])
+    with factory() as db:
+        feature[KEY] = prepare_adjustment(db, floor_code='3F', feature=feature, published=published)
+        feature['points'] = [[x + 1000, y] for x, y in feature['points']]
+        draft = {**published, 'features': [feature]}
+        before = {
+            row.id: (row.floor3_layout.left_pct, row.floor3_layout.top_pct, row.floor3_layout.version)
+            for row in db.scalars(select(WarehouseLocation).options(selectinload(WarehouseLocation.floor3_layout)))
+            if row.floor3_layout
+        }
+        logs = apply_adjustments(
+            db, floor_code='3F', draft=draft, published=published, new_revision='conflict-visible-map'
+        )
+        outside = [item for item in logs if not item['operational_relative_updated']]
+        assert outside
+        for item in outside:
+            row = db.get(WarehouseLocation, item['location_id'])
+            assert (row.floor3_layout.left_pct, row.floor3_layout.top_pct, row.floor3_layout.version) == before[row.id]
+            assert item['absolute']['x_mm'] < min(point[0] for point in feature['points'])
+        policy = db.scalar(select(WarehouseAreaStoragePolicy))
+        policy.published_map_revision = 'conflict-visible-map'
+        applied = {**draft, 'revision': 'conflict-visible-map'}
+        assert record_map_applications(
+            db, floor_layout=applied, actor=db.get(User, ids['admin']),
+            operation_key='visible-conflict-proof', previous_floor_layout=published,
+            coordinate_adjustments=logs,
+        ) == 1
+
+
 def test_area_location_draft_rejects_concurrent_position_change(p187_app):
     from copy import deepcopy
     from app.services.warehouse_location_geometry_draft import prepare_adjustment, verify_adjustment, KEY
@@ -1210,6 +1247,27 @@ def test_area_location_draft_rejects_concurrent_position_change(p187_app):
         with pytest.raises(WarehouseTwinLayoutEditConflictError, match='其他操作'):
             verify_adjustment(db, floor_code='3F', feature=feature, published=published)
         db.rollback()
+
+
+def test_area_location_draft_accepts_unrelated_map_revision_but_rejects_changed_source_area(p187_app):
+    from copy import deepcopy
+    from app.services.warehouse_location_geometry_draft import prepare_adjustment, verify_adjustment, KEY
+    from app.services.warehouse_twin_layout_editor import WarehouseTwinLayoutEditConflictError
+    app, factory, _ = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        _publish_six_slots(client)
+    published = _measured_layout()
+    feature = deepcopy(published['features'][0])
+    with factory() as db:
+        feature[KEY] = prepare_adjustment(db, floor_code='3F', feature=feature, published=published)
+        feature[KEY]['slots'][0]['x_mm'] += 123
+        unrelated_change = {**deepcopy(published), 'revision': 'unrelated-background-change'}
+        assert verify_adjustment(db, floor_code='3F', feature=feature, published=unrelated_change) == feature[KEY]
+        changed_area = deepcopy(unrelated_change)
+        changed_area['features'][0]['points'][0][0] += 50
+        with pytest.raises(WarehouseTwinLayoutEditConflictError, match='原区域坐标已变化'):
+            verify_adjustment(db, floor_code='3F', feature=feature, published=changed_area)
 
 
 def test_scoped_application_requires_admin_before_accessing_layout(p187_app):

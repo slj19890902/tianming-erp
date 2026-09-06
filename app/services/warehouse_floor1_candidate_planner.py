@@ -775,6 +775,7 @@ def validate_capacity_layout_slots_for_zone(
     *,
     feature_id: str,
     slots: list[dict],
+    allow_spatial_conflicts: bool = False,
 ) -> list[dict]:
     """Validate one complete active ground-location layout against the map.
 
@@ -821,12 +822,22 @@ def validate_capacity_layout_slots_for_zone(
             depth=float(current["depth_mm"]),
             polygon=polygon,
             epsilon_mm=geometry_epsilon,
-        ):
+        ) and not allow_spatial_conflicts:
             raise Floor1CandidatePlanningError(
                 f"货位 {slot.get('location_id') or ''} 超出所属区域边界",
                 status_code=409,
             )
-        if any(
+        if (
+            float(current["x_mm"]) < float(bounds["min_x"]) - geometry_epsilon
+            or float(current["y_mm"]) < float(bounds["min_y"]) - geometry_epsilon
+            or float(current["x_mm"]) + float(current["width_mm"]) > float(bounds["max_x"]) + geometry_epsilon
+            or float(current["y_mm"]) + float(current["depth_mm"]) > float(bounds["max_y"]) + geometry_epsilon
+        ):
+            raise Floor1CandidatePlanningError(
+                f"货位 {slot.get('location_id') or ''} 超出整层地图范围",
+                status_code=409,
+            )
+        if not allow_spatial_conflicts and any(
             _rectangles_overlap(
                 current,
                 obstacle,
@@ -843,7 +854,7 @@ def validate_capacity_layout_slots_for_zone(
                 current,
                 previous,
                 epsilon_mm=geometry_epsilon,
-            ):
+            ) and not allow_spatial_conflicts:
                 raise Floor1CandidatePlanningError(
                     "货位之间发生重叠，请拉开后再保存", status_code=409
                 )

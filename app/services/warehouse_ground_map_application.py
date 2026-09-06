@@ -86,8 +86,32 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
             "left_pct": float(s.location.floor3_layout.left_pct), "top_pct": float(s.location.floor3_layout.top_pct),
             "width_pct": float(s.location.floor3_layout.width_pct), "height_pct": float(s.location.floor3_layout.height_pct),
             "layout_kind": s.location.floor3_layout.layout_kind} for s in slots]
+        adjustment_candidate = bool(slots) and all(
+            slot.location_id in adjustment_by_location for slot in slots
+        )
+        if adjustment_candidate:
+            xs = [float(point[0]) for point in feature["points"]]
+            ys = [float(point[1]) for point in feature["points"]]
+            left, bottom = min(xs), min(ys)
+            width, height = max(xs) - left, max(ys) - bottom
+            payloads = []
+            for slot in slots:
+                absolute = adjustment_by_location[slot.location_id]["absolute"]
+                payloads.append({
+                    "location_id": slot.location_id,
+                    "left_pct": (float(absolute["x_mm"]) - left) / width * 100,
+                    "top_pct": (bottom + height - float(absolute["y_mm"]) - float(absolute["depth_mm"])) / height * 100,
+                    "width_pct": float(absolute["width_mm"]) / width * 100,
+                    "height_pct": float(absolute["depth_mm"]) / height * 100,
+                    "layout_kind": slot.location.floor3_layout.layout_kind,
+                })
         try:
-            measured = validate_capacity_layout_slots_for_zone(floor_layout, feature_id=policy.map_feature_id, slots=payloads)
+            measured = validate_capacity_layout_slots_for_zone(
+                floor_layout,
+                feature_id=policy.map_feature_id,
+                slots=payloads,
+                allow_spatial_conflicts=adjustment_candidate,
+            )
         except Floor1CandidatePlanningError as error:
             raise WarehouseAreaActivationError(str(error), status_code=error.status_code) from error
         tolerance = float(_percent_round_trip_epsilon(feature["points"]))
@@ -131,12 +155,18 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
             and prior.get('area_id') == plan.area_id and prior.get('map_feature_id') == policy.map_feature_id
             and prior.get('map_revision') == previous_floor_layout.get('revision')
             and prior.get('locations') == {str(s.location_id): location_signature(s.location, s.location.floor3_layout) for s in slots})
-        if not direct and not legacy_reflected and not authorized_adjustment and not previously_verified:
+        unchanged_feature_geometry = bool(
+            previous_floor_layout
+            and previous_feature
+            and previous_feature['points'] == feature['points']
+        )
+        if not direct and not legacy_reflected and not authorized_adjustment and not previously_verified and not unchanged_feature_geometry:
             raise WarehouseAreaActivationError(
                 f"区域 {plan.area.area_code} 保留货位与原排位物理坐标不一致，不能随地图应用", status_code=409)
         details = {"plan_id": plan.id, "plan_version": plan.version, "area_id": plan.area_id,
             "original_map_revision": plan.published_map_revision, "map_revision": floor_layout["revision"],
             "legacy_y_reflection": bool(legacy_reflected),
+            "unchanged_feature_geometry": unchanged_feature_geometry,
             # Detailed before/after coordinates are in TWIN_LAYOUT_PUBLISH.
             # Keep the operational receipt small enough for the audit serializer.
             "coordinate_adjustment_count": len(slots) if authorized_adjustment else 0,

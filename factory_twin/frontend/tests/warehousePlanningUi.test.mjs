@@ -171,12 +171,13 @@ test("both map publish entrances reload warehouse records before claiming the ne
         refreshDashboard: async () => { steps.push("warehouse"); if (readFails) throw Error("warehouse readback unavailable"); },
         setSpatialEditBusy: () => {}, setLayoutDraftControl: () => {}, setLocationEditMessage: v => { messages.push(v); },
         setMapMode: () => {}, setSearchPanelOpen: () => {}, setLocationEditMode: () => {}, setAreaPolicyEditMode: () => {},
-        setAdvancedAreaMaintenanceOpen: () => {}, setRackDrafts: () => {}, setZonePolicyDrafts: () => {}, replaceZoneGeometryDrafts: () => {},
+        setAdvancedAreaMaintenanceOpen: () => {}, setLocationPointEditAreaCode: () => {}, setLayoutMapToolsOpen: () => {},
+        setRackDrafts: () => {}, setZonePolicyDrafts: () => {}, replaceZoneGeometryDrafts: () => {},
         setLegacyRackBindingPreview: () => {}, setLegacyRackBindingSelections: () => {},
       };
       await componentValue(handler, context)();
       assert.deepEqual(steps, ["layout", "warehouse"]);
-      assert.match(messages.at(-1), readFails ? /已发布.*回读失败/ : /已发布.*旧地图备份/);
+      assert.match(messages.at(-1), readFails ? /已发布.*回读失败/ : handler === "previewAndPublishLayout" ? /已保存并应用.*旧地图备份/ : /已发布.*旧地图备份/);
       if (readFails) assert.doesNotMatch(messages.at(-1), /发布布局失败/);
     }
   }
@@ -476,6 +477,7 @@ test("all map commit-and-readback actions keep acknowledged success distinct fro
         : (commits++, { backup_name: "test-backup", published_revision: "p2" }),
       refreshPublishedTwinFloor: async () => { throw new Error("simulated readback unavailable"); },
       refreshPlanningTwinFloor: async () => { throw new Error("simulated readback unavailable"); }, refreshDashboard: async () => {},
+      setLocationPointEditAreaCode: noop, setLayoutMapToolsOpen: noop,
     })();
     assert.equal(commits, 1, name);
     assert.match(messages.at(-1), /已发布.*回读失败|草稿已放弃.*回读失败|区域已启用.*回读失败/, name);
@@ -656,8 +658,9 @@ test("aligned floor 4 keeps one compact three-point recalibration action", () =>
 
 test("planning exits to lookup and map geometry tools open only on demand", () => {
   assert.match(source, /setMapMode\("lookup"\);[\s\S]*setSearchPanelOpen\(true\)/);
-  assert.match(source, /\{layoutMapToolsOpen \? "退出地图调整" : "调整地图"\}<\/button>/);
-  assert.match(source, /setLayoutMapToolsOpen\(\(current\) => !current\)/);
+  assert.match(source, /\{layoutMapToolsOpen \? "完成并应用地图调整" : "调整地图"\}<\/button>/);
+  assert.match(source, /if \(layoutMapToolsOpen\) \{[\s\S]*void previewAndPublishLayout\(\);[\s\S]*return;/);
+  assert.doesNotMatch(componentValue("previewAndPublishLayout", {}).toString(), /window\.confirm/);
   assert.match(source, /mapMode === "planning" && locationEditMode && canEditLocations && layoutMapToolsOpen && <section className="twin-layout-map-tools">/);
   assert.match(source, /featureEditingEnabled=\{!spatialEditBusy && locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"\}/);
   assert.match(source, /layoutDrawKind = locationEditMode && layoutMapToolsOpen && layoutMapTool !== "adjust"/);
@@ -683,6 +686,8 @@ test("map adjustment and location placement are mutually exclusive", () => {
   assert.match(source, /const planningVisibleFeatures = useMemo/);
   assert.match(source, /findPalletPlanningConflicts\([\s\S]*planningVisibleFeatures/);
   assert.match(source, /features: planningVisibleFeatures\.map/);
+  assert.match(source, /activeSaved \|\| zone\?\.ground_location_draft\?\.slots\.find/);
+  assert.match(source, /: savedPosition;/);
   assert.doesNotMatch(source, /locationEditMode && !layoutMapToolsOpen \? locationProjectionFeatures : layout\.features/);
   assert.match(source, /setLayoutMapToolsOpen\(false\)/);
   assert.match(source, /layoutMapToolsOpen \? EMPTY_CANVAS_IDS : locationPointEditPalletIds/);

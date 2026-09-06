@@ -463,11 +463,23 @@ def published_ground_plan(
             "GROUND_LAYOUT_NOT_PUBLISHED", "当前区域尚未发布地堆排位。", status_code=404
         )
     policy = plan.area.storage_policy
+    current_map_applied = False
+    if policy and policy.published_map_revision != plan.published_map_revision:
+        from app.services.warehouse_ground_map_application import load_map_applications, application_matches
+        from app.services.warehouse_twin_layout import load_warehouse_twin_published_floor_identity
+        identity = load_warehouse_twin_published_floor_identity(plan.area.floor.floor_number)
+        current_revision = str((identity or {}).get("revision") or "")
+        receipt = load_map_applications(db, [plan.id]).get(plan.id)
+        active = [slot for slot in plan.slots if slot.location.is_active]
+        current_map_applied = bool(active) and current_revision == policy.published_map_revision and all(
+            application_matches(receipt, plan_id=plan.id, plan_version=plan.version,
+                area_id=plan.area_id, policy=policy, revision=current_revision,
+                location=slot.location, layout=slot.location.floor3_layout) for slot in active)
     if (
         policy is None
         or policy.status != "published"
         or policy.storage_layout not in {"pallet_ground", "mixed"}
-        or policy.published_map_revision != plan.published_map_revision
+        or (policy.published_map_revision != plan.published_map_revision and not current_map_applied)
     ):
         raise WarehouseGroundSlotError(
             "GROUND_LAYOUT_PUBLISH_STALE", "区域地图或存放策略已变化，请管理员重新核对地堆排位。"

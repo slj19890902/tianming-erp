@@ -58,6 +58,31 @@ test("stocktake keeps an acknowledged receipt when readback fails and retains on
   }
 });
 
+test("both map publish entrances reload warehouse records before claiming the new map is ready", async () => {
+  for (const handler of ["publishLayoutDraft", "previewAndPublishLayout"]) {
+    for (const readFails of [false, true]) {
+      const steps = [], messages = [];
+      const context = {
+        layout: { source_sha256: "new-map" }, floorCode: "3F",
+        layoutDraftControl: { status: "validated", has_draft: true, published_revision: "old-map", warnings: [] },
+        window: { confirm: () => true }, operationKey: () => "publish-request",
+        prepareLegacyRackBindingConfirmation: async () => ({ request: {}, summary: "" }),
+        mutateJson: async url => url.endsWith("/validate") ? { status: "validated", draft_revision: "new-map", blockers: [], warnings: [] } : { backup_name: "previous-map.json" },
+        refreshPublishedTwinFloor: async () => { steps.push("layout"); },
+        refreshDashboard: async () => { steps.push("warehouse"); if (readFails) throw Error("warehouse readback unavailable"); },
+        setSpatialEditBusy: () => {}, setLayoutDraftControl: () => {}, setLocationEditMessage: v => { messages.push(v); },
+        setMapMode: () => {}, setSearchPanelOpen: () => {}, setLocationEditMode: () => {}, setAreaPolicyEditMode: () => {},
+        setAdvancedAreaMaintenanceOpen: () => {}, setRackDrafts: () => {}, setZonePolicyDrafts: () => {}, replaceZoneGeometryDrafts: () => {},
+        setLegacyRackBindingPreview: () => {}, setLegacyRackBindingSelections: () => {},
+      };
+      await componentValue(handler, context)();
+      assert.deepEqual(steps, ["layout", "warehouse"]);
+      assert.match(messages.at(-1), readFails ? /已发布.*回读失败/ : /已发布.*旧地图备份/);
+      if (readFails) assert.doesNotMatch(messages.at(-1), /发布布局失败/);
+    }
+  }
+});
+
 test("a rejected pallet cannot become a move source even when it has a version", () => {
   const declaration = syntax.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "palletMoveSource");
   assert.ok(declaration);

@@ -57,6 +57,98 @@ TWIN_SOURCE = (
 ).read_text(encoding="utf-8")
 
 
+def test_remove_no_go_features_does_not_publish_unrelated_admin_draft(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft_path = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding="utf-8"))
+    floor = document["floors"]["3F"]
+    floor["features"].append(
+        {
+            "id": "no-go-3f-test",
+            "feature_code": "NO-GO-3F-TEST",
+            "name": "待删除禁放区",
+            "feature_kind": "no_go",
+            "subtype": "door_clearance",
+            "points": [[100, 100], [200, 100], [200, 200], [100, 200]],
+        }
+    )
+    floor["revision"] = _floor_revision(floor)
+    published.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+    published_revision = floor["revision"]
+
+    advanced = editor._new_draft_document(published)
+    advanced_floor = advanced["floors"]["3F"]
+    advanced_floor["features"].append(
+        {
+            "id": "draft-aisle-3f-test",
+            "feature_code": "AISLE-3F-DRAFT-TEST",
+            "name": "尚未发布通道",
+            "feature_kind": "aisle",
+            "subtype": "main_aisle",
+            "points": [[500, 500], [600, 500], [600, 600], [500, 600]],
+        }
+    )
+    advanced_floor["revision"] = _floor_revision(advanced_floor)
+    editor._mark_draft_changed(advanced, "3F")
+    editor._write_document(draft_path, advanced)
+
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-47b-admin"))
+            result = warehouse_api.remove_twin_no_go_features(
+                "3F",
+                warehouse_api.TwinNoGoRemovalPayload(
+                    expected_revision=advanced_floor["revision"],
+                    expected_published_revision=published_revision,
+                    feature_ids=["no-go-3f-test"],
+                    operation_key="remove-no-go-api-test",
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert result["removed_feature_count"] == 1
+            assert result["inventory_changed"] is False
+            assert result["other_drafts_preserved"] is True
+            assert db.scalar(select(func.count(InventoryLot.id))) == 0
+            replay = warehouse_api.remove_twin_no_go_features(
+                "3F",
+                warehouse_api.TwinNoGoRemovalPayload(
+                    expected_revision=advanced_floor["revision"],
+                    expected_published_revision=published_revision,
+                    feature_ids=["no-go-3f-test"],
+                    operation_key="remove-no-go-api-test",
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert replay["idempotent_replay"] is True
+            assert replay["applied"] is False
+            log = db.scalar(
+                select(OperationLog).where(
+                    OperationLog.action_code == "warehouse.no_go.remove"
+                )
+            )
+            assert log is not None
+
+        runtime = json.loads(Path(editor.TWIN_LAYOUT_PATH).read_text(encoding="utf-8"))
+        live_ids = {
+            item["id"] for item in runtime["floors"]["3F"]["features"]
+        }
+        assert "no-go-3f-test" not in live_ids
+        assert "draft-aisle-3f-test" not in live_ids
+        active = json.loads(draft_path.read_text(encoding="utf-8"))
+        active_ids = {item["id"] for item in active["floors"]["3F"]["features"]}
+        assert "no-go-3f-test" not in active_ids
+        assert "draft-aisle-3f-test" in active_ids
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.parametrize('fail_rebase', [False, True])
 def test_apply_zone_geometry_preserves_other_drafts_and_rolls_back_atomically(tmp_path, monkeypatch, fail_rebase):
     from copy import deepcopy

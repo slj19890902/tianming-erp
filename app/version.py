@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.258"
-APP_VERSION_NAME = "P0-39历史冻结价金额一致性修复"
-APP_BUILD_DATE = "2026-09-03"
+APP_VERSION = "v0.22.259"
+APP_VERSION_NAME = "P0-45新收料冻结价事务门禁"
+APP_BUILD_DATE = "2026-09-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -1801,7 +1801,7 @@ _V022247_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认版本为v0.22.247、数据库revision为唯一head jn72v8x9z61。",
 ]
 
-APP_CHANGES = [
+_V022258_CHANGES = [
     "P0-39允许老板授权的历史测试归类事实仅用于供应商月结；可冻结指定的数量、材质、尺寸和含税含运价，而不改原收料、报料、库存或常用箱历史。",
     "普通冻结价格事实仍必须与原实收数量和收料单号一致；只有数据库约束认可的财务测试归类事实可采用覆盖数量。",
     "月结明细清晰标为“历史测试归类”，价格事实以哈希计划、时点备份、操作员、幂等键和审计记录闭环。",
@@ -1809,10 +1809,23 @@ APP_CHANGES = [
     "本版不新增迁移，也不自动补建历史事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022258_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认版本为v0.22.258、数据库 revision 保持唯一 head kq75v8x9z64。",
     "对未标记的普通历史冻结价格事实篡改数量快照，确认供应商月结仍明确阻断。",
     "仅用专项受控脚本在隔离副本执行老板授权的测试归类计划，确认月结可见归类标记且原收料、报料、库存和常用箱读取不变。",
+]
+
+APP_CHANGES = [
+    "新纸板收料必须在同一事务内冻结供应商结算价；缺价、来源不符或冻结失败时，收料、库存、进度和审计一并回滚。",
+    "普通订单、组合件和纸板补库统一执行冻结价检查；纸板补库必须从正式收料入口入库，已有采购快照继续使用收料当时的价格。",
+    "管理员遇到缺价可从提示打开材质报价维护，返回原收料页继续提交；失败行保留数量和重复提交保护。",
+    "新增可重复运行的隔离财务回归和全日期只读缺价检查；本版无数据库迁移，不自动补建历史价格事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "进入系统备份→系统版本，确认版本为v0.22.259、数据库revision保持唯一head kq75v8x9z64。",
+    "在隔离副本尝试缺价收料，确认提示具体原因且收料、库存和进度均不增加；维护正确报价后原请求可成功重试且仅入账一次。",
+    "在隔离副本核对普通收料与纸板补库均生成冻结价，后续调价不改变已收料的结算金额。",
 ]
 
 
@@ -1906,6 +1919,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.258：本次更新｜{item}" for item in _V022258_CHANGES),
+    *(f"v0.22.258：如何验证｜{item}" for item in _V022258_VERIFICATION_STEPS),
     *(f"v0.22.247：本次更新｜{item}" for item in _V022247_CHANGES),
     *(f"v0.22.247：如何验证｜{item}" for item in _V022247_VERIFICATION_STEPS),
     *(f"v0.22.246：本次更新｜{item}" for item in _V022246_CHANGES),

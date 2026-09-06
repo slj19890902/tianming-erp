@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.261"
-APP_VERSION_NAME = "P0-45月结完整性与收付款门禁"
+APP_VERSION = "v0.22.262"
+APP_VERSION_NAME = "P0-45月结来源与承兑日期门禁"
 APP_BUILD_DATE = "2026-09-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -1844,7 +1844,7 @@ _V022260_VERIFICATION_STEPS = [
     "用普通仓库账号确认地图保持只读，并核对正式库存数量、地图发布版和未操作楼层没有被本次代码发布改写。",
 ]
 
-APP_CHANGES = [
+_V022261_CHANGES = [
     "供应商账期有实收缺价或来源异常时，暂停该账期的月结生成、重生成和确认，显示缺口数量与收料单；其他完整供应商继续处理。",
     "月结扫描与写入使用同一事务保护；新增实收不能在完整性检查与应付确认之间悄悄插入，旧草稿来源变化须重生成核对。",
     "供应商月结关联的应付记录统一从月结办理付款和受控调整，通用应付按钮不能单独改变一边账目状态。",
@@ -1852,10 +1852,22 @@ APP_CHANGES = [
     "全日期只读检查不再仅凭外购路线标记跳过通用实收；本版包含v0.22.259新收料冻结价门禁及已集成地图更新，没有新增迁移，不自动回填历史价格或金额。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022261_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认v0.22.261、唯一数据库revision为rp06v8x9z65，与前一版正式代码一致。",
     "在隔离副本用同供应商有价与缺价实收生成月结，确认整期阻断且能展开定位缺价单；完整供应商可正常生成。",
     "在隔离副本确认月结关联应付的通用付款/作废被拒绝，已有收款的客户对账单重开和争议调整被拒绝，原金额和事实不变。",
+]
+
+APP_CHANGES = [
+    "供应商月结确认在同一写事务内重新核对活动实收、明细指纹和存档来源哈希；来源撤销、新增或变化时拒绝形成应付，并要求重新生成核对。",
+    "供应商组合付款使用承兑时，背书日期必须处于承兑收到日与到期日之间；边界日期允许，区间外拒绝且不写付款事实。",
+    "补齐工厂 Python 3.10 对 SQLite 繁忙错误码属性缺失的兼容，数据库占锁时统一返回可重试的业务冲突；本版无迁移，不回填历史价格或金额。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "进入系统备份→系统版本，确认 v0.22.262，数据库 revision 仍为唯一 head rp06v8x9z65。",
+    "在隔离副本生成并核对月结草稿后撤销来源实收，确认原草稿不能确认或重生成应付，草稿版本和应付数量不变。",
+    "在隔离副本核对承兑收到日/到期日允许付款，区间外日期拒绝；另以并发写锁确认返回 409，释放锁后可正常重试。",
 ]
 
 
@@ -1949,6 +1961,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.261：本次更新｜{item}" for item in _V022261_CHANGES),
+    *(f"v0.22.261：如何验证｜{item}" for item in _V022261_VERIFICATION_STEPS),
     *(f"v0.22.260：本次更新｜{item}" for item in _V022260_CHANGES),
     *(f"v0.22.260：如何验证｜{item}" for item in _V022260_VERIFICATION_STEPS),
     *(f"v0.22.259：本次更新｜{item}" for item in _V022259_CHANGES),

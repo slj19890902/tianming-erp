@@ -282,6 +282,7 @@ from app.services.warehouse_ground_slots import (
     ground_occupancy_payload,
     ground_preview_fingerprint,
     ground_slots_adjacent,
+    effective_ground_slot_geometries,
     number_ground_physical_slots,
     occupancy_physical_quantity,
     published_ground_plan,
@@ -5422,6 +5423,7 @@ def list_ground_storage_candidates(
             product_id=product_id,
             incoming_quantity=incoming_quantity,
             can_view_occupied_details=has_unrestricted_customer_access(user, db),
+            floor_layout=load_warehouse_twin_floor(floor_code.strip().upper()),
         )
         return {
             "floor_name": plan.area.floor.floor_name,
@@ -5575,7 +5577,10 @@ def _validate_ground_target(
             raise WarehouseGroundSlotError(
                 "GROUND_SECONDARY_STALE", "大型货物第二位置已变化，请重新点选。"
             )
-        if not ground_slots_adjacent(primary_slot, secondary_slot):
+        positions = effective_ground_slot_geometries(
+            plan, load_warehouse_twin_floor(plan.area.floor.floor_code)
+        )
+        if not ground_slots_adjacent(primary_slot, secondary_slot, positions=positions):
             raise WarehouseGroundSlotError(
                 "GROUND_SLOTS_NOT_ADJACENT", "大型货物只能选择两个相邻地堆位置。"
             )

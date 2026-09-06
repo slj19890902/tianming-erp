@@ -1332,3 +1332,44 @@ def test_adjacent_ground_locations_follow_current_positions_not_immutable_plan(p
             slot.location.floor3_layout.width_pct /= 2
         assert ground_slots_adjacent(left, right)
         db.rollback()
+
+
+def test_ground_candidates_and_target_use_applied_absolute_positions(p187_app, monkeypatch):
+    from app.services.warehouse_location_geometry_draft import prepare_adjustment, KEY
+    from app.services.warehouse_ground_slots import WarehouseGroundSlotError
+
+    app, factory, ids = p187_app
+    published = _measured_layout()
+    with TestClient(app) as client:
+        _login(client)
+        _publish_six_slots(client)
+        with factory() as db:
+            plan = db.scalar(select(WarehouseGroundLayoutPlan))
+            left, right = plan.slots[:2]
+            left_id, right_id = left.location_id, right.location_id
+            old_position = (right.location.floor3_layout.left_pct,
+                            right.location.floor3_layout.version, right.x_mm)
+            feature = published['features'][0]
+            feature[KEY] = prepare_adjustment(db, floor_code='3F', feature=feature, published=published)
+            saved = next(item for item in feature[KEY]['slots'] if item['location_id'] == right_id)
+            saved['x_mm'] += 600
+            monkeypatch.setattr(warehouse_api, 'load_warehouse_twin_floor', lambda _: published)
+            with pytest.raises(WarehouseGroundSlotError) as error:
+                warehouse_api._validate_ground_target(
+                    db, plan=plan, primary_slot=left, secondary_location_id=right_id,
+                    expected_primary_version=left.location.floor3_layout.version,
+                    expected_secondary_version=right.location.floor3_layout.version,
+                    customer_id=ids['customer'], product_id=ids['product'], quantity=1,
+                )
+            assert error.value.code == 'GROUND_SLOTS_NOT_ADJACENT'
+            assert (right.location.floor3_layout.left_pct,
+                    right.location.floor3_layout.version, right.x_mm) == old_position
+        response = client.get('/api/warehouse/ground-storage/candidates', params={
+            'floor_code': '3F', 'area_code': 'A01', 'customer_id': ids['customer'],
+            'product_id': ids['product'], 'incoming_quantity': 1,
+        })
+        assert response.status_code == 200, response.text
+        rows = {item['location_id']: item for item in response.json()['items']}
+        assert right_id not in rows[left_id]['adjacent_location_ids']
+        assert float(rows[right_id]['geometry']['left_pct']) == pytest.approx(50)
+        assert rows[right_id]['current_quantity'] == 0

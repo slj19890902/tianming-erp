@@ -1879,6 +1879,45 @@ def confirm_statement(
             "SUPPLIER_SETTLEMENT_DIFFERENCE_UNRESOLVED",
             "供应商账单金额仍与调整后金额不一致，请先处理差异",
         )
+    # Claim the SQLite writer before re-reading receipts. A reversal must not
+    # commit between the source check and creation of the payable. The final
+    # update below still advances the public version exactly once.
+    claim = db.execute(
+        update(SupplierMonthlyStatement)
+        .where(
+            SupplierMonthlyStatement.id == row.id,
+            SupplierMonthlyStatement.active_guard == 1,
+            SupplierMonthlyStatement.status == "draft",
+            SupplierMonthlyStatement.version == expected_version,
+        )
+        .values(version=expected_version)
+        .execution_options(synchronize_session=False)
+    )
+    if claim.rowcount != 1:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_STALE", "月结单已变化，请刷新后重试", 409
+        )
+    start_utc, end_utc = _utc_period_bounds(row.period_start, row.period_end)
+    candidates, _issues = _scan_candidates_for_bounds(
+        db, start_utc=start_utc, end_utc=end_utc
+    )
+    selected = [
+        item for item in candidates
+        if item.supplier_id == row.supplier_id
+        and item.currency == row.currency and item.tax_basis == row.tax_basis
+    ]
+    lines = _active_lines(db, row.id)
+    current_hash = _candidate_source_hash(selected)
+    if (
+        not lines
+        or current_hash != _statement_line_source_hash(lines)
+        or (row.source_hash is not None and current_hash != row.source_hash)
+    ):
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_SOURCE_CHANGED",
+            "本期实收来源已撤销、新增或变化，未确认应付；请核对并重生成月结草稿",
+            409,
+        )
     now = utc_now_naive()
     payable = FinancePayable(
         supplier_id=row.supplier_id,
@@ -2424,9 +2463,9 @@ def post_payment_batch(
             raise SupplierSettlementError(
                 "ACCEPTANCE_NOTE_STALE", "承兑票据状态已变化，请刷新后重试"
             )
-        if payment_date < acceptance.received_date:
+        if not acceptance.received_date <= payment_date <= acceptance.maturity_date:
             raise SupplierSettlementError(
-                "ACCEPTANCE_ENDORSE_DATE_INVALID", "背书日期不能早于承兑收到日期", 422
+                "ACCEPTANCE_ENDORSE_DATE_INVALID", "背书日期必须在承兑收到日与到期日之间", 422
             )
         acceptance_face = _money(acceptance.amount)
         acceptance_applied = _money(

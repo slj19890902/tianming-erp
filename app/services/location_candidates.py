@@ -149,9 +149,10 @@ def load_warehouse_location_projection_contexts(
         ).all()
     }
     ground_rows_by_location: dict[int, list[dict[str, object]]] = {}
-    for plan_id, status, revision, area_id, location_id in db.execute(
+    for plan_id, plan_version, status, revision, area_id, location_id in db.execute(
         select(
             WarehouseGroundLayoutPlan.id,
+            WarehouseGroundLayoutPlan.version,
             WarehouseGroundLayoutPlan.status,
             WarehouseGroundLayoutPlan.published_map_revision,
             WarehouseGroundLayoutPlan.area_id,
@@ -166,6 +167,7 @@ def load_warehouse_location_projection_contexts(
         ground_rows_by_location.setdefault(int(location_id), []).append(
             {
                 "plan_id": int(plan_id),
+                "plan_version": plan_version,
                 "status": status,
                 "published_map_revision": revision,
                 "area_id": area_id,
@@ -230,6 +232,14 @@ def load_warehouse_location_projection_contexts(
         except (OSError, ValueError, WarehouseTwinLayoutNotFoundError):
             published_identities[floor_number] = None
 
+    from app.services.warehouse_ground_map_application import load_map_applications, application_matches
+    application_plan_ids = {
+        candidate["plan_id"] for location in location_rows if location.is_active
+        for candidate in ground_rows_by_location.get(int(location.id), [])
+        if (identity := published_identities.get(int(location.warehouse_floor or 0)))
+        and identity.get("revision") != candidate["published_map_revision"]
+    }
+    applications = load_map_applications(db, application_plan_ids)
     contexts: dict[int, dict[str, object | None]] = {}
     for location in location_rows:
         floor_number = int(location.warehouse_floor or 0)
@@ -239,6 +249,15 @@ def load_warehouse_location_projection_contexts(
             (published_identities.get(floor_number) or {}).get("revision") or ""
         ).strip()
         ground_candidates = ground_rows_by_location.get(int(location.id), [])
+        ground_candidates = [
+            {**candidate, "source_published_map_revision": candidate["published_map_revision"],
+             "published_map_revision": current_revision}
+            if application_matches(applications.get(candidate["plan_id"]),
+                plan_id=candidate["plan_id"], plan_version=candidate["plan_version"], area_id=candidate["area_id"],
+                policy=context.get("policy"), revision=current_revision, location=location,
+                layout=layouts_by_location.get(int(location.id))) else candidate
+            for candidate in ground_candidates
+        ]
         ground_layout = next(
             (
                 candidate

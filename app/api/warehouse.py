@@ -1410,6 +1410,8 @@ class Floor3LayoutSlotStatePayload(BaseModel):
     expected_version: int = Field(gt=0)
     expected_map_revision: str | None = Field(default=None, min_length=1, max_length=64)
     expected_policy_version: int | None = Field(default=None, ge=1)
+    retire_published_ground_slot: bool = False
+    expected_ground_plan_version: int | None = Field(default=None, ge=1)
 
 
 class Floor3PalletClearPayload(BaseModel):
@@ -6809,9 +6811,24 @@ def disable_activated_area_location(
         floor, area, policy = _area_layout_context(
             db, floor_code=route.floor_code, area_code=route.area_code
         )
-        _assert_published_ground_plan_location_unlocked(
-            db, location_id=location_id
-        )
+        retained_plan = None
+        if payload.retire_published_ground_slot:
+            retained_plan = db.scalar(select(WarehouseGroundLayoutPlan).join(
+                WarehouseGroundLayoutSlot,
+                WarehouseGroundLayoutSlot.plan_id == WarehouseGroundLayoutPlan.id,
+            ).where(WarehouseGroundLayoutSlot.location_id == location_id,
+                    WarehouseGroundLayoutPlan.status == "published"))
+            if (retained_plan is None or retained_plan.area_id != area.id
+                    or retained_plan.version != payload.expected_ground_plan_version):
+                raise WarehouseAreaActivationError("原排位版本或归属已变化，请刷新后重试", status_code=409)
+            occupied = db.scalar(select(WarehouseGroundOccupancySlot.id).where(
+                WarehouseGroundOccupancySlot.location_id == location_id,
+                WarehouseGroundOccupancySlot.status == "active",
+            ).limit(1))
+            if occupied is not None:
+                raise WarehouseAreaActivationError("该货位仍被栈板占用，不能停用（包括跨位栈板）", status_code=409)
+        else:
+            _assert_published_ground_plan_location_unlocked(db, location_id=location_id)
         if policy is None:
             raise WarehouseAreaActivationError(
                 "历史区域尚未完成正式区域确认，请先在区域规划中确认并发布",
@@ -6881,6 +6898,8 @@ def disable_activated_area_location(
             description="逻辑停用正式区域空库位",
             details={
                 "is_active": False,
+                "retained_ground_plan_id": retained_plan.id if retained_plan else None,
+                "retained_ground_plan_version": retained_plan.version if retained_plan else None,
                 "source_version": route.source_version,
                 "before": before,
                 "after": _location_layout_state(location),
@@ -10915,6 +10934,7 @@ def _publish_twin_layout_draft_locked(
             status_code=409,
             detail="正式区域尚未完成：" + "；".join(blockers[:5]),
         )
+    published_floor_before = load_published_warehouse_twin_floor_for_edit(floor_code)
     publish_snapshot = snapshot_warehouse_twin_publish_state()
     result = None
     try:
@@ -10985,13 +11005,18 @@ def _publish_twin_layout_draft_locked(
             floor_code=floor_code,
             deferred_feature_id=defer_location_readiness_for_feature_id,
         )
+        from app.services.warehouse_ground_map_application import record_map_applications
+        ground_map_application_count = record_map_applications(
+            db, floor_layout=load_warehouse_twin_floor(floor_code), actor=user,
+            operation_key=payload.operation_key, request=request, previous_floor_layout=published_floor_before,
+        )
         legacy_name_update_count = int(
             getattr(published_policies, "legacy_name_update_count", 0)
         )
         formal_master_changed = bool(
             published_policies or legacy_name_update_count or rack_master_changed
         )
-        if result.applied or formal_master_changed:
+        if result.applied or formal_master_changed or ground_map_application_count:
             _twin_layout_asset_log(
             db,
             request=request,
@@ -11002,6 +11027,7 @@ def _publish_twin_layout_draft_locked(
             description="管理员发布已校验的仓库地图草稿",
             details={
                 **result.value,
+                "ground_map_application_count": ground_map_application_count,
                 "formal_area_count": len(published_policies),
                 "formal_areas": [
                     {

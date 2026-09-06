@@ -4813,6 +4813,7 @@ export function WarehouseTwinApp() {
       if (!result) return;
       publicationAcknowledged = true;
       await refreshPublishedTwinFloor();
+      await refreshDashboard();
       setMapMode("lookup");
       setSearchPanelOpen(true);
       setLocationEditMode(false);
@@ -4826,7 +4827,7 @@ export function WarehouseTwinApp() {
     } catch (reason) {
       if (publicationAcknowledged) {
         setLayoutDraftControl(null);
-        setLocationEditMessage(`布局已发布，但地图回读失败：${(reason as Error).message}。当前画面尚未核验，请切回查货重读；不要重复发布。`);
+        setLocationEditMessage(`布局已发布，但地图或仓库记录回读失败：${(reason as Error).message}。当前画面尚未核验，请刷新页面核对；不要重复发布。`);
       } else {
         setLocationEditMessage(`发布布局失败：${(reason as Error).message}`);
       }
@@ -4883,6 +4884,7 @@ export function WarehouseTwinApp() {
       if (!result) return;
       publicationAcknowledged = true;
       await refreshPublishedTwinFloor();
+      await refreshDashboard();
       setMapMode("lookup");
       setSearchPanelOpen(true);
       setLocationEditMode(false);
@@ -4897,7 +4899,7 @@ export function WarehouseTwinApp() {
     } catch (reason) {
       if (publicationAcknowledged) {
         setLayoutDraftControl(null);
-        setLocationEditMessage(`布局已发布，但地图回读失败：${(reason as Error).message}。当前画面尚未核验，请切回查货重读；不要重复发布。`);
+        setLocationEditMessage(`布局已发布，但地图或仓库记录回读失败：${(reason as Error).message}。当前画面尚未核验，请刷新页面核对；不要重复发布。`);
       } else {
         setLocationEditMessage(`预览并发布失败：${(reason as Error).message}`);
       }

@@ -233,6 +233,121 @@ def _publish_six_slots(client: TestClient) -> dict:
     return publish.json()
 
 
+def test_explicit_empty_ground_slot_retirement_preserves_plan_and_rejects_occupied(p187_app):
+    from sqlalchemy import text
+    app, factory, ids = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        published = _publish_six_slots(client)
+        slots = published["slots"]
+        with factory() as db:
+            plan = db.scalar(select(WarehouseGroundLayoutPlan))
+            plan_version = plan.version
+            for table in ("warehouse_ground_layout_plans", "warehouse_ground_layout_slots"):
+                db.execute(text(f"CREATE TRIGGER keep_{table} BEFORE UPDATE ON {table} BEGIN SELECT RAISE(ABORT,'immutable original plan'); END"))
+            db.commit()
+            before = {t: db.execute(text(f"SELECT * FROM {t} ORDER BY id")).all() for t in ("warehouse_ground_layout_plans", "warehouse_ground_layout_slots")}
+        inbound = client.post("/api/warehouse/ground-storage/finished-inbound", json={
+            "location_id": slots[0]["location_id"], "secondary_location_id": slots[1]["location_id"],
+            "expected_secondary_layout_version": slots[1]["layout_version"],
+            "expected_layout_version": slots[0]["layout_version"], "customer_id": ids["customer"], "product_id": ids["product"],
+            "quantity": 1, "capacity_quantity": 2, "stock_date": "2026-09-06", "idempotency_key": "retire-occupied-check",
+        })
+        assert inbound.status_code == 201, inbound.text
+        def payload(slot):
+            management = client.get("/api/warehouse/spatial-layout/floors/3F/areas/A01/management").json()
+            return {"expected_version": slot["layout_version"], "expected_map_revision": management["published_map_revision"],
+                    "expected_policy_version": management["policy_version"], "retire_published_ground_slot": True,
+                    "expected_ground_plan_version": plan_version}
+        for slot in slots[:2]:
+            response = client.post(f'/api/warehouse/spatial-layout/locations/{slot["location_id"]}/disable', json=payload(slot))
+            assert response.status_code == 409, response.text
+            assert "占用" in response.text
+        slot = slots[2]
+        url = f'/api/warehouse/spatial-layout/locations/{slot["location_id"]}/disable'
+        body = payload(slot)
+        assert client.post(url, json={**body, "retire_published_ground_slot": False}).status_code == 409
+        assert client.post(url, json={**body, "expected_ground_plan_version": plan_version + 1}).status_code == 409
+        _login_workshop(client)
+        assert client.post(url, json=body).status_code == 403
+        _login(client)
+        result = client.post(url, json=body)
+        assert result.status_code == 200, result.text
+        assert result.json()["location"]["is_active"] is False
+        assert client.post(url, json=body).status_code == 409
+    with factory() as db:
+        for table, rows in before.items():
+            assert db.execute(text(f"SELECT * FROM {table} ORDER BY id")).all() == rows
+        assert db.scalar(select(func.count(WarehouseLocation.id))) == 6
+        assert db.scalar(select(func.count(WarehouseLocation.id)).where(WarehouseLocation.is_active.is_(True))) == 5
+        assert db.scalar(select(func.sum(InventoryLot.quantity_available))) == 1
+
+
+@pytest.mark.parametrize("legacy_reflected", [False, True])
+def test_new_map_requires_verified_unchanged_ground_positions_and_invalidates_stale_receipt(p187_app, monkeypatch, legacy_reflected):
+    import copy
+    from sqlalchemy import text
+    from app.services import warehouse_twin_layout
+    from app.services.warehouse_ground_map_application import record_map_applications
+    from app.services.warehouse_ground_slots import published_ground_plan, WarehouseGroundSlotError
+    from app.services.warehouse_area_activation import WarehouseAreaActivationError
+    app, factory, ids = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        published = _publish_six_slots(client)
+        slot = published["slots"][2]
+        m = client.get("/api/warehouse/spatial-layout/floors/3F/areas/A01/management").json()
+        disabled = client.post(f'/api/warehouse/spatial-layout/locations/{slot["location_id"]}/disable', json={
+            "expected_version": slot["layout_version"], "expected_map_revision": m["published_map_revision"],
+            "expected_policy_version": m["policy_version"], "retire_published_ground_slot": True,
+            "expected_ground_plan_version": m["ground_plan_version"],
+        })
+        assert disabled.status_code == 200, disabled.text
+    identity = {**_published_runtime_identity(), "revision": "verified-new-map"}
+    monkeypatch.setattr(location_candidates, "load_warehouse_twin_published_floor_identity", lambda _floor: identity)
+    monkeypatch.setattr(warehouse_twin_layout, "load_warehouse_twin_published_floor_identity", lambda _floor: identity)
+    measured = {**_measured_layout(), "revision": identity["revision"]}
+    with factory() as db:
+        actor = db.get(User, ids["admin"])
+        policy = db.scalar(select(WarehouseAreaStoragePolicy))
+        policy.published_map_revision = identity["revision"]
+        if legacy_reflected:
+            legacy_plan = db.scalar(select(WarehouseGroundLayoutPlan))
+            for slot in legacy_plan.slots:
+                slot.y_mm = Decimal(2000) - slot.y_mm - slot.depth_mm
+            db.commit()
+            with pytest.raises(WarehouseAreaActivationError, match="物理坐标"):
+                record_map_applications(db, floor_layout=measured, actor=actor, operation_key="unrecognized-origin")
+            legacy_plan.publish_idempotency_key = "p0-26-current-map-e5f192ba605185db:publish:1"
+        db.commit()
+        original = {t: db.execute(text(f"SELECT * FROM {t} ORDER BY id")).all() for t in ("warehouse_ground_layout_plans", "warehouse_ground_layout_slots")}
+        with pytest.raises(WarehouseGroundSlotError, match="重新核对"):
+            published_ground_plan(db, floor_code="3F", area_code="A01")
+        assert record_map_applications(db, floor_layout=measured, actor=actor, operation_key="apply-map") == 1
+        db.commit()
+        assert record_map_applications(db, floor_layout=measured, actor=actor, operation_key="apply-map-retry") == 0
+        plan = published_ground_plan(db, floor_code="3F", area_code="A01")
+        assert plan.published_map_revision == "p1-87-map-r1"
+        rows = list(db.scalars(select(WarehouseLocation).where(WarehouseLocation.is_active.is_(True))))
+        contexts = location_candidates.load_warehouse_location_projection_contexts(db, rows)
+        assert all(c["ground_layout"]["published_map_revision"] == identity["revision"] for c in contexts.values())
+        assert len(contexts) == 5
+        drifted = copy.deepcopy(measured)
+        drifted["bounds_mm"]["max_x"] += 20
+        drifted["features"][0]["points"] = [[x + 20, y] for x, y in drifted["features"][0]["points"]]
+        with pytest.raises(WarehouseAreaActivationError, match="物理坐标"):
+            record_map_applications(db, floor_layout=drifted, actor=actor, operation_key="bad-map")
+        row = rows[0]
+        row.floor3_layout.version += 1
+        db.flush()
+        context = location_candidates.load_warehouse_location_projection_contexts(db, [row])[row.id]
+        assert context["ground_layout"]["published_map_revision"] == "p1-87-map-r1"
+        with pytest.raises(WarehouseGroundSlotError, match="重新核对"):
+            published_ground_plan(db, floor_code="3F", area_code="A01")
+        for table, values in original.items():
+            assert db.execute(text(f"SELECT * FROM {table} ORDER BY id")).all() == values
+
+
 def test_admin_can_drag_published_ground_slots_with_gaps_and_replay_safely(
     p187_app,
 ) -> None:

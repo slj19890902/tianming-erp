@@ -4,6 +4,8 @@ import { filterOperationalFeatures } from "./operationalView.mjs";
 import {
   clearFormalAreaOptions,
   formalAreaOptionsEffectEnabled,
+  filterPlanningPublishedFeatures,
+  removeZoneHierarchy,
   stableTwinFeatures
 } from "./formalAreaOptions.mjs";
 import {
@@ -2052,8 +2054,7 @@ export function WarehouseTwinApp() {
   const activeRackPreviewId = planningPreviewActive && selected?.kind === "rack" ? selected.id : null;
   const activeObjectPreview = Boolean(activeEditingFeatureId || activeRackPreviewId);
   const planningVisibleFeatures = useMemo(() => {
-    const published = (stableTwinFeatures(displayBaseLayout) as TwinFeature[])
-      .filter((feature) => feature.feature_kind !== "aisle");
+    const published = filterPlanningPublishedFeatures(displayBaseLayout, layout) as TwinFeature[];
     if (!activeEditingFeatureId) return published;
     const edited = features.find((feature) => feature.id === activeEditingFeatureId);
     if (!edited || edited.feature_kind === "aisle") return published;
@@ -2063,7 +2064,7 @@ export function WarehouseTwinApp() {
     return published.some((feature) => feature.id === edited.id)
       ? published.map((feature) => feature.id === edited.id ? { ...feature, ...visibleEdited } : feature)
       : [...published, visibleEdited];
-  }, [features, zoneGeometryDrafts, activeEditingFeatureId, displayBaseLayout]);
+  }, [features, zoneGeometryDrafts, activeEditingFeatureId, displayBaseLayout, layout]);
   const locationCollisionStructures = planningPublishedLayout?.structures || layout?.structures || [];
   const locationCollisionPlacements = planningPublishedLayout?.placements || layout?.placements || [];
   const locationCollisionRacks = planningPublishedLayout?.racks || layout?.racks || [];
@@ -5448,6 +5449,7 @@ export function WarehouseTwinApp() {
     )) return;
     setSpatialEditBusy(true);
     setFeatureContextMenu(null);
+    let deletionWritten = false;
     try {
       const key = operationKey("feature-delete");
       const query = new URLSearchParams({
@@ -5461,6 +5463,13 @@ export function WarehouseTwinApp() {
         }
         query.set("expected_policy_version", String(feature.formal_policy_version));
         query.set("expected_published_revision", feature.formal_published_map_revision);
+        const management = await requestJson<AreaLocationManagement>(
+          `/api/warehouse/spatial-layout/floors/${encodeURIComponent(floorCode)}/areas/${encodeURIComponent(feature.erp_area_code || "")}/management`
+        );
+        if (management.ground_plan_id && management.ground_plan_version) {
+          query.set("retire_ground_plan", "true");
+          query.set("expected_ground_plan_version", String(management.ground_plan_version));
+        }
       }
       const response = await mutateJson<LayoutMutationResponse<{
         id: string;
@@ -5472,12 +5481,18 @@ export function WarehouseTwinApp() {
         "DELETE"
       );
       if (!response) return;
+      deletionWritten = true;
       const draftChanged = response.item.draft_changed !== false;
-      setLayout((current) => current ? {
-        ...current,
-        source_sha256: draftChanged ? response.revision : current.source_sha256,
-        features: current.features.filter((item) => item.id !== feature.id),
-      } : current);
+      setLayout((current) => {
+        const removed = removeZoneHierarchy(current, feature.id, feature.erp_area_code) as Layout | null;
+        return removed ? {
+          ...removed,
+          source_sha256: draftChanged ? response.revision : removed.source_sha256,
+        } : removed;
+      });
+      setPlanningPublishedLayout((current) => (
+        removeZoneHierarchy(current, feature.id, feature.erp_area_code) as Layout | null
+      ));
       if (draftChanged) rememberServerDraft(response.revision);
       replaceZoneGeometryDrafts((current) => {
         const next = { ...current };
@@ -5490,13 +5505,18 @@ export function WarehouseTwinApp() {
         return next;
       });
       setSelected(null);
+      if (archivesFormalArea) {
+        await Promise.all([refreshPlanningTwinFloor(), refreshDashboard()]);
+      }
       setLocationEditMessage(
         archivesFormalArea
-          ? `${label}已受控归档；空位置已停用，库存数量和历史流水均未改变。`
+          ? `${label}已受控归档；旧空货位已停用，原排位和历史流水均保留。该位置现在是通道，可直接新增区域。`
           : `${label}已从规划草稿删除；库存、正式库位和已发布地图均未改变。`
       );
     } catch (reason) {
-      setLocationEditMessage(`删除${label}失败：${(reason as Error).message}`);
+      setLocationEditMessage(deletionWritten
+        ? `${label}已删除，但地图或仓库记录回读未完成：${(reason as Error).message}。请刷新核对，不要重复删除。`
+        : `删除${label}失败：${(reason as Error).message}`);
     } finally {
       setSpatialEditBusy(false);
     }

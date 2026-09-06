@@ -1493,6 +1493,10 @@ def test_area_context_menu_and_existing_button_share_archive_flow() -> None:
     assert "deleteSelectedLayoutFeature = () => deleteLayoutFeature" in TWIN_SOURCE
     assert 'query.set("expected_policy_version"' in TWIN_SOURCE
     assert 'query.set("expected_published_revision"' in TWIN_SOURCE
+    assert 'query.set("retire_ground_plan", "true")' in TWIN_SOURCE
+    assert 'query.set("expected_ground_plan_version"' in TWIN_SOURCE
+    assert "removeZoneHierarchy(current, feature.id, feature.erp_area_code)" in TWIN_SOURCE
+    assert "await Promise.all([refreshPlanningTwinFloor(), refreshDashboard()])" in TWIN_SOURCE
     assert 'locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"' in TWIN_SOURCE
     route = next(
         route

@@ -4,6 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 import * as inventory from "../src/warehouseInventory.mjs";
+import { filterPlanningPublishedFeatures } from "../src/formalAreaOptions.mjs";
 
 const source = readFileSync(new URL("../src/WarehouseTwinApp.tsx", import.meta.url), "utf8");
 const editorSource = readFileSync(new URL("../src/EditorCanvas.tsx", import.meta.url), "utf8");
@@ -328,6 +329,7 @@ test("moving a draft boundary preserves real location coordinates and keeps loca
     const context = { ...inventory, useMemo: (callback) => callback(), EMPTY_CANVAS_IDS: componentValue("EMPTY_CANVAS_IDS", {}), mapMode: mode, features,
       planningPreviewActive: preview, activeEditingFeatureId: preview ? zone.id : null,
       displayBaseLayout: { features: published, racks: [] },
+      filterPlanningPublishedFeatures,
       stableTwinFeatures: (layout) => layout.features, planningCollisionRacks: [],
       planningPublishedFeatures: published, zoneGeometryDrafts: localPoints ? { [zone.id]: localPoints } : {},
       visualLocations: locations, floorCode: "3F", standardPallet: { contract_version: "standard-pallet-v1", width_mm: 1200, depth_mm: 1000, height_mm: 150 },
@@ -723,7 +725,7 @@ test("planning derives passages from floor space outside zones and keeps legacy 
   assert.match(source, /onFeatureContextMenu=\{locationEditMode/);
   assert.match(source, /selectedLayoutFeature\?\.feature_kind === "zone"/);
   assert.match(source, /aisleEditingEnabled=\{false\}/);
-  assert.match(source, /filter\(\(feature\) => feature\.feature_kind !== "aisle"\)/);
+  assert.match(source, /filterPlanningPublishedFeatures\(displayBaseLayout, layout\)/);
   assert.match(source, /区域外自动作为通道/);
   assert.doesNotMatch(source, />新增区域<\/button>/);
   assert.doesNotMatch(source, />新增通道<\/button>/);

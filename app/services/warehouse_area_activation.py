@@ -858,6 +858,7 @@ def adjust_area_location_count(
     area_code: str,
     target_count: int,
     operator_id: int,
+    allow_empty_historical_retirement: bool = False,
 ) -> AreaLocationCountResult:
     if target_count < 0 or target_count > 500:
         raise WarehouseAreaActivationError("目标库位数必须在 0 到 500 之间")
@@ -922,7 +923,9 @@ def adjust_area_location_count(
         # Count changes never guess that a historical manual/version-1 row was
         # system generated.  An administrator must first adopt such rows via
         # the dedicated auto-arrange confirmation.
-        return layout.source_type == "seeded"
+        return layout.source_type == "seeded" or (
+            allow_empty_historical_retirement and target_count == 0
+        )
 
     if target_count == current_count:
         return AreaLocationCountResult(

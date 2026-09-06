@@ -1735,7 +1735,7 @@ export function WarehouseTwinApp() {
   const [simpleAreaCapacity, setSimpleAreaCapacity] = useState("0");
   const [advancedAreaMaintenanceOpen, setAdvancedAreaMaintenanceOpen] = useState(false);
   const [locationPointEditAreaCode, setLocationPointEditAreaCode] = useState<string | null>(null);
-  const [locationLayoutIdempotencyKey, setLocationLayoutIdempotencyKey] = useState(() => operationKey("ground-layout-positions"));
+  const locationLayoutOperationRef = useRef<{ signature: string; key: string } | null>(null);
   const [delayedDispatchOpen, setDelayedDispatchOpen] = useState(false);
   const [formalAreaOptions, setFormalAreaOptions] = useState<FormalWarehouseAreaOption[]>([]);
   const [selectedExistingAreaId, setSelectedExistingAreaId] = useState("");
@@ -3877,15 +3877,26 @@ export function WarehouseTwinApp() {
         const origin = locationProjectionFeatures.find((item) => item.id === feature?.id);
         if (!feature || !origin) throw new Error("区域原坐标缺失，请重读地图");
         const bounds = pointsBoundsMm(origin.points);
-        const result = await mutateJson<LayoutMutationResponse<TwinFeature>>(
-          `/api/warehouse/twin-layout/floors/${floorCode}/features/${feature.id}/geometry`, "PATCH", {
+        const requestBody = {
             expected_revision: workingLayout.source_sha256, expected_version: feature.version,
-            operation_key: `${locationLayoutIdempotencyKey}-${areaCode}`, points: feature.points,
+            points: feature.points,
             ground_locations: slots.map((slot) => ({
               location_id: slot.location_id, expected_version: slot.expected_version,
               x_mm: bounds.centerXmm - bounds.widthMm / 2 + bounds.widthMm * slot.left_pct / 100,
               y_mm: bounds.centerYmm + bounds.heightMm / 2 - bounds.heightMm * (slot.top_pct + slot.height_pct) / 100
             }))
+          };
+        const requestSignature = JSON.stringify({ areaCode, ...requestBody });
+        if (locationLayoutOperationRef.current?.signature !== requestSignature) {
+          locationLayoutOperationRef.current = {
+            signature: requestSignature,
+            key: operationKey("ground-layout-positions")
+          };
+        }
+        const result = await mutateJson<LayoutMutationResponse<TwinFeature>>(
+          `/api/warehouse/twin-layout/floors/${floorCode}/features/${feature.id}/geometry`, "PATCH", {
+            ...requestBody,
+            operation_key: `${locationLayoutOperationRef.current.key}-${areaCode}`,
           });
         if (!result) throw new Error("尚未取得保存回执，请重读核对");
         workingLayout = { ...workingLayout, source_sha256: result.revision,
@@ -3898,13 +3909,14 @@ export function WarehouseTwinApp() {
       if (!savedFeature) throw new Error("没有取得当前区域的保存结果");
       await applySavedAreaGeometryRevision(savedFeature, workingLayout.source_sha256, expectedPublishedRevision);
       setLocationDrafts((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !savedIds.has(Number(id)))));
-      setLocationLayoutIdempotencyKey(operationKey("ground-layout-positions"));
+      locationLayoutOperationRef.current = null;
       setLocationPointEditAreaCode(null);
       setKeyboardLocationEditActive(false);
       setLocationEditMessage(`已保存并应用 ${savedIds.size} 个货位调整；三种模式现在使用同一坐标。`);
     } catch (reason) {
       setLocationDrafts((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !savedIds.has(Number(id)))));
       if (savedIds.size) {
+        locationLayoutOperationRef.current = null;
         try { await refreshPlanningTwinFloor(); } catch { /* 原保存回执仍有效，保留准确状态提示。 */ }
       }
       const applicationWritten = Boolean((reason as Error & { applicationWritten?: boolean }).applicationWritten);
@@ -5820,7 +5832,7 @@ export function WarehouseTwinApp() {
           setLayoutMapTool("adjust");
           setLayoutDrawPoints([]);
           setLocationEditMessage(layoutMapToolsOpen ? "已返回货位摆放；现在只可拖动具体货位，点击区域空白只会选中区域。" : "已进入地图调整；区域移动时货位保持原位置。保存后自动校验并应用；未通过时只保留当前对象预览供继续调整。");
-        }}>{layoutMapToolsOpen ? "完成地图调整" : "调整地图"}</button>}
+        }}>{layoutMapToolsOpen ? "退出地图调整" : "调整地图"}</button>}
         {canEditLocations && floorCode === "4F" && mapMode === "planning" && locationEditMode && <>
           <button
             type="button"
@@ -6449,9 +6461,9 @@ export function WarehouseTwinApp() {
                 <label className="twin-zone-name-field"><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 4F 新振成品区" /></label>
                 <label><span>用途</span><select value={simpleAreaUsage} onChange={(event) => setSimpleAreaUsage(event.target.value as InventoryUsage)}><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="raw_material">原材料</option><option value="mold">模具</option><option value="print_plate">印刷版</option><option value="temporary_turnover">临时周转</option></select></label>
                 <label><span>形式</span><select value={simpleAreaLayout} onChange={(event) => setSimpleAreaLayout(event.target.value as Exclude<StorageLayout, "mixed">)}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
-                <label><span>最大栈板数</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /></label>
+                <label><span>{simpleAreaLayout === "pallet_ground" ? "栈板货位数" : "最大栈板数"}</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /></label>
               </div>
-              <div className="twin-zone-confirm-row"><button type="button" className="confirm" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || simpleAreaCapacity === ""} onClick={confirmSelectedAreaOnce}>{spatialEditBusy ? "确认中…" : "确认"}</button><p>保存设置，不改库存；专项货架容量可填 0。</p></div>
+              <div className="twin-zone-confirm-row"><button type="button" className="confirm" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || simpleAreaCapacity === ""} onClick={confirmSelectedAreaOnce}>{spatialEditBusy ? "保存中…" : "保存区域设置"}</button><p>{simpleAreaLayout === "pallet_ground" ? "同步空货位数量，不改库存；填 0 会停用全部空货位。" : "保存设置，不改库存；专项货架容量可填 0。"}</p></div>
               {selectedAreaHasPublishedBinding && selectedAreaCreatesInventoryLocations && <div className="twin-location-point-planner">
                 <div><b>货位点位</b><small>{selectedAreaLocationCount} 个正式货位 · 只调整当前区域</small></div>
                 {locationPointEditAreaCode === selectedAreaCode ? <div className="actions">
@@ -6459,7 +6471,7 @@ export function WarehouseTwinApp() {
                   <button type="button" disabled={locationEditBusy} onClick={cancelLocationPointEditing}>取消点位调整</button>
                 </div> : null}
                 {selectedAreaFeature.ground_location_draft?.base_revision === planningPublishedLayout?.source_sha256 && <div className="actions">
-                  <button type="button" className="save" disabled={spatialEditBusy || locationEditBusy || activeLocationDraftCount > 0 || Object.keys(zoneGeometryDrafts).length > 0 || Object.keys(rackDrafts).length > 0 || Object.keys(zonePolicyDrafts).length > 0} onClick={applySelectedAreaGeometry}>{spatialEditBusy ? "正在校验并应用…" : "应用本区域调整"}</button>
+                  <button type="button" className="save" disabled={spatialEditBusy || locationEditBusy || activeLocationDraftCount > 0 || Object.keys(zoneGeometryDrafts).length > 0 || Object.keys(rackDrafts).length > 0 || Object.keys(zonePolicyDrafts).length > 0} onClick={applySelectedAreaGeometry}>{spatialEditBusy ? "正在保存并应用…" : "保存并应用当前区域"}</button>
                   <span>只应用本区域边界与货位位置</span>
                 </div>}
                 <p>{locationPointEditAreaCode === selectedAreaCode ? "奶白色为空货位，绿色为有货货位。红色冲突可先保存；系统会尝试应用，未通过时留在当前区域继续调整。库存数量与栈板绑定不变。" : "区域规划按已应用地图显示全部正式货位：奶白色为空货位，绿色为有货货位。系统不强制紧贴均匀排布；保存通过校验后，查货、移货和盘点立即使用同一位置。"}</p>
@@ -6480,7 +6492,6 @@ export function WarehouseTwinApp() {
               <div className="twin-region-planning-actions">
                 <button type="button" className={!advancedAreaMaintenanceOpen ? "active" : ""} disabled={Boolean(locationPointEditAreaCode)} onClick={() => { setAdvancedAreaMaintenanceOpen(false); setAreaPolicyEditMode(true); setLocationEditMessage("请核对当前区域名称、用途、形式和容量。"); }}>编辑</button>
                 <button type="button" className={advancedAreaMaintenanceOpen ? "active" : ""} disabled={Boolean(locationPointEditAreaCode)} title={locationPointEditAreaCode ? "请先保存并固定或取消点位调整" : ""} onClick={() => { setAdvancedAreaMaintenanceOpen(true); setAreaPolicyEditMode(true); setLocationEditMessage("请选择货架或货位，按现场尺寸整理并保存草稿。"); }}>货位/货架</button>
-                <button type="button" className="publish" disabled={spatialEditBusy || !layoutDraftControl?.has_draft || Boolean(locationPointEditAreaCode)} onClick={previewAndPublishLayout}>发布</button>
               </div>
             </div>}
             {locationEditMode && canEditLocations && selectedAreaIsMold && <section className="twin-mold-rack-planner">

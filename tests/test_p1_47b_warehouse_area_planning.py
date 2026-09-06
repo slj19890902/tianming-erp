@@ -3246,37 +3246,58 @@ def test_one_step_raw_material_area_creates_shared_pallet_positions(
                 for item in current_floor['features']
                 if item['id'] == 'zone-f1'
             )
-            runtime_before_rejected_zero = runtime.read_bytes()
-            with monkeypatch.context() as scoped:
-                scoped.setattr(
-                    warehouse_api,
-                    '_ensure_one_step_pallet_locations',
-                    lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                        AssertionError(
-                            'published plan members must not reach legacy count/reflow'
-                        )
-                    ),
+            zero_capacity = warehouse_api.confirm_twin_zone_area(
+                '3F',
+                'zone-f1',
+                _confirm_area_payload(
+                    revision=current_floor['revision'],
+                    published_revision=current_floor['revision'],
+                    operation_key='p1-60-one-step-existing-plan-zero',
+                    usage='raw_material',
+                    storage_layout='pallet_ground',
+                    capacity=0,
+                    expected_version=int(current_feature['version']),
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert zero_capacity['available_location_count'] == 0
+            assert zero_capacity['area']['planned_location_count'] == 0
+            assert zero_capacity['area']['planned_pallet_capacity'] == 0
+            assert zero_capacity['area']['capacity_review_status'] == 'excluded'
+            assert db.scalar(
+                select(func.count(WarehouseLocation.id)).where(
+                    WarehouseLocation.is_active.is_(True)
                 )
-                with pytest.raises(warehouse_api.HTTPException) as zero_capacity:
-                    warehouse_api.confirm_twin_zone_area(
-                        '3F',
-                        'zone-f1',
-                        _confirm_area_payload(
-                            revision=current_floor['revision'],
-                            published_revision=current_floor['revision'],
-                            operation_key='p1-60-one-step-existing-plan-zero',
-                            usage='raw_material',
-                            storage_layout='pallet_ground',
-                            capacity=0,
-                            expected_version=int(current_feature['version']),
-                        ),
-                        _request(),
-                        db,
-                        admin,
-                    )
-            assert zero_capacity.value.status_code == 409
-            assert '不能从一次确认清空' in str(zero_capacity.value.detail)
-            assert runtime.read_bytes() == runtime_before_rejected_zero
+            ) == 0
+            plan = db.scalar(select(WarehouseGroundLayoutPlan))
+            assert plan is not None
+            assert plan.target_slot_count == 4
+            assert len(plan.slots) == 4
+
+            zero_document = json.loads(runtime.read_text(encoding='utf-8'))
+            zero_floor = zero_document['floors']['3F']
+            zero_feature = next(
+                item for item in zero_floor['features'] if item['id'] == 'zone-f1'
+            )
+            restored_capacity = warehouse_api.confirm_twin_zone_area(
+                '3F',
+                'zone-f1',
+                _confirm_area_payload(
+                    revision=zero_floor['revision'],
+                    published_revision=zero_floor['revision'],
+                    operation_key='p1-60-one-step-existing-plan-restore',
+                    usage='raw_material',
+                    storage_layout='pallet_ground',
+                    capacity=4,
+                    expected_version=int(zero_feature['version']),
+                ),
+                _request(),
+                db,
+                admin,
+            )
+            assert restored_capacity['available_location_count'] == 4
             assert db.scalar(
                 select(func.count(WarehouseLocation.id)).where(
                     WarehouseLocation.is_active.is_(True)

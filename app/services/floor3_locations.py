@@ -754,6 +754,7 @@ def adjust_area_location_count(
     area_code: str,
     target_count: int,
     operator_id: int,
+    allow_empty_historical_retirement: bool = False,
 ) -> Floor3AreaLocationCountResult:
     area = area_code.strip().upper()
     if target_count < 0 or target_count > 500:
@@ -783,7 +784,9 @@ def adjust_area_location_count(
             return False
         # Count changes never infer provenance from manual/version 1.  Historical
         # candidates become seeded only after the separate auto-arrange consent.
-        return layout.source_type == "seeded"
+        return layout.source_type == "seeded" or (
+            allow_empty_historical_retirement and target_count == 0
+        )
 
     if target_count == current_count:
         return Floor3AreaLocationCountResult(

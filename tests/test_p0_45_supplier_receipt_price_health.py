@@ -151,7 +151,7 @@ class SupplierReceiptPriceHealthTests(unittest.TestCase):
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["frozen_price_count"], 1)
 
-    def test_reversals_and_explicit_external_routes_are_excluded(self):
+    def test_reversals_are_excluded_but_external_flags_do_not_hide_generic_receipts(self):
         for row_id in range(1, 5):
             self.receipt(row_id)
         self.db.execute("UPDATE incoming_receipts SET status='reversed' WHERE id=1")
@@ -160,14 +160,32 @@ class SupplierReceiptPriceHealthTests(unittest.TestCase):
         self.insert("incoming_receipt_purpose_reversals", id=1, incoming_receipt_purpose_allocation_id=3)
         self.insert("incoming_receipt_reversal_facts", id=1, incoming_receipt_item_id=4)
         self.receipt(5, "stock_replenishment_item")
-        self.snapshot(5)  # Even a stray paperboard fact cannot pull an external route in.
         self.insert("external_packaging_purchase_items", id=1, stock_replenishment_item_id=5)
         self.receipt(6, "stock_replenishment_item")
         self.db.execute("UPDATE stock_replenishment_order_items SET procurement_route_snapshot='external_packaging' WHERE id=6")
         report = self.check()
+        self.assertFalse(report["ok"], report)
+        self.assertEqual(report["effective_receipt_count"], 2)
+        self.assertEqual(report["unresolved_count"], 2)
+        self.assertEqual(report["excluded_counts"], {"reversed": 4})
+        self.assertEqual([row["incoming_receipt_item_id"] for row in report["unresolved"]], [5, 6])
+        for row in report["unresolved"]:
+            self.assertIn("unresolved_replenishment_payable_route", row["gaps"])
+            self.assertIn("missing_frozen_settlement_price", row["gaps"])
+
+    def test_existing_authorized_finance_classification_is_still_a_valid_frozen_fact(self):
+        self.receipt(1, "stock_replenishment_item")
+        self.db.execute("UPDATE stock_replenishment_order_items SET procurement_route_snapshot='external_packaging' WHERE id=1")
+        self.snapshot(1, fact_origin="historical_master_adoption",
+                      finance_only_test_classification=1,
+                      match_strategy="owner_authorized_finance_test_classification",
+                      adoption_reason="2026-09-02 老板确认采用当前主数据",
+                      adoption_evidence_reference="isolated-existing-authorized-fact",
+                      received_quantity_snapshot=2)
+        report = self.check()
         self.assertTrue(report["ok"], report)
-        self.assertEqual(report["effective_receipt_count"], 0)
-        self.assertEqual(report["excluded_counts"], {"reversed": 4, "external_packaging": 2})
+        self.assertEqual(report["frozen_price_count"], 1)
+        self.assertEqual(report["effective_receipt_count"], 1)
 
     def test_allocation_cost_is_never_a_supplier_price(self):
         self.receipt(1)

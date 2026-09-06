@@ -122,12 +122,19 @@ def _price_gaps(fact: sqlite3.Row, length: Any, width: Any) -> list[str]:
     return gaps
 
 
-def _source(db: sqlite3.Connection, item: sqlite3.Row) -> dict[str, Any]:
+def _finance_test_classification(fact: sqlite3.Row) -> bool:
+    return (fact["finance_only_test_classification"] == 1
+            and fact["fact_origin"] == "historical_master_adoption"
+            and fact["match_strategy"] == "owner_authorized_finance_test_classification")
+
+
+def _source(db: sqlite3.Connection, item: sqlite3.Row, *,
+            finance_test_classified: bool = False) -> dict[str, Any]:
     # Supplier order receipts can retain a legacy requisition link; the supplier
     # order is authoritative, matching _paperboard_source in monthly settlement.
     kinds = [kind for kind in _SOURCES if item[kind + "_id"] is not None]
     kind = kinds[0] if kinds else "unknown"
-    result: dict[str, Any] = {"kind": kind, "id": None, "gaps": [], "excluded": False}
+    result: dict[str, Any] = {"kind": kind, "id": None, "gaps": []}
     if not kinds:
         result["gaps"].append("unknown_purchase_source")
         return result
@@ -140,19 +147,17 @@ def _source(db: sqlite3.Connection, item: sqlite3.Row) -> dict[str, Any]:
         result["gaps"].append("missing_purchase_source")
         return result
     if kind == "stock_replenishment_item":
-        # Same precedence as stock_replenishment_uses_paperboard_price. Only an
-        # explicit external route is excluded; unknown finished routes fail closed.
+        # A route flag or a purchase link does not prove an independent payable
+        # receipt exists. A generic posted receipt must remain visible as a gap.
         external = _rows(db, "external_packaging_purchase_items", "stock_replenishment_item_id", source["id"])
         route = source["procurement_route_snapshot"]
-        if (external or route == "external_packaging") and len(kinds) == 1:
-            result["excluded"] = True
-            return result
         product = _one(db, "products", source["product_id"])
         liner = (product is not None and "".join(_text(product["box_style"]).upper().split())
                  in {"LINER", "衬板"})
-        paperboard = (route == "paperboard" or source["target_inventory_type"] == "semi_finished"
-                      or (source["target_inventory_type"] == "finished" and liner))
-        if not paperboard:
+        paperboard = (not external and route != "external_packaging"
+                      and (route == "paperboard" or source["target_inventory_type"] == "semi_finished"
+                           or (source["target_inventory_type"] == "finished" and liner)))
+        if not paperboard and not finance_test_classified:
             result["gaps"].append("unresolved_replenishment_payable_route")
     header = _one(db, header_table, source[header_key])
     if header is None:
@@ -216,8 +221,7 @@ def _snapshot_gaps(db: sqlite3.Connection, item: sqlite3.Row, receipt: sqlite3.R
     if fact["receipt_number_snapshot"] != receipt["receipt_number"]:
         gaps.append("snapshot_receipt_number_mismatch")
     classification = fact["finance_only_test_classification"]
-    authorized_test = (classification == 1 and fact["fact_origin"] == "historical_master_adoption"
-                       and fact["match_strategy"] == "owner_authorized_finance_test_classification")
+    authorized_test = _finance_test_classification(fact)
     if classification not in (0, 1) or (classification == 1 and not authorized_test):
         gaps.append("invalid_finance_test_classification")
     if (not authorized_test and _number(fact["received_quantity_snapshot"]) != _number(item["received_quantity"])):
@@ -281,17 +285,16 @@ def check_database(database: str | Path) -> dict[str, Any]:
             if reversed_item:
                 excluded["reversed"] += 1
                 continue
-            source = _source(db, item)
-            if source["excluded"]:
-                excluded["external_packaging"] += 1
-                continue
+            snapshots = _rows(db, "supplier_receipt_settlement_price_facts", "incoming_receipt_item_id", item["id"])
+            source = _source(db, item, finance_test_classified=bool(
+                snapshots and _finance_test_classification(snapshots[0])
+            ))
             total += 1
             gaps = list(source["gaps"])
             if item["status"] != "posted" or receipt is None or receipt["status"] != "posted":
                 gaps.append("receipt_not_effectively_posted")
             if _number(item["received_quantity"]) <= 0:
                 gaps.append("invalid_received_quantity")
-            snapshots = _rows(db, "supplier_receipt_settlement_price_facts", "incoming_receipt_item_id", item["id"])
             if len(snapshots) > 1 or len(allocations) > 1:
                 gaps.append("duplicate_receipt_price_links")
             if snapshots and receipt is not None:

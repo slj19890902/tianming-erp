@@ -69,4 +69,4 @@
 
 下一步顺序：先交付 P0-45A 同事务冻结与提交门禁；再单独处理 B/C 全库历史缺口和持续完整性；上述通用应付、已收款客户异议风险各用独立定向用例验证后修补；最后复用现有服务增加周期草稿和异常提醒自动化。财务与地图继续独立 worktree、提交和验收。
 
-本轮已提供统一自动回归脚本 `scripts/uat/verify_p0_45_finance.py`（测试数据库、备份及密钥均使用临时隔离目录）与全日期只读 CLI `scripts/admin/check_supplier_receipt_prices.py`（显式指定数据库，以 `mode=ro` 和 `query_only` 打开）；正式历史采用、周期强阻断和无人值守调度仍未执行。
+第一轮已提供统一自动回归脚本 `scripts/uat/verify_p0_45_finance.py`（测试数据库、备份及密钥均使用临时隔离目录）与全日期只读 CLI `scripts/admin/check_supplier_receipt_prices.py`（显式指定数据库，以 `mode=ro` 和 `query_only` 打开）。后续第二轮已补齐周期完整性、通用应付及已收款客户异议门禁，并在工厂导出副本只读定位39条历史缺价，详见 `P0_45_ROUND2_DELIVERY_20260907.md`；正式历史采用和无人值守调度仍未执行。

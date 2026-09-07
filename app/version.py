@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.262"
-APP_VERSION_NAME = "财务来源与仓库相邻性门禁"
+APP_VERSION = "v0.22.263"
+APP_VERSION_NAME = "地堆楼层编码兼容"
 APP_BUILD_DATE = "2026-09-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -1858,18 +1858,31 @@ _V022261_VERIFICATION_STEPS = [
     "在隔离副本确认月结关联应付的通用付款/作废被拒绝，已有收款的客户对账单重开和争议调整被拒绝，原金额和事实不变。",
 ]
 
-APP_CHANGES = [
+_V022262_CHANGES = [
     "供应商月结确认在同一写事务内重新核对活动实收、明细指纹和存档来源哈希；来源撤销、新增或变化时拒绝形成应付，并要求重新生成核对。",
     "供应商组合付款使用承兑时，背书日期必须处于承兑收到日与到期日之间；边界日期允许，区间外拒绝且不写付款事实。",
     "补齐工厂 Python 3.10 对 SQLite 繁忙错误码属性缺失的兼容，数据库占锁时统一返回可重试的业务冲突；本版无迁移，不回填历史价格或金额。",
     "大型货物跨地堆位置的候选与实际提交统一读取已应用地图的绝对物理坐标；已拉开的货位不再被旧百分比或历史排位误判为相邻。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022262_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认 v0.22.262，数据库 revision 仍为唯一 head rp06v8x9z65。",
     "在隔离副本生成并核对月结草稿后撤销来源实收，确认原草稿不能确认或重生成应付，草稿版本和应付数量不变。",
     "在隔离副本核对承兑收到日/到期日允许付款，区间外日期拒绝；另以并发写锁确认返回 409，释放锁后可正常重试。",
     "在隔离地图副本把两个货位的已应用绝对坐标拉开，确认候选不再推荐且跨位提交被拒绝；旧位置身份、百分比台账和库存数量保持不变。",
+]
+
+
+APP_CHANGES = [
+    "地堆候选和大型货物双位置提交统一按正式楼层号读取数字孪生地图；数据库保留的 F1 楼层编码会安全映射为地图键 1F，不再出现地图未配置错误。",
+    "三楼、四楼原有 3F/4F 地图键和 v0.22.262 已应用绝对坐标相邻性门禁保持不变；新增 F1 别名回归覆盖。",
+    "本版无数据库迁移，不修改或回填楼层、区域、货位、地图、库存、收料、价格、月结或付款事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "进入系统备份→系统版本，确认 v0.22.263，数据库 revision 仍为唯一 head rp06v8x9z65。",
+    "用正式一楼 F1 已发布地堆区域读取候选，确认接口正常返回且地图按 1F 加载；选择相邻双位置时继续按已应用绝对坐标校验。",
+    "抽查三楼和四楼已发布地堆区域，确认候选与地图正常回读；核对发布前后正式库存数量、地图版本和业务单据没有变化。",
 ]
 
 
@@ -1963,6 +1976,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.262：本次更新｜{item}" for item in _V022262_CHANGES),
+    *(f"v0.22.262：如何验证｜{item}" for item in _V022262_VERIFICATION_STEPS),
     *(f"v0.22.261：本次更新｜{item}" for item in _V022261_CHANGES),
     *(f"v0.22.261：如何验证｜{item}" for item in _V022261_VERIFICATION_STEPS),
     *(f"v0.22.260：本次更新｜{item}" for item in _V022260_CHANGES),

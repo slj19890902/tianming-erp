@@ -381,8 +381,33 @@ interface DelayedDispatchRelocation {
 type LocationLayoutGeometry = NonNullable<ReturnType<typeof locationLayoutGeometry>>;
 
 interface AuthResponse {
-  user: { role: string; ui_mode?: "standard" | "large" };
+  user: { id: number; role: string; ui_mode?: "standard" | "large" };
   permissions: string[];
+}
+
+interface PendingLotDraft {
+  lotId: number;
+  lotNumber: string;
+  productName: string;
+  customerName: string;
+  sourceName: string;
+  quantity: number;
+  unit: string;
+  actorId: number;
+  attempted: boolean;
+  written: boolean;
+  rejected: boolean;
+  complete: boolean;
+  error: string;
+  payload: Readonly<{
+    source_location_id: number;
+    expected_version: number;
+    expected_layout_version: number;
+    expected_pallet_id: number | null;
+    expected_pallet_version: number | null;
+    idempotency_key: string;
+    confirmed: true;
+  }>;
 }
 
 interface TwinDashboard {
@@ -1788,6 +1813,10 @@ export function WarehouseTwinApp() {
   const [pendingPlacementBusy, setPendingPlacementBusy] = useState(false);
   const [pendingRefreshRequired, setPendingRefreshRequired] = useState(false);
   const pendingPlacementRef = useRef<{ busy: boolean; signature: string; key: string }>({ busy: false, signature: "", key: "" });
+  const [authActorId, setAuthActorId] = useState<number | null>(null);
+  const [pendingLotDraft, setPendingLotDraft] = useState<PendingLotDraft | null>(null);
+  const [pendingLotBusy, setPendingLotBusy] = useState(false);
+  const pendingLotRef = useRef<{ draft: PendingLotDraft | null; busy: boolean }>({ draft: null, busy: false });
   const [stocktakeDecreaseQuantity, setStocktakeDecreaseQuantity] = useState("");
   const [stocktakeLastResult, setStocktakeLastResult] = useState<StocktakeBatchResultItem[]>([]);
   const [groundOperation, setGroundOperation] = useState<"inbound" | "transfer">("inbound");
@@ -1852,6 +1881,7 @@ export function WarehouseTwinApp() {
     refreshDashboard().catch((reason: Error) => setError(reason.message));
     requestJson<AuthResponse>("/api/auth/me")
       .then((value) => {
+        setAuthActorId(value.user.id);
         setCanEditLocations(!traceReadOnly && value.user.role === "admin");
         setCanExecuteWarehouse(!traceReadOnly && value.permissions.includes("warehouse.execute"));
         setCanStocktake(!traceReadOnly && value.permissions.includes("warehouse.stocktake.submit"));
@@ -1859,6 +1889,7 @@ export function WarehouseTwinApp() {
         setUiMode(value.user.ui_mode === "large" ? "large" : "standard");
       })
       .catch(() => {
+        setAuthActorId(null);
         setCanEditLocations(false);
         setCanExecuteWarehouse(false);
         setCanStocktake(false);
@@ -4173,6 +4204,90 @@ export function WarehouseTwinApp() {
     );
   };
 
+  const openPendingLotRelocation = () => {
+    if (pendingLotRef.current.busy || !canEditLocations || !authActorId) return;
+    const previous = pendingLotRef.current.draft;
+    if (previous && previous.attempted && !previous.rejected && !previous.complete) {
+      setPendingLotDraft({ ...previous });
+      return;
+    }
+    const item = selectedStocktakeItem;
+    if (!selectedLocation || selectedLocationStocktakeBlockReason || !item?.version
+        || item.inventory_type !== "finished" || !["active", "frozen"].includes(item.status || "")) return;
+    const quantity = Number(item.available_quantity || 0) + Number(item.reserved_quantity || 0) + Number(item.damaged_quantity || 0);
+    if (quantity <= 0) return;
+    const pallet = selectedLocationPallets.find((row) => row.items.some((entry) => entry.lot_id === item.lot_id));
+    const draft: PendingLotDraft = {
+      lotId: item.lot_id, lotNumber: item.lot_number || `批次 ${item.lot_id}`,
+      productName: item.product_name || item.inventory_code || "产品名称待补充",
+      customerName: employeeCustomerName(item), sourceName: employeeLocationName(selectedLocation),
+      quantity, unit: item.unit || "", actorId: authActorId,
+      attempted: false, written: false, rejected: false, complete: false, error: "",
+      payload: Object.freeze({ source_location_id: selectedLocation.location_id,
+        expected_version: item.version, expected_layout_version: Number(selectedLocation.map_position?.version),
+        expected_pallet_id: pallet?.pallet_id || null, expected_pallet_version: pallet?.version || null,
+        idempotency_key: operationKey("lot-to-pending"), confirmed: true })
+    };
+    pendingLotRef.current.draft = draft;
+    setPendingLotDraft({ ...draft });
+  };
+
+  const cancelPendingLotRelocation = () => {
+    const draft = pendingLotRef.current.draft;
+    if (pendingLotRef.current.busy || (draft?.attempted && !draft.rejected && !draft.complete)) return;
+    pendingLotRef.current.draft = null;
+    setPendingLotDraft(null);
+  };
+
+  const confirmPendingLotRelocation = async () => {
+    const draft = pendingLotRef.current.draft;
+    if (!draft || pendingLotRef.current.busy || draft.complete || !canEditLocations) return;
+    pendingLotRef.current.busy = true;
+    setPendingLotBusy(true);
+    draft.error = "";
+    setPendingLotDraft({ ...draft });
+    let posting = false;
+    const hadUnknownAttempt = draft.attempted && !draft.rejected && !draft.written;
+    try {
+      const auth = await requestJson<AuthResponse>("/api/auth/me");
+      if (auth.user.id !== draft.actorId || auth.user.role !== "admin") {
+        throw new Error("登录身份已变化，请使用原管理员账号核对这一请求；不能由其他账号重试。");
+      }
+      if (!draft.written) {
+        draft.attempted = true;
+        draft.rejected = false;
+        posting = true;
+        await mutateJson(`/api/warehouse/twin-operations/lots/${draft.lotId}/pending-relocation`, "POST", draft.payload);
+        draft.written = true;
+        posting = false;
+      }
+      const currentAuth = await requestJson<AuthResponse>("/api/auth/me");
+      if (currentAuth.user.id !== draft.actorId || currentAuth.user.role !== "admin") {
+        throw new Error("登录身份已变化，原请求已成功；请使用原账号刷新核对。");
+      }
+      await refreshDashboard();
+      draft.complete = true;
+      setStocktakeLotId(null);
+      setStocktakeDecreaseQuantity("");
+      setWarehouseOperationMessage(`原批次 ${draft.lotNumber} 已移到待归位，${formatNumber(draft.quantity)} ${inventoryUnitLabel(draft.unit)}保持不变；可继续核对并添加现场实际货物。`);
+    } catch (error) {
+      const status = (error as Error & { status?: number }).status;
+      if (posting && !hadUnknownAttempt && status && status >= 400 && status < 500
+          && ![408, 425, 429].includes(status)) draft.rejected = true;
+      draft.error = draft.written
+        ? `原批次已转待归位，但地图尚未核对完成；只需刷新，不要重复提交。${(error as Error).message}`
+        : draft.attempted && !draft.rejected
+          ? `结果尚未确认，已保留同一请求供重试。${(error as Error).message}`
+          : (error as Error).message;
+    } finally {
+      if (pendingLotRef.current.draft === draft) {
+        pendingLotRef.current.busy = false;
+        setPendingLotBusy(false);
+        setPendingLotDraft({ ...draft });
+      }
+    }
+  };
+
   const placePendingInventory = async () => {
     if (pendingPlacementRef.current.busy || pendingRefreshRequired) return;
     if (!canEditLocations || !selectedLocation || !selectedPendingItem || selectedLocationFinishedAddBlockReason) return;
@@ -6278,7 +6393,10 @@ export function WarehouseTwinApp() {
             const stocktakeBlockReason = mapMode === "move" && moveAction === "stocktake"
               ? selectedLocationStocktakeBlockReason || stocktakeDecreaseBlockReason(item)
               : null;
-            return <button type="button" className={`twin-location-item ${stocktakeLotId === item.lot_id ? "correction-selected" : ""} ${(traceFocusedLotId && traceFocusedLotId === item.lot_id) || (focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey) ? "warehouse-search-hit" : ""} ${stocktakeBlockReason ? "stocktake-ineligible" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`} disabled={Boolean(stocktakeBlockReason)} title={stocktakeBlockReason || ""} onClick={() => {
+            const canSelectForPending = canEditLocations && !selectedLocationStocktakeBlockReason
+              && item.inventory_type === "finished" && Boolean(item.version)
+              && ["active", "frozen"].includes(item.status || "") && inventoryHasPhysicalQuantity(item);
+            return <button type="button" className={`twin-location-item ${stocktakeLotId === item.lot_id ? "correction-selected" : ""} ${(traceFocusedLotId && traceFocusedLotId === item.lot_id) || (focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey) ? "warehouse-search-hit" : ""} ${stocktakeBlockReason ? "stocktake-ineligible" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`} disabled={Boolean(stocktakeBlockReason) && !canSelectForPending} title={stocktakeBlockReason || ""} onClick={() => {
               if (mapMode === "move" && moveAction === "stocktake") {
                 setStocktakeLotId(item.lot_id || null);
                 setStocktakeDecreaseQuantity("");
@@ -6288,12 +6406,27 @@ export function WarehouseTwinApp() {
               <div className="twin-location-item-code"><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>
               <h4>{item.product_name || "产品名称待补充"}</h4>
               <div className="twin-location-item-summary"><span>{item.customer_name || "客户待确认"}</span></div>
+              {mapMode === "move" && moveAction === "stocktake" && <small>{item.lot_number || `批次 ${item.lot_id}`}</small>}
               {stocktakeBlockReason && <>
                 <small className="twin-stocktake-block-reason">不可盘点调减：{stocktakeBlockReason}</small>
                 <small className="twin-stocktake-resolution">解决方法：{stocktakeBlockResolution(stocktakeBlockReason)}</small>
               </>}
             </button>;
           })}
+          {canEditLocations && mapMode === "move" && moveAction === "stocktake" && viewMode === "2d" && !locationEditMode && <>
+            {!pendingLotDraft && selectedStocktakeItem?.inventory_type === "finished" && <button type="button" className="twin-detail-toggle" disabled={Boolean(selectedLocationStocktakeBlockReason) || !authActorId || !selectedStocktakeItem.version || !inventoryHasPhysicalQuantity(selectedStocktakeItem)} onClick={openPendingLotRelocation}>标签不符：将所选批次移到待归位</button>}
+            {pendingLotDraft && <section className="twin-correction-form" aria-label="所选批次转待归位确认">
+              <b>{pendingLotDraft.productName} · {pendingLotDraft.lotNumber}</b>
+              <p>{pendingLotDraft.customerName} · 来源：{pendingLotDraft.sourceName}</p>
+              <p>{formatNumber(pendingLotDraft.quantity)} {inventoryUnitLabel(pendingLotDraft.unit)} → 待归位</p>
+              <small>仅转移这一原批次，数量、客户、产品和业务来源不变；混板上的其他批次仍留在原位。</small>
+              {pendingLotDraft.error && <p role="alert">{pendingLotDraft.error}</p>}
+              {pendingLotDraft.complete ? <><p role="status">原批次已转待归位，地图已刷新。可继续添加现场实际货物。</p><button type="button" onClick={cancelPendingLotRelocation}>继续盘点</button></> : <>
+                {(!pendingLotDraft.attempted || pendingLotDraft.rejected) && <button type="button" disabled={pendingLotBusy} onClick={cancelPendingLotRelocation}>取消</button>}
+                <button type="button" className="twin-primary-action" disabled={pendingLotBusy || pendingLotDraft.rejected} onClick={() => void confirmPendingLotRelocation()}>{pendingLotBusy ? "正在处理…" : pendingLotDraft.written ? "刷新核对地图" : pendingLotDraft.attempted ? "重试同一请求" : "确认移到待归位"}</button>
+              </>}
+            </section>}
+          </>}
           {mapMode === "lookup" && selectedLocationTraceItems.length > 4 && <button type="button" className="twin-detail-toggle" aria-expanded={locationItemsExpanded} onClick={() => setLocationItemsExpanded((current) => !current)}>{locationItemsExpanded ? "收起货物" : `查看全部 ${selectedLocationTraceItems.length} 条货物`}</button>}
           {displayedLocationConflictIds.has(`erp-location-${selectedLocation.location_id}`) && <p className="twin-location-column-warning">{locationEditMode ? "该货位越界，或与其他货位、柱子、设备、货架、禁放区冲突，可先保存调整，再拖到安全位置；应用前会核对冲突。" : "该货位与固定柱子冲突，请进入区域规划核对现场位置。"}</p>}
           <button type="button" className="twin-detail-toggle secondary" aria-expanded={locationDetailOpen} onClick={() => setLocationDetailOpen((current) => !current)}>{locationDetailOpen ? "收起位置与栈板详情" : "位置与栈板详情"}</button>

@@ -19,6 +19,7 @@ from app.services.warehouse_floor_claim import claim_warehouse_floor_projection
 PENDING_CODE = "RECOUNT-PENDING"
 PENDING_SOURCE = "RECOUNT_PENDING"
 RESET_ACTION = "warehouse.recount.pending.reset"
+LOT_ACTION = "warehouse.recount.pending.lot"
 
 
 class PendingRelocationError(ValueError):
@@ -86,6 +87,158 @@ def preview_pending_relocation(db: Session) -> dict:
             "fingerprint": _fingerprint(_facts(lots, pallets))}
 
 
+def _pending_location(db: Session) -> WarehouseLocation:
+    pending = db.scalar(select(WarehouseLocation).where(WarehouseLocation.location_code == PENDING_CODE))
+    if pending is not None and not is_pending_relocation_location(pending):
+        raise PendingRelocationError("待归位位置身份冲突，不能覆盖已有位置")
+    if pending is None:
+        pending = WarehouseLocation(location_code=PENDING_CODE, location_name="盘点待归位",
+            warehouse_type="shared", warehouse_floor=None, storage_type=None,
+            source_version=PENDING_SOURCE, placement_status="unplaced", is_active=True,
+            is_temporary=True, remarks="重新盘点前的位置待确认，不代表已实物搬入某区域")
+        db.add(pending)
+        db.flush()
+    return pending
+
+
+def _record_pending_lot_movement(db: Session, *, lot, source_location_id, pending_id,
+                                 key, operation_key, operator_id, reason):
+    balances = {f"{side}_{name}": getattr(lot, f"quantity_{name}")
+                for side in ("before", "after")
+                for name in ("available", "reserved", "consumed", "damaged", "scrapped")}
+    db.add(InventoryMovement(movement_number="RP-" + key[:32], inventory_lot_id=lot.id,
+        movement_type="location_transfer", quantity=lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged,
+        unit=lot.unit, idempotency_key="recount:" + key, operator_id=operator_id,
+        reason=reason, remarks=json.dumps({"from_location_id": source_location_id,
+        "to_location_id": pending_id, "recount_operation_key": operation_key}), **balances))
+
+
+def move_lot_to_pending_relocation(db: Session, *, actor, lot_id: int,
+        source_location_id: int, expected_version: int, expected_layout_version: int,
+        expected_pallet_id: int | None, expected_pallet_version: int | None,
+        operation_key: str, request=None) -> dict:
+    """Move only the confirmed lot; retain its ledger, reservations and item identity."""
+    from app.services.floor3_locations import _claim_pallet_version, clear_pallet
+    from app.services.location_candidates import claim_active_placed_location, operational_location_issue
+    from app.services.warehouse_ground_slots import release_ground_occupancy_for_pallet
+
+    if actor.role != "admin":
+        raise PendingRelocationError("转待归位只能由管理员确认", 403)
+    if not operation_key.strip() or len(operation_key) > 100:
+        raise PendingRelocationError("请求标识无效", 400)
+    payload = dict(lot_id=lot_id, source_location_id=source_location_id,
+        expected_version=expected_version, expected_layout_version=expected_layout_version,
+        expected_pallet_id=expected_pallet_id, expected_pallet_version=expected_pallet_version)
+    request_hash = _fingerprint(payload)
+    source = db.get(WarehouseLocation, source_location_id)
+    if source is None or source.warehouse_floor not in {1, 3, 4}:
+        raise PendingRelocationError("来源必须是一楼、三楼或四楼的正式地图库位")
+    # Share the source floor mutex with map, stock and whole-warehouse recount writes.
+    claim_warehouse_floor_projection(db, floor_number=source.warehouse_floor)
+    repeated = db.scalar(select(OperationLog).where(OperationLog.action_code == LOT_ACTION,
+        OperationLog.batch_id == operation_key, OperationLog.result == "success"))
+    if repeated is not None:
+        details = json.loads(repeated.details or "{}")
+        if repeated.actor_user_id_snapshot != actor.id or details.get("request_hash") != request_hash:
+            raise PendingRelocationError("该请求标识已用于不同的批次、内容或操作员")
+        return {**details["result"], "replayed": True}
+    if not claim_active_placed_location(db, source_location_id,
+                                       expected_layout_version=expected_layout_version):
+        raise PendingRelocationError("来源货位或地图版本已变化，请刷新后重新核对")
+    source = db.get(WarehouseLocation, source_location_id, populate_existing=True)
+    if (source.source_version not in {"V11", "TWIN_V1", "CURRENT_MAP"}
+            or (source.source_version == "V11" and source.warehouse_floor != 3)
+            or source.location_code in {"F1-DISPATCH-01", "1F-DISPATCH-01"}
+            or str(source.area_code or "").upper() == "DISPATCH"):
+        raise PendingRelocationError("该来源不属于当前可盘点的正式地图库位")
+    issue = operational_location_issue(db, source, warehouse_types={"finished", "shared"},
+        require_published=True, require_map_geometry=True, required_inventory_type="finished")
+    if issue:
+        raise PendingRelocationError(f"来源货位不可用：{issue}")
+    lot = db.scalar(select(InventoryLot).where(InventoryLot.id == lot_id)
+        .options(selectinload(InventoryLot.finished_detail), selectinload(InventoryLot.pallet_item))
+        .execution_options(populate_existing=True))
+    if lot is None:
+        raise PendingRelocationError("库存批次不存在", 404)
+    if lot.version != expected_version or lot.warehouse_location_id != source_location_id:
+        raise PendingRelocationError("该批次数量、版本或位置已变化，请刷新后重新核对")
+    physical = lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged
+    if lot.inventory_type != "finished" or lot.finished_detail is None or lot.status not in {"active", "frozen"} or physical <= 0:
+        raise PendingRelocationError("只允许将仍有实物数量的正式成品批次转待归位")
+    item = lot.pallet_item
+    if (item.pallet_id if item is not None else None) != expected_pallet_id:
+        raise PendingRelocationError("该批次的栈板关联已变化，请刷新后重新核对")
+    pallet = None
+    if item is not None:
+        pallet = db.scalar(select(InventoryPallet).where(InventoryPallet.id == item.pallet_id)
+            .options(selectinload(InventoryPallet.items)).execution_options(populate_existing=True))
+        if (pallet is None or not pallet.is_current or pallet.status != "active"
+                or pallet.location_id != source_location_id or pallet.version != expected_pallet_version):
+            raise PendingRelocationError("来源栈板的位置或版本已变化，请刷新后重新核对")
+        if (item.item_type != lot.inventory_type or item.unit != lot.unit or item.quantity != physical
+                or item.customer_id != lot.finished_detail.owner_customer_id
+                or item.product_id != lot.finished_detail.product_id):
+            raise PendingRelocationError("栈板明细与该批次的客户、产品或数量不一致，请先核对")
+    elif expected_pallet_version is not None:
+        raise PendingRelocationError("无栈板批次不能指定栈板版本")
+    before = _facts([lot], [pallet] if pallet is not None else [])
+    pending = _pending_location(db)
+    if not claim_pending_relocation_source(db, pending.id):
+        raise PendingRelocationError("待归位位置已变化，请刷新后重试")
+    now = utc_now_naive()
+    claimed = db.execute(update(InventoryLot).where(InventoryLot.id == lot_id,
+        InventoryLot.version == expected_version, InventoryLot.warehouse_location_id == source_location_id)
+        .values(warehouse_location_id=pending.id, version=expected_version + 1, last_movement_at=now))
+    if claimed.rowcount != 1:
+        raise PendingRelocationError("该批次已被其他操作更新，请刷新后重试")
+    key = sha256(f"single-lot:{operation_key}".encode()).hexdigest()
+    target_pallet = None
+    if pallet is not None:
+        old_version = pallet.version
+        _claim_pallet_version(db, pallet, expected_version=expected_pallet_version)
+        pallet.updated_by = actor.id
+        if len(pallet.items) == 1:
+            target_pallet = pallet
+            pallet.location_id = pending.id
+            pallet.location_occupancy_key = f"RECOUNT:{pallet.id}"
+            pallet.needs_relocation = True
+            release_ground_occupancy_for_pallet(db, pallet_id=pallet.id, operator_id=actor.id)
+        else:
+            # Preserve the original item/lot IDs; only its container changes on a mixed pallet.
+            target_pallet = InventoryPallet(pallet_code="RP-" + key[:32], location_id=pending.id,
+                location_occupancy_key="RECOUNT:" + key[:32], needs_relocation=True,
+                status="active", is_current=True, version=1, created_by=actor.id, updated_by=actor.id)
+            db.add(target_pallet)
+            db.flush()
+            item.pallet = target_pallet
+            db.flush()
+            remaining = list(pallet.items)
+            if remaining and all(entry.inventory_lot_id is not None
+                    and entry.inventory_lot is not None
+                    and entry.inventory_lot.quantity_available + entry.inventory_lot.quantity_reserved
+                        + entry.inventory_lot.quantity_damaged == 0 for entry in remaining):
+                clear_pallet(db, pallet_id=pallet.id, expected_version=pallet.version,
+                    remarks="单批转待归位后原栈板仅剩无量历史明细", operator_id=actor.id)
+        db.add(InventoryLocationMovement(pallet_id=target_pallet.id, from_location_id=source_location_id,
+            to_location_id=pending.id, movement_type="move" if target_pallet is pallet else "create",
+            operator_id=actor.id, idempotency_key="recount-single-pallet:" + key,
+            confirmed_at=now, pallet_version_before=old_version if target_pallet is pallet else None,
+            pallet_version_after=target_pallet.version, remarks=f"单批转待归位；批次 {lot.id}，原栈板 {pallet.id}"))
+    _record_pending_lot_movement(db, lot=lot, source_location_id=source_location_id,
+        pending_id=pending.id, key=key, operation_key=operation_key, operator_id=actor.id,
+        reason="现场标签不符，原批次位置待核实；数量不变")
+    result = dict(lot_id=lot.id, lot_number=lot.lot_number, source_location_id=source_location_id,
+        pending_location_id=pending.id, quantity=physical, unit=lot.unit,
+        pallet_id=target_pallet.id if target_pallet is not None else None, replayed=False)
+    append_audit_event(db, actor=actor, request=request, event_category="business", result="success",
+        source="web", module_code="warehouse", action_code=LOT_ACTION, resource="InventoryLot",
+        entity_id=lot.id, batch_id=operation_key, description="所选原批次转盘点待归位，数量和业务来源不变",
+        details={"request_hash": request_hash, "request": payload, "before": before, "result": result,
+                 "pallet_item_id": item.id if item is not None else None})
+    db.flush()
+    return result
+
+
 def reset_to_pending_relocation(db: Session, *, actor, expected_fingerprint: str,
                                 operation_key: str, request=None) -> dict:
     """One administrator-confirmed transaction; caller commits only with its audit."""
@@ -128,16 +281,7 @@ def reset_to_pending_relocation(db: Session, *, actor, expected_fingerprint: str
             lot = lot_map.get(item.inventory_lot_id)
             if lot is not None and lot.warehouse_location_id != pallet.location_id:
                 raise PendingRelocationError("栈板与有量库存位置不一致，请先核对")
-    pending = db.scalar(select(WarehouseLocation).where(WarehouseLocation.location_code == PENDING_CODE))
-    if pending is not None and not is_pending_relocation_location(pending):
-        raise PendingRelocationError("待归位位置身份冲突，不能覆盖已有位置")
-    if pending is None:
-        pending = WarehouseLocation(location_code=PENDING_CODE, location_name="盘点待归位",
-            warehouse_type="shared", warehouse_floor=None, storage_type=None,
-            source_version=PENDING_SOURCE, placement_status="unplaced", is_active=True,
-            is_temporary=True, remarks="重新盘点前的位置待确认，不代表已实物搬入某区域")
-        db.add(pending)
-        db.flush()
+    pending = _pending_location(db)
     now = utc_now_naive()
     for lot in lots:
         old_location_id = lot.warehouse_location_id
@@ -145,14 +289,9 @@ def reset_to_pending_relocation(db: Session, *, actor, expected_fingerprint: str
         lot.version += 1
         lot.last_movement_at = now
         key = sha256(f"{operation_key}:lot:{lot.id}".encode()).hexdigest()
-        balances = {f"{side}_{name}": getattr(lot, f"quantity_{name}")
-                    for side in ("before", "after")
-                    for name in ("available", "reserved", "consumed", "damaged", "scrapped")}
-        db.add(InventoryMovement(movement_number="RP-" + key[:32], inventory_lot_id=lot.id,
-            movement_type="location_transfer", quantity=lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged,
-            unit=lot.unit, idempotency_key="recount:" + key, operator_id=actor.id,
-            reason="重新盘点，原位置待核实", remarks=json.dumps({"from_location_id": old_location_id,
-            "to_location_id": pending.id, "recount_operation_key": operation_key}), **balances))
+        _record_pending_lot_movement(db, lot=lot, source_location_id=old_location_id,
+            pending_id=pending.id, key=key, operation_key=operation_key, operator_id=actor.id,
+            reason="重新盘点，原位置待核实")
     for pallet in pallets:
         old_location_id, old_version = pallet.location_id, pallet.version
         pallet.location_id = pending.id

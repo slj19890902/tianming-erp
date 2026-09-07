@@ -1021,6 +1021,16 @@ class PendingRelocationResetPayload(BaseModel):
     confirmed: Literal[True]
 
 
+class PendingRelocationLotPayload(BaseModel):
+    source_location_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    expected_layout_version: int = Field(gt=0)
+    expected_pallet_id: int | None = Field(default=None, gt=0)
+    expected_pallet_version: int | None = Field(default=None, gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=100)
+    confirmed: Literal[True]
+
+
 class TwinTemporaryFinishedInboundPayload(BaseModel):
     """Explicit temporary product creation and first stock placement by an admin."""
 
@@ -7834,6 +7844,30 @@ def reset_twin_pending_relocation(payload: PendingRelocationResetPayload, reques
     except PendingRelocationError as error:
         db.rollback()
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/twin-operations/lots/{lot_id}/pending-relocation")
+def move_twin_lot_to_pending(lot_id: int, payload: PendingRelocationLotPayload, request: Request,
+                            db: Session = Depends(get_db), user: User = Depends(admin_only)) -> dict:
+    from app.services.warehouse_relocation_pending import PendingRelocationError, move_lot_to_pending_relocation
+    _require_lot_customer_access(db, lot_id, user)
+    try:
+        result = move_lot_to_pending_relocation(db, actor=user, lot_id=lot_id, request=request,
+            source_location_id=payload.source_location_id, expected_version=payload.expected_version,
+            expected_layout_version=payload.expected_layout_version,
+            expected_pallet_id=payload.expected_pallet_id, expected_pallet_version=payload.expected_pallet_version,
+            operation_key=payload.idempotency_key)
+        db.commit()
+        return {**result, "message": "所选原批次已转待归位，数量未改变"}
+    except (PendingRelocationError, Floor3LocationError) as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="请求标识或库存位置存在冲突，请刷新核对后重试") from error
     except Exception:
         db.rollback()
         raise

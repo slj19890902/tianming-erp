@@ -1835,11 +1835,14 @@
       /* Toast */
       .toast {
         position: fixed; right: 20px; bottom: 24px; z-index: 80;
-        max-width: 420px; padding: 12px 18px; border-radius: 12px;
+        max-width: min(420px, calc(100vw - 40px)); padding: 12px 18px; border-radius: 12px;
+        display: flex; align-items: center; gap: 12px; overflow-wrap: anywhere;
         color: #fff; background: #1d1d1f; box-shadow: 0 8px 24px rgba(0,0,0,0.25);
       }
       .toast.error { background: var(--red); }
       .toast.warning { background: #c27400; }
+      .toast-close { flex: none; min-width: 44px; min-height: 44px; border: 1px solid currentColor; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+      .toast-close:focus-visible { outline: 2px solid white; outline-offset: 3px; }
 
       /* Loading bar */
       .loading-bar { height: 2px; background: linear-gradient(90deg, transparent, var(--primary), transparent); animation: slide 1s infinite; }
@@ -2452,6 +2455,7 @@
         display:block; width:100%; height:auto; min-height:0; flex:1 1 auto;
         border:1px solid var(--line); border-radius:10px; background:var(--panel);
       }
+      .warehouse-frame-status { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; padding:8px 12px; }
       .production-table th,
       .production-table td { padding:4px 6px; line-height:1.2; vertical-align:middle; }
       .production-product-summary {
@@ -3157,17 +3161,23 @@
             </section>
 
             <section v-if="warehouseFrameUrl" v-show="activePage === 'warehouse'" class="warehouse-shell">
+              <div v-if="warehouseFrameState !== 'responsive'" class="warehouse-frame-status" role="status" aria-live="polite">
+                <span>{{ warehouseFrameState === 'error' ? '仓库页面未能载入' : warehouseFrameState === 'loaded' ? '页面已载入，等待仓库响应…' : '正在载入仓库…' }}</span>
+                <a class="btn small" :href="warehouseFrameUrl" target="_blank" rel="noopener">单独打开仓库</a>
+              </div>
               <iframe
                 ref="warehouseFrame"
                 :key="warehouseFrameRevision"
                 class="warehouse-shell-frame"
                 :src="warehouseFrameUrl"
+                @load="warehouseFrameLoaded"
+                @error="warehouseFrameState = 'error'"
                 title="天明智慧仓储"
               ></iframe>
             </section>
 
             <template v-if="activePage === 'dashboard'">
-              <div class="page-head"><div><h2>首页仪表盘</h2><p>一打开就能看到今天最该处理的订单、报料、送货、回单和对账事项。</p><span v-if="overview.as_of" class="muted">统计截至 {{ formatDateTime(overview.as_of) }} · 对账月份 {{ overview.statement_month }}</span></div></div>
+              <div class="page-head"><div><h2>首页仪表盘</h2><span v-if="overview.as_of" class="muted">统计截至 {{ formatDateTime(overview.as_of) }} · 对账月份 {{ overview.statement_month }}</span></div></div>
               <div v-if="overviewLoading" class="status blue" style="margin-bottom: 12px;">首页数据加载中……</div>
               <div v-if="overviewError" class="status red" style="margin-bottom: 12px;">首页数据加载失败：{{ overviewError }}</div>
               <div v-if="dashboardCards.length" class="dashboard-cards">
@@ -3179,9 +3189,9 @@
                     <span v-if="card.amount !== undefined && card.amount !== null" class="dashboard-card-amount"> / ￥ {{ money(card.amount) }}</span>
                   </div>
                   <div class="card-hint">{{ card.description }}</div>
-                  <div v-if="card.key==='pending_material' && dashboardRequisitionHoldSummary.total" class="dashboard-hold-summary" @click.stop="openWaitingRequisitionFromDashboard">
+                  <button type="button" v-if="card.key==='pending_material' && dashboardRequisitionHoldSummary.total" class="btn dashboard-hold-summary" @click.stop="openWaitingRequisitionFromDashboard">
                     等候 {{ dashboardRequisitionHoldSummary.total }} 条<span v-if="dashboardRequisitionHoldSummary.due_count"> · 到期 {{ dashboardRequisitionHoldSummary.due_count }} 条</span>
-                  </div>
+                  </button>
                   <div class="dashboard-card-actions">
                     <button class="btn small primary" @click.stop="openDashboardTarget(card)">{{ card.button_label || "去处理" }}</button>
                   </div>
@@ -3281,7 +3291,7 @@
               </div>
             </template>
             <template v-else-if="activePage === 'customers'">
-              <page-head title="客户管理" desc="维护客户编号、账期、信用额度、联系人和开票资料。"></page-head>
+              <page-head title="客户管理"></page-head>
               <div class="toolbar">
                 <div class="toolbar-group"><button v-if="canCreateCustomers" class="btn primary" @click="openCustomer()">新增客户</button></div>
                 <div class="toolbar-group"><button class="btn" :disabled="customerPhoneGovernanceExporting" @click="exportCustomerPhoneGovernance">{{ customerPhoneGovernanceExporting ? '生成清单中…' : '导出电话待核对清单' }}</button><label><input type="checkbox" v-model="filters.showInactive" @change="runExplicitPageListLoad('customers',{resetPage:true})" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @input="queuePageSearch('customers')" @keyup.enter="runExplicitPageListLoad('customers',{resetPage:true})" /><button class="btn" @click="runExplicitPageListLoad('customers',{resetPage:true})">查询</button></div>
@@ -3418,11 +3428,13 @@
                   <button :class="['btn', {primary: productTab === 'products'}]" @click="selectProductTab('products')">产品资料</button>
                   <button :class="['btn', {primary: productTab === 'materials'}]" @click="selectProductTab('materials')">纸板材质字典</button>
                   <button v-if="canAdmin" :class="['btn', {primary: productTab === 'suppliers'}]" @click="selectProductTab('suppliers')">供应商</button>
-                  <button v-if="canCreateProducts && productTab === 'products' && selectedProductCustomer" class="btn success" @click="openProduct()">新增产品</button>
+                </div>
+                <div class="toolbar-group" role="group" aria-label="资料操作">
+                  <button v-if="canCreateProducts && productTab === 'products' && selectedProductCustomer" class="btn primary" @click="openProduct()">新增产品</button>
                   <button v-if="canDeleteProducts && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
                   <button v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn" :disabled="productWorkbookImport.loading" @click="downloadProductWorkbookTemplate">下载样品 Excel</button>
-                  <button v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn primary" :disabled="productWorkbookImport.loading" @click="productWorkbookImport.visible=!productWorkbookImport.visible">样品 Excel 导入</button>
-                  <button v-if="canAdmin && productTab === 'products'" class="btn primary" :disabled="mixedSampleImport.loading" @click="mixedSampleImport.visible=!mixedSampleImport.visible">混合样品整理</button>
+                  <button v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn" :disabled="productWorkbookImport.loading" @click="productWorkbookImport.visible=!productWorkbookImport.visible">样品 Excel 导入</button>
+                  <button v-if="canAdmin && productTab === 'products'" class="btn" :disabled="mixedSampleImport.loading" @click="mixedSampleImport.visible=!mixedSampleImport.visible">混合样品整理</button>
                 </div>
                 <div v-if="productTab === 'products' && selectedProductCustomer" class="toolbar-group">
                   <input class="input" style="min-width:180px" placeholder="存货编码 / 款号" v-model.trim="filters.productCode" @input="queuePageSearch('products')" @keyup.enter="runExplicitPageListLoad('products',{resetPage:true})" />
@@ -9266,7 +9278,12 @@
           </div>
         </div>
       </div>
-      <div v-if="toast.message" :class="['toast', {error: toast.error}]">{{ toast.message }}</div>
+        <div role="status" :aria-live="toast.error ? 'assertive' : 'polite'" aria-atomic="true">
+          <div v-if="toast.message" :class="['toast', {error: toast.error}]">
+            <span>{{ toast.message }}</span>
+            <button type="button" class="toast-close" aria-label="关闭提示" @click="dismissToast">关闭</button>
+          </div>
+        </div>
     </div>
 
     <script>
@@ -9662,7 +9679,7 @@
             incomingNextStepGuide: {visible:false, count:0, pendingBalance:false},
             productionNextStepGuide: {visible:false, mode:"", count:0, locations:""},
             pageCacheUpdatedAt: {},
-            warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F", warehouseTwinFloors: [{code:"1F",label:"生产车间"},{code:"3F",label:"成品仓库"},{code:"4F",label:"成品仓库"}],
+            warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseFrameState: "loading", warehouseTwinFloor: "3F", warehouseTwinFloors: [{code:"1F",label:"生产车间"},{code:"3F",label:"成品仓库"},{code:"4F",label:"成品仓库"}],
             warehouseTwinMetrics: {active_lots:0,occupied_locations:0,mapped_locations:0,unlocated_finished:0,unmatched_observations:0,column_conflicts:0},
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             overview: { cards: [], todos: [], summary: {} }, warehouseCapacitySummary:null, overviewError: "", overviewLoading: false, dashboardDetailsVisible:false,
@@ -11243,6 +11260,8 @@
           }
         },
         watch: {
+          warehouseFrameUrl() { this.warehouseFrameState = "loading"; },
+          warehouseFrameRevision() { this.warehouseFrameState = "loading"; },
           // 常用箱纸板成本参考：尺寸/箱型/材质变化时实时重算（不保存）
           "productForm.material_id"() { this.queueProductBoardCost(); this.autoApplyProductRecommendations(); },
           "productForm.box_category"() { this.queueProductBoardCost(); },
@@ -12966,7 +12985,12 @@
           showToast(message, error=false) {
             clearTimeout(this.toastTimer);
             this.toast = { message, error };
-            this.toastTimer = setTimeout(() => this.toast.message = "", 3200);
+            this.toastTimer = error ? null : setTimeout(() => this.dismissToast(), 3200);
+          },
+          dismissToast() {
+            clearTimeout(this.toastTimer);
+            this.toastTimer = null;
+            this.toast.message = "";
           },
           toggleVersionGroup(groupKey) {
             this.versionExpandedGroups = {
@@ -15202,12 +15226,16 @@
             this.ensureWarehouseFrame();
             this.warehouseFrameRevision += 1;
           },
+          warehouseFrameLoaded() {
+            if (this.warehouseFrameState !== "responsive") this.warehouseFrameState = "loaded";
+          },
           handleWarehouseFrameMessage(event) {
             if (event.origin !== window.location.origin) return;
             const frameWindow = this.$refs.warehouseFrame?.contentWindow;
             if (!frameWindow || event.source !== frameWindow) return;
             const payload = event.data || {};
             if (payload.source !== "tianming-warehouse" || payload.type !== "warehouse-state") return;
+            this.warehouseFrameState = "responsive";
             if (this.isWarehouseTwinFloorCode(payload.floor_code)) this.warehouseTwinFloor = payload.floor_code;
             this.warehouseTwinMetrics = {
               active_lots: Math.max(0, Number(payload.active_lots || 0)),

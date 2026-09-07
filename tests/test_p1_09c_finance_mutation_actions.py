@@ -93,8 +93,8 @@ vm.settle = new AsyncFunction("row", {json.dumps(settle_body, ensure_ascii=False
   pending[0].resolve({{data:{{ok:true}}}});
   if (await cancelling !== true || vm.financeStatementOperationState.action || vm.modal !== null || vm.statementDetail !== null) throw new Error("cancel did not close, refresh and unlock");
 
-  prompts.push(" INV-001 ", "75.50");
   const invoiceRow = {{id:2,total_receivable:100,invoiced_amount:20,pending_invoice_amount:80,confirmation_status:"confirmed",version:4,ledger_version:6}};
+  vm.financeInvoiceForm = {{row:{{...invoiceRow}},invoice_number:" INV-001 ",amount:"75.50",committed:false}};
   const registering = vm.registerInvoice(invoiceRow);
   const duplicateRegisterPromise = vm.registerInvoice(invoiceRow);
   await Promise.resolve();
@@ -121,13 +121,14 @@ vm.settle = new AsyncFunction("row", {json.dumps(settle_body, ensure_ascii=False
   if (await settling !== true || vm.financeStatementOperationState.action || kpiLoads !== 1) throw new Error("settlement did not refresh and unlock");
   if (vm.financeManualMutationAttempts.settle) throw new Error("successful settlement did not clear its attempt");
 
-  prompts.push("INV-002", "10.00");
-  vm.loadFinance = async () => {{ throw new Error("刷新断开"); }};
+  vm.financeInvoiceForm = {{row:{{id:4}},invoice_number:"INV-002",amount:"10.00",committed:false}};
+  vm.loadFinance = async () => false;
   const registeredButRefreshFailed = vm.registerInvoice({{id:4,total_receivable:20,invoiced_amount:0,pending_invoice_amount:20,confirmation_status:"confirmed",version:2,ledger_version:1}});
   pending[3].resolve({{data:{{id:21}}}});
   if (await registeredButRefreshFailed !== true || vm.financeStatementOperationState.action) throw new Error("successful registration was misreported after refresh failure");
   if (vm.financeManualMutationAttempts.register) throw new Error("confirmed success retained an invoice attempt");
   if (!messages.some(row => row.danger && row.message.includes("已经登记") && row.message.includes("不要重复登记"))) throw new Error("registration refresh failure lacked anti-repeat guidance");
+  if (await vm.registerInvoice({{id:4}}) !== false || pending.length !== 4) throw new Error("committed form submitted again after failed refresh");
 
   prompts.push("5.00");
   const uncertainRow = {{id:5,total_receivable:20,settled_amount:0,pending_payment_amount:20,confirmation_status:"confirmed",version:9,ledger_version:11}};

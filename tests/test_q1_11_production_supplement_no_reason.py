@@ -15,15 +15,13 @@ def _supplement_method() -> str:
 
 def test_supplement_requires_business_facts_but_not_free_text_reason() -> None:
     method = _supplement_method()
-    assert 'prompt("本次补充实际投入数量"' in method
-    assert "本次实际合格产量" in method
-    assert "输入余货位置名称或当前地址" in method
-    assert (
-        "[item.employee_location_name,item.current_address_name,"
-        "item.current_address_code,item.location_name]"
-    ) in method
+    assert 'type:"productionSupplement"' in method
+    assert "本次实际合格产量" in INDEX
+    assert 'v-model.number="productionSupplementForm.location_id"' in INDEX
+    assert "productionLocationsForRow(row).find" in method
     assert "补充生产确认原因" not in method
-    assert method.count("confirm(") == 1
+    assert "prompt(" not in method
+    assert "confirm(" not in method
     assert "material_input_quantity:input" in method
     assert "actual_output_quantity:output" in method
     assert "defective_quantity:theoretical-output" in method
@@ -44,3 +42,12 @@ def test_backend_keeps_supplement_permissions_quantities_and_audit() -> None:
     assert "command.defective_quantity < 0" in PRODUCTION_SERVICE
     assert "available_input" in PRODUCTION_SERVICE
     assert "expected_version" in PRODUCTION_SERVICE
+
+
+def test_supplement_entry_uses_the_existing_backend_eligibility() -> None:
+    assert 'v-if="canAdmin && row.can_supplement"' in INDEX
+    assert ':disabled="productionBusy" @click="supplementProductionCompletion(row)"' in INDEX
+    assert '"can_supplement": (' in PRODUCTION_SERVICE
+    assert 'completion.status == "posted"' in PRODUCTION_SERVICE
+    assert "and available_input > 0" in PRODUCTION_SERVICE
+    assert "not receipt_purpose_managed" in PRODUCTION_SERVICE

@@ -4711,7 +4711,7 @@
                     <td><div class="history-two-lines" :title="productionProductTitle(row)"><strong class="history-line"><span v-if="row.is_component_task">组件｜</span>{{ row.product_code || '-' }}</strong><span class="history-line">{{ row.product_name || '-' }}</span></div></td>
                     <td><div class="history-two-lines"><div class="history-line"><template v-if="row._actual_editing"><div class="history-inline-edit"><span>实际</span><input class="input" type="number" min="1" step="1" v-model.number="row._actual_draft" :disabled="productionBusy" @keydown.enter.prevent="modifyProductionActualQuantity(row)" @keydown.esc.prevent="cancelProductionActualQuantityEdit(row)"><button class="btn small success" :disabled="productionBusy" @click="modifyProductionActualQuantity(row)">保存</button><button class="btn small" :disabled="productionBusy" @click="cancelProductionActualQuantityEdit(row)">取消</button></div></template><template v-else><strong>实际 {{ row.actual_output_quantity ?? row.quantity ?? 0 }}</strong><button v-if="['admin','boss'].includes(user?.role) && !row.is_fully_delivered && row.can_adjust_actual_quantity" class="btn small warning" :disabled="productionBusy" @click="beginProductionActualQuantityEdit(row)">修改</button></template></div><span class="history-line muted">理论 {{ row.planned_output_quantity ?? 0 }}</span></div></td>
                     <td><div class="history-two-lines"><span v-if="row.status==='reversed'" class="history-line status orange">已撤销</span><span v-else-if="row.is_fully_delivered" class="history-line history-delivered">已送完</span><button v-else-if="productionCurrentLocationClickable(row)" class="history-link" type="button" :title="row.current_warehouse_location_name || ''" @click="openProductionInventory(row)">{{ row.current_warehouse_location_name || '位置名称待完善' }}</button><strong v-else-if="row.current_inventory_status==='located'" class="history-line">{{ row.current_warehouse_location_name || '位置名称待完善' }}</strong><span v-else class="history-line muted">暂无当前库存</span><span v-if="row.status==='reversed'" class="history-line muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</span><span v-else-if="!row.is_fully_delivered && (row.current_warehouse_location_map_issue || row.current_location_issue)" class="history-line status orange" :title="row.current_warehouse_location_map_issue || row.current_location_issue">{{ row.current_warehouse_location_map_issue || row.current_location_issue }}</span></div></td>
-                    <td class="production-history-actions"><button v-if="user?.role==='admin' && !row.is_fully_delivered && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销</button><span v-else class="muted">-</span></td>
+                    <td class="production-history-actions"><div v-if="canAdmin && row.can_supplement"><button class="btn small" type="button" :disabled="productionBusy" @click="supplementProductionCompletion(row)">补录</button></div><button v-if="user?.role==='admin' && !row.is_fully_delivered && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销</button><span v-else-if="!(canAdmin && row.can_supplement)" class="muted">-</span></td>
                   </tr></tbody>
                   </table>
                 </data-panel>
@@ -5357,7 +5357,7 @@
                 <div class="panel">
                   <div class="section-title">全部对账单</div>
                   <div class="table-wrap"><table><thead><tr><th>对账单号</th><th>客户</th><th>月份</th><th class="sensitive-price">应收金额</th><th class="sensitive-price">已开票</th><th class="sensitive-price">已收款</th><th>状态</th><th>操作</th></tr></thead>
-                  <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><span v-if="Number(row.total_receivable)>0 && Number(row.invoiced_amount)>=Number(row.total_receivable)" class="status green">已开票</span><status-tag v-else :value="row.status"></status-tag></td><td class="toolbar-group"><button v-if="canFinance" class="btn small" :disabled="Number(row.total_receivable)-Number(row.invoiced_amount)<=0 || !!financeStatementOperationState.action" @click="registerInvoice(row)">{{ financeStatementOperationState.action==='register' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '登记中…' : '登记开票' }}</button><button class="btn small" @click="exportStatement(row,'xlsx')">导出 Excel</button><button v-if="canFinance" class="btn small" @click="openStatementDispute(row)">客户异议</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
+                  <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><span v-if="Number(row.total_receivable)>0 && Number(row.invoiced_amount)>=Number(row.total_receivable)" class="status green">已开票</span><status-tag v-else :value="row.status"></status-tag></td><td class="toolbar-group"><button v-if="canFinance" class="btn small" :disabled="Number(row.total_receivable)-Number(row.invoiced_amount)<=0 || !!financeStatementOperationState.action" @click="openRegisterInvoice(row)">{{ financeStatementOperationState.action==='register' && Number(financeStatementOperationState.statementId)===Number(row.id) ? '登记中…' : '登记开票' }}</button><button class="btn small" @click="exportStatement(row,'xlsx')">导出 Excel</button><button v-if="canFinance" class="btn small" @click="openStatementDispute(row)">客户异议</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
                   <pager :page="pages.statements" :total="statementsTotal" :page-size="pageSize" @change="pages.statements=$event; loadFinance()"></pager>
                 </div>
                 <div class="panel" style="margin-top:10px">
@@ -8362,7 +8362,20 @@
                     <div class="field stock-span-6"><label>压线尺寸</label><div v-if="line.crease_type==='压线'" class="stock-crease-inputs"><label>上摇盖<input class="input" type="number" min="0" v-model.number="line.crease_left_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>高<input class="input" type="number" min="1" v-model.number="line.crease_middle_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>下摇盖<input class="input" type="number" min="0" v-model.number="line.crease_right_mm" @input="syncStockReportWidthFromCrease(line)" /></label></div><div v-else>{{ line.crease_type || '无需压线分段' }}</div></div>
                     <div v-if="stockCreaseMismatch(line)" class="status orange stock-span-full" style="white-space:normal">{{ stockCreaseMismatch(line) }}</div>
                     <div class="field stock-span-4"><label>到厂去向</label><div>{{ line.target_inventory_type==='finished' ? '三楼右区 F34 优先、F12 兜底临时周转' : '三楼左区已发布原料或半成品货位' }}</div></div>
-                    <div class="field stock-span-4"><label>库存预警</label><button class="btn" type="button" @click="saveStockPolicyFromLine(line)">保存为预警模板</button></div>
+                    <div class="field stock-span-4"><label>库存预警</label><button class="btn" type="button" :disabled="!canRequisition || stockPolicyForms[line._key]?.saving || stockPolicyForms[line._key]?.committed" @click="saveStockPolicyFromLine(line)">{{ stockPolicyForms[line._key]?.committed ? '预警模板已保存' : '保存为预警模板' }}</button></div>
+                    <div v-if="stockPolicyForms[line._key]?.open" class="stock-span-full panel">
+                      <div class="section-title">库存预警模板</div>
+                      <fieldset class="form-grid" :disabled="stockPolicyForms[line._key].saving || stockPolicyForms[line._key].committed || !canRequisition" style="border:0;padding:0;margin:0;min-width:0">
+                        <div class="field wide"><label :for="'stock-policy-name-'+line._key">预警模板名称</label><input :id="'stock-policy-name-'+line._key" class="input" maxlength="200" v-model.trim="stockPolicyForms[line._key].policy_name" /></div>
+                        <div class="field"><label :for="'stock-policy-warning-'+line._key">库存低于或等于多少时预警（{{ line.target_inventory_type==='finished' ? '个' : '张' }}）</label><input :id="'stock-policy-warning-'+line._key" class="input" type="number" min="0" step="1" v-model="stockPolicyForms[line._key].warning_quantity" /></div>
+                        <div class="field"><label :for="'stock-policy-target-'+line._key">触发后建议补到多少（{{ line.target_inventory_type==='finished' ? '个' : '张' }}）</label><input :id="'stock-policy-target-'+line._key" class="input" type="number" min="1" step="1" v-model="stockPolicyForms[line._key].target_quantity" /></div>
+                      </fieldset>
+                      <div v-if="stockPolicyForms[line._key].committed" :class="['status', stockPolicyForms[line._key].refreshFailed ? 'orange' : 'green']" style="white-space:normal">{{ stockPolicyForms[line._key].refreshFailed ? '库存预警模板已保存，预警列表刷新失败，请刷新核对，无需重复保存。' : '库存预警模板已保存' }}</div>
+                      <div class="toolbar-group" style="margin-top:10px">
+                        <button class="btn" type="button" :disabled="stockPolicyForms[line._key].saving" @click="cancelStockPolicyFromLine(line)">{{ stockPolicyForms[line._key].committed ? '关闭' : '取消' }}</button>
+                        <button v-if="!stockPolicyForms[line._key].committed" class="btn primary" type="button" :disabled="stockPolicyForms[line._key].saving || !canRequisition" @click="submitStockPolicyFromLine(line)">{{ stockPolicyForms[line._key].saving ? '保存中…' : '保存预警模板' }}</button>
+                      </div>
+                    </div>
                     </div>
                   </details>
                 </div>
@@ -8681,6 +8694,18 @@
                 <div class="muted" style="margin-top:6px">24 小时内有效，仅可操作当前天华草稿。</div>
               </div>
             </div>
+            <form v-else-if="modal.type === 'productionSupplement' && productionSupplementForm" @submit.prevent="submitProductionSupplement">
+              <div class="notice" style="margin-bottom:12px"><strong>{{ productionSupplementForm.row.product_code || '-' }} · {{ productionSupplementForm.row.product_name || '-' }}</strong><div>{{ productionSupplementForm.row.item_order_number || productionSupplementForm.row.order_number || '-' }}</div><div>本次补录新增生产确认，原完工历史保留。</div></div>
+              <div v-if="productionSupplementForm.submitted" class="notice success" style="margin-bottom:12px">已补录 {{ productionSupplementForm.payload.items[0].actual_output_quantity }} 个合格品，未改写原生产确认。</div>
+              <div v-if="productionSupplementForm.error" class="notice danger" role="alert" style="margin-bottom:12px">{{ productionSupplementForm.error }}</div>
+              <div class="form-grid">
+                <div class="field"><label for="production-supplement-input">本次实际投入数量</label><input id="production-supplement-input" class="input" type="number" min="1" step="1" :max="productionSupplementSummary().availableInput" v-model.number="productionSupplementForm.input" :disabled="!!productionSupplementForm.payload || productionSupplementForm.saving" required /><span class="muted">可用投入 {{ productionSupplementSummary().availableInput }}</span></div>
+                <div class="field"><label for="production-supplement-output">本次实际合格产量</label><input id="production-supplement-output" class="input" type="number" min="1" step="1" :max="productionSupplementSummary().theoretical" v-model.number="productionSupplementForm.output" :disabled="!!productionSupplementForm.payload || productionSupplementForm.saving" required /><span class="muted">理论上限 {{ productionSupplementSummary().theoretical }}</span></div>
+                <div class="field" style="grid-column:1/-1"><label for="production-supplement-location">合格品入库位置</label><select id="production-supplement-location" class="select" v-model.number="productionSupplementForm.location_id" :disabled="!!productionSupplementForm.payload || productionSupplementForm.saving || productionLocationsLoading" required><option :value="null">请选择实际可用位置</option><option v-for="location in productionLocationsForRow(productionSupplementForm.row)" :key="location.id" :value="Number(location.id)">{{ inventoryLocation(location) }}</option></select><span v-if="productionLocationsLoading" class="muted">正在读取可用位置…</span><span v-else-if="productionLocationsError" class="status orange">{{ productionLocationsError }} <button class="btn small" type="button" :disabled="!!productionSupplementForm.payload || productionSupplementForm.saving" @click="ensureProductionLocations({force:true})">重试读取</button></span><span v-else-if="!productionLocationsForRow(productionSupplementForm.row).length" class="status orange">{{ productionPreferredAreaIds(productionSupplementForm.row).length ? '客户指定区域当前没有空闲成品位置' : '当前没有空闲成品位置' }}</span></div>
+              </div>
+              <div class="notice" style="margin-top:12px">本次损耗 {{ productionSupplementSummary().defective }}；合格品全部进入 {{ productionSupplementSummary().destination }}。</div>
+              <div class="toolbar" style="justify-content:flex-end;margin-top:12px"><button class="btn" type="button" :disabled="productionSupplementCloseBlocked()" @click="closeModal">{{ productionSupplementForm.submitted ? '关闭' : '取消' }}</button><button v-if="!productionSupplementForm.refreshed" class="btn primary" type="submit" :disabled="productionSupplementForm.saving || productionBusy || (!productionSupplementForm.payload && (productionLocationsLoading || !!productionLocationsError))">{{ productionSupplementForm.saving ? '处理中…' : productionSupplementForm.submitted ? '刷新列表' : productionSupplementForm.payload ? '重试本次补录' : '确认补录' }}</button></div>
+            </form>
             <div v-else-if="modal.type === 'productionLabelMaintenance'">
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">这里只维护任务冻结的包装标签计划，不提供完工输入。生产数量、材料状态、库存和送货不会因这里的操作改变。</div>
               <section v-if="productionPendingLabelMaintenanceRows().length" style="margin-bottom:16px">
@@ -8757,6 +8782,16 @@
                 </tbody>
               </table>
               <div v-if="statementDetail.invoices?.length" class="status blue" style="margin-top:10px">已有 {{ statementDetail.invoice_count }} 条开票记录；已正式开票时系统会禁止直接改历史。</div>
+            </div>
+            <div v-else-if="modal.type === 'manualInvoiceRegistration'" class="form-grid">
+              <div class="field wide"><label>对账单</label><strong>{{ financeInvoiceForm.row?.statement_number || financeInvoiceForm.row?.id }}</strong></div>
+              <div class="field"><label>已登记开票（元）</label><span>{{ money(financeInvoiceForm.row?.invoiced_amount) }}</span></div>
+              <div class="field"><label>剩余可登记（元）</label><span>{{ money(financeInvoiceForm.remaining) }}</span></div>
+              <fieldset class="field wide" :disabled="!!financeStatementOperationState.action || !!financeManualMutationAttempts.register" style="border:0;padding:0;margin:0">
+                <label for="manual-invoice-number">发票号码</label><input id="manual-invoice-number" class="input" v-model.trim="financeInvoiceForm.invoice_number" autocomplete="off" />
+                <label for="manual-invoice-amount">本次已开票金额（元）</label><input id="manual-invoice-amount" class="input" type="number" min="0.01" step="0.01" :max="financeInvoiceForm.remaining" v-model="financeInvoiceForm.amount" />
+              </fieldset>
+              <div v-if="financeManualMutationAttempts.register" class="notice field wide" role="status">上一笔结果待核对，将使用原发票、金额与操作凭证重试。</div>
             </div>
             <div v-else-if="modal.type === 'statementEdit'">
               <div class="form-grid">
@@ -9102,7 +9137,8 @@
             </div>
           </div>
           <div v-if="modal?.type !== 'product'" class="modal-foot">
-            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
+            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='manualInvoiceRegistration' && !!financeStatementOperationState.action) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal || modal?.type==='manualInvoiceRegistration' ? "取消" : "关闭" }}</button>
+            <button v-if="modal?.type==='manualInvoiceRegistration' && canFinance" type="button" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="registerInvoice(financeInvoiceForm.row)">{{ financeStatementOperationState.action ? '正在登记…' : financeManualMutationAttempts.register ? '重试核对登记' : '登记已开票结果' }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
@@ -9784,6 +9820,7 @@
             invoiceTaskUploadState:{uploading:false,taskId:null,taskNumber:"",error:""},
             financeStatementOperationState:{action:"",statementId:null,actorId:null,authGeneration:null,idempotencyKey:""},
             financeManualMutationAttempts:{register:null,settle:null}, financeManualMutationRecoveryError:"",
+            financeInvoiceForm:{row:null,invoice_number:"",amount:"",remaining:0,committed:false},
             invoiceSellers: [], invoiceSellerForm:{id:null,seller_code:"",seller_name:"",tax_no:"",address:"",phone:"",bank_name:"",bank_account:"",is_enabled:true,confirmation_status:"pending",version:null}, invoiceSellerState:{loading:false,error:"",saving:false,loaded:false}, invoiceSellerReturnCustomerId:null,
             settlementEntities: [], settlementEntityForm:{id:null,entity_code:"",entity_name:"",short_name:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,statement_cycle_start_day:20,is_enabled:true,confirmation_status:"pending",version:null}, settlementEntityState:{loading:false,error:"",saving:false,loaded:false}, settlementEntityReturnCustomerId:null,
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,settlement_entity_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""},
@@ -9857,7 +9894,7 @@
             compositeRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null, requestKey:"", draftSignature:""},
             stockReplenishmentSaveState:{saving:false, committed:false, uncertain:false, result:null},
             stockReplenishmentVoidState:{orderId:null, documentNumber:"", uncertainIds:{}},
-            stockPolicyWarnings: [], stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
+            stockPolicyWarnings: [], stockPolicyForms: {}, stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
             stockReplenishmentForm: { source_type:"customer_request", idempotency_key:null, supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] },
             lowStockExpandedCustomers: {},
             requisitionReportedTotal: 0, requisitionReportedMatchedLines: 0,
@@ -9876,6 +9913,7 @@
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
             productionPlacementFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionActualAdjustmentAttempts: {}, productionLabelRefreshAttempts: {},
+            productionSupplementForm: null,
             productFormSnapshot: null, productBomSnapshot: null,
             productEditReturnContext: null,
             productMaterialContext: { product_id:null, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" },
@@ -11260,6 +11298,16 @@
           }
         },
         watch: {
+          authGeneration: {
+            flush:"sync",
+            handler(generation) {
+              const form = this.productionSupplementForm;
+              if (form?.saving && Number(form.authGeneration) !== Number(generation)) {
+                form.saving = false;
+                this.productionBusy = false;
+              }
+            },
+          },
           warehouseFrameUrl() { this.warehouseFrameState = "loading"; },
           warehouseFrameRevision() { this.warehouseFrameState = "loading"; },
           // 常用箱纸板成本参考：尺寸/箱型/材质变化时实时重算（不保存）
@@ -18387,6 +18435,7 @@
             const warningOnly = !!options.warningOnly;
             const controller = this.beginLatestRequest("requisition:stock-replenishment-bootstrap");
             this.stockReplenishmentSaveState = {saving:false, committed:false, uncertain:false, result:null};
+            this.stockPolicyForms = {};
             this.stockReplenishmentForm = { source_type:warningOnly ? "stock_warning" : "customer_request", idempotency_key:createIdempotencyKey(), supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] };
             this.stockReplenishmentProducts = [];
             this.stockReplenishmentCompanions = [];
@@ -18664,14 +18713,36 @@
             }
             return "";
           },
-          async saveStockPolicyFromLine(line) {
+          saveStockPolicyFromLine(line) {
+            if (!this.canRequisition) return false;
+            const existing = this.stockPolicyForms[line._key];
+            if (existing?.saving || existing?.committed) return false;
             const validation = this.validateStockReplenishmentForm();
-            if (validation) { this.showToast(validation,true); return; }
-            const name = prompt("预警模板名称", line.product_name || line.product_code || "库存预警");
-            if (!name) return;
-            const warningQuantity = Number(prompt("库存低于或等于多少时预警？", "10"));
-            const targetQuantity = Number(prompt("触发后建议补到多少？", String(Math.max(Number(line.quantity||0),warningQuantity))));
-            if (!Number.isInteger(warningQuantity) || warningQuantity<0 || !Number.isInteger(targetQuantity) || targetQuantity<=0 || targetQuantity<warningQuantity) { this.showToast("预警/目标数量输入无效",true); return; }
+            if (validation) { this.showToast(validation,true); return false; }
+            this.stockPolicyForms[line._key] = existing || {
+              policy_name:line.product_name || line.product_code || "库存预警", warning_quantity:10,
+              target_quantity:Math.max(Number(line.quantity||0),10), saving:false, committed:false, refreshFailed:false,
+            };
+            this.stockPolicyForms[line._key].open = true;
+            return true;
+          },
+          cancelStockPolicyFromLine(line) {
+            const form = this.stockPolicyForms[line._key];
+            if (!form || form.saving) return false;
+            form.open = false;
+            return true;
+          },
+          async submitStockPolicyFromLine(line) {
+            const form = this.stockPolicyForms[line._key];
+            if (!this.canRequisition || !form?.open || form.saving || form.committed) return false;
+            const validation = this.validateStockReplenishmentForm();
+            if (validation) { this.showToast(validation,true); return false; }
+            const name = String(form.policy_name ?? "").trim();
+            if (!name || name.length>200) { this.showToast("请填写不超过200字的预警模板名称",true); return false; }
+            const warningText = String(form.warning_quantity ?? "").trim(), targetText = String(form.target_quantity ?? "").trim();
+            const warningQuantity = Number(warningText), targetQuantity = Number(targetText);
+            if (!warningText || !targetText || !Number.isInteger(warningQuantity) || warningQuantity<0 || !Number.isInteger(targetQuantity) || targetQuantity<=0 || targetQuantity<warningQuantity) { this.showToast("预警/目标数量输入无效",true); return false; }
+            form.saving = true;
             try {
               await axios.post("/api/requisition/stock-policies", {
                 policy_name:name,target_inventory_type:line.target_inventory_type,product_id:line.reference_product_id||null,customer_id:line.customer_id||null,
@@ -18680,9 +18751,19 @@
                 sheet_type:line.sheet_type||"raw_board",component_type:line.component_type||"whole",pieces_per_box:Number(line.pieces_per_box||1),stock_yield_per_sheet:Number(line.stock_yield_per_sheet||1),
                 warning_quantity:warningQuantity,target_quantity:targetQuantity,default_location_id:null,supplier_name:this.stockReplenishmentForm.supplier_name||null,remark:line.remark||null,active:true,
               });
-              const {data}=await axios.get("/api/requisition/stock-policies",{params:{warning_only:true}}); this.stockPolicyWarnings=data.items||[];
+              form.committed = true;
+              try {
+                const {data}=await axios.get("/api/requisition/stock-policies",{params:{warning_only:true}});
+                this.stockPolicyWarnings=data.items||[];
+              } catch(error) {
+                form.refreshFailed = true;
+                this.showToast("库存预警模板已保存，预警列表刷新失败，请刷新核对，无需重复保存。",true);
+                return true;
+              }
               this.showToast("库存预警模板已保存");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { form.saving = false; }
           },
           async loadProduction() {
             if (this.productionTab === "pending") {
@@ -19583,33 +19664,83 @@
             }
           },
           async supplementProductionCompletion(row) {
-            if (this.productionBusy || this.user?.role !== "admin" || !row?.can_supplement) return;
-            const availableInput = Number(row.available_material_input_quantity || 0);
-            const input = Number(prompt("本次补充实际投入数量", String(availableInput)));
-            if (!Number.isInteger(input) || input <= 0 || input > availableInput) {
-              this.showToast(`补充投入必须为 1 至 ${availableInput} 的整数`, true);
+            if (!this.canAdmin || !Number(this.user?.id) || !row?.can_supplement) return;
+            const previous = this.productionSupplementForm;
+            if (previous?.payload && !this.productionSupplementSessionIsCurrent(previous)) {
+              this.showToast("登录会话已变化，请先核对原补录结果，不能用当前身份重试旧补录", true);
               return;
             }
-            const theoretical = this.productionTheoreticalOutput({
-              ...row,
-              actual_input_quantity: input,
-            });
-            const output = Number(prompt(`本次实际合格产量（理论最多 ${theoretical}）`, String(theoretical)));
-            if (!Number.isInteger(output) || output <= 0 || output > theoretical) {
-              this.showToast(`实际合格产量必须为 1 至 ${theoretical} 的整数`, true);
+            if (this.productionBusy) return;
+            if (previous?.payload && (!previous.submitted || (
+              Number(previous.row.task_id) === Number(row.task_id)
+              && Number(previous.row.task_version) === Number(row.task_version)
+            ))) {
+              this.modal = {type:"productionSupplement",title:"补录生产"};
               return;
             }
-            const locations = this.productionLocationsForRow(row);
-            if (!locations.length) { this.showToast(this.productionPreferredAreaIds(row).length ? "客户指定区域当前没有空闲成品位置" : "当前没有空闲成品位置", true); return; }
-            const code = String(prompt(`输入余货位置名称或当前地址：\n${locations.slice(0,20).map(item=>this.inventoryLocation(item)).join("、")}`, this.inventoryLocation(locations[0])) || "").trim();
-            const location = locations.find(item => [item.employee_location_name,item.current_address_name,item.current_address_code,item.location_name].some(value=>String(value||"").toUpperCase()===code.toUpperCase()));
-            if (!location) { this.showToast("未找到该空闲成品库位", true); return; }
-            if (!confirm(`确认补录：投入 ${input}，合格 ${output}，损耗 ${theoretical-output}，全部进入 ${this.inventoryLocation(location)}？`)) return;
-            this.productionBusy = true;
-            try {
-              await axios.post("/api/production/completion-batches", {
+            const input = Number(row.available_material_input_quantity || 0);
+            this.productionSupplementForm = {
+              actorId:Number(this.user.id), authGeneration:this.authGeneration,
+              row:{...row}, input, output:this.productionTheoreticalOutput({...row,actual_input_quantity:input}),
+              location_id:null, destination:"", payload:null, saving:false, submitted:false, refreshed:false, error:"",
+            };
+            this.modal = {type:"productionSupplement",title:"补录生产"};
+            await this.ensureProductionLocations({force:true});
+          },
+          productionSupplementSessionIsCurrent(form) {
+            return !!form && this.productionSupplementForm === form
+              && Number(form.actorId) > 0
+              && Number(form.actorId) === Number(this.user?.id || 0)
+              && Number(form.authGeneration) === Number(this.authGeneration);
+          },
+          productionSupplementCloseBlocked() {
+            const form = this.productionSupplementForm;
+            return !!(form?.saving || (form?.payload && !form.submitted));
+          },
+          productionSupplementSummary() {
+            const form = this.productionSupplementForm;
+            if (!form) return {availableInput:0,theoretical:0,defective:"-",destination:"未选择位置"};
+            const theoretical = this.productionTheoreticalOutput({...form.row,actual_input_quantity:Number(form.input)});
+            const output = Number(form.output);
+            const location = this.productionLocationsForRow(form.row).find(item => Number(item.id) === Number(form.location_id));
+            return {
+              availableInput:Number(form.row.available_material_input_quantity || 0), theoretical,
+              defective:Number.isInteger(output) && output > 0 && output <= theoretical ? theoretical-output : "-",
+              destination:form.destination || (location ? this.inventoryLocation(location) : "未选择位置"),
+            };
+          },
+          async submitProductionSupplement() {
+            const form = this.productionSupplementForm;
+            if (form && !this.productionSupplementSessionIsCurrent(form)) {
+              this.showToast("登录会话已变化，不能用当前身份重试旧补录", true);
+              return;
+            }
+            if (!form || form.saving || this.productionBusy || !this.canAdmin || !form.row?.can_supplement) return;
+            form.error = "";
+            if (!form.payload) {
+              const row = form.row;
+              const availableInput = Number(row.available_material_input_quantity || 0);
+              const input = Number(form.input);
+              const theoretical = this.productionTheoreticalOutput({...row,actual_input_quantity:input});
+              const output = Number(form.output);
+              if (!Number.isInteger(input) || input <= 0 || input > availableInput) {
+                form.error = "补充投入必须为 1 至 " + availableInput + " 的整数";
+                return;
+              }
+              if (!Number.isInteger(output) || output <= 0 || output > theoretical) {
+                form.error = "实际合格产量必须为 1 至 " + theoretical + " 的整数";
+                return;
+              }
+              if (this.productionLocationsLoading || this.productionLocationsError) {
+                form.error = "请先读取可用成品位置";
+                return;
+              }
+              const location = this.productionLocationsForRow(row).find(item => Number(item.id) === Number(form.location_id));
+              if (!location) { form.error = "请选择当前可用的成品位置"; return; }
+              form.destination = this.inventoryLocation(location);
+              form.payload = Object.freeze({
                 idempotency_key:createIdempotencyKey(),
-                items:[{
+                items:Object.freeze([Object.freeze({
                   task_id:Number(row.task_id),
                   expected_version:Number(row.task_version),
                   disposition:"stock",
@@ -19622,13 +19753,43 @@
                   pallet_id:location.pallet_id ? Number(location.pallet_id) : null,
                   pallet_code:location.pallet_code || null,
                   remarks:null,
-                }],
+                })]),
               });
-              await Promise.all([this.loadProduction(),this.loadDeliveries(),this.loadKpi()]);
-              this.showToast(`已补录 ${output} 个合格品，未改写原生产确认`);
-            } catch(error) {
-              this.showToast(`补充生产确认失败：${this.errorMessage(error)}`, true);
-            } finally { this.productionBusy=false; }
+            }
+            form.saving = true;
+            this.productionBusy = true;
+            try {
+              if (!form.submitted) {
+                try {
+                  await axios.post("/api/production/completion-batches", form.payload);
+                  if (!this.productionSupplementSessionIsCurrent(form)) return;
+                  form.submitted = true;
+                } catch(error) {
+                  if (!this.productionSupplementSessionIsCurrent(form)) return;
+                  const status = Number(error?.response?.status || 0);
+                  if (status >= 400 && status < 500 && ![408,425,429].includes(status)) {
+                    form.payload = null;
+                    form.destination = "";
+                    form.error = "补录未成功：" + this.errorMessage(error) + "。请核对后再提交。";
+                  } else {
+                    form.error = "尚未确认补录结果：" + this.errorMessage(error) + "。请重试本次补录，系统会沿用原内容核对，不会新增另一笔。";
+                  }
+                  return;
+                }
+              }
+              try {
+                const results = await Promise.all([this.loadProduction(),this.loadDeliveries(),this.loadKpi()]);
+                if (!this.productionSupplementSessionIsCurrent(form)) return;
+                if (results.some(result => result === false)) throw new Error("列表尚未完整刷新");
+                form.refreshed = true;
+                this.showToast("已补录 " + form.payload.items[0].actual_output_quantity + " 个合格品，未改写原生产确认");
+              } catch(error) {
+                if (!this.productionSupplementSessionIsCurrent(form)) return;
+                form.error = "补录已成功，但列表刷新失败：" + this.errorMessage(error) + "。请刷新列表，不要重复补录。";
+              }
+            } finally {
+              if (this.productionSupplementSessionIsCurrent(form)) { form.saving=false; this.productionBusy=false; }
+            }
           },
           openProductionInventory(row) {
             if (!this.productionCurrentLocationClickable(row)) return;
@@ -34827,7 +34988,15 @@
             }
           },
 	          closeModal() {
+            if (this.modal?.type === "manualInvoiceRegistration" && this.financeStatementOperationState.action) return;
 	            if (this.isForcedPassword) return;
+              if (this.modal?.type === "productionSupplement") {
+                if (this.productionSupplementCloseBlocked()) {
+                  this.showToast(this.productionSupplementForm.saving ? "补录正在处理，请稍候" : "请先重试并核对本次补录结果，再关闭", true);
+                  return;
+                }
+                if (!this.productionSupplementForm?.submitted) this.productionSupplementForm = null;
+              }
               const invoiceSellerReturnCustomerId = this.modal?.type === "invoiceSellers"
                 ? Number(this.invoiceSellerReturnCustomerId || 0)
                 : 0;
@@ -36305,9 +36474,31 @@
               && statusCode < 500
               && ![408, 425, 429].includes(statusCode);
           },
+          openRegisterInvoice(row) {
+            if (!this.canFinance || this.financeStatementOperationState.action) return false;
+            const attempt = this.financeManualMutationAttempts.register;
+            if (attempt && (!this.financeManualMutationAttemptIsCurrent(attempt) || Number(attempt.statementId) !== Number(row.id))) {
+              this.showToast("上一笔开票结果待核对，请在原账号、原对账单继续处理", true);
+              return false;
+            }
+            const old = this.financeInvoiceForm;
+            if (old?.committed && Number(old.row?.id) === Number(row.id) && Number(row.ledger_version) <= Number(old.row.ledger_version)) {
+              this.showToast("上一张发票已登记，请先刷新对账单余额", true);
+              return false;
+            }
+            const remaining = Number(row.pending_invoice_amount ?? (Number(row.total_receivable) - Number(row.invoiced_amount)));
+            if (!attempt && (!Number.isFinite(remaining) || remaining <= 0)) { this.showToast("当前没有待登记开票余额", true); return false; }
+            this.financeInvoiceForm = {row:{...row}, remaining, invoice_number:attempt?.payload.invoice_number || "", amount:attempt?.payload.invoice_amount || remaining.toFixed(2), committed:false};
+            this.modal = {type:"manualInvoiceRegistration",title:"登记已开票结果"};
+            return true;
+          },
           async registerInvoice(row) {
             if (this.financeStatementOperationState.action) return false;
             const statementId = Number(row.id);
+            if (this.financeInvoiceForm?.committed && Number(this.financeInvoiceForm.row?.id) === statementId) {
+              this.showToast("该发票已经登记，请先刷新余额再登记下一张", true);
+              return false;
+            }
             if (this.financeManualMutationRecoveryError) {
               this.showToast(this.financeManualMutationRecoveryError, true);
               return false;
@@ -36334,12 +36525,12 @@
               return false;
             }
             if (!attempt) {
-              const invoiceNumber = String(prompt("请输入发票号码") || "").trim();
-              if (!invoiceNumber) return false;
+              const form = this.financeInvoiceForm;
+              if (Number(form?.row?.id) !== statementId) { this.showToast("请重新打开本张对账单的开票登记", true); return false; }
+              const invoiceNumber = String(form.invoice_number || "").trim();
+              if (!invoiceNumber) { this.showToast("请填写发票号码", true); return false; }
               const remaining = Number(row.pending_invoice_amount ?? (Number(row.total_receivable) - Number(row.invoiced_amount)));
-              const amountInput = prompt("请输入本次开票金额", remaining.toFixed(2));
-              if (amountInput === null) return false;
-              const amountNumber = Number(amountInput);
+              const amountNumber = Number(form.amount);
               if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
                 this.showToast("本次开票金额必须大于 0", true);
                 return false;
@@ -36402,9 +36593,11 @@
               }
               if (!requestIsCurrent()) return false;
               this.clearFinanceManualMutationAttempt("register", attempt);
+              if (Number(this.financeInvoiceForm?.row?.id) === statementId) this.financeInvoiceForm.committed = true;
+              if (this.modal?.type === "manualInvoiceRegistration") this.modal = null;
               this.showToast("开票登记成功");
               try {
-                await this.loadFinance();
+                if (await this.loadFinance() === false) throw new Error("开票余额尚未完整刷新");
               } catch(error) {
                 if (sessionIsCurrent()) this.showToast(`发票已经登记，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复登记。`, true);
               }

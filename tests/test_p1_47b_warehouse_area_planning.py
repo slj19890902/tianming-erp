@@ -4470,6 +4470,45 @@ def test_one_step_rebase_restores_published_zone_when_preserved_draft_lacks_it(
     assert restored["floors"]["3F"]["racks"][0]["id"] == "unrelated-rack"
 
 
+def test_one_step_rebase_uses_confirmed_policy_snapshot_when_second_read_lacks_zone(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The already-confirmed zone must not be rolled back by draft restoration."""
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    advanced = editor._new_draft_document(published)
+    floor = advanced["floors"]["3F"]
+    feature = next(item for item in floor["features"] if item["id"] == "zone-f1")
+    floor["features"] = [item for item in floor["features"] if item["id"] != "zone-f1"]
+    floor["racks"].append({"id": "unrelated-rack", "rack_code": "R-DRAFT"})
+    floor["revision"] = _floor_revision(floor)
+    editor._mark_draft_changed(advanced, "3F")
+    editor._write_document(draft, advanced)
+    context = editor.LayoutOneStepDraftContext(
+        draft_snapshot=editor.snapshot_warehouse_twin_layout_draft(draft_path=draft),
+        had_active_draft=True,
+        published_floor_revision=_revision(published),
+        published_feature_version=1,
+    )
+    # Model the old second-read failure after the one-step publish has already
+    # supplied the validated target feature to formal policy synchronization.
+    reread = json.loads(published.read_text(encoding="utf-8"))
+    reread["floors"]["3F"]["features"] = [
+        item for item in reread["floors"]["3F"]["features"] if item["id"] != "zone-f1"
+    ]
+    editor._write_document(published, reread)
+    assert editor.rebase_warehouse_twin_advanced_draft_after_one_step(
+        context,
+        "3F",
+        "zone-f1",
+        published_feature_snapshot=feature,
+        draft_path=draft,
+    ) is True
+    restored = json.loads(draft.read_text(encoding="utf-8"))
+    assert any(item["id"] == "zone-f1" for item in restored["floors"]["3F"]["features"])
+    assert restored["floors"]["3F"]["racks"][0]["id"] == "unrelated-rack"
+
+
 def test_one_step_confirmation_preserves_same_floor_rack_draft(
     tmp_path: Path,
     monkeypatch,

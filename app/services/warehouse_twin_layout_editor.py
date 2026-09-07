@@ -491,6 +491,7 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
     *,
     geometry_only: bool = False,
     remaining_location_drafts: dict[str, Any] | None = None,
+    published_feature_snapshot: dict[str, Any] | None = None,
     published_path: Path | None = None,
     draft_path: Path | None = None,
 ) -> bool:
@@ -524,6 +525,17 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
             ),
             None,
         )
+        if published_feature_snapshot is not None:
+            if (
+                published_feature_snapshot.get("feature_kind") != "zone"
+                or str(published_feature_snapshot.get("id") or "") != feature_id
+            ):
+                raise WarehouseTwinLayoutEditError("一次确认后的区域快照无效")
+            # The one-step confirmation has already validated and published
+            # this exact policy snapshot before formal-area synchronization.
+            # Reusing it here prevents an unrelated second file read during
+            # advanced-draft restoration from rolling that confirmation back.
+            published_feature = published_feature_snapshot
         advanced_features = list(advanced_floor.get("features") or [])
         advanced_index = next(
             (

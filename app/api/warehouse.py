@@ -14963,6 +14963,7 @@ def confirm_twin_zone_area(
                 one_step_context,
                 floor_code,
                 feature_id,
+                published_feature_snapshot=policy_result['item'],
             )
             area = db.scalar(
                 select(WarehouseArea)

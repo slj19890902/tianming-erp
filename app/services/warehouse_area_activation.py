@@ -921,10 +921,11 @@ def adjust_area_location_count(
         if layout is None:
             return False
         # Count changes never guess that a historical manual/version-1 row was
-        # system generated.  An administrator must first adopt such rows via
-        # the dedicated auto-arrange confirmation.
+        # system generated.  The sole exception is the published-ground-plan
+        # reduction path: it supplies a locked plan version and may retire only
+        # empty surplus locations together with their plan slots.
         return layout.source_type == "seeded" or (
-            allow_empty_historical_retirement and target_count == 0
+            allow_empty_historical_retirement and target_count < current_count
         )
 
     if target_count == current_count:

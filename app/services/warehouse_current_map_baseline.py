@@ -28,7 +28,7 @@ AREA_POLICIES: dict[int, tuple[str, str, int | None, str, str, list[str]]] = {
     7: ("C1", "C1 成品存放区（主通道北侧）", 24, "b78bad82-b86f-43fb-adb7-88e7cb551da4", "pallet_ground", ["finished"]),
     8: ("C2", "C2 成品存放区（主通道南侧）", 33, "97f9c9d3-5c6f-42c8-94fa-9d13b82c3e2a", "pallet_ground", ["finished"]),
     9: ("CD1", "CD1 成品存放区", 14, "3f473721-94ca-4c36-8c98-5d2e6448d279", "pallet_ground", ["finished"]),
-    10: ("D1", "D1 栈板成品存放区（无货架）", 28, "a2ec14a6-ecda-40c1-9eef-177339e50aed", "pallet_ground", ["finished"]),
+    10: ("D1", "D1 栈板成品存放区（无货架）", 23, "a2ec14a6-ecda-40c1-9eef-177339e50aed", "pallet_ground", ["finished"]),
     11: ("D2", "D2 货架为主·栈板混合存放区", 8, "3b662b8e-a457-4544-9ccb-98dacdafd835", "mixed", ["finished"]),
     12: ("DE1", "DE1 成品存放区", 5, "58068eb6-d94b-4e24-9173-a16146806303", "pallet_ground", ["finished"]),
     13: ("E1", "E1 成品存放区（主通道北侧）", 27, "cd40e190-223f-4407-a586-e79b323941ad", "pallet_ground", ["finished"]),

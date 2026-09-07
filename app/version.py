@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.267"
-APP_VERSION_NAME = "仓库货位冲突精度修复"
+APP_VERSION = "v0.22.268"
+APP_VERSION_NAME = "右区D1地堆容量修复"
 APP_BUILD_DATE = "2026-09-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -1885,16 +1885,28 @@ _V022266_VERIFICATION_STEPS = [
     "模拟服务器已确认而地图刷新失败，确认页面明确提示合并已完成、旧草稿不再可提交；正常路径仍只写一次合并。",
 ]
 
-APP_CHANGES = [
+_V022267_CHANGES = [
     "查货接口保留正式地图已有四位百分比坐标精度，避免相邻货位在毫米换算后出现虚假重叠；E2-22不再被误标红。",
     "查货模式按货位互叠、区域越界或固定障碍物显示对应冲突原因，不再把所有规划几何冲突误称为固定柱子。",
     "本版无数据库迁移，不修改库存、货位、柱子、地图草稿或已发布地图业务数据。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022267_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认 v0.22.267，数据库 revision 仍为唯一 head rp06v8x9z65。",
     "打开三楼查货模式并定位右区E2的E2-22，确认其不再显示红色或固定柱子冲突，区域规划模式保持一致。",
     "在隔离测试布局分别制造货位互叠、区域越界和固定障碍冲突，确认提示类别正确且真实冲突仍保持红色。",
+]
+
+APP_CHANGES = [
+    "已发布地堆区域可在完整区域、地图、货位和地堆计划版本核对后，受控减少无库存、无当前栈板、无活动占用的多余货位；幸存货位坐标不移动。",
+    "右区 D1 的新建基线容量从误设的 28 个标准栈板位修正为现场可放置的 23 个；已存在的正式区域须由管理员确认操作后才会变更。",
+    "本版无数据库迁移，不自动停用任何正式货位，不移动或改写库存、批次、预占、栈板和货物事实。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "进入系统备份→系统版本，确认 v0.22.268，数据库 revision 仍为唯一 head rp06v8x9z65。",
+    "在右区 D1 刷新地图后把目标库位数从 28 调整为 23，确认只停用 5 个空货位，正式地堆排位、确认容量和地图有效货位数均为 23。",
+    "给待停用货位绑定库存、当前栈板或活动地堆占用后再次减少，确认操作被拒绝，原有货位与地堆排位不改变。",
 ]
 
 
@@ -1988,6 +2000,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.267：本次更新｜{item}" for item in _V022267_CHANGES),
+    *(f"v0.22.267：如何验证｜{item}" for item in _V022267_VERIFICATION_STEPS),
     *(f"v0.22.266：本次更新｜{item}" for item in _V022266_CHANGES),
     *(f"v0.22.266：如何验证｜{item}" for item in _V022266_VERIFICATION_STEPS),
     *(f"v0.22.262：本次更新｜{item}" for item in _V022262_CHANGES),

@@ -36,9 +36,9 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.248"
-    assert APP_VERSION_NAME == "供应商月结周期、组合付款与简化水电费"
-    assert APP_BUILD_DATE == "2026-09-03"
+    assert APP_VERSION == "v0.22.268"
+    assert APP_VERSION_NAME == "右区D1地堆容量修复"
+    assert APP_BUILD_DATE == "2026-09-07"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
     assert metadata["external_acceptance_required"] is True
@@ -49,11 +49,10 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "对账日" in item and "结算周期" in item for item in current_release)
-    assert any("本次更新｜" in item and "业务修订N+1" in item and "旧明细" in item for item in current_release)
-    assert any("本次更新｜" in item and "供应商贷项" in item and "组合付款" in item for item in current_release)
-    assert any("本次更新｜" in item and "水费电费" in item and "重复记账" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.248" in item and "jo73v8x9z62" in item for item in current_release)
+    assert any("本次更新｜" in item and "完整区域、地图、货位和地堆计划版本" in item for item in current_release)
+    assert any("本次更新｜" in item and "D1" in item and "28" in item and "23" in item for item in current_release)
+    assert any("本次更新｜" in item and "无数据库迁移" in item and "不自动停用" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.268" in item and "rp06v8x9z65" in item for item in current_release)
     prior_release_247 = [item for item in APP_CHANGELOG if item.startswith("v0.22.247：")]
     assert any("本次更新｜" in item and "有效实收" in item and "不可变结算价格事实" in item for item in prior_release_247)
     assert any("本次更新｜" in item and "旧无路线成品" in item and "失败关闭" in item for item in prior_release_247)

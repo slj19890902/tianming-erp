@@ -619,6 +619,8 @@ interface AreaLocationCountResponse {
   disabled_count: number;
   policy_version?: number | null;
   published_map_revision?: string | null;
+  ground_plan_id?: number | null;
+  ground_plan_version?: number | null;
   message: string;
   items: Array<{
     action: "created" | "enabled" | "disabled";
@@ -3845,6 +3847,7 @@ export function WarehouseTwinApp() {
           ? areaLocationManagement?.published_map_revision || planningPublishedRevision || undefined
           : undefined,
         expected_policy_version: areaLocationManagement?.policy_version || undefined,
+        expected_ground_plan_version: areaLocationManagement?.ground_plan_version || undefined,
         expected_layout_versions: selectedAreaLayoutVersions
       });
       await refreshDashboard();
@@ -4005,7 +4008,9 @@ export function WarehouseTwinApp() {
       setAreaLocationManagement((current) => current ? {
         ...current,
         policy_version: result?.policy_version ?? current.policy_version,
-        published_map_revision: result?.published_map_revision ?? current.published_map_revision
+        published_map_revision: result?.published_map_revision ?? current.published_map_revision,
+        ground_plan_id: result?.ground_plan_id ?? current.ground_plan_id,
+        ground_plan_version: result?.ground_plan_version ?? current.ground_plan_version
       } : current);
       setLocationEditMessage(result?.message || `${selectedAreaCode} 区库位数量已更新。`);
     } catch (reason) {

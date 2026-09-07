@@ -319,7 +319,7 @@ def test_floor3_f_detail_moves_away_from_the_selected_rack_without_duplicate_pan
 
 
 def test_floor3_d1_uses_current_measured_positions_instead_of_legacy_special_layout() -> None:
-    assert 'if(areaCode==="D1")return 28' in WAREHOUSE_HTML
+    assert 'if(areaCode==="D1")return 23' in WAREHOUSE_HTML
     render = WAREHOUSE_HTML.split("function renderFloor3AreaSlots(){", 1)[1].split(
         "function renderFloor3LayoutEditor", 1
     )[0]

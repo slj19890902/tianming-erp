@@ -26,6 +26,8 @@ from app.models.warehouse_inventory import (
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
+    WarehouseGroundLayoutPlan,
+    WarehouseGroundLayoutSlot,
     WarehouseLocation,
 )
 from app.services.warehouse_area_activation import (
@@ -357,7 +359,114 @@ def test_zero_location_count_rejects_replayed_empty_snapshot_atomically(
             json=payload,
         )
         assert replay.status_code == 409, replay.text
-        assert _area_contract_state(factory, "ZERO") == committed
+    assert _area_contract_state(factory, "ZERO") == committed
+
+
+def test_published_ground_plan_can_reduce_only_empty_manual_surplus_slots(
+    spatial_contract_app,
+) -> None:
+    app, factory, location_ids = spatial_contract_app
+    with factory() as db:
+        admin = db.scalar(select(User).where(User.username == "slot-contract-admin"))
+        area = db.scalar(select(WarehouseArea).where(WarehouseArea.area_code == "PUB"))
+        assert admin is not None and area is not None
+        locations = list(
+            db.scalars(
+                select(WarehouseLocation)
+                .where(WarehouseLocation.id.in_(location_ids.values()))
+                .order_by(WarehouseLocation.sort_order)
+            ).all()
+        )
+        for location in locations[:2]:
+            assert location.floor3_layout is not None
+            location.floor3_layout.source_type = "manual"
+        plan = WarehouseGroundLayoutPlan(
+            area_id=area.id,
+            status="published",
+            target_slot_count=2,
+            numbering_origin="south",
+            row_direction="from_aisle_inward",
+            slot_direction="left_to_right",
+            row_start_no=1,
+            slot_start_no=1,
+            draft_map_revision="slot-layout-test",
+            published_map_revision="slot-layout-test",
+            preview_fingerprint="a" * 64,
+            version=1,
+            publish_idempotency_key="published-ground-reduce-test",
+            publish_request_hash="b" * 64,
+            updated_by=admin.id,
+            published_by=admin.id,
+            published_at=datetime.now(),
+        )
+        db.add(plan)
+        db.flush()
+        for serial, location in enumerate(locations[:2], start=1):
+            db.add(
+                WarehouseGroundLayoutSlot(
+                    plan_id=plan.id,
+                    location_id=location.id,
+                    route_sequence=serial,
+                    row_no=1,
+                    slot_no=serial,
+                    x_mm=Decimal((serial - 1) * 1200),
+                    y_mm=Decimal(0),
+                    width_mm=1200,
+                    depth_mm=1000,
+                )
+            )
+        db.commit()
+
+    with TestClient(app) as client:
+        _contract_login(client, "slot-contract-admin")
+        management = client.get(
+            "/api/warehouse/spatial-layout/floors/3F/areas/PUB/management"
+        )
+        assert management.status_code == 200, management.text
+        assert management.json()["available_actions"] == [
+            "location_count",
+            "published_layout",
+        ]
+        response = client.post(
+            "/api/warehouse/spatial-layout/floors/3F/areas/PUB/location-count",
+            json={
+                "target_count": 1,
+                "confirmed": True,
+                "expected_map_revision": "slot-layout-test",
+                "expected_policy_version": 1,
+                "expected_ground_plan_version": 1,
+                "expected_layout_versions": {
+                    str(location_ids["PUB-L001"]): 1,
+                    str(location_ids["PUB-L002"]): 1,
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["disabled_count"] == 1
+    assert response.json()["ground_plan_version"] == 2
+    with factory() as db:
+        area = db.scalar(select(WarehouseArea).where(WarehouseArea.area_code == "PUB"))
+        plan = db.scalar(select(WarehouseGroundLayoutPlan))
+        assert area is not None and plan is not None
+        assert area.planned_location_count == 1
+        assert area.planned_pallet_capacity == 1
+        assert area.confirmed_pallet_capacity == 1
+        assert plan.target_slot_count == 1
+        assert plan.version == 2
+        assert {
+            int(location_id)
+            for location_id in db.scalars(
+                select(WarehouseGroundLayoutSlot.location_id).where(
+                    WarehouseGroundLayoutSlot.plan_id == plan.id
+                )
+            )
+        } == {location_ids["PUB-L001"]}
+        assert db.scalar(
+            select(WarehouseLocation.is_active).where(
+                WarehouseLocation.id == location_ids["PUB-L002"]
+            )
+        ) is False
 
 
 @pytest.mark.parametrize(

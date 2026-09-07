@@ -2647,7 +2647,7 @@
     }
     function floor3TheoreticalCapacity(areaCode){
       if(areaCode==="F")return FLOOR3_F_AREA_CODES.reduce((sum,code)=>sum+floor3TheoreticalCapacity(code),0);
-      if(areaCode==="D1")return 28;
+      if(areaCode==="D1")return 23;
       if(areaCode==="SEMI-011")return 4;
       if(areaCode==="DE1")return 5;
       const zone=floor3Zone(areaCode),ground=floor3PackZone(zone).count,rack=FLOOR3_RACK_DEFS.filter(item=>item.zoneId===areaCode).reduce((sum,item)=>sum+item.cellCapacity,0);

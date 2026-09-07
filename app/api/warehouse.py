@@ -5423,7 +5423,9 @@ def list_ground_storage_candidates(
             product_id=product_id,
             incoming_quantity=incoming_quantity,
             can_view_occupied_details=has_unrestricted_customer_access(user, db),
-            floor_layout=load_warehouse_twin_floor(floor_code.strip().upper()),
+            floor_layout=load_warehouse_twin_floor(
+                f"{int(plan.area.floor.floor_number)}F"
+            ),
         )
         return {
             "floor_name": plan.area.floor.floor_name,
@@ -5578,7 +5580,8 @@ def _validate_ground_target(
                 "GROUND_SECONDARY_STALE", "大型货物第二位置已变化，请重新点选。"
             )
         positions = effective_ground_slot_geometries(
-            plan, load_warehouse_twin_floor(plan.area.floor.floor_code)
+            plan,
+            load_warehouse_twin_floor(f"{int(plan.area.floor.floor_number)}F"),
         )
         if not ground_slots_adjacent(primary_slot, secondary_slot, positions=positions):
             raise WarehouseGroundSlotError(

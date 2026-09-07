@@ -1373,3 +1373,69 @@ def test_ground_candidates_and_target_use_applied_absolute_positions(p187_app, m
         assert right_id not in rows[left_id]['adjacent_location_ids']
         assert float(rows[right_id]['geometry']['left_pct']) == pytest.approx(50)
         assert rows[right_id]['current_quantity'] == 0
+
+
+def test_ground_candidate_and_target_canonicalize_stored_floor_alias(
+    p187_app, monkeypatch
+) -> None:
+    app, factory, ids = p187_app
+    with TestClient(app) as client:
+        _login(client)
+        _publish_six_slots(client)
+
+        with factory() as db:
+            floor = db.scalar(select(WarehouseFloor))
+            assert floor is not None
+            floor.floor_code = "F1"
+            floor.floor_name = "一楼"
+            floor.floor_number = 1
+            for location in db.scalars(select(WarehouseLocation)).all():
+                location.warehouse_floor = 1
+            db.commit()
+
+        loaded_floor_codes: list[str] = []
+
+        def load_floor(floor_code: str) -> dict:
+            loaded_floor_codes.append(floor_code)
+            return _measured_layout()
+
+        monkeypatch.setattr(warehouse_api, "load_warehouse_twin_floor", load_floor)
+        monkeypatch.setattr(
+            location_candidates,
+            "load_warehouse_twin_published_floor_identity",
+            lambda _floor_number: _published_runtime_identity(),
+        )
+        response = client.get(
+            "/api/warehouse/ground-storage/candidates",
+            params={
+                "floor_code": "F1",
+                "area_code": "A01",
+                "customer_id": ids["customer"],
+                "product_id": ids["product"],
+                "incoming_quantity": 1,
+            },
+        )
+        assert response.status_code == 200, response.text
+
+    with factory() as db:
+        plan = warehouse_api.published_ground_plan(
+            db,
+            floor_code="F1",
+            area_code="A01",
+            required_inventory_type="finished",
+        )
+        left, right = plan.slots[:2]
+        warehouse_api._validate_ground_target(
+            db,
+            plan=plan,
+            primary_slot=left,
+            secondary_location_id=right.location_id,
+            expected_primary_version=left.location.floor3_layout.version,
+            expected_secondary_version=right.location.floor3_layout.version,
+            customer_id=ids["customer"],
+            product_id=ids["product"],
+            quantity=1,
+        )
+        db.rollback()
+
+    assert loaded_floor_codes == ["1F", "1F"]

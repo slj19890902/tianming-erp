@@ -112,6 +112,7 @@ type TwinFeature = LayoutFeature & {
   capacity_review_status?: string | null;
   capacity_eligible?: boolean | null;
   confirmed_pallet_capacity?: number | null;
+  max_rack_count?: number | null;
 };
 type InventoryUsage = "finished" | "semi_finished" | "raw_material" | "mold" | "print_plate" | "temporary_turnover";
 type StorageLayout = "rack" | "pallet_ground" | "mixed";
@@ -2999,9 +3000,14 @@ export function WarehouseTwinApp() {
     setSimpleAreaUsage(currentUsage || "finished");
     setSimpleAreaLayout(selectedAreaFeature.storage_layout === "rack" ? "rack" : "pallet_ground");
     setSimpleAreaCapacity(String(
-      selectedAreaFeature.confirmed_pallet_capacity
-      ?? selectedAreaFeature.planned_pallet_capacity
-      ?? 0
+      selectedAreaFeature.storage_layout === "rack"
+        ? (selectedAreaFeature.max_rack_count
+          ?? selectedAreaFeature.confirmed_pallet_capacity
+          ?? selectedAreaFeature.planned_pallet_capacity
+          ?? 0)
+        : (selectedAreaFeature.confirmed_pallet_capacity
+          ?? selectedAreaFeature.planned_pallet_capacity
+          ?? 0)
     ));
     setAdvancedAreaMaintenanceOpen(false);
     setSelectedExistingAreaId("");
@@ -6485,9 +6491,9 @@ export function WarehouseTwinApp() {
                 <label className="twin-zone-name-field"><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 4F 新振成品区" /></label>
                 <label><span>用途</span><select value={simpleAreaUsage} onChange={(event) => setSimpleAreaUsage(event.target.value as InventoryUsage)}><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="raw_material">原材料</option><option value="mold">模具</option><option value="print_plate">印刷版</option><option value="temporary_turnover">临时周转</option></select></label>
                 <label><span>形式</span><select value={simpleAreaLayout} onChange={(event) => setSimpleAreaLayout(event.target.value as Exclude<StorageLayout, "mixed">)}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
-                <label><span>{simpleAreaLayout === "pallet_ground" ? "栈板货位数" : "最大栈板数"}</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /></label>
+                <label><span>{simpleAreaLayout === "pallet_ground" ? "栈板货位数" : "最大货架数"}</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /></label>
               </div>
-              <div className="twin-zone-confirm-row"><button type="button" className="confirm" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || simpleAreaCapacity === ""} onClick={confirmSelectedAreaOnce}>{spatialEditBusy ? "保存中…" : "保存区域设置"}</button><p>{simpleAreaLayout === "pallet_ground" ? "同步空货位数量，不改库存；填 0 会停用全部空货位。" : "保存设置，不改库存；专项货架容量可填 0。"}</p></div>
+              <div className="twin-zone-confirm-row"><button type="button" className="confirm" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || simpleAreaCapacity === ""} onClick={confirmSelectedAreaOnce}>{spatialEditBusy ? "保存中…" : "保存区域设置"}</button><p>{simpleAreaLayout === "pallet_ground" ? "同步空货位数量，不改库存；填 0 会停用全部空货位。" : "最大货架数可在此调整；达到上限时新增货架会明确阻止，不改现有货架和库存。"}</p></div>
               {selectedAreaHasPublishedBinding && selectedAreaCreatesInventoryLocations && <div className="twin-location-point-planner">
                 <div><b>货位点位</b><small>{selectedAreaLocationCount} 个正式货位 · 只调整当前区域</small></div>
                 {locationPointEditAreaCode === selectedAreaCode ? <div className="actions">

@@ -10174,6 +10174,7 @@ class TwinZoneStoragePolicyPayload(BaseModel):
     erp_area_code: str = Field(min_length=1, max_length=30)
     area_name: str | None = Field(default=None, max_length=100)
     existing_area_id: int | None = Field(default=None, ge=1)
+    max_rack_count: int | None = Field(default=None, ge=0, le=500)
 
     @field_validator("erp_area_code")
     @classmethod
@@ -14209,6 +14210,7 @@ def _update_twin_zone_storage_policy_locked(
             area_name=payload.area_name,
             formal_area_id=selected_existing_area_id,
             formal_floor_id=(formal_area.floor_id if formal_area is not None else None),
+            max_rack_count=payload.max_rack_count,
             legacy_v11_name_only=legacy_v11_name_only,
         )
         mapped_area_code = str(mutation.value.get("erp_area_code") or "").strip().upper()
@@ -14921,6 +14923,11 @@ def confirm_twin_zone_area(
                     erp_area_code=payload.erp_area_code,
                     area_name=payload.area_name,
                     existing_area_id=payload.existing_area_id,
+                    max_rack_count=(
+                        payload.max_pallet_capacity
+                        if payload.storage_layout == 'rack'
+                        else None
+                    ),
                 ),
                 request=request,
                 db=db,

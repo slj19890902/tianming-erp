@@ -388,7 +388,7 @@ class WarehouseLocation(Base):
     address_area_id: Mapped[int | None] = mapped_column(
         ForeignKey("warehouse_areas.id", ondelete="RESTRICT"), nullable=True
     )
-    rack_code: Mapped[str | None] = mapped_column(String(1), nullable=True)
+    rack_code: Mapped[str | None] = mapped_column(String(4), nullable=True)
     map_rack_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     rack_display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     ground_row_no: Mapped[int | None] = mapped_column(Integer, nullable=True)

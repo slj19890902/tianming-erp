@@ -227,6 +227,32 @@ def test_rack_level_cell_counts_must_match_levels_and_stay_within_range(
         )
 
 
+def test_rack_area_maximum_blocks_only_the_next_new_rack(tmp_path: Path) -> None:
+    path = _asset(tmp_path / "rack-maximum.json")
+    document = json.loads(path.read_text(encoding="utf-8"))
+    floor = document["floors"]["3F"]
+    floor["features"][0]["max_rack_count"] = 1
+    floor["revision"] = _floor_revision(floor)
+    path.write_text(json.dumps(document), encoding="utf-8")
+    first = create_warehouse_twin_rack(
+        "3F",
+        expected_revision=floor["revision"],
+        operation_key="rack-maximum-first",
+        area_feature_id="zone-f1",
+        values=_rack_values(),
+        path=path,
+    )
+    with pytest.raises(WarehouseTwinLayoutEditConflictError, match="最大货架数为 1"):
+        create_warehouse_twin_rack(
+            "3F",
+            expected_revision=first.floor_revision,
+            operation_key="rack-maximum-second",
+            area_feature_id="zone-f1",
+            values=_rack_values(name="第二架"),
+            path=path,
+        )
+
+
 def test_zone_policy_keeps_business_usage_separate_from_storage_layout(tmp_path: Path) -> None:
     path = _asset(tmp_path / "layout.json")
     revision = json.loads(path.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
@@ -243,6 +269,23 @@ def test_zone_policy_keeps_business_usage_separate_from_storage_layout(tmp_path:
     assert result.value["allowed_inventory_types"] == ["finished", "semi_finished", "raw_material"]
     assert result.value["storage_layout"] == "mixed"
     assert result.value["subtype"] == "rack_storage"
+
+
+def test_rack_policy_persists_adjustable_maximum(tmp_path: Path) -> None:
+    path = _asset(tmp_path / "rack-policy.json")
+    revision = json.loads(path.read_text(encoding="utf-8"))["floors"]["3F"]["revision"]
+    result = update_warehouse_twin_zone_policy(
+        "3F",
+        "zone-f1",
+        expected_revision=revision,
+        expected_version=1,
+        operation_key="rack-policy-maximum-0001",
+        allowed_inventory_types=["finished"],
+        storage_layout="rack",
+        max_rack_count=28,
+        path=path,
+    )
+    assert result.value["max_rack_count"] == 28
 
 
 def test_draft_edit_validate_and_publish_are_separate_versioned_steps(

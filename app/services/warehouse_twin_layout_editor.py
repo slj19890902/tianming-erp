@@ -139,6 +139,7 @@ _ZONE_POLICY_FIELDS = (
     "formal_area_name",
     "formal_area_id",
     "formal_floor_id",
+    "max_rack_count",
 )
 
 
@@ -2288,6 +2289,23 @@ def create_warehouse_twin_rack(
         zone = _feature(floor, area_feature_id)
         if zone.get("feature_kind") != "zone":
             raise WarehouseTwinLayoutEditError("只能在仓储区域内新增货架")
+        maximum = zone.get("max_rack_count")
+        if maximum is not None:
+            try:
+                maximum = int(maximum)
+            except (TypeError, ValueError) as error:
+                raise WarehouseTwinLayoutEditError("区域最大货架数无效") from error
+            if maximum < 0 or maximum > 500:
+                raise WarehouseTwinLayoutEditError("区域最大货架数必须是 0 至 500")
+            existing_count = sum(
+                1
+                for item in floor.get("racks") or []
+                if str(item.get("area_feature_id") or "") == area_feature_id
+            )
+            if existing_count >= maximum:
+                raise WarehouseTwinLayoutEditConflictError(
+                    f"该区域最大货架数为 {maximum}，请先调整区域设置或整理现有货架"
+                )
         area_code = _feature_area_code(zone)
         rack = {
             "id": str(uuid4()),
@@ -2587,6 +2605,7 @@ def update_warehouse_twin_zone_policy(
     area_name: str | None = None,
     formal_area_id: int | None = None,
     formal_floor_id: int | None = None,
+    max_rack_count: int | None = None,
     legacy_v11_name_only: bool = False,
     path: Path | None = None,
 ) -> LayoutMutation:
@@ -2605,6 +2624,13 @@ def update_warehouse_twin_zone_policy(
         raise WarehouseTwinLayoutEditError("正式区域身份无效")
     if normalized_area_code is not None and len(normalized_area_code) > 30:
         raise WarehouseTwinLayoutEditError("正式区域编号最多 30 个字符")
+    if max_rack_count is not None and (
+        isinstance(max_rack_count, bool)
+        or not isinstance(max_rack_count, int)
+        or max_rack_count < 0
+        or max_rack_count > 500
+    ):
+        raise WarehouseTwinLayoutEditError("区域最大货架数必须是 0 至 500 的整数")
 
     def mutate(floor: dict[str, Any]) -> dict[str, Any]:
         feature = _feature(floor, feature_id)
@@ -2613,6 +2639,11 @@ def update_warehouse_twin_zone_policy(
         _ensure_version(feature, expected_version, "区域")
         feature["allowed_inventory_types"] = normalized_types
         feature["storage_layout"] = storage_layout
+        if storage_layout == "rack":
+            if max_rack_count is not None:
+                feature["max_rack_count"] = max_rack_count
+        else:
+            feature.pop("max_rack_count", None)
         if normalized_area_code is not None:
             for other in floor.get("features") or []:
                 if (
@@ -2666,6 +2697,11 @@ def update_warehouse_twin_zone_policy(
         same_legacy_name_only = bool(
             mutation.value.get('legacy_v11_name_only')
         ) is bool(legacy_v11_name_only)
+        same_max_rack_count = (
+            storage_layout != "rack"
+            or max_rack_count is None
+            or mutation.value.get("max_rack_count") == max_rack_count
+        )
         if not (
             same_types
             and same_layout
@@ -2673,6 +2709,7 @@ def update_warehouse_twin_zone_policy(
             and same_name
             and same_identity
             and same_legacy_name_only
+            and same_max_rack_count
         ):
             raise WarehouseTwinLayoutEditConflictError('该操作键已用于不同的区域策略')
     return mutation

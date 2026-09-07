@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
-import string
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
@@ -480,12 +479,21 @@ def _map_rack_letter(
         ).all()
         if value
     }
-    for value in string.ascii_uppercase:
+    # Rack identities are printed and stable, but a legitimate physical area
+    # is not limited to one alphabet cycle. Continue with AA, AB … after Z.
+    index = 0
+    while True:
+        value = ""
+        current = index
+        while True:
+            current, remainder = divmod(current, 26)
+            value = chr(ord("A") + remainder) + value
+            if current == 0:
+                break
+            current -= 1
         if value not in used:
             return value
-    raise WarehouseRackCellSyncError(
-        f"{area.area_name} 已有 26 个正式货架身份，不能继续自动分配；请先整理空货架。"
-    )
+        index += 1
 
 
 def _rack_geometry_percent(

@@ -319,8 +319,8 @@ class WarehouseLocation(Base):
         ),
         CheckConstraint(
             "address_kind != 'rack_slot' OR "
-            "(address_area_id IS NOT NULL AND rack_code >= 'A' AND rack_code <= 'Z' "
-            "AND length(rack_code) = 1 AND level_no >= 1 AND level_no <= 99 "
+            "(address_area_id IS NOT NULL AND rack_code >= 'A' AND rack_code <= 'ZZZZ' "
+            "AND length(rack_code) BETWEEN 1 AND 4 AND level_no >= 1 AND level_no <= 99 "
             "AND slot_no >= 1 AND slot_no <= 99)",
             name="ck_warehouse_locations_rack_address",
         ),

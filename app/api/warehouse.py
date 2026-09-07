@@ -4521,6 +4521,141 @@ def _reduce_published_ground_plan_empty_slots(
     }
 
 
+def _extend_published_ground_plan_empty_slots(
+    db: Session,
+    *,
+    plan: WarehouseGroundLayoutPlan,
+    policy: WarehouseAreaStoragePolicy,
+    area: WarehouseArea,
+    floor_layout: dict,
+    expected_plan_version: int | None,
+    active_location_ids_before: set[int],
+    added_locations: list[WarehouseLocation],
+    operator_id: int,
+) -> dict:
+    """Add measured pallet slots without moving existing published slots."""
+
+    if expected_plan_version is None:
+        raise WarehouseAreaActivationError("缺少地堆排位版本，请刷新后重试", status_code=409)
+    if plan.status != "published" or plan.version != expected_plan_version:
+        raise WarehouseAreaActivationError("地堆排位已被其他操作更新，请刷新后重试", status_code=409)
+    if plan.published_map_revision != policy.published_map_revision:
+        raise WarehouseAreaActivationError("地堆排位与正式地图版本不一致，请刷新后重试", status_code=409)
+    if not added_locations:
+        raise WarehouseAreaActivationError("本次没有新增空货位，不能变更地堆排位", status_code=409)
+    plan_slots = list(plan.slots)
+    if {int(slot.location_id) for slot in plan_slots} != active_location_ids_before:
+        raise WarehouseAreaActivationError("正式地堆排位与当前启用货位不一致，请先核对后重试", status_code=409)
+    if not policy.map_feature_id:
+        raise WarehouseAreaActivationError("区域尚未绑定正式地图边界，不能增加地堆货位", status_code=409)
+
+    reserved = [_layout_geometry_payload(slot.location) for slot in plan_slots]
+    try:
+        new_slots = confirmed_capacity_slots_for_zone(
+            floor_layout,
+            feature_id=policy.map_feature_id,
+            target_count=len(added_locations),
+            prefer_standard_pallet_slots=True,
+            reserved_slots=reserved,
+        )
+        submitted = [
+            *reserved,
+            *[
+                {**slot, "location_id": int(location.id)}
+                for location, slot in zip(added_locations, new_slots, strict=True)
+            ],
+        ]
+        measured = validate_capacity_layout_slots_for_zone(
+            floor_layout, feature_id=policy.map_feature_id, slots=submitted
+        )
+    except Floor1CandidatePlanningError as error:
+        raise WarehouseAreaActivationError(str(error), status_code=error.status_code) from error
+    if len(new_slots) != len(added_locations):
+        raise WarehouseAreaActivationError("新增地堆货位生成不完整，请刷新后重试", status_code=409)
+
+    feature = next(
+        (item for item in floor_layout.get("features") or []
+         if item.get("feature_kind") == "zone" and str(item.get("id") or "") == str(policy.map_feature_id)),
+        None,
+    )
+    tolerance = max(1.0, float(_percent_round_trip_epsilon((feature or {}).get("points") or [])))
+    new_measured = measured[len(reserved):]
+    for slot in new_measured:
+        size = (float(slot["width_mm"]), float(slot["depth_mm"]))
+        if not ((abs(size[0] - 1200) <= tolerance and abs(size[1] - 1000) <= tolerance)
+                or (abs(size[0] - 1000) <= tolerance and abs(size[1] - 1200) <= tolerance)):
+            raise WarehouseAreaActivationError(
+                "当前区域没有足够的1200×1000毫米实测空栈板位；不能把逻辑点位冒充正式地堆排位",
+                status_code=409,
+            )
+
+    now = beijing_now_naive()
+    for location, slot in zip(added_locations, new_slots, strict=True):
+        layout = location.floor3_layout
+        if layout is None:
+            raise WarehouseAreaActivationError("新增货位缺少地图坐标，请刷新后重试", status_code=409)
+        layout.left_pct = Decimal(str(slot["left_pct"]))
+        layout.top_pct = Decimal(str(slot["top_pct"]))
+        layout.width_pct = Decimal(str(slot["width_pct"]))
+        layout.height_pct = Decimal(str(slot["height_pct"]))
+        layout.layout_kind = "physical_pallet"
+        layout.source_type = "seeded"
+        layout.updated_by = operator_id
+        layout.updated_at = now
+        location.placement_status = "placed"
+
+    all_locations = [*(slot.location for slot in plan_slots), *added_locations]
+    numbered = number_ground_physical_slots(
+        [
+            {**actual, "existing_location_id": int(location.id)}
+            for location, actual in zip(all_locations, measured, strict=True)
+        ],
+        numbering_origin=plan.numbering_origin,
+        row_direction=plan.row_direction,
+        slot_direction=plan.slot_direction,
+        row_start_no=plan.row_start_no,
+        slot_start_no=plan.slot_start_no,
+    )
+    for slot in plan_slots:
+        db.delete(slot)
+    db.flush()
+    fingerprint_slots: list[dict] = []
+    locations_by_id = {int(location.id): location for location in all_locations}
+    for numbered_slot in numbered:
+        location_id = int(numbered_slot["existing_location_id"])
+        location = locations_by_id[location_id]
+        layout = location.floor3_layout
+        assert layout is not None
+        db.add(WarehouseGroundLayoutSlot(
+            plan_id=plan.id, location_id=location_id,
+            route_sequence=int(numbered_slot["route_sequence"]),
+            row_no=int(numbered_slot["row_no"]), slot_no=int(numbered_slot["slot_no"]),
+            x_mm=Decimal(str(numbered_slot["x_mm"])), y_mm=Decimal(str(numbered_slot["y_mm"])),
+            width_mm=int(round(float(numbered_slot["width_mm"]))),
+            depth_mm=int(round(float(numbered_slot["depth_mm"]))),
+        ))
+        fingerprint_slots.append({
+            **numbered_slot, "location_code": location.location_code,
+            "left_pct": float(layout.left_pct), "top_pct": float(layout.top_pct),
+            "width_pct": float(layout.width_pct), "height_pct": float(layout.height_pct),
+            "existing_location_id": location_id,
+            "existing_layout_version": int(layout.version),
+        })
+    plan.target_slot_count = len(all_locations)
+    plan.preview_fingerprint = ground_preview_fingerprint(
+        area_id=area.id, policy_version=policy.version,
+        map_revision=str(policy.published_map_revision or ""),
+        configuration=_ground_plan_configuration(plan), slots=fingerprint_slots,
+    )
+    plan.version += 1
+    plan.updated_by = operator_id
+    plan.updated_at = now
+    db.flush()
+    return {"plan_id": int(plan.id), "plan_version": int(plan.version),
+            "target_slot_count": int(plan.target_slot_count),
+            "added_location_ids": sorted(int(location.id) for location in added_locations)}
+
+
 def _assert_published_ground_plan_location_unlocked(
     db: Session,
     *,
@@ -6226,7 +6361,24 @@ def set_activated_area_location_count(
             and area_policy.storage_layout == "pallet_ground"
             and payload.target_count < len(active_ground_location_ids_before)
         )
-        if published_ground_plan is not None and not allows_published_ground_reduction:
+        allows_published_ground_extension = bool(
+            published_ground_plan is not None
+            and area_policy.status == "published"
+            and area_policy.storage_layout == "pallet_ground"
+            and payload.target_count > len(active_ground_location_ids_before)
+        )
+        is_published_ground_noop = bool(
+            published_ground_plan is not None
+            and area_policy.status == "published"
+            and area_policy.storage_layout == "pallet_ground"
+            and payload.target_count == len(active_ground_location_ids_before)
+        )
+        if (
+            published_ground_plan is not None
+            and not allows_published_ground_reduction
+            and not allows_published_ground_extension
+            and not is_published_ground_noop
+        ):
             _assert_published_ground_plan_area_unlocked(db, area_id=_area.id)
         ground_capacity_before = (
             {
@@ -6238,7 +6390,7 @@ def set_activated_area_location_count(
                 "ground_plan_version": published_ground_plan.version,
                 "ground_plan_slot_count": len(active_ground_location_ids_before),
             }
-            if allows_published_ground_reduction
+            if allows_published_ground_reduction or allows_published_ground_extension
             else None
         )
         if route.management_mode == "floor3_v11":
@@ -6273,6 +6425,7 @@ def set_activated_area_location_count(
             count_changed
             and area_policy.status == "published"
             and area_policy.storage_layout != "rack"
+            and not allows_published_ground_extension
         ):
             reflow_result = _reflow_area_locations(
                 db,
@@ -6318,6 +6471,48 @@ def set_activated_area_location_count(
                     "ground_plan_version": ground_plan_result["plan_version"],
                     "ground_plan_slot_count": ground_plan_result["target_slot_count"],
                     "disabled_location_ids": ground_plan_result["removed_location_ids"],
+                    "inventory_changed": False,
+                    "pallet_binding_changed": False,
+                },
+            )
+        elif allows_published_ground_extension:
+            assert published_ground_plan is not None
+            floor_layout = load_warehouse_twin_floor(route.floor_code)
+            ground_plan_result = _extend_published_ground_plan_empty_slots(
+                db,
+                plan=published_ground_plan,
+                policy=area_policy,
+                area=_area,
+                floor_layout=floor_layout,
+                expected_plan_version=payload.expected_ground_plan_version,
+                active_location_ids_before=active_ground_location_ids_before,
+                added_locations=[*result.created, *result.enabled],
+                operator_id=user.id,
+            )
+            assert ground_capacity_before is not None
+            _area.planned_pallet_capacity = result.active_count
+            _area.confirmed_pallet_capacity = result.active_count
+            _area.capacity_review_status = "confirmed"
+            _area.capacity_eligible = result.active_count > 0
+            _apply_capacity_review(_area, user=user, review_changed=True)
+            _warehouse_capacity_log(
+                db,
+                request=request,
+                user=user,
+                action="warehouse.ground_layout.capacity_extend",
+                entity_type="warehouse_ground_layout_plan",
+                entity_id=published_ground_plan.id,
+                object_ref=f"ground-layout:{route.floor_code}:{result.area_code}",
+                before=ground_capacity_before,
+                after={
+                    "planned_location_count": _area.planned_location_count,
+                    "planned_pallet_capacity": _area.planned_pallet_capacity,
+                    "confirmed_pallet_capacity": _area.confirmed_pallet_capacity,
+                    "capacity_review_status": _area.capacity_review_status,
+                    "capacity_eligible": _area.capacity_eligible,
+                    "ground_plan_version": ground_plan_result["plan_version"],
+                    "ground_plan_slot_count": ground_plan_result["target_slot_count"],
+                    "added_location_ids": ground_plan_result["added_location_ids"],
                     "inventory_changed": False,
                     "pallet_binding_changed": False,
                 },

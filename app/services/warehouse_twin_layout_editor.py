@@ -533,8 +533,16 @@ def rebase_warehouse_twin_advanced_draft_after_one_step(
             ),
             None,
         )
-        if not isinstance(published_feature, dict) or advanced_index is None:
+        if not isinstance(published_feature, dict):
             raise WarehouseTwinLayoutEditError("一次确认后区域身份回读失败")
+        if advanced_index is None:
+            # The one-step flow may have published a newly measured zone from
+            # its isolated draft while an older advanced draft is being kept
+            # for unrelated work.  The published zone is authoritative here;
+            # add that unchanged copy to the preserved draft instead of
+            # rolling the whole formal confirmation back after it succeeded.
+            advanced_features.append(deepcopy(published_feature))
+            advanced_index = len(advanced_features) - 1
         # Keep any advanced geometry/name/subtype edits for later maintenance,
         # but consume the selected zone's storage-policy draft.  The freshly
         # published policy is authoritative for these fields.

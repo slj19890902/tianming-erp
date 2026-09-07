@@ -4002,6 +4002,7 @@ export function WarehouseTwinApp() {
           ? areaLocationManagement?.published_map_revision || planningPublishedRevision || undefined
           : undefined,
         expected_policy_version: areaLocationManagement?.policy_version || undefined,
+        expected_ground_plan_version: areaLocationManagement?.ground_plan_version || undefined,
         expected_layout_versions: selectedAreaLayoutVersions
       });
       await refreshDashboard();

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from starlette.requests import Request
 from sqlalchemy import func, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import selectinload, sessionmaker
 
 from app.api import warehouse as warehouse_api
 from app.core.database import create_sqlite_engine
@@ -4330,9 +4330,9 @@ def test_one_step_confirmation_publishes_a_zone_created_only_in_the_active_draft
                     revision=created.floor_revision,
                     published_revision=published_revision,
                     operation_key="p1-134-confirm-draft-only-zone",
-                    capacity=6,
-                    area_code="X2",
-                    area_name="三楼 X2 成品区",
+                    capacity=4,
+                    area_code="H4",
+                    area_name="左区H4",
                 ),
                 _request(),
                 db,
@@ -4341,10 +4341,10 @@ def test_one_step_confirmation_publishes_a_zone_created_only_in_the_active_draft
 
             assert result["status"] == "published"
             assert result["advanced_draft_preserved"] is False
-            assert result["area"]["area_code"] == "X2"
-            assert result["created_location_count"] == 6
+            assert result["area"]["area_code"] == "H4"
+            assert result["created_location_count"] == 4
             assert db.scalar(select(func.count(WarehouseArea.id))) == 1
-            assert db.scalar(select(func.count(WarehouseLocation.id))) == 6
+            assert db.scalar(select(func.count(WarehouseLocation.id))) == 4
 
         live = json.loads(runtime.read_text(encoding="utf-8"))
         published_zone = next(
@@ -4353,10 +4353,121 @@ def test_one_step_confirmation_publishes_a_zone_created_only_in_the_active_draft
             if item.get("id") == created.value["id"]
         )
         assert published_zone["points"] == created.value["points"]
-        assert published_zone["erp_area_code"] == "X2"
+        assert published_zone["erp_area_code"] == "H4"
         assert not draft.exists()
     finally:
         engine.dispose()
+
+
+def test_published_pallet_ground_area_can_extend_and_reduce_without_racks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A ground-only area owns its published slots; racks are not a prerequisite."""
+    published, _draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(warehouse_api, "list_production_projection_mappings", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        warehouse_api, "load_warehouse_twin_floor",
+        lambda code: json.loads(runtime.read_text(encoding="utf-8"))["floors"][code.upper()],
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-47b-admin"))
+            assert admin is not None
+            confirmed = warehouse_api.confirm_twin_zone_area(
+                "3F", "zone-f1",
+                _confirm_area_payload(
+                    revision=_revision(published), operation_key="ground-only-four",
+                    storage_layout="pallet_ground", capacity=4,
+                ),
+                _request(), db, admin,
+            )
+            assert confirmed["ground_plan_status"] == "published"
+            area = db.scalar(select(WarehouseArea).where(WarehouseArea.area_code == "F1"))
+            plan = db.scalar(select(WarehouseGroundLayoutPlan).options(selectinload(WarehouseGroundLayoutPlan.slots)))
+            assert area is not None and plan is not None
+            before = {
+                row.id: (row.location_code, row.floor3_layout.left_pct, row.floor3_layout.top_pct)
+                for row in db.scalars(select(WarehouseLocation).options(selectinload(WarehouseLocation.floor3_layout))).all()
+            }
+            policy = area.storage_policy
+            assert policy is not None
+            versions = {row.id: row.floor3_layout.version for row in db.scalars(select(WarehouseLocation).options(selectinload(WarehouseLocation.floor3_layout))).all()}
+            extended = warehouse_api.set_activated_area_location_count(
+                "3F", "F1", warehouse_api.Floor3AreaLocationCountPayload(
+                    target_count=6, confirmed=True, expected_map_revision=policy.published_map_revision,
+                    expected_policy_version=policy.version, expected_ground_plan_version=plan.version,
+                    expected_layout_versions=versions,
+                ), _request(), db, admin,
+            )
+            assert extended["active_count"] == 6
+            assert extended["created_count"] == 2
+            db.expire_all()
+            rows = list(db.scalars(select(WarehouseLocation).options(selectinload(WarehouseLocation.floor3_layout)).where(WarehouseLocation.is_active.is_(True))).all())
+            assert len(rows) == 6
+            assert all(row.storage_type == "ground" for row in rows)
+            assert {row.id: (row.location_code, row.floor3_layout.left_pct, row.floor3_layout.top_pct) for row in rows if row.id in before} == before
+            plan = db.scalar(select(WarehouseGroundLayoutPlan).options(selectinload(WarehouseGroundLayoutPlan.slots)))
+            assert plan is not None and len(plan.slots) == 6
+            policy = area.storage_policy
+            assert policy is not None
+            replay = warehouse_api.set_activated_area_location_count(
+                "3F", "F1", warehouse_api.Floor3AreaLocationCountPayload(
+                    target_count=6, confirmed=True, expected_map_revision=policy.published_map_revision,
+                    expected_policy_version=policy.version, expected_ground_plan_version=plan.version,
+                    expected_layout_versions={row.id: row.floor3_layout.version for row in rows},
+                ), _request(), db, admin,
+            )
+            assert replay["created_count"] == replay["enabled_count"] == replay["disabled_count"] == 0
+            db.expire_all()
+            area = db.scalar(select(WarehouseArea).where(WarehouseArea.area_code == "F1"))
+            plan = db.scalar(select(WarehouseGroundLayoutPlan).options(selectinload(WarehouseGroundLayoutPlan.slots)))
+            assert area is not None and area.storage_policy is not None and plan is not None
+            current_rows = list(db.scalars(select(WarehouseLocation).options(selectinload(WarehouseLocation.floor3_layout)).where(WarehouseLocation.is_active.is_(True))).all())
+            reduced = warehouse_api.set_activated_area_location_count(
+                "3F", "F1", warehouse_api.Floor3AreaLocationCountPayload(
+                    target_count=5, confirmed=True,
+                    expected_map_revision=area.storage_policy.published_map_revision,
+                    expected_policy_version=area.storage_policy.version,
+                    expected_ground_plan_version=plan.version,
+                    expected_layout_versions={row.id: row.floor3_layout.version for row in current_rows},
+                ), _request(), db, admin,
+            )
+            assert reduced["active_count"] == 5 and reduced["disabled_count"] == 1
+            db.expire_all()
+            plan = db.scalar(select(WarehouseGroundLayoutPlan).options(selectinload(WarehouseGroundLayoutPlan.slots)))
+            assert plan is not None and len(plan.slots) == 5
+    finally:
+        engine.dispose()
+
+
+def test_one_step_rebase_restores_published_zone_when_preserved_draft_lacks_it(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A stale preserved draft must not undo an already-published new area."""
+    published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    advanced = editor._new_draft_document(published)
+    floor = advanced["floors"]["3F"]
+    floor["features"] = [item for item in floor["features"] if item["id"] != "zone-f1"]
+    floor["racks"].append({"id": "unrelated-rack", "rack_code": "R-DRAFT"})
+    floor["revision"] = _floor_revision(floor)
+    editor._mark_draft_changed(advanced, "3F")
+    editor._write_document(draft, advanced)
+    context = editor.LayoutOneStepDraftContext(
+        draft_snapshot=editor.snapshot_warehouse_twin_layout_draft(draft_path=draft),
+        had_active_draft=True,
+        published_floor_revision=_revision(published),
+        published_feature_version=1,
+    )
+    assert editor.rebase_warehouse_twin_advanced_draft_after_one_step(
+        context, "3F", "zone-f1", draft_path=draft
+    ) is True
+    restored = json.loads(draft.read_text(encoding="utf-8"))
+    assert any(item["id"] == "zone-f1" for item in restored["floors"]["3F"]["features"])
+    assert restored["floors"]["3F"]["racks"][0]["id"] == "unrelated-rack"
 
 
 def test_one_step_confirmation_preserves_same_floor_rack_draft(

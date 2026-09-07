@@ -250,13 +250,13 @@ def test_logout_reset_clears_all_production_card_open_state() -> None:
         assert f"this.{field}" in reset_body
 
 
-def test_card_page_is_a4_half_page_print_and_keeps_writes_in_explicit_label_refresh() -> None:
+def test_card_page_is_readable_a4_print_and_keeps_writes_in_explicit_label_refresh() -> None:
     assert "生产任务单" in CARD
     assert "@page { size:A4 portrait" in CARD
     assert "待来料计划版" in CARD
     assert "本次实收" in CARD
     assert "本批最多生产" in CARD
-    assert "每个生产任务固定半张 A4" in CARD
+    assert "每个生产任务另起页" in CARD
     assert "/api/incoming/receipt-items/${encodeURIComponent(receiptItemId)}/production-card" in CARD
     assert 'credentials:"include"' in CARD
     assert "window.opener" not in CARD

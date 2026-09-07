@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
+import re
 import subprocess
 from pathlib import Path
 
@@ -11,25 +11,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PRINT_PAGE = ROOT / "static" / "requisition-production-print.html"
-
-
-def _headless_browser() -> Path | None:
-    for command in ("msedge", "chrome", "chromium"):
-        resolved = shutil.which(command)
-        if resolved:
-            return Path(resolved)
-    candidates = []
-    for variable in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"):
-        root = os.environ.get(variable)
-        if not root:
-            continue
-        candidates.extend(
-            (
-                Path(root) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
-                Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe",
-            )
-        )
-    return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 
 def _normal_complex_package() -> dict:
@@ -123,104 +104,102 @@ def _normal_complex_package() -> dict:
     }
 
 
-def _render_package(tmp_path: Path, package: dict) -> str:
-    browser = _headless_browser()
-    if browser is None:
-        pytest.skip("当前环境未找到 Edge/Chrome，跳过实际半张 A4 DOM 验收")
-
+def _render_package(tmp_path: Path, package: dict) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("当前环境未找到 Node.js")
     source = PRINT_PAGE.read_text(encoding="utf-8")
-    package_json = json.dumps(package, ensure_ascii=False)
-    mock = (
-        "<script>window.fetch=async()=>({ok:true,status:200,json:async()=>("
-        + package_json
-        + ")});</script>\n  <script>\n    (() => {"
+    inline_script = source.split("<script>", 1)[1].split("</script>", 1)[0]
+    harness = """
+import vm from 'node:vm';
+const nodes = new Map();
+const node = id => {
+  if (!nodes.has(id)) nodes.set(id, {
+    innerHTML:'', textContent:'', disabled:false, hidden:false,
+    addEventListener(){}, querySelectorAll(){return [];},
+  });
+  return nodes.get(id);
+};
+const document = {getElementById:node, body:{classList:{toggle(){}}}};
+const window = {
+  location:new URL('http://fixture.invalid/requisition-production-print.html?id=1'),
+  history:{replaceState(){}},
+};
+vm.runInNewContext(INLINE_SCRIPT, {
+  document, window, URL, URLSearchParams, AbortController, setTimeout,
+  fetch:async()=>({ok:true,status:200,json:async()=>(PACKAGE)}),
+});
+await new Promise(setImmediate);
+process.stdout.write(JSON.stringify({
+  html:node('pages').innerHTML,
+  print_disabled:node('printButton').disabled,
+  toolbar:node('toolbarNote').textContent,
+  message:node('message').textContent,
+}));
+""".replace("INLINE_SCRIPT", json.dumps(inline_script, ensure_ascii=False)).replace(
+        "PACKAGE", json.dumps(package, ensure_ascii=False)
     )
-    source = source.replace("  <script>\n    (() => {", mock, 1)
-    probe = """
-    <script>
-      (() => {
-        const deadline = Date.now() + 5000;
-        const inspect = () => {
-          const card = document.querySelector('.task-card:not(.blank)');
-          if (!card && Date.now() < deadline) { setTimeout(inspect, 50); return; }
-          if (!card) { document.body.dataset.probeComplete = 'missing'; return; }
-          document.body.dataset.probeComplete = 'true';
-          document.body.dataset.cardOverflow = String(card.scrollHeight > card.clientHeight + 1);
-          document.body.dataset.printDisabled = String(document.getElementById('printButton').disabled);
-          document.body.dataset.cardHeight = String(Math.round(card.getBoundingClientRect().height));
-          document.body.dataset.cardScrollHeight = String(card.scrollHeight);
-          document.body.dataset.message = document.getElementById('message').textContent;
-        };
-        inspect();
-      })();
-    </script>
-    """
-    source = source.replace("</body>", probe + "</body>")
-    fixture = tmp_path / "p0-34-normal-complex-task.html"
-    fixture.write_text(source, encoding="utf-8")
-
+    script = tmp_path / "print-render.mjs"
+    script.write_text(harness, encoding="utf-8")
     result = subprocess.run(
-        [
-            str(browser),
-            "--headless=new",
-            "--disable-gpu",
-            "--disable-extensions",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--window-size=1200,1400",
-            "--virtual-time-budget=6000",
-            f"--user-data-dir={tmp_path / 'profile'}",
-            "--dump-dom",
-            fixture.resolve().as_uri() + "?id=1",
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=45,
-        check=False,
+        [node, str(script)], capture_output=True, text=True,
+        encoding="utf-8", timeout=15, check=False,
     )
-    assert result.returncode == 0, result.stderr[-1000:]
-    return result.stdout
+    assert result.returncode == 0, result.stderr[-1500:]
+    return json.loads(result.stdout)
 
 
-def test_normal_three_color_receipt_task_fits_fixed_half_a4(tmp_path: Path) -> None:
+def test_three_color_receipt_keeps_all_plate_facts(tmp_path: Path) -> None:
     output = _render_package(tmp_path, _normal_complex_package())
-    assert 'data-probe-complete="true"' in output
-    assert 'data-card-overflow="false"' in output
-    assert 'data-print-disabled="false"' in output
+    assert output["print_disabled"] is False
+    assert "长内容自动续页" in output["toolbar"]
+    assert all(value in output["html"] for value in (
+        "PL-001", "PL-002", "PL-003", "当前位置", "机器设定",
+    ))
 
 
-def test_extreme_required_text_still_fails_closed_and_names_source(tmp_path: Path) -> None:
+def test_long_names_notes_and_every_process_component_remain_on_paper(tmp_path: Path) -> None:
     package = _normal_complex_package()
-    package["cards"][0]["production_steps"] = [
-        "极端超长工艺说明：" + "逐箱核对印刷方向、粘口、标签和捆扎批次；" * 80
+    card = package["cards"][0]
+    name = "超长产品名称" * 80 + "产品名称末尾"
+    notes = "逐箱核对印刷方向、粘口、标签和捆扎批次；" * 80 + "工艺末尾"
+    card["product_name"] = name
+    card["production_steps"] = [notes]
+    original = card["components"][0]
+    card["components"] = [
+        dict(original, component_label=f"组件{n}", mold_tool_id=n,
+             mold_display_name=f"模具{n}") for n in range(1, 5)
+    ]
+    reminder = card["fulfillment_reminders"][0]
+    card["fulfillment_reminders"] = [
+        dict(reminder, content=f"回单交代{n}") for n in range(1, 4)
     ]
     output = _render_package(tmp_path, package)
-    assert 'data-probe-complete="true"' in output
-    assert 'data-card-overflow="true"' in output
-    assert 'data-print-disabled="true"' in output
-    assert "半张 A4 主要占用：材料、注意事项与回单交代" in output
+    assert output["print_disabled"] is False
+    assert name in output["html"]
+    assert notes in output["html"]
+    assert all(f"组件{n}" in output["html"] for n in range(1, 5))
+    assert all(f"模具{n}" in output["html"] for n in range(1, 5))
+    assert all(f"回单交代{n}" in output["html"] for n in range(1, 4))
+    assert "ultra-compact" not in output["html"]
+    assert "…扫码查看" not in output["html"]
 
 
-def test_capacity_failure_names_the_largest_business_section() -> None:
+def test_print_styles_keep_fourteen_point_floor_and_allow_fragmentation() -> None:
     source = PRINT_PAGE.read_text(encoding="utf-8")
-    assert "function capacityOverflowSource(card)" in source
-    assert "data-capacity-label" in source
-    assert "主要占用" in source
+    style = source.split("<style>", 1)[1].split("</style>", 1)[0]
+    sizes = [float(value) for value in re.findall(r"font-size:(\d+(?:\.\d+)?)pt", style)]
+    assert sizes and min(sizes) >= 14
+    assert ".task-card small { font-size:14pt; }" in style
+    assert "overflow:hidden" not in style
+    assert "height:297mm;" not in style.replace("min-height:297mm;", "")
+    assert "break-inside:auto" in style
+    assert "break-before:page" in style
+    assert "grid-template-rows:140.5mm" not in style
+    assert "const initialOverflow" not in source
 
 
-def test_capacity_layout_preserves_required_facts_without_tiny_fallback() -> None:
-    source = PRINT_PAGE.read_text(encoding="utf-8")
-    for marker in (
-        "printing-plates-grid",
-        "printing-plate-card",
-        "supporting-grid",
-        "process-detail-stack",
-        "客户回单交代（仅内部）",
-        "特别注意事项",
-        "机器设定",
-        "当前位置",
-    ):
-        assert marker in source
-    assert "font-size:5.5pt" not in source
+def test_business_print_block_is_preserved(tmp_path: Path) -> None:
+    package = _normal_complex_package()
+    package["printable"] = False
+    assert _render_package(tmp_path, package)["print_disabled"] is True

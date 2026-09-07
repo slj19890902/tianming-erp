@@ -872,25 +872,22 @@ def test_print_page_and_erp_entry_use_one_layout_for_plan_and_receipt_phases():
     assert "receiptMode" in print_html
     assert "/api/incoming/receipt-items/${encodeURIComponent(receiptItemId)}/production-card" in print_html
     assert "待来料计划版" in print_html
-    assert "每个生产任务固定半张 A4" in print_html
+    assert "每个生产任务另起页" in print_html
     assert "@page { size:A4 portrait;" in print_html
-    assert "grid-template-rows:140.5mm 140.5mm" in print_html
+    assert "break-before:page" in print_html
     assert 'class="task-card half-card blank"' in print_html
     assert 'class="page batch-page"' in print_html
     assert "single-page" not in print_html
     assert "cardNeedsFullPage" not in print_html
-    assert "每页上下两款" in print_html
+    assert "长内容自动续页" in print_html
     assert "A1 型纸箱生产任务单" in print_html
     assert "模切内盒生产任务单" in print_html
     assert "衬板生产任务单" in print_html
     assert (
-        ".production-key-value,.detail-row.production-key-fact .value { font-size:12pt;"
+        ".production-key-value,.detail-row.production-key-fact .value { font-size:14pt;"
         in print_html
     )
-    assert (
-        ".task-card.printing-heavy .production-key-value,\n    .task-card.printing-heavy .detail-row.production-key-fact .value { font-size:9.5pt;"
-        in print_html
-    )
+    assert ".task-card.printing-heavy" not in print_html.split("</style>", 1)[0]
     assert 'detailRow("压线尺寸", fit(crease), "production-key-fact")' in print_html
     assert (
         'detailRow("结合方式", fit(card.joining_method || "无需结合"), "production-key-fact")'
@@ -909,7 +906,7 @@ def test_print_page_and_erp_entry_use_one_layout_for_plan_and_receipt_phases():
     assert "请核对后再打印" in print_html
     assert "card.scrollHeight > card.clientHeight + 1" in print_html
     assert "任务内容超过页面容量，已停止打印" not in print_html
-    assert "function renderPages(packageData, ultraKeys = new Set())" in print_html
+    assert "function renderPages(packageData)" in print_html
     assert 'credentials:"include"' in print_html
     assert 'cache:"no-store"' in print_html
     assert "customer-safe" in print_html

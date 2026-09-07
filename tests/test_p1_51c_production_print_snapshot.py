@@ -868,14 +868,14 @@ expect(printingHtml({{components:[{{printing_situation:'无印刷',printing_plat
     assert ".customer-safe.internal-only{display:none!important;}" in compact_css
     assert "white-space:normal" in TASK_PRINT
     assert "overflow-wrap:anywhere" in TASK_PRINT
-    assert ".task-card.printing-heavy" in TASK_PRINT
+    assert "font-size:14pt" in TASK_PRINT
     assert "element.scrollHeight > element.clientHeight + 1" in TASK_PRINT
     assert "element.scrollWidth > element.clientWidth + 1" in TASK_PRINT
     assert "toolbarNote.textContent = receiptBatchMode" in TASK_PRINT
     assert ": batchMode" in TASK_PRINT
     assert ": receiptMode" in TASK_PRINT
     assert "fullPageCount" not in TASK_PRINT
-    assert "每个生产任务固定半张 A4" in TASK_PRINT
+    assert "每个生产任务另起页" in TASK_PRINT
 
     assert "task.printing_colors_frozen === false" in mobile
     assert 'colors.join("＋")' in mobile

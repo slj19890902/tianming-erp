@@ -58,6 +58,7 @@ from app.services.supplier_monthly_settlement import (
 from app.services.supplier_receipt_price_facts import (
     SupplierReceiptPriceFactError,
     confirm_receipt_document_price,
+    list_receipt_price_issues,
     preview_historical_price_adoptions,
     preview_receipt_document_price,
     receipt_document_price_context,
@@ -478,6 +479,16 @@ def preview_supplier_receipt_price_adoptions(
         start_utc=start_utc,
         end_utc=end_utc,
     )
+
+
+@router.get("/supplier-settlements/receipt-price-issues")
+def get_supplier_receipt_price_issues(
+    after_id: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
+    db: Session = Depends(get_db),
+    _user: User = Depends(company_read),
+) -> dict[str, Any]:
+    return list_receipt_price_issues(db, after_id=after_id, limit=limit)
 
 
 @router.get("/supplier-settlements/receipt-price-confirmations/{receipt_item_id}")

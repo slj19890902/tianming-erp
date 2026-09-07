@@ -5074,6 +5074,7 @@
                     <div class="toolbar-group">
                       <div class="field" style="width:150px"><label>月结月份</label><input class="input" type="month" v-model="supplierSettlementMonth" @change="loadSupplierSettlements" /></div>
                       <button class="btn" :disabled="supplierSettlementState.loading" @click="loadSupplierSettlements">刷新</button>
+                      <button class="btn" :disabled="(supplierReceiptPriceIssuesState.loading && supplierReceiptPriceIssuesState.actorId===Number(user?.id) && supplierReceiptPriceIssuesState.authGeneration===authGeneration) || supplierReceiptPriceForm?.saving || !!supplierSettlementState.action" @click="loadSupplierReceiptPriceIssues(false)">补查全部纸板缺价</button>
                       <button v-if="canFinance" class="btn primary" :disabled="!!supplierSettlementState.action" @click="generateDueSupplierSettlements(false)">{{ supplierSettlementState.action==='generate-due' ? '补生成中…' : '补生成到期草稿' }}</button>
                       <button v-if="canFinance" class="btn" title="兼容原“生成 / 刷新草稿”操作" :disabled="!!supplierSettlementState.action" @click="generateSupplierSettlements(false)">{{ supplierSettlementState.action==='generate' ? '归集中…' : '生成所选月份草稿' }}</button>
                       <button v-if="['admin','boss'].includes(user?.role) && supplierSettlementIssues.some(item=>item.code==='PAPERBOARD_FROZEN_PRICE_MISSING')" class="btn" :disabled="supplierPriceAdoption.loading || !!supplierSettlementState.action" @click="previewSupplierPriceAdoptions">{{ supplierPriceAdoption.loading ? '检查中…' : '检查历史缺价' }}</button>
@@ -5082,6 +5083,19 @@
                   <div class="muted">列表中的结算周期以各供应商对账日为准；顶部日期仅为所选月份的默认 20 日兼容范围。未冻结最终价格或供应商主档异常的实收不会猜价，会列为待处理。</div>
                   <div v-if="supplierSettlementState.error" class="notice warning" style="margin-top:8px">{{ supplierSettlementState.error }}</div>
                   <div v-for="issue in supplierSettlementIssues" :key="`${issue.source_key}-${issue.code}`" class="notice warning" style="margin-top:8px"><strong>{{ issue.supplier_name || '供应商待核对' }} · {{ issue.receipt_number || issue.source_key }}</strong><span v-if="issue.purchase_document_number"> · {{ issue.purchase_document_number }}</span>：{{ issue.message }}<div v-if="issue.missing_fields?.length" class="muted">缺少：{{ issue.missing_fields.join('、') }}</div><div v-if="issue.recommended_action" class="muted">处理：{{ issue.recommended_action }}</div><button v-if="canFinance && issue.code==='PAPERBOARD_FROZEN_PRICE_MISSING'" class="btn small" :disabled="supplierReceiptPriceForm?.saving || !!supplierSettlementState.action" @click="openSupplierReceiptPrice(issue)">按原始凭据核价</button></div>
+                  <div v-if="supplierReceiptPriceIssuesState.actorId===Number(user?.id) && supplierReceiptPriceIssuesState.authGeneration===authGeneration && (supplierReceiptPriceIssuesState.loaded || supplierReceiptPriceIssuesState.loading || supplierReceiptPriceIssuesState.error)" style="margin-top:10px" aria-live="polite">
+                    <strong>全部月份 · 纸板缺价补查</strong>
+                    <div class="muted">覆盖有效实收，包含未到结算日及以前未纳入月结的记录。已确认周期只列问题；凭据符合人民币、含13%税、含运口径的行才能核价。</div>
+                    <div v-if="supplierReceiptPriceIssuesState.loading" class="muted">正在补查…</div>
+                    <div v-if="supplierReceiptPriceIssuesState.error" class="notice warning">{{ supplierReceiptPriceIssuesState.error }}</div>
+                    <div v-for="issue in supplierReceiptPriceIssuesState.items" :key="issue.source_key" class="notice warning" style="margin-top:8px">
+                      <strong>{{ issue.supplier_name || '供应商待核对' }} · {{ issue.receipt_number }}</strong> · {{ issue.receipt_date }}<span v-if="issue.purchase_document_number"> · {{ issue.purchase_document_number }}</span>：{{ issue.message }}
+                      <div class="muted">实收 {{ issue.received_quantity }} {{ issue.quantity_unit }}<span v-if="issue.recommended_action"> · {{ issue.recommended_action }}</span></div>
+                      <button v-if="canFinance && issue.can_confirm && issue.code==='PAPERBOARD_FROZEN_PRICE_MISSING'" class="btn small" :disabled="supplierReceiptPriceIssuesState.loading || supplierReceiptPriceForm?.saving || !!supplierSettlementState.action" @click="openSupplierReceiptPrice(issue)">按原始凭据核价</button>
+                    </div>
+                    <div v-if="supplierReceiptPriceIssuesState.loaded" class="muted">已载入 {{ supplierReceiptPriceIssuesState.items.length }} 条缺价问题。{{ supplierReceiptPriceIssuesState.hasMore ? '还有记录待检查。' : '本次补查已到末页。' }}</div>
+                    <button v-if="supplierReceiptPriceIssuesState.hasMore" class="btn small" :disabled="supplierReceiptPriceIssuesState.loading || supplierReceiptPriceForm?.saving || !!supplierSettlementState.action" @click="loadSupplierReceiptPriceIssues(true)">继续补查</button>
+                  </div>
                   <details v-if="supplierPriceAdoption.previewMonth===supplierSettlementMonth" class="panel" style="margin-top:8px">
                     <summary style="cursor:pointer"><strong>历史缺价 dry-run 清单</strong> · 可唯一匹配 {{ supplierPriceAdoption.eligible.length }} 条 · 待人工核对 {{ supplierPriceAdoption.rejected.length }} 条</summary>
                     <div class="muted" style="margin:8px 0">本页面只读，不会采用或修改历史价格。正式采用必须由工厂 Codex 导出并核对逐行 CSV/JSON 计划，在备份验证、数据库 SHA、版本、Alembic head 和逐行 CAS 全部一致后，用受控脚本显式 --apply，并另写执行回执。</div>
@@ -10000,6 +10014,7 @@
             supplierSettlementState:{loading:false,action:"",statementId:null,error:"",periodStart:"",periodEnd:"",generateKey:"",generateDueKey:"",autoGeneratedMonth:"",uploadStatementId:null,uploadInvoiceId:null},
             supplierPriceAdoption:{loading:false,previewMonth:"",eligible:[],rejected:[],adoptionReason:"",planHash:"",error:""},
             supplierReceiptPriceForm:null,
+            supplierReceiptPriceIssuesState:{loading:false,loaded:false,error:"",items:[],hasMore:false,nextAfterId:null,actorId:null,authGeneration:null},
             supplierSettlementAttempts:{},
             simpleFinanceMeta:{primary_groups:[],rule_types:[],centers:[],customers:[],supplier_statements:[],note:""},
             simpleFinanceSummary:{primary_groups:{material:{},personnel:{},freight:{},fixed_operating:{}},active_employee_count:0,held_acceptance_count:0,held_acceptance_amount:"0.00",note:""},
@@ -22461,11 +22476,35 @@
               }
             }
           },
+          async loadSupplierReceiptPriceIssues(append = false) {
+            if (!this.canViewFinanceCosts || this.supplierSettlementState.action || this.supplierReceiptPriceForm?.saving) return false;
+            const previous = this.supplierReceiptPriceIssuesState;
+            const actorId = Number(this.user?.id), authGeneration = this.authGeneration;
+            const sameSession = previous.actorId === actorId && previous.authGeneration === authGeneration;
+            if (sameSession && previous.loading) return false;
+            if (append && (!sameSession || !previous.loaded || !previous.hasMore)) return false;
+            this.supplierReceiptPriceIssuesState = {...previous,actorId,authGeneration,loading:true,error:"",items:sameSession ? previous.items : [],loaded:sameSession && previous.loaded};
+            const state = this.supplierReceiptPriceIssuesState;
+            const isCurrent = () => this.supplierReceiptPriceIssuesState === state && Number(this.user?.id) === actorId && this.authGeneration === authGeneration;
+            try {
+              const {data} = await axios.get('/api/finance/supplier-settlements/receipt-price-issues',{params:{after_id:append ? previous.nextAfterId : 0,limit:100}});
+              if (!isCurrent()) return false;
+              state.items = [...new Map([...(append ? previous.items : []),...(data.issues || [])].map(issue=>[issue.source_key,issue])).values()];
+              state.loaded = true;
+              state.hasMore = !!data.has_more;
+              state.nextAfterId = data.next_after_id;
+              return true;
+            } catch(error) {
+              if (isCurrent()) state.error = this.errorMessage(error);
+              return false;
+            } finally { if (this.supplierReceiptPriceIssuesState === state) state.loading = false; }
+          },
           supplierReceiptPriceIsCurrent(form) {
             return this.supplierReceiptPriceForm === form && form.actorId === Number(this.user?.id) && form.authGeneration === this.authGeneration;
           },
           async openSupplierReceiptPrice(issue) {
-            if (!this.canFinance || this.supplierSettlementState.action || issue?.code !== 'PAPERBOARD_FROZEN_PRICE_MISSING') return false;
+            const scan = this.supplierReceiptPriceIssuesState;
+            if (!this.canFinance || this.supplierSettlementState.action || (scan?.loading && scan.actorId === Number(this.user?.id) && scan.authGeneration === this.authGeneration) || issue?.can_confirm === false || issue?.code !== 'PAPERBOARD_FROZEN_PRICE_MISSING') return false;
             const opener = this.rememberModalOpener?.();
             const match = /^paperboard:([1-9]\d*)$/.exec(issue.source_key || '');
             if (!match) return false;
@@ -22514,11 +22553,13 @@
               await axios.post(`${url}/confirm`,form.confirmPayload);
               form.committed = true;
               if (!this.supplierReceiptPriceIsCurrent(form)) return true;
+              const scan = this.supplierReceiptPriceIssuesState;
+              if (scan?.actorId === form.actorId && scan.authGeneration === form.authGeneration) scan.items = scan.items.filter(issue=>issue.source_key !== `paperboard:${form.receiptId}`);
               if (this.modal?.type === 'supplierReceiptPrice') { this.modal = null; this.restoreModalOpenerFocus?.(); }
               let refreshed = false;
               try { refreshed = await this.loadSupplierSettlements(false); } catch (_) { /* The price is already committed. */ }
               if (!this.supplierReceiptPriceIsCurrent(form)) return true;
-              this.showToast(refreshed ? '核价已保存。生成所选月份草稿后纳入月结。' : '核价已保存，月结列表尚未刷新；请刷新核对，不要重复核价。', !refreshed);
+              this.showToast(refreshed ? '核价已保存。请按实收日期选择所属结算月份，再生成草稿纳入月结。' : '核价已保存，月结列表尚未刷新；请刷新核对，不要重复核价。', !refreshed);
               return true;
             } catch(error) {
               if (!this.supplierReceiptPriceIsCurrent(form)) return false;

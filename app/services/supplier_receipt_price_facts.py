@@ -29,6 +29,7 @@ from app.models.order import OrderItem
 from app.models.product import Product
 from app.models.purchase_receipt import (
     IncomingReceiptPurposeAllocation,
+    IncomingReceiptPurposeReversal,
     PurchaseReceiptFact,
 )
 from app.models.requisition import Requisition, RequisitionItem
@@ -633,6 +634,67 @@ def _document_price_context(
 
 def receipt_document_price_context(db: Session, *, receipt_item_id: int) -> dict[str, Any]:
     return _document_price_context(db, receipt_item_id)[4]
+
+
+def list_receipt_price_issues(
+    db: Session, *, after_id: int = 0, limit: int = 100
+) -> dict[str, Any]:
+    """Page missing prices across all receipt dates without generating statements."""
+    native_price = select(PurchaseReceiptFact.id).join(
+        IncomingReceiptPurposeAllocation,
+        IncomingReceiptPurposeAllocation.purchase_receipt_fact_id == PurchaseReceiptFact.id,
+    ).where(IncomingReceiptPurposeAllocation.incoming_receipt_item_id == IncomingReceiptItem.id)
+    frozen_price = select(SupplierReceiptSettlementPriceFact.id).where(
+        SupplierReceiptSettlementPriceFact.incoming_receipt_item_id == IncomingReceiptItem.id
+    )
+    reversed_purpose = select(IncomingReceiptPurposeReversal.id).where(
+        IncomingReceiptPurposeReversal.incoming_receipt_item_id == IncomingReceiptItem.id
+    )
+    rows = db.execute(
+        select(IncomingReceiptItem, IncomingReceipt)
+        .join(IncomingReceipt, IncomingReceipt.id == IncomingReceiptItem.receipt_id)
+        .where(
+            IncomingReceipt.status == "posted", IncomingReceiptItem.status == "posted",
+            IncomingReceiptItem.id > after_id,
+            ~native_price.exists(), ~frozen_price.exists(), ~reversed_purpose.exists(),
+        )
+        .order_by(IncomingReceiptItem.id)
+        .limit(limit + 1)
+    ).all()
+    page, has_more = rows[:limit], len(rows) > limit
+    issues: list[dict[str, Any]] = []
+    for item, receipt in page:
+        issue: dict[str, Any] = {
+            "source_type": "paperboard", "source_key": f"paperboard:{item.id}",
+            "incoming_receipt_item_id": int(item.id),
+            "receipt_number": receipt.receipt_number,
+            "receipt_date": utc_naive_to_beijing_date(receipt.received_at),
+            "received_quantity": item.received_quantity, "quantity_unit": "张",
+            "missing_fields": ["冻结结算价格"], "can_confirm": False,
+        }
+        try:
+            source = _receipt_source_context(db, item)
+            issue.update(supplier_name=source.supplier_name,
+                         purchase_document_number=source.purchase_document_number)
+            context = receipt_document_price_context(db, receipt_item_id=int(item.id))
+        except SupplierReceiptPriceFactError as error:
+            if error.code == "SUPPLIER_RECEIPT_NOT_PAPERBOARD":
+                continue
+            issue.update(code=error.code, message=error.message,
+                         recommended_action="先按上述原因核对来源或既有月结，再补查；不能直接确认价格")
+        else:
+            issue.update(
+                code="PAPERBOARD_FROZEN_PRICE_MISSING", can_confirm=True,
+                supplier_name=context["supplier_name"], source_hash=context["source_hash"],
+                message="纸板实收缺少冻结结算价格，尚不能计入月结",
+                recommended_action="核对原采购单或供应商账单逐行凭据；符合人民币、含13%税、含运口径后核价",
+            )
+        issues.append(issue)
+    return {
+        "scope": "all_posted_missing_prices", "issues": issues,
+        "scanned_count": len(page), "has_more": has_more,
+        "next_after_id": int(page[-1][0].id) if has_more else None,
+    }
 
 
 def _document_price_plan(

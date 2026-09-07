@@ -1,6 +1,6 @@
 """Regression cases from the 2026-09-07 review, using isolated API fixtures."""
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -36,6 +36,79 @@ def _reviewed_statement(client, factory):
     })
     assert response.status_code == 200, response.text
     return receipt_id, response.json()
+
+
+@pytest.mark.parametrize('action', ['regenerate', 'refresh'])
+def test_source_scan_issue_does_not_silently_replace_statement_with_partial_lines(
+    requisition_app, monkeypatch, action,
+):
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.supplier_settlement import SupplierMonthlyStatement, SupplierMonthlyStatementLine
+    from app.services import supplier_monthly_settlement as monthly
+    from tests.test_p1_81_receipt_purpose_flow import (
+        _seed_material_and_staging, _create_frozen_sources, _freeze_receipt_fact, _receive,
+    )
+
+    app, factory = requisition_app
+    _use_p181_published_map_identity(monkeypatch)
+    _include_supplier_router(app)
+    with TestClient(app) as client:
+        _login(client, 'admin')
+        _seed_material_and_staging(factory)
+        sources = _create_frozen_sources(client, factory, order_quantity=10,
+            purchase_total=10, order_purpose=10, stock_purpose=0, composite=True)
+        assert len(sources) == 2
+        receipt_ids = []
+        for i, source in enumerate(sources):
+            price = _freeze_receipt_fact(client, source, idempotency_key=f'review-partial-price-{i}')
+            assert price.status_code == 200, price.text
+            receipt = _receive(client, source, price.json(), quantity=10,
+                idempotency_key=f'review-partial-receipt-{i}')
+            assert receipt.status_code == 200, receipt.text
+            receipt_ids.append(receipt.json()['receipt_item_id'])
+        with factory() as db:
+            for key in receipt_ids:
+                item = db.get(IncomingReceiptItem, key)
+                db.get(IncomingReceipt, item.receipt_id).received_at = datetime(2026, 8, 15, 3)
+            db.commit()
+        response = client.post('/api/finance/supplier-settlements/generate', json={
+            'settlement_month': '2026-08', 'idempotency_key': 'review-partial-generate'})
+        assert response.status_code == 200, response.text
+        statement = response.json()['items'][0]
+        with factory() as db:
+            lines_before = [(line.id, line.source_key, line.active_guard) for line in db.scalars(
+                select(SupplierMonthlyStatementLine).where(SupplierMonthlyStatementLine.statement_id == statement['id']))]
+            assert len(lines_before) == 2
+        original_scan = monthly._scan_candidates_for_bounds
+        def scan_with_missing_source(db, **kwargs):
+            candidates, issues = original_scan(db, **kwargs)
+            # Inject one scanner diagnostic without damaging frozen business
+            # facts. Both receipt/API transactions and replacement are real.
+            key = f'paperboard:{receipt_ids[0]}'
+            return [item for item in candidates if item.source_key != key], [*issues,
+                monthly._issue(source_type='paperboard', source_key=key, receipt_number='TEST',
+                    code='PAPERBOARD_FROZEN_PRICE_MISSING', message='测试来源缺少冻结结算价格')]
+        monkeypatch.setattr(monthly, '_scan_candidates_for_bounds', scan_with_missing_source)
+        if action == 'regenerate':
+            result = client.post(f"/api/finance/supplier-settlements/{statement['id']}/regenerate", json={
+                'expected_version': statement['version'], 'idempotency_key': 'review-partial-regenerate'})
+            assert result.status_code == 409, result.text
+            assert result.json()['detail']['code'] == 'SUPPLIER_SETTLEMENT_SOURCE_ISSUES'
+        else:
+            result = client.post('/api/finance/supplier-settlements/generate', json={
+                'settlement_month': '2026-08', 'idempotency_key': 'review-partial-refresh'})
+            assert result.status_code == 200, result.text
+            assert result.json()['changed_statement_count'] == 0
+            # Refresh already preserves scanner warnings and requires explicit
+            # regeneration. Keep that existing behavior alongside this fix.
+            assert any(issue['code'] == 'PAPERBOARD_FROZEN_PRICE_MISSING' for issue in result.json()['issues'])
+        with factory() as db:
+            saved = db.get(SupplierMonthlyStatement, statement['id'])
+            assert (saved.version, saved.status, saved.erp_amount) == (
+                statement['version'], statement['status'], Decimal(statement['erp_amount']))
+            assert [(line.id, line.source_key, line.active_guard) for line in db.scalars(
+                select(SupplierMonthlyStatementLine).where(SupplierMonthlyStatementLine.statement_id == saved.id))] == lines_before
+            assert db.scalar(select(func.count(SupplierMonthlyStatement.id))) == 1
 
 
 @pytest.mark.parametrize('action', ['confirm', 'regenerate', 'refresh'])

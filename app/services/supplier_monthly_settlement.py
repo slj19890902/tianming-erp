@@ -1254,9 +1254,18 @@ def regenerate_statement(
         settlement_day=int(supplier.settlement_day or 20),
     )
     start_utc, end_utc = _utc_period_bounds(period_start, period_end)
-    candidates, _issues = _scan_candidates_for_bounds(
+    candidates, issues = _scan_candidates_for_bounds(
         db, start_utc=start_utc, end_utc=end_utc
     )
+    old_source_keys = {line.source_key for line in _active_lines(db, row.id)}
+    source_issues = [issue for issue in issues if issue.get("source_key") in old_source_keys]
+    if source_issues:
+        raise SupplierSettlementError(
+            "SUPPLIER_SETTLEMENT_SOURCE_ISSUES",
+            "原草稿的实收来源核对失败，未重生成："
+            + "；".join(str(issue["message"]) for issue in source_issues[:3]),
+            409,
+        )
     selected = [
         item
         for item in candidates
@@ -1486,7 +1495,9 @@ def statement_response(db: Session, row: SupplierMonthlyStatement) -> dict[str, 
     available_credits = list(
         db.scalars(
             select(SupplierCreditLot)
+            .join(SupplierMonthlyStatement, SupplierMonthlyStatement.id == SupplierCreditLot.source_statement_id)
             .where(
+                SupplierMonthlyStatement.currency == row.currency,
                 SupplierCreditLot.supplier_id == row.supplier_id,
                 SupplierCreditLot.status.in_({"available", "partial"}),
                 SupplierCreditLot.available_amount > 0,
@@ -2346,7 +2357,9 @@ def payment_options(
     credits = list(
         db.scalars(
             select(SupplierCreditLot)
+            .join(SupplierMonthlyStatement, SupplierMonthlyStatement.id == SupplierCreditLot.source_statement_id)
             .where(
+                SupplierMonthlyStatement.currency == row.currency,
                 SupplierCreditLot.supplier_id == row.supplier_id,
                 SupplierCreditLot.status.in_({"available", "partial"}),
                 SupplierCreditLot.available_amount > 0,
@@ -2448,6 +2461,13 @@ def post_payment_batch(
             raise SupplierSettlementError(
                 "SUPPLIER_CREDIT_STALE",
                 "供应商余额已变化或不属于当前供应商，请刷新后重试",
+            )
+        source_statement = db.get(SupplierMonthlyStatement, credit.source_statement_id)
+        if source_statement is None or source_statement.currency != row.currency:
+            raise SupplierSettlementError(
+                "SUPPLIER_CREDIT_CURRENCY_MISMATCH",
+                "供应商余额来源币种与本期月结不一致或来源缺失，未抵扣",
+                422,
             )
         selected_credits.append((credit, amount, expected_credit_version))
         credit_total = _money(credit_total + amount)

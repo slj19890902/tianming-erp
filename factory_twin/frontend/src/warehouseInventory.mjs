@@ -2,6 +2,16 @@ function normalized(value) {
   return String(value ?? "").trim().toLocaleLowerCase("zh-CN");
 }
 
+export function effectiveGroundSlotSnapshot(published, currentVersion, preview, previewIsNew = false) {
+  const fields = ["location_id", "expected_version", "x_mm", "y_mm", "width_mm", "depth_mm"];
+  if (preview && (previewIsNew || !published || fields.some((key) => preview[key] !== published[key]))) {
+    return preview;
+  }
+  if (!published || !Number.isFinite(Number(currentVersion))) return undefined;
+  const appliedVersion = Number(published.applied_layout_version ?? published.expected_version);
+  return Number(currentVersion) <= appliedVersion ? published : undefined;
+}
+
 export function inventoryPhysicalQuantity(item) {
   const hasBreakdown = [item?.available_quantity, item?.reserved_quantity, item?.damaged_quantity]
     .some((value) => value !== undefined && value !== null);

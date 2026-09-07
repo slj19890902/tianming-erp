@@ -32,6 +32,7 @@ import {
   locationLayoutGeometry,
   mergePublishedFeatureGeometry,
   normalizeInventoryLocationProjection,
+  effectiveGroundSlotSnapshot,
   normalizeStandardPalletContract,
   searchHighlightAreaCodes,
   standardPalletDisplayIssue,
@@ -95,7 +96,7 @@ import type {
 } from "./types";
 
 type TwinFeature = LayoutFeature & {
-  ground_location_draft?: { base_revision: string; slots: Array<{ location_id: number; expected_version: number; x_mm: number; y_mm: number; width_mm: number; depth_mm: number }> };
+  ground_location_draft?: { base_revision: string; slots: Array<{ location_id: number; expected_version: number; applied_layout_version?: number; x_mm: number; y_mm: number; width_mm: number; depth_mm: number }> };
   formal_area_id?: number | null;
   formal_floor_id?: number | null;
   erp_area_code?: string | null;
@@ -2099,9 +2100,14 @@ export function WarehouseTwinApp() {
     const projectedLocation = normalizeInventoryLocationProjection(location) as DashboardLocation;
     const zone = locationProjectionFeatures.find((feature) => feature.id === location.map_feature_id
       || (feature.feature_kind === "zone" && feature.erp_area_code === location.area_code));
-    const activeSaved = planningPreviewActive ? features.filter((feature) => feature.id === activeEditingFeatureId).flatMap((feature) =>
-      feature.ground_location_draft?.slots || []).find((slot) => slot.location_id === location.location_id) : undefined;
-    const saved = activeSaved || zone?.ground_location_draft?.slots.find((slot) => slot.location_id === location.location_id);
+    const activeGeometry = planningPreviewActive
+      ? features.find((feature) => feature.id === activeEditingFeatureId)?.ground_location_draft : undefined;
+    const activeSaved = activeGeometry?.slots.find((slot) => slot.location_id === location.location_id);
+    const saved = effectiveGroundSlotSnapshot(
+      zone?.ground_location_draft?.slots.find((slot) => slot.location_id === location.location_id),
+      location.map_position?.version, activeSaved,
+      Boolean(activeGeometry && activeGeometry.base_revision === (planningPublishedLayout?.source_sha256 || publishedFloorRevision)),
+    );
     const bounds = zone ? pointsBoundsMm(zone.points) : null;
     const savedPosition = saved && bounds ? {
       location_id: saved.location_id, expected_version: saved.expected_version,
@@ -2129,7 +2135,7 @@ export function WarehouseTwinApp() {
           ?? "unknown"
       }
     } : projectedLocation;
-  }), [dashboard?.locations, locationDrafts, planningPreviewActive, activeEditingFeatureId, features, locationProjectionFeatures, planningPublishedLayout]);
+  }), [dashboard?.locations, locationDrafts, planningPreviewActive, activeEditingFeatureId, features, locationProjectionFeatures, planningPublishedLayout, publishedFloorRevision]);
   const currentFloorOccupiedLocations = useMemo(
     () => visualLocations.filter((location) => (
       location.floor_code === floorCode && location.occupancy_status === "occupied"
@@ -6042,7 +6048,7 @@ export function WarehouseTwinApp() {
         </div>
         {mapHelpOpen && <section id="warehouse-map-help" className="twin-location-readonly-note">
           <b>地图帮助</b>
-          <p>区域和货位调整保存后会自动校验并只应用本次对象；成功后查货、移货和规划立即使用同一位置。冲突标红时调整仍会保存，但已应用地图保持不变。调整图形不改变库存数量或栈板绑定。</p>
+          <p>区域和货位调整保存后会自动校验并只应用本次对象；成功后查货、移货和规划立即使用同一位置。货位空间冲突会标红，保存成功后仍会应用；保存被拒绝时保留原已应用地图，并显示原因。调整图形不改变库存数量或栈板绑定。</p>
           <p>正常画面始终显示已应用地图；只有选中正在修改的对象时显示该对象编辑预览。保存货架或完成地图调整后会直接应用。</p>
           <p>移货、盘点和合并中的选择先保留在页面，提交结果以各自的保存状态为准。权限限制、冲突和失败原因仍显示在对应操作处。</p>
           <button type="button" onClick={() => setMapHelpOpen(false)}>关闭帮助</button>

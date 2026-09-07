@@ -19,6 +19,7 @@ import {
   locationLayoutGeometry,
   mergePublishedFeatureGeometry,
   normalizeInventoryLocationProjection,
+  effectiveGroundSlotSnapshot,
   normalizeStandardPalletContract,
   searchHighlightAreaCodes,
   standardPalletDisplayIssue,
@@ -1641,4 +1642,22 @@ test("stocktake batch strips display fields and never emits remove semantics", (
   assert.equal(JSON.stringify(payload).includes("remove"), false);
   assert.deepEqual(removeStocktakeDraft([add, decrease], "add-1"), [decrease]);
   assert.deepEqual(clearStocktakeDrafts(), []);
+});
+
+test("applied snapshots do not override later saves in browse or unchanged planning", () => {
+  const published = { location_id: 1, expected_version: 4, applied_layout_version: 5,
+    x_mm: 1200, y_mm: 1000, width_mm: 1200, depth_mm: 1000 };
+  assert.equal(effectiveGroundSlotSnapshot(published, 5), published);
+  for (const version of [6, 7]) {
+    assert.equal(effectiveGroundSlotSnapshot(published, version), undefined);
+    const unchangedDraft = { ...published };
+    delete unchangedDraft.applied_layout_version;
+    assert.equal(effectiveGroundSlotSnapshot(published, version, unchangedDraft), undefined);
+  }
+  const outside = { ...published, applied_layout_version: 4, x_mm: -600 };
+  assert.equal(effectiveGroundSlotSnapshot(outside, 4), outside);
+  assert.equal(effectiveGroundSlotSnapshot(outside, 5), undefined);
+  const preview = { ...published, expected_version: 7, x_mm: 2400 };
+  assert.equal(effectiveGroundSlotSnapshot(published, 7, preview, true), preview);
+  assert.equal(effectiveGroundSlotSnapshot(published, 7, preview), preview);
 });

@@ -1373,3 +1373,69 @@ def test_ground_candidates_and_target_use_applied_absolute_positions(p187_app, m
         assert right_id not in rows[left_id]['adjacent_location_ids']
         assert float(rows[right_id]['geometry']['left_pct']) == pytest.approx(50)
         assert rows[right_id]['current_quantity'] == 0
+
+
+def test_later_published_position_saves_supersede_map_snapshot(p187_app, monkeypatch, tmp_path):
+    from copy import deepcopy
+    import json
+    from app.services.warehouse_location_geometry_draft import prepare_adjustment, apply_adjustments, KEY
+    from app.services.warehouse_twin_layout import load_warehouse_twin_floor
+
+    app, factory, ids = p187_app
+    published = _measured_layout()
+    applied = deepcopy(published)
+    source = deepcopy(published)
+    source['revision'] = 'before-applied-map-snapshot'
+    runtime = tmp_path / 'published-map.json'
+    with TestClient(app) as client:
+        _login(client)
+        _publish_six_slots(client)
+        with factory() as db:
+            feature = applied['features'][0]
+            feature[KEY] = prepare_adjustment(db, floor_code='3F', feature=feature, published=source)
+            apply_adjustments(db, floor_code='3F', draft=applied, published=source,
+                              new_revision=published['revision'])
+            db.commit()
+            location_ids = sorted(db.scalars(select(WarehouseLocation.id)))
+        runtime.write_text(json.dumps({'schema_version': 1, 'floors': {'3F': applied}}), encoding='utf8')
+        file_before = runtime.read_bytes()
+        monkeypatch.setattr(warehouse_api, 'load_warehouse_twin_floor',
+                            lambda code: load_warehouse_twin_floor(code, path=runtime))
+        returned = client.get('/api/warehouse/twin-layout/floors/3F')
+        assert returned.status_code == 200, returned.text
+        assert returned.json()['features'][0][KEY]['slots'][0]['applied_layout_version'] == 2
+        for attempt, other in enumerate((location_ids[1], location_ids[2]), start=1):
+            with factory() as db:
+                plan = db.scalar(select(WarehouseGroundLayoutPlan))
+                policy = db.scalar(select(WarehouseAreaStoragePolicy))
+                first, second = [db.get(WarehouseLocation, key) for key in (location_ids[0], other)]
+                changes = []
+                expected = {}
+                for source, target in ((first, second), (second, first)):
+                    old, new = source.floor3_layout, target.floor3_layout
+                    changes.append(dict(location_id=source.id, expected_version=old.version,
+                        left_pct=float(new.left_pct), top_pct=float(new.top_pct),
+                        width_pct=float(old.width_pct), height_pct=float(old.height_pct), z_index=old.z_index))
+                    expected[source.id] = float(new.left_pct)
+                payload = dict(slots=changes, expected_map_revision=published['revision'],
+                    expected_policy_version=policy.version, expected_plan_version=plan.version,
+                    idempotency_key=f'review-position-save-{attempt}')
+            url = '/api/warehouse/ground-layout/floors/3F/areas/A01/published-positions'
+            result = client.patch(url, json=payload)
+            assert result.status_code == 200, result.text
+            replay = client.patch(url, json=payload)
+            assert replay.status_code == 200 and replay.json()['idempotent_replay']
+            rows = client.get('/api/warehouse/ground-storage/candidates', params=dict(
+                floor_code='3F', area_code='A01', customer_id=ids['customer'],
+                product_id=ids['product'], incoming_quantity=1)).json()['items']
+            by_id = {item['location_id']: item for item in rows}
+            with factory() as db:
+                fresh = prepare_adjustment(db, floor_code='3F', feature=applied['features'][0], published=applied)
+                slots = {item['location_id']: item for item in fresh['slots']}
+                for key, left in expected.items():
+                    assert float(by_id[key]['geometry']['left_pct']) == pytest.approx(left)
+                    assert slots[key]['x_mm'] == pytest.approx(3600 * left / 100)
+                assert sorted(db.scalars(select(WarehouseLocation.id))) == location_ids
+                assert db.scalar(select(func.count(InventoryLot.id))) == 0
+                assert db.scalar(select(func.count(InventoryPallet.id))) == 0
+            assert runtime.read_bytes() == file_before

@@ -136,6 +136,11 @@ export function inventoryLocationItems(
   location?: InventoryProjectionLocation | null
 ): InventoryProjectionItem[];
 
+export function effectiveGroundSlotSnapshot<T extends { expected_version: number; applied_layout_version?: number }>(
+  published: T | undefined, currentVersion: number | undefined,
+  preview?: T, previewIsNew?: boolean,
+): T | undefined;
+
 export function normalizeInventoryLocationProjection(
   location?: InventoryProjectionLocation | null
 ): InventoryProjectionLocation | null | undefined;

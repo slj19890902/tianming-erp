@@ -4606,6 +4606,15 @@ def _validate_current_area_layout(
             raise WarehouseAreaActivationError(
                 "正式地图版本与区域设置不一致，请刷新后重试", status_code=409
             )
+        from app.services.warehouse_location_geometry_draft import applied_slot_is_current, relative_slots
+        feature = next((item for item in floor_layout.get("features", [])
+                        if item.get("id") == policy.map_feature_id), {})
+        versions = {row.id: row.floor3_layout.version for row in rows}
+        saved = [slot for slot in (feature.get("ground_location_draft") or {}).get("slots", [])
+                 if slot["location_id"] in versions
+                 and applied_slot_is_current(feature, slot, versions[slot["location_id"]])]
+        effective = {slot["location_id"]: slot for slot in relative_slots(feature, {"slots": saved})} if saved else {}
+        slots = [{**slot, **effective.get(slot["location_id"], {})} for slot in slots]
         return validate_capacity_layout_slots_for_zone(
             floor_layout,
             feature_id=policy.map_feature_id,
@@ -4622,7 +4631,6 @@ def _validate_published_area_layouts_for_floor(
     *,
     floor_code: str,
     deferred_feature_id: str | None = None,
-    allow_spatial_conflicts_for_feature_ids: set[str] | None = None,
 ) -> None:
     floor = warehouse_floor_for_code(db, floor_code)
     if floor is None:
@@ -4672,9 +4680,10 @@ def _validate_published_area_layouts_for_floor(
             floor_code=floor.floor_code,
             area_code=area.area_code,
             source_version=next(iter(sources)),
-            allow_spatial_conflicts=policy.map_feature_id in (
-                allow_spatial_conflicts_for_feature_ids or set()
-            ),
+            # Map edits retain spatial conflicts as red diagnostics, including
+            # conflicts accepted on an earlier save. Identity and floor bounds
+            # remain mandatory; inventory operations keep their own guards.
+            allow_spatial_conflicts=True,
         )
 
 
@@ -9681,6 +9690,13 @@ def get_warehouse_twin_floor_layout(
             floor_code=floor_code,
             floor_layout=load_warehouse_twin_floor(floor_code),
         )
+        # Read-only response metadata: no layout-file mutation or new revision.
+        from copy import deepcopy
+        from app.services.warehouse_location_geometry_draft import applied_slot_layout_version
+        layout = deepcopy(layout)
+        for feature in layout.get("features", []):
+            for slot in (feature.get("ground_location_draft") or {}).get("slots", []):
+                slot["applied_layout_version"] = applied_slot_layout_version(feature, slot)
         return {**layout, "standard_pallet": standard_pallet_contract()}
     except WarehouseTwinLayoutNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -11415,9 +11431,6 @@ def _publish_twin_layout_draft_locked(
             db,
             floor_code=floor_code,
             deferred_feature_id=defer_location_readiness_for_feature_id,
-            allow_spatial_conflicts_for_feature_ids={
-                str(item.get("feature_id") or "") for item in coordinate_adjustments
-            },
         )
         from app.services.warehouse_ground_map_application import record_map_applications
         ground_map_application_count = record_map_applications(

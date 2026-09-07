@@ -419,6 +419,7 @@ def occupancy_physical_quantity(occupancy: WarehouseGroundOccupancy) -> int:
 
 def effective_ground_slot_geometries(plan, floor_layout: dict) -> dict[int, dict]:
     """Read applied millimetres and expose the same zone-relative projection."""
+    from app.services.warehouse_location_geometry_draft import applied_slot_is_current
     feature_id = plan.area.storage_policy.map_feature_id
     feature = next((item for item in floor_layout.get("features", [])
                     if item.get("id") == feature_id), None)
@@ -440,6 +441,8 @@ def effective_ground_slot_geometries(plan, floor_layout: dict) -> dict[int, dict
         relative = {key: float(getattr(layout, key)) for key in
                     ("left_pct", "top_pct", "width_pct", "height_pct")}
         absolute = saved.get(slot.location_id)
+        if absolute is not None and not applied_slot_is_current(feature, absolute, layout.version):
+            absolute = None
         if absolute is not None:
             absolute = {key: float(absolute[key]) for key in
                         ("x_mm", "y_mm", "width_mm", "depth_mm")}

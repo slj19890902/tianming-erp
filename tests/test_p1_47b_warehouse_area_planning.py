@@ -241,6 +241,85 @@ def test_apply_zone_geometry_preserves_other_drafts_and_rolls_back_atomically(tm
         engine.dispose()
 
 
+@pytest.mark.parametrize('outside_zone', [False, True])
+def test_apply_other_zone_preserves_previously_saved_ground_conflicts(tmp_path, monkeypatch, outside_zone):
+    published, draft_path = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding='utf8'))
+    floor = document['floors']['3F']
+    floor['features'][0]['points'] = [[0, 0], [5000, 0], [5000, 10000], [0, 10000]]
+    floor['features'].append(dict(id='zone-other', feature_code='ZONE-OTHER', name='空区域',
+        feature_kind='zone', subtype='rack_storage', version=1,
+        points=[[8000, 0], [10000, 0], [10000, 2000], [8000, 2000]]))
+    floor['revision'] = _floor_revision(floor)
+    published.write_text(json.dumps(document), encoding='utf8')
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(warehouse_api, 'list_production_projection_mappings', lambda *a, **k: [])
+    monkeypatch.setattr(warehouse_api, 'load_warehouse_twin_floor',
+        lambda code: json.loads(runtime.read_text(encoding='utf8'))['floors'][code.upper()])
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            warehouse_api.confirm_twin_zone_area('3F', 'zone-f1',
+                _confirm_area_payload(revision=_revision(published), operation_key='repeat-ground-init', capacity=24),
+                _request(), db, admin)
+            current = json.loads(runtime.read_bytes())['floors']['3F']
+            feature = current['features'][0]
+            saved = warehouse_api.update_twin_layout_feature_geometry('3F', 'zone-f1',
+                warehouse_api.TwinLayoutFeatureGeometryPayload(expected_revision=current['revision'],
+                    expected_version=feature['version'], operation_key='repeat-capture', points=feature['points']),
+                _request(), db, admin)
+            slot = saved['item']['ground_location_draft']['slots'][0]
+            other_slot = saved['item']['ground_location_draft']['slots'][1]
+            target_x = 5200 if outside_zone else other_slot['x_mm']
+            target_y = slot['y_mm'] if outside_zone else other_slot['y_mm']
+            saved = warehouse_api.update_twin_layout_feature_geometry('3F', 'zone-f1',
+                warehouse_api.TwinLayoutFeatureGeometryPayload(expected_revision=saved['revision'],
+                    expected_version=saved['item']['version'], operation_key='repeat-move', points=feature['points'],
+                    ground_locations=[dict(location_id=slot['location_id'], expected_version=slot['expected_version'],
+                        x_mm=target_x, y_mm=target_y)]), _request(), db, admin)
+            first = warehouse_api.apply_twin_zone_geometry('3F', 'zone-f1',
+                warehouse_api.TwinZoneGeometryApplyPayload(expected_revision=saved['revision'],
+                    expected_published_revision=current['revision'], expected_version=saved['item']['version'],
+                    operation_key='repeat-first-apply'), _request(), db, admin)
+            assert first['applied']
+            current = json.loads(runtime.read_bytes())['floors']['3F']
+            saved_ground = current['features'][0]['ground_location_draft']
+            from app.services.warehouse_location_geometry_draft import relative_slots
+            from app.services.warehouse_floor1_candidate_planner import validate_capacity_layout_slots_for_zone, Floor1CandidatePlanningError
+            with pytest.raises(Floor1CandidatePlanningError):
+                validate_capacity_layout_slots_for_zone(current, feature_id='zone-f1',
+                    slots=relative_slots(current['features'][0], saved_ground))
+            row = db.get(WarehouseLocation, slot['location_id'])
+            before_position = (row.floor3_layout.left_pct, row.floor3_layout.top_pct, row.floor3_layout.version)
+            plan = db.scalar(select(WarehouseGroundLayoutPlan))
+            plan_facts = [(s.id, s.location_id, s.x_mm, s.y_mm) for s in plan.slots]
+            active = editor.load_warehouse_twin_layout_draft('3F')
+            saved = warehouse_api.update_twin_layout_feature_geometry('3F', 'zone-other',
+                warehouse_api.TwinLayoutFeatureGeometryPayload(expected_revision=active['revision'],
+                    expected_version=1, operation_key='repeat-other-move',
+                    points=[[8000, 100], [10000, 100], [10000, 2100], [8000, 2100]]), _request(), db, admin)
+            payload = warehouse_api.TwinZoneGeometryApplyPayload(expected_revision=saved['revision'],
+                expected_published_revision=current['revision'], expected_version=saved['item']['version'],
+                operation_key='repeat-other-apply')
+            second = warehouse_api.apply_twin_zone_geometry('3F', 'zone-other', payload, _request(), db, admin)
+            assert second['applied']
+            live = json.loads(runtime.read_bytes())['floors']['3F']
+            assert live['revision'] != current['revision']
+            assert live['features'][0]['ground_location_draft'] == saved_ground
+            db.expire_all()
+            assert (row.floor3_layout.left_pct, row.floor3_layout.top_pct, row.floor3_layout.version) == before_position
+            assert [(s.id, s.location_id, s.x_mm, s.y_mm) for s in plan.slots] == plan_facts
+            from app.services.warehouse_ground_slots import effective_ground_slot_geometries
+            assert effective_ground_slot_geometries(plan, live)[row.id]['x_mm'] == pytest.approx(target_x)
+            assert db.scalar(select(func.count(InventoryLot.id))) == 0
+            files = runtime.read_bytes(), draft_path.read_bytes()
+            assert warehouse_api.apply_twin_zone_geometry('3F', 'zone-other', payload, _request(), db, admin)['idempotent_replay']
+            assert (runtime.read_bytes(), draft_path.read_bytes()) == files
+    finally:
+        engine.dispose()
+
+
 def test_apply_zone_boundary_without_ground_locations_becomes_the_only_operational_geometry(tmp_path, monkeypatch):
     published, _draft_path = _isolate_layout_paths(tmp_path, monkeypatch)
     runtime = Path(editor.TWIN_LAYOUT_PATH)

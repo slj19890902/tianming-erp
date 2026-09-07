@@ -96,6 +96,8 @@ def prepare_adjustment(db, *, floor_code, feature, published):
     for row in rows:
         layout = row.floor3_layout
         applied = applied_slots.get(row.id)
+        if applied and not applied_slot_is_current(original, applied, layout.version):
+            applied = None
         sw = float(applied['width_mm']) if applied else w*float(layout.width_pct)/100
         sh = float(applied['depth_mm']) if applied else h*float(layout.height_pct)/100
         slots.append(dict(location_id=row.id, source_signature=location_signature(row, layout),
@@ -185,6 +187,26 @@ def relative_slots(feature, value):
         'height_pct': round(s['depth_mm']/h*100, 4)} for s in value['slots']]
 
 
+def _relative_slot_fits_zone(slot):
+    return (
+        0 <= float(slot['left_pct']) and 0 <= float(slot['top_pct'])
+        and float(slot['left_pct']) + float(slot['width_pct']) <= 100
+        and float(slot['top_pct']) + float(slot['height_pct']) <= 100
+    )
+
+
+def applied_slot_layout_version(feature, slot):
+    # expected_version is the pre-application version. apply_adjustments only
+    # advances it when the position fits the constrained relative ledger.
+    # Later writes to that ledger must supersede this retained map snapshot.
+    relative = relative_slots(feature, {'slots': [slot]})[0]
+    return int(slot['expected_version']) + int(_relative_slot_fits_zone(relative))
+
+
+def applied_slot_is_current(feature, slot, layout_version):
+    return int(layout_version) <= applied_slot_layout_version(feature, slot)
+
+
 def validate_adjustments(db, *, floor_code, draft, published):
     """Saving is permissive; application is checked against the whole draft map."""
     result = {}
@@ -220,12 +242,7 @@ def apply_adjustments(db, *, floor_code, draft, published, new_revision):
             row = by_id[slot['location_id']]
             layout = row.floor3_layout
             before = {k: float(getattr(layout, k)) for k in ('left_pct','top_pct','width_pct','height_pct')}
-            fits_zone = (
-                0 <= float(slot['left_pct'])
-                and 0 <= float(slot['top_pct'])
-                and float(slot['left_pct']) + float(slot['width_pct']) <= 100
-                and float(slot['top_pct']) + float(slot['height_pct']) <= 100
-            )
+            fits_zone = _relative_slot_fits_zone(slot)
             if fits_zone:
                 for k in before:
                     setattr(layout, k, Decimal(str(slot[k])))

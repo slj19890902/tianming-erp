@@ -82,9 +82,9 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
         feature = next((f for f in floor_layout.get("features", []) if f["id"] == policy.map_feature_id), None)
         if feature is None or any(s.location.floor3_layout is None for s in slots):
             raise WarehouseAreaActivationError("旧排位缺少区域或货位几何，不能应用地图", status_code=409)
-        payloads = [{"location_id": s.location_id,
-            "left_pct": float(s.location.floor3_layout.left_pct), "top_pct": float(s.location.floor3_layout.top_pct),
-            "width_pct": float(s.location.floor3_layout.width_pct), "height_pct": float(s.location.floor3_layout.height_pct),
+        from app.services.warehouse_ground_slots import effective_ground_slot_geometries
+        effective = effective_ground_slot_geometries(plan, floor_layout)
+        payloads = [{**effective[s.location_id], "location_id": s.location_id,
             "layout_kind": s.location.floor3_layout.layout_kind} for s in slots]
         adjustment_candidate = bool(slots) and all(
             slot.location_id in adjustment_by_location for slot in slots
@@ -110,7 +110,9 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
                 floor_layout,
                 feature_id=policy.map_feature_id,
                 slots=payloads,
-                allow_spatial_conflicts=adjustment_candidate,
+                # A later map save must preserve previously accepted red
+                # diagnostics. Verify coordinate identity below, not occupancy.
+                allow_spatial_conflicts=True,
             )
         except Floor1CandidatePlanningError as error:
             raise WarehouseAreaActivationError(str(error), status_code=error.status_code) from error

@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.264"
+APP_VERSION = "v0.22.265"
 APP_VERSION_NAME = "全仓待归位与区域视图同步"
 APP_BUILD_DATE = "2026-09-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -1880,9 +1880,9 @@ APP_CHANGES = [
 ]
 
 APP_VERIFICATION_STEPS = [
-    "进入系统备份→系统版本，确认 v0.22.264，数据库 revision 仍为唯一 head rp06v8x9z65。",
+    "进入系统备份→系统版本，确认 v0.22.265，数据库 revision 仍为唯一 head rp06v8x9z65。",
     "依次切换三楼查货、区域规划和移货，确认区域数量与对象一致，并能看到尚未启用的同名成品混放候选图块。",
-    "核对 288 个有量批次和 253 个托盘均处于盘点待归位，原库存数量、客户、产品、来源与历史不变；随后可逐批选择实际货位重新添加。",
+    "核对本次全部有量批次和当前托盘均处于盘点待归位，原库存数量、客户、产品、来源与历史不变；随后可逐批选择实际货位重新添加。",
 ]
 
 

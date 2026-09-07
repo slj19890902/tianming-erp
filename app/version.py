@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.266"
-APP_VERSION_NAME = "多栈合并断线回执修复"
+APP_VERSION = "v0.22.267"
+APP_VERSION_NAME = "仓库货位冲突精度修复"
 APP_BUILD_DATE = "2026-09-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -1873,16 +1873,28 @@ _V022262_VERIFICATION_STEPS = [
 ]
 
 
-APP_CHANGES = [
+_V022266_CHANGES = [
     "多栈合并已收到服务器成功回执后，即使地图刷新断线也明确显示合并已完成，并清除旧草稿，避免操作员重复提交。",
     "提交阶段发生网络中断时不再显示英文 Failed to fetch；来源、目标和同一幂等键继续保留，并提示先刷新核对后安全重试。",
     "本版无数据库迁移，不自动重发任何合并请求，不修改既有库存数量、批次、预占、栈板或位置事实。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022266_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认 v0.22.266，数据库 revision 仍为唯一 head rp06v8x9z65。",
     "模拟多栈合并提交时断线，确认页面显示中文连接提示，并保留来源、目标和原幂等键供核对后重试。",
     "模拟服务器已确认而地图刷新失败，确认页面明确提示合并已完成、旧草稿不再可提交；正常路径仍只写一次合并。",
+]
+
+APP_CHANGES = [
+    "查货接口保留正式地图已有四位百分比坐标精度，避免相邻货位在毫米换算后出现虚假重叠；E2-22不再被误标红。",
+    "查货模式按货位互叠、区域越界或固定障碍物显示对应冲突原因，不再把所有规划几何冲突误称为固定柱子。",
+    "本版无数据库迁移，不修改库存、货位、柱子、地图草稿或已发布地图业务数据。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "进入系统备份→系统版本，确认 v0.22.267，数据库 revision 仍为唯一 head rp06v8x9z65。",
+    "打开三楼查货模式并定位右区E2的E2-22，确认其不再显示红色或固定柱子冲突，区域规划模式保持一致。",
+    "在隔离测试布局分别制造货位互叠、区域越界和固定障碍冲突，确认提示类别正确且真实冲突仍保持红色。",
 ]
 
 
@@ -1976,6 +1988,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.266：本次更新｜{item}" for item in _V022266_CHANGES),
+    *(f"v0.22.266：如何验证｜{item}" for item in _V022266_VERIFICATION_STEPS),
     *(f"v0.22.262：本次更新｜{item}" for item in _V022262_CHANGES),
     *(f"v0.22.262：如何验证｜{item}" for item in _V022262_VERIFICATION_STEPS),
     *(f"v0.22.261：本次更新｜{item}" for item in _V022261_CHANGES),

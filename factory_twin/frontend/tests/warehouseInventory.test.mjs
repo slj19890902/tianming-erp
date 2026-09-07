@@ -20,6 +20,7 @@ import {
   mergePublishedFeatureGeometry,
   normalizeInventoryLocationProjection,
   normalizeStandardPalletContract,
+  planningConflictWarning,
   searchHighlightAreaCodes,
   standardPalletDisplayIssue,
   standardPalletContractsMatch,
@@ -992,6 +993,22 @@ test("operational conflicts isolate planning-only geometry categories", () => {
   assert.ok(planningCategories.has("no-go-planning"));
 });
 
+test("planning conflict warnings name location overlap and boundary instead of claiming every issue is a column", () => {
+  const palletId = "erp-location-251";
+  assert.equal(
+    planningConflictWarning([{ pallet_id: palletId, column_id: "location:erp-location-257" }], palletId),
+    "该货位与其他货位重叠，请进入区域规划核对现场位置。"
+  );
+  assert.equal(
+    planningConflictWarning([{ pallet_id: palletId, column_id: "zone-boundary:zone-e2" }], palletId),
+    "该货位超出所属区域边界，请进入区域规划核对现场位置。"
+  );
+  assert.equal(
+    planningConflictWarning([{ pallet_id: palletId, column_id: "column-e2" }], palletId),
+    "该货位与柱子、设备、货架或禁放区重叠，请进入区域规划核对现场位置。"
+  );
+});
+
 test("empty planning slots use their visible pallet footprint for column conflicts", () => {
   const planningSlot = {
     id: "erp-location-151",
@@ -1112,6 +1129,44 @@ test("percentage quantisation does not merge edge-touching D1 locations", () => 
       { pallet_id: "erp-location-152", column_id: "location:erp-location-151" }
     ]
   );
+});
+
+test("published E2 four-decimal positions keep E2-22 and E2-28 edge-aligned", () => {
+  const zone = {
+    id: "zone-e2",
+    feature_kind: "zone",
+    feature_code: "E2",
+    erp_area_code: "E2",
+    points: [[10129, -19652.5], [15129, -19652.5], [15129, -5652.5], [10129, -5652.5]]
+  };
+  const location = (locationId, locationCode, topPct) => ({
+    location_id: locationId,
+    location_code: locationCode,
+    location_name: locationCode,
+    floor_code: "3F",
+    area_code: "E2",
+    map_feature_id: zone.id,
+    position_status: "mapped",
+    storage_type: "ground",
+    occupancy_status: "empty",
+    map_position: {
+      left_pct: 60,
+      top_pct: topPct,
+      width_pct: 20,
+      height_pct: 8.5714,
+      version: 3,
+      layout_kind: "physical_pallet"
+    }
+  });
+  const pallets = buildMappedLocationPallets(
+    [zone],
+    [location(251, "E2-22", 34.2857), location(257, "E2-28", 42.8571)],
+    "3F",
+    { contract_version: "standard-pallet-v1", width_mm: 1200, depth_mm: 1000, height_mm: 150 }
+  );
+
+  assert.equal(pallets.length, 2);
+  assert.deepEqual(findPalletPlanningConflicts(pallets, [], [zone]), []);
 });
 
 test("planning conflict preview rejects zone overflow and confirmed equipment", () => {

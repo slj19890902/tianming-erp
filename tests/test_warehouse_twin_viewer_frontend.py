@@ -603,8 +603,9 @@ def test_phase2c10_flags_column_conflicts_and_blocks_conflicting_layout_drafts()
     assert "findPalletColumnConflicts" in SOURCE
     assert "findPalletPlanningConflicts" in SOURCE
     assert "uniquePalletConflictCount(operationalColumnConflicts)" in SOURCE
-    assert 'rule_code: "LOCATION_OVERLAPS_COLUMN"' in SOURCE
-    assert "该货位与固定柱子冲突" in SOURCE
+    assert 'rule_code: "LOCATION_GEOMETRY_CONFLICT"' in SOURCE
+    assert "planningConflictWarning" in SOURCE
+    assert "该货位与固定柱子冲突，请进入区域规划核对现场位置。" not in SOURCE
     assert "planningGeometryConflicts" in SOURCE
     assert "柱子冲突" in ERP_INDEX
     assert "货位越界，或与其他货位、柱子、设备、货架、禁放区冲突" in SOURCE

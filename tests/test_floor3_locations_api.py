@@ -256,6 +256,14 @@ def _ensure_location_layout_version(factory, location_id: int, *, left_pct: int 
         return int(location.floor3_layout.version)
 
 
+def test_map_projection_preserves_formal_four_decimal_precision() -> None:
+    from app.services.location_candidates import _map_number
+
+    assert _map_number(Decimal("34.2857")) == 34.2857
+    assert _map_number(Decimal("42.8571")) == 42.8571
+    assert _map_number(Decimal("8.5714")) == 8.5714
+
+
 def test_published_candidates_keep_accepted_v11_map_locations_until_area_policy_exists(
     floor3_app,
     monkeypatch: pytest.MonkeyPatch,

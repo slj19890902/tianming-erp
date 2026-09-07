@@ -1142,6 +1142,27 @@ class TwinMovementBatchPayload(BaseModel):
         return self
 
 
+class TwinStocktakeMatchPayload(BaseModel):
+    location_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    expected_layout_version: int = Field(gt=0)
+    expected_address_version: int = Field(gt=0)
+    expected_map_revision: str | None = Field(default=None, min_length=1, max_length=64)
+    expected_available: int = Field(ge=0)
+    expected_reserved: int = Field(ge=0)
+    expected_damaged: int = Field(ge=0)
+    expected_unit: Literal["boxes", "sheets"]
+    idempotency_key: str = Field(min_length=1, max_length=100)
+    confirmed: Literal[True]
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def strip_match_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("请求标识不能为空")
+        return value.strip()
+
+
 class TwinStocktakeBatchItemPayload(BaseModel):
     client_item_id: str = Field(min_length=1, max_length=80)
     operation: Literal["add", "decrease"]
@@ -8529,6 +8550,29 @@ def confirm_twin_movement_batch(
         except HTTPException:
             db.rollback()
             raise
+        except Exception:
+            db.rollback()
+            raise
+
+
+@router.post("/twin-operations/lots/{lot_id}/stocktake-match")
+def confirm_twin_stocktake_match(lot_id: int, payload: TwinStocktakeMatchPayload, request: Request,
+                                db: Session = Depends(get_db), user: User = Depends(can_submit_stocktake)) -> dict:
+    from app.services.warehouse_stocktake_batch import confirm_stocktake_match
+    _require_lot_customer_access(db, lot_id, user)
+    with WAREHOUSE_STOCKTAKE_BATCH_LOCK:
+        try:
+            result = confirm_stocktake_match(db, lot_id=lot_id, actor=user, request=request,
+                operation_key=payload.idempotency_key,
+                snapshot=payload.model_dump(exclude={"idempotency_key", "confirmed"}))
+            db.commit()
+            return result
+        except WarehouseStocktakeBatchError as error:
+            db.rollback()
+            raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+        except (IntegrityError, OperationalError) as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="盘点或位置正在被其他操作更新，请刷新核对") from error
         except Exception:
             db.rollback()
             raise

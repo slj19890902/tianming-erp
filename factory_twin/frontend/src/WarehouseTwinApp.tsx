@@ -385,6 +385,27 @@ interface AuthResponse {
   permissions: string[];
 }
 
+interface StocktakeMatchConfirmation {
+  lotId: number;
+  lotNumber: string;
+  productName: string;
+  locationName: string;
+  quantity: number;
+  unit: string;
+  actorId: number;
+  attempted: boolean;
+  written: boolean;
+  complete: boolean;
+  rejected: boolean;
+  error: string;
+  payload: Readonly<{
+    location_id: number; expected_version: number; expected_layout_version: number;
+    expected_address_version: number; expected_map_revision: string | null;
+    expected_available: number; expected_reserved: number; expected_damaged: number;
+    expected_unit: string; idempotency_key: string; confirmed: true;
+  }>;
+}
+
 interface PendingLotDraft {
   lotId: number;
   lotNumber: string;
@@ -1817,6 +1838,9 @@ export function WarehouseTwinApp() {
   const [pendingLotDraft, setPendingLotDraft] = useState<PendingLotDraft | null>(null);
   const [pendingLotBusy, setPendingLotBusy] = useState(false);
   const pendingLotRef = useRef<{ draft: PendingLotDraft | null; busy: boolean }>({ draft: null, busy: false });
+  const [stocktakeMatch, setStocktakeMatch] = useState<StocktakeMatchConfirmation | null>(null);
+  const [stocktakeMatchBusy, setStocktakeMatchBusy] = useState(false);
+  const stocktakeMatchRef = useRef<{ request: StocktakeMatchConfirmation | null; busy: boolean }>({ request: null, busy: false });
   const [stocktakeDecreaseQuantity, setStocktakeDecreaseQuantity] = useState("");
   const [stocktakeLastResult, setStocktakeLastResult] = useState<StocktakeBatchResultItem[]>([]);
   const [groundOperation, setGroundOperation] = useState<"inbound" | "transfer">("inbound");
@@ -3145,6 +3169,13 @@ export function WarehouseTwinApp() {
       && (location.occupancy_status === "occupied" || rackLocationInventoryItems(location).length > 0)).length;
   }, [focusedRackAreaCode, visualLocations, floorCode]);
   const selectedStocktakeItem = selectedLocationItems.find((item) => item.lot_id === stocktakeLotId) || null;
+  useEffect(() => {
+    const previous = stocktakeMatchRef.current.request;
+    if (!stocktakeMatchRef.current.busy && previous && (previous.complete || previous.rejected)) {
+      stocktakeMatchRef.current.request = null;
+      setStocktakeMatch(null);
+    }
+  }, [selectedStocktakeItem?.lot_id, selectedStocktakeItem?.version, selectedLocation?.location_id]);
   const selectedStocktakeDecreaseBlockReason = selectedStocktakeItem
     ? selectedLocationStocktakeBlockReason || stocktakeDecreaseBlockReason(selectedStocktakeItem)
     : null;
@@ -4202,6 +4233,79 @@ export function WarehouseTwinApp() {
     setWarehouseOperationMessage(
       `已优先加入现有库存移货草稿：${match.source_location_name} → ${employeeLocationName(selectedLocation)} · ${formatNumber(quantity)} ${inventoryUnitLabel(match.unit)}。请先提交移货，再回到盘点补录确实缺少的数量。`
     );
+  };
+
+  const clearRejectedStocktakeMatch = () => {
+    if (stocktakeMatchRef.current.busy || !stocktakeMatchRef.current.request?.rejected) return;
+    stocktakeMatchRef.current.request = null;
+    setStocktakeMatch(null);
+  };
+
+  const confirmStocktakeMatch = async () => {
+    if (!canStocktake || !authActorId || stocktakeMatchRef.current.busy) return;
+    let current = stocktakeMatchRef.current.request;
+    if (current?.complete || current?.rejected) return;
+    if (!current) {
+      const item = selectedStocktakeItem;
+      if (!selectedLocation || selectedLocationStocktakeBlockReason || !item?.version
+          || !["active", "frozen"].includes(item.status || "")
+          || !["finished", "semi_finished"].includes(item.inventory_type || "")) return;
+      const available = Number(item.available_quantity), reserved = Number(item.reserved_quantity), damaged = Number(item.damaged_quantity);
+      if (![available, reserved, damaged].every((value) => Number.isInteger(value) && value >= 0)) return;
+      current = { lotId: item.lot_id, lotNumber: item.lot_number || `批次 ${item.lot_id}`,
+        productName: item.product_name || item.inventory_code || "产品名称待补充",
+        locationName: employeeLocationName(selectedLocation), quantity: available + reserved + damaged,
+        unit: item.unit || "", actorId: authActorId, attempted: false, written: false,
+        complete: false, rejected: false, error: "",
+        payload: Object.freeze({ location_id: selectedLocation.location_id, expected_version: item.version,
+          expected_layout_version: Number(selectedLocation.map_position?.version),
+          expected_address_version: Number(selectedLocation.address_version || 1),
+          expected_map_revision: selectedLocation.published_map_revision || null,
+          expected_available: available, expected_reserved: reserved, expected_damaged: damaged,
+          expected_unit: item.unit || "", idempotency_key: operationKey("stocktake-match"), confirmed: true }) };
+      stocktakeMatchRef.current.request = current;
+    }
+    const confirmation = current;
+    stocktakeMatchRef.current.busy = true;
+    setStocktakeMatchBusy(true);
+    confirmation.error = "";
+    setStocktakeMatch({ ...confirmation });
+    const hadUnknownAttempt = confirmation.attempted && !confirmation.written;
+    let posting = false;
+    try {
+      const auth = await requestJson<AuthResponse>("/api/auth/me");
+      if (auth.user.id !== confirmation.actorId || !auth.permissions.includes("warehouse.stocktake.submit")) {
+        throw new Error("登录身份或盘点权限已变化，请使用原账号核对该请求。");
+      }
+      if (!confirmation.written) {
+        confirmation.attempted = true;
+        posting = true;
+        await mutateJson(`/api/warehouse/twin-operations/lots/${confirmation.lotId}/stocktake-match`, "POST", confirmation.payload);
+        confirmation.written = true;
+        posting = false;
+      }
+      const authAfter = await requestJson<AuthResponse>("/api/auth/me");
+      if (authAfter.user.id !== confirmation.actorId || !authAfter.permissions.includes("warehouse.stocktake.submit")) {
+        throw new Error("登录身份或盘点权限已变化，请使用原账号刷新核对。");
+      }
+      await refreshDashboard();
+      confirmation.complete = true;
+      setWarehouseOperationMessage(`批次 ${confirmation.lotNumber} 已核对相符并记录：${formatNumber(confirmation.quantity)} ${inventoryUnitLabel(confirmation.unit)}，数量保持不变。`);
+    } catch (error) {
+      const status = (error as Error & { status?: number }).status;
+      if (posting && !hadUnknownAttempt && status && status >= 400 && status < 500
+          && ![408, 425, 429].includes(status)) confirmation.rejected = true;
+      confirmation.error = confirmation.written
+        ? `相符记录已保存，但地图刷新未完成；只需刷新核对。${(error as Error).message}`
+        : confirmation.attempted && !confirmation.rejected
+          ? `结果尚未确认，已保留原请求供同键重试。${(error as Error).message}` : (error as Error).message;
+    } finally {
+      if (stocktakeMatchRef.current.request === confirmation) {
+        stocktakeMatchRef.current.busy = false;
+        setStocktakeMatchBusy(false);
+        setStocktakeMatch({ ...confirmation });
+      }
+    }
   };
 
   const openPendingLotRelocation = () => {
@@ -6396,7 +6500,11 @@ export function WarehouseTwinApp() {
             const canSelectForPending = canEditLocations && !selectedLocationStocktakeBlockReason
               && item.inventory_type === "finished" && Boolean(item.version)
               && ["active", "frozen"].includes(item.status || "") && inventoryHasPhysicalQuantity(item);
-            return <button type="button" className={`twin-location-item ${stocktakeLotId === item.lot_id ? "correction-selected" : ""} ${(traceFocusedLotId && traceFocusedLotId === item.lot_id) || (focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey) ? "warehouse-search-hit" : ""} ${stocktakeBlockReason ? "stocktake-ineligible" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`} disabled={Boolean(stocktakeBlockReason) && !canSelectForPending} title={stocktakeBlockReason || ""} onClick={() => {
+            const canSelectForMatch = canStocktake && !selectedLocationStocktakeBlockReason && Boolean(item.version)
+              && ["finished", "semi_finished"].includes(item.inventory_type || "")
+              && ["active", "frozen"].includes(item.status || "");
+            const selectionBlocked = Boolean(stocktakeBlockReason) && !canSelectForPending && !canSelectForMatch;
+            return <button type="button" className={`twin-location-item ${stocktakeLotId === item.lot_id ? "correction-selected" : ""} ${(traceFocusedLotId && traceFocusedLotId === item.lot_id) || (focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey) ? "warehouse-search-hit" : ""} ${selectionBlocked ? "stocktake-ineligible" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`} disabled={selectionBlocked} title={stocktakeBlockReason || ""} onClick={() => {
               if (mapMode === "move" && moveAction === "stocktake") {
                 setStocktakeLotId(item.lot_id || null);
                 setStocktakeDecreaseQuantity("");
@@ -6413,6 +6521,17 @@ export function WarehouseTwinApp() {
               </>}
             </button>;
           })}
+          {canStocktake && mapMode === "move" && moveAction === "stocktake" && viewMode === "2d" && !locationEditMode && (selectedStocktakeItem || stocktakeMatch) && <section className="twin-correction-form" aria-label="所选批次数量相符核对">
+            <b>本次核对：{stocktakeMatch?.productName || selectedStocktakeItem?.product_name} · {stocktakeMatch?.lotNumber || selectedStocktakeItem?.lot_number || `批次 ${selectedStocktakeItem?.lot_id}`}</b>
+            <span>{stocktakeMatch?.locationName || employeeLocationName(selectedLocation)}</span>
+            <strong>账面总数：{formatNumber(stocktakeMatch?.quantity ?? inventoryLabelQuantity(selectedStocktakeItem!))} {inventoryUnitLabel(stocktakeMatch?.unit || selectedStocktakeItem?.unit)}</strong>
+            <small>可用 {formatNumber(stocktakeMatch?.payload.expected_available ?? selectedStocktakeItem?.available_quantity)} ＋ 预占 {formatNumber(stocktakeMatch?.payload.expected_reserved ?? selectedStocktakeItem?.reserved_quantity)} ＋ 损坏 {formatNumber(stocktakeMatch?.payload.expected_damaged ?? selectedStocktakeItem?.damaged_quantity)}；有差异请使用现有新增或调减。</small>
+            {stocktakeMatch?.error && <p role="alert">{stocktakeMatch.error}</p>}
+            {stocktakeMatch?.complete ? <p role="status">本批次已核对相符并记录，数量保持不变。</p> : <>
+              {stocktakeMatch?.rejected && <button type="button" disabled={stocktakeMatchBusy} onClick={clearRejectedStocktakeMatch}>重新核对</button>}
+              <button type="button" className="twin-primary-action" disabled={stocktakeMatchBusy || Boolean(stocktakeMatch?.rejected) || (!stocktakeMatch && (Boolean(selectedLocationStocktakeBlockReason) || !selectedStocktakeItem?.version || !authActorId))} onClick={() => void confirmStocktakeMatch()}>{stocktakeMatchBusy ? "正在记录…" : stocktakeMatch?.written ? "刷新核对结果" : stocktakeMatch?.attempted ? "重试同一相符请求" : "数量相符"}</button>
+            </>}
+          </section>}
           {canEditLocations && mapMode === "move" && moveAction === "stocktake" && viewMode === "2d" && !locationEditMode && <>
             {!pendingLotDraft && selectedStocktakeItem?.inventory_type === "finished" && <button type="button" className="twin-detail-toggle" disabled={Boolean(selectedLocationStocktakeBlockReason) || !authActorId || !selectedStocktakeItem.version || !inventoryHasPhysicalQuantity(selectedStocktakeItem)} onClick={openPendingLotRelocation}>标签不符：将所选批次移到待归位</button>}
             {pendingLotDraft && <section className="twin-correction-form" aria-label="所选批次转待归位确认">

@@ -34,6 +34,7 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.floor3_locations import Floor3LocationError, clear_pallet
+from app.services.audit_log import append_audit_event
 from app.services.location_candidates import operational_location_issue
 from app.services.location_candidates import claim_active_placed_location
 from app.services.warehouse_inventory import (
@@ -49,6 +50,7 @@ from app.services.warehouse_inventory import (
 
 WAREHOUSE_STOCKTAKE_BATCH_LOCK = RLock()
 STOCKTAKE_BATCH_ACTION_CODE = "warehouse.stocktake_batch.confirmed"
+STOCKTAKE_MATCH_ACTION_CODE = "warehouse.stocktake_match.confirmed"
 
 
 @dataclass(frozen=True)
@@ -118,12 +120,13 @@ def stocktake_batch_replay(
     batch_id: str,
     request_hash: str,
     actor_user_id: int | None,
+    action_code: str = STOCKTAKE_BATCH_ACTION_CODE,
 ) -> dict | None:
     row = db.scalar(
         select(OperationLog)
         .where(
             OperationLog.batch_id == batch_id,
-            OperationLog.action_code == STOCKTAKE_BATCH_ACTION_CODE,
+            OperationLog.action_code == action_code,
             OperationLog.result == "success",
         )
         .order_by(OperationLog.id.desc())
@@ -185,6 +188,76 @@ def stocktake_batch_replay(
             "已完成盘点批次缺少可回放结果，请停止重试并联系管理员", 409
         )
     return result
+
+
+def confirm_stocktake_match(db: Session, *, lot_id: int, snapshot: dict,
+                           operation_key: str, actor, request=None) -> dict:
+    """A selected map lot was checked as shown; no stock or old stocktake order changes."""
+    from app.services.stocktake import _location_identity_snapshot
+
+    canonical = {"operation": "count_match", "lot_id": lot_id, **snapshot}
+    request_hash = sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    replay_args = dict(batch_id=operation_key, request_hash=request_hash, actor_user_id=actor.id,
+                       action_code=STOCKTAKE_MATCH_ACTION_CODE)
+    replay = stocktake_batch_replay(db, **replay_args)
+    if replay is not None:
+        return {**replay, "idempotent_replay": True}
+    location_id = snapshot["location_id"]
+    if not claim_active_placed_location(db, location_id,
+                                       expected_layout_version=snapshot["expected_layout_version"]):
+        raise WarehouseStocktakeBatchError("盘点货位或地图版本已变化，请刷新后重新核对", 409)
+    replay = stocktake_batch_replay(db, **replay_args)
+    if replay is not None:
+        return {**replay, "idempotent_replay": True}
+    lot = db.scalar(_lot_query().where(InventoryLot.id == lot_id).execution_options(populate_existing=True))
+    if lot is None:
+        raise WarehouseStocktakeBatchError("库存批次不存在", 404)
+    if (lot.inventory_type not in {"finished", "semi_finished"} or lot.status not in {"active", "frozen"}
+            or lot.warehouse_location_id != location_id or lot.unit != snapshot["expected_unit"]
+            or lot.unit != {"finished": "boxes", "semi_finished": "sheets"}.get(lot.inventory_type)):
+        raise WarehouseStocktakeBatchError("批次状态、位置或数量单位已变化，请重新核对", 409)
+    location = _supported_formal_location(db, location_id=location_id, inventory_type=lot.inventory_type,
+                                         capacity_source_location_id=location_id)
+    address, position, revision = _location_identity_snapshot(db, location)
+    if (address != snapshot["expected_address_version"] or position != "mapped"
+            or revision != snapshot["expected_map_revision"]):
+        raise WarehouseStocktakeBatchError("货位地址或正式地图已变化，请刷新后重新核对", 409)
+    if _is_dispatch_location(area_code=location.area_code, location_code=location.location_code):
+        raise WarehouseStocktakeBatchError("待送区不能通过地图盘点确认相符", 409)
+    pending = db.scalar(select(StocktakeOrder.id).where(StocktakeOrder.location_id == location_id,
+        StocktakeOrder.status.in_(("draft", "submitted"))).limit(1))
+    if pending is not None:
+        raise WarehouseStocktakeBatchError("该货位已有未完成盘点任务，请先完成或撤销后再核对", 409)
+    claimed = db.execute(update(InventoryLot).where(InventoryLot.id == lot_id,
+        InventoryLot.warehouse_location_id == location_id, InventoryLot.version == snapshot["expected_version"],
+        InventoryLot.quantity_available == snapshot["expected_available"],
+        InventoryLot.quantity_reserved == snapshot["expected_reserved"],
+        InventoryLot.quantity_damaged == snapshot["expected_damaged"], InventoryLot.status == lot.status,
+        InventoryLot.unit == snapshot["expected_unit"])
+        .values(updated_at=InventoryLot.updated_at).execution_options(synchronize_session=False))
+    if claimed.rowcount != 1:
+        raise WarehouseStocktakeBatchError("批次数量、预占、损坏分项或版本已变化，请重新核对", 409)
+    quantity = snapshot["expected_available"] + snapshot["expected_reserved"] + snapshot["expected_damaged"]
+    customer_id, product_id = _lot_identity(lot)
+    detail = lot.finished_detail or lot.semi_finished_detail
+    fact = {**snapshot, "lot_id": lot_id, "lot_number": lot.lot_number,
+        "customer_id": customer_id, "product_id": product_id,
+        "customer_name": detail.owner_customer_name_snapshot if detail is not None else None,
+        "product_name": getattr(detail, "product_name_snapshot", None),
+        "inventory_type": lot.inventory_type, "unit": lot.unit, "source_type": lot.source_type,
+        "source_ref_type": lot.source_ref_type, "source_ref_id": lot.source_ref_id,
+        "operation": "count_match", "book_quantity": quantity, "counted_quantity": quantity,
+        "difference_quantity": 0, "available_quantity": snapshot["expected_available"],
+        "reserved_quantity": snapshot["expected_reserved"], "damaged_quantity": snapshot["expected_damaged"]}
+    result = {"message": "所选批次已核对相符，数量未改变", "batch_id": operation_key,
+        "confirmed_at": beijing_now_naive().isoformat(), "operator_id": actor.id, "items": [fact]}
+    append_audit_event(db, request=request, actor=actor, event_category="business", result="success",
+        source="web", module_code="warehouse", action_code=STOCKTAKE_MATCH_ACTION_CODE,
+        resource="InventoryLot", entity_id=lot_id, batch_id=operation_key,
+        description="所选地图批次数量核对相符；不是全库位盘点审核，库存数量不变",
+        details={"request_hash": request_hash, "result": result})
+    db.flush()
+    return {**result, "idempotent_replay": False}
 
 
 def stocktake_batch_audit_details(

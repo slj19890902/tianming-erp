@@ -18,7 +18,7 @@ import re
 import unicodedata
 from typing import Any, Iterable
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.time_contract import utc_naive_to_beijing_date
@@ -41,7 +41,11 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
-from app.models.supplier_settlement import SupplierReceiptSettlementPriceFact
+from app.models.supplier_settlement import (
+    SupplierMonthlyStatement,
+    SupplierMonthlyStatementLine,
+    SupplierReceiptSettlementPriceFact,
+)
 from app.models.user import User
 from app.services.material_purchase_contract import (
     CONFIRMED_PURCHASE_CURRENCY,
@@ -67,6 +71,8 @@ HISTORICAL_ADOPTION_REASON = "2026-09-02 老板确认采用当前主数据"
 CONFIRMED_SHIPPING_FEE_MODE = "included"
 MONEY = Decimal("0.01")
 SIX_PLACES = Decimal("0.000001")
+DOCUMENT_CONFIRMATION_ORIGIN = "historical_document_confirmation"
+DOCUMENT_CONFIRMATION_REASON = "按原采购单或供应商对账单逐笔核对确认"
 
 
 class SupplierReceiptPriceFactError(ValueError):
@@ -512,10 +518,14 @@ def _fact_from_plan(
         fact_origin=origin,
         match_strategy=plan.match_strategy,
         source_hash=plan.source_hash,
-        adoption_reason=(HISTORICAL_ADOPTION_REASON if origin == "historical_master_adoption" else None),
+        adoption_reason=(
+            HISTORICAL_ADOPTION_REASON if origin == "historical_master_adoption"
+            else DOCUMENT_CONFIRMATION_REASON if origin == DOCUMENT_CONFIRMATION_ORIGIN
+            else None
+        ),
         adoption_evidence_reference=(
             adoption_evidence_reference
-            if origin == "historical_master_adoption"
+            if origin in {"historical_master_adoption", DOCUMENT_CONFIRMATION_ORIGIN}
             else None
         ),
         source_kind=plan.source_kind,
@@ -528,6 +538,191 @@ def _fact_from_plan(
         report_width_mm=plan.report_width_mm,
         created_by=int(user.id),
     )
+
+
+def _document_price_context(
+    db: Session, receipt_item_id: int
+) -> tuple[ReceiptSourceContext, Supplier, Material, str, dict[str, Any]]:
+    item = db.get(IncomingReceiptItem, receipt_item_id)
+    if item is None:
+        raise SupplierReceiptPriceFactError("SUPPLIER_RECEIPT_NOT_FOUND", "收料明细不存在", 404)
+    context = _receipt_source_context(db, item)
+    if item.supplier_order_item_id is not None:
+        purchase_source = db.get(SupplierRequisitionOrderItem, item.supplier_order_item_id)
+        purchase_header = db.get(SupplierRequisitionOrder, purchase_source.supplier_order_id)
+    elif item.requisition_item_id is not None:
+        purchase_source = db.get(RequisitionItem, item.requisition_item_id)
+        purchase_header = db.get(Requisition, purchase_source.requisition_id)
+    else:
+        purchase_source = db.get(StockReplenishmentOrderItem, item.stock_replenishment_item_id)
+        purchase_header = db.get(StockReplenishmentOrder, purchase_source.replenishment_order_id)
+    if any(getattr(row, "status", None) in {"voided", "cancelled", "reversed"}
+           for row in (purchase_source, purchase_header)):
+        raise SupplierReceiptPriceFactError(
+            "SUPPLIER_RECEIPT_DOCUMENT_SOURCE_INACTIVE", "采购来源已作废或撤销，不能冻结历史凭据价格"
+        )
+    native_fact = db.scalar(
+        select(PurchaseReceiptFact.id)
+        .join(IncomingReceiptPurposeAllocation,
+              IncomingReceiptPurposeAllocation.purchase_receipt_fact_id == PurchaseReceiptFact.id)
+        .where(IncomingReceiptPurposeAllocation.incoming_receipt_item_id == item.id)
+    )
+    existing_fact = db.scalar(select(SupplierReceiptSettlementPriceFact.id).where(
+        SupplierReceiptSettlementPriceFact.incoming_receipt_item_id == item.id
+    ))
+    if native_fact is not None or existing_fact is not None:
+        raise SupplierReceiptPriceFactError(
+            "SUPPLIER_RECEIPT_PRICE_ALREADY_FROZEN", "该收料已有冻结价格，不能用历史凭据覆盖"
+        )
+    try:
+        supplier = resolve_supplier(db, context.supplier_name, require_active=False)
+    except SupplierLookupError as error:
+        raise SupplierReceiptPriceFactError(error.code, error.message, 422) from error
+    linked_line = db.scalar(select(SupplierMonthlyStatementLine.id).where(
+        SupplierMonthlyStatementLine.incoming_receipt_item_id == item.id,
+        SupplierMonthlyStatementLine.active_guard == 1,
+    ))
+    settled_period = db.scalar(select(SupplierMonthlyStatement.id).where(
+        SupplierMonthlyStatement.supplier_id == supplier.id,
+        SupplierMonthlyStatement.active_guard == 1,
+        SupplierMonthlyStatement.period_start <= context.receipt_date,
+        SupplierMonthlyStatement.period_end >= context.receipt_date,
+        SupplierMonthlyStatement.currency == CONFIRMED_PURCHASE_CURRENCY,
+        SupplierMonthlyStatement.tax_basis == "tax_inclusive",
+        SupplierMonthlyStatement.status.notin_({"draft", "difference"}),
+    ))
+    if linked_line is not None or settled_period is not None:
+        raise SupplierReceiptPriceFactError(
+            "SUPPLIER_RECEIPT_SETTLEMENT_LOCKED",
+            "该实收已入月结或所属供应商周期已确认，请按既有月结更正流程处理",
+        )
+    # These master fields identify the material only; no master quote is read.
+    material, strategy = _resolve_material(
+        db, context=context, supplier=supplier, allow_supplier_code_fallback=True
+    )
+    payload = {
+        "incoming_receipt_item_id": int(item.id),
+        "receipt_id": int(item.receipt_id),
+        "purchase_source_id": int(purchase_source.id),
+        "purchase_source_version": getattr(purchase_source, "version", None),
+        "purchase_source_status": getattr(purchase_source, "status", None),
+        "purchase_document_id": int(purchase_header.id),
+        "purchase_document_status": getattr(purchase_header, "status", None),
+        "source_key": f"paperboard:{item.id}",
+        "receipt_number": context.receipt_number,
+        "receipt_date": context.receipt_date,
+        "purchase_document_number": context.purchase_document_number,
+        "supplier_id": int(supplier.id), "supplier_name": _display_name(supplier),
+        "material_id": int(material.id), "material_code": str(material.code).strip(),
+        "source_material_code": context.material_code,
+        "source_material_version": int(material.version),
+        "source_kind": context.source_kind,
+        "report_length_mm": context.report_length_mm,
+        "report_width_mm": context.report_width_mm,
+        "received_quantity": context.received_quantity, "quantity_unit": "张",
+    }
+    payload["source_hash"] = canonical_purchase_receipt_hash(payload)
+    payload["required_contract"] = {
+        "currency": CONFIRMED_PURCHASE_CURRENCY,
+        "tax_included": CONFIRMED_PURCHASE_TAX_INCLUDED,
+        "tax_rate": CONFIRMED_PURCHASE_TAX_RATE,
+        "shipping_fee_mode": CONFIRMED_SHIPPING_FEE_MODE,
+    }
+    return context, supplier, material, strategy, payload
+
+
+def receipt_document_price_context(db: Session, *, receipt_item_id: int) -> dict[str, Any]:
+    return _document_price_context(db, receipt_item_id)[4]
+
+
+def _document_price_plan(
+    db: Session, *, receipt_item_id: int, evidence_reference: str,
+    unit_price: Decimal, price_unit: str, document_amount: Decimal,
+    currency: str, tax_included: bool, tax_rate: Decimal, shipping_fee_mode: str,
+    expected_source_hash: str,
+) -> tuple[ReceiptPriceAdoptionPlan, dict[str, Any]]:
+    context, supplier, material, strategy, source = _document_price_context(db, receipt_item_id)
+    if source["source_hash"] != expected_source_hash:
+        raise SupplierReceiptPriceFactError(
+            "SUPPLIER_RECEIPT_DOCUMENT_SOURCE_STALE", "收料来源已变化，请重新打开核价"
+        )
+    evidence = str(evidence_reference or "").strip()
+    if not evidence or len(evidence) > 255:
+        raise SupplierReceiptPriceFactError("SUPPLIER_RECEIPT_DOCUMENT_REFERENCE_REQUIRED", "请填写凭据单号及行号（不超过255字）", 422)
+    if (currency != CONFIRMED_PURCHASE_CURRENCY or tax_included is not True
+        or tax_rate != CONFIRMED_PURCHASE_TAX_RATE or shipping_fee_mode != CONFIRMED_SHIPPING_FEE_MODE):
+        raise SupplierReceiptPriceFactError(
+            "SUPPLIER_RECEIPT_DOCUMENT_CONTRACT_INVALID",
+            "本入口仅适用于已核对为人民币、含13%税且含运的凭据；未知口径不能冻结", 422,
+        )
+    normalized_unit = normalize_purchase_price_unit(price_unit)
+    if normalized_unit is None or not unit_price.is_finite() or unit_price <= 0:
+        raise SupplierReceiptPriceFactError("SUPPLIER_RECEIPT_DOCUMENT_PRICE_INVALID", "凭据单价或计价单位无效", 422)
+    price = _six(unit_price)
+    breakdown = calculate_purchase_sheet_cost_breakdown(
+        unit_price=price, price_unit=normalized_unit, tax_included=tax_included,
+        tax_rate=tax_rate, report_length_mm=context.report_length_mm,
+        report_width_mm=context.report_width_mm,
+    )
+    amount = _money(breakdown.gross_per_sheet * Decimal(context.received_quantity))
+    tax_amount = _money(breakdown.tax_per_sheet * Decimal(context.received_quantity))
+    if not document_amount.is_finite() or document_amount <= 0 or _money(document_amount) != amount:
+        raise SupplierReceiptPriceFactError(
+            "SUPPLIER_RECEIPT_DOCUMENT_AMOUNT_MISMATCH",
+            f"凭据对应本次实收的金额与计算金额 {amount:.2f} 不一致，请核对数量、规格、单价和计价单位", 422,
+        )
+    plan_hash = canonical_purchase_receipt_hash({
+        "source_hash": source["source_hash"], "evidence_reference": evidence,
+        "unit_price": price, "price_unit": normalized_unit, "document_amount": amount,
+        "currency": currency, "tax_included": tax_included, "tax_rate": tax_rate,
+        "shipping_fee_mode": shipping_fee_mode, "fact_origin": DOCUMENT_CONFIRMATION_ORIGIN,
+    })
+    plan = ReceiptPriceAdoptionPlan(
+        incoming_receipt_item_id=receipt_item_id, receipt_number=context.receipt_number,
+        receipt_date=context.receipt_date, received_quantity=context.received_quantity,
+        quantity_unit="张", source_kind=context.source_kind,
+        purchase_document_number=context.purchase_document_number, supplier_id=int(supplier.id),
+        supplier_name=_display_name(supplier), material_id=int(material.id),
+        material_code=source["material_code"], material_version=int(material.version),
+        unit_price=price, price_unit=normalized_unit, currency=currency, tax_included=tax_included,
+        tax_rate=tax_rate, shipping_fee_mode=shipping_fee_mode,
+        report_length_mm=context.report_length_mm, report_width_mm=context.report_width_mm,
+        match_strategy=strategy, source_hash=plan_hash, erp_amount=amount, tax_amount=tax_amount,
+    )
+    return plan, {**source, "plan_hash": plan_hash, "erp_amount": amount,
+                  "tax_amount": tax_amount, "document_amount": amount,
+                  "amount_difference": Decimal("0.00")}
+
+
+def preview_receipt_document_price(db: Session, **values: Any) -> dict[str, Any]:
+    return _document_price_plan(db, **values)[1]
+
+
+def confirm_receipt_document_price(
+    db: Session, *, user: User, expected_plan_hash: str, **values: Any
+) -> dict[str, Any]:
+    # Claim the SQLite writer before re-reading the receipt and its settlement.
+    claim = db.execute(update(IncomingReceiptItem).where(
+        IncomingReceiptItem.id == values["receipt_item_id"], IncomingReceiptItem.status == "posted"
+    ).values(status=IncomingReceiptItem.status).execution_options(synchronize_session=False))
+    if claim.rowcount != 1:
+        raise SupplierReceiptPriceFactError("SUPPLIER_RECEIPT_NOT_POSTED", "实收状态已变化，请刷新后核对")
+    db.expire_all()
+    plan, _preview = _document_price_plan(db, **values)
+    if plan.source_hash != expected_plan_hash:
+        raise SupplierReceiptPriceFactError("SUPPLIER_RECEIPT_DOCUMENT_PLAN_STALE", "核价内容已变化，请重新核对")
+    fact = _fact_from_plan(
+        plan, origin=DOCUMENT_CONFIRMATION_ORIGIN, user=user,
+        adoption_evidence_reference=str(values["evidence_reference"]).strip(),
+    )
+    db.add(fact)
+    db.flush()
+    return {
+        "fact_id": int(fact.id), "incoming_receipt_item_id": plan.incoming_receipt_item_id,
+        "fact_origin": DOCUMENT_CONFIRMATION_ORIGIN, "source_hash": fact.source_hash,
+        "erp_amount": plan.erp_amount, "tax_amount": plan.tax_amount, "created": True,
+        "requires_statement_regeneration": True,
+    }
 
 
 def freeze_stock_replenishment_price(

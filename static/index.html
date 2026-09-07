@@ -1101,6 +1101,9 @@
         background: var(--panel); box-shadow: var(--shadow-modal);
       }
       .modal:focus { outline: none; }
+      .modal.receipt-price-modal { width: min(720px, 100%); max-width: 100%; min-width: 0; box-sizing: border-box; }
+      .modal.review-form-modal { max-width: 100%; min-width: 0; box-sizing: border-box; }
+      .modal-mask.review-form-mask { grid-template-columns: minmax(0, 1fr); }
       .modal:focus-visible { outline: 3px solid rgba(0,113,227,.45); outline-offset: 3px; }
       .delivery-row-more { position: relative; }
       .delivery-row-more > summary { list-style: none; }
@@ -5078,7 +5081,7 @@
                   </div>
                   <div class="muted">列表中的结算周期以各供应商对账日为准；顶部日期仅为所选月份的默认 20 日兼容范围。未冻结最终价格或供应商主档异常的实收不会猜价，会列为待处理。</div>
                   <div v-if="supplierSettlementState.error" class="notice warning" style="margin-top:8px">{{ supplierSettlementState.error }}</div>
-                  <div v-for="issue in supplierSettlementIssues" :key="`${issue.source_key}-${issue.code}`" class="notice warning" style="margin-top:8px"><strong>{{ issue.supplier_name || '供应商待核对' }} · {{ issue.receipt_number || issue.source_key }}</strong><span v-if="issue.purchase_document_number"> · {{ issue.purchase_document_number }}</span>：{{ issue.message }}<div v-if="issue.missing_fields?.length" class="muted">缺少：{{ issue.missing_fields.join('、') }}</div><div v-if="issue.recommended_action" class="muted">处理：{{ issue.recommended_action }}</div></div>
+                  <div v-for="issue in supplierSettlementIssues" :key="`${issue.source_key}-${issue.code}`" class="notice warning" style="margin-top:8px"><strong>{{ issue.supplier_name || '供应商待核对' }} · {{ issue.receipt_number || issue.source_key }}</strong><span v-if="issue.purchase_document_number"> · {{ issue.purchase_document_number }}</span>：{{ issue.message }}<div v-if="issue.missing_fields?.length" class="muted">缺少：{{ issue.missing_fields.join('、') }}</div><div v-if="issue.recommended_action" class="muted">处理：{{ issue.recommended_action }}</div><button v-if="canFinance && issue.code==='PAPERBOARD_FROZEN_PRICE_MISSING'" class="btn small" :disabled="supplierReceiptPriceForm?.saving || !!supplierSettlementState.action" @click="openSupplierReceiptPrice(issue)">按原始凭据核价</button></div>
                   <details v-if="supplierPriceAdoption.previewMonth===supplierSettlementMonth" class="panel" style="margin-top:8px">
                     <summary style="cursor:pointer"><strong>历史缺价 dry-run 清单</strong> · 可唯一匹配 {{ supplierPriceAdoption.eligible.length }} 条 · 待人工核对 {{ supplierPriceAdoption.rejected.length }} 条</summary>
                     <div class="muted" style="margin:8px 0">本页面只读，不会采用或修改历史价格。正式采用必须由工厂 Codex 导出并核对逐行 CSV/JSON 计划，在备份验证、数据库 SHA、版本、Alembic head 和逐行 CAS 全部一致后，用受控脚本显式 --apply，并另写执行回执。</div>
@@ -5093,7 +5096,7 @@
                     <summary style="cursor:pointer"><strong>{{ row.supplier_name }}</strong>　对账日 {{ row.settlement_day || row.settlement_day_snapshot || 20 }} 日　结算周期 {{ row.period_start }} 至 {{ row.period_end }}　版本 N{{ row.document_revision || 1 }}　<span :class="['status',supplierSettlementStatusTone(row.status)]">{{ supplierSettlementStatusText(row.status) }}</span>　ERP ¥{{ money(row.erp_amount) }}　应付 ¥{{ money(row.adjusted_amount) }}　剩余 ¥{{ money(row.remaining_payable_amount) }}</summary>
                     <div class="toolbar" style="padding-top:8px"><div class="muted">{{ row.statement_number }} · 业务修订 N{{ row.document_revision || 1 }}；历史版本均保留，不会物理删除。</div><div class="toolbar-group"><button class="btn small" :disabled="row._historyLoading" @click="toggleSupplierSettlementHistory(row)">{{ row._historyLoading ? '读取中…' : '历史版本' }}</button><button v-if="row.can_regenerate && canFinance" class="btn small" :disabled="supplierSettlementBusy(row)" @click="regenerateSupplierSettlement(row)">重新生成</button></div></div>
                     <div v-if="row._historyOpen" class="notice" style="margin-top:6px"><div v-if="!row._historyItems.length" class="muted">暂无更早业务修订。</div><div v-for="history in row._historyItems" :key="history.id" class="muted">N{{ history.document_revision || 1 }} · {{ history.statement_number }} · {{ history.period_start }} 至 {{ history.period_end }} · {{ supplierSettlementStatusText(history.status) }} · 应付 ¥{{ money(history.adjusted_amount) }}</div></div>
-                    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>实收日 / 单号</th><th>采购单</th><th>品类 / 规格</th><th>实收</th><th>冻结单价</th><th>含税应付</th><th>其中税额</th></tr></thead><tbody><tr v-for="line in row.lines" :key="line.id"><td>{{ line.receipt_date }}<div><a :href="line.source_link" target="_blank" rel="noopener">{{ line.receipt_number }}</a></div></td><td>{{ line.purchase_document_number }}<div v-if="line.price_fact_origin==='historical_master_adoption'" class="status orange">历史价格事后采用</div></td><td>{{ line.material_or_product_snapshot }}<div class="muted">{{ line.category_label }} · {{ line.specification_snapshot || '-' }}</div></td><td>{{ line.received_quantity }} {{ line.quantity_unit }}</td><td>{{ line.frozen_unit_price }} / {{ line.price_unit }}</td><td class="sensitive-price">¥ {{ money(line.erp_amount) }}</td><td class="sensitive-price">¥ {{ money(line.tax_amount) }}</td></tr></tbody></table></div>
+                    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>实收日 / 单号</th><th>采购单</th><th>品类 / 规格</th><th>实收</th><th>冻结单价</th><th>含税应付</th><th>其中税额</th></tr></thead><tbody><tr v-for="line in row.lines" :key="line.id"><td>{{ line.receipt_date }}<div><a :href="line.source_link" target="_blank" rel="noopener">{{ line.receipt_number }}</a></div></td><td>{{ line.purchase_document_number }}<div v-if="line.price_fact_origin==='historical_master_adoption'" class="status orange">历史价格事后采用</div><div v-if="line.price_fact_origin==='historical_document_confirmation'" class="status blue">原始凭据核价</div></td><td>{{ line.material_or_product_snapshot }}<div class="muted">{{ line.category_label }} · {{ line.specification_snapshot || '-' }}</div></td><td>{{ line.received_quantity }} {{ line.quantity_unit }}</td><td>{{ line.frozen_unit_price }} / {{ line.price_unit }}</td><td class="sensitive-price">¥ {{ money(line.erp_amount) }}</td><td class="sensitive-price">¥ {{ money(line.tax_amount) }}</td></tr></tbody></table></div>
                     <div v-if="['draft','difference'].includes(row.status) && canFinance" class="form-grid" style="padding:10px 0 0">
                       <div class="field"><label>供应商账单号</label><input class="input" v-model.trim="row._reviewNumber" /></div><div class="field"><label>账单日期</label><input class="input" type="date" v-model="row._reviewDate" /></div><div class="field"><label>供应商含税金额</label><input class="input" type="number" step="0.01" min="0" v-model="row._reviewAmount" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="reviewSupplierSettlement(row)">核对账单</button></div>
                       <div class="field"><label>差异类型</label><select class="select" v-model="row._adjustType"><option value="price">价格差异</option><option value="quantity">数量差异（只调应付）</option><option value="tax_rounding">税额尾差</option><option value="other">其他</option></select></div><div class="field"><label>差异调整（可正负）</label><input class="input" type="number" step="0.01" v-model="row._adjustAmount" /></div><div class="field"><label>说明</label><input class="input" v-model.trim="row._adjustNote" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="adjustSupplierSettlement(row)">登记差异</button></div>
@@ -6004,8 +6007,8 @@
         </div>
       </div>
 
-      <div v-if="modal" class="modal-mask" @click.self="onModalMaskClick">
-        <div ref="businessModal" class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product', 'product-editor-large': modal.type === 'product' && isLargeUi}" :role="isAccessibleBusinessDialog ? 'dialog' : null" :aria-modal="isAccessibleBusinessDialog ? 'true' : null" :aria-labelledby="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null" :aria-describedby="isAccessibleReadOnlyOrderDialog ? 'erp-order-detail-description' : null" :tabindex="isAccessibleBusinessDialog ? -1 : null" @keydown="onModalKeydown">
+      <div v-if="modal" class="modal-mask" :class="{'review-form-mask':['supplierReceiptPrice','manualInvoiceRegistration','productionSupplement','stockReplenishment'].includes(modal.type)}" @click.self="onModalMaskClick">
+        <div ref="businessModal" class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'receipt-price-modal': modal.type === 'supplierReceiptPrice', 'review-form-modal': ['manualInvoiceRegistration','productionSupplement','stockReplenishment'].includes(modal.type), 'product-editor-modal': modal.type === 'product', 'product-editor-large': modal.type === 'product' && isLargeUi}" :role="isAccessibleBusinessDialog ? 'dialog' : null" :aria-modal="isAccessibleBusinessDialog ? 'true' : null" :aria-labelledby="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null" :aria-describedby="isAccessibleReadOnlyOrderDialog ? 'erp-order-detail-description' : null" :tabindex="isAccessibleBusinessDialog ? -1 : null" @keydown="onModalKeydown">
           <div class="modal-head"><strong :id="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null">{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small high-frequency-action" @click="closeModal">关闭</button></div>
           <div class="modal-body">
             <div v-if="masterVersionConflict && masterVersionConflict.entity === modal.type" class="notice danger" style="margin-bottom:12px">
@@ -8783,6 +8786,19 @@
               </table>
               <div v-if="statementDetail.invoices?.length" class="status blue" style="margin-top:10px">已有 {{ statementDetail.invoice_count }} 条开票记录；已正式开票时系统会禁止直接改历史。</div>
             </div>
+            <div v-else-if="modal.type === 'supplierReceiptPrice' && supplierReceiptPriceForm" class="form-grid">
+              <div class="field wide"><label>本次核价收料</label><strong>{{ supplierReceiptPriceForm.context?.receipt_number }} · {{ supplierReceiptPriceForm.context?.purchase_document_number }}</strong><div>{{ supplierReceiptPriceForm.context?.supplier_name }} · {{ supplierReceiptPriceForm.context?.material_code }}</div></div>
+              <div class="field wide"><label>原实收</label><span>{{ supplierReceiptPriceForm.context?.received_quantity }} 张 · {{ supplierReceiptPriceForm.context?.report_length_mm }} × {{ supplierReceiptPriceForm.context?.report_width_mm }} mm</span></div>
+              <div class="notice field wide">人民币 · 含13%税 · 含运。仅确认凭据符合此口径的行；口径未核实或不符时请勿确认。</div>
+              <fieldset class="field wide form-grid" :disabled="supplierReceiptPriceForm.saving || !!supplierReceiptPriceForm.confirmPayload || supplierReceiptPriceForm.committed" style="border:0;padding:0;margin:0;min-width:0">
+                <div class="field wide"><label for="supplier-receipt-evidence">原采购单或供应商账单号 / 行号</label><input id="supplier-receipt-evidence" class="input" v-model.trim="supplierReceiptPriceForm.evidence_reference" maxlength="255" autocomplete="off" /></div>
+                <div class="field"><label for="supplier-receipt-unit-price">凭据含税单价（元）</label><input id="supplier-receipt-unit-price" class="input" type="number" min="0.000001" step="0.000001" v-model="supplierReceiptPriceForm.unit_price" /></div>
+                <div class="field"><label for="supplier-receipt-price-unit">计价单位</label><select id="supplier-receipt-price-unit" class="input" v-model="supplierReceiptPriceForm.price_unit"><option value="per_square_meter">每平方米</option><option value="per_sheet">每张</option></select></div>
+                <div class="field wide"><label for="supplier-receipt-document-amount">凭据对应本次实收的含税金额（元）</label><input id="supplier-receipt-document-amount" class="input" type="number" min="0.01" step="0.01" v-model="supplierReceiptPriceForm.document_amount" /></div>
+              </fieldset>
+              <div v-if="supplierReceiptPriceForm.confirmPayload && !supplierReceiptPriceForm.committed" class="notice field wide" role="status">确认结果待核对，重试沿用原价格和操作凭证，不会再次核价。</div>
+              <div v-if="supplierReceiptPriceForm.error" class="notice warning field wide" role="alert">{{ supplierReceiptPriceForm.error }}</div>
+            </div>
             <div v-else-if="modal.type === 'manualInvoiceRegistration'" class="form-grid">
               <div class="field wide"><label>对账单</label><strong>{{ financeInvoiceForm.row?.statement_number || financeInvoiceForm.row?.id }}</strong></div>
               <div class="field"><label>已登记开票（元）</label><span>{{ money(financeInvoiceForm.row?.invoiced_amount) }}</span></div>
@@ -9136,9 +9152,10 @@
               </div>
             </div>
           </div>
-          <div v-if="modal?.type !== 'product'" class="modal-foot">
-            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='manualInvoiceRegistration' && !!financeStatementOperationState.action) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal || modal?.type==='manualInvoiceRegistration' ? "取消" : "关闭" }}</button>
+          <div v-if="!['product','productionSupplement'].includes(modal?.type)" class="modal-foot">
+            <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='manualInvoiceRegistration' && !!financeStatementOperationState.action) || (modal?.type==='supplierReceiptPrice' && !!supplierReceiptPriceForm?.saving) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal || ['manualInvoiceRegistration','supplierReceiptPrice'].includes(modal?.type) ? "取消" : "关闭" }}</button>
             <button v-if="modal?.type==='manualInvoiceRegistration' && canFinance" type="button" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="registerInvoice(financeInvoiceForm.row)">{{ financeStatementOperationState.action ? '正在登记…' : financeManualMutationAttempts.register ? '重试核对登记' : '登记已开票结果' }}</button>
+            <button v-if="modal?.type==='supplierReceiptPrice' && canFinance" type="button" class="btn primary" :disabled="supplierReceiptPriceForm?.saving || supplierReceiptPriceForm?.committed" @click="confirmSupplierReceiptPrice">{{ supplierReceiptPriceForm?.saving ? '正在核对…' : supplierReceiptPriceForm?.confirmPayload ? '重试核对结果' : '按此口径确认价格' }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
@@ -9982,6 +9999,7 @@
             supplierSettlements:[], supplierSettlementIssues:[],
             supplierSettlementState:{loading:false,action:"",statementId:null,error:"",periodStart:"",periodEnd:"",generateKey:"",generateDueKey:"",autoGeneratedMonth:"",uploadStatementId:null,uploadInvoiceId:null},
             supplierPriceAdoption:{loading:false,previewMonth:"",eligible:[],rejected:[],adoptionReason:"",planHash:"",error:""},
+            supplierReceiptPriceForm:null,
             supplierSettlementAttempts:{},
             simpleFinanceMeta:{primary_groups:[],rule_types:[],centers:[],customers:[],supplier_statements:[],note:""},
             simpleFinanceSummary:{primary_groups:{material:{},personnel:{},freight:{},fixed_operating:{}},active_employee_count:0,held_acceptance_count:0,held_acceptance_amount:"0.00",note:""},
@@ -10879,7 +10897,7 @@
             return ["orderDetail", "orderGroupDetail"].includes(this.modal?.type);
           },
           isAccessibleBusinessDialog() {
-            return this.isAccessibleReadOnlyOrderDialog || modalA11ySessionActive;
+            return this.isAccessibleReadOnlyOrderDialog || ['supplierReceiptPrice','manualInvoiceRegistration','productionSupplement','stockReplenishment'].includes(this.modal?.type) || modalA11ySessionActive;
           },
           canSaveModal() {
             if (!this.modal) return false;
@@ -18432,6 +18450,7 @@
           },
           async openStockReplenishment(options={}) {
             if (!this.canRequisition) return;
+            const opener = this.rememberModalOpener?.();
             const warningOnly = !!options.warningOnly;
             const controller = this.beginLatestRequest("requisition:stock-replenishment-bootstrap");
             this.stockReplenishmentSaveState = {saving:false, committed:false, uncertain:false, result:null};
@@ -18440,6 +18459,7 @@
             this.stockReplenishmentProducts = [];
             this.stockReplenishmentCompanions = [];
             this.modal = { type:"stockReplenishment", title:warningOnly ? "按库存预警生成报料草稿" : "手动库存补库报料" };
+            this.focusAccessibleModal?.(opener);
             try {
               const tasks = [
                 axios.get("/api/requisition/stock-policies", {params:{warning_only:true}, signal:controller.signal}),
@@ -19665,6 +19685,7 @@
           },
           async supplementProductionCompletion(row) {
             if (!this.canAdmin || !Number(this.user?.id) || !row?.can_supplement) return;
+            const opener = this.rememberModalOpener?.();
             const previous = this.productionSupplementForm;
             if (previous?.payload && !this.productionSupplementSessionIsCurrent(previous)) {
               this.showToast("登录会话已变化，请先核对原补录结果，不能用当前身份重试旧补录", true);
@@ -19676,6 +19697,7 @@
               && Number(previous.row.task_version) === Number(row.task_version)
             ))) {
               this.modal = {type:"productionSupplement",title:"补录生产"};
+              this.focusAccessibleModal?.(opener);
               return;
             }
             const input = Number(row.available_material_input_quantity || 0);
@@ -19685,6 +19707,7 @@
               location_id:null, destination:"", payload:null, saving:false, submitted:false, refreshed:false, error:"",
             };
             this.modal = {type:"productionSupplement",title:"补录生产"};
+            this.focusAccessibleModal?.(opener);
             await this.ensureProductionLocations({force:true});
           },
           productionSupplementSessionIsCurrent(form) {
@@ -22437,6 +22460,73 @@
                 this.finishLatestRequest(requestKey,controller);
               }
             }
+          },
+          supplierReceiptPriceIsCurrent(form) {
+            return this.supplierReceiptPriceForm === form && form.actorId === Number(this.user?.id) && form.authGeneration === this.authGeneration;
+          },
+          async openSupplierReceiptPrice(issue) {
+            if (!this.canFinance || this.supplierSettlementState.action || issue?.code !== 'PAPERBOARD_FROZEN_PRICE_MISSING') return false;
+            const opener = this.rememberModalOpener?.();
+            const match = /^paperboard:([1-9]\d*)$/.exec(issue.source_key || '');
+            if (!match) return false;
+            const receiptId = Number(match[1]);
+            const old = this.supplierReceiptPriceForm;
+            if (old && this.supplierReceiptPriceIsCurrent(old)) {
+              if (old.saving) return false;
+              if (old.confirmPayload && !old.committed) {
+                if (old.receiptId !== receiptId) { this.showToast('请先核对上一笔价格确认结果', true); return false; }
+                this.modal = {type:'supplierReceiptPrice',title:'按原始凭据核价'};
+                this.focusAccessibleModal?.(opener);
+                return true;
+              }
+              if (old.committed && old.receiptId === receiptId) { this.showToast('此行价格已确认，请刷新月结核对', true); return false; }
+            }
+            this.supplierReceiptPriceForm = {receiptId,actorId:Number(this.user?.id),authGeneration:this.authGeneration,context:null,evidence_reference:'',unit_price:'',price_unit:'per_square_meter',document_amount:'',confirmPayload:null,committed:false,saving:true,error:''};
+            const form = this.supplierReceiptPriceForm;
+            try {
+              const {data} = await axios.get(`/api/finance/supplier-settlements/receipt-price-confirmations/${receiptId}`);
+              if (!this.supplierReceiptPriceIsCurrent(form)) return false;
+              form.context = data;
+              this.modal = {type:'supplierReceiptPrice',title:'按原始凭据核价'};
+              this.focusAccessibleModal?.(opener);
+              return true;
+            } catch(error) {
+              if (this.supplierReceiptPriceIsCurrent(form)) this.showToast(this.errorMessage(error), true);
+              return false;
+            } finally { form.saving = false; }
+          },
+          async confirmSupplierReceiptPrice() {
+            const form = this.supplierReceiptPriceForm;
+            if (!form || !this.canFinance || !this.supplierReceiptPriceIsCurrent(form) || form.saving || form.committed || !form.context) return false;
+            if (!form.confirmPayload && (!form.evidence_reference.trim() || !['per_square_meter','per_sheet'].includes(form.price_unit) || !Number.isFinite(Number(form.unit_price)) || Number(form.unit_price) <= 0 || !Number.isFinite(Number(form.document_amount)) || Number(form.document_amount) <= 0)) {
+              form.error = '请填写凭据引用、有效单价和本次实收对应金额'; return false;
+            }
+            const url = `/api/finance/supplier-settlements/receipt-price-confirmations/${form.receiptId}`;
+            form.saving = true;
+            form.error = '';
+            try {
+              if (!form.confirmPayload) {
+                const payload = {evidence_reference:form.evidence_reference.trim(),unit_price:String(form.unit_price),price_unit:form.price_unit,document_amount:String(form.document_amount),currency:'CNY',tax_included:true,tax_rate:'0.13',shipping_fee_mode:'included',expected_source_hash:form.context.source_hash};
+                const {data} = await axios.post(`${url}/preview`,payload);
+                if (!this.supplierReceiptPriceIsCurrent(form)) return false;
+                form.confirmPayload = Object.freeze({...payload,expected_plan_hash:data.plan_hash,idempotency_key:createIdempotencyKey()});
+              }
+              await axios.post(`${url}/confirm`,form.confirmPayload);
+              form.committed = true;
+              if (!this.supplierReceiptPriceIsCurrent(form)) return true;
+              if (this.modal?.type === 'supplierReceiptPrice') { this.modal = null; this.restoreModalOpenerFocus?.(); }
+              let refreshed = false;
+              try { refreshed = await this.loadSupplierSettlements(false); } catch (_) { /* The price is already committed. */ }
+              if (!this.supplierReceiptPriceIsCurrent(form)) return true;
+              this.showToast(refreshed ? '核价已保存。生成所选月份草稿后纳入月结。' : '核价已保存，月结列表尚未刷新；请刷新核对，不要重复核价。', !refreshed);
+              return true;
+            } catch(error) {
+              if (!this.supplierReceiptPriceIsCurrent(form)) return false;
+              const status = Number(error?.response?.status || 0);
+              if (status >= 400 && status < 500 && ![408,425,429].includes(status)) form.confirmPayload = null;
+              form.error = form.confirmPayload ? `确认结果尚未核实，请用原操作重试核对：${this.errorMessage(error)}` : this.errorMessage(error);
+              return false;
+            } finally { form.saving = false; }
           },
           async previewSupplierPriceAdoptions() {
             if (!['admin','boss'].includes(this.user?.role) || this.supplierPriceAdoption.loading || this.supplierSettlementState.action) return false;
@@ -34988,6 +35078,10 @@
             }
           },
 	          closeModal() {
+            if (this.modal?.type === 'supplierReceiptPrice') {
+              if (this.supplierReceiptPriceForm?.saving) return;
+              if (!this.supplierReceiptPriceForm?.confirmPayload) this.supplierReceiptPriceForm = null;
+            }
             if (this.modal?.type === "manualInvoiceRegistration" && this.financeStatementOperationState.action) return;
 	            if (this.isForcedPassword) return;
               if (this.modal?.type === "productionSupplement") {
@@ -36476,6 +36570,7 @@
           },
           openRegisterInvoice(row) {
             if (!this.canFinance || this.financeStatementOperationState.action) return false;
+            const opener = this.rememberModalOpener?.();
             const attempt = this.financeManualMutationAttempts.register;
             if (attempt && (!this.financeManualMutationAttemptIsCurrent(attempt) || Number(attempt.statementId) !== Number(row.id))) {
               this.showToast("上一笔开票结果待核对，请在原账号、原对账单继续处理", true);
@@ -36490,6 +36585,7 @@
             if (!attempt && (!Number.isFinite(remaining) || remaining <= 0)) { this.showToast("当前没有待登记开票余额", true); return false; }
             this.financeInvoiceForm = {row:{...row}, remaining, invoice_number:attempt?.payload.invoice_number || "", amount:attempt?.payload.invoice_amount || remaining.toFixed(2), committed:false};
             this.modal = {type:"manualInvoiceRegistration",title:"登记已开票结果"};
+            this.focusAccessibleModal?.(opener);
             return true;
           },
           async registerInvoice(row) {

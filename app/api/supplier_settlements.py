@@ -11,7 +11,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -57,7 +57,10 @@ from app.services.supplier_monthly_settlement import (
 )
 from app.services.supplier_receipt_price_facts import (
     SupplierReceiptPriceFactError,
+    confirm_receipt_document_price,
     preview_historical_price_adoptions,
+    preview_receipt_document_price,
+    receipt_document_price_context,
 )
 
 
@@ -109,6 +112,22 @@ class GeneratePayload(IdempotentPayload):
     def validate_month(cls, value: str) -> str:
         settlement_period(value)
         return value
+
+
+class ReceiptDocumentPricePayload(BaseModel):
+    evidence_reference: str = Field(min_length=1, max_length=255)
+    unit_price: Decimal = Field(gt=0, max_digits=20, decimal_places=6)
+    price_unit: str
+    document_amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+    currency: str
+    tax_included: StrictBool
+    tax_rate: Decimal = Field(ge=0, le=1, decimal_places=6)
+    shipping_fee_mode: str
+    expected_source_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ReceiptDocumentPriceConfirmPayload(ReceiptDocumentPricePayload, IdempotentPayload):
+    expected_plan_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class RegeneratePayload(IdempotentPayload):
@@ -459,6 +478,64 @@ def preview_supplier_receipt_price_adoptions(
         start_utc=start_utc,
         end_utc=end_utc,
     )
+
+
+@router.get("/supplier-settlements/receipt-price-confirmations/{receipt_item_id}")
+def get_receipt_document_price_context(
+    receipt_item_id: int, db: Session = Depends(get_db),
+    _user: User = Depends(company_read),
+) -> dict[str, Any]:
+    try:
+        return jsonable_encoder(
+            receipt_document_price_context(db, receipt_item_id=receipt_item_id),
+            custom_encoder={Decimal: str},
+        )
+    except SupplierReceiptPriceFactError as error:
+        raise _translate(error) from error
+
+
+@router.post("/supplier-settlements/receipt-price-confirmations/{receipt_item_id}/preview")
+def preview_receipt_document_price_confirmation(
+    receipt_item_id: int, payload: ReceiptDocumentPricePayload,
+    db: Session = Depends(get_db), _user: User = Depends(company_read),
+) -> dict[str, Any]:
+    try:
+        return jsonable_encoder(
+            preview_receipt_document_price(db, receipt_item_id=receipt_item_id, **payload.model_dump()),
+            custom_encoder={Decimal: str},
+        )
+    except SupplierReceiptPriceFactError as error:
+        raise _translate(error) from error
+
+
+@router.post("/supplier-settlements/receipt-price-confirmations/{receipt_item_id}/confirm", status_code=201)
+def confirm_receipt_document_price_confirmation(
+    receipt_item_id: int, payload: ReceiptDocumentPriceConfirmPayload,
+    db: Session = Depends(get_db), user: User = Depends(company_execute),
+) -> dict[str, Any]:
+    values = payload.model_dump(exclude={"idempotency_key"})
+
+    def operation():
+        return confirm_receipt_document_price(
+            db, receipt_item_id=receipt_item_id, user=user, **values
+        ), None
+
+    action = "SUPPLIER_RECEIPT_DOCUMENT_PRICE_CONFIRM"
+    request = {"receipt_item_id": receipt_item_id, **values}
+    try:
+        return _run_mutation(
+            db, user=user, key=payload.idempotency_key, action=action,
+            payload=request, operation=operation,
+            description="按原采购单或供应商对账单逐笔核对并冻结实收结算价格",
+        )
+    except HTTPException as error:
+        if error.status_code == 409:
+            # A concurrent retry may have waited for the first receipt writer.
+            replay = _replay(db, key=payload.idempotency_key,
+                             request_hash=_request_hash(action, request), action=action, user=user)
+            if replay is not None:
+                return replay
+        raise
 
 
 @router.post("/supplier-settlements/generate")

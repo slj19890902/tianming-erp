@@ -239,7 +239,8 @@ class SupplierReceiptSettlementPriceFact(Base):
     __tablename__ = "supplier_receipt_settlement_price_facts"
     __table_args__ = (
         CheckConstraint(
-            "fact_origin IN ('receipt_frozen','historical_master_adoption')",
+            "fact_origin IN ('receipt_frozen','historical_master_adoption',"
+            "'historical_document_confirmation')",
             name="ck_supplier_receipt_price_facts_origin",
         ),
         CheckConstraint(
@@ -281,6 +282,10 @@ class SupplierReceiptSettlementPriceFact(Base):
             "(fact_origin = 'historical_master_adoption' AND "
             "adoption_reason IS NOT NULL AND "
             "adoption_reason = '2026-09-02 老板确认采用当前主数据' "
+            "AND adoption_evidence_reference IS NOT NULL "
+            "AND length(trim(adoption_evidence_reference)) > 0) OR "
+            "(fact_origin = 'historical_document_confirmation' AND "
+            "adoption_reason IS NOT NULL AND length(trim(adoption_reason)) > 0 "
             "AND adoption_evidence_reference IS NOT NULL "
             "AND length(trim(adoption_evidence_reference)) > 0))",
             name="ck_supplier_receipt_price_facts_adoption",

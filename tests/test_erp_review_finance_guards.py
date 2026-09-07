@@ -38,7 +38,7 @@ def _reviewed_statement(client, factory):
     return receipt_id, response.json()
 
 
-@pytest.mark.parametrize('action', ['confirm', 'regenerate'])
+@pytest.mark.parametrize('action', ['confirm', 'regenerate', 'refresh'])
 def test_reversed_source_cannot_be_confirmed_or_regenerated_into_payable(
     requisition_app, monkeypatch, action,
 ):
@@ -55,23 +55,33 @@ def test_reversed_source_cannot_be_confirmed_or_regenerated_into_payable(
             'reason': '隔离测试：撤回错误实收', 'idempotency_key': 'review-guards-revert',
         })
         assert response.status_code == 200, response.text
-        response = client.post(
-            f"/api/finance/supplier-settlements/{statement['id']}/{action}", json={
+        if action == 'refresh':
+            payload = {'settlement_month': '2026-08', 'idempotency_key': 'review-empty-month-refresh'}
+            response = client.post('/api/finance/supplier-settlements/generate', json=payload)
+            assert response.status_code == 200, response.text
+            assert response.json()['changed_statement_count'] == 0
+            assert any(issue['code'] == 'SUPPLIER_SETTLEMENT_REGENERATION_EMPTY'
+                       and issue['source_key'] == str(statement['id']) for issue in response.json()['issues'])
+            assert client.post('/api/finance/supplier-settlements/generate', json=payload).json() == response.json()
+        else:
+            response = client.post(
+                f"/api/finance/supplier-settlements/{statement['id']}/{action}", json={
                 'expected_version': statement['version'],
                 'idempotency_key': f'review-guards-{action}',
-            },
-        )
-        assert response.status_code == 409, response.text
-        assert response.json()['detail']['code'] == (
-            'SUPPLIER_SETTLEMENT_SOURCE_CHANGED' if action == 'confirm'
-            else 'SUPPLIER_SETTLEMENT_REGENERATION_EMPTY'
-        )
+                },
+            )
+            assert response.status_code == 409, response.text
+            assert response.json()['detail']['code'] == (
+                'SUPPLIER_SETTLEMENT_SOURCE_CHANGED' if action == 'confirm'
+                else 'SUPPLIER_SETTLEMENT_REGENERATION_EMPTY'
+            )
     with factory() as db:
         saved = db.get(SupplierMonthlyStatement, statement['id'])
         assert saved.status == 'draft'
         assert saved.version == statement['version']
         assert saved.finance_payable_id is None
         assert db.scalar(select(func.count(FinancePayable.id))) == 0
+        assert db.scalar(select(func.count(SupplierMonthlyStatement.id))) == 1
 
 
 @pytest.mark.parametrize('payment_date,valid', [

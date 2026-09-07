@@ -1114,16 +1114,31 @@ def generate_or_refresh_settlements(
             groups.setdefault((candidate.currency, candidate.tax_basis), []).append(
                 candidate
             )
+        existing_groups = {
+            (row.currency, row.tax_basis): row
+            for row in db.scalars(select(SupplierMonthlyStatement).where(
+                SupplierMonthlyStatement.supplier_id == supplier.id,
+                SupplierMonthlyStatement.settlement_month == settlement_month,
+                SupplierMonthlyStatement.active_guard == 1,
+            ))
+        }
+        # A disappeared source group still has a visible draft. Report that
+        # mismatch instead of silently returning it as an unchanged result.
+        for key, row in existing_groups.items():
+            if row.status in ACTIVE_DRAFT_STATUSES:
+                groups.setdefault(key, [])
         for (currency, tax_basis), group_candidates in groups.items():
-            existing = db.scalar(
-                select(SupplierMonthlyStatement).where(
-                    SupplierMonthlyStatement.supplier_id == supplier.id,
-                    SupplierMonthlyStatement.settlement_month == settlement_month,
-                    SupplierMonthlyStatement.currency == currency,
-                    SupplierMonthlyStatement.tax_basis == tax_basis,
-                    SupplierMonthlyStatement.active_guard == 1,
-                )
-            )
+            existing = existing_groups.get((currency, tax_basis))
+            if not group_candidates:
+                issues.append(_issue(
+                    source_type="supplier_statement", source_key=str(existing.id),
+                    receipt_number=existing.statement_number,
+                    supplier_name=supplier.standard_name,
+                    code="SUPPLIER_SETTLEMENT_REGENERATION_EMPTY",
+                    message="当前周期没有可生成的有效实收，原草稿保持不变；不能据旧金额确认应付",
+                    recommended_action="核对已撤销或缺价的实收来源后重新生成",
+                ))
+                continue
             desired_hash = _candidate_source_hash(group_candidates)
             if existing is None:
                 created = _create_statement_from_candidates(

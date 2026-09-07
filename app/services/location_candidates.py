@@ -103,7 +103,7 @@ def pallet_has_physical_goods_condition(pallet_id_expression):
 
 
 def _map_number(value: object) -> float:
-    return round(float(value or 0), 3)
+    return round(float(value or 0), 4)
 
 
 def load_warehouse_location_projection_contexts(

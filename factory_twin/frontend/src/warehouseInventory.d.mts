@@ -233,6 +233,11 @@ export function findPalletPlanningConflicts(
   racks?: import("./types").Rack[]
 ): Array<{ pallet_id: string; column_id: string }>;
 
+export function planningConflictWarning(
+  conflicts?: Array<{ pallet_id: string; column_id: string }>,
+  palletId?: string
+): string;
+
 export function uniquePalletConflictCount(
   conflicts?: Array<{ pallet_id: string; column_id: string }>
 ): number;

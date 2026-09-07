@@ -33,6 +33,7 @@ import {
   mergePublishedFeatureGeometry,
   normalizeInventoryLocationProjection,
   normalizeStandardPalletContract,
+  planningConflictWarning,
   searchHighlightAreaCodes,
   standardPalletDisplayIssue,
   standardPalletContractsMatch,
@@ -2442,9 +2443,9 @@ export function WarehouseTwinApp() {
       violations: [
         ...layout.violations,
         ...displayedLocationConflicts.map((item) => ({
-          id: `location-column-${item.pallet_id}-${item.column_id}`,
+          id: `location-geometry-${item.pallet_id}-${item.column_id}`,
           severity: "error" as const,
-          rule_code: "LOCATION_OVERLAPS_COLUMN",
+          rule_code: "LOCATION_GEOMETRY_CONFLICT",
           message: "货位越界，或与其他货位、柱子、设备、货架、禁放区冲突",
           entity_kind: "pallet",
           entity_id: item.pallet_id,
@@ -2649,6 +2650,9 @@ export function WarehouseTwinApp() {
   const selectedLocation = selected?.kind === "pallet"
     ? visualLocations.find((item) => `erp-location-${item.location_id}` === selected.id)
     : undefined;
+  const selectedLocationPlanningWarning = selectedLocation
+    ? planningConflictWarning(displayedLocationConflicts, `erp-location-${selectedLocation.location_id}`)
+    : "";
   const selectedDispatchPallet = selected?.kind === "pallet" && selected.id.startsWith("erp-dispatch-pallet-")
     ? dispatchStagingPallets.find((item) => `erp-dispatch-pallet-${item.pallet_id}` === selected.id)
     : undefined;
@@ -6297,7 +6301,7 @@ export function WarehouseTwinApp() {
             </button>;
           })}
           {mapMode === "lookup" && selectedLocationTraceItems.length > 4 && <button type="button" className="twin-detail-toggle" aria-expanded={locationItemsExpanded} onClick={() => setLocationItemsExpanded((current) => !current)}>{locationItemsExpanded ? "收起货物" : `查看全部 ${selectedLocationTraceItems.length} 条货物`}</button>}
-          {displayedLocationConflictIds.has(`erp-location-${selectedLocation.location_id}`) && <p className="twin-location-column-warning">{locationEditMode ? "该货位越界，或与其他货位、柱子、设备、货架、禁放区冲突，可先保存调整，再拖到安全位置；应用前会核对冲突。" : "该货位与固定柱子冲突，请进入区域规划核对现场位置。"}</p>}
+          {displayedLocationConflictIds.has(`erp-location-${selectedLocation.location_id}`) && <p className="twin-location-column-warning">{locationEditMode ? "该货位越界，或与其他货位、柱子、设备、货架、禁放区冲突，可先保存调整，再拖到安全位置；应用前会核对冲突。" : selectedLocationPlanningWarning}</p>}
           <button type="button" className="twin-detail-toggle secondary" aria-expanded={locationDetailOpen} onClick={() => setLocationDetailOpen((current) => !current)}>{locationDetailOpen ? "收起位置与栈板详情" : "位置与栈板详情"}</button>
           {locationDetailOpen && <div className="twin-location-secondary">
             <h3>{selectedLocation.location_name}</h3>

@@ -761,6 +761,20 @@ export function findPalletPlanningConflicts(
   return conflicts;
 }
 
+export function planningConflictWarning(conflicts = [], palletId = "") {
+  const relatedIds = conflicts
+    .filter((item) => String(item?.pallet_id || "") === String(palletId || ""))
+    .map((item) => String(item?.column_id || ""));
+  if (!relatedIds.length) return "";
+  const reasons = [];
+  if (relatedIds.some((id) => id.startsWith("location:"))) reasons.push("与其他货位重叠");
+  if (relatedIds.some((id) => id.startsWith("zone-boundary:"))) reasons.push("超出所属区域边界");
+  if (relatedIds.some((id) => id && !id.startsWith("location:") && !id.startsWith("zone-boundary:"))) {
+    reasons.push("与柱子、设备、货架或禁放区重叠");
+  }
+  return `该货位${reasons.join("，且")}，请进入区域规划核对现场位置。`;
+}
+
 export function expandAreaInventory(locations, floorCode, areaCode) {
   if (!areaCode) return [];
   const seenLotIds = new Set();

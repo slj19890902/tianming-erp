@@ -2876,6 +2876,109 @@ def test_one_step_area_confirmation_saves_validates_publishes_and_confirms_capac
         engine.dispose()
 
 
+def test_one_step_new_zone_avoids_archived_internal_code_and_reads_identity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, _draft = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = json.loads(published.read_text(encoding="utf-8"))
+    floor_layout = document["floors"]["3F"]
+    floor_layout["features"] = []
+    floor_layout["retired_features"] = [
+        {
+            "id": "archived-zone-id",
+            "feature_code": "ZONE-3F-EDIT-001",
+            "feature_kind": "zone",
+        }
+    ]
+    floor_layout["revision"] = _floor_revision(floor_layout)
+    published.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+    published_revision = floor_layout["revision"]
+    created = editor.create_warehouse_twin_feature(
+        "3F",
+        expected_revision=published_revision,
+        operation_key="create-after-archived-zone-code",
+        feature_kind="zone",
+        points=[[5_000, 0], [10_000, 0], [10_000, 10_000], [5_000, 10_000]],
+    )
+    assert created.value["feature_code"] == "ZONE-3F-EDIT-002"
+
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(
+        warehouse_api,
+        "list_production_projection_mappings",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        warehouse_api,
+        "load_warehouse_twin_floor",
+        lambda floor_code: json.loads(runtime.read_text(encoding="utf-8"))["floors"][
+            floor_code.upper()
+        ],
+    )
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-47b-admin"))
+            floor = db.scalar(select(WarehouseFloor).where(WarehouseFloor.floor_code == "3F"))
+            assert admin is not None and floor is not None
+            archived_area = WarehouseArea(
+                floor_id=floor.id,
+                area_code="OLD-001",
+                area_name="已归档旧区域",
+                construction_status="archived",
+            )
+            archived_area.storage_policy = WarehouseAreaStoragePolicy(
+                map_feature_id="archived-zone-id",
+                allowed_inventory_types_json='["finished"]',
+                storage_layout="pallet_ground",
+                status="archived",
+                version=2,
+                archived_at=datetime(2026, 9, 7, 8, 0),
+                archived_by=admin.id,
+                archive_operation_key="archive-old-zone-code",
+                archive_request_hash="a" * 64,
+                archive_feature_snapshot_json=json.dumps(
+                    {
+                        "published_layout_objects": {
+                            "features": [
+                                {
+                                    "id": "archived-zone-id",
+                                    "feature_code": "ZONE-3F-EDIT-001",
+                                    "erp_area_code": "OLD-001",
+                                }
+                            ]
+                        }
+                    }
+                ),
+            )
+            db.add(archived_area)
+            db.commit()
+
+            result = warehouse_api.confirm_twin_zone_area(
+                "3F",
+                created.value["id"],
+                _confirm_area_payload(
+                    revision=created.floor_revision,
+                    published_revision=published_revision,
+                    operation_key="confirm-after-archived-zone-code",
+                    capacity=1,
+                    area_code="X2",
+                    area_name="三楼 X2 新区域",
+                ),
+                _request(),
+                db,
+                admin,
+            )
+
+            assert result["status"] == "published"
+            assert result["area"]["area_code"] == "X2"
+            assert result["area"]["storage_policy"]["status"] == "published"
+            assert db.get(WarehouseArea, archived_area.id).construction_status == "archived"
+    finally:
+        engine.dispose()
+
+
 def test_one_step_new_floor3_zone_does_not_force_verified_v11_siblings_to_rebind(
     tmp_path: Path,
     monkeypatch,

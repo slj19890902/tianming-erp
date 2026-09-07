@@ -2157,8 +2157,12 @@ def _next_feature_code(floor: dict[str, Any], feature_kind: str) -> str:
     prefix = "ZONE" if feature_kind == "zone" else "AISLE"
     stem = f"{prefix}-{floor.get('floor_code')}-EDIT-"
     used = {
-        str(item.get("feature_code") or "")
-        for item in floor.get("features") or []
+        str(item.get("feature_code") or "").strip().upper()
+        for collection in (
+            floor.get("features") or [],
+            floor.get("retired_features") or [],
+        )
+        for item in collection
     }
     sequence = 1
     while f"{stem}{sequence:03d}" in used:

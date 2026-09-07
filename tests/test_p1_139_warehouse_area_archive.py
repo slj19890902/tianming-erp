@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from app.models.user import User
 from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryPallet,
+    OrderedFinishedReceiptReturn,
     WarehouseArea,
     WarehouseAreaStoragePolicy,
     WarehouseFloor,
@@ -338,6 +340,116 @@ def test_empty_published_area_archives_without_inventory_write_and_replays(
                     OperationLog.action == "TWIN_LAYOUT_FORMAL_AREA_ARCHIVE"
                 )
             ) == 1
+    finally:
+        engine.dispose()
+
+
+def test_archiving_preserves_active_return_history_after_return_lot_transfers_away(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    baseline, _published, _draft = _isolate_layout(tmp_path, monkeypatch)
+    revision = json.loads(baseline.read_text(encoding="utf-8"))["floors"]["3F"][
+        "revision"
+    ]
+    engine, factory = _database(tmp_path, revision=revision)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-139-admin"))
+            location = db.scalar(select(WarehouseLocation))
+            assert admin is not None and location is not None
+            staging_location = WarehouseLocation(
+                location_code="TMP-RETURN-01",
+                location_name="临时退回存放位",
+                warehouse_type="finished",
+                is_active=True,
+                warehouse_floor=3,
+                area_code="TMP",
+                storage_type="ground",
+                address_kind="legacy",
+                source_version="test",
+                placement_status="placed",
+            )
+            db.add(staging_location)
+            db.flush()
+            return_lot = InventoryLot(
+                lot_number="P1-139-RETURN-MOVED",
+                inventory_type="finished",
+                warehouse_location_id=staging_location.id,
+                quantity_available=6,
+                quantity_reserved=0,
+                quantity_consumed=0,
+                quantity_damaged=0,
+                quantity_scrapped=0,
+                unit="boxes",
+                status="active",
+                source_type="delivery_return",
+                stock_date=date(2026, 9, 7),
+                stock_date_accuracy="exact",
+                last_movement_at=datetime(2026, 9, 7, 8, 0),
+                version=2,
+            )
+            db.add(return_lot)
+            db.commit()
+            location_id = location.id
+            staging_location_id = staging_location.id
+            return_lot_id = return_lot.id
+
+        # The archive guard only reads the immutable return fact and its return
+        # lot.  Its receipt/allocation/movement dependencies are intentionally
+        # outside this focused archive fixture, so insert the isolated fact
+        # through a separate SQLite connection with FKs disabled.
+        raw = sqlite3.connect(engine.url.database)
+        try:
+            raw.execute("PRAGMA foreign_keys = OFF")
+            cursor = raw.execute(
+                """
+                INSERT INTO ordered_finished_receipt_returns (
+                    return_receipt_item_id, sequence_no, delivery_item_id,
+                    delivery_inventory_allocation_id, source_inventory_lot_id,
+                    return_inventory_lot_id, return_location_id, reservation_id,
+                    return_in_movement_id, source_reverse_movement_id,
+                    source_transfer_movement_id, quantity, resolution_action,
+                    status, idempotency_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    910_001,
+                    1,
+                    910_001,
+                    910_001,
+                    return_lot_id,
+                    return_lot_id,
+                    location_id,
+                    None,
+                    910_001,
+                    910_002,
+                    910_003,
+                    6,
+                    "accept_short",
+                    "active",
+                    "p1-139-return-history-after-transfer",
+                ),
+            )
+            return_fact_id = int(cursor.lastrowid)
+            raw.commit()
+        finally:
+            raw.close()
+
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == "p1-139-admin"))
+            assert admin is not None
+            result = _archive(db, admin, revision=revision)
+            assert result["applied"] is True
+            db.expire_all()
+            persisted_fact = db.get(OrderedFinishedReceiptReturn, return_fact_id)
+            persisted_lot = db.get(InventoryLot, return_lot_id)
+            assert persisted_fact is not None and persisted_lot is not None
+            assert persisted_fact.status == "active"
+            assert persisted_fact.return_location_id == location_id
+            assert persisted_lot.warehouse_location_id == staging_location_id
+            assert persisted_lot.quantity_available == 6
+            assert db.scalar(select(WarehouseLocation.is_active)) is False
     finally:
         engine.dispose()
 

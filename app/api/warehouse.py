@@ -12515,9 +12515,23 @@ def _formal_area_archive_blockers(
             blockers.append(f"仍有未完成库存预占 {reservation_count} 条")
         receipt_return_count = int(
             db.scalar(
-                select(func.count(OrderedFinishedReceiptReturn.id)).where(
+                select(func.count(OrderedFinishedReceiptReturn.id))
+                .outerjoin(
+                    InventoryLot,
+                    InventoryLot.id
+                    == OrderedFinishedReceiptReturn.return_inventory_lot_id,
+                )
+                .where(
                     OrderedFinishedReceiptReturn.return_location_id.in_(location_ids),
                     OrderedFinishedReceiptReturn.status == "active",
+                    # A return fact keeps its original receiving location for
+                    # audit.  It must not keep an otherwise empty area alive
+                    # after its return lot has been formally transferred away.
+                    # A missing return lot remains a fail-closed blocker.
+                    or_(
+                        InventoryLot.id.is_(None),
+                        InventoryLot.warehouse_location_id.in_(location_ids),
+                    ),
                 )
             )
             or 0

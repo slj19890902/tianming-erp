@@ -3725,27 +3725,35 @@ export function WarehouseTwinApp() {
 
   const confirmPalletMergeBatch = async () => {
     if (mergeSources.length < 2 || !mergeTarget || mergeBatchBusy) return;
+    const target = mergeTarget;
     const submittedSources = mergeSources.filter((item) => item.pallet_id !== mergeTarget.pallet_id);
     const sourcePreview = submittedSources.map((item) => `${item.floor_code}/${item.location_name || "位置名称待完善"}`).join("\n");
     if (!window.confirm(`确认一次把 ${submittedSources.length} 个来源货位的全部库存批次并入主货位吗？\n\n来源：\n${sourcePreview}\n\n主货位：${mergeTarget.floor_code}/${mergeTarget.location_name || "位置名称待完善"}\n\n来源栈板将逻辑释放；库存数量、批次、预占和库龄不变。`)) return;
     setMergeBatchBusy(true);
     setWarehouseOperationMessage("");
+    let mergeAcknowledged = false;
     try {
       await mutateJson(
         "/api/warehouse/pallets/merge-batches",
         "POST",
         buildPalletMergeBatchPayload(mergeBatchIdempotencyKey, mergeSources, mergeTarget)
       );
-      await refreshDashboard();
-      const target = mergeTarget;
+      mergeAcknowledged = true;
       setMergeSources([]);
       setMergeTarget(null);
       setMergeBatchIdempotencyKey(operationKey("warehouse-pallet-merge-batch"));
       if (isWarehouseOperationalFloorCode(target.floor_code)) setFloorCode(target.floor_code);
       setSelected({ kind: "pallet", id: `erp-location-${target.location_id}` });
+      await refreshDashboard();
       setWarehouseOperationMessage(`${submittedSources.length} 个来源货位已一次并入 ${target.location_name}；来源栈板已逻辑释放。`);
     } catch (reason) {
-      setWarehouseOperationMessage(`多栈合并失败：${(reason as Error).message}。来源、目标和本次幂等键已保留，可核对后重试。`);
+      const rawMessage = String((reason as Error)?.message || reason || "未知错误");
+      const message = /failed to fetch|networkerror|load failed/i.test(rawMessage) ? "服务连接中断" : rawMessage;
+      setWarehouseOperationMessage(mergeAcknowledged
+        ? `多栈合并已完成，但地图刷新失败：${message}。请刷新页面核对；不要重复提交合并。`
+        : message === "服务连接中断"
+          ? "多栈合并提交未收到服务器回执：服务连接中断。来源、目标和同一幂等键已保留；服务恢复后先刷新页面核对，若草稿仍在可用同一幂等键重试，系统只会处理一次。"
+          : `多栈合并失败：${message}。来源、目标和本次幂等键已保留，可核对后重试。`);
     } finally {
       setMergeBatchBusy(false);
     }

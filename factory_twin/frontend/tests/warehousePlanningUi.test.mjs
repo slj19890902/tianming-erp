@@ -314,6 +314,57 @@ test("acknowledged warehouse moves are not offered again when dashboard refresh 
   }
 });
 
+test("pallet merge keeps one retry key until acknowledgement and does not repeat an acknowledged merge", async () => {
+  for (const failure of ["write", "readback", null]) {
+    let sources = [
+      { client_item_id: "source-one", pallet_id: 11, floor_code: "3F", location_name: "三楼 01", location_id: 101 },
+      { client_item_id: "target-one", pallet_id: 22, floor_code: "3F", location_name: "三楼 02", location_id: 102 }
+    ];
+    let target = sources[1];
+    let activeKey = "same-merge-request";
+    let reads = 0;
+    const messages = [];
+    await componentValue("confirmPalletMergeBatch", {
+      mergeSources: sources,
+      mergeTarget: target,
+      mergeBatchBusy: false,
+      mergeBatchIdempotencyKey: activeKey,
+      window: { confirm: () => true },
+      buildPalletMergeBatchPayload: (idempotencyKey, items, selectedTarget) => ({ idempotencyKey, items, selectedTarget }),
+      mutateJson: async (_url, _method, payload) => {
+        assert.equal(payload.idempotencyKey, "same-merge-request");
+        if (failure === "write") throw new TypeError("Failed to fetch");
+        return { batch_id: activeKey };
+      },
+      refreshDashboard: async () => { reads++; if (failure === "readback") throw new Error("刷新中断"); },
+      setMergeBatchBusy: () => {},
+      setWarehouseOperationMessage: value => messages.push(value),
+      setMergeSources: value => { sources = value; },
+      setMergeTarget: value => { target = value; },
+      setMergeBatchIdempotencyKey: value => { activeKey = value; },
+      operationKey: () => "next-merge-request",
+      isWarehouseOperationalFloorCode: () => true,
+      setFloorCode: () => {},
+      setSelected: () => {}
+    })();
+
+    if (failure === "write") {
+      assert.equal(sources.length, 2);
+      assert.equal(target.pallet_id, 22);
+      assert.equal(activeKey, "same-merge-request", "uncertain write retains the same idempotency key");
+      assert.equal(reads, 0);
+      assert.match(messages.at(-1), /提交未收到服务器回执.*服务连接中断.*刷新页面核对.*同一幂等键/);
+      assert.doesNotMatch(messages.at(-1), /Failed to fetch/);
+    } else {
+      assert.equal(sources.length, 0, "an acknowledged merge is no longer offered as a pending draft");
+      assert.equal(target, null);
+      assert.equal(activeKey, "next-merge-request");
+      assert.equal(reads, 1);
+      assert.match(messages.at(-1), failure === "readback" ? /合并已完成.*地图刷新失败.*不要重复提交/ : /已一次并入/);
+    }
+  }
+});
+
 test("moving a draft boundary preserves real location coordinates and keeps locations editable", () => {
   const zone = { id: "zone-map-test", feature_code: "ZONE-3F-TEST", feature_kind: "zone", erp_area_code: "TEST", version: 1,
     points: [[0, 0], [6000, 0], [6000, 4000], [0, 4000]] };

@@ -50,7 +50,7 @@ test("clearing non-empty options changes state once and then preserves identity"
   assert.equal(clearFormalAreaOptions(cleared), cleared);
 });
 
-test("planning published base omits a zone removed from the active draft", () => {
+test("all modes keep the applied region set when a saved draft removes a zone", () => {
   const published = {
     features: [
       { id: "zone-old", feature_kind: "zone" },
@@ -59,7 +59,10 @@ test("planning published base omits a zone removed from the active draft", () =>
     ]
   };
   const draft = { features: [{ id: "zone-keep", feature_kind: "zone" }] };
-  assert.deepEqual(filterPlanningPublishedFeatures(published, draft).map((row) => row.id), ["zone-keep"]);
+  assert.deepEqual(
+    filterPlanningPublishedFeatures(published, draft).map((row) => row.id),
+    ["zone-old", "zone-keep"]
+  );
 });
 
 test("removing a zone also removes its stale rack and pallet overlays", () => {

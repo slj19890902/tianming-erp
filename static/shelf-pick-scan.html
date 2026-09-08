@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>货架扫码拿货</title>
+<style>*{box-sizing:border-box}body{margin:0;background:#f1f5f9;color:#172554;font:17px/1.6 system-ui,"Microsoft YaHei",sans-serif}main{max-width:520px;margin:24px auto;padding:22px;background:white;border-radius:16px}h1{font-size:25px;margin:0 0 16px}#result{font-size:23px;font-weight:700;white-space:pre-line}.hint{color:#475569;font-size:15px}button,a{display:block;margin:12px 0;padding:12px;border-radius:8px;border:0;background:#2563eb;color:white;text-decoration:none;text-align:center;font:inherit;cursor:pointer}button:disabled{opacity:.5}#tasks button{width:100%}.success{color:#15803d}.error{color:#b91c1c}[hidden]{display:none!important}</style></head>
+<body><main><h1>货架扫码拿货</h1><p id="product"></p><p id="result" role="status">正在核对标签与拿货任务…</p><p class="hint">扫码只表示本款已拿齐。货物放入集货区后另行确认集货，扫码不会移库或发货。</p><div id="tasks"></div><a id="detail" hidden>查看拿货及集货明细</a><a id="login" hidden>登录后继续扫码</a><button id="retry" hidden>重新核对</button></main>
+<script>
+const $=id=>document.getElementById(id), esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const path=location.pathname.match(/^\/sp\/(\d+)\/(\d+)\/(\d+)\/(\d+)$/), params=new URLSearchParams(location.search);
+const label=Object.fromEntries(['l','p','v','a'].map((k,i)=>[k,Number(path?path[i+1]:params.get(k))]));
+let context=null,busy=false;
+function remembered(){try{return Number(localStorage.getItem('shelf-pick-task-'+context.user_id))}catch{return 0}}
+function remember(id){try{localStorage.setItem('shelf-pick-task-'+context.user_id,String(id))}catch{}}
+async function request(url,options){const response=await fetch(url,{credentials:'include',cache:'no-store',...options});const body=await response.json().catch(()=>({}));if(!response.ok){const e=Error(typeof body.detail==='string'?body.detail:body.detail?.message||`请求失败（${response.status}）`);e.status=response.status;throw e}return body}
+function failure(e){$('result').className='error';$('result').textContent=e.message||'连接失败，请重新核对';$('retry').hidden=false;if(e.status===401){$('login').href='/?next='+encodeURIComponent(location.pathname+location.search);$('login').hidden=false}}
+async function confirm(task){if(busy)return;busy=true;$('tasks').innerHTML='';$('detail').href='/mobile/delivery-pick.html?task_id='+task.id;$('detail').hidden=false;
+try{if(task.problem)throw Error(task.problem);$('result').className='';$('result').textContent='正在记录拿齐…';const nonce=crypto.randomUUID?crypto.randomUUID():Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
+const result=await request('/api/shelf-pick-scan/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...label,task_id:task.id,print_version:task.print_version,idempotency_key:'shelf-scan-'+nonce})});remember(task.id);$('result').className='success';$('result').textContent=`${result.already_picked?'本款已经拿齐，无需重复记录':'✓ 本款已拿齐'}\n${result.delivery_number}\n共 ${result.quantity} 只`;}
+catch(e){failure(e)}finally{busy=false}}
+async function boot(){if(busy)return;$('retry').hidden=true;$('login').hidden=true;$('detail').hidden=true;$('tasks').innerHTML='';$('result').className='';$('result').textContent='正在核对标签与拿货任务…';
+try{if(Object.values(label).some(x=>!Number.isSafeInteger(x)||x<=0))throw Error('二维码无效，请扫描当前货架标签');context=await request('/api/shelf-pick-scan/context?'+new URLSearchParams(label));$('product').textContent=[context.customer,context.inventory_code,context.product_name].filter(Boolean).join(' · ');const tasks=context.tasks||[];
+if(!tasks.length)throw Error('没有分配给当前账号的对应拿货任务，请先分配任务');const selected=tasks.find(x=>x.id===remembered());if(selected)return await confirm(selected);if(!remembered()&&tasks.length===1)return await confirm(tasks[0]);
+$('result').textContent=remembered()?'上次任务不适用，请选定本次拿货单':'本款对应多张任务，请先选定本次拿货单';$('tasks').innerHTML=tasks.map(x=>`<button data-task="${x.id}">${esc(x.delivery_number)} · ${x.quantity} 只${x.already_picked?' · 已拿齐':''}</button>`).join('');$('tasks').querySelectorAll('button').forEach(button=>button.onclick=()=>confirm(tasks.find(x=>x.id===Number(button.dataset.task))));}
+catch(e){failure(e)}}
+$('retry').onclick=boot;boot();
+</script></body></html>

@@ -44,7 +44,7 @@
       <section id="taskDetail" hidden>
         <div class="back-row"><button id="backToTasksButton" onclick="showTaskList()">返回待拿货任务</button></div>
         <div id="stagingPanel"></div>
-        <div id="normalAction" class="normal-action"><button id="completePlannedButton" class="primary" onclick="completePlanned()">本单全部按计划拿齐</button><p>货物放好并核对实际集货位后，点本单拿齐；不会自动发货。</p></div>
+        <div id="normalAction" class="normal-action"><button id="completePlannedButton" class="primary" onclick="completePlanned()">本单全部按计划拿齐</button><p>货物放好并核对实际位置后确认；不会自动发货。</p></div>
         <div id="readyBanner" class="ready-banner" hidden>已拿齐，可回电脑发货打印</div>
         <div id="locationGroups"></div>
         <details id="exceptionTools" class="exception-tools">
@@ -71,7 +71,7 @@
     let mapFloors=[], mapData=null, mapGeneration=0, mapController=null;
     let listGeneration=0, listController=null, detailGeneration=0, detailController=null;
     const listPageSize=20; let listPage=0, listTotal=0, listRows=[], listHasMore=false, listLoading=false, listAsOf="";
-    const busyItems=new Set(); let taskActionBusy=false; let loginBusy=false;
+    const busyItems=new Set(); let scanUserId=null; let taskActionBusy=false; let loginBusy=false;
     const statusOf = item => item.pick_status || "pending";
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
     const toast = text => { const node=document.getElementById("toast"); node.textContent=text; node.hidden=false; setTimeout(()=>node.hidden=true,2200); };
@@ -151,6 +151,7 @@
         const body=await request(`/api/delivery-picks/${encodeURIComponent(selectedId)}`,{signal:controller.signal});
         if(generation!==detailGeneration||taskId!==selectedId) return false;
         task=normalize(body);
+        if(typeof scanUserId!=="undefined"&&scanUserId){try{localStorage.setItem("shelf-pick-task-"+scanUserId,String(task.id))}catch{}}
         if(expectedPrintVersion && task.print_version !== expectedPrintVersion) {
           task=null;
           showTaskFailure(new Error("纸质拿货单版本已过期，请返回 ERP 重新打印后再回录差异"));
@@ -164,13 +165,16 @@
     async function showTaskList() { if(taskActionBusy||busyItems.size) return; closeTaskMap({restoreScroll:false}); detailGeneration+=1; detailController?.abort(); detailController=null; task=null; taskId=null; const url=new URL(location.href); url.searchParams.delete("task_id"); history.replaceState(null,"",url); await loadTaskList(); }
     function render() {
       if(!task) return;
-      document.getElementById("taskMeta").textContent=`${task.delivery_number || "送货单"} · ${taskStatusLabel(task.status)}${task.as_of?` · 更新 ${task.as_of}`:""}`;
-      const ready=["driver_confirmed","applied"].includes(task.status);
+      const pickedAwaitingCollection=(task.items||[]).length&&(task.items||[]).every(x=>statusOf(x)==="picked")&&(task.items||[]).some(x=>x.staging_required&&Number(x.staged_quantity||0)<Number(x.picked_quantity||0));
+      document.getElementById("taskMeta").textContent=`${task.delivery_number || "送货单"} · ${pickedAwaitingCollection?"已拿齐 · 待集货":taskStatusLabel(task.status)}${task.as_of?` · 更新 ${task.as_of}`:""}`;
+      const awaitingStaging=(task.items||[]).some(x=>x.staging_required&&Number(x.staged_quantity||0)<Number(x.picked_quantity||0));
+      const ready=["driver_confirmed","applied"].includes(task.status)&&!awaitingStaging;
       document.getElementById("normalAction").hidden=ready;
       document.getElementById("readyBanner").hidden=!ready;
       const completeButton=document.getElementById("completePlannedButton");
+      completeButton.textContent=(task.items||[]).some(x=>x.staging_required)?"确认本单已放入集货区":"本单全部按计划拿齐";
       const editable=["pushed","driver_confirmed","exception"].includes(task.status);
-      completeButton.disabled=taskActionBusy||busyItems.size>0||task.status!=="pushed"||task.location_plan_complete===false;
+      completeButton.disabled=taskActionBusy||busyItems.size>0||!["pushed","driver_confirmed"].includes(task.status)||task.location_plan_complete===false;
       document.getElementById("submitTaskButton").disabled=taskActionBusy||busyItems.size>0||!editable;
       document.getElementById("refreshTaskButton").disabled=taskActionBusy||busyItems.size>0;
       document.getElementById("backToTasksButton").disabled=taskActionBusy||busyItems.size>0;
@@ -240,7 +244,7 @@
       if(!components.length) return "";
       return `<section class="pick-components" aria-label="本次随货子件，只读展示"><div class="pick-components-title">本次随货子件（只读，不单独确认）</div>${components.map(component=>{ const quantity=Number(component.planned_delivery_quantity ?? component.quantity ?? 0); const label=[component.product_code || component.component_code || "-",component.product_name || component.component_name || "未命名组件"].join(" / "); return `<div class="pick-component-row"><span class="pick-component-name">${escapeHtml(label)}</span><span class="pick-component-quantity">${quantity}</span></div>`; }).join("")}</section>`;
     }
-    function renderStaging(item){if(!item.staging_required)return '';if(Number(item.staged_quantity||0)>=Number(item.planned_quantity||item.original_quantity||0)&&Number(item.staged_quantity||0)>0)return `<div class="spec">已集货 ${Number(item.staged_quantity)} 只，实际集货位置见下方明细。装车后按原流程确认送货。</div>`;const rows=item.staging_candidates||[];return `<div class="spec">已集货 ${Number(item.staged_quantity||0)} 只。先将本次数量放到以下位置，再点拿齐/少拿。</div><label class="spec">实际集货位 <select class="staging-target" aria-label="实际集货位" style="max-width:100%;font-size:14px">${rows.length?'<option value="">请选择实际集货位置</option>':'<option value="">请先配置可用固定集货区</option>'}${rows.map(row=>`<option value="${row.location_id}">${escapeHtml(row.name||row.address)}</option>`).join('')}</select></label>`}
+    function renderStaging(item){if(!item.staging_required)return '';if(Number(item.staged_quantity||0)>=Number(item.planned_quantity||item.original_quantity||0)&&Number(item.staged_quantity||0)>0)return `<div class="spec">已集货 ${Number(item.staged_quantity)} 只，实际集货位置见下方明细。装车后按原流程确认送货。</div>`;const rows=item.staging_candidates||[];return `<div class="spec">已拿货 ${Number(item.picked_quantity||0)} 只 · 已集货 ${Number(item.staged_quantity||0)} 只。放好后确认实际集货位置。</div><label class="spec">实际集货位 <select class="staging-target" aria-label="实际集货位" style="max-width:100%;font-size:14px">${rows.length?'<option value="">请选择实际集货位置</option>':'<option value="">请先配置可用固定集货区</option>'}${rows.map(row=>`<option value="${row.location_id}">${escapeHtml(row.name||row.address)}</option>`).join('')}</select></label>`}
     function stagingTarget(item){if(!item.staging_required)return null;const card=document.querySelector(`[data-stage-item-id="${Number(item.id)}"]`),value=Number(card?.querySelector('.staging-target')?.value);const row=(item.staging_candidates||[]).find(x=>x.location_id===value);return row?{location_id:row.location_id,address_version:row.address_version,layout_version:row.layout_version}:null}
     function renderItem(item) {
       const status=statusOf(item); const id=Number(item.id); const planned=Number(item.planned_quantity ?? item.delivered_quantity ?? item.quantity ?? 0); const picked=item.picked_quantity ?? item.actual_quantity ?? (status==="picked"?planned:0); const disabled=taskActionBusy||busyItems.size>0||!["pushed","driver_confirmed","exception"].includes(task.status);
@@ -268,7 +272,7 @@
     }
     async function loadTask() { try { if(taskId) await selectTask(taskId); else await loadTaskList(); } catch(error) { document.getElementById("error").textContent=error.message; } }
     async function login(event) { event.preventDefault(); if(loginBusy)return; loginBusy=true; const button=document.getElementById("loginButton"); button.disabled=true; const error=document.getElementById("loginError"); error.textContent=""; try { await request("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("username").value,password:document.getElementById("password").value,remember_me:false})}); await boot(); } catch(exception) { error.textContent=exception.message; } finally { loginBusy=false; button.disabled=false; } }
-    async function boot() { try { await request("/api/auth/me"); document.getElementById("loginBox").hidden=true; document.getElementById("app").hidden=false; if(!taskId) await loadTaskList(); else await selectTask(taskId); } catch(error) { if(!handleAuthError(error)){document.getElementById("error").textContent=error.message;document.getElementById("app").hidden=false;} } }
+    async function boot() { try { scanUserId=(await request("/api/auth/me")).id; document.getElementById("loginBox").hidden=true; document.getElementById("app").hidden=false; if(!taskId) await loadTaskList(); else await selectTask(taskId); } catch(error) { if(!handleAuthError(error)){document.getElementById("error").textContent=error.message;document.getElementById("app").hidden=false;} } }
     boot();
   </script>
 </body>

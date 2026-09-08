@@ -17454,6 +17454,19 @@ def _shelf_label_content(db: Session, row: WarehouseLocation, user: User) -> dic
     return {**profile_info(db, product), "binding_priority": binding.priority}
 
 
+def _with_shelf_label(db, row, user, label):
+    from urllib.parse import urlsplit
+    content = _shelf_label_content(db, row, user)
+    label['shelf_content'] = content
+    if content and not content.get('restricted'):
+        origin = urlsplit(label['lookup_url'])
+        url = f'{origin.scheme}://{origin.netloc}/sp/{row.id}/{content["product_id"]}/{content["version"]}/{row.address_version}'
+        buffer = BytesIO()
+        qrcode.make(url).save(buffer, format='PNG')
+        label.update(lookup_url=url, qr_data_url='data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode('ascii'))
+    return label
+
+
 @router.get("/locations/labels")
 def get_location_labels(
     request: Request,
@@ -17492,12 +17505,12 @@ def get_location_labels(
     lan_ip = _lan_ip()
     return {
         "items": [
-            {**_location_label_dict(
+            _with_shelf_label(db, row, _user, _location_label_dict(
                 row,
                 request,
                 projection_contexts.get(int(row.id), {}),
                 lan_ip,
-            ), "shelf_content": _shelf_label_content(db, row, _user)}
+            ))
             for row in ordered_rows
         ],
         "count": len(ordered_rows),
@@ -17526,8 +17539,7 @@ def get_location_label(
     projection_context = load_warehouse_location_projection_contexts(
         db, [row]
     ).get(int(row.id), {})
-    return {**_location_label_dict(row, request, projection_context),
-            "shelf_content": _shelf_label_content(db, row, _user)}
+    return _with_shelf_label(db, row, _user, _location_label_dict(row, request, projection_context))
 
 
 @router.get("/location-candidates")

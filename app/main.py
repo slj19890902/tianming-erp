@@ -496,6 +496,10 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == '/sp/{location_id}/{product_id}/{version}/{address_version}' for route in application.routes):
+        application.add_api_route('/sp/{location_id}/{product_id}/{version}/{address_version}',
+            lambda: FileResponse(Path(__file__).resolve().parents[1] / 'static' / 'shelf-pick-scan.html'),
+            methods=['GET'], include_in_schema=False)
     mobile_erp_path = (
         Path(__file__).resolve().parents[1]
         / "static"
@@ -835,6 +839,8 @@ def create_app() -> FastAPI:
         )
     if not any(route.path == "/api/warehouse/fixed-shelf/products" for route in application.routes):
         application.include_router(fixed_shelf_router, prefix="/api/warehouse/fixed-shelf", tags=["fixed-shelf"])
+        from app.api.shelf_pick_scan import router as shelf_pick_scan_router
+        application.include_router(shelf_pick_scan_router, prefix='/api/shelf-pick-scan', tags=['fixed-shelf'])
     if not any(route.path == "/api/warehouse/locations" for route in application.routes):
         application.include_router(
             warehouse_router,

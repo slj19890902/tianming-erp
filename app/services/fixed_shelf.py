@@ -72,6 +72,17 @@ def location_info(db, location, projection_context=None):
             "sort_order": location.sort_order, "issue": location_issue(db, location, projection_context)}
 
 
+def staging_issue(db, location, projection_context=None):
+    if location is None or location.storage_type not in {'ground', 'temporary_aisle'}:
+        return '请选择固定集货区内实际可用的地面货位'
+    return operational_location_issue(db, location, warehouse_types={'finished', 'shared'},
+        require_published=True, require_map_geometry=True, required_inventory_type='finished', projection_context=projection_context)
+
+
+def staging_info(db, location, projection_context=None):
+    return {**location_info(db, location, projection_context), 'issue': staging_issue(db, location, projection_context)}
+
+
 def location_lots(db, location_id):
     return list(db.scalars(select(InventoryLot).where(InventoryLot.warehouse_location_id == location_id,
         InventoryLot.inventory_type == "finished", InventoryLot.status != "closed")).all())
@@ -98,7 +109,7 @@ def check_contents(db, location_id, product):
     return total
 
 
-def save_profile(db, product, *, expected_version, units_per_bundle, bindings):
+def save_profile(db, product, *, expected_version, units_per_bundle, bindings, staging_location_id=None):
     if not bindings or bindings[0]["priority"] != 0 or len({x["priority"] for x in bindings}) != len(bindings):
         raise ShelfError("必须配置一个主位，补充位顺序不得重复")
     if len({x["location_id"] for x in bindings}) != len(bindings):
@@ -124,6 +135,18 @@ def save_profile(db, product, *, expected_version, units_per_bundle, bindings):
         Delivery.status == 'pending').group_by(OrderItem.id).having(func.count(func.distinct(Delivery.id)) > 1).limit(1))
     if duplicate:
         raise ShelfError('该料号已有同一订单行的多张待发拿货任务，请先处理重复任务再启用固定货架')
+    if staging_location_id:
+        issue = staging_issue(db, db.get(WarehouseLocation, staging_location_id))
+        if issue:
+            raise ShelfError(issue)
+    profile = db.get(ShelfProfile, product.id)
+    if profile.staging_location_id != staging_location_id:
+        staged = db.scalars(select(InventoryLot).join(ShelfLotState, ShelfLotState.lot_id == InventoryLot.id)
+            .join(FinishedGoodsInventoryDetail, FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id)
+            .where(FinishedGoodsInventoryDetail.product_id == product.id, ShelfLotState.staged_delivery_item_id.is_not(None))).all()
+        if any(physical_quantity(lot) for lot in staged):
+            raise ShelfError('该料号已有实际集货，请先处理已集货物，再更改固定集货区')
+    profile.staging_location_id = staging_location_id
     old = list(db.scalars(select(ShelfBinding).where(ShelfBinding.product_id == product.id)).all())
     selected = {x["location_id"] for x in bindings}
     for row in old:
@@ -189,6 +212,7 @@ def profile_info(db, product):
         "inventory_code": product.customer_material_code, "product_name": product.product_name,
         "specification": " × ".join(integer_mm(x) for x in (product.length_mm, product.width_mm, product.height_mm) if x is not None) + " mm",
         "units_per_bundle": profile.units_per_bundle if profile else None,
+        "staging_location_id": profile.staging_location_id if profile else None,
         "version": profile.version if profile else 0,
         "warning_quantity": warning, "warning_policy_count": len(policies), "locations": locations,
         "shelf_refill_reference_quantity": refill}
@@ -222,12 +246,18 @@ def copy_lot_state(db, source_lot, target_lot):
     if state is None:
         return
     target = db.get(ShelfLotState, target_lot.id)
+    if state.staged_delivery_item_id:
+        from app.services.fixed_shelf_staging import follow_staged_allocation_transfer
+        follow_staged_allocation_transfer(db, source_lot, target_lot, state.staged_delivery_item_id)
     binding = db.get(ShelfBinding, target_lot.warehouse_location_id)
     target_id = None if binding and binding.product_id == target_lot.finished_detail.product_id else state.target_location_id
+    staged_item_id = None if binding and binding.product_id == target_lot.finished_detail.product_id else state.staged_delivery_item_id
     if target is None:
-        db.add(ShelfLotState(lot_id=target_lot.id, units_per_bundle=state.units_per_bundle, target_location_id=target_id))
+        db.add(ShelfLotState(lot_id=target_lot.id, units_per_bundle=state.units_per_bundle, target_location_id=target_id,
+            staged_delivery_item_id=staged_item_id))
     else:
         target.target_location_id = target_id
+        target.staged_delivery_item_id = staged_item_id
 
 
 def bundle_breakdown(quantity, units):

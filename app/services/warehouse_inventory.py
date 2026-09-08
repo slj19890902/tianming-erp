@@ -1929,6 +1929,7 @@ def _transfer_finished_lot_location(
     expected_target_map_revision: str | None = None,
     ground_secondary_location_id: int | None = None,
     ground_capacity_quantity: int | None = None,
+    reserved_plan: dict[int, int] | None = None,
 ) -> FinishedLotLocationTransferResult:
     """Move all or part of a finished lot without changing stock totals.
 
@@ -1968,6 +1969,9 @@ def _transfer_finished_lot_location(
     )
     if require_pending_source:
         request_hash = sha256(("recount-placement:" + request_hash).encode()).hexdigest()
+        compatible_legacy_hashes = ()
+    if reserved_plan is not None:
+        request_hash = sha256((request_hash + json.dumps(reserved_plan, sort_keys=True)).encode()).hexdigest()
         compatible_legacy_hashes = ()
     repeated = db.scalar(
         select(InventoryLotTransfer).where(
@@ -2095,7 +2099,7 @@ def _transfer_finished_lot_location(
         expected_layout_version=expected_target_layout_version,
         expected_map_revision=expected_target_map_revision,
     )
-    if target_location.id == source_location.id:
+    if target_location.id == source_location.id and reserved_plan is None:
         raise WarehouseInventoryError("目标位置不能与来源位置相同", 409)
     if require_staging_source and target_location.location_code == "F1-DISPATCH-01":
         raise WarehouseInventoryError("目标库位不能仍是一楼待送区", 409)
@@ -2163,6 +2167,17 @@ def _transfer_finished_lot_location(
     source_location_id = int(lot.warehouse_location_id)
     available_take = min(quantity, int(lot.quantity_available or 0))
     reserved_take = quantity - available_take
+    if reserved_plan is not None:
+        reserved_take = sum(reserved_plan.values())
+        available_take = quantity - reserved_take
+        if available_take < 0 or available_take > int(lot.quantity_available or 0):
+            raise WarehouseInventoryError('实际集货数量超过本次可用库存', 409)
+        for reservation_id, take in reserved_plan.items():
+            selected = db.get(InventoryReservation, reservation_id)
+            if (take <= 0 or selected is None or selected.inventory_lot_id != lot.id
+                    or selected.status not in {'active', 'partial'} or selected.yield_factor != 1
+                    or take > selected.reserved_stock_quantity - selected.consumed_stock_quantity - selected.released_stock_quantity):
+                raise WarehouseInventoryError('集货预占来源或数量已变化，请刷新', 409)
     source_before = _balances(lot)
     now = utc_now_naive()
 
@@ -2282,6 +2297,8 @@ def _transfer_finished_lot_location(
                 - int(reservation.released_stock_quantity or 0)
             )
             take = min(remaining_reserved, remaining)
+            if reserved_plan is not None:
+                take = min(take, reserved_plan.get(reservation.id, 0))
             if take <= 0:
                 continue
             reservation.released_stock_quantity += take
@@ -2510,6 +2527,7 @@ def transfer_finished_lot_between_locations(
     expected_target_map_revision: str | None = None,
     ground_secondary_location_id: int | None = None,
     ground_capacity_quantity: int | None = None,
+    reserved_plan: dict[int, int] | None = None,
 ) -> FinishedLotLocationTransferResult:
     return _transfer_finished_lot_location(
         db,
@@ -2530,6 +2548,7 @@ def transfer_finished_lot_between_locations(
         expected_target_map_revision=expected_target_map_revision,
         ground_secondary_location_id=ground_secondary_location_id,
         ground_capacity_quantity=ground_capacity_quantity,
+        reserved_plan=reserved_plan,
     )
 
 
@@ -2953,6 +2972,7 @@ def finished_inventory_candidates_for_bom_component(
     General stock is included solely so the caller can display its explicit
     warning; it is never silently selected by the reservation service.
     """
+    from app.services.fixed_shelf_staging import held_for_staging_expression
     snapshot = db.get(SalesOrderItemBomComponent, bom_snapshot_id)
     item = db.get(OrderItem, order_item_id)
     if snapshot is None or item is None or snapshot.sales_order_item_id != item.id:
@@ -2969,6 +2989,7 @@ def finished_inventory_candidates_for_bom_component(
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
             FinishedGoodsInventoryDetail.product_id == snapshot.component_product_id,
+            ~held_for_staging_expression(),
             or_(
                 FinishedGoodsInventoryDetail.owner_customer_id == order.customer_id,
                 FinishedGoodsInventoryDetail.is_general.is_(True),
@@ -3023,6 +3044,9 @@ def reserve_finished_inventory_for_bom_component(
     lot = db.get(InventoryLot, inventory_lot_id)
     if lot is None or lot.finished_detail is None or lot.inventory_type != "finished" or lot.status != "active":
         raise WarehouseInventoryError("组件成品库存批次当前不可预占", 409)
+    from app.services.fixed_shelf_staging import staging_owner
+    if staging_owner(db, lot.id):
+        raise WarehouseInventoryError("该批次已为送货单集货，不能重复预占", 409)
     detail = lot.finished_detail
     if detail.product_id != snapshot.component_product_id:
         raise WarehouseInventoryError("库存产品与组件不一致", 409)
@@ -3094,6 +3118,7 @@ def reserve_finished_inventory_for_bom_component(
 
 
 def finished_inventory_candidates(db: Session, order_item_id: int) -> list[InventoryLot]:
+    from app.services.fixed_shelf_staging import held_for_staging_expression
     row = db.execute(
         select(OrderItem, Order)
         .join(Order, Order.id == OrderItem.order_id)
@@ -3121,6 +3146,7 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
             FinishedGoodsInventoryDetail.product_id == item.product_id,
+            ~held_for_staging_expression(),
             or_(
                 FinishedGoodsInventoryDetail.owner_customer_id == order.customer_id,
                 FinishedGoodsInventoryDetail.is_general.is_(True),
@@ -3144,6 +3170,7 @@ def finished_inventory_candidates_for_product(
         raise WarehouseInventoryError("产品不存在", 404)
     if product.customer_id != customer_id:
         raise WarehouseInventoryError("产品不属于所选客户", 409)
+    from app.services.fixed_shelf_staging import held_for_staging_expression
     return db.scalars(
         select(InventoryLot)
         .join(
@@ -3154,6 +3181,7 @@ def finished_inventory_candidates_for_product(
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
+            ~held_for_staging_expression(),
             FinishedGoodsInventoryDetail.product_id == product_id,
             FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
             FinishedGoodsInventoryDetail.is_general.is_(False),
@@ -3269,6 +3297,9 @@ def reserve_finished_inventory(
     detail = lot.finished_detail
     if lot.inventory_type != "finished" or lot.status != "active":
         raise WarehouseInventoryError("该库存批次当前不可预占", 409)
+    from app.services.fixed_shelf_staging import staging_owner
+    if staging_owner(db, lot.id):
+        raise WarehouseInventoryError('该批次已集货待送，不能再抵扣其他订单', 409)
     if detail.product_id != item.product_id:
         raise WarehouseInventoryError("库存产品与订单产品不一致")
     if not detail.is_general and detail.owner_customer_id != order.customer_id:

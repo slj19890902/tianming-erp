@@ -79,6 +79,7 @@
     }
     function buildRows(task) {
       const totals = new Map();
+      const items = new Map((task.items || []).map(item => [String(item.id), item]));
       const rows = [];
       (task.location_groups || []).forEach(group => {
         [...(group.lines || [])].sort((left, right) => String(left.product_code || "").localeCompare(String(right.product_code || ""), "zh-CN")).forEach(line => {
@@ -95,6 +96,9 @@
             unit: line.unit || "个",
             bundleText: line.bundle_text || "每捆数量待核",
             putawayPending: !!line.putaway_pending,
+            staging: items.get(String(line.pick_item_id))?.staging_required
+              ? items.get(String(line.pick_item_id)).staging_area_label || '集货区待配置'
+              : '',
           });
         });
       });
@@ -111,7 +115,7 @@
         <td>${row.sequence}</td>
         <td>${escapeHtml(row.productCode)}</td>
         <td class="product"><div class="product-name">${escapeHtml(row.productName)}</div><div class="spec">${escapeHtml(row.specification)}</div>${row.productTotal === null ? "" : `<div class="subtotal">本品合计 ${row.productTotal} ${escapeHtml(row.unit)}</div>`}</td>
-        <td class="location"><div class="route">第 ${row.routeSequence || "-"} 站</div><div>${escapeHtml(row.location)}</div></td>
+        <td class="location"><div class="route">第 ${row.routeSequence || "-"} 站</div><div>${escapeHtml(row.location)}</div>${row.staging ? `<div class="spec">集中到：${escapeHtml(row.staging)}</div>` : ''}</td>
         <td>${row.quantity} ${escapeHtml(row.unit)}<div class="spec">${escapeHtml(row.bundleText)}</div>${row.putawayPending?'<div class="spec">待上架</div>':""}</td>
         <td><span class="write-line"></span></td>
         <td><span class="write-line"></span></td>
@@ -141,7 +145,7 @@
         <footer class="footer">
           <div class="summary"><span>${summaryText}</span><span>异常行数：________</span></div>
           <div class="signatures"><div>拿货人：<div class="signature"></div></div><div>复核人：<div class="signature"></div></div><div>异常处理：<div class="signature"></div></div></div>
-          <div class="notice">本单只用于仓库找货备货，不代表已出库。纸面填写不改库存、不发货；只有少拿、没货或位置不符时回录差异。</div>
+          <div class="notice">本单只用于仓库找货备货，不代表已出库。纸面填写不改库存、不发货；固定货架成品放入集货区后，须在手机选择实际集货位并确认拿货，再装车送货。</div>
         </footer>
       </section>`;
     }

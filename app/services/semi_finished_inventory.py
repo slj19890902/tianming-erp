@@ -1547,6 +1547,7 @@ def _finished_reservations_for_delivery(
     db: Session,
     order_item_id: int,
     reservation_type: str = "finished_order",
+    delivery_item_id: int | None = None,
 ) -> list[InventoryReservation]:
     query = (
         select(InventoryReservation)
@@ -1568,7 +1569,8 @@ def _finished_reservations_for_delivery(
         query = query.where(
             InventoryReservation.sales_order_item_bom_component_id.is_(None)
         )
-    return db.scalars(query).all()
+    from app.services.fixed_shelf_staging import prioritize_staged
+    return prioritize_staged(db, db.scalars(query).all(), delivery_item_id)
 
 
 def _semi_reservations_for_delivery(
@@ -1629,7 +1631,7 @@ def consume_delivery_item_inventory(
     finished_coverage = finished_order_source_coverage(finished_reservations)
     target_finished = min(target_order_delivery, finished_coverage)
     remaining_finished = max(target_finished - current_finished, 0)
-    for reservation in _finished_reservations_for_delivery(db, item.id):
+    for reservation in _finished_reservations_for_delivery(db, item.id, delivery_item_id=delivery_item.id):
         if remaining_finished <= 0:
             break
         available = (
@@ -1685,6 +1687,7 @@ def consume_delivery_item_inventory(
         db,
         item.id,
         "finished_surplus_delivery",
+        delivery_item_id=delivery_item.id,
     ):
         if remaining_surplus <= 0:
             break

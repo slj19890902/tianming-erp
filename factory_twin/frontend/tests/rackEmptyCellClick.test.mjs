@@ -3,6 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
+import { groupShelfProducts } from "../src/shelfDisplay.mjs";
 
 const source = fs.readFileSync(new URL("../src/WarehouseTwinApp.tsx", import.meta.url), "utf8");
 const component = source.slice(source.indexOf("function WarehouseRackElevation("), source.indexOf("export function WarehouseTwinApp()"));
@@ -13,6 +14,7 @@ const locations = Array.from({length: 9}, (_, index) => ({
   slot_no: index % 3 + 1, location_name: `F9第${Math.floor(index / 3) + 1}层第${index % 3 + 1}格`, items: [],
 }));
 const sandbox = {
+  groupShelfProducts,
   React: {createElement: (type, props, ...children) => ({type, props: props || {}, children: children.flat(Infinity)})},
   useState: value => [value, () => {}], useMemo: fn => fn(), useEffect() {},
   rackLevelCellCounts: value => value.level_cell_counts,
@@ -31,7 +33,7 @@ function render(overrides = {}) {
     onPrevious() {}, onNext() {}, onClose() {}, onChooseEmptyLocation: id => selected.push(id), ...overrides});
   function nodes(node) { return node && typeof node === "object" ? [node, ...node.children.flatMap(nodes)] : []; }
   const emptyControls = nodes(tree).filter(node => node.props.className?.includes("mold-rack-empty-spine"));
-  return {selected, emptyControls};
+  return {selected, emptyControls, nodes: nodes(tree)};
 }
 
 test("clicking the visible plus and empty body selects each exact rack cell once", () => {
@@ -67,6 +69,20 @@ test("missing permission, missing formal identity, duplicate identity and blocke
 test("an occupied cell retains its inventory and does not render a misleading add control", () => {
   const {emptyControls} = render({locations: locations.map(row => ({...row, items: [{lot_id: row.location_id}]}))});
   assert.equal(emptyControls.length, 0);
+});
+
+test("carton cells read product and specification before customer and retain every batch", () => {
+  const items = [1, 2].map(lot_id => ({lot_id, product_id: 5, customer_id: 7, product_name: "中性内盒",
+    specification: "400×300×200", inventory_code: "CODE-5", quantity: 15, unit: "pcs"}));
+  const {nodes} = render({locations: [{...locations[0], items}]});
+  const cards = nodes.filter(node => node.props.className === "shelf-product-card");
+  assert.equal(cards.length, 1);
+  const content = JSON.stringify(cards[0]);
+  assert.ok(content.indexOf("中性内盒") < content.indexOf("CODE-5"));
+  assert.ok(content.indexOf("400×300×200") < content.indexOf("CODE-5"));
+  assert.ok(content.includes('30'));
+  assert.equal(nodes.filter(node => node.props.className === "shelf-batch-row").length, 2);
+  assert.equal(nodes.filter(node => node.props.className === "mold-rack-book-spines").length, 0);
 });
 
 test("the selected empty cell opens its stocktake inspector without writing inventory", () => {

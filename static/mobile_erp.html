@@ -181,6 +181,9 @@
     .warehouse-map-features { position: absolute; inset: 0; width: 100%; height: 100%; }
     .warehouse-map-feature-zone { fill: #eef4f0; stroke: #9db1a6; stroke-width: 80; }
     .warehouse-map-feature-aisle { fill: #fff8df; stroke: #d4b761; stroke-width: 55; }
+    .warehouse-stocktake-name { font-size: 20px; line-height: 1.4; overflow-wrap: anywhere; }
+    .warehouse-stocktake-spec { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
+    .warehouse-stocktake-quantity { font-size: 23px; color: #166534; font-variant-numeric: tabular-nums; }
     .warehouse-map-location { position: absolute; min-width: 0; min-height: 0; padding: 2px; overflow: hidden; border: 2px solid #16a34a; border-radius: 5px; background: #dcfce7; color: #166534; font-size: 10px; font-weight: 900; }
     .warehouse-map-location.has-goods { background: #dbeafe; border-color: #2563eb; color: #1d4ed8; }
     .warehouse-map-location.not-disclosed { background: #e5e7eb; border-color: #64748b; color: #334155; }
@@ -1611,9 +1614,10 @@
         goods.forEach(good => {
           const card = node("section", "candidate");
           card.append(
-            node("strong", "", `${good.product_code || "无存货编码"}｜${good.product_name || "未填写名称"}`),
-            node("span", "", `${good.customer_name || "未填写客户"}｜${good.specification || "未填写规格"}`),
-            node("span", "", `${good.quantity_total || 0}${good.unit}｜在 ${readableLocation(location)}`)
+            node("strong", "warehouse-stocktake-name", good.product_name || "未填写名称"),
+            node("span", "warehouse-stocktake-spec", good.specification || "未填写规格"),
+            node("strong", "warehouse-stocktake-quantity", `实际数量 ${good.quantity_total ?? "待核对"}${good.unit || ""}`),
+            node("small", "muted", `${good.customer_name || "未填写客户"}｜${good.product_code || "无存货编码"}｜${readableLocation(location)}`)
           );
           const actions = node("div", "warehouse-map-item-actions");
           const move = node("button", "small-btn", "搬运 / 拆分数量");
@@ -1669,9 +1673,10 @@
               const button = node("button", "candidate");
               button.type = "button";
               button.append(
-                node("strong", "", `${good.product_code || "无存货编码"}｜${good.product_name || "未填写名称"}`),
-                node("span", "", `${good.customer_name || "未填写客户"}｜${good.specification || "未填写规格"}`),
-                node("span", "", `${good.quantity_total || 0}${good.unit}｜系统位置 ${readableLocation(good.registered_location)}`),
+                node("strong", "warehouse-stocktake-name", good.product_name || "未填写名称"),
+                node("span", "warehouse-stocktake-spec", good.specification || "未填写规格"),
+                node("strong", "warehouse-stocktake-quantity", `实际数量 ${good.quantity_total ?? "待核对"}${good.unit || ""}`),
+                node("small", "muted", `${good.customer_name || "未填写客户"}｜${good.product_code || "无存货编码"}｜系统位置 ${readableLocation(good.registered_location)}`),
                 node("span", "candidate-action", good.can_move ? "选择并登记搬到当前空位" : "质量冻结/损坏，仅供核对")
               );
               button.disabled = good.can_move !== true;

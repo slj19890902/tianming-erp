@@ -123,7 +123,10 @@
     function restoreWarehouseAreaReturn(){
       const params=new URLSearchParams(window.location.search),floor=params.get('return_floor'),area=params.get('return_area');
       if(!floor||!area)return;
-      const target='/mobile/?'+new URLSearchParams({warehouse_map:'1',floor_code:floor,area_code:area})+'#warehouse';
+      const returnParams=new URLSearchParams({warehouse_map:'1',floor_code:floor,area_code:area});
+      const locationId=Number(params.get('location_id')||0);
+      if(Number.isSafeInteger(locationId)&&locationId>0)returnParams.set('location_id',String(locationId));
+      const target='/mobile/?'+returnParams+'#warehouse';
       const link=document.querySelector('.header-link');link.href=target;link.textContent='返回原区域';
       $('backToLocations').textContent='返回原区域';
       $('backToLocations').addEventListener('click',event=>{event.preventDefault();event.stopImmediatePropagation();if(state.submitting||(typeof inbound!=='undefined'&&inbound.busy))return;window.location.assign(target)},true);

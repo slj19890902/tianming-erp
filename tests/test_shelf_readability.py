@@ -35,3 +35,14 @@ def test_modified_mobile_scripts_parse(tmp_path):
             script.write_text(code, encoding='utf-8')
             result = subprocess.run([shutil.which('node'), '--check', str(script)], capture_output=True, text=True)
             assert result.returncode == 0, result.stderr
+
+
+def test_stocktake_return_keeps_exact_location_and_reopens_its_rack():
+    stocktake = (ROOT / 'static/mobile_stocktake.html').read_text(encoding='utf-8')
+    mobile = (ROOT / 'static/mobile_erp.html').read_text(encoding='utf-8')
+    assert "returnParams.set('location_id',String(locationId))" in stocktake
+    assert 'Number.isSafeInteger(locationId)&&locationId>0' in stocktake
+    assert 'state.warehouseSelectedRack = focusedLocation.map_rack_id' in mobile
+    assert 'location.map_rack_id && !notDisclosed' in mobile
+    assert 'visibleGoods.slice(0, 2)' in mobile
+    assert '点击查看全部' in mobile

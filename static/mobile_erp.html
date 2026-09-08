@@ -193,7 +193,11 @@
     .warehouse-map-location.deep-link { outline: 4px solid #7e22ce; box-shadow: 0 0 0 7px rgba(126, 34, 206, .18); }
     .warehouse-map-location[disabled] { border-style: dashed; opacity: .65; }
     .warehouse-rack-level { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
-    .warehouse-rack-level .warehouse-map-location { position: static; min-width: 72px; min-height: 52px; flex: 1 0 72px; font-size: 13px; }
+    .warehouse-rack-level .warehouse-map-location { position: static; min-width: 72px; min-height: 72px; flex: 1 0 72px; font-size: 13px; display: grid; gap: 6px; text-align: left; padding: 9px; }
+    .warehouse-rack-product-preview { display: grid; gap: 4px; font-weight: 400; }
+    .warehouse-rack-product-preview strong { font-size: 15px; overflow-wrap: anywhere; }
+    .warehouse-rack-product-preview small { font-size: 13px; overflow-wrap: anywhere; }
+    @media(max-width:600px) { .warehouse-rack-level .warehouse-map-location { flex-basis: calc(50% - 8px); } }
     .warehouse-map-actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 9px 0; }
     .warehouse-map-goods .candidate { margin-top: 7px; }
     .warehouse-map-form { margin-top: 9px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
@@ -1468,6 +1472,7 @@
           const focusedLocation = preferredLocation || lotLocation;
           if (focusedLocation) {
             state.warehouseMapFocusLocationId = Number(focusedLocation.location_id);
+            if (focusedLocation.map_rack_id) state.warehouseSelectedRack = focusedLocation.map_rack_id;
             renderWarehouseMap();
             renderWarehouseLocationGoods(focusedLocation, preferredLotId);
             document.querySelector(`.warehouse-map-location[data-location-id="${focusedLocation.location_id}"]`)?.scrollIntoView({ block: "center", inline: "center" });
@@ -1553,6 +1558,17 @@
             button.style.width = `${location.geometry.width_pct}%`;
             button.style.height = `${location.geometry.height_pct}%`;
           } else if (location.map_rack_id) button.textContent = `${location.slot_no}格${occupied ? " · 有货" : notDisclosed ? " · 状态未公开" : " · 空"}${hasRedIssue ? " · 待核对" : ""}`;
+          if (location.map_rack_id && !notDisclosed) {
+            const visibleGoods = location.goods || [];
+            visibleGoods.slice(0, 2).forEach(good => {
+              const preview = node("span", "warehouse-rack-product-preview");
+              preview.append(node("strong", "", good.product_name || "名称待补充"),
+                node("small", "", good.specification || "规格待补充"),
+                node("small", "", `实物 ${good.quantity_total ?? "待核对"}${good.unit || ""}`));
+              button.append(preview);
+            });
+            if (visibleGoods.length > 2) button.append(node("small", "", `还有 ${visibleGoods.length - 2} 个批次，点击查看全部`));
+          }
           button.disabled = location.can_select_target !== true;
           button.addEventListener("click", () => {
             if (location.map_rack_id) state.warehouseSelectedRack = location.map_rack_id;

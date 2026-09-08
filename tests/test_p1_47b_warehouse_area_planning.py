@@ -579,6 +579,227 @@ def _bind_formal_area(
     return area, policy
 
 
+def _seed_precise_rack_area_with_legacy_anchors(
+    db,
+    *,
+    admin: User,
+) -> tuple[WarehouseArea, dict, list[WarehouseLocation]]:
+    area, policy = _bind_formal_area(db, admin=admin)
+    area.area_name = '三楼左区 G 货架'
+    area.planned_location_count = 9
+    area.construction_status = 'enabled'
+    policy.storage_layout = 'rack'
+    policy.status = 'published'
+    policy.published_map_revision = 'published-before-rack-adjustment'
+    rack = {
+        'id': 'rack-left-g-001',
+        'layout_id': 'layout-3f-p1-47b',
+        'rack_code': 'RACK-3F-F1-A',
+        'name': '左区G货架G-1',
+        'x_mm': 5_000,
+        'y_mm': 5_000,
+        'width_mm': 2_800,
+        'depth_mm': 1_500,
+        'height_mm': 3_000,
+        'levels': 3,
+        'level_heights_mm': [1_000, 2_000],
+        'cargo_rows': 4,
+        'level_cell_counts': [3, 3, 3],
+        'bays': 1,
+        'access_side': 'south',
+        'min_aisle_width_mm': 1_500,
+        'rotation_deg': 90,
+        'color': '#38bdf8',
+        'source': 'manual',
+        'status': 'candidate',
+        'is_locked': False,
+        'version': 2,
+        'area_feature_id': 'zone-f1',
+        'area_code': 'F1',
+    }
+    rows: list[WarehouseLocation] = []
+    for serial in range(1, 3):
+        row = WarehouseLocation(
+            location_code=f'3F-F1-L{serial:03d}',
+            location_name=f'旧空位 {serial}',
+            warehouse_type='finished',
+            is_active=True,
+            warehouse_floor=3,
+            area_code='F1',
+            storage_type='rack',
+            sort_order=serial,
+            source_version='CURRENT_MAP',
+            address_kind='legacy',
+            # Historical planning anchors predate formal area identities and
+            # therefore carry only the stable floor/area code.
+            address_area_id=None,
+            placement_status='placed',
+        )
+        row.floor3_layout = Floor3LocationLayout(
+            left_pct=Decimal(serial),
+            top_pct=Decimal('1'),
+            width_pct=Decimal('1'),
+            height_pct=Decimal('1'),
+            z_index=0,
+            version=1,
+            source_type='seeded',
+            layout_kind='logical_anchor',
+            created_by=admin.id,
+            updated_by=admin.id,
+        )
+        db.add(row)
+        rows.append(row)
+    for level_no in range(1, 4):
+        for slot_no in range(1, 4):
+            row = WarehouseLocation(
+                location_code=f'3F-F1-A-{level_no:02d}-{slot_no:02d}',
+                location_name=f'左区G货架G-1 第{level_no}层 第{slot_no}格',
+                warehouse_type='finished',
+                is_active=True,
+                warehouse_floor=3,
+                area_code='F1',
+                storage_type='rack',
+                level_no=level_no,
+                sort_order=10 + level_no * 10 + slot_no,
+                source_version='CURRENT_MAP',
+                address_kind='rack_slot',
+                address_area_id=area.id,
+                rack_code='A',
+                map_rack_id=rack['id'],
+                rack_display_name=rack['name'],
+                slot_no=slot_no,
+                placement_status='placed',
+            )
+            row.floor3_layout = Floor3LocationLayout(
+                left_pct=Decimal(slot_no),
+                top_pct=Decimal(level_no),
+                width_pct=Decimal('1'),
+                height_pct=Decimal('1'),
+                z_index=level_no,
+                version=1,
+                source_type='seeded',
+                layout_kind='physical_rack',
+                created_by=admin.id,
+                updated_by=admin.id,
+            )
+            db.add(row)
+            rows.append(row)
+    db.flush()
+    return area, rack, rows
+
+
+def test_rack_publish_retires_empty_legacy_anchors_without_count_deadlock(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft_path = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = editor._new_draft_document(published)
+    floor_layout = document['floors']['3F']
+    floor_layout['racks'] = []
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            assert admin is not None
+            area, rack, rows = _seed_precise_rack_area_with_legacy_anchors(
+                db,
+                admin=admin,
+            )
+            feature = next(item for item in floor_layout['features'] if item['id'] == 'zone-f1')
+            feature.update(
+                {
+                    'erp_area_code': area.area_code,
+                    'allowed_inventory_types': ['finished'],
+                    'storage_layout': 'rack',
+                    'formal_area_id': area.id,
+                    'formal_floor_id': area.floor_id,
+                    'formal_area_name': area.area_name,
+                }
+            )
+            floor_layout['racks'] = [rack]
+            floor_layout['revision'] = _floor_revision(floor_layout)
+            editor._mark_draft_changed(document, '3F')
+            editor._write_document(draft_path, document)
+            db.commit()
+
+            blockers = warehouse_api._formal_area_publish_blockers(db, '3F')
+            assert not any('计划 9 个库位，当前有效 11 个' in item for item in blockers)
+
+            warehouse_api.publish_floor_area_policies(
+                db,
+                floor_code='3F',
+                published_revision=floor_layout['revision'],
+                operator_id=admin.id,
+                published_features=floor_layout['features'],
+                reconcile_rack_cell_feature_ids={'zone-f1'},
+            )
+
+            result = warehouse_api.sync_published_rack_cells(
+                db,
+                floor_layout=floor_layout,
+                operator_id=admin.id,
+            )
+            db.flush()
+            assert set(result.disabled_location_ids) == {rows[0].id, rows[1].id}
+            assert not rows[0].is_active and not rows[1].is_active
+            assert sum(1 for row in rows if row.is_active) == 9
+            assert area.planned_location_count == 9
+    finally:
+        engine.dispose()
+
+
+def test_rack_publish_still_blocks_occupied_legacy_anchor(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, _draft_path = _isolate_layout_paths(tmp_path, monkeypatch)
+    document = editor._new_draft_document(published)
+    floor_layout = document['floors']['3F']
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            assert admin is not None
+            _area, rack, rows = _seed_precise_rack_area_with_legacy_anchors(
+                db,
+                admin=admin,
+            )
+            floor_layout['racks'] = [rack]
+            db.add(
+                InventoryLot(
+                    lot_number='P1-47B-LEFT-G-LEGACY',
+                    inventory_type='finished',
+                    warehouse_location_id=rows[0].id,
+                    quantity_available=1,
+                    quantity_reserved=0,
+                    quantity_consumed=0,
+                    quantity_damaged=0,
+                    quantity_scrapped=0,
+                    unit='boxes',
+                    status='active',
+                    source_type='stocktake',
+                    stock_date=date(2026, 9, 8),
+                    stock_date_accuracy='exact',
+                    last_movement_at=datetime(2026, 9, 8, 10, 0),
+                    version=1,
+                )
+            )
+            db.commit()
+
+            with pytest.raises(
+                warehouse_api.WarehouseRackCellSyncError,
+                match='旧规划货位仍有货',
+            ):
+                warehouse_api.sync_published_rack_cells(
+                    db,
+                    floor_layout=floor_layout,
+                    operator_id=admin.id,
+                )
+            assert rows[0].is_active and rows[1].is_active
+    finally:
+        engine.dispose()
+
+
 def _change_policy_payload(*, revision: str, version: int, operation_key: str):
     payload = _policy_payload(
         revision=revision,

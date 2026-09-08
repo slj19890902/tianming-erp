@@ -10861,6 +10861,11 @@ def _formal_area_publish_blockers(
         for item in draft.get("features") or []
         if item.get("feature_kind") == "zone" and item.get("id")
     }
+    precise_rack_feature_ids = {
+        str(item.get("area_feature_id") or "").strip()
+        for item in draft.get("racks") or []
+        if item.get("id") and str(item.get("area_feature_id") or "").strip()
+    }
     policies = list(
         db.scalars(
             select(WarehouseAreaStoragePolicy)
@@ -11078,6 +11083,16 @@ def _formal_area_publish_blockers(
         if (
             area.planned_location_count
             and policy.map_feature_id != defer_location_readiness_for_feature_id
+            # A rack publish reconciles its formal cells later in the same
+            # transaction.  Pre-publish rows may therefore contain both the
+            # precise cells and empty planning anchors that the rack sync will
+            # retire.  Do not let the older generic count gate deadlock that
+            # safe reconciliation; occupied anchors and removed cells remain
+            # fail-closed in sync_published_rack_cells().
+            and not (
+                policy.storage_layout == "rack"
+                and policy.map_feature_id in precise_rack_feature_ids
+            )
         ):
             try:
                 route = resolve_area_location_management(
@@ -11785,6 +11800,12 @@ def _publish_twin_layout_draft_locked(
                 defer_location_readiness_for_feature_id=(
                     defer_location_readiness_for_feature_id
                 ),
+                reconcile_rack_cell_feature_ids={
+                    str(rack.get("area_feature_id") or "").strip()
+                    for rack in coordinate_draft.get("racks") or []
+                    if str(rack.get("id") or "").strip()
+                    and str(rack.get("area_feature_id") or "").strip()
+                },
             )
         rack_cell_sync = sync_published_rack_cells(
             db,

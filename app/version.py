@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.273"
-APP_VERSION_NAME = "新增区域归档身份冲突修复"
-APP_BUILD_DATE = "2026-09-07"
+APP_VERSION = "v0.22.274"
+APP_VERSION_NAME = "货架旧空位自动退役修复"
+APP_BUILD_DATE = "2026-09-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -1897,16 +1897,29 @@ _V022267_VERIFICATION_STEPS = [
     "在隔离测试布局分别制造货位互叠、区域越界和固定障碍冲突，确认提示类别正确且真实冲突仍保持红色。",
 ]
 
-APP_CHANGES = [
+_V022273_CHANGES = [
     "新增区域和通道的内部编号分配同时避开当前对象与已归档对象，不再复用历史归档编号。",
     "归档区域保护规则保持不变；新区域发布时不会再因内部编号碰撞被误剔除并触发正式身份回读失败。",
     "本版无新增数据库迁移，不修改正式区域、库存、货位、货架、已发布地图或现有规划草稿。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022273_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认 v0.22.273，数据库 revision 仍为唯一 head rq07v8x9z66。",
     "在已有归档区域的楼层新增区域并标出位置，保存区域设置后确认正式身份可正常回读且区域已启用。",
     "刷新并重新进入地图，确认新区域仍存在；归档区域保持归档，既有库存、货位、货架和未应用草稿不变。",
+]
+
+APP_CHANGES = [
+    "货架区已有精确层格时，地图发布不再被同一区域的空旧规划占位数量卡死；发布事务会自动停用这些旧空位。",
+    "旧占位只保留历史记录，不再出现在查货、移货或可选位置中；任何仍有库存或实体栈板的旧位置继续阻止发布。",
+    "左区G货架已保存的90度草稿可在安全退役2个空旧占位后正式应用；本版无数据库结构迁移，不改变库存数量。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "进入系统备份→系统版本，确认 v0.22.274，数据库 revision 仍为唯一 head rq07v8x9z66。",
+    "进入仓库地图→3F→左区G货架，确认查货只显示G-1的3层×3格正式位置，不再显示L001/L002旧空位。",
+    "确认左区G货架保持90度；切换区域规划与查货、再强制刷新，角度和9个正式层格均保持不变。",
+    "核对库存数量未变化；在隔离回归中给旧占位加入库存时，发布仍须明确拒绝且不能停用该位置。",
 ]
 
 
@@ -2000,6 +2013,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.273：本次更新｜{item}" for item in _V022273_CHANGES),
+    *(f"v0.22.273：如何验证｜{item}" for item in _V022273_VERIFICATION_STEPS),
     *(f"v0.22.267：本次更新｜{item}" for item in _V022267_CHANGES),
     *(f"v0.22.267：如何验证｜{item}" for item in _V022267_VERIFICATION_STEPS),
     *(f"v0.22.266：本次更新｜{item}" for item in _V022266_CHANGES),

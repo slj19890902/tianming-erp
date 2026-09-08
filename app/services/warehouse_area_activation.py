@@ -1174,6 +1174,7 @@ def publish_floor_area_policies(
     operator_id: int,
     published_features: list[dict],
     defer_location_readiness_for_feature_id: str | None = None,
+    reconcile_rack_cell_feature_ids: set[str] | None = None,
 ) -> PublishedAreaPolicyResult:
     floor = warehouse_floor_for_code(db, floor_code)
     if floor is None:
@@ -1188,6 +1189,7 @@ def publish_floor_area_policies(
         ).all()
     )
     areas_by_code = {area.area_code.upper(): area for area in areas}
+    rack_cell_feature_ids = set(reconcile_rack_cell_feature_ids or ())
     requested_feature_ids = {
         str(item.get("id") or "").strip()
         for item in published_features
@@ -1482,6 +1484,17 @@ def publish_floor_area_policies(
                 desired_type is not None
                 and area.planned_location_count > 0
                 and feature_id != defer_location_readiness_for_feature_id
+                # Precise rack cells are synchronized immediately after this
+                # policy publish in the same SQL/file transaction.  At this
+                # point the active rows may still include empty planning
+                # anchors, so the older generic readiness check must defer to
+                # that rack synchronization.  Occupied obsolete anchors still
+                # fail closed there and roll the whole publish back.
+                and not (
+                    feature_id in rack_cell_feature_ids
+                    and storage_layout == "rack"
+                    and policy.storage_layout == "rack"
+                )
             ):
                 active_rows = list(
                     db.scalars(

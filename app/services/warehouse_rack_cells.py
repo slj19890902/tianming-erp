@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.time_contract import beijing_now_naive
@@ -715,7 +715,16 @@ def sync_published_rack_cells(
             generic_rows = list(
                 db.scalars(
                     select(WarehouseLocation).where(
-                        WarehouseLocation.address_area_id == area.id,
+                        or_(
+                            WarehouseLocation.address_area_id == area.id,
+                            (
+                                WarehouseLocation.address_area_id.is_(None)
+                                & (
+                                    func.upper(WarehouseLocation.area_code)
+                                    == area.area_code.upper()
+                                )
+                            ),
+                        ),
                         WarehouseLocation.storage_type == "rack",
                         WarehouseLocation.map_rack_id.is_(None),
                         WarehouseLocation.source_version

@@ -1569,7 +1569,17 @@ function WarehouseRackElevation({
                     key={`${item.lot_id}-${item.location_code || "unknown"}`}
                     title={`${item.inventory_code || item.lot_number || `批次 ${item.lot_id}`} · ${item.product_name || "产品名称待补充"} · ${employeeCustomerName(item)} · ${formatNumber(inventoryLabelQuantity(item))} ${inventoryUnitLabel(item.unit)}`}
                     onClick={() => { setSelectedItem(item); setDetailOpen(false); }}
-                  ><small>{index + 1}</small><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><span>{employeeCustomerName(item)} · {formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</span></button>)}</div> : <span className="mold-rack-empty-spine">{identityConflict ? "请管理员确认唯一正式货位" : location ? blockReason || "＋ 为此货位选产品" : "暂无已建空货位"}</span>}
+                  ><small>{index + 1}</small><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><span>{employeeCustomerName(item)} · {formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</span></button>)}</div> : <button
+                    type="button"
+                    className="mold-rack-empty-spine"
+                    aria-label={`${cellTitle}：为此货位选产品`}
+                    disabled={identityConflict || !location || Boolean(blockReason)}
+                    onClick={() => {
+                      if (canChooseProducts && location && !identityConflict && !blockReason) {
+                        onChooseEmptyLocation(location.location_id);
+                      }
+                    }}
+                  >{identityConflict ? "请管理员确认唯一正式货位" : location ? blockReason || "＋ 为此货位选产品" : "暂无已建空货位"}</button>}
                 </section>;
               })}</div>
             </div>})}

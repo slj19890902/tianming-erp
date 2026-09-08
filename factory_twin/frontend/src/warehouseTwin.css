@@ -447,6 +447,10 @@ body.warehouse-twin-page {
 .mold-rack-book-spines b { color: #fff; font: 800 8px Consolas, "Microsoft YaHei", sans-serif; letter-spacing: .2px; }
 .mold-rack-book-spines span { min-height: 0; color: #cce6e2; font-size: 8px; line-height: 1.25; overflow: hidden; }
 .mold-rack-empty-spine { min-height: 62px !important; display: grid; place-items: center; color: #668892 !important; font-size: 8px !important; }
+.twin-rack-focus-panel button.mold-rack-empty-spine { width: 100%; height: 100%; padding: 12px; border: 1px dashed var(--erp-line, #8daeb9); border-radius: 4px; background: transparent; color: var(--erp-primary, #1769c2) !important; font-size: 12px !important; line-height: 1.5; cursor: pointer; touch-action: manipulation; }
+.twin-rack-focus-panel button.mold-rack-empty-spine:hover:not(:disabled) { background: #eaf4ff; border-color: #1769c2; }
+.twin-rack-focus-panel button.mold-rack-empty-spine:focus-visible { outline: 3px solid #1769c2; outline-offset: -3px; }
+.twin-rack-focus-panel button.mold-rack-empty-spine:disabled { color: var(--erp-muted, #64748b) !important; cursor: not-allowed; }
 .mold-rack-cell.occupied { border-color: #30b8a9; background: linear-gradient(145deg, #0d544f, #0a3338); box-shadow: inset 0 0 18px #5eead41a; }
 .mold-rack-cell.occupied strong { color: #e2fffb; }
 .mold-rack-cell.occupied span { color: #a9ddd6; }

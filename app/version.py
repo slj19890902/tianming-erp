@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.278"
-APP_VERSION_NAME = "空库位右键删除并保存"
+APP_VERSION = "v0.22.279"
+APP_VERSION_NAME = "货架空货位选产品点击修复"
 APP_BUILD_DATE = "2026-09-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2047,18 +2047,30 @@ _V022277_VERIFICATION_STEPS = [
     "手机查询点击未送齐订单，搜索客户，切换下单/交货日期并翻页；已送齐、作废和已关闭明细不应出现。",
 ]
 
-APP_CHANGES = [
+_V022278_CHANGES = [
     "管理员可右键点击地图空库位，选择删除空库位并保存，确认后立即保存，无需再次应用地图。",
     "删除仅停用指定空库位并同步区域数量，保留历史记录、其他库位位置与库存，避免刷新后恢复。",
     "有货或跨位栈板占用、权限不足、版本冲突时拒绝删除；保存和刷新失败均显示明确提示。本版无数据库结构迁移。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022278_VERIFICATION_STEPS = [
     "系统版本为 v0.22.278，唯一数据库 head 保持 rq07v8x9z66。",
     "管理员右键空库位并确认删除，核对区域数量减少，刷新或切换查货后不再出现；取消操作不改变地图。",
     "有货及跨位占用库位不能删除，普通账号不可删除，其他库位位置和库存保持不变。",
 ]
 
+APP_CHANGES = [
+    "修复货架正视图中“＋为此货位选产品”只有文字、点击无反应的问题；中间整块空白区改为真实按钮，点击选中对应层格并打开盘点调整。",
+    "放大空货位按钮文字和点击区域，支持键盘焦点；权限、移货来源、未发布规划与货位身份冲突门禁保持不变。本版不修改数据库结构或库存数量。",
+]
+APP_VERIFICATION_STEPS = [
+    "系统版本为 v0.22.279，强制刷新地图后开启移货/盘点。",
+    "点击F9等货架空格中间的加号或空白区域，确认打开对应货位的盘点调整面板，可选择客户与产品。",
+    "核对缺失正式货位、有身份冲突或没有权限的格子仍显示原因并禁止选择；仅点击货位不应写入库存。",
+]
+
 APP_CHANGELOG = [
+    *(f"v0.22.278：本次更新｜{item}" for item in _V022278_CHANGES),
+    *(f"v0.22.278：如何验证｜{item}" for item in _V022278_VERIFICATION_STEPS),
     *(f"v0.22.277：本次更新｜{item}" for item in _V022277_CHANGES),
     *(f"v0.22.277：如何验证｜{item}" for item in _V022277_VERIFICATION_STEPS),
     *(f"v0.22.276：本次更新｜{item}" for item in _V022276_CHANGES),

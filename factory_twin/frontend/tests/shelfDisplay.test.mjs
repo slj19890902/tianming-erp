@@ -1,8 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { groupShelfProducts, filterShelfMolds } from '../src/shelfDisplay.mjs';
+import { groupShelfProducts, filterShelfMolds, shelfStockDates } from '../src/shelfDisplay.mjs';
 const item = {lot_id: 1, customer_id: 1, product_id: 2, specification: '400x300x200', unit: 'pcs',
   available_quantity: 30, reserved_quantity: 10, damaged_quantity: 2, location_id: 10};
+test('stock dates distinguish unknown history and non-exact dates instead of fabricating freshness', () => {
+  assert.deepEqual(shelfStockDates([
+    {stock_date: '2026-09-02', stock_date_accuracy: 'exact'},
+    {stock_date: '2020-01-01', stock_date_accuracy: 'unknown'},
+    {stock_date: '2026-09-08', stock_date_accuracy: 'estimated'},
+  ]), {first: '2026-09-02', latest: '2026-09-08', incomplete: true, approximate: true});
+  assert.equal(shelfStockDates([]).first, null);
+});
 test('same product batches aggregate physical quantity without losing individual lots or double counting', () => {
   const input = [item, {...item, lot_id: 2}, item];
   const before = JSON.stringify(input);

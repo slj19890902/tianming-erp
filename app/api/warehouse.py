@@ -23820,6 +23820,8 @@ def get_lot(
             reservation_query.order_by(InventoryReservation.id.desc())
         ).all()
     ]
+    from app.services.shelf_lot_history import shelf_delivery_history
+    result["shelf_deliveries"] = shelf_delivery_history(db, lot_id, visible_customer_ids)
     return result
 
 

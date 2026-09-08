@@ -1,10 +1,12 @@
 export interface ShelfReadingItem {
+  stock_date?: string | null; stock_date_accuracy?: string;
   lot_id: number; product_id?: number | null; customer_id?: number | null;
   inventory_type?: string; unit?: string; specification?: string | null; material?: string | null;
   location_id?: number; location_code?: string | null; quantity?: number;
   available_quantity?: number; reserved_quantity?: number; damaged_quantity?: number;
   composite_parent_group_key?: string | null;
 }
+export function shelfStockDates(items: ShelfReadingItem[]): {first: string | null; latest: string | null; incomplete: boolean; approximate: boolean};
 export function groupShelfProducts<T extends ShelfReadingItem>(items: T[]): Array<{
   key: string; item: T; items: T[]; physical: number; available: number; reserved: number; damaged: number;
 }>;

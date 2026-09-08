@@ -32,3 +32,11 @@ export function filterShelfMolds(items, query = '') {
       [product.customer_name, product.product_code, product.product_name])]
       .some(value => String(value || '').toLocaleLowerCase('zh-CN').includes(needle)));
 }
+
+export function shelfStockDates(items) {
+  const dates = items.filter(item => item.stock_date_accuracy !== 'unknown' && item.stock_date)
+    .map(item => item.stock_date).sort();
+  return { first: dates[0] || null, latest: dates.at(-1) || null,
+    incomplete: dates.length !== items.length,
+    approximate: items.some(item => item.stock_date && item.stock_date_accuracy !== 'exact') };
+}

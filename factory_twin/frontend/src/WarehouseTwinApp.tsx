@@ -70,7 +70,8 @@ import {
   moldRacksForArea
 } from "./moldRackView.mjs";
 import type { MoldLocationOption } from "./moldRackView.mjs";
-import { filterShelfMolds, groupShelfProducts } from "./shelfDisplay.mjs";
+import { filterShelfMolds, groupShelfProducts, shelfStockDates } from "./shelfDisplay.mjs";
+import { ShelfLotHistory } from "./ShelfLotHistory";
 import {
   buildStocktakeBatchPayload,
   clearStocktakeDrafts,
@@ -217,6 +218,8 @@ interface InventoryItem {
   age_days?: number | null;
   version?: number;
   specification?: string | null;
+  stock_date?: string | null;
+  stock_date_accuracy?: string;
   material?: string | null;
   composite_parent_group_key?: string | null;
   allowed_product_ids?: number[];
@@ -1574,6 +1577,8 @@ function WarehouseRackElevation({
                         <b className="shelf-physical">实物 {formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</b>
                         <small>{employeeCustomerName(group.item)} · {group.item.inventory_code || "存货编码待补充"}</small>
                         <small>可用 {formatNumber(group.available)} · 已占用 {formatNumber(group.reserved)}{group.damaged ? ` · 异常 ${formatNumber(group.damaged)}` : ""}</small>
+                        <small>首次入库 {shelfStockDates(group.items).first || "待确认"} · 最近入库 {shelfStockDates(group.items).latest || "待确认"}</small>
+                        {(shelfStockDates(group.items).incomplete || shelfStockDates(group.items).approximate) && <small>部分入库日期不明或非精确，见批次详情</small>}
                       </button>
                       <details><summary>{group.items.length} 个批次 · 查看明细</summary>{group.items.map(item => <button type="button" className="shelf-batch-row" key={item.lot_id} onClick={() => { setSelectedItem(item); setDetailOpen(true); }}><span>{item.lot_number || "批次号待补充"}</span><b>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</b></button>)}</details>
                     </article>)}
@@ -1602,6 +1607,7 @@ function WarehouseRackElevation({
             <strong>{selectedItem.specification || "规格待补充"}</strong>
             <p className="shelf-physical">实际数量 {formatNumber(inventoryLabelQuantity(selectedItem))} {inventoryUnitLabel(selectedItem.unit)}</p>
             <dl><div><dt>客户</dt><dd>{employeeCustomerName(selectedItem)}</dd></div><div><dt>存货编码</dt><dd>{selectedItem.inventory_code || "待补充"}</dd></div></dl>
+            <ShelfLotHistory lotId={selectedItem.lot_id} load={requestJson} />
             <button type="button" className="twin-rack-detail-toggle" aria-expanded={detailOpen} onClick={() => setDetailOpen((value) => !value)}>{detailOpen ? "收起详情" : "查看详情"}</button>
             {detailOpen && <dl className="twin-rack-product-detail"><div><dt>可用数量</dt><dd>{formatNumber(selectedItem.available_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>已预占</dt><dd>{formatNumber(selectedItem.reserved_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>实际位置</dt><dd>{selectedItem.location_name || "位置名称待完善"}</dd></div><div><dt>存放方式</dt><dd>{selectedItem.pallet_code ? "已绑定实物栈板" : "地堆或散存"}</dd></div><div><dt>批次</dt><dd>{selectedItem.lot_number || "—"}</dd></div></dl>}
           </article>}

@@ -3,7 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
-import { groupShelfProducts } from "../src/shelfDisplay.mjs";
+import { groupShelfProducts, shelfStockDates } from "../src/shelfDisplay.mjs";
 
 const source = fs.readFileSync(new URL("../src/WarehouseTwinApp.tsx", import.meta.url), "utf8");
 const component = source.slice(source.indexOf("function WarehouseRackElevation("), source.indexOf("export function WarehouseTwinApp()"));
@@ -15,6 +15,7 @@ const locations = Array.from({length: 9}, (_, index) => ({
 }));
 const sandbox = {
   groupShelfProducts,
+  shelfStockDates,
   React: {createElement: (type, props, ...children) => ({type, props: props || {}, children: children.flat(Infinity)})},
   useState: value => [value, () => {}], useMemo: fn => fn(), useEffect() {},
   rackLevelCellCounts: value => value.level_cell_counts,

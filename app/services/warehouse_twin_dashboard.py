@@ -356,6 +356,7 @@ def _lot_payload(
         "age_days": age_days,
         "age_bucket": _age_bucket_key(age_days),
         "stock_date_accuracy": row.stock_date_accuracy,
+        "stock_date": row.stock_date.isoformat() if row.stock_date and row.stock_date_accuracy != "unknown" else None,
         "status": row.status,
         "version": row.version,
     }

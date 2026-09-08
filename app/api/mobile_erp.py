@@ -2897,8 +2897,8 @@ def _mobile_short_location_label(
     """Return one concise but unique physical address for the phone map."""
 
     compact_area = re.sub(r"^([A-Z]+)0+(\d+)$", r"\1\2", area_code.upper())
-    if location.ground_row_no and location.slot_no:
-        return f"{compact_area}·{int(location.ground_row_no)}排·{int(location.slot_no)}号位"
+    if not canonical.get("map_rack_id") and canonical.get("employee_location_name"):
+        return str(canonical["employee_location_name"])
     level_no = canonical.get("level_no")
     slot_no = canonical.get("slot_no")
     rack_name = str(canonical.get("rack_display_name") or "").strip()
@@ -3385,6 +3385,9 @@ def mobile_warehouse_map_area(
                 )
     unrestricted = visible_customer_ids is None
     location_payloads = []
+    from app.services.warehouse_location_sequence import applied_ground_geometry
+    area_feature = next((feature for feature in (map_floor or {}).get("features", [])
+                         if feature.get("erp_area_code") == normalized_area), None)
     for row in rows:
         location = row.location
         canonical = operational_location_payload(row)
@@ -3405,6 +3408,7 @@ def mobile_warehouse_map_area(
                     canonical=canonical,
                     area_code=normalized_area,
                 ),
+                "storage_type": location.storage_type,
                 "area_code": normalized_area,
                 "map_rack_id": canonical["map_rack_id"],
                 "rack_display_name": canonical["rack_display_name"],
@@ -3417,7 +3421,7 @@ def mobile_warehouse_map_area(
                 "published_map_revision": canonical["published_map_revision"],
                 "map_feature_id": canonical["map_feature_id"],
                 "geometry": (
-                    _mobile_layout_payload(layout)
+                    {**_mobile_layout_payload(layout), **applied_ground_geometry(location.id, layout, area_feature)}
                     if isinstance(layout, Floor3LocationLayout)
                     else None
                 ),

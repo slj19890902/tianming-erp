@@ -279,11 +279,15 @@ def test_mobile_map_uses_published_geometry_without_pallet_identifiers(
 
 def test_all_mobile_and_employee_location_lists_share_the_area_projection(
     mobile_erp_app,
+    monkeypatch,
 ) -> None:
     from app.models.product import Product
     from app.models.user import User
     from app.models.warehouse_inventory import WarehouseArea
     from app.api import warehouse as warehouse_api
+    monkeypatch.setattr(warehouse_api, "load_warehouse_twin_floor", lambda _: {
+        "features": [{"id": "mobile-zone-c1", "erp_area_code": "C1", "feature_kind": "zone",
+                      "points": [[0, 0], [10000, 0], [10000, 10000], [0, 10000]]}]})
     from app.services.production_workflow import list_temporary_locations
     from app.services.stocktake import list_locations as list_stocktake_locations
 
@@ -1293,7 +1297,7 @@ def test_mobile_map_frontend_defers_reads_and_writes_only_after_final_confirm(
         "has_location_discrepancy",
         "跨楼层、区域选择目标货位",
         "盘点数量",
-        "/mobile/stocktake.html?location_id=",
+        "return_floor: state.warehouseMapFloor",
         "location_discrepancy_id",
     ):
         assert marker in MOBILE_HTML

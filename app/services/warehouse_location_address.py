@@ -502,6 +502,11 @@ def format_location_address(
     floor_number = int(
         (floor.floor_number if floor is not None else location.warehouse_floor) or 0
     )
+    if area_sequence and location.address_kind != "rack_slot" and area is not None and floor_number:
+        area_name = employee_area_name(area, area_code=location.area_code, floor_number=floor_number)
+        floor_name = _floor_name(floor_number)
+        prefix = area_name if str(area_name).startswith(floor_name) else f"{floor_name} {area_name}"
+        return location.location_code, f"{prefix}-{int(area_sequence):02d}"
     if (
         location.address_kind == "rack_slot"
         and area is not None

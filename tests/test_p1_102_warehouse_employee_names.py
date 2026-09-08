@@ -114,14 +114,14 @@ def test_area_local_sequence_gives_every_side_one_unique_employee_position() -> 
 
     assert employee_location_name(
         left, area=area, floor=floor, area_sequence=1
-    ) == "三楼 右区A1 新振（主通道西侧）·A1-1"
+    ) == "三楼 右区A1 新振（主通道西侧）-01"
     assert location_address_payload(
         right,
         area=area,
         floor=floor,
         position_status="mapped",
         area_sequence=6,
-    )["employee_location_name"] == "三楼 右区A1 新振（主通道西侧）·A1-6"
+    )["employee_location_name"] == "三楼 右区A1 新振（主通道西侧）-06"
 
 
 def test_current_map_location_uses_the_same_area_local_sequence_projection() -> None:
@@ -142,7 +142,7 @@ def test_current_map_location_uses_the_same_area_local_sequence_projection() -> 
         area_sequence=1,
     )
 
-    assert projected.endswith("A1-1")
+    assert projected.endswith("-01")
     assert projected != location.location_code
 
 

@@ -1,4 +1,6 @@
 import { StocktakeObservationPanel } from "./StocktakeObservationPanel";
+// Also render these exact components in the isolated visual acceptance fixture.
+export { MoldRackElevation, WarehouseRackElevation };
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { EditorCanvas, type CanvasFocusTarget } from "./EditorCanvas";
 import { filterOperationalFeatures } from "./operationalView.mjs";
@@ -1420,13 +1422,13 @@ function MoldRackElevation({
           {!loading && error && <><h3>模具读取失败</h3><p className="error">{error}</p></>}
           {!loading && !error && selectedMold && <article className="twin-rack-product-label mold-label">
             <span>模具实物 · 关联产品详情</span><h3>{selectedMold.mold_name}</h3><strong>{selectedProduct?.product_name || "选择下方关联产品查看"}</strong>
-            <dl>{selectedProduct && <div><dt>客户</dt><dd>{selectedProduct.customer_name || "客户待确认"}</dd></div>}<div><dt>关联模具</dt><dd>{selectedMold.mold_code} · {selectedMold.mold_name}</dd></div><div><dt>正式位置</dt><dd>{selectedMold.rack_location}</dd></div><div><dt>现场指引</dt><dd>{selectedMold.location_guide?.prompt || "位置指引待补充"}</dd></div><div><dt>关联产品</dt><dd>{selectedMold.product_count} 款</dd></div></dl>
+            <dl>{selectedProduct && <div><dt>客户</dt><dd>{selectedProduct.customer_name || "客户待确认"}</dd></div>}<div><dt>关联模具</dt><dd>{selectedMold.mold_name}</dd></div><div><dt>现场位置</dt><dd>{selectedMold.location_guide?.prompt || "位置指引待补充"}</dd></div><div><dt>关联产品</dt><dd>{selectedMold.product_count} 款</dd></div></dl>
             <div className="twin-mold-rack-selected-actions">
               <button type="button" className="twin-rack-detail-toggle" disabled={moveAttemptUncertain} onClick={() => { setSelectedMoldId(null); setSelectedProductId(null); }}>返回本格模具目录</button>
               {canMoveMolds && <button type="button" className="move" disabled={moveBusy || moveAttemptUncertain} onClick={openMoldMove}>{movePanelOpen ? "重新选择目标位置" : "移动该模具"}</button>}
             </div>
             {movePanelOpen && <section className="twin-mold-move-panel">
-              <div><b>移动 {selectedMold.mold_code}</b><small>只列出当前正式发布的模具货架层格；预览不会写入。</small></div>
+              <div><b>移动 {selectedMold.mold_name}</b><small>只列出当前正式发布的模具货架层格；预览不会写入。</small></div>
               <label><span>目标货架</span><select value={moveRackCode} disabled={moveBusy || moveAttemptUncertain || !moveOptions.length} onChange={(event) => selectMoveRack(event.target.value)}>{moveOptions.map((option) => <option value={option.rack_code} key={option.rack_code}>{option.rack_code} · {option.name}</option>)}</select></label>
               {selectedMoveRack?.levels.length ? <label><span>目标层</span><select value={moveLevel} disabled={moveBusy || moveAttemptUncertain} onChange={(event) => {
                 const value = event.target.value;

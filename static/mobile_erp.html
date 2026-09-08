@@ -1352,6 +1352,7 @@
           }
         }
         const floor = state.warehouseMapFloors.find(item => item.floor_code === resolvedPreferred.floorCode)
+          || state.warehouseMapFloors.find(item => item.floor_code === "3F")
           || state.warehouseMapFloors.find(item => item.floor_code === state.warehouseMapFloor)
           || state.warehouseMapFloors[0];
         if (!floor) {

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.283"
-APP_VERSION_NAME = "送货单独立客户单号与打印简化"
+APP_VERSION = "v0.22.284"
+APP_VERSION_NAME = "盘点异常处理完成与消红"
 APP_BUILD_DATE = "2026-09-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2099,16 +2099,26 @@ _V022282_VERIFICATION_STEPS = [
     "系统版本为 v0.22.282；未布局库位的实际待送货物可以正常出货并打开送货单打印。",
     "核对客户、存货编码和数量，重复操作不重复扣库存；有剩余货物或损坏品的栈板继续保留。",
 ]
-APP_CHANGES = [
+_V022283_CHANGES = [
     "送货单客户单号可在编辑页独立保存，送货打印和后续对账导出使用新单号，原订单、报料、来料、生产及库存关联保持不变。",
     "移除打印页打印机操作提示，规格表头统一标注mm，各产品规格不再重复带单位。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022283_VERIFICATION_STEPS = [
     "系统版本为v0.22.283，数据库head为rr08v8x9z67。",
     "编辑送货单客户单号并保存，核对打印和对账导出使用新单号，原订单单号和出货数量不变。",
     "打开送货打印页，确认不再显示打印机操作提示，规格表头有mm且各行不重复显示mm。",
 ]
+APP_CHANGES = [
+    "管理员在库位异常详情可标记已处理，保存后刷新地图；最后一项异常处理完成后取消标红，有其他待处理异常则继续提示。",
+    "库位详情保留已处理记录、存货编码、上报数量、处理说明和时间；仅更新异常状态，不自动修改正式库存。本版无数据库结构迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "系统版本为v0.22.284，数据库head保持rr08v8x9z67；刷新仓库地图，选择员工上报异常的红色库位。",
+    "管理员实际处理完成后点击标记已处理，确认红色标记取消并出现已处理记录；同一库位仍有未处理异常时应继续标红。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.283：本次更新｜{item}" for item in _V022283_CHANGES),
+    *(f"v0.22.283：如何验证｜{item}" for item in _V022283_VERIFICATION_STEPS),
     *(f"v0.22.282：本次更新｜{item}" for item in _V022282_CHANGES),
     *(f"v0.22.282：如何验证｜{item}" for item in _V022282_VERIFICATION_STEPS),
     *(f"v0.22.281：本次更新｜{item}" for item in _V022281_CHANGES),

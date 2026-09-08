@@ -1052,8 +1052,9 @@ def test_whole_move_releases_source_projection_and_binds_target(
         assert target_item is not None and target_item.quantity == Decimal("80")
 
 
+@pytest.mark.parametrize("extra_open", [False, True])
 def test_empty_position_searches_all_physical_inventory_and_marks_unmatched(
-    mobile_erp_app,
+    mobile_erp_app, extra_open,
 ) -> None:
     from app.models.warehouse_inventory import (
         InventoryLot,
@@ -1174,6 +1175,14 @@ def test_empty_position_searches_all_physical_inventory_and_marks_unmatched(
         assert [item["id"] for item in listed.json()["items"]] == [
             observation["id"]
         ]
+        if extra_open:
+            another = client.post("/api/mobile/erp/warehouse/unmatched-inventory-observations",
+                json={"observed_location_id":target_location_id,
+                    "observed_location_layout_version":1,
+                    "inventory_keyword":"SECOND-OPEN-REPORT", "reported_quantity":2,
+                    "reported_unit":"只", "reason":"同库位另一项仍待核对",
+                    "idempotency_key":"second-open-observation"})
+            assert another.status_code == 201, another.text
         resolved = client.post(
             f"/api/mobile/erp/warehouse/unmatched-inventory-observations/{observation['id']}/resolve",
             json={
@@ -1214,14 +1223,25 @@ def test_empty_position_searches_all_physical_inventory_and_marks_unmatched(
             for item in after_area.json()["locations"]
             if item["location_id"] == target_location_id
         )
-        assert after_target["has_unmatched_inventory_observation"] is False
+        assert after_target["has_unmatched_inventory_observation"] is extra_open
+        history = client.get("/api/mobile/erp/warehouse/unmatched-inventory-observations",
+            params={"status":"resolved", "location_id":target_location_id})
+        assert history.status_code == 200, history.text
+        assert [item["id"] for item in history.json()["items"]] == [observation["id"]]
+        assert history.json()["items"][0]["status"] == "resolved"
+        assert history.json()["items"][0]["resolved_at"]
+        assert history.json()["items"][0]["resolution_note"] == "已现场核对，后续由正式盘点流程处理"
+        other = client.get("/api/mobile/erp/warehouse/unmatched-inventory-observations",
+            params={"status":"resolved", "location_id":999999})
+        assert other.json()["items"] == []
+
 
     with factory() as db:
         assert db.scalar(
             select(func.count(WarehouseUnmatchedInventoryObservation.id))
-        ) == 1
+        ) == 1 + int(extra_open)
         assert db.scalar(
-            select(WarehouseUnmatchedInventoryObservation.status)
+            select(WarehouseUnmatchedInventoryObservation.status).where(WarehouseUnmatchedInventoryObservation.id == observation["id"])
         ) == "resolved"
         assert db.scalar(select(func.count(InventoryLot.id))) == before_lot_count
         assert int(

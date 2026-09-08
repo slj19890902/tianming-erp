@@ -16,6 +16,7 @@ from app.models.warehouse_inventory import (
     Floor3LocationLayout,
     InventoryLot,
     InventoryMovement,
+    InventoryReservation,
     WarehouseArea,
     WarehouseLocation,
 )
@@ -836,6 +837,63 @@ def _operation_log(
     )
 
 
+def _release_count_shortfall(db: Session, *, lot: InventoryLot, counted: int,
+                             reviewer: User, order_number: str, key: str) -> list[dict]:
+    """Keep oldest reservations; release only the shortage before recording loss.
+
+    Caller owns the location/lot lock and transaction. This is not cancellation
+    of a production or delivery fact: original and consumed quantities stay intact.
+    """
+    shortage = int(lot.quantity_reserved) - counted
+    if shortage <= 0:
+        return []
+    if reviewer.role != "admin":
+        raise StocktakeError("低于预占的实盘数量须由管理员确认", 403, "ADMIN_COUNT_REQUIRED")
+    rows = list(db.scalars(select(InventoryReservation).where(
+        InventoryReservation.inventory_lot_id == lot.id,
+        InventoryReservation.status.in_(["active", "partial"]),
+        InventoryReservation.reserved_stock_quantity >
+        InventoryReservation.consumed_stock_quantity + InventoryReservation.released_stock_quantity,
+    ).order_by(InventoryReservation.reserved_at.desc().nulls_last(),
+               InventoryReservation.id.desc()).with_for_update()))
+    remaining = lambda row: int(row.reserved_stock_quantity) - int(row.consumed_stock_quantity) - int(row.released_stock_quantity)
+    if sum(remaining(row) for row in rows) != int(lot.quantity_reserved) or any(
+        row.reservation_type not in {"finished_order", "finished_surplus_delivery"}
+        or int(row.yield_factor or 1) != 1
+        or (row.credited_requirement_quantity is not None and
+            int(row.credited_requirement_quantity) - int(row.consumed_requirement_quantity)
+            - int(row.released_requirement_quantity) != remaining(row)) for row in rows
+    ):
+        raise StocktakeError("预占明细与库存余额不一致，请核对预占台账后重新盘点", 409, "RESERVATION_LEDGER_MISMATCH")
+    from app.services.warehouse_inventory import _balances, _movement, _finished_reservation_status
+    releases = []
+    for row in rows:
+        if shortage <= 0:
+            break
+        quantity = min(shortage, remaining(row))
+        before = _balances(lot)
+        lot.quantity_reserved -= quantity
+        lot.quantity_available += quantity
+        lot.version += 1
+        lot.last_movement_at = utc_now_naive()
+        row.released_stock_quantity += quantity
+        row.released_requirement_quantity += quantity
+        row.released_by = reviewer.id
+        row.released_at = lot.last_movement_at
+        row.release_reason = f"盘点单 {order_number} 实盘不足，先预占先保留"
+        row.status = _finished_reservation_status(row)
+        _movement(db, lot=lot, movement_type="release_reserve", quantity=quantity,
+                  before=before, operator_id=reviewer.id, reason=row.release_reason,
+                  idempotency_key=_movement_idempotency_key(f"{key}:shortfall:{row.id}", lot.id),
+                  reservation_id=row.id, related_order_id=row.order_id,
+                  related_order_item_id=row.order_item_id)
+        releases.append({"reservation_id": row.id, "order_id": row.order_id,
+                         "order_item_id": row.order_item_id, "shortage_quantity": quantity})
+        shortage -= quantity
+    db.flush()
+    return releases
+
+
 def approve_stocktake(
     db: Session,
     *,
@@ -945,7 +1003,6 @@ def approve_stocktake(
         )
 
     drifted: list[int] = []
-    below_reserved: list[int] = []
     for lot in lots:
         item = items_by_lot[lot.id]
         if (
@@ -954,19 +1011,11 @@ def approve_stocktake(
             or int(lot.quantity_reserved) != item.reserved_quantity_snapshot
         ):
             drifted.append(lot.id)
-        if item.counted_quantity < int(lot.quantity_reserved):
-            below_reserved.append(lot.id)
     if drifted:
         raise StocktakeError(
             f"库存已发生变化，涉及批次 {drifted}",
             409,
             "STOCKTAKE_DRIFT",
-        )
-    if below_reserved:
-        raise StocktakeError(
-            f"盘点数不能小于已预占数，涉及批次 {below_reserved}",
-            409,
-            "BELOW_RESERVED",
         )
 
     reviewed_at = utc_now_naive()
@@ -974,6 +1023,9 @@ def approve_stocktake(
     movement_bindings: list[tuple[StocktakeItem, int]] = []
     for lot in lots:
         item = items_by_lot[lot.id]
+        released_shortfall = _release_count_shortfall(
+            db, lot=lot, counted=int(item.counted_quantity), reviewer=reviewer,
+            order_number=order.order_number, key=key)
         before_available = int(lot.quantity_available)
         reserved = int(lot.quantity_reserved)
         new_available = int(item.counted_quantity) - reserved
@@ -1017,6 +1069,7 @@ def approve_stocktake(
         adjustments.append(
             {
                 "inventory_lot_id": lot.id,
+                "released_shortfall": released_shortfall,
                 "before_available": before_available,
                 "reserved": reserved,
                 "counted_quantity": int(item.counted_quantity),

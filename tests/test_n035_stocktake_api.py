@@ -852,7 +852,7 @@ def test_approve_rejects_stale_and_historical_missing_layout_snapshots(
         assert db.scalar(select(func.count(InventoryMovement.id))) == 0
 
 
-def test_approve_rejects_count_below_reserved_without_writes(stocktake_api) -> None:
+def test_approve_rejects_unmatched_reservation_ledger_without_writes(stocktake_api) -> None:
     application, factory, ids = stocktake_api
     with TestClient(application) as client:
         _login(client, "n035-workshop")
@@ -869,8 +869,8 @@ def test_approve_rejects_count_below_reserved_without_writes(stocktake_api) -> N
             json={"idempotency_key": "n035-below-reserved-review"},
         )
         assert response.status_code == 409
-        assert response.json()["detail"]["code"] == "BELOW_RESERVED"
-        assert "小于已预占" in response.json()["detail"]["message"]
+        assert response.json()["detail"]["code"] == "RESERVATION_LEDGER_MISMATCH"
+        assert "预占台账" in response.json()["detail"]["message"]
 
     with factory() as db:
         assert db.get(StocktakeOrder, order["id"]).status == "submitted"

@@ -129,13 +129,18 @@ def confirm_scan(payload: ScanPayload, db: Session = Depends(get_db), user: User
             task.status = 'pushed'
             task.submitted_at = None
             task.submitted_by = None
+            if all(row.status == 'picked' and row.picked_quantity == row.original_quantity for row in task.items):
+                from app.api.deliveries import _utc_now
+                task.status = 'driver_confirmed'
+                task.submitted_at = _utc_now()
+                task.submitted_by = user.id
             _write_audit(db, user=user, action='SCAN_FIXED_SHELF_PICK', resource='DeliveryPickTask', entity_id=task.id,
                 details={'product_id': payload.p, 'location_id': payload.l, 'item_ids': [item.id for item in items],
                     'quantity': sum(item.original_quantity for item in items), 'inventory_moved': False},
-                description='货架扫码标记本款拿齐，实际集货另行确认')
+                description='货架扫码标记本款拿齐，不移库；拿齐后按原流程发货')
         result = {'task_id': task.id, 'delivery_number': response['delivery_number'],
             'quantity': sum(item.original_quantity for item in items), 'already_picked': already,
-            'message': '已记录本款拿齐，集货另行确认', 'inventory_moved': False}
+            'message': '已记录本款拿齐，无需集货确认', 'inventory_moved': False}
         db.add(ShelfMutation(idempotency_key=payload.idempotency_key, request_hash=digest,
             result_json=json.dumps(result, ensure_ascii=False)))
         db.commit()

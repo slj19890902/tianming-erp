@@ -6348,11 +6348,15 @@ def get_delivery_pick_measured_map_area(
 def _confirm_shelf_staging(db, task, confirmations, print_version, user):
     from app.models.fixed_shelf import ShelfProfile
     from app.services.fixed_shelf import ShelfError
-    from app.services.fixed_shelf_staging import item_product, stage_pick_item
+    from app.services.fixed_shelf_staging import item_product, stage_pick_item, staged_lots
     required = []
     for item, quantity, target in confirmations:
         product = item_product(db, item)
-        if product and db.get(ShelfProfile, product.id):
+        if product and db.get(ShelfProfile, product.id) and (
+            target is not None or quantity < sum(
+                int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0) + int(lot.quantity_damaged or 0)
+                for lot in staged_lots(db, item.delivery_item_id))
+        ):
             required.append((item, quantity, target))
     if not required:
         return

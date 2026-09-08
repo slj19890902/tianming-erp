@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.286"
-APP_VERSION_NAME = "手机仓库地图默认三楼"
+APP_VERSION = "v0.22.287"
+APP_VERSION_NAME = "拿齐后无需再次集货确认"
 APP_BUILD_DATE = "2026-09-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2127,15 +2127,26 @@ _V022285_VERIFICATION_STEPS = [
     "管理员在固定货架配置真实料号、主位、每捆数量及集货区，重新生成80×40mm标签，100%实体试打后用员工手机扫描。",
     "拿齐扫码后确认显示已拿齐待集货，库存位置与数量不变，重复扫码不累计；实际集货后另行确认，再核对发货批次。",
 ]
-APP_CHANGES = [
+_V022286_CHANGES = [
     "手机仓库地图普通入口默认显示三楼总览，仍可切换1F和4F；从具体货位或明确楼层链接进入时优先显示目标楼层。",
     "仅调整默认查看楼层，不修改地图、正式货位、库存或权限，无数据库迁移。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022286_VERIFICATION_STEPS = [
     "刷新手机版后打开仓库地图，确认默认三楼；选择1F、4F可正常切换楼层总览。",
     "打开一楼或四楼具体货位链接，确认仍定位原楼层；系统版本应为v0.22.286。",
 ]
+APP_CHANGES = [
+    "取消固定货架拿齐后的必需集货确认，不再要求选择集货位；全部扫码拿齐后按原流程确认发货。",
+    "扫码和普通拿齐不自动移库；实际发货扣减原分配批次，少拿仍先处理数量差异，既有实际集货记录保留保护。",
+    "保留手机地图默认三楼和1F、4F切换；无数据库结构迁移，不修改已有库存或地图。",
+]
+APP_VERIFICATION_STEPS = [
+    "系统版本v0.22.287；扫描货架标签拿齐后进入可发货状态，不出现必须选择集货位或再次集货确认。",
+    "确认扫码前后库存位置数量不变，重复扫码不累计；实际发货后按本次数量扣库存，少拿须先应用差异。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.286：本次更新｜{item}" for item in _V022286_CHANGES),
+    *(f"v0.22.286：如何验证｜{item}" for item in _V022286_VERIFICATION_STEPS),
     *(f"v0.22.285：本次更新｜{item}" for item in _V022285_CHANGES),
     *(f"v0.22.285：如何验证｜{item}" for item in _V022285_VERIFICATION_STEPS),
     *(f"v0.22.284：本次更新｜{item}" for item in _V022284_CHANGES),

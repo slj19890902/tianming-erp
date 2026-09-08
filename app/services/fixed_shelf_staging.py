@@ -121,7 +121,7 @@ def enrich_staging(db, item_responses, product_ids):
             continue
         product = db.get(Product, profile.product_id)
         lots = staged_lots(db, item['delivery_item_id'])
-        item['staging_required'] = True
+        item['staging_required'] = False
         anchor = db.get(WarehouseLocation, profile.staging_location_id) if profile.staging_location_id else None
         area = db.get(WarehouseArea, anchor.address_area_id) if anchor and anchor.address_area_id else None
         item['staging_area_label'] = f'{anchor.warehouse_floor}楼 · {area.area_name}' if area else None
@@ -224,9 +224,17 @@ def require_staged_dispatch(db, lines):
         profile = db.get(ShelfProfile, product.id) if product else None
         if profile is None:
             continue
+        actual_staged = staged_lots(db, line.id)
+        if not actual_staged:
+            from app.models.delivery import DeliveryPickTaskItem
+            picked = db.scalars(select(DeliveryPickTaskItem).where(
+                DeliveryPickTaskItem.delivery_item_id == line.id)).all()
+            if not picked or not any(item.status in {'picked', 'partial'} and int(item.picked_quantity or 0) >= int(line.delivered_quantity) for item in picked):
+                raise WarehouseInventoryError('固定货架拿货尚未完成，请先核对拿货数量', 409)
+            continue
         anchor = db.get(WarehouseLocation, profile.staging_location_id) if profile.staging_location_id else None
         valid = 0
-        for lot in staged_lots(db, line.id):
+        for lot in actual_staged:
             location = db.get(WarehouseLocation, lot.warehouse_location_id)
             if anchor and location and (location.warehouse_floor, location.area_code) == (anchor.warehouse_floor, anchor.area_code) and not shelf.staging_issue(db, location):
                 valid += int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)

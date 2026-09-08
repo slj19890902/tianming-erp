@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.276"
-    assert APP_VERSION_NAME == "区域保存与货位朝向修复"
+    assert APP_VERSION == "v0.22.278"
+    assert APP_VERSION_NAME == "空库位右键删除并保存"
     assert APP_BUILD_DATE == "2026-09-08"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -49,10 +49,10 @@ def test_factory_update_reports_current_release_version() -> None:
     current_release = [
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
-    assert any("本次更新｜" in item and "货位重叠" in item for item in current_release)
-    assert any("本次更新｜" in item and "货位朝向" in item for item in current_release)
-    assert any("本次更新｜" in item and "草稿保留" in item for item in current_release)
-    assert any("如何验证｜" in item and "v0.22.276" in item and "rq07v8x9z66" in item for item in current_release)
+    assert any("本次更新｜" in item and "右键" in item for item in current_release)
+    assert any("本次更新｜" in item and "同步区域数量" in item for item in current_release)
+    assert any("本次更新｜" in item and "跨位栈板占用" in item for item in current_release)
+    assert any("如何验证｜" in item and "v0.22.278" in item and "rq07v8x9z66" in item for item in current_release)
     prior_release_247 = [item for item in APP_CHANGELOG if item.startswith("v0.22.247：")]
     assert any("本次更新｜" in item and "有效实收" in item and "不可变结算价格事实" in item for item in prior_release_247)
     assert any("本次更新｜" in item and "旧无路线成品" in item and "失败关闭" in item for item in prior_release_247)

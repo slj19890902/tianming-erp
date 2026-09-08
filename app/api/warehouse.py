@@ -6763,7 +6763,7 @@ def get_area_location_management(
             )
             )
             if published_plan is not None:
-                management["available_actions"] = ["location_count", "published_layout"]
+                management["available_actions"] = ["location_count", "published_layout", "disable_empty"]
                 management["ground_plan_id"] = published_plan.id
                 management["ground_plan_version"] = published_plan.version
                 management["spatial_layout_locked_reason"] = None
@@ -7227,6 +7227,9 @@ def disable_activated_area_location(
         floor, area, policy = _area_layout_context(
             db, floor_code=route.floor_code, area_code=route.area_code
         )
+        capacity_before = {"planned_pallet_capacity": area.planned_pallet_capacity,
+                           "confirmed_pallet_capacity": area.confirmed_pallet_capacity,
+                           "planned_location_count": area.planned_location_count}
         retained_plan = None
         if payload.retire_published_ground_slot:
             retained_plan = db.scalar(select(WarehouseGroundLayoutPlan).join(
@@ -7305,6 +7308,27 @@ def disable_activated_area_location(
                 expected_version=payload.expected_version,
                 operator_id=user.id,
             )
+        active_count = int(area.planned_location_count or 0)
+        if existing.storage_type == "ground" and policy.storage_layout == "pallet_ground":
+            area.planned_pallet_capacity = active_count
+            area.confirmed_pallet_capacity = active_count if active_count else None
+            area.capacity_eligible = active_count > 0
+            area.capacity_review_status = "confirmed" if active_count else "excluded"
+            _apply_capacity_review(area, user=user, review_changed=True)
+            _warehouse_capacity_log(
+                db, request=request, user=user, action="warehouse.location.empty_retire",
+                entity_type="warehouse_area", entity_id=area.id, object_ref=f"{route.floor_code}/{area.area_code}",
+                before=capacity_before, after={"planned_location_count": active_count,
+                    "planned_pallet_capacity": area.planned_pallet_capacity,
+                    "confirmed_pallet_capacity": area.confirmed_pallet_capacity,
+                    "retired_location_id": location_id, "inventory_changed": False},
+            )
+        if retained_plan is not None:
+            from app.services.warehouse_ground_map_application import record_map_applications
+            floor_layout = load_warehouse_twin_floor(route.floor_code)
+            record_map_applications(db, floor_layout=floor_layout, previous_floor_layout=floor_layout,
+                actor=user, operation_key=f"empty-location-retire:{location_id}:{location.floor3_layout.version}",
+                request=request, retired_location_ids={location_id})
         _floor3_layout_log(
             db,
             request=request,
@@ -7326,6 +7350,7 @@ def disable_activated_area_location(
             **area_location_management_payload(route),
             "policy_version": policy.version,
             "published_map_revision": policy.published_map_revision,
+            "active_location_count": active_count,
             "location": _location_dict_for_db(db, location),
             "layout": _floor3_layout_dict(location.floor3_layout),
         }

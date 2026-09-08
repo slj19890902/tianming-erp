@@ -27,3 +27,11 @@ def test_overlap_exception_requires_exact_previously_applied_location_snapshot()
     layout.version -= 1
     layout.left_pct += 1
     assert not _previously_verified(plan, feature, previous, receipt, slots)
+    layout.left_pct -= 1
+    removed = NS(location_id=99, location=NS(is_active=False))
+    plan.slots = [*slots, removed]
+    prior_with_removed = {**receipt, "locations": {**receipt["locations"], "99": "old-signature"}}
+    assert not _previously_verified(plan, feature, previous, prior_with_removed, slots)
+    assert _previously_verified(plan, feature, previous, prior_with_removed, slots, {99})
+    removed.location.is_active = True
+    assert not _previously_verified(plan, feature, previous, prior_with_removed, slots, {99})

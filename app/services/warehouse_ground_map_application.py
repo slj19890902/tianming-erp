@@ -69,7 +69,10 @@ def _published_floor_plans(db, floor_layout):
                  .selectinload(WarehouseLocation.floor3_layout))))
 
 
-def _previously_verified(plan, feature, previous_floor_layout, prior, slots):
+def _previously_verified(plan, feature, previous_floor_layout, prior, slots, retired_location_ids=()):
+    retired = {str(s.location_id) for s in getattr(plan, "slots", [])
+               if s.location_id in retired_location_ids and not s.location.is_active}
+    prior_locations = {key: value for key, value in (prior.get("locations") or {}).items() if key not in retired}
     previous_feature = next((f for f in (previous_floor_layout or {}).get("features", [])
                              if f["id"] == (feature or {}).get("id")), None)
     return bool(slots and previous_feature and feature
@@ -78,7 +81,7 @@ def _previously_verified(plan, feature, previous_floor_layout, prior, slots):
         and prior.get("area_id") == plan.area_id and prior.get("map_feature_id") == feature["id"]
         and prior.get("map_revision") == previous_floor_layout.get("revision")
         and all(s.location.floor3_layout is not None for s in slots)
-        and prior.get("locations") == {str(s.location_id): location_signature(s.location, s.location.floor3_layout) for s in slots})
+        and prior_locations == {str(s.location_id): location_signature(s.location, s.location.floor3_layout) for s in slots})
 
 
 def previously_verified_area_features(db, *, floor_layout, previous_floor_layout):
@@ -96,7 +99,7 @@ def previously_verified_area_features(db, *, floor_layout, previous_floor_layout
             receipts.get(plan.id) or {}, [s for s in plan.slots if s.location.is_active])}
 
 
-def record_map_applications(db, *, floor_layout, actor, operation_key, request=None, previous_floor_layout=None, coordinate_adjustments=None):
+def record_map_applications(db, *, floor_layout, actor, operation_key, request=None, previous_floor_layout=None, coordinate_adjustments=None, retired_location_ids=()):
     plans = _published_floor_plans(db, floor_layout)
     previous = load_map_applications(db, [p.id for p in plans])
     changed = 0
@@ -121,7 +124,7 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
             slot.location_id in adjustment_by_location for slot in slots
         )
         previously_verified = _previously_verified(
-            plan, feature, previous_floor_layout, previous.get(plan.id) or {}, slots)
+            plan, feature, previous_floor_layout, previous.get(plan.id) or {}, slots, retired_location_ids)
         if adjustment_candidate:
             xs = [float(point[0]) for point in feature["points"]]
             ys = [float(point[1]) for point in feature["points"]]

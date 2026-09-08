@@ -274,6 +274,12 @@ def test_explicit_empty_ground_slot_retirement_preserves_plan_and_rejects_occupi
         result = client.post(url, json=body)
         assert result.status_code == 200, result.text
         assert result.json()["location"]["is_active"] is False
+        assert result.json()["active_location_count"] == 5
+        with factory() as db:
+            area = db.scalar(select(WarehouseArea))
+            assert area.planned_location_count == 5
+            assert area.planned_pallet_capacity == 5
+            assert area.confirmed_pallet_capacity == 5
         assert client.post(url, json=body).status_code == 409
     with factory() as db:
         for table, rows in before.items():
@@ -381,7 +387,7 @@ def test_admin_can_drag_published_ground_slots_with_gaps_and_replay_safely(
             "/api/warehouse/spatial-layout/floors/3F/areas/A01/management"
         )
         assert management.status_code == 200, management.text
-        assert management.json()["available_actions"] == ["published_layout"]
+        assert management.json()["available_actions"] == ["location_count", "published_layout", "disable_empty"]
 
         slots = published.json()["slots"]
         moved = slots[-1]

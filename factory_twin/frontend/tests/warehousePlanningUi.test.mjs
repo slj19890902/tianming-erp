@@ -108,6 +108,46 @@ function componentValue(name, context, optional = false) {
   return sandbox.value;
 }
 
+test("right clicking an empty map location targets that exact location in lookup and planning", () => {
+  for (const mapMode of ["lookup", "planning"]) {
+    let menu;
+    const open = componentValue("openWarehouseContextMenu", {
+      mapMode, canEditLocations: true, setObjectActions: () => {}, setLocationContextMenu: value => { menu = value; }, setFeatureContextMenu: () => {},
+      visualLocations: [{ location_id: 42, is_active: true, occupancy_status: "empty", map_position: { version: 3 } }],
+      openObjectActions: () => false,
+    });
+    assert.equal(open({ kind: "pallet", id: "erp-location-42" }, 10, 20), true);
+    assert.equal(menu.locationId, 42);
+    assert.equal(menu.clientX, 10);
+    assert.equal(open({ kind: "pallet", id: "planning-capacity-preview" }, 10, 20), false);
+    assert.equal(menu, null);
+  }
+});
+
+test("empty location deletion sends plan and position guards once and distinguishes readback failure", async () => {
+  for (const stage of ["cancel", "occupied", "write-failure", "read-failure", "success"]) {
+    const writes = [], messages = [], reads = [];
+    const noop = () => {};
+    const location = { location_id: 42, area_code: "B2", floor_code: "3F", occupancy_status: stage === "occupied" ? "occupied" : "empty", map_position: { version: 7 } };
+    await componentValue("deleteEmptyMapLocation", {
+      visualLocations: [location], locationDrafts: {}, canEditLocations: true, locationEditBusy: false, spatialEditBusy: false,
+      employeeLocationName: () => "南B2 3号位", window: { confirm: () => stage !== "cancel" },
+      setLocationContextMenu: noop, setLocationEditBusy: noop, setLocationEditMessage: m => messages.push(m),
+      requestJson: async () => ({ available_actions: ["disable_empty"], published_map_revision: "map", policy_version: 8, ground_plan_id: 2, ground_plan_version: 3 }),
+      mutateJson: async (url, method, body) => { writes.push({ url, body }); if (stage === "write-failure") throw Error("写入失败"); return { location: { is_active: false }, active_location_count: 13 }; },
+      features: [{ id: "zone", erp_area_code: "B2" }], areaSettingsDraftsRef: { current: {} }, selectedAreaCode: "B2", setSimpleAreaCapacity: noop,
+      setSelected: noop, mapMode: "planning", refreshDashboard: async () => { reads.push(1); if (stage === "read-failure") throw Error("回读异常"); }, refreshPlanningTwinFloor: async () => {},
+    })(42);
+    if (["cancel", "occupied"].includes(stage)) { assert.equal(writes.length, 0); continue; }
+    assert.equal(writes.length, 1);
+    assert.match(writes[0].url, /locations\/42\/disable$/);
+    assert.equal(writes[0].body.retire_published_ground_slot, true);
+    assert.equal(writes[0].body.expected_ground_plan_version, 3);
+    assert.equal(writes[0].body.expected_version, 7);
+    assert.match(messages.at(-1), stage === "write-failure" ? /删除空库位失败/ : stage === "read-failure" ? /已删除.*回读失败.*不要重复删除/ : /已删除并保存.*13/);
+  }
+});
+
 test("area settings preserve a failed name count and rotation and report beside the save control", async () => {
   const messages = [], requests = [];
   const draft = { name: "南B2", usage: "finished", layout: "pallet_ground", capacity: "14", rotation: 90 };

@@ -1720,6 +1720,7 @@ export function WarehouseTwinApp() {
     clientX: number;
     clientY: number;
   } | null>(null);
+  const [locationContextMenu, setLocationContextMenu] = useState<{ locationId: number; clientX: number; clientY: number } | null>(null);
   const [layoutDrawPoints, setLayoutDrawPoints] = useState<number[][]>([]);
   const [floor4CalibrationMode, setFloor4CalibrationMode] = useState(false);
   const [floor4CalibrationPoints, setFloor4CalibrationPoints] = useState<number[][]>([]);
@@ -1829,11 +1830,12 @@ export function WarehouseTwinApp() {
     setFloor4CalibrationMode(false);
     setFloor4CalibrationPoints([]);
     setFeatureContextMenu(null);
+    setLocationContextMenu(null);
   }, [floorCode, locationEditMode]);
 
   useEffect(() => {
-    if (!featureContextMenu) return;
-    const closeMenu = () => setFeatureContextMenu(null);
+    if (!featureContextMenu && !locationContextMenu) return;
+    const closeMenu = () => { setFeatureContextMenu(null); setLocationContextMenu(null); };
     const closeMenuOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeMenu();
     };
@@ -1843,7 +1845,7 @@ export function WarehouseTwinApp() {
       window.removeEventListener("pointerdown", closeMenu);
       window.removeEventListener("keydown", closeMenuOnEscape);
     };
-  }, [featureContextMenu]);
+  }, [featureContextMenu, locationContextMenu]);
 
   const refreshDashboard = useCallback(async () => {
     const params = new URLSearchParams({
@@ -4061,30 +4063,53 @@ export function WarehouseTwinApp() {
     }
   };
 
-  const disableSelectedLocation = async () => {
-    if (!selectedLocation?.map_position || selectedLocation.occupancy_status !== "empty") return;
-    if (!window.confirm(`确认停用空库位 ${selectedLocation.location_code} 吗？历史身份和操作记录会保留。`)) return;
+  const deleteEmptyMapLocation = async (locationId: number) => {
+    const location = visualLocations.find((item) => item.location_id === locationId);
+    if (!canEditLocations || locationEditBusy || spatialEditBusy || !location?.map_position || location.occupancy_status !== "empty") return;
+    if (location.map_rack_id || location.address_kind === "rack_slot") {
+      setLocationEditMessage("货架层格请通过货架设置调整，不能单独删除。");
+      return;
+    }
+    if (Object.values(locationDrafts).some((draft) => visualLocations.some((item) => item.location_id === draft.location_id && item.area_code === location.area_code && item.floor_code === location.floor_code))) {
+      setLocationEditMessage("该区域还有未保存的货位调整，请先保存或取消，再删除空库位。");
+      return;
+    }
+    const name = employeeLocationName(location);
+    if (!window.confirm(`确认删除空库位“${name}”并保存吗？\n只移除这个空位，其余位置不动，历史记录保留。`)) return;
+    setLocationContextMenu(null);
     setLocationEditBusy(true);
+    let deletionWritten = false;
     try {
-      if (!areaLocationManagement?.available_actions.includes("disable_empty")) {
+      const management = await requestJson<AreaLocationManagement>(`/api/warehouse/spatial-layout/floors/${encodeURIComponent(location.floor_code)}/areas/${encodeURIComponent(location.area_code || "")}/management`);
+      if (!management.available_actions.includes("disable_empty")) {
         throw new Error("区域库位管理路径尚未就绪，请刷新后重试。");
       }
-      const endpoint = `/api/warehouse/spatial-layout/locations/${selectedLocation.location_id}/disable`;
-      await mutateJson(endpoint, "POST", {
-        expected_version: selectedLocation.map_position.version,
-        expected_map_revision: areaLocationManagement.published_map_revision || undefined,
-        expected_policy_version: areaLocationManagement.policy_version || undefined
+      const endpoint = `/api/warehouse/spatial-layout/locations/${location.location_id}/disable`;
+      const result = await mutateJson<{ location: { is_active: boolean }; active_location_count: number }>(endpoint, "POST", {
+        expected_version: location.map_position.version,
+        expected_map_revision: management.published_map_revision || undefined,
+        expected_policy_version: management.policy_version || undefined,
+        retire_published_ground_slot: Boolean(management.ground_plan_id),
+        expected_ground_plan_version: management.ground_plan_version || undefined
       });
+      if (!result || result.location.is_active !== false) throw new Error("未收到删除回执，请刷新核对");
+      deletionWritten = true;
+      const feature = features.find((item) => item.erp_area_code === location.area_code);
+      const key = feature ? `${location.floor_code}/${feature.id}` : "";
+      if (areaSettingsDraftsRef.current[key]) areaSettingsDraftsRef.current[key].capacity = String(result.active_location_count);
+      if (selectedAreaCode === location.area_code) setSimpleAreaCapacity(String(result.active_location_count));
       setSelected(null);
-      await refreshDashboard();
-      await reloadAreaLocationManagement(selectedAreaCode);
-      setLocationEditMessage(`${selectedLocation.location_code} 已逻辑停用，没有物理删除历史记录。`);
+      await Promise.all([refreshDashboard(), mapMode === "planning" ? refreshPlanningTwinFloor() : refreshPublishedTwinFloor()]);
+      setLocationEditMessage(`“${name}”已删除并保存，区域剩余 ${result.active_location_count} 个空/有货库位；其余位置和库存未改变。`);
     } catch (reason) {
-      setLocationEditMessage((reason as Error).message);
+      setLocationEditMessage(deletionWritten
+        ? `空库位已删除，但地图回读失败：${(reason as Error).message}。请刷新核对，不要重复删除。`
+        : `删除空库位失败：${(reason as Error).message}`);
     } finally {
       setLocationEditBusy(false);
     }
   };
+  const disableSelectedLocation = () => selectedLocation && deleteEmptyMapLocation(selectedLocation.location_id);
 
   const focusSearchItem = (item: SearchItem) => {
     setFocusedSearchItem(item);
@@ -5641,6 +5666,26 @@ export function WarehouseTwinApp() {
     if (!feature || feature.feature_kind !== "zone") return;
     setFeatureContextMenu({ featureId, clientX, clientY });
   };
+  const openWarehouseContextMenu = (entity: NonNullable<SelectedEntity>, clientX: number, clientY: number) => {
+    setObjectActions(null);
+    setLocationContextMenu(null);
+    setFeatureContextMenu(null);
+    if (canEditLocations && entity.kind === "pallet") {
+      const location = visualLocations.find((item) => `erp-location-${item.location_id}` === entity.id);
+      if (location?.is_active && location.occupancy_status === "empty" && location.map_position
+          && !location.map_rack_id && location.address_kind !== "rack_slot") {
+        setLocationContextMenu({ locationId: location.location_id, clientX, clientY });
+        return true;
+      }
+    }
+    if (mapMode === "planning") {
+      if (entity.kind !== "feature" || !locationEditMode || !layoutMapToolsOpen || layoutMapTool !== "adjust") return false;
+      setSelected(entity);
+      openFeatureContextMenu(entity.id, clientX, clientY);
+      return true;
+    }
+    return openObjectActions(entity, clientX, clientY);
+  };
 
   const beginFloor4Calibration = () => {
     if (floorCode !== "4F" || !locationEditMode || spatialEditBusy) return;
@@ -6073,7 +6118,7 @@ export function WarehouseTwinApp() {
           onFinishPalletNudge={() => { locationNudgeRef.current = null; void saveLocationDrafts(); }}
           aisleEditingEnabled={false}
           onFeatureContextMenu={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust" ? openFeatureContextMenu : undefined}
-          onEntityContextMenu={mapMode !== "planning" && viewMode === "2d" ? openObjectActions : undefined}
+          onEntityContextMenu={viewMode === "2d" ? openWarehouseContextMenu : undefined}
           onDropAsset={noop}
           onDropRack={noop}
           onDropPallet={noop}
@@ -6093,6 +6138,11 @@ export function WarehouseTwinApp() {
           visualTheme="warehouse"
           showInternalCodes={mapMode === "planning" && canEditLocations}
           />}
+          {locationContextMenu && <div className="twin-feature-context-menu" role="menu" aria-label="空库位操作"
+            style={{ left: locationContextMenu.clientX, top: locationContextMenu.clientY }} onPointerDown={(event) => event.stopPropagation()}>
+            <button type="button" role="menuitem" disabled={locationEditBusy || spatialEditBusy} onClick={() => void deleteEmptyMapLocation(locationContextMenu.locationId)}>删除空库位并保存</button>
+            <small>只删除所选空位，保留历史记录</small>
+          </div>}
           {featureContextMenu && (() => {
             const feature = features.find((item) => item.id === featureContextMenu.featureId);
             return feature ? <div

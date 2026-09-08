@@ -2461,6 +2461,7 @@ body.warehouse-twin-page {
 .shelf-mold-directory { max-height: 55vh; overflow-y: auto; }
 .shelf-mold-directory button { min-height: 64px; text-align: left; }
 .shelf-mold-directory b { font-size: 16px; overflow-wrap: anywhere; }
+.shelf-mold-directory span, .shelf-mold-directory small { font-size: 12px; line-height: 1.5; }
 .shelf-product-card button.selected, .shelf-product-card button:focus-visible, .shelf-mold-summary:focus-visible { outline: 2px solid #2563eb; outline-offset: -2px; }
 .twin-rack-stage:not(.twin-mold-rack-stage) .twin-elevation-frame { overflow: auto; }
 .twin-rack-stage:not(.twin-mold-rack-stage) .twin-elevation-level { flex: none; min-height: 230px; }

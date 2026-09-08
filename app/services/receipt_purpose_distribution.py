@@ -1554,6 +1554,10 @@ def _receipt_lots_with_location_names(
     ).all()
     lots: dict[int, InventoryLot] = {}
     names: dict[int, str] = {}
+    from app.services.warehouse_location_sequence import load_spatial_sequences
+    spatial_numbers = load_spatial_sequences(db,
+        {location.warehouse_floor for _, location, _, _, _ in rows if location is not None},
+        {location.area_code for _, location, _, _, _ in rows if location is not None})
     for lot, location, area, floor, area_sequence in rows:
         lots[int(lot.id)] = lot
         if location is not None:
@@ -1561,7 +1565,7 @@ def _receipt_lots_with_location_names(
                 location,
                 area=area,
                 floor=floor,
-                area_sequence=(int(area_sequence) if area_sequence else None),
+                area_sequence=spatial_numbers.get(location.id) or (int(area_sequence) if area_sequence else None),
             )
     return lots, names
 

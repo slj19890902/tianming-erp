@@ -23,14 +23,12 @@ def initial_stock_context(db: Session, *, location_id: int, product_id: int) -> 
     snapshot = hashlib.sha256(json.dumps({
         "location": location, "product_id": product_id, "lots": facts,
     }, sort_keys=True, default=str, ensure_ascii=False).encode()).hexdigest()
-    occupied = bool(location.get("lots") or location.get("lot_count"))
     pending = bool(location.get("pending_stocktake"))
     return {
         "snapshot": snapshot,
         "existing_quantity": sum(lot.quantity_available + lot.quantity_reserved
                                  + lot.quantity_damaged for lot in lots),
         "existing_location_count": len({lot.warehouse_location_id for lot in lots}),
-        "can_add": not occupied and not pending,
-        "block_reason": "当前货位已有库存，请在实盘数量中核对，或先移货归位。" if occupied
-            else "当前货位有待审核盘点，请处理后再入库。" if pending else None,
+        "can_add": not pending,
+        "block_reason": "当前货位有待审核盘点，请处理后再入库。" if pending else None,
     }

@@ -602,8 +602,8 @@ def _assert_add_compatible(
             detail: FinishedGoodsInventoryDetail | None = lot.finished_detail
             compatible = bool(
                 detail is not None
-                and detail.owner_customer_id == item.customer_id
-                and detail.product_id == item.product_id
+                and lot.status == "active"
+                and int(lot.quantity_damaged or 0) == 0
             )
         else:
             detail = lot.semi_finished_detail
@@ -650,17 +650,16 @@ def _assert_add_compatible(
             or pallet_item.unit != "boxes"
             or pallet_item.match_status != "matched"
             or linked_lot is None
-            or linked_lot.status not in {"active", "frozen"}
+            or linked_lot.status != "active"
+            or int(linked_lot.quantity_damaged or 0) > 0
             or linked_lot.inventory_type != "finished"
             or linked_lot.unit != "boxes"
             or linked_lot.warehouse_location_id != item.location_id
             or linked_detail is None
-            or linked_detail.owner_customer_id != item.customer_id
-            or linked_detail.product_id != item.product_id
             or linked_product is None
             or linked_product.deleted_at is not None
             or not linked_product.is_active
-            or linked_product.customer_id != item.customer_id
+            or linked_product.customer_id != linked_detail.owner_customer_id
             or pallet_item.customer_id != linked_detail.owner_customer_id
             or pallet_item.product_id != linked_detail.product_id
         ):

@@ -23,12 +23,16 @@ function renderInitialInbound() {
   const enabled = state.user?.role === "admin" && state.selectedLocation && !state.locked;
   $("initialInbound").classList.toggle("hidden", !enabled);
   if (!enabled) return;
-  // Existing goods must be counted through the existing lot workflow.
-  $("inboundFields").disabled = Boolean(state.lots.length);
-  $("inboundRefresh").disabled = Boolean(state.lots.length);
-  $("inboundContext").textContent = state.lots.length
-    ? "此货位已有库存，请在上方填写实盘数量；位置不对请先移货归位。"
-    : "请选择客户和产品，核对系统现存数量。";
+  const selectedProduct = new URLSearchParams(window.location.search);
+  if (!inbound.prefilled && selectedProduct.get("product_id") && selectedProduct.get("customer_id")) {
+    inbound.prefilled = true;
+    $("inboundCustomer").innerHTML = `<option value="${Number(selectedProduct.get("customer_id"))}">${h(selectedProduct.get("customer_name"))}</option>`;
+    $("inboundProduct").innerHTML = `<option value="${Number(selectedProduct.get("product_id"))}">${h(selectedProduct.get("product_code"))} · ${h(selectedProduct.get("product_name"))}</option>`;
+    $("inboundQuantity").value = selectedProduct.get("counted_quantity") || "";
+  }
+  $("inboundFields").disabled = false;
+  $("inboundRefresh").disabled = false;
+  $("inboundContext").textContent = "可在同一货位添加不同产品。只填写尚未登记的新增实物；已有批次数量请在上方盘点修改，其他货位已登记的实物请移库。";
   try {
     const saved = JSON.parse(sessionStorage.getItem(inboundAttemptStorageKey()) || "null");
     if (saved?.items?.[0]?.location_id === Number(pick(state.selectedLocation, ["id", "location_id"]))) {
@@ -38,7 +42,7 @@ function renderInitialInbound() {
       return;
     }
   } catch { /* Invalid local state never changes the ledger. */ }
-  if (!state.lots.length && $("inboundProduct").value) refreshInboundContext();
+  if ($("inboundProduct").value) refreshInboundContext();
 }
 
 function setInboundBusy(value) {

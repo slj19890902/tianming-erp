@@ -23,7 +23,7 @@ def _initial(ids, context):
     )), "initial_inventory_snapshot": context["snapshot"], "existing_inventory_acknowledged": True}
 
 
-def test_initial_inbound_snapshot_replay_and_occupied_guard(stocktake_app):
+def test_initial_inbound_snapshot_replay_and_add_to_occupied_location(stocktake_app):
     app, factory, ids, _ = stocktake_app
     with TestClient(app) as client:
         _login(client, "p147d-admin")
@@ -40,10 +40,13 @@ def test_initial_inbound_snapshot_replay_and_occupied_guard(stocktake_app):
         assert replay.json()["idempotent_replay"]
         assert client.post(URL, json={**payload, "initial_inventory_snapshot": "0" * 64}).status_code == 409
         occupied = _context(client, ids)
-        assert not occupied["can_add"]
+        assert occupied["can_add"]
+        second = {**_initial(ids, occupied), "idempotency_key": "mobile-initial-second"}
+        added = client.post(URL, json=second)
+        assert added.status_code == 200, added.text
         with factory() as db:
             assert db.scalar(select(func.sum(InventoryLot.quantity_available)).where(
-                InventoryLot.warehouse_location_id == ids["loc_fg1_add"])) == 13
+                InventoryLot.warehouse_location_id == ids["loc_fg1_add"])) == 26
 
 
 def test_initial_inbound_rejects_stale_stock_and_non_admin(stocktake_app):
@@ -63,6 +66,25 @@ def test_initial_inbound_rejects_stale_stock_and_non_admin(stocktake_app):
         assert response.status_code == 409, response.text
         with factory() as db:
             assert not db.scalar(select(InventoryLot.id).where(InventoryLot.warehouse_location_id == ids["loc_fg1_add"]))
+
+
+def test_admin_adds_different_product_to_same_location(stocktake_app):
+    app, factory, ids, _ = stocktake_app
+    with TestClient(app) as client:
+        _login(client, "p147d-admin")
+        first = _initial(ids, _context(client, ids))
+        assert client.post(URL, json=first).status_code == 200
+        context = client.get("/api/warehouse/twin-operations/initial-stock-context", params={
+            "location_id": ids["loc_fg1_add"], "product_id": ids["other_product"]}).json()
+        second = _initial(ids, context)
+        second["idempotency_key"] = "initial-different-product"
+        second["items"][0].update(customer_id=ids["other_customer"], product_id=ids["other_product"])
+        saved = client.post(URL, json=second)
+        assert saved.status_code == 200, saved.text
+    with factory() as db:
+        lots = list(db.scalars(select(InventoryLot).where(InventoryLot.warehouse_location_id == ids["loc_fg1_add"])))
+        assert {lot.finished_detail.product_id for lot in lots} == {ids["product"], ids["other_product"]}
+        assert sum(lot.quantity_available for lot in lots) == 26
 
 
 def test_mobile_product_create_uses_master_validation_and_rejects_existing_code(stocktake_app):

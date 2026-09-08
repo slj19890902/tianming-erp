@@ -2836,6 +2836,7 @@ class MobileWarehouseDiscrepancyResolvePayload(BaseModel):
 
 
 class MobileWarehouseUnmatchedObservationPayload(BaseModel):
+    product_id: int | None = Field(default=None, gt=0)
     observed_location_id: int = Field(gt=0)
     observed_location_layout_version: int = Field(gt=0)
     customer_keyword: str | None = Field(default=None, max_length=120)
@@ -2897,8 +2898,8 @@ def _mobile_short_location_label(
     """Return one concise but unique physical address for the phone map."""
 
     compact_area = re.sub(r"^([A-Z]+)0+(\d+)$", r"\1\2", area_code.upper())
-    if location.ground_row_no and location.slot_no:
-        return f"{compact_area}·{int(location.ground_row_no)}排·{int(location.slot_no)}号位"
+    if not canonical.get("map_rack_id") and canonical.get("employee_location_name"):
+        return str(canonical["employee_location_name"])
     level_no = canonical.get("level_no")
     slot_no = canonical.get("slot_no")
     rack_name = str(canonical.get("rack_display_name") or "").strip()
@@ -3191,6 +3192,35 @@ def mobile_warehouse_map_floors(
     }
 
 
+@router.get("/warehouse/map/overview/{floor_code}")
+def mobile_warehouse_floor_overview(
+    floor_code: str,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_inventory),
+) -> dict:
+    """Only area geometry/identity; no selectable locations or stock details."""
+    _no_store(response)
+    normalized = floor_code.strip().upper()
+    floors = mobile_warehouse_map_floors(response=response, db=db, user=user)["floors"]
+    floor = next((item for item in floors if item["floor_code"] == normalized), None)
+    if floor is None:
+        raise HTTPException(status_code=404, detail="楼层不存在或尚未启用")
+    try:
+        layout = overlay_formal_area_bindings(db, floor_code=normalized,
+            floor_layout=load_warehouse_twin_floor(normalized))
+    except (WarehouseTwinLayoutNotFoundError, ValueError):
+        return {"floor_code": normalized, "floor_name": floor["floor_name"], "areas": [], "map_status": "unmeasured"}
+    by_code = {area["area_code"]: area for area in floor["areas"]}
+    areas = [{"feature_id": feature["id"], "area_code": feature["erp_area_code"],
+              "area_name": by_code[feature["erp_area_code"]]["area_name"], "points": feature["points"]}
+             for feature in layout.get("features", [])
+             if feature.get("feature_kind") == "zone" and feature.get("erp_area_code") in by_code
+             and len(feature.get("points") or []) >= 3]
+    return {"floor_code": normalized, "floor_name": floor["floor_name"], "areas": areas,
+            "map_status": "ready" if areas else "unmeasured"}
+
+
 @router.get("/warehouse/map/locations/{location_id}")
 def mobile_warehouse_map_location_identity(
     location_id: int,
@@ -3385,6 +3415,9 @@ def mobile_warehouse_map_area(
                 )
     unrestricted = visible_customer_ids is None
     location_payloads = []
+    from app.services.warehouse_location_sequence import applied_ground_geometry
+    area_feature = next((feature for feature in (map_floor or {}).get("features", [])
+                         if feature.get("erp_area_code") == normalized_area), None)
     for row in rows:
         location = row.location
         canonical = operational_location_payload(row)
@@ -3405,6 +3438,7 @@ def mobile_warehouse_map_area(
                     canonical=canonical,
                     area_code=normalized_area,
                 ),
+                "storage_type": location.storage_type,
                 "area_code": normalized_area,
                 "map_rack_id": canonical["map_rack_id"],
                 "rack_display_name": canonical["rack_display_name"],
@@ -3417,7 +3451,7 @@ def mobile_warehouse_map_area(
                 "published_map_revision": canonical["published_map_revision"],
                 "map_feature_id": canonical["map_feature_id"],
                 "geometry": (
-                    _mobile_layout_payload(layout)
+                    {**_mobile_layout_payload(layout), **applied_ground_geometry(location.id, layout, area_feature)}
                     if isinstance(layout, Floor3LocationLayout)
                     else None
                 ),
@@ -3568,6 +3602,7 @@ def search_mobile_warehouse_physical_inventory(
     items = []
     for lot in lots:
         location = lot.location
+        from app.services.warehouse_relocation_pending import is_pending_relocation_location
         context = contexts.get(int(location.id), {})
         projection = warehouse_location_projection(location, **context)
         address = location_address_payload(
@@ -3585,6 +3620,7 @@ def search_mobile_warehouse_physical_inventory(
             {
                 **_mobile_goods_payload(lot),
                 "registered_location": {
+                    "is_pending_relocation": is_pending_relocation_location(location),
                     "location_id": int(location.id),
                     "location_code": location.location_code,
                     "employee_location_name": address["employee_location_name"],
@@ -4236,6 +4272,26 @@ def _mobile_unmatched_observation_payload(
     }
 
 
+@router.get("/warehouse/observation-products")
+def search_mobile_observation_products(
+    response: Response, q: str = Query(min_length=1, max_length=200),
+    db: Session = Depends(get_db), user: User = Depends(can_read_inventory),
+) -> dict:
+    _no_store(response)
+    pattern = f"%{q.strip()}%"
+    statement = select(Product, Customer).join(Customer, Customer.id == Product.customer_id).where(Product.deleted_at.is_(None), Product.is_active.is_(True), or_(
+        Product.product_code.ilike(pattern), Product.customer_material_code.ilike(pattern),
+        Product.product_name.ilike(pattern), Customer.name.ilike(pattern),
+        Customer.chinese_short_name.ilike(pattern), Customer.customer_code.ilike(pattern)))
+    allowed = _visible_customer_ids(user, db)
+    if allowed is not None:
+        statement = statement.where(Product.customer_id.in_(allowed))
+    return {"items": [{"product_id": product.id, "customer_id": customer.id,
+                       "customer_name": customer.chinese_short_name or customer.name,
+                       "product_code": product.product_code, "product_name": product.product_name}
+                      for product, customer in db.execute(statement.order_by(Product.product_code, Product.id).limit(50))]}
+
+
 @router.post("/warehouse/unmatched-inventory-observations", status_code=201)
 def report_mobile_unmatched_inventory_observation(
     payload: MobileWarehouseUnmatchedObservationPayload,
@@ -4245,6 +4301,17 @@ def report_mobile_unmatched_inventory_observation(
     user: User = Depends(can_read_inventory),
 ) -> dict:
     _no_store(response)
+    if payload.product_id is not None:
+        product = db.get(Product, payload.product_id)
+        allowed = _visible_customer_ids(user, db)
+        if product is None or product.deleted_at is not None or not product.is_active or (allowed is not None and product.customer_id not in allowed):
+            raise HTTPException(status_code=404, detail="产品不存在或不在可访问客户范围内")
+        customer = db.get(Customer, product.customer_id)
+        payload = payload.model_copy(update={
+            "customer_keyword": (customer.chinese_short_name or customer.name)[:120],
+            "inventory_keyword": str(product.product_code or product.customer_material_code or product.id)[:200],
+            "reason": f"现场盘点选定产品 #{product.id}：{product.product_name}；员工上报，待管理员确认入账",
+        })
     location = db.scalar(
         select(WarehouseLocation)
         .options(selectinload(WarehouseLocation.floor3_layout))

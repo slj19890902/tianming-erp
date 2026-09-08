@@ -599,6 +599,9 @@ def ground_candidate_rows(
             start=1,
         )
     }
+    from app.services.warehouse_location_sequence import load_spatial_sequences
+    area_sequence_by_location.update(load_spatial_sequences(
+        db, {int(plan.area.floor.floor_number)}, {str(plan.area.area_code)}))
     occupancies = list(
         db.scalars(
             select(WarehouseGroundOccupancy)

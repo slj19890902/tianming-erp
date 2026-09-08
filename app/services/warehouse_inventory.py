@@ -2148,7 +2148,8 @@ def _transfer_finished_lot_location(
                 str(target_lot.inventory_type or ""),
                 str(target_lot.unit or ""),
             )
-            if target_signature != source_signature:
+            operator = db.get(User, operator_id) if operator_id is not None else None
+            if target_signature != source_signature and (operator is None or operator.role != "admin"):
                 raise WarehouseInventoryError(
                     "目标货位已有不同客户、存货编码或规格的货物，不能直接混放；同品可共位保留批次，异品请换空位",
                     409,
@@ -2445,12 +2446,16 @@ def transfer_pending_finished_lot(
     db: Session, *, lot_id: int, expected_version: int, quantity: int,
     location_id: int, operator_id: int | None, idempotency_key: str,
     expected_target_layout_version: int,
+    expected_target_address_version: int | None = None,
+    expected_target_map_revision: str | None = None,
 ) -> FinishedLotLocationTransferResult:
     return _transfer_finished_lot_location(
         db, lot_id=lot_id, expected_version=expected_version, quantity=quantity,
         location_id=location_id, operator_id=operator_id, idempotency_key=idempotency_key,
         require_staging_source=False, require_pending_source=True,
         expected_target_layout_version=expected_target_layout_version,
+        expected_target_address_version=expected_target_address_version,
+        expected_target_map_revision=expected_target_map_revision,
     )
 
 

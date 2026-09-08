@@ -219,6 +219,9 @@ def load_warehouse_location_projection_contexts(
             current_sequence += 1
             area_sequences[int(location_id)] = current_sequence
 
+    from app.services.warehouse_location_sequence import load_spatial_sequences
+    area_sequences.update(load_spatial_sequences(db, floor_numbers, area_codes))
+
     published_identities: dict[int, dict | None] = {}
     for floor_number in {
         int(row.warehouse_floor)

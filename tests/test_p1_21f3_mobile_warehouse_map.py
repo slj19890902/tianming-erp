@@ -279,11 +279,15 @@ def test_mobile_map_uses_published_geometry_without_pallet_identifiers(
 
 def test_all_mobile_and_employee_location_lists_share_the_area_projection(
     mobile_erp_app,
+    monkeypatch,
 ) -> None:
     from app.models.product import Product
     from app.models.user import User
     from app.models.warehouse_inventory import WarehouseArea
     from app.api import warehouse as warehouse_api
+    monkeypatch.setattr(warehouse_api, "load_warehouse_twin_floor", lambda _: {
+        "features": [{"id": "mobile-zone-c1", "erp_area_code": "C1", "feature_kind": "zone",
+                      "points": [[0, 0], [10000, 0], [10000, 10000], [0, 10000]]}]})
     from app.services.production_workflow import list_temporary_locations
     from app.services.stocktake import list_locations as list_stocktake_locations
 
@@ -866,7 +870,7 @@ def test_discrepant_goods_can_move_to_another_position_and_close_report_atomical
         )
 
 
-def test_mobile_move_rejects_incompatible_occupied_target_but_allows_red_report(
+def test_mobile_move_rejects_frozen_occupied_target_but_allows_red_report(
     mobile_erp_app,
 ) -> None:
     from app.models.product import Product
@@ -894,6 +898,7 @@ def test_mobile_move_rejects_incompatible_occupied_target_but_allows_red_report(
         target_lot.finished_detail.product_id = other_product.id
         target_lot.finished_detail.inventory_code_snapshot = other_product.product_code
         target_lot.finished_detail.product_name_snapshot = other_product.product_name
+        target_lot.status = "frozen"
         db.commit()
 
     with TestClient(app) as client:
@@ -1293,7 +1298,7 @@ def test_mobile_map_frontend_defers_reads_and_writes_only_after_final_confirm(
         "has_location_discrepancy",
         "跨楼层、区域选择目标货位",
         "盘点数量",
-        "/mobile/stocktake.html?location_id=",
+        "return_floor: state.warehouseMapFloor",
         "location_discrepancy_id",
     ):
         assert marker in MOBILE_HTML

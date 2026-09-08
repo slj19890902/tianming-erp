@@ -1001,6 +1001,8 @@ class TwinStagingPlacementPayload(BaseModel):
 
     location_id: int = Field(gt=0)
     expected_layout_version: int = Field(gt=0)
+    expected_address_version: int | None = Field(default=None, gt=0)
+    expected_map_revision: str | None = Field(default=None, min_length=1, max_length=120)
     expected_version: int = Field(gt=0)
     quantity: int = Field(gt=0)
     idempotency_key: str = Field(min_length=1, max_length=120)
@@ -8265,7 +8267,9 @@ def place_twin_pending_lot(lot_id: int, payload: TwinStagingPlacementPayload, re
     try:
         result = transfer_pending_finished_lot(db, lot_id=lot_id, expected_version=payload.expected_version,
             quantity=payload.quantity, location_id=target.id, operator_id=user.id,
-            idempotency_key=payload.idempotency_key, expected_target_layout_version=payload.expected_layout_version)
+            idempotency_key=payload.idempotency_key, expected_target_layout_version=payload.expected_layout_version,
+            expected_target_address_version=payload.expected_address_version,
+            expected_target_map_revision=payload.expected_map_revision)
         if not result.replayed:
             append_audit_event(db, request=request, actor=user, event_category="business", result="success",
                 source="web", module_code="warehouse", action_code="warehouse.recount.pending.place",

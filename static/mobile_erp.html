@@ -1633,6 +1633,41 @@
           });
           actions.append(move, stocktake);
           card.append(actions);
+          const history = node("details", "warehouse-lot-history");
+          history.append(node("summary", "", "入库时间、订单与同款位置"));
+          const historyBody = node("div");
+          history.append(historyBody);
+          let historyLoading = false;
+          let historyLoaded = false;
+          history.addEventListener("toggle", async () => {
+            if (!history.open || historyLoading || historyLoaded) return;
+            historyLoading = true;
+            historyBody.replaceChildren(node("p", "muted", "正在核对批次记录…"));
+            try {
+              const detail = await apiGet(`/api/warehouse/lots/${good.lot_id}`);
+              if (Number(detail.id) !== Number(good.lot_id)) throw new Error("批次身份不一致，请刷新");
+              if (!history.isConnected) return;
+              const archive = detail.time_archive || {};
+              const related = detail.shelf_related_inventory || {};
+              historyBody.replaceChildren(
+                node("p", "", `入库日期：${archive.formed_on || "历史日期待确认"}${archive.formed_on && archive.formation_accuracy !== "exact" ? "（非精确）" : ""}`),
+                node("p", "", `来源订单：${related.source_order?.order_number || "无可确认的生产来源"}`),
+                node("p", "", `最近实际送货：${detail.shelf_deliveries?.[0]?.dispatched_at || "无可见正式发货记录"}`)
+              );
+              (detail.reservations || []).filter(row => row.remaining_reserved_stock_quantity > 0).forEach(row => {
+                historyBody.append(node("p", "", `${row.order_number || "关联订单待确认"} · 占用 ${row.remaining_reserved_stock_quantity}${good.unit || ""}`));
+              });
+              historyBody.append(node("strong", "", "同款库存位置"));
+              (related.same_product_locations || []).forEach(row => {
+                historyBody.append(node("p", "", `${row.location_name} · 实物 ${row.physical_quantity}${good.unit || ""} · 已占用 ${row.reserved_quantity}${row.status === "frozen" ? " · 已冻结" : ""}`));
+              });
+              historyBody.append(node("small", "muted", "位置查询不执行库存抵扣；新订单需确认预占后再按净需求报料。"));
+              historyLoaded = true;
+            } catch (error) {
+              if (history.isConnected) historyBody.replaceChildren(node("p", "error", `读取失败：${error.message}；收起后重新展开可重试。`));
+            } finally { historyLoading = false; }
+          });
+          card.append(history);
           container.append(card);
           if (Number(good.lot_id) === Number(preferredLotId) && good.can_move) selectWarehouseMapSource(good, location);
         });

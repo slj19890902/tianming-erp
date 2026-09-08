@@ -2,7 +2,7 @@ from datetime import date, datetime
 from sqlalchemy import select, func
 from app.models.delivery import Delivery
 from app.models.warehouse_inventory import InventoryMovement
-from app.services.shelf_lot_history import shelf_delivery_history
+from app.services.shelf_lot_history import shelf_delivery_history, shelf_related_inventory
 from app.services.warehouse_twin_dashboard import _lot_payload
 from test_warehouse_inventory_foundation import db, finished_lot, seed_other_customer_product
 
@@ -44,3 +44,28 @@ def test_dashboard_date_does_not_invent_unknown_historical_date(db):
     assert _lot_payload(lot, date.today())['stock_date'] == lot.stock_date.isoformat()
     lot.stock_date_accuracy = 'unknown'
     assert _lot_payload(lot, date.today())['stock_date'] is None
+
+
+def test_same_product_lookup_preserves_customer_snapshot_and_quantity_boundaries(db):
+    from app.services.warehouse_inventory import manual_finished_in
+    lot = finished_lot(db)
+    detail = lot.finished_detail
+    second = manual_finished_in(db, customer_id=detail.owner_customer_id, product_id=detail.product_id,
+        location_id=lot.warehouse_location_id, quantity=7, stock_date=date.today(), source_type='manual',
+        remarks=None, operator_id=None, idempotency_key='same-product-second')
+    db.commit()
+    result = shelf_related_inventory(db, lot, {detail.owner_customer_id})
+    assert result['source_order'] is None
+    assert {row['lot_id'] for row in result['same_product_locations']} == {lot.id, second.id}
+    assert sum(row['physical_quantity'] for row in result['same_product_locations']) == 27
+    assert shelf_related_inventory(db, lot, set())['same_product_locations'] == []
+    original = second.finished_detail.length_mm
+    second.finished_detail.length_mm = original + 1
+    db.flush()
+    assert [row['lot_id'] for row in shelf_related_inventory(db, lot, None)['same_product_locations']] == [lot.id]
+    second.finished_detail.length_mm = original
+    second.status = 'frozen'
+    db.flush()
+    rows = shelf_related_inventory(db, lot, None)['same_product_locations']
+    assert next(row for row in rows if row['lot_id'] == second.id)['status'] == 'frozen'
+    assert lot.quantity_available == 20 and second.quantity_available == 7

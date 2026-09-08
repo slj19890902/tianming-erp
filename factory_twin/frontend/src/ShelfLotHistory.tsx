@@ -5,6 +5,11 @@ interface History {
   time_archive?: { formed_on?: string | null; formation_accuracy?: string; entered_current_location_at?: string | null };
   reservations?: Array<{id: number; order_number?: string; remaining_reserved_stock_quantity: number; status: string}>;
   shelf_deliveries?: Array<{delivery_id: number; delivery_number: string; dispatched_at: string}>;
+  shelf_related_inventory?: {
+    source_order?: {order_number: string} | null;
+    same_product_locations: Array<{lot_id: number; location_id: number; location_name: string;
+      floor: number; physical_quantity: number; available_quantity: number; reserved_quantity: number; status: string; unit: string}>;
+  };
 }
 
 export function ShelfLotHistory({lotId, load}: {lotId: number; load: (url: string) => Promise<History>}) {
@@ -30,8 +35,16 @@ export function ShelfLotHistory({lotId, load}: {lotId: number; load: (url: strin
       <div><dt>进入当前货位</dt><dd>{archive.entered_current_location_at || '尚无可靠记录'}</dd></div>
       <div><dt>最近实际送货</dt><dd>{deliveries[0]?.dispatched_at || '无可见正式发货记录'}</dd></div></dl>
     <h4>当前占用订单</h4>
+    <p>来源订单：{data.shelf_related_inventory?.source_order?.order_number || '无可确认的生产来源订单'}</p>
     {reservations.length ? reservations.map(row => <p key={row.id}>{row.order_number || '关联订单待确认'} · 占用 {row.remaining_reserved_stock_quantity}</p>) : <p>无可见未消耗预占记录</p>}
     <details><summary>实际送货记录（{deliveries.length}）</summary>{deliveries.map(row => <p key={row.delivery_id}>{row.delivery_number} · {row.dispatched_at}</p>)}</details>
+    <details><summary>同款库存位置</summary>
+      {(data.shelf_related_inventory?.same_product_locations || []).map(row => <p key={row.lot_id}>
+        <a href={`/factory-twin-assets/warehouse-twin.html?floor=${row.floor}F&location_id=${row.location_id}&lot_id=${row.lot_id}`} target="_blank" rel="noopener noreferrer">{row.location_name}</a>
+        {' · '}实物 {row.physical_quantity} · 可用 {row.available_quantity} · 占用 {row.reserved_quantity}{row.status === 'frozen' ? ' · 已冻结' : ''}
+      </p>)}
+      <small>同客户、同产品及相同规格材质的位置；不代表全部可用于新订单。请在订单库存抵扣中核对并确认，不直接减少报料数量。</small>
+    </details>
     <small>以上为当前批次关联事实，不代表同款全部库存；扫码拿齐和集货不算发货。</small>
   </section>;
 }

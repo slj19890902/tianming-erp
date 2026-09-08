@@ -1,3 +1,4 @@
+import { StocktakeObservationPanel } from "./StocktakeObservationPanel";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { EditorCanvas, type CanvasFocusTarget } from "./EditorCanvas";
 import { filterOperationalFeatures } from "./operationalView.mjs";
@@ -1691,6 +1692,7 @@ export function WarehouseTwinApp() {
   const [canEditLocations, setCanEditLocations] = useState(false);
   const [canExecuteWarehouse, setCanExecuteWarehouse] = useState(false);
   const [canStocktake, setCanStocktake] = useState(false);
+  const [canCorrectInventory, setCanCorrectInventory] = useState(false);
   const [canViewProductionProjection, setCanViewProductionProjection] = useState(false);
   const [uiMode, setUiMode] = useState<"standard" | "large">("standard");
   const [locationEditMode, setLocationEditMode] = useState(false);
@@ -1874,6 +1876,7 @@ export function WarehouseTwinApp() {
         setCanEditLocations(!traceReadOnly && value.user.role === "admin");
         setCanExecuteWarehouse(!traceReadOnly && value.permissions.includes("warehouse.execute"));
         setCanStocktake(!traceReadOnly && value.permissions.includes("warehouse.stocktake.submit"));
+        setCanCorrectInventory(!traceReadOnly && value.user.role === "admin" && value.permissions.includes("warehouse.correct"));
         setCanViewProductionProjection(value.permissions.includes("warehouse.view"));
         setUiMode(value.user.ui_mode === "large" ? "large" : "standard");
       })
@@ -6422,7 +6425,9 @@ export function WarehouseTwinApp() {
           {objectActionsButton}
           {!traceReadOnly && canStocktake && !locationEditMode && <button type="button" className="twin-primary-action" disabled={loading || pendingPlacementBusy} onClick={() => { setMapMode("move"); setMoveAction("stocktake"); setSearchPanelOpen(true); }}>添加货物</button>}
           <div className="twin-location-card-title"><div><small>当前位置</small><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em></div>
-          {selectedLocation.has_unmatched_inventory_observation && <div className="twin-unmatched-observation"><b>现场有货但系统未匹配 · 待管理员核对</b>{(selectedLocation.unmatched_inventory_observations || []).map((item) => <p key={item.id}><strong>{item.inventory_keyword}</strong>{item.customer_keyword ? ` · ${item.customer_keyword}` : ""}{item.reported_quantity ? ` · 约 ${item.reported_quantity}${item.reported_unit || ""}` : ""}<span>{item.reason}</span></p>)}</div>}
+          <StocktakeObservationPanel key={selectedLocation.location_id} locationId={selectedLocation.location_id}
+            observations={selectedLocation.unmatched_inventory_observations || []}
+            canResolve={canCorrectInventory} onResolved={refreshDashboard} />
           {selectedLocation.has_location_discrepancy && <div className="twin-unmatched-observation"><b>现场位置与系统登记不符 · 持续标红</b>{(selectedLocation.location_discrepancies || []).map((item) => <p key={item.id}><strong>{item.lot.inventory_code || item.lot.lot_number || `批次 ${item.lot.lot_id}`}</strong>{item.reported_quantity ? ` · ${formatNumber(item.reported_quantity)} ${inventoryUnitLabel(item.lot.unit)}` : ""}<span>{item.reason}</span></p>)}</div>}
           <div className="twin-selection-summary"><span><small>货物</small><b>{selectedLocationItems.length} 条</b></span><span><small>客户</small><b>{selectedLocationCustomerLabel}</b></span><span><small>栈板</small><b>{selectedLocationPallets.length || 0} 块</b></span></div>
           {selectedLocationItems.length === 0 && <p className="twin-location-empty-primary">该位置当前没有货物</p>}

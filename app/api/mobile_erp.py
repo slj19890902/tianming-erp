@@ -4268,6 +4268,7 @@ def _mobile_unmatched_observation_payload(
         "reason": row.reason,
         "reported_at": utc_naive_to_api(row.reported_at),
         "resolution_note": row.resolution_note,
+        "resolved_at": utc_naive_to_api(row.resolved_at) if row.resolved_at else None,
         "resolved_inventory_lot_id": row.resolved_inventory_lot_id,
     }
 
@@ -4417,6 +4418,7 @@ def report_mobile_unmatched_inventory_observation(
 def list_mobile_unmatched_inventory_observations(
     response: Response,
     status: Literal["open", "resolved", "cancelled"] = Query(default="open"),
+    location_id: int | None = Query(default=None, gt=0),
     limit: int = Query(default=100, ge=1, le=200),
     db: Session = Depends(get_db),
     _user: User = Depends(can_correct_inventory),
@@ -4426,6 +4428,7 @@ def list_mobile_unmatched_inventory_observations(
         db.scalars(
             select(WarehouseUnmatchedInventoryObservation)
             .where(WarehouseUnmatchedInventoryObservation.status == status)
+            .where(WarehouseUnmatchedInventoryObservation.observed_location_id == location_id if location_id is not None else True)
             .order_by(
                 WarehouseUnmatchedInventoryObservation.reported_at.desc(),
                 WarehouseUnmatchedInventoryObservation.id.desc(),

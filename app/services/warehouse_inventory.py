@@ -752,6 +752,7 @@ def release_empty_pallets_after_delivery(
                 remarks=f"送货单 {delivery_id} 正式发货后货物清零，自动释放空栈板",
                 operator_id=operator_id,
                 idempotency_key=_delivery_pallet_release_key(delivery_id, pallet_id),
+                allow_non_operational_source=True,
             )
         except Floor3LocationError as error:
             raise WarehouseInventoryError(str(error), error.status_code) from error

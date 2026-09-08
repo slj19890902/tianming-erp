@@ -2331,6 +2331,7 @@ def clear_pallet(
     operator_id: int | None,
     idempotency_key: str | None = None,
     require_pending_source: bool = False,
+    allow_non_operational_source: bool = False,
 ) -> InventoryPallet:
     existing = (
         _movement_by_idempotency_key(db, idempotency_key)
@@ -2345,7 +2346,12 @@ def clear_pallet(
         ):
             raise Floor3LocationError("幂等键已用于不同的栈板清空业务", status_code=409)
         return _pallet(db, pallet_id, refresh=True)
-    row = _pallet(db, pallet_id, allow_non_operational_source=require_pending_source)
+    # Dispatch releases an already empty pallet, not a storage destination.
+    # Keep stock, version, idempotency and audit checks below for every caller.
+    row = _pallet(
+        db, pallet_id,
+        allow_non_operational_source=(require_pending_source or allow_non_operational_source),
+    )
     if require_pending_source:
         from app.services.warehouse_relocation_pending import is_pending_relocation_location
         if not is_pending_relocation_location(db.get(WarehouseLocation, row.location_id)):

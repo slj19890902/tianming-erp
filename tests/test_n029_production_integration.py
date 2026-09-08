@@ -602,8 +602,9 @@ def test_delivery_does_not_release_pallet_with_damaged_goods(
         assert pallet.location_id == ids["temporary_location"]
 
 
+@pytest.mark.parametrize("placement_status", ["placed", "unplaced"])
 def test_authorized_over_delivery_103_consumes_stock_and_records_three(
-    n029_delivery_app,
+    n029_delivery_app, placement_status,
 ) -> None:
     from app.models.delivery import DeliveryItem
     from app.models.order import OrderItem
@@ -617,6 +618,10 @@ def test_authorized_over_delivery_103_consumes_stock_and_records_three(
     app, factory, ids = n029_delivery_app
     lot_id = _prepare_103_finished_stock(factory, ids)
     pallet_id = _bind_finished_lot_to_test_pallet(factory, lot_id)
+    from app.models.warehouse_inventory import WarehouseLocation
+    with factory() as db:
+        db.get(WarehouseLocation, ids["temporary_location"]).placement_status = placement_status
+        db.commit()
     with TestClient(app) as client:
         _login(client)
         created = client.post(
@@ -638,6 +643,12 @@ def test_authorized_over_delivery_103_consumes_stock_and_records_three(
         assert created.json()["items"][0]["over_delivery_quantity"] == 3
         dispatched = client.put(f"/api/deliveries/{created.json()['id']}/dispatch")
         assert dispatched.status_code == 200, dispatched.text
+        printed = client.get(f"/api/deliveries/{created.json()['id']}/print")
+        assert printed.status_code == 200, printed.text
+        assert printed.json()["items"]
+        repeated = client.put(f"/api/deliveries/{created.json()['id']}/dispatch")
+        assert repeated.status_code in {200, 409}, repeated.text
+
 
     with factory() as db:
         item = db.get(OrderItem, ids["task_completed"])

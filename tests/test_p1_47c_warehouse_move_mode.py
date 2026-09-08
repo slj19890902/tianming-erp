@@ -762,6 +762,8 @@ def test_pending_reset_and_partial_placement_keep_reservations_and_replay(move_b
                        "expected_version": lot.version, "quantity": amount,
                        "idempotency_key": "pending-partial-place", "confirmed": True}
         url = f'/api/warehouse/twin-operations/pending-lots/{ids["loose_lot"]}/place'
+        stale = client.post(url, json={**payload, "expected_address_version": 999999})
+        assert stale.status_code == 409, stale.text
         bad = client.post(url, json={**payload, "quantity": 999999})
         assert bad.status_code == 409, bad.text
         placed = client.post(url, json=payload)

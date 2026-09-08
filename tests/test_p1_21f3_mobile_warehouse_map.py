@@ -870,7 +870,7 @@ def test_discrepant_goods_can_move_to_another_position_and_close_report_atomical
         )
 
 
-def test_mobile_move_rejects_incompatible_occupied_target_but_allows_red_report(
+def test_mobile_move_rejects_frozen_occupied_target_but_allows_red_report(
     mobile_erp_app,
 ) -> None:
     from app.models.product import Product
@@ -898,6 +898,7 @@ def test_mobile_move_rejects_incompatible_occupied_target_but_allows_red_report(
         target_lot.finished_detail.product_id = other_product.id
         target_lot.finished_detail.inventory_code_snapshot = other_product.product_code
         target_lot.finished_detail.product_name_snapshot = other_product.product_name
+        target_lot.status = "frozen"
         db.commit()
 
     with TestClient(app) as client:

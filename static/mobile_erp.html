@@ -360,9 +360,11 @@
       <div id="warehouseAreaOverview">
       <div class="warehouse-map-controls">
         <select id="warehouseMapFloor" aria-label="楼层"></select>
+        <select id="warehouseMapGroup" aria-label="区域字母分组"></select>
         <select id="warehouseMapArea" aria-label="区域"></select>
       </div>
       <div class="warehouse-map-actions">
+        <button id="warehouseFloorOverviewButton" class="small-btn" type="button">楼层总览</button>
         <button id="warehouseMapZoomOut" class="small-btn" type="button">缩小</button>
         <button id="warehouseMapZoomIn" class="small-btn" type="button">放大</button>
         <button id="warehouseMapRefresh" class="small-btn" type="button">刷新当前位置</button>
@@ -371,6 +373,7 @@
       <div id="warehouseMapState" class="card status">进入后才读取一层一片区域。</div>
       <p id="warehouseMapGuidance" class="warehouse-map-note" hidden></p>
       <div id="warehouseMapStage" class="warehouse-map-stage" hidden></div>
+      <div id="warehouseFloorOverview" hidden></div>
       <div id="warehouseRackList"></div>
       </div>
       <div id="warehouseMapGoods" class="warehouse-map-goods" hidden></div>
@@ -1282,6 +1285,10 @@
         return [area, ...tail].filter(Boolean).join("·") || readable;
       }
 
+      function warehouseAreaLetter(area) {
+        return String(area.area_name || "").toUpperCase().match(/[A-Z]/)?.[0] || "其他";
+      }
+
       function renderWarehouseMapSelectors() {
         const floorSelect = byId("warehouseMapFloor");
         const areaSelect = byId("warehouseMapArea");
@@ -1292,8 +1299,17 @@
           option.selected = floor.floor_code === state.warehouseMapFloor;
           floorSelect.append(option);
         });
-        areaSelect.replaceChildren();
-        warehouseAreaOptions().forEach(area => {
+        const groupSelect = byId("warehouseMapGroup");
+        groupSelect.replaceChildren();
+        ["", ...new Set(warehouseAreaOptions().map(warehouseAreaLetter).sort())].forEach(group => {
+          const option = node("option", "", group || "A–Z 全部区域");
+          option.value = group; option.selected = group === (state.warehouseMapGroup || ""); groupSelect.append(option);
+        });
+        const placeholder = node("option", "", "点击总览或选择具体区域");
+        placeholder.value = ""; placeholder.selected = !state.warehouseMapArea;
+        areaSelect.replaceChildren(placeholder);
+        warehouseAreaOptions().filter(area => !state.warehouseMapGroup || warehouseAreaLetter(area) === state.warehouseMapGroup)
+          .sort((a, b) => a.area_name.localeCompare(b.area_name, "zh-CN", { numeric: true })).forEach(area => {
           const suffix = area.map_status === "ready" ? "" : "（未建立实测地图）";
           const matching = warehouseAreaOptions().filter(item => item.area_name === area.area_name);
           const discriminator = matching.length > 1 ? `（第${matching.indexOf(area) + 1}片·${area.published_location_count}位）` : "";
@@ -1348,7 +1364,8 @@
           || areas.find(item => item.area_code === state.warehouseMapArea)
           || areas.find(item => item.map_status === "ready")
           || areas[0];
-        state.warehouseMapArea = area?.area_code || "";
+        state.warehouseMapArea = resolvedPreferred.areaCode ? area?.area_code || "" : "";
+        state.warehouseMapGroup = "";
         state.warehouseMapFocusLocationId = Number(resolvedPreferred.locationId || 0) || null;
         state.warehouseMapSource = null;
         state.warehouseMapTarget = null;
@@ -1357,9 +1374,65 @@
           preferredLotId: resolvedPreferred.lotId,
           preferredLocationId: state.warehouseMapFocusLocationId,
         });
+        else await loadWarehouseFloorOverview();
+      }
+
+      async function loadWarehouseFloorOverview() {
+        showWarehouseArea();
+        state.warehouseMapOverview = true;
+        state.warehouseMapController?.abort();
+        const controller = new AbortController();
+        state.warehouseMapController = controller;
+        const generation = ++state.warehouseMapGeneration;
+        byId("warehouseMapStage").hidden = true;
+        byId("warehouseRackList").hidden = true;
+        byId("warehouseMapMoveForm").hidden = true;
+        byId("warehouseFloorOverview").hidden = false;
+        showStatus("warehouseMapState", "正在读取楼层区域总览…", "");
+        try {
+          const data = await apiGet(`/api/mobile/erp/warehouse/map/overview/${encodeURIComponent(state.warehouseMapFloor)}`, {signal: controller.signal});
+          if (generation !== state.warehouseMapGeneration) return;
+          const container = byId("warehouseFloorOverview"); container.replaceChildren();
+          byId("warehouseMapTitle").textContent = `${data.floor_name}｜楼层总览`;
+          byId("warehouseMapGuidance").textContent = "先选A–Z分组或直接点击区域；总览不显示、不操作具体货位。";
+          byId("warehouseMapGuidance").hidden = false;
+          const areas = data.areas || [], points = areas.flatMap(area => area.points);
+          if (!points.length) { showStatus("warehouseMapState", "该楼层暂无已应用区域总览，可用上方列表选择已登记区域。", "empty"); return; }
+          const xs = points.map(p => p[0]), ys = points.map(p => -p[1]);
+          const left = Math.min(...xs), top = Math.min(...ys), width = Math.max(...xs) - left, height = Math.max(...ys) - top;
+          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.setAttribute("viewBox", `${left} ${top} ${width} ${height}`);
+          svg.style.width = "100%"; svg.style.height = "min(65vh, 700px)";
+          areas.forEach(area => {
+            const enabled = !state.warehouseMapGroup || warehouseAreaLetter(area) === state.warehouseMapGroup;
+            const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+            polygon.setAttribute("points", area.points.map(p => `${p[0]},${-p[1]}`).join(" "));
+            polygon.setAttribute("fill", enabled ? "#bfdbfe" : "#e5e7eb");
+            polygon.setAttribute("stroke", "#1d4ed8"); polygon.setAttribute("stroke-width", width / 500);
+            const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            label.setAttribute("x", area.points.reduce((sum,p) => sum+p[0],0)/area.points.length);
+            label.setAttribute("y", -area.points.reduce((sum,p) => sum+p[1],0)/area.points.length);
+            label.setAttribute("text-anchor", "middle"); label.setAttribute("font-size", width/70); label.textContent = area.area_name;
+            group.append(polygon, label);
+            if (enabled) {
+              group.setAttribute("role", "button"); group.setAttribute("tabindex", "0"); group.setAttribute("aria-label", area.area_name);
+              const open = () => { state.warehouseMapArea = area.area_code; state.warehouseMapFocusLocationId = null; renderWarehouseMapSelectors(); loadWarehouseMapArea({preserveMove: Boolean(state.warehouseMapSource)}); };
+              group.addEventListener("click", open); group.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") {event.preventDefault(); open();} });
+            }
+            svg.append(group);
+          });
+          container.append(svg); byId("warehouseMapState").hidden = true;
+        } catch (error) {
+          if (error.name !== "AbortError" && generation === state.warehouseMapGeneration) showStatus("warehouseMapState", error.message, "error", loadWarehouseFloorOverview);
+        }
       }
 
       async function loadWarehouseMapArea({ preferredLotId = null, preferredLocationId = null, preserveMove = false } = {}) {
+        if (!state.warehouseMapArea) return loadWarehouseFloorOverview();
+        state.warehouseMapOverview = false;
+        byId("warehouseFloorOverview").hidden = true;
+        byId("warehouseRackList").hidden = false;
         showWarehouseArea();
         state.warehouseMapController?.abort();
         const controller = new AbortController();
@@ -1524,15 +1597,15 @@
           card.append(move, returned);
           container.append(card);
         });
-        if (!goods.length) {
-          const stocktake = node("button", "search-btn", "盘点 / 首次入库");
+        {
+          const stocktake = node("button", "search-btn", "盘点 / 添加货物");
           stocktake.type = "button";
           stocktake.addEventListener("click", () => {
             const params = new URLSearchParams({ location_id: location.location_id, return_floor: state.warehouseMapFloor, return_area: state.warehouseMapArea });
             window.location.assign(`/mobile/stocktake.html?${params}`);
           });
           container.append(stocktake);
-          container.append(node("p", "muted", "该正式货位当前为空。若现场有货，请先按客户简称和存货编码搜索全仓实物库存；找到后可直接登记实际搬运，仍找不到再标红待管理员核对。"));
+          container.append(node("p", "muted", "已登记的实物可搜索后移入当前货位；未登记的实物请使用盘点 / 添加货物。搬运时可填写部分数量，剩余数量保留在原货位。"));
           renderEmptyWarehouseLocationSearch(location, container);
         }
         goods.forEach(good => {
@@ -1543,7 +1616,7 @@
             node("span", "", `${good.quantity_total || 0}${good.unit}｜在 ${readableLocation(location)}`)
           );
           const actions = node("div", "warehouse-map-item-actions");
-          const move = node("button", "small-btn", "搬运");
+          const move = node("button", "small-btn", "搬运 / 拆分数量");
           move.type = "button";
           move.disabled = good.can_move !== true;
           move.addEventListener("click", () => selectWarehouseMapSource(good, location));
@@ -1610,7 +1683,7 @@
               result.append(button);
             });
             if (!(data.items || []).length) result.append(node("p", "status error", "系统未找到匹配的正数成品库存；请核对关键词，或标红交管理员处理。"));
-            const report = node("button", "small-btn", "仍不是现场货物：标红待管理员核对");
+            const report = node("button", "small-btn", state.shell?.user?.role === "admin" ? "不是这批货：选择现场产品并盘点入库" : "不是这批货：选择现场产品上报管理员");
             report.type = "button";
             report.addEventListener("click", () => reportUnmatchedWarehouseInventory(location, customerKeyword, inventoryKeyword));
             result.append(report);
@@ -1626,36 +1699,54 @@
       }
 
       async function reportUnmatchedWarehouseInventory(location, customerKeyword, inventoryKeyword) {
-        const requiredKeyword = String(inventoryKeyword || customerKeyword || "").trim();
-        if (!requiredKeyword) {
-          window.alert("请至少填写客户简称或存货编码等关键信息");
-          return;
-        }
-        const quantityText = window.prompt("现场大约有多少只？不确定可留空：", "");
-        if (quantityText === null) return;
-        const quantity = quantityText.trim() ? Number(quantityText) : null;
-        if (quantity !== null && (!Number.isInteger(quantity) || quantity <= 0)) {
-          window.alert("现场数量必须是正整数，或留空等待管理员核对");
-          return;
-        }
-        const reason = window.prompt("请记录包装、印字或其他可帮助管理员识别的信息：", "现场有货，但全仓实物库存搜索未找到匹配批次");
-        if (!reason?.trim()) return;
-        try {
-          const data = await apiPost("/api/mobile/erp/warehouse/unmatched-inventory-observations", {
-            observed_location_id: location.location_id,
-            observed_location_layout_version: location.geometry.version,
-            customer_keyword: String(customerKeyword || "").trim() || null,
-            inventory_keyword: requiredKeyword,
-            reported_quantity: quantity,
-            reported_unit: quantity === null ? null : "只",
-            reason: reason.trim(),
-            idempotency_key: warehouseRequestKey("mobile-map-unmatched"),
-          });
-          window.alert(data.message || "现场未匹配货物已标红，等待管理员核对");
-          await loadWarehouseMapArea();
-        } catch (error) {
-          window.alert(error.message || "现场未匹配货物标记失败");
-        }
+        const container = byId("warehouseMapGoods");
+        const form = node("section", "card");
+        const query = node("input"); query.placeholder = "搜索客户、存货编码或产品名称";
+        query.value = inventoryKeyword || customerKeyword || "";
+        const quantity = node("input"); quantity.type = "number"; quantity.min = "1"; quantity.placeholder = "现场实际数量（只）";
+        const results = node("div");
+        const search = node("button", "search-btn", "搜索产品"); search.type = "button";
+        search.addEventListener("click", async () => {
+          if (!query.value.trim()) return;
+          search.disabled = true;
+          try {
+            const data = await apiGet(`/api/mobile/erp/warehouse/observation-products?q=${encodeURIComponent(query.value.trim())}`);
+            results.replaceChildren();
+            (data.items || []).forEach(product => {
+              const button = node("button", "candidate", `${product.customer_name}｜${product.product_code}｜${product.product_name}`);
+              button.type = "button";
+              let requestKey;
+              button.addEventListener("click", async () => {
+                const count = Number(quantity.value);
+                if (!Number.isSafeInteger(count) || count <= 0) { window.alert("请填写正整数现场数量"); return; }
+                if (state.shell?.user?.role === "admin") {
+                  const params = new URLSearchParams({location_id: location.location_id, return_floor: state.warehouseMapFloor,
+                    return_area: state.warehouseMapArea, product_id: product.product_id, customer_id: product.customer_id,
+                    product_code: product.product_code, product_name: product.product_name, customer_name: product.customer_name, counted_quantity: count});
+                  window.location.assign(`/mobile/stocktake.html?${params}`);
+                  return;
+                }
+                button.disabled = true;
+                try {
+                  requestKey ||= warehouseRequestKey("mobile-selected-observation");
+                  await apiPost("/api/mobile/erp/warehouse/unmatched-inventory-observations", {
+                    product_id: product.product_id, observed_location_id: location.location_id,
+                    observed_location_layout_version: location.layout_version || location.geometry?.version,
+                    inventory_keyword: product.product_code || String(product.product_id), reported_quantity: count,
+                    reported_unit: "只", reason: "现场盘点选定产品", idempotency_key: requestKey,
+                  });
+                  button.textContent = "已上报管理员，尚未改动库存";
+                } catch (error) { window.alert(error.message); button.disabled = false; }
+              });
+              results.append(button);
+            });
+            if (!(data.items || []).length) results.append(node("p", "muted", "未找到产品，请换用客户名称或完整编码搜索。"));
+          } catch (error) { window.alert(error.message); }
+          finally { search.disabled = false; }
+        });
+        form.append(node("h3", "", "选择现场产品"), quantity, query, search, results);
+        container.append(form);
+        form.scrollIntoView({behavior: "smooth", block: "nearest"});
       }
 
       function selectWarehouseMapSource(good, location, discrepancy = null) {
@@ -1690,11 +1781,12 @@
         const good = state.warehouseMapSource.good;
         const targetGoods = Array.isArray(location.goods) ? location.goods : [];
         const compatible = targetGoods.every(item => warehouseMapGoodsCompatible(good, item));
-        const targetBlocked = targetGoods.length > 0 && !compatible;
+        const unsafeTarget = targetGoods.some(item => String(item.status || "active") !== "active" || Number(item.quantity_damaged || 0) > 0);
+        const targetBlocked = unsafeTarget || (targetGoods.length > 0 && !compatible && state.shell?.user?.role !== "admin");
         byId("warehouseMapMoveSummary").textContent = targetBlocked
           ? `${readableLocation(location)} 已有不同货物，不能直接混放；可先上报现场位置并标红。`
           : targetGoods.length
-            ? `${readableLocation(location)} 已有同一产品；可以共用货位，系统会保留每个批次。`
+            ? `${readableLocation(location)} 已有货物；可以共用货位，系统分别保留产品和批次，不合并数量身份。`
             : `${good.product_code || "当前货物"}：${readableLocation(state.warehouseMapSource.location)} → ${readableLocation(location)}`;
         byId("warehouseMapConfirmMove").disabled = !state.warehouseMapCanExecute || targetBlocked;
         byId("warehouseMapReportMismatch").disabled = false;
@@ -1724,6 +1816,22 @@
           const ledgerSource = source.ledgerLocation || source.location;
           const sourceLayoutVersion = ledgerSource.layout_version || ledgerSource.geometry?.version;
           const targetLayoutVersion = target.layout_version || target.geometry?.version;
+          if (ledgerSource.is_pending_relocation === true) {
+            if (!target.location_id || !target.address_version || !targetLayoutVersion || !target.published_map_revision) {
+              throw new Error("目标货位地图身份不完整，请刷新目标区域后重试");
+            }
+            state.warehouseMapMoveRequestKey ||= warehouseRequestKey("mobile-pending-place");
+            const placed = await apiPost(`/api/warehouse/twin-operations/pending-lots/${source.good.lot_id}/place`, {
+              location_id: target.location_id, expected_layout_version: targetLayoutVersion,
+              expected_address_version: target.address_version, expected_map_revision: target.published_map_revision,
+              expected_version: source.good.lot_version, quantity,
+              idempotency_key: state.warehouseMapMoveRequestKey, confirmed: true,
+            });
+            state.warehouseMapMoveRequestKey = null;
+            window.alert(placed.message || "已归位，库存总数未增加");
+            await loadWarehouseMapArea();
+            return;
+          }
           if (!ledgerSource.location_id || !ledgerSource.address_version || !sourceLayoutVersion || !ledgerSource.published_map_revision
             || !target.location_id || !target.address_version || !targetLayoutVersion || !target.published_map_revision) {
             throw new Error("货位地图身份不完整，请刷新当前区域后重试");
@@ -2427,12 +2535,15 @@
       });
       byId("warehouseMapButton").addEventListener("click", () => openWarehouseMap());
       byId("closeWarehouseMap").addEventListener("click", closeWarehouseMap);
+      byId("warehouseFloorOverviewButton").addEventListener("click", () => { state.warehouseMapArea = ""; renderWarehouseMapSelectors(); loadWarehouseFloorOverview(); });
+      byId("warehouseMapGroup").addEventListener("change", () => { state.warehouseMapGroup = byId("warehouseMapGroup").value; state.warehouseMapArea = ""; renderWarehouseMapSelectors(); loadWarehouseFloorOverview(); });
       byId("warehouseMapFloor").addEventListener("change", () => {
         state.warehouseMapFocusLocationId = null;
         state.warehouseMapFloor = byId("warehouseMapFloor").value;
-        state.warehouseMapArea = warehouseAreaOptions()[0]?.area_code || "";
+        state.warehouseMapArea = "";
+        state.warehouseMapGroup = "";
         renderWarehouseMapSelectors();
-        loadWarehouseMapArea({ preserveMove: Boolean(state.warehouseMapSource) });
+        loadWarehouseFloorOverview();
       });
       byId("warehouseMapArea").addEventListener("change", () => {
         state.warehouseMapFocusLocationId = null;

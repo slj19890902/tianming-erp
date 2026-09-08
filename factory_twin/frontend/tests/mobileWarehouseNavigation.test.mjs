@@ -5,7 +5,8 @@ import vm from 'node:vm';
 const html = fs.readFileSync(new URL('../../../static/mobile_erp.html', import.meta.url), 'utf8');
 const stocktake = fs.readFileSync(new URL('../../../static/mobile_stocktake.html', import.meta.url), 'utf8');
 function fn(name, context) {
-  const start = html.indexOf(`      function ${name}(`);
+  let start = html.indexOf(`      function ${name}(`);
+  if (start < 0) start = html.indexOf(`      async function ${name}(`);
   const end = html.indexOf('\n      }', start) + 8;
   return vm.runInNewContext(`(${html.slice(start, end)})`, context);
 }
@@ -18,6 +19,27 @@ class Element {
 }
 test('mobile inline scripts parse', () => {
   for (const source of [html, stocktake]) for (const match of source.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) new vm.Script(match[1]);
+});
+
+test('pending relocation uses the guarded placement command without inventing source geometry', async () => {
+  const state = {warehouseMapSource: {good: {lot_id: 9, lot_version: 3, quantity_movable: 100},
+    location: {location_id: 7, is_pending_relocation: true}},
+    warehouseMapTarget: {location_id: 8, layout_version: 4, address_version: 2, published_map_revision: 'map-current'}};
+  let posted;
+  await fn('confirmWarehouseMapMove', {state, byId: () => ({value: '40'}), warehouseRequestKey: () => 'one-key',
+    apiPost: async (url, payload) => {posted = {url, payload}; return {};},
+    window: {alert: message => {assert.doesNotMatch(message, /身份不完整/);}}, loadWarehouseMapArea: async () => {}})();
+  assert.equal(posted.url, '/api/warehouse/twin-operations/pending-lots/9/place');
+  assert.equal(posted.payload.quantity, 40);
+  assert.equal(posted.payload.expected_address_version, 2);
+  assert.equal(posted.payload.expected_map_revision, 'map-current');
+});
+
+test('letter grouping uses region letters for floor-level selection', () => {
+  const letter = fn('warehouseAreaLetter', {});
+  assert.equal(letter({area_name: '南A1'}), 'A');
+  assert.equal(letter({area_name: '北Z3'}), 'Z');
+  assert.equal(letter({area_name: '新区域（待设置）'}), '其他');
 });
 test('rack levels appear inside a clickable front elevation, not overlapping map rectangles', () => {
   const elements = new Map();

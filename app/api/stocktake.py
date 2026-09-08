@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -217,6 +218,41 @@ def get_stocktake_location(
         _raise_service_error(error)
     except OperationalError as error:
         _raise_sqlite_concurrency_error(error)
+
+
+@router.post("/stocktakes/confirm", status_code=status.HTTP_201_CREATED)
+def confirm_mobile_stocktake(
+    payload: StocktakeCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_stocktake_review),
+    submitter: User = Depends(require_stocktake_submit),
+) -> dict[str, object]:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可在手机确认盘点并即时更新库存")
+    # Separate command identity from submit-for-review; both writes share one transaction.
+    command_key = "mobile-confirm-" + hashlib.sha256(payload.idempotency_key.encode()).hexdigest()
+    ip_address, user_agent = _request_metadata(request)
+    try:
+        order = stocktake_service.create_stocktake(
+            db, location_id=payload.location_id, location_layout_version=payload.location_layout_version,
+            location_address_version=payload.location_address_version, location_position_status=payload.location_position_status,
+            published_map_revision=payload.published_map_revision, items=[item.model_dump() for item in payload.items],
+            idempotency_key=command_key, submitter=user, ip_address=ip_address, user_agent=user_agent)
+        order = stocktake_service.approve_stocktake(db, order_id=order.id,
+            idempotency_key=command_key, reason="管理员手机确认实盘数量", reviewer=user,
+            ip_address=ip_address, user_agent=user_agent)
+        db.commit()
+        return _order_payload(db, stocktake_service.get_order(db, order.id))
+    except stocktake_service.StocktakeError as error:
+        db.rollback()
+        _raise_service_error(error)
+    except OperationalError as error:
+        db.rollback()
+        _raise_sqlite_concurrency_error(error)
+    except IntegrityError as error:
+        db.rollback()
+        _raise_conflict("STOCKTAKE_SAVE_CONFLICT", "盘点确认冲突，请刷新核对后重试", error)
 
 
 @router.post("/stocktakes", status_code=status.HTTP_201_CREATED)

@@ -15,6 +15,7 @@ const $ = id => { if (!nodes.has(id)) nodes.set(id, {value:'', checked:false, di
 const state = {user:{id:1,role:'admin'}, selectedLocation:{id:2,layout_version:1}, lots:[], locked:false};
 let mode='race', calls=[], deferred=[];
 const context = {console, URLSearchParams, Intl, Date, JSON, Number, $, state, h: x => String(x),
+  window: {location: {search: ''}},
   pick:(row,keys)=>keys.map(k=>row?.[k]).find(x=>x!==undefined),
   idempotencyKey:()=> 'stable-key', updateSubmitState(){}, showMessage(){},
   sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},

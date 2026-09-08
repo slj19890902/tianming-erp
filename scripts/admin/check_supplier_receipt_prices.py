@@ -9,6 +9,7 @@ or imports application startup, database, backup, or migration code.
 from __future__ import annotations
 
 import argparse
+import csv
 from collections import Counter
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -329,12 +330,39 @@ def check_database(database: str | Path) -> dict[str, Any]:
     return report
 
 
+def write_review_csv(report: dict[str, Any], destination: Path) -> None:
+    """Export unresolved evidence only; never overwrite a database or old review."""
+    fields = ["incoming_receipt_item_id", "receipt_id", "receipt_number",
+              "received_at", "supplier_name", "source_kind", "source_id",
+              "purchase_document_number", "received_quantity", "gaps"]
+    # Exclusive creation also protects symlinks/hardlinks to existing business files.
+    with destination.open("x", encoding="utf-8-sig", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for row in report["unresolved"]:
+            values = {key: row.get(key) for key in fields}
+            values["gaps"] = "; ".join(row["gaps"])
+            # Supplier and document text is untrusted when opened in Excel.
+            for key, value in values.items():
+                if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
+                    values[key] = "'" + value
+            writer.writerow(values)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", required=True, help="Existing SQLite database file (opened read-only)")
     parser.add_argument("--json", action="store_true", help="Emit one JSON report to stdout")
+    parser.add_argument("--csv", type=Path, help="Create a new UTF-8 CSV of unresolved rows for review (never overwrite)")
     args = parser.parse_args(argv)
     report = check_database(args.database)
+    if args.csv is not None and not report["errors"]:
+        try:
+            write_review_csv(report, args.csv)
+            report["review_csv"] = str(args.csv.resolve())
+        except OSError as error:
+            report["ok"] = False
+            report["errors"].append(f"CSV export failed: {error}")
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:

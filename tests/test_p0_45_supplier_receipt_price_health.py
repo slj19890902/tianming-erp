@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import csv
 import importlib.util
 import json
 import os
@@ -297,6 +298,37 @@ class SupplierReceiptPriceHealthTests(unittest.TestCase):
         result = self.cli("--database", str(missing), "--json")
         self.assertEqual(result.returncode, 2)
         self.assertFalse(missing.exists())
+
+    def test_csv_exports_all_dates_and_preserves_database_and_existing_files(self):
+        self.receipt(1, received_at="2025-01-02 01:00:00")
+        self.receipt(2, received_at="2026-09-08 01:00:00")
+        self.receipt(3)
+        self.native(3)
+        self.db.execute("UPDATE supplier_requisition_order_items SET supplier_name_snapshot='=1+1' WHERE id=1")
+        self.db.commit()
+        before = self.database.read_bytes()
+        output = self.directory / "review.csv"
+        result = self.cli("--database", str(self.database), "--json", "--csv", str(output))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        with output.open(encoding="utf-8-sig", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual([row["incoming_receipt_item_id"] for row in rows], ["1", "2"])
+        self.assertEqual(rows[0]["supplier_name"], "'=1+1")
+        self.assertIn("missing_frozen_settlement_price", rows[0]["gaps"])
+        self.assertEqual(self.database.read_bytes(), before)
+        original_csv = output.read_bytes()
+        for target in (output, self.database):
+            result = self.cli("--database", str(self.database), "--json", "--csv", str(target))
+            self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.database.read_bytes(), before)
+        self.assertEqual(output.read_bytes(), original_csv)
+
+    def test_csv_is_not_created_when_check_fails(self):
+        output = self.directory / "review.csv"
+        self.db.execute("DROP TABLE supplier_receipt_settlement_price_facts")
+        result = self.cli("--database", str(self.database), "--json", "--csv", str(output))
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(output.exists())
 
     def test_explicit_database_is_required_and_apply_is_unavailable(self):
         self.assertEqual(self.cli("--json").returncode, 2)

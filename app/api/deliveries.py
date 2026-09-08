@@ -906,9 +906,22 @@ def _validate_delivery_source_contract(
         raise ValueError("混合送货必须同时包含订单待送和无订单成品库存")
 
 
+class PickStagingTarget(BaseModel):
+    location_id: int = Field(gt=0)
+    address_version: int = Field(gt=0)
+    layout_version: int | None = Field(default=None, gt=0)
+
+
+class PickStagingBatch(BaseModel):
+    print_version: str | None = None
+    targets: dict[int, PickStagingTarget] = Field(default_factory=dict)
+
+
 class DeliveryPickItemUpdate(BaseModel):
     pick_status: str
     picked_quantity: int | None = None
+    print_version: str | None = None
+    staging_target: PickStagingTarget | None = None
 
     @field_validator("pick_status")
     @classmethod
@@ -1894,6 +1907,9 @@ def _pick_task_response(
     for item in item_responses:
         item['specification_display'] = display_specification(item.get('specification'))
         item['customer_inventory_code'] = customer_codes.get(item_product_ids.get(item['id']))
+    from app.services.fixed_shelf_staging import enrich_staging
+    if include_location_plan:
+        enrich_staging(db, item_responses, item_product_ids)
     print_version_payload = {
         "task_id": task.id,
         "snapshot_version": task.snapshot_version,
@@ -1906,6 +1922,8 @@ def _pick_task_response(
                 "product_code": item.get("product_code"),
                 "customer_inventory_code": item.get("customer_inventory_code"),
                 "specification_display": item.get("specification_display"),
+                "staged_quantity": item.get("staged_quantity"),
+                "staging_candidates": item.get("staging_candidates"),
             }
             for item in item_responses
         ],
@@ -2869,6 +2887,8 @@ def _inventory_sources_for_order_item(
             InventoryReservation.id,
         )
     ).all()
+    from app.services.fixed_shelf_staging import prioritize_staged
+    reservations = prioritize_staged(db, reservations, delivery_item_id)
     requirements = {
         row.id: row
         for row in db.scalars(
@@ -5730,6 +5750,8 @@ def _build_pick_task(
     from app.services.fixed_shelf import guard_pick_task_overlap, ShelfError
     try:
         guard_pick_task_overlap(db, [line.order_item_id for line in lines if line.order_item_id], delivery.id)
+        from app.services.fixed_shelf_staging import guard_unordered_pick_overlap
+        guard_unordered_pick_overlap(db, delivery.id, [line.id for line in lines])
     except ShelfError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     task = DeliveryPickTask(
@@ -6313,9 +6335,50 @@ def get_delivery_pick_measured_map_area(
     }
 
 
+def _confirm_shelf_staging(db, task, confirmations, print_version, user):
+    from app.models.fixed_shelf import ShelfProfile
+    from app.services.fixed_shelf import ShelfError
+    from app.services.fixed_shelf_staging import item_product, stage_pick_item
+    required = []
+    for item, quantity, target in confirmations:
+        product = item_product(db, item)
+        if product and db.get(ShelfProfile, product.id):
+            required.append((item, quantity, target))
+    if not required:
+        return
+    try:
+        claimed = db.execute(update(Delivery).where(Delivery.id == task.delivery_id,
+            Delivery.status == 'pending').values(version=Delivery.version))
+        if claimed.rowcount != 1:
+            raise ShelfError('送货单状态已变化，请刷新')
+        task_id = task.id
+        db.expire_all()
+        if db.get(DeliveryPickTask, task_id, populate_existing=True) is None:
+            raise ShelfError('拿货任务已变更，请重新打开')
+        fresh = _pick_task_response(db, task)
+        by_id = {row['id']: row for row in fresh['items']}
+        if any(quantity != by_id[item.id].get('staged_quantity', 0) for item, quantity, _target in required) and print_version != fresh['print_version']:
+            raise ShelfError('拿货位置或数量已变化，请刷新手机或A4明细后再确认集货')
+        for item, quantity, target in required:
+            stage_pick_item(db, item, quantity=quantity, target=target.model_dump() if target else None, operator_id=user.id)
+    except (ShelfError, WarehouseInventoryError) as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+def _prepare_shelf_draft_replacement(db, delivery_id, delivery_item_id=None):
+    from app.services.fixed_shelf import ShelfError
+    from app.services.fixed_shelf_staging import prepare_draft_replacement
+    try:
+        prepare_draft_replacement(db, delivery_id, delivery_item_id)
+    except ShelfError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @pick_router.post("/{task_id}/complete-planned")
 def complete_delivery_pick_task_as_planned(
     task_id: int,
+    payload: PickStagingBatch | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_pick),
 ) -> dict:
@@ -6338,6 +6401,9 @@ def complete_delivery_pick_task_as_planned(
         )
     if not task.items:
         raise HTTPException(status_code=409, detail="拿货任务没有可确认明细")
+    _confirm_shelf_staging(db, task,
+        [(item, int(item.original_quantity), payload.targets.get(item.id) if payload else None) for item in task.items],
+        payload.print_version if payload else None, user)
     for item in task.items:
         item.status = "picked"
         item.picked_quantity = int(item.original_quantity or 0)
@@ -6395,6 +6461,7 @@ def update_delivery_pick_task_item(
         if requested not in {None, 0}:
             raise HTTPException(status_code=400, detail="无货状态的拿货数量必须为0")
         quantity = 0
+    _confirm_shelf_staging(db, task, [(item, quantity, payload.staging_target)], payload.print_version, user)
     item.status = payload.pick_status
     item.picked_quantity = quantity
     if task.status in {"driver_confirmed", "exception"}:
@@ -6497,6 +6564,7 @@ def apply_delivery_pick_task(
                 }
             )
             if int(item.picked_quantity) <= 0:
+                _prepare_shelf_draft_replacement(db, delivery.id, delivery_item.id)
                 db.delete(delivery_item)
             else:
                 if delivery_item.source_type == "unordered_finished":
@@ -6509,6 +6577,8 @@ def apply_delivery_pick_task(
                         )
                         .order_by(UnorderedFinishedDeliveryAllocation.id)
                     ).all()
+                    from app.services.fixed_shelf_staging import prioritize_staged
+                    allocations = prioritize_staged(db, allocations, delivery_item.id)
                     planned_total = sum(
                         int(allocation.planned_quantity or 0)
                         for allocation in allocations
@@ -8731,6 +8801,8 @@ def _dispatch_delivery(
                 status_code=409,
                 detail="本次送货单已无可发货明细，请删除送货草稿或重新编辑",
             )
+        from app.services.fixed_shelf_staging import require_staged_dispatch
+        require_staged_dispatch(db, lines)
         order_lines = [line for line in lines if line.source_type == "order"]
         unordered_lines = [
             line for line in lines if line.source_type == "unordered_finished"
@@ -9216,6 +9288,7 @@ def _update_delivery(
                 status_code=409,
                 detail="送货单保存后不能切换订单待送与无订单库存来源",
             )
+        _prepare_shelf_draft_replacement(db, delivery_id)
         _discard_delivery_pick_task(
             db,
             delivery_id=delivery_id,
@@ -10046,6 +10119,7 @@ def delete_delivery(
                 detail="已确认发货的送货单不能删除，请改用取消发货",
             )
         delivery = _delivery_or_404(db, delivery_id)
+        _prepare_shelf_draft_replacement(db, delivery_id)
         facts = _delivery_deletion_facts(db, delivery)
         if facts["statement_item_id"] is not None:
             raise HTTPException(

@@ -222,6 +222,10 @@ def _validated_customer_lot(
     detail = db.get(FinishedGoodsInventoryDetail, allocation.inventory_lot_id)
     if lot is None or detail is None:
         raise WarehouseInventoryError("所选成品库存批次不存在", 409)
+    from app.services.fixed_shelf_staging import staging_owner
+    owner = staging_owner(db, lot.id)
+    if owner and owner != delivery_item.id:
+        raise WarehouseInventoryError('该批次已为其他送货明细集货，不能重复出库', 409)
     if (
         lot.inventory_type != "finished"
         or detail.is_general

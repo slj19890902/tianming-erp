@@ -9,6 +9,7 @@ class ShelfProfile(Base):
     __table_args__ = (CheckConstraint("units_per_bundle IS NULL OR units_per_bundle > 0", name="ck_shelf_profile_bundle"), CheckConstraint("version > 0", name="ck_shelf_profile_version"))
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), primary_key=True)
     units_per_bundle: Mapped[int | None] = mapped_column(Integer)
+    staging_location_id: Mapped[int | None] = mapped_column(ForeignKey("warehouse_locations.id", ondelete="RESTRICT"))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
@@ -27,6 +28,7 @@ class ShelfLotState(Base):
     lot_id: Mapped[int] = mapped_column(ForeignKey("inventory_lots.id", ondelete="RESTRICT"), primary_key=True)
     units_per_bundle: Mapped[int | None] = mapped_column(Integer)
     target_location_id: Mapped[int | None] = mapped_column(ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), index=True)
+    staged_delivery_item_id: Mapped[int | None] = mapped_column(ForeignKey("sales_delivery_items.id", ondelete="RESTRICT"), index=True)
 
 
 class ShelfMutation(Base):

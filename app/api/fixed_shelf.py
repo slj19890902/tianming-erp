@@ -32,6 +32,7 @@ class BindingPayload(BaseModel):
 class ProfilePayload(BaseModel):
     expected_version: int = Field(ge=0)
     units_per_bundle: int | None = Field(default=None, gt=0, le=1000000)
+    staging_location_id: int | None = Field(default=None, gt=0)
     bindings: list[BindingPayload] = Field(min_length=1, max_length=50)
     idempotency_key: str = Field(min_length=1, max_length=100, pattern=r"\S")
 
@@ -44,7 +45,7 @@ class PutawayPayload(BaseModel):
     layout_version: int = Field(gt=0)
     source_location_id: int = Field(gt=0)
     source_address_version: int = Field(gt=0)
-    source_layout_version: int = Field(gt=0)
+    source_layout_version: int | None = Field(default=None, gt=0)
     idempotency_key: str = Field(min_length=1, max_length=100, pattern=r"\S")
 
 
@@ -124,7 +125,8 @@ def update_profile(product_id: int, payload: ProfilePayload, request: Request,
     product = product_for_user(db, user, product_id)
     return mutate(db, user, request, "warehouse.fixed_shelf.configure", product_id, payload,
         lambda: service.save_profile(db, product, expected_version=payload.expected_version,
-            units_per_bundle=payload.units_per_bundle, bindings=sorted([x.model_dump() for x in payload.bindings], key=lambda x: x["priority"])))
+            units_per_bundle=payload.units_per_bundle, staging_location_id=payload.staging_location_id,
+            bindings=sorted([x.model_dump() for x in payload.bindings], key=lambda x: x["priority"])))
 
 
 @router.get("/locations")
@@ -160,6 +162,16 @@ def product_lots(product_id: int, db: Session = Depends(get_db), user: User = De
             "can_putaway": bool((state and state.target_location_id) or (source_binding and source_binding.product_id == product.id)),
             "source": source, "location": source['name']})
     return {"items": result, "limit": 100}
+
+
+@router.get('/staging-locations')
+def staging_locations(db: Session = Depends(get_db), user: User = Depends(can_read)):
+    rows = db.scalars(select(WarehouseLocation).where(WarehouseLocation.is_active.is_(True),
+        WarehouseLocation.storage_type.in_(['ground', 'temporary_aisle']),
+        WarehouseLocation.placement_status == 'placed').order_by(WarehouseLocation.warehouse_floor,
+        WarehouseLocation.area_code, WarehouseLocation.sort_order).limit(1500)).all()
+    contexts = load_warehouse_location_projection_contexts(db, rows)
+    return {'items': [service.staging_info(db, row, contexts.get(row.id, {})) for row in rows]}
 
 
 @router.get("/putaway")

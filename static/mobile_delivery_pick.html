@@ -43,7 +43,8 @@
       <section id="taskChooser"></section>
       <section id="taskDetail" hidden>
         <div class="back-row"><button id="backToTasksButton" onclick="showTaskList()">返回待拿货任务</button></div>
-        <div id="normalAction" class="normal-action"><button id="completePlannedButton" class="primary" onclick="completePlanned()">本单全部按计划拿齐</button><p>正常拿齐只点这一个按钮，不会自动发货。</p></div>
+        <div id="stagingPanel"></div>
+        <div id="normalAction" class="normal-action"><button id="completePlannedButton" class="primary" onclick="completePlanned()">本单全部按计划拿齐</button><p>货物放好并核对实际集货位后，点本单拿齐；不会自动发货。</p></div>
         <div id="readyBanner" class="ready-banner" hidden>已拿齐，可回电脑发货打印</div>
         <div id="locationGroups"></div>
         <details id="exceptionTools" class="exception-tools">
@@ -175,6 +176,7 @@
       document.getElementById("backToTasksButton").disabled=taskActionBusy||busyItems.size>0;
       document.getElementById("locationGroups").innerHTML=(task.location_groups || []).length ? (task.location_groups || []).map(renderLocationGroup).join("") : '<div class="message">当前没有可用的拿货位置计划，请刷新或登记异常。</div>';
       const rows=task.items || []; const defs=filters();
+      document.getElementById("stagingPanel").innerHTML=rows.filter(x=>x.staging_required).map(item=>`<section class="card" data-stage-item-id="${Number(item.id)}"><div class="code">${escapeHtml(item.customer_inventory_code||item.product_code)} · ${escapeHtml(item.product_name)}</div>${renderStaging(item)}</section>`).join("");
       document.getElementById("filters").innerHTML=defs.map(([key,label,predicate])=>`<button class="${activeFilter===key?"active":""}" onclick="setFilter('${key}')">${rows.filter(predicate).length} ${label}</button>`).join("");
       const predicate=defs.find(row=>row[0]===activeFilter)[2]; const visible=rows.filter(predicate); const groups=new Map();
       visible.forEach(item=>{ const customer=item.customer_name || task.customer_name || "未指定客户"; if(!groups.has(customer)) groups.set(customer,[]); groups.get(customer).push(item); });
@@ -238,21 +240,23 @@
       if(!components.length) return "";
       return `<section class="pick-components" aria-label="本次随货子件，只读展示"><div class="pick-components-title">本次随货子件（只读，不单独确认）</div>${components.map(component=>{ const quantity=Number(component.planned_delivery_quantity ?? component.quantity ?? 0); const label=[component.product_code || component.component_code || "-",component.product_name || component.component_name || "未命名组件"].join(" / "); return `<div class="pick-component-row"><span class="pick-component-name">${escapeHtml(label)}</span><span class="pick-component-quantity">${quantity}</span></div>`; }).join("")}</section>`;
     }
+    function renderStaging(item){if(!item.staging_required)return '';if(Number(item.staged_quantity||0)>=Number(item.planned_quantity||item.original_quantity||0)&&Number(item.staged_quantity||0)>0)return `<div class="spec">已集货 ${Number(item.staged_quantity)} 只，实际集货位置见下方明细。装车后按原流程确认送货。</div>`;const rows=item.staging_candidates||[];return `<div class="spec">已集货 ${Number(item.staged_quantity||0)} 只。先将本次数量放到以下位置，再点拿齐/少拿。</div><label class="spec">实际集货位 <select class="staging-target" aria-label="实际集货位" style="max-width:100%;font-size:14px">${rows.length?'<option value="">请选择实际集货位置</option>':'<option value="">请先配置可用固定集货区</option>'}${rows.map(row=>`<option value="${row.location_id}">${escapeHtml(row.name||row.address)}</option>`).join('')}</select></label>`}
+    function stagingTarget(item){if(!item.staging_required)return null;const card=document.querySelector(`[data-stage-item-id="${Number(item.id)}"]`),value=Number(card?.querySelector('.staging-target')?.value);const row=(item.staging_candidates||[]).find(x=>x.location_id===value);return row?{location_id:row.location_id,address_version:row.address_version,layout_version:row.layout_version}:null}
     function renderItem(item) {
-      const status=statusOf(item); const id=Number(item.id); const planned=Number(item.planned_quantity ?? item.delivered_quantity ?? item.quantity ?? 0); const picked=item.picked_quantity ?? item.actual_quantity ?? (status==="picked"?planned:0); const disabled=taskActionBusy||busyItems.has(id)||!["pushed","driver_confirmed","exception"].includes(task.status);
+      const status=statusOf(item); const id=Number(item.id); const planned=Number(item.planned_quantity ?? item.delivered_quantity ?? item.quantity ?? 0); const picked=item.picked_quantity ?? item.actual_quantity ?? (status==="picked"?planned:0); const disabled=taskActionBusy||busyItems.size>0||!["pushed","driver_confirmed","exception"].includes(task.status);
       return `<article class="card ${escapeHtml(status)}" data-item-id="${id}"><div class="name">${escapeHtml(item.product_name||"未命名产品")}</div><div class="spec">规格：${escapeHtml(item.specification_display||item.specification||"-")}</div><div class="code">存货编码：${escapeHtml(item.customer_inventory_code||item.product_code||"-")}</div>${renderPickComponents(item)}<div class="qty-row"><div class="qty-label">计划 ${planned} · 实际拿货</div><input class="picked-qty" type="number" min="0" value="${Number(picked)}" aria-label="实际拿货数量" ${disabled?"disabled":""}/></div><div class="actions"><button class="primary" onclick="updateItem(${id},'picked')" ${disabled?"disabled":""}>拿齐</button><button class="partial" onclick="updateItem(${id},'partial')" ${disabled?"disabled":""}>少拿</button><button class="no-stock" onclick="updateItem(${id},'no_stock')" ${disabled?"disabled":""}>未找到</button></div></article>`;
     }
     async function updateItem(itemId,status) {
-      const id=Number(itemId); if(busyItems.has(id)||taskActionBusy) return; const currentTask=task; const card=document.querySelector(`[data-item-id="${id}"]`); const item=currentTask?.items.find(row=>Number(row.id)===id); if(!item||!card) return;
+      const id=Number(itemId); if(busyItems.has(id)||taskActionBusy) return; if(busyItems.size) return; const currentTask=task; const card=document.querySelector(`[data-item-id="${id}"]`); const item=currentTask?.items.find(row=>Number(row.id)===id); if(!item||!card) return;
       const planned=Number(item.planned_quantity ?? item.delivered_quantity ?? item.quantity ?? 0); let qty=Number(card.querySelector(".picked-qty").value); if(status==="picked"&&(!Number.isFinite(qty)||qty<=0))qty=planned; if(status==="no_stock")qty=0; if(status==="partial"&&(!Number.isFinite(qty)||qty<=0||qty>=planned))return toast("部分拿货数量必须大于0且小于计划数量"); if(!Number.isFinite(qty)||qty<0)return toast("请输入有效数量");
-      busyItems.add(id); render();
-      try { const body=await request(`/api/delivery-picks/${encodeURIComponent(currentTask.id)}/items/${encodeURIComponent(id)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({pick_status:status,picked_quantity:qty})}); if(task!==currentTask)return; Object.assign(item,body.item||body); if(body.task)task={...task,...body.task,items:task.items}; render(); toast("拿货结果已保存"); }
+      const stageTarget=item.staging_required?stagingTarget(item):null; busyItems.add(id); render();
+      try { const body=await request(`/api/delivery-picks/${encodeURIComponent(currentTask.id)}/items/${encodeURIComponent(id)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({pick_status:status,picked_quantity:qty,print_version:currentTask.print_version,staging_target:stageTarget})}); if(task!==currentTask)return; Object.assign(item,body.item||body); if(body.task)task=normalize(body.task); render(); toast("拿货结果已保存"); }
       catch(error) { if(!handleAuthError(error))toast(error.message); }
       finally { busyItems.delete(id); if(task&&Number(task.id)===Number(currentTask.id))render(); }
     }
     async function completePlanned() {
-      if(taskActionBusy||busyItems.size) return; const currentTask=task; if(!currentTask)return; taskActionBusy=true; render();
-      try { const body=await request(`/api/delivery-picks/${encodeURIComponent(currentTask.id)}/complete-planned`,{method:"POST"}); if(task!==currentTask)return; task=normalize(body); toast("本单已按计划拿齐，可发货打印"); }
+      if(taskActionBusy||busyItems.size) return; const currentTask=task; if(!currentTask)return; const stageTargets=Object.fromEntries(currentTask.items.filter(x=>x.staging_required).map(x=>[x.id,stagingTarget(x)]).filter(x=>x[1])); taskActionBusy=true; render();
+      try { const body=await request(`/api/delivery-picks/${encodeURIComponent(currentTask.id)}/complete-planned`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({print_version:currentTask.print_version,targets:stageTargets})}); if(task!==currentTask)return; task=normalize(body); toast("本单已按计划拿齐，可发货打印"); }
       catch(error) { if(!handleAuthError(error)){document.getElementById("error").textContent=error.message;toast(error.message);} }
       finally { taskActionBusy=false; if(task)render(); }
     }

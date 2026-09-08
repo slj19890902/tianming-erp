@@ -256,9 +256,6 @@
     <button id="retryButton" class="secondary hidden" type="button">重新读取</button>
     <a href="/" aria-label="返回系统">返回系统</a>
   </div>
-  <div class="print-guide no-print" data-field="paperGuide">
-    正在读取送货单纸张设置…
-  </div>
 
   <div id="loadState" class="load-state no-print">正在读取送货单…</div>
   <div id="errorBox" class="error no-print" hidden></div>
@@ -296,7 +293,7 @@
           <th>客户单号</th>
           <th>款号</th>
           <th>产品名称</th>
-          <th>规格</th>
+          <th>规格（mm）</th>
           <th>单位</th>
           <th>数量</th>
           <th>备注</th>
@@ -351,10 +348,7 @@
       document.documentElement.style.setProperty("--paper-height", `${safeHeight}mm`);
       document.documentElement.dataset.printerModel = printerModel;
       document.documentElement.dataset.orientationMode = "driver_managed";
-      const guide = document.querySelector('[data-field="paperGuide"]');
-      if (guide) {
-        guide.textContent = `ERP 已自动应用 ${printerModel} 连续纸档案（${safeWidth} × ${safeHeight}mm）。打印窗口请选择当前电脑已安装的 ${printerModel}，沿用该打印机驱动的纸张和方向、缩放 100%、每张纸打印 1 页；不要交换宽高或再次旋转。`;
-      }
+
     }
 
     async function loadPaperSettings() {
@@ -452,7 +446,7 @@
       getField(sheet, "itemRows").innerHTML = entries.map((entry) => {
         const item = entry.item;
         const productName = String(item.product_name || "").trim() || "产品名称未登记";
-        const specification = String(item.specification || "").trim();
+        const specification = String(item.specification || "").replace(/(?:mm|毫米)/gi, "").trim();
         const customerRemark = String(item.remarks || "").trim();
         const tableRemark = customerRemark.length > 12 ? "详见备注说明" : customerRemark;
         const longNameClass = productName.length > 28 ? " long-name" : "";

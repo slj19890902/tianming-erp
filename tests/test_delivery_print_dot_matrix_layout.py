@@ -85,13 +85,12 @@ def test_dot_matrix_print_uses_driver_managed_physical_orientation() -> None:
     assert "size: auto" in _css_block(source, "@page")
     assert "size: 241mm 139.5mm" not in source
     assert "pageStyle.textContent" not in source
-    assert 'data-field="paperGuide"' in source
-    assert "ERP 已自动应用" in source
+    assert 'data-field="paperGuide"' not in source
+    assert "ERP 已自动应用" not in source
     assert "EPSON SK820" in source
     assert "driver_managed" in source
-    assert "不要交换宽高" in source
-    assert "再次旋转" in source
-    assert "每张纸打印 1 页" in source
+    assert "不要交换宽高" not in source
+    assert "每张纸打印 1 页" not in source
     assert "天明ERP送货单-" not in source
 
 
@@ -143,7 +142,7 @@ def test_printed_product_name_and_specification_use_separate_columns() -> None:
 
     assert "产品名称 / 规格" not in source
     assert "<th>产品名称</th>" in source
-    assert "<th>规格</th>" in source
+    assert "<th>规格（mm）</th>" in source
     assert 'class="product-specification"' in source
     assert 'class="product-spec"' not in source
     assert 'item.specification || ""' in source

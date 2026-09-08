@@ -701,6 +701,7 @@ class UnorderedFinishedAllocationCreate(BaseModel):
 
 
 class DeliveryLineCreate(BaseModel):
+    customer_po: str | None = Field(default=None, max_length=200)
     source_type: str = "order"
     order_item_id: int | None = None
     product_id: int | None = None
@@ -782,6 +783,15 @@ class DeliveryRevisionUpdate(DeliveryUpdate):
         self.idempotency_key = self.idempotency_key.strip()
         return self
 
+
+class DeliveryCustomerPoLine(BaseModel):
+    delivery_item_id: int = Field(gt=0)
+    customer_po: str = Field(max_length=200)
+
+class DeliveryCustomerPoUpdate(BaseModel):
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    items: list[DeliveryCustomerPoLine] = Field(min_length=1)
 
 class DeliveryDateCorrection(BaseModel):
     actual_delivery_date: date
@@ -3171,7 +3181,7 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
                 DeliveryItem.remarks,
                 Order.id.label("order_id"),
                 Order.order_number,
-                Order.customer_po,
+                func.coalesce(DeliveryItem.customer_po_snapshot, Order.customer_po).label("customer_po"),
                 func.coalesce(
                     func.nullif(DeliveryItem.product_code_snapshot, ""),
                     func.nullif(OrderItem.snapshot_product_code, ""),
@@ -5392,7 +5402,7 @@ def _delivery_response(
                     )
                 ),
                 "customer_po": (
-                    "无订单库存" if is_unordered else mapping.get("customer_po")
+                    mapping.get("customer_po") if mapping.get("customer_po") is not None else ("无订单库存" if is_unordered else None)
                 ),
                 **kit_metadata,
                 "actual_goods_lines": actual_goods_lines,
@@ -6949,6 +6959,7 @@ def _store_unordered_finished_items(
             source_type="unordered_finished",
             order_item_id=None,
             product_id=product.id,
+            customer_po_snapshot=line.customer_po,
             product_code_snapshot=product.product_code,
             product_name_snapshot=product.product_name,
             specification_snapshot=_product_specification(product),
@@ -8268,7 +8279,7 @@ def list_deliveries(
                 DeliveryItem.is_current.is_(True),
                 or_(
                     func.lower(Order.order_number).like(pattern),
-                    func.lower(Order.customer_po).like(pattern),
+                    func.lower(func.coalesce(DeliveryItem.customer_po_snapshot, Order.customer_po)).like(pattern),
                     func.lower(
                         func.coalesce(
                             func.nullif(DeliveryItem.product_code_snapshot, ""),
@@ -8318,7 +8329,7 @@ def list_deliveries(
         condition
         for condition in (
             _contains(Order.order_number, order_no),
-            _contains(Order.customer_po, customer_po),
+            _contains(func.coalesce(DeliveryItem.customer_po_snapshot, Order.customer_po), customer_po),
             _contains(item_product_code, product_code),
             _contains(item_product_name, product_name),
             _contains(OrderItem.snapshot_spec, spec),
@@ -8543,6 +8554,7 @@ def create_delivery(
                     source_type="order",
                     order_item_id=order_item.id,
                     **build_order_delivery_snapshot(db, order_item),
+                    customer_po_snapshot=line.customer_po,
                     delivered_quantity=line.delivered_quantity,
                     ordered_quantity_snapshot=int(order_item.quantity or 0),
                     order_remaining_snapshot=order_remaining,
@@ -9065,6 +9077,15 @@ def _update_delivery(
     revision_mode: bool = False,
 ) -> dict:
     existing_delivery = _delivery_for_user(db, delivery_id, user)
+    previous_po = {
+        (row.source_type, row.order_item_id if row.source_type == "order" else row.product_id): row.customer_po_snapshot
+        for row in db.scalars(select(DeliveryItem).where(
+            DeliveryItem.delivery_id == delivery_id, DeliveryItem.is_current.is_(True)
+        ))
+    }
+    for line in payload.items:
+        if "customer_po" not in line.model_fields_set:
+            line.customer_po = previous_po.get((line.source_type, line.order_item_id if line.source_type == "order" else line.product_id))
     historical_backfill = bool(existing_delivery.is_historical_backfill)
     if (
         payload.historical_backfill is not None
@@ -9270,6 +9291,7 @@ def _update_delivery(
                     source_type="order",
                     order_item_id=order_item.id,
                     **build_order_delivery_snapshot(db, order_item),
+                    customer_po_snapshot=line.customer_po,
                     delivered_quantity=line.delivered_quantity,
                     ordered_quantity_snapshot=int(order_item.quantity or 0),
                     order_remaining_snapshot=order_remaining,
@@ -9481,6 +9503,10 @@ def revise_dispatched_delivery(
             commit=False,
             revision_mode=True,
         )
+        prior_po = {(line.source_type, line.order_item_id if line.source_type == "order" else line.product_id): line.customer_po_snapshot for line in old_lines}
+        for item in payload.items:
+            if "customer_po" not in item.model_fields_set:
+                item.customer_po = prior_po.get((item.source_type, item.order_item_id if item.source_type == "order" else item.product_id))
         for line in old_lines:
             line.is_current = False
         db.flush()
@@ -10595,6 +10621,69 @@ def get_delivery(
     return _delivery_response(db, delivery_id)
 
 
+@router.put("/{delivery_id}/customer-po")
+def update_delivery_customer_po(
+    delivery_id: int,
+    payload: DeliveryCustomerPoUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """Change document references only, without cancelling/re-dispatching stock."""
+    delivery = _delivery_for_user(db, delivery_id, user)
+    action = "delivery_customer_po_update"
+    request_hash = _delivery_request_hash(action, {
+        "delivery_id": delivery_id,
+        **payload.model_dump(exclude={"idempotency_key"}),
+    })
+    replay, _ = _delivery_idempotency_replay(
+        db, idempotency_key=payload.idempotency_key, request_hash=request_hash,
+        action=action, actor=user,
+    )
+    if replay is not None:
+        return replay
+    try:
+        claimed = db.execute(update(Delivery).where(
+            Delivery.id == delivery_id,
+            Delivery.status.in_(["pending", "dispatched"]),
+            Delivery.version == payload.expected_version,
+        ).values(version=Delivery.version + 1))
+        if claimed.rowcount != 1:
+            raise HTTPException(status_code=409, detail="送货单已作废或版本已变化，请刷新后重试")
+        rows = {row.id: row for row in db.scalars(select(DeliveryItem).where(
+            DeliveryItem.delivery_id == delivery_id, DeliveryItem.is_current.is_(True)
+        ))}
+        ids = [line.delivery_item_id for line in payload.items]
+        if len(set(ids)) != len(ids) or any(item_id not in rows for item_id in ids):
+            raise HTTPException(status_code=409, detail="送货明细不属于当前送货单或已变化")
+        changes = []
+        for line in payload.items:
+            row = rows[line.delivery_item_id]
+            value = line.customer_po.strip()
+            original_po = db.scalar(select(Order.customer_po).join(
+                OrderItem, OrderItem.order_id == Order.id
+            ).where(OrderItem.id == row.order_item_id)) if row.order_item_id else None
+            changes.append({"delivery_item_id": row.id,
+                            "before": row.customer_po_snapshot if row.customer_po_snapshot is not None else original_po,
+                            "after": value})
+            row.customer_po_snapshot = value
+        _write_audit(db, user=user, action="UPDATE_CUSTOMER_PO", resource="Delivery",
+                     entity_id=delivery_id, details={"changes": changes,
+                     "before_version": payload.expected_version,
+                     "after_version": payload.expected_version + 1},
+                     description="修改送货单客户单号，不回写上游订单")
+        db.flush()
+        db.expire(delivery)
+        response = _delivery_response(db, delivery_id)
+        _record_delivery_idempotency(db, idempotency_key=payload.idempotency_key,
+            request_hash=request_hash, action=action, actor=user,
+            delivery_id=delivery_id, response=response)
+        db.commit()
+        return response
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.get("/{delivery_id}/print")
 def get_delivery_print_data(
     delivery_id: int,
@@ -10614,10 +10703,10 @@ def get_delivery_print_data(
             DeliveryItem.id.label("delivery_item_id"),
             DeliveryItem.source_type,
             DeliveryItem.order_item_id,
-            case(
+            func.coalesce(DeliveryItem.customer_po_snapshot, case(
                 (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
                 else_=Order.customer_po,
-            ).label("customer_po"),
+            )).label("customer_po"),
             func.coalesce(
                 DeliveryItem.product_code_snapshot,
                 OrderItem.snapshot_product_code,

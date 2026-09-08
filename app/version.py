@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.282"
-APP_VERSION_NAME = "送货单打印解除库位布局限制"
+APP_VERSION = "v0.22.283"
+APP_VERSION_NAME = "送货单独立客户单号与打印简化"
 APP_BUILD_DATE = "2026-09-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2091,15 +2091,26 @@ _V022281_VERIFICATION_STEPS = [
     "搜索待归位实物，选择部分数量并确认放入正式货位，核对剩余数与目标数之和不变；再试同货位不同产品添加和返回原区域。",
     "管理员选择现场产品并确认盘点入库，核对库存立即更新；员工只生成上报，管理员直接盘点同键重试不重复调整。",
 ]
-APP_CHANGES = [
+_V022282_CHANGES = [
     "修复未布局库位的货物全部出完时，自动释放空栈板被地图校验阻断、无法打开送货单打印的问题。",
     "送货单按客户、订单和存货编码正常出货与打印；拿货地图布局规则保持，库存、权限、版本、幂等与审计保护不变。本版无数据库结构迁移。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022282_VERIFICATION_STEPS = [
     "系统版本为 v0.22.282；未布局库位的实际待送货物可以正常出货并打开送货单打印。",
     "核对客户、存货编码和数量，重复操作不重复扣库存；有剩余货物或损坏品的栈板继续保留。",
 ]
+APP_CHANGES = [
+    "送货单客户单号可在编辑页独立保存，送货打印和后续对账导出使用新单号，原订单、报料、来料、生产及库存关联保持不变。",
+    "移除打印页打印机操作提示，规格表头统一标注mm，各产品规格不再重复带单位。",
+]
+APP_VERIFICATION_STEPS = [
+    "系统版本为v0.22.283，数据库head为rr08v8x9z67。",
+    "编辑送货单客户单号并保存，核对打印和对账导出使用新单号，原订单单号和出货数量不变。",
+    "打开送货打印页，确认不再显示打印机操作提示，规格表头有mm且各行不重复显示mm。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.282：本次更新｜{item}" for item in _V022282_CHANGES),
+    *(f"v0.22.282：如何验证｜{item}" for item in _V022282_VERIFICATION_STEPS),
     *(f"v0.22.281：本次更新｜{item}" for item in _V022281_CHANGES),
     *(f"v0.22.281：如何验证｜{item}" for item in _V022281_VERIFICATION_STEPS),
     *(f"v0.22.280：本次更新｜{item}" for item in _V022280_CHANGES),

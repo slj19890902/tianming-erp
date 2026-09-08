@@ -222,6 +222,7 @@ class DeliveryItem(Base):
         ForeignKey("products.id", ondelete="RESTRICT"),
         nullable=True,
     )
+    customer_po_snapshot: Mapped[str | None] = mapped_column(String(200), nullable=True)
     product_code_snapshot: Mapped[str | None] = mapped_column(String(150), nullable=True)
     product_name_snapshot: Mapped[str | None] = mapped_column(String(250), nullable=True)
     specification_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)

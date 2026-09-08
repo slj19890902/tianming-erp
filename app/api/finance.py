@@ -1651,10 +1651,10 @@ def _statement_detail_response(
             ReturnReceipt.actual_received_date,
             Delivery.delivery_date,
             Delivery.delivery_number,
-            case(
+            func.coalesce(DeliveryItem.customer_po_snapshot, case(
                 (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
                 else_=Order.customer_po,
-            ).label("customer_po"),
+            )).label("customer_po"),
             func.coalesce(
                 DeliveryItem.product_code_snapshot,
                 Product.product_code,
@@ -1840,10 +1840,10 @@ def export_statement_excel(
         select(
             Delivery.delivery_date,
             Delivery.delivery_number,
-            case(
+            func.coalesce(DeliveryItem.customer_po_snapshot, case(
                 (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
                 else_=Order.customer_po,
-            ).label("customer_po"),
+            )).label("customer_po"),
             func.coalesce(
                 DeliveryItem.product_code_snapshot,
                 OrderItem.snapshot_product_code,
@@ -2113,10 +2113,10 @@ def _customer_statement_export_data(
             Delivery.delivery_date,
             Delivery.delivery_number,
             Order.order_number,
-            case(
+            func.coalesce(DeliveryItem.customer_po_snapshot, case(
                 (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
                 else_=Order.customer_po,
-            ).label("customer_po"),
+            )).label("customer_po"),
             func.coalesce(
                 DeliveryItem.product_code_snapshot,
                 OrderItem.snapshot_product_code,
@@ -3794,10 +3794,10 @@ def _pending_statement_query(
                 (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
                 else_=Order.order_number,
             ).label("order_number"),
-            case(
+            func.coalesce(DeliveryItem.customer_po_snapshot, case(
                 (DeliveryItem.source_type == "unordered_finished", "无订单库存"),
                 else_=Order.customer_po,
-            ).label("customer_po"),
+            )).label("customer_po"),
             func.coalesce(
                 DeliveryItem.product_code_snapshot,
                 Product.product_code,

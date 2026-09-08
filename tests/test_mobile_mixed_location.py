@@ -57,7 +57,11 @@ def test_employee_selects_product_and_reports_without_changing_inventory(mobile_
         assert db.scalar(select(func.count(InventoryLot.id)).where(InventoryLot.warehouse_location_id == target_id)) == 0
 
 
-def test_floor_overview_contains_only_regions_not_lots(mobile_erp_app):
+def test_floor_overview_contains_only_regions_not_lots(mobile_erp_app, monkeypatch):
+    from app.api import mobile_erp
+    monkeypatch.setattr(mobile_erp, "load_warehouse_twin_floor", lambda _: {
+        "floor_code": "3F", "features": [{"id": "test-c1", "feature_kind": "zone", "erp_area_code": "C1",
+                                           "points": [[0, 0], [100, 0], [100, 100], [0, 100]]}]})
     app, _, factory = mobile_erp_app
     _add_map_target(factory, code="C1-OVERVIEW", with_existing=False)
     with TestClient(app) as client:

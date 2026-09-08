@@ -280,6 +280,17 @@ def test_mm_display_is_integer_and_does_not_change_other_specification_values():
     assert shelf.integer_mm(200) == '200'
 
 
+def test_shelf_qr_uses_configured_factory_origin_not_preview_port(monkeypatch):
+    from types import SimpleNamespace
+    from app.api import warehouse
+    monkeypatch.setattr(warehouse, 'load_settings', lambda: SimpleNamespace(browser_url='http://192.168.3.80:8000/'))
+    monkeypatch.setattr(warehouse, '_shelf_label_content', lambda *args: {'product_id': 23, 'version': 4})
+    row = SimpleNamespace(id=12, address_version=5)
+    result = warehouse._with_shelf_label(None, row, None, {'lookup_url': 'http://127.0.0.1:18000/warehouse.html'})
+    assert result['lookup_url'] == 'http://192.168.3.80:8000/sp/12/23/4/5'
+    assert result['qr_data_url'].startswith('data:image/png;base64,')
+
+
 def test_same_fixed_shelf_order_row_cannot_be_promised_to_two_pending_tasks(pick_app):
     from test_n036_delivery_pick import _login, _create_task
     from app.models.delivery import Delivery, DeliveryItem

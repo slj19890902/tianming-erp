@@ -17463,7 +17463,8 @@ def _with_shelf_label(db, row, user, label):
     content = _shelf_label_content(db, row, user)
     label['shelf_content'] = content
     if content and not content.get('restricted'):
-        origin = urlsplit(label['lookup_url'])
+        # Printed labels must remain reachable after an alternate-port preview.
+        origin = urlsplit(load_settings().browser_url)
         url = f'{origin.scheme}://{origin.netloc}/sp/{row.id}/{content["product_id"]}/{content["version"]}/{row.address_version}'
         buffer = BytesIO()
         qrcode.make(url).save(buffer, format='PNG')

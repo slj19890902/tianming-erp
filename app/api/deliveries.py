@@ -6395,15 +6395,15 @@ def complete_delivery_pick_task_as_planned(
     """Confirm the normal path in one action without dispatching the delivery."""
 
     task = _pick_task_for_user(db, task_id, user)
+    response = _pick_task_response(db, task)
     if task.status == "driver_confirmed" and all(
         item.status == "picked"
         and int(item.picked_quantity or 0) == int(item.original_quantity or 0)
         for item in task.items
-    ):
-        return _pick_task_response(db, task)
-    if task.status != "pushed":
+    ) and all(not row.get('staging_required') or row.get('staged_quantity', 0) >= row['original_quantity'] for row in response['items']):
+        return response
+    if task.status not in {"pushed", "driver_confirmed"}:
         raise HTTPException(status_code=409, detail="当前拿货任务不能一键按计划拿齐")
-    response = _pick_task_response(db, task)
     if not response["location_plan_complete"]:
         raise HTTPException(
             status_code=409,

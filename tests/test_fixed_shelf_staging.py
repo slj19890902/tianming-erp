@@ -158,7 +158,7 @@ def test_mobile_partial_then_complete_and_duplicate_are_physical_once(setup,monk
         lot,delivery,line,task,item=case(db,pid,cid,ids[0],target,unordered=unordered)
         user=db.get(User,1)
         fresh=_pick_task_response(db,task)
-        assert fresh['items'][0]['staging_required']
+        assert fresh['items'][0]['staging_required'] is False
         payload=dict(pick_status='partial',picked_quantity=20,print_version='stale',staging_target=shelf.staging_info(db,target))
         with pytest.raises(HTTPException,match='') as err:
             update_delivery_pick_task_item(task.id,item.id,DeliveryPickItemUpdate(**payload),db,user)
@@ -174,6 +174,34 @@ def test_mobile_partial_then_complete_and_duplicate_are_physical_once(setup,monk
         complete_delivery_pick_task_as_planned(task.id,batch,db,user)
         assert sum(shelf.physical_quantity(x) for x in staging.staged_lots(db,line.id))==50
         assert shelf.physical_quantity(lot)==75
+
+
+@pytest.mark.parametrize('unordered', [False, True])
+@pytest.mark.parametrize('partial', [False, True])
+def test_manual_pick_without_stage_target_can_dispatch(setup, monkeypatch, unordered, partial):
+    from app.api.deliveries import (complete_delivery_pick_task_as_planned, update_delivery_pick_task_item,
+        DeliveryPickItemUpdate, submit_delivery_pick_task, apply_delivery_pick_task, _dispatch_delivery)
+    from app.models.user import User
+    factory, pid, cid, ids = setup
+    with factory() as db:
+        target = ground(db, monkeypatch)
+        lot, delivery, line, task, item = case(db, pid, cid, ids[0], target, unordered=unordered)
+        user = db.get(User, 1)
+        before = (lot.warehouse_location_id, lot.quantity_available, lot.quantity_reserved)
+        quantity = 20 if partial else 50
+        if partial:
+            update_delivery_pick_task_item(task.id, item.id,
+                DeliveryPickItemUpdate(pick_status='partial', picked_quantity=20), db, user)
+        else:
+            complete_delivery_pick_task_as_planned(task.id, None, db, user)
+        assert before == (lot.warehouse_location_id, lot.quantity_available, lot.quantity_reserved)
+        assert not staging.staged_lots(db, line.id)
+        if partial:
+            submit_delivery_pick_task(task.id, db, user)
+            apply_delivery_pick_task(task.id, db, user)
+        _dispatch_delivery(delivery.id, db=db, user=user)
+        assert lot.quantity_consumed == quantity
+        assert lot.warehouse_location_id == ids[0]
 
 
 def test_return_then_restage_uses_new_transfer_and_current_allocation(setup,monkeypatch):

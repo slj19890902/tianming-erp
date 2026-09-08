@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>货架扫码拿货</title>
 <style>*{box-sizing:border-box}body{margin:0;background:#f1f5f9;color:#172554;font:17px/1.6 system-ui,"Microsoft YaHei",sans-serif}main{max-width:520px;margin:24px auto;padding:22px;background:white;border-radius:16px}h1{font-size:25px;margin:0 0 16px}#result{font-size:23px;font-weight:700;white-space:pre-line}.hint{color:#475569;font-size:15px}button,a{display:block;margin:12px 0;padding:12px;border-radius:8px;border:0;background:#2563eb;color:white;text-decoration:none;text-align:center;font:inherit;cursor:pointer}button:disabled{opacity:.5}#tasks button{width:100%}.success{color:#15803d}.error{color:#b91c1c}[hidden]{display:none!important}</style></head>
-<body><main><h1>货架扫码拿货</h1><p id="product"></p><p id="result" role="status">正在核对标签与拿货任务…</p><p class="hint">扫码只表示本款已拿齐。货物放入集货区后另行确认集货，扫码不会移库或发货。</p><div id="tasks"></div><a id="detail" hidden>查看拿货及集货明细</a><a id="login" hidden>登录后继续扫码</a><button id="retry" hidden>重新核对</button></main>
+<body><main><h1>货架扫码拿货</h1><p id="product"></p><p id="result" role="status">正在核对标签与拿货任务…</p><p class="hint">扫码只表示本款已拿齐。无需再次集货确认；扫码不会移库或发货，装车后按原流程确认发货。</p><div id="tasks"></div><a id="detail" hidden>查看拿货明细</a><a id="login" hidden>登录后继续扫码</a><button id="retry" hidden>重新核对</button></main>
 <script>
 const $=id=>document.getElementById(id), esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const path=location.pathname.match(/^\/sp\/(\d+)\/(\d+)\/(\d+)\/(\d+)$/), params=new URLSearchParams(location.search);

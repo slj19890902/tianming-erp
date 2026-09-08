@@ -18,7 +18,7 @@ def args(db,pid,lid):
 
 
 @pytest.mark.parametrize('unordered',[False,True])
-def test_scan_marks_picked_once_without_any_inventory_move_then_collects(setup,monkeypatch,unordered):
+def test_scan_marks_picked_once_then_dispatches_without_collection(setup,monkeypatch,unordered):
     factory,pid,cid,ids=setup
     with factory() as db:
         target=ground(db,monkeypatch)
@@ -31,20 +31,21 @@ def test_scan_marks_picked_once_without_any_inventory_move_then_collects(setup,m
         before=(lot.warehouse_location_id,lot.quantity_available,lot.quantity_reserved,lot.version)
         result=scan.confirm_scan(payload,db,user)
         assert result['quantity']==50 and result['inventory_moved'] is False
-        assert item.status=='picked' and item.picked_quantity==50 and task.status=='pushed'
+        assert item.status=='picked' and item.picked_quantity==50 and task.status=='driver_confirmed'
         assert before==(lot.warehouse_location_id,lot.quantity_available,lot.quantity_reserved,lot.version)
         assert not staging.staged_lots(db,line.id)
         from app.services.warehouse_inventory import WarehouseInventoryError
-        with pytest.raises(WarehouseInventoryError):
-            staging.require_staged_dispatch(db,[line])
+        staging.require_staged_dispatch(db,[line])
         assert scan.confirm_scan(payload,db,user)==result
         payload.idempotency_key='another-camera-scan'
         assert scan.confirm_scan(payload,db,user)['already_picked']
         assert len(db.scalars(select(InventoryLot)).all())==1
-        response=_pick_task_response(db,task)
-        complete_delivery_pick_task_as_planned(task.id,PickStagingBatch(print_version=response['print_version'],
-            targets={item.id:shelf.staging_info(db,target)}),db,user)
-        assert sum(shelf.physical_quantity(x) for x in staging.staged_lots(db,line.id))==50
+        from app.api.deliveries import _dispatch_delivery
+        _dispatch_delivery(delivery.id,db=db,user=user)
+        assert delivery.status == 'dispatched'
+        assert lot.quantity_consumed == 50
+        assert lot.warehouse_location_id == ids[0]
+        assert not staging.staged_lots(db,line.id)
 
 
 def test_old_label_stale_task_wrong_shelf_and_other_employee_fail_closed(setup,monkeypatch):

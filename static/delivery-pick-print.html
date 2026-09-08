@@ -87,12 +87,14 @@
           rows.push({
             itemKey,
             routeSequence: Number(group.recommended_sequence || 0),
-            productCode: line.product_code || "-",
+            productCode: line.customer_inventory_code || line.product_code || "-",
             productName: line.product_name || "未命名产品",
-            specification: line.specification || "-",
+            specification: line.specification_display || line.specification || "-",
             location: group.label || line.employee_location_name || line.current_address_name || line.location_name || "位置待核对",
             quantity: Number(line.pick_quantity || 0),
             unit: line.unit || "个",
+            bundleText: line.bundle_text || "每捆数量待核",
+            putawayPending: !!line.putaway_pending,
           });
         });
       });
@@ -110,14 +112,12 @@
         <td>${escapeHtml(row.productCode)}</td>
         <td class="product"><div class="product-name">${escapeHtml(row.productName)}</div><div class="spec">${escapeHtml(row.specification)}</div>${row.productTotal === null ? "" : `<div class="subtotal">本品合计 ${row.productTotal} ${escapeHtml(row.unit)}</div>`}</td>
         <td class="location"><div class="route">第 ${row.routeSequence || "-"} 站</div><div>${escapeHtml(row.location)}</div></td>
-        <td>${row.quantity} ${escapeHtml(row.unit)}</td>
+        <td>${row.quantity} ${escapeHtml(row.unit)}<div class="spec">${escapeHtml(row.bundleText)}</div>${row.putawayPending?'<div class="spec">待上架</div>':""}</td>
         <td><span class="write-line"></span></td>
         <td><span class="write-line"></span></td>
       </tr>`;
     }
-    function pageHtml(task, user, rows, pageIndex, pageCount) {
-      const start = pageIndex * ROWS_PER_PAGE;
-      const pageRows = rows.slice(start, start + ROWS_PER_PAGE);
+    function pageHtml(task, user, rows, pageIndex, pageCount, pageRows = rows.slice(pageIndex * ROWS_PER_PAGE, (pageIndex + 1) * ROWS_PER_PAGE)) {
       const totalQuantity = rows.reduce((sum, row) => sum + row.quantity, 0);
       const printUser = user.display_name || user.real_name || user.username || "-";
       const summaryText = pageIndex === pageCount - 1
@@ -135,7 +135,7 @@
           <div><strong>打印人/时间：</strong>${escapeHtml(printUser)} / ${escapeHtml(displayDateTime())}</div>
         </div>
         <table>
-          <thead><tr><th class="seq">序号</th><th class="code">款号</th><th class="product">名称 / 尺寸</th><th class="location">具体位置</th><th class="planned">本次数量</th><th class="actual">实际拿货</th><th class="difference">差异</th></tr></thead>
+          <thead><tr><th class="seq">序号</th><th class="code">款号</th><th class="product">名称 / 尺寸</th><th class="location">具体位置</th><th class="planned">本次数量 / 捆数</th><th class="actual">实际拿货</th><th class="difference">差异</th></tr></thead>
           <tbody>${pageRows.map(rowHtml).join("")}</tbody>
         </table>
         <footer class="footer">
@@ -152,9 +152,22 @@
         const [user, task] = await Promise.all([request("/api/auth/me"), request(`/api/delivery-picks/${encodeURIComponent(taskId)}`)]);
         const rows = buildRows(task);
         if (!rows.length) throw new Error("当前任务没有可打印的拿货位置，请先核对库存分配");
-        const pageCount = Math.max(Math.ceil(rows.length / ROWS_PER_PAGE), 1);
-        document.getElementById("pages").innerHTML = Array.from({length:pageCount}, (_unused, index) => pageHtml(task, user, rows, index, pageCount)).join("");
-        document.getElementById("pages").hidden = false;
+        const pages = document.getElementById("pages");
+        pages.hidden = false;
+        await document.fonts.ready;
+        const batches = [];
+        let batch = [];
+        for(const row of rows){
+          const candidate = [...batch, row];
+          pages.innerHTML = pageHtml(task, user, rows, 0, 1, candidate);
+          const tooTall = pages.firstElementChild.getBoundingClientRect().height > 296 * 96 / 25.4 + 1;
+          if(batch.length && (tooTall || candidate.length > ROWS_PER_PAGE)){batches.push(batch);batch=[row];}
+          else if(tooTall){throw Error("单条明细超过A4可打印高度，请核对产品名称或规格");}
+          else batch=candidate;
+        }
+        if(batch.length)batches.push(batch);
+        const pageCount = batches.length;
+        pages.innerHTML = batches.map((batch,index)=>pageHtml(task,user,rows,index,pageCount,batch)).join("");
         state.hidden = true;
         const differenceButton = document.getElementById("differenceButton");
         differenceButton.href = `/mobile/delivery-pick.html?task_id=${encodeURIComponent(task.id)}&print_version=${encodeURIComponent(task.print_version)}`;

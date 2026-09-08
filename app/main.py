@@ -59,6 +59,7 @@ from app.api.pdf_training import router as pdf_training_router
 from app.api.production import router as production_router
 from app.api.system import router as system_router
 from app.api.warehouse import router as warehouse_router
+from app.api.fixed_shelf import router as fixed_shelf_router
 from app.api.stocktake import router as stocktake_router
 from app.api.inventory_onboarding import router as inventory_onboarding_router
 from app.api.tianhua_pre_delivery import (
@@ -832,6 +833,8 @@ def create_app() -> FastAPI:
             prefix="/api/pdf-training",
             tags=["pdf-training"],
         )
+    if not any(route.path == "/api/warehouse/fixed-shelf/products" for route in application.routes):
+        application.include_router(fixed_shelf_router, prefix="/api/warehouse/fixed-shelf", tags=["fixed-shelf"])
     if not any(route.path == "/api/warehouse/locations" for route in application.routes):
         application.include_router(
             warehouse_router,

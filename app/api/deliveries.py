@@ -1883,6 +1883,17 @@ def _pick_task_response(
         if include_location_plan
         else []
     )
+    from app.services.fixed_shelf import enrich_pick_groups, display_specification
+    enrich_pick_groups(db, location_groups)
+    item_product_ids = {}
+    for item in item_responses:
+        order_item = read_context['order_items'].get(item.get('order_item_id'))
+        delivery_item = read_context['delivery_items'].get(item.get('delivery_item_id'))
+        item_product_ids[item['id']] = order_item.product_id if order_item else delivery_item.product_id if delivery_item else None
+    customer_codes = dict(db.execute(select(Product.id, Product.customer_material_code).where(Product.id.in_([pid for pid in item_product_ids.values() if pid]))).all())
+    for item in item_responses:
+        item['specification_display'] = display_specification(item.get('specification'))
+        item['customer_inventory_code'] = customer_codes.get(item_product_ids.get(item['id']))
     print_version_payload = {
         "task_id": task.id,
         "snapshot_version": task.snapshot_version,
@@ -1893,6 +1904,8 @@ def _pick_task_response(
                 "picked_quantity": item.get("picked_quantity"),
                 "pick_status": item.get("pick_status"),
                 "product_code": item.get("product_code"),
+                "customer_inventory_code": item.get("customer_inventory_code"),
+                "specification_display": item.get("specification_display"),
             }
             for item in item_responses
         ],
@@ -1909,6 +1922,11 @@ def _pick_task_response(
                         "location_id": line.get("location_id"),
                         "pallet_id": line.get("pallet_id"),
                         "pick_quantity": line.get("pick_quantity"),
+                        "lot_id": line.get("lot_id"),
+                        "units_per_bundle": line.get("units_per_bundle"),
+                        "putaway_pending": line.get("putaway_pending"),
+                        "specification_display": line.get("specification_display"),
+                        "customer_inventory_code": line.get("customer_inventory_code"),
                     }
                     for line in group.get("lines") or []
                 ],
@@ -5709,6 +5727,11 @@ def _build_pick_task(
     ).all()
     if not lines:
         raise HTTPException(status_code=409, detail="送货单没有可拿货明细")
+    from app.services.fixed_shelf import guard_pick_task_overlap, ShelfError
+    try:
+        guard_pick_task_overlap(db, [line.order_item_id for line in lines if line.order_item_id], delivery.id)
+    except ShelfError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     task = DeliveryPickTask(
         delivery_id=delivery.id,
         customer_id=delivery.customer_id,

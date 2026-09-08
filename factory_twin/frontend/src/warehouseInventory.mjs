@@ -406,6 +406,14 @@ export function buildMappedLocationPallets(
   const grouped = new Map();
   for (const location of locations) {
     if (location.floor_code !== floorCode) continue;
+    // Empty rack cells are represented by the rack's layer/grid view, not
+    // independent movable location dots on the floor plan.
+    if ((location.map_rack_id || location.address_kind === "rack_slot")
+      && location.occupancy_status === "empty"
+      && inventoryLocationPallets(location).length === 0
+      && !(location.loose_items || []).length
+      && !location.has_unmatched_inventory_observation
+      && !location.has_location_discrepancy) continue;
     if (location.position_status !== "mapped") continue;
     if (!Number(location.map_position?.version)) continue;
     const mapFeatureId = String(location.map_feature_id || "").trim();

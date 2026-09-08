@@ -15,6 +15,82 @@ const cssSource = readFileSync(new URL("../src/warehouseTwin.css", import.meta.u
 // Execute the component's actual selectors/handlers without mounting a second UI.
 // This catches wiring errors which tests of the projection utility alone miss.
 const syntax = ts.createSourceFile("WarehouseTwinApp.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+
+test("map adjustment retains new regions and rack movements after deselection", () => {
+  const original = { id: "rack", x_mm: 100 };
+  const moved = { ...original, x_mm: 900 };
+  const created = { id: "new-zone", feature_kind: "zone", points: [[0,0],[2,0],[2,2]] };
+  const context = { useMemo: fn => fn(), planningPreviewActive: true, layoutMapToolsOpen: true,
+    features: [created], zoneGeometryDrafts: {}, activeEditingFeatureId: null, activeRackPreviewId: null,
+    layout: { racks: [original], features: [created] }, displayBaseLayout: { features: [], racks: [original] },
+    rackDrafts: { rack: moved }, filterPlanningPublishedFeatures };
+  assert.equal(componentValue("planningVisibleFeatures", context)[0].id, "new-zone");
+  assert.equal(componentValue("planningCollisionRacks", context)[0].x_mm, 900);
+  context.planningPreviewActive = false;
+  assert.equal(componentValue("planningVisibleFeatures", context).length, 0);
+  assert.equal(componentValue("planningCollisionRacks", context)[0].x_mm, 100);
+});
+
+test("complete map saves rack movement before validating the new revision and preserves failed drafts", async () => {
+  for (const rejected of [false, true]) {
+    const calls = [], modes = [];
+    let cleared = false;
+    const noop = () => {};
+    await componentValue("previewAndPublishLayout", {
+      layout: { source_sha256: "d1", racks: [{ id: "rack", version: 2, x_mm: 100 }] },
+      rackDrafts: { rack: { id: "rack", version: 2, x_mm: 900 } }, rackDraft: r => r, rackMutationPayload: r => r,
+      floorCode: "3F", layoutDraftControl: { has_draft: true, published_revision: "p1" },
+      setSpatialEditBusy: noop, setLocationEditMessage: noop, operationKey: () => "complete-key",
+      setLayout: noop, rememberServerDraft: noop, setLayoutDraftControl: noop,
+      mutateJson: async (url, method, payload) => {
+        calls.push({ url, method, payload });
+        if (method === "PATCH") return { revision: "d2", item: { id: "rack", version: 3, x_mm: 900 } };
+        if (url.endsWith("validate")) return { draft_revision: "d2", blockers: rejected ? ["occupied"] : [], warnings: [] };
+        return { backup_name: "before.json" };
+      },
+      prepareLegacyRackBindingConfirmation: async () => ({ request: {} }), refreshPublishedTwinFloor: noop, refreshDashboard: noop,
+      setMapMode: mode => modes.push(mode), setSearchPanelOpen: noop, setLocationEditMode: noop, setAreaPolicyEditMode: noop,
+      setAdvancedAreaMaintenanceOpen: noop, setLocationPointEditAreaCode: noop, setLayoutMapToolsOpen: noop,
+      setRackDrafts: () => { cleared = true; }, setZonePolicyDrafts: noop, replaceZoneGeometryDrafts: noop,
+      setLegacyRackBindingPreview: noop, setLegacyRackBindingSelections: noop,
+    })();
+    assert.equal(calls[0].payload.x_mm, 900);
+    assert.equal(calls[0].payload.expected_revision, "d1");
+    assert.equal(calls[0].payload.expected_version, 2);
+    assert.equal(calls[1].payload.expected_revision, "d2");
+    assert.equal(calls.length, rejected ? 2 : 3);
+    assert.equal(cleared, !rejected);
+    assert.deepEqual(modes, rejected ? [] : ["lookup"]);
+    if (!rejected) assert.equal(calls[2].payload.expected_draft_revision, "d2");
+  }
+});
+
+test("empty rack cells have no movable floor dots while stock and discrepancies stay visible", () => {
+  const zone = { id: "z", feature_kind: "zone", points: [[0,0],[6000,0],[6000,4000],[0,4000]] };
+  const empty = { location_id: 1, location_code: "A", floor_code: "3F", area_code: "A", map_feature_id: "z",
+    map_rack_id: "rack", address_kind: "rack_slot", occupancy_status: "empty", position_status: "mapped",
+    map_position: { left_pct: 10, top_pct: 10, width_pct: 5, height_pct: 5, version: 1 }, loose_items: [] };
+  const locations = [empty, { ...empty, location_id: 2, occupancy_status: "occupied", loose_items: [{ quantity_available: 3 }] },
+    { ...empty, location_id: 3, has_location_discrepancy: true }, { ...empty, location_id: 4, map_rack_id: null, address_kind: "ground_slot", storage_type: "ground" }];
+  const dots = inventory.buildMappedLocationPallets([zone], locations, "3F", { contract_version: "standard-pallet-v1", width_mm: 1200, depth_mm: 1000, height_mm: 150 });
+  assert.deepEqual(dots.map(p => p.id), ["erp-location-2", "erp-location-3", "erp-location-4"]);
+  const draggable = componentValue("locationPointEditPalletIds", { useMemo: fn => fn(), locationEditMode: true,
+    visualLocations: locations, floorCode: "3F", previewOnlyLocationIds: new Set(), locationPointEditAreaCode: null, EMPTY_CANVAS_IDS: [] });
+  assert.deepEqual(Array.from(draggable), ["erp-location-4"]);
+});
+
+test("new zone geometry saves without trying to apply an unbound formal region", async () => {
+  const feature = { id: "new", version: 1 }, points = [[0,0],[5000,0],[5000,3000],[0,3000]];
+  let applied = 0, message = "";
+  await componentValue("saveLayoutFeatureGeometry", { layout: { source_sha256: "d1" }, spatialEditBusy: false,
+    planningPublishedLayout: { source_sha256: "p1" }, floorCode: "3F", operationKey: () => "geometry-key",
+    setSpatialEditBusy: () => {}, mutateJson: async () => ({ revision: "d2", item: { ...feature, points, version: 2 } }),
+    setLayout: () => {}, rememberServerDraft: () => {}, replaceZoneGeometryDrafts: () => {},
+    applySavedAreaGeometryRevision: async () => { applied++; }, setLocationEditMessage: text => { message = text; }
+  })(feature, points);
+  assert.equal(applied, 0);
+  assert.match(message, /新区域尺寸与位置已保存/);
+});
 function componentValue(name, context, optional = false) {
   let initializer;
   function visit(node) {
@@ -162,7 +238,7 @@ test("both map publish entrances reload warehouse records before claiming the ne
     for (const readFails of [false, true]) {
       const steps = [], messages = [];
       const context = {
-        layout: { source_sha256: "new-map" }, floorCode: "3F",
+        layout: { source_sha256: "new-map" }, floorCode: "3F", rackDrafts: {},
         layoutDraftControl: { status: "validated", has_draft: true, published_revision: "old-map", warnings: [] },
         window: { confirm: () => true }, operationKey: () => "publish-request",
         prepareLegacyRackBindingConfirmation: async () => ({ request: {}, summary: "" }),
@@ -379,7 +455,7 @@ test("moving a draft boundary preserves real location coordinates and keeps loca
   function render(mode, localPoints = null, preview = mode === "planning") {
     const features = mode === "planning" ? [draft, empty, aisle] : published;
     const context = { ...inventory, useMemo: (callback) => callback(), EMPTY_CANVAS_IDS: componentValue("EMPTY_CANVAS_IDS", {}), mapMode: mode, features,
-      planningPreviewActive: preview, activeEditingFeatureId: preview ? zone.id : null,
+      planningPreviewActive: preview, layoutMapToolsOpen: false, activeEditingFeatureId: preview ? zone.id : null,
       displayBaseLayout: { features: published, racks: [] },
       filterPlanningPublishedFeatures,
       stableTwinFeatures: (layout) => layout.features, planningCollisionRacks: [],
@@ -517,7 +593,7 @@ test("all map commit-and-readback actions keep acknowledged success distinct fro
     let commits = 0;
     const noop = () => {};
     await componentValue(name, {
-      layout: { source_sha256: "d2" }, floorCode: "3F", layoutDraftControl: { has_draft: true, status: "validated", published_revision: "p1" },
+      layout: { source_sha256: "d2" }, floorCode: "3F", rackDrafts: {}, layoutDraftControl: { has_draft: true, status: "validated", published_revision: "p1" },
       selectedAreaFeature: { id: "zone-test", version: 1 }, simpleAreaCapacity: "1", formalAreaCodeDraft: "TEST", formalAreaNameDraft: "测试区",
       formalAreaOptions: [], selectedExistingAreaId: "", simpleAreaUsage: "semi_finished", simpleAreaLayout: "pallet_ground", planningPublishedRevision: "p1",
       setSpatialEditBusy: noop, setLocationEditMessage: message => messages.push(message), setLayoutDraftControl: noop,

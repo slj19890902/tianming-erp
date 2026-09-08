@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.274"
-APP_VERSION_NAME = "货架旧空位自动退役修复"
+APP_VERSION = "v0.22.275"
+APP_VERSION_NAME = "地图规划保存与预览一致性修复"
 APP_BUILD_DATE = "2026-09-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -1909,17 +1909,30 @@ _V022273_VERIFICATION_STEPS = [
     "刷新并重新进入地图，确认新区域仍存在；归档区域保持归档，既有库存、货位、货架和未应用草稿不变。",
 ]
 
-APP_CHANGES = [
+_V022274_CHANGES = [
     "货架区已有精确层格时，地图发布不再被同一区域的空旧规划占位数量卡死；发布事务会自动停用这些旧空位。",
     "旧占位只保留历史记录，不再出现在查货、移货或可选位置中；任何仍有库存或实体栈板的旧位置继续阻止发布。",
     "左区G货架已保存的90度草稿可在安全退役2个空旧占位后正式应用；本版无数据库结构迁移，不改变库存数量。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022274_VERIFICATION_STEPS = [
     "进入系统备份→系统版本，确认 v0.22.274，数据库 revision 仍为唯一 head rq07v8x9z66。",
     "进入仓库地图→3F→左区G货架，确认查货只显示G-1的3层×3格正式位置，不再显示L001/L002旧空位。",
     "确认左区G货架保持90度；切换区域规划与查货、再强制刷新，角度和9个正式层格均保持不变。",
     "核对库存数量未变化；在隔离回归中给旧占位加入库存时，发布仍须明确拒绝且不能停用该位置。",
+]
+
+APP_CHANGES = [
+    "调整地图时持续显示新区域和货架草稿，点击空白或切换选中对象不再导致区域消失、货架预览回退。",
+    "新区域先保存尺寸和位置，再通过保存区域设置启用；完成并应用会先保存未提交的货架移动，按最新版本校验发布。",
+    "空货架层格统一在货架层格视图查看，不再生成可拖动白点；有货与异常仍显示，货架层格只能随整架定位。本版无数据库结构迁移。",
+]
+
+APP_VERIFICATION_STEPS = [
+    "系统版本应为 v0.22.275，数据库唯一 head 仍为 rq07v8x9z66。",
+    "新增区域，修改长宽、名称、形式和容量后保存区域设置；点击空白、完成并应用并切回查货，核对区域仍在保存位置。",
+    "移动货架后直接完成并应用，再刷新查货，确认货架位置保留；发布失败时继续显示待处理草稿。",
+    "区域规划中不再出现空货架层格白点；地面栈板货位、有货层格和库存异常保持可见。",
 ]
 
 
@@ -2013,6 +2026,8 @@ def current_release_metadata(
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.274：本次更新｜{item}" for item in _V022274_CHANGES),
+    *(f"v0.22.274：如何验证｜{item}" for item in _V022274_VERIFICATION_STEPS),
     *(f"v0.22.273：本次更新｜{item}" for item in _V022273_CHANGES),
     *(f"v0.22.273：如何验证｜{item}" for item in _V022273_VERIFICATION_STEPS),
     *(f"v0.22.267：本次更新｜{item}" for item in _V022267_CHANGES),

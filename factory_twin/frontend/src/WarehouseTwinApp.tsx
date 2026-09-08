@@ -2057,6 +2057,10 @@ export function WarehouseTwinApp() {
   const activeRackPreviewId = planningPreviewActive && selected?.kind === "rack" ? selected.id : null;
   const activeObjectPreview = Boolean(activeEditingFeatureId || activeRackPreviewId);
   const planningVisibleFeatures = useMemo(() => {
+    if (planningPreviewActive && layoutMapToolsOpen) {
+      return features.filter((feature) => feature.feature_kind !== "aisle").map((feature) =>
+        zoneGeometryDrafts[feature.id] ? { ...feature, points: zoneGeometryDrafts[feature.id] } : feature);
+    }
     const published = filterPlanningPublishedFeatures(displayBaseLayout, layout) as TwinFeature[];
     if (!activeEditingFeatureId) return published;
     const edited = features.find((feature) => feature.id === activeEditingFeatureId);
@@ -2067,13 +2071,16 @@ export function WarehouseTwinApp() {
     return published.some((feature) => feature.id === edited.id)
       ? published.map((feature) => feature.id === edited.id ? { ...feature, ...visibleEdited } : feature)
       : [...published, visibleEdited];
-  }, [features, zoneGeometryDrafts, activeEditingFeatureId, displayBaseLayout, layout]);
+  }, [features, zoneGeometryDrafts, activeEditingFeatureId, displayBaseLayout, layout, planningPreviewActive, layoutMapToolsOpen]);
   const locationCollisionStructures = planningPublishedLayout?.structures || layout?.structures || [];
   const locationCollisionPlacements = planningPublishedLayout?.placements || layout?.placements || [];
   const locationCollisionRacks = planningPublishedLayout?.racks || layout?.racks || [];
   const planningCollisionStructures = displayBaseLayout?.structures || [];
   const planningCollisionPlacements = displayBaseLayout?.placements || [];
   const planningCollisionRacks = useMemo(() => {
+    if (planningPreviewActive && layoutMapToolsOpen) {
+      return (layout?.racks || []).map((rack) => rackDrafts[rack.id] || rack);
+    }
     const published = [...(displayBaseLayout?.racks || [])];
     const activeId = activeRackPreviewId;
     if (!activeId) return published;
@@ -2082,7 +2089,7 @@ export function WarehouseTwinApp() {
     return published.some((rack) => rack.id === activeId)
       ? published.map((rack) => rack.id === activeId ? edited : rack)
       : [...published, edited];
-  }, [displayBaseLayout?.racks, rackDrafts, activeRackPreviewId, layout?.racks]);
+  }, [displayBaseLayout?.racks, rackDrafts, activeRackPreviewId, layout?.racks, planningPreviewActive, layoutMapToolsOpen]);
   const standardPallet = useMemo(
     () => standardPalletContractsMatch(layoutStandardPallet, dashboard?.standard_pallet)
       ? normalizeStandardPalletContract(layoutStandardPallet)
@@ -2840,6 +2847,7 @@ export function WarehouseTwinApp() {
   const locationPointEditPalletIds = useMemo(() => locationEditMode
     ? visualLocations
       .filter((item) => item.floor_code === floorCode
+        && !item.map_rack_id && item.address_kind !== "rack_slot"
         && item.position_status === "mapped"
         && !previewOnlyLocationIds.has(`erp-location-${item.location_id}`)
         && (!locationPointEditAreaCode || item.area_code === locationPointEditAreaCode))
@@ -3502,6 +3510,10 @@ export function WarehouseTwinApp() {
     if (!locationEditMode || layoutMapToolsOpen) return;
     const locationId = Number(palletId.replace("erp-location-", ""));
     const location = visualLocations.find((item) => item.location_id === locationId);
+    if (location?.map_rack_id || location?.address_kind === "rack_slot") {
+      setLocationEditMessage("货架层格随整架定位，请选择货架移动并保存。");
+      return;
+    }
     if (locationPointEditAreaCode && location?.area_code !== locationPointEditAreaCode) {
       setLocationEditMessage(`当前只可拖动 ${locationPointEditAreaCode} 区货位；其他区域保持固定。`);
       return;
@@ -4811,7 +4823,11 @@ export function WarehouseTwinApp() {
 
   const previewAndPublishLayout = async () => {
     if (!layout) return;
-    if (!layoutDraftControl?.has_draft) {
+    const pendingRacks = Object.entries(rackDrafts).filter(([id, draft]) => {
+      const original = layout.racks.find((rack) => rack.id === id);
+      return original && JSON.stringify(rackMutationPayload(draft)) !== JSON.stringify(rackMutationPayload(rackDraft(original)));
+    });
+    if (!layoutDraftControl?.has_draft && !pendingRacks.length) {
       setSpatialEditBusy(true);
       try {
         await refreshPublishedTwinFloor();
@@ -4834,10 +4850,24 @@ export function WarehouseTwinApp() {
     setSpatialEditBusy(true);
     let publicationAcknowledged = false;
     try {
+      let draftRevision = layout.source_sha256;
+      for (const [id, draft] of pendingRacks) {
+        const original = layout.racks.find((rack) => rack.id === id)!;
+        const saved = await mutateJson<LayoutMutationResponse<Rack>>(
+          `/api/warehouse/twin-layout/floors/${floorCode}/racks/${id}`, "PATCH",
+          { ...rackMutationPayload(draft), expected_revision: draftRevision,
+            expected_version: original.version, operation_key: operationKey("rack-complete-save") },
+        );
+        if (!saved) throw new Error("货架保存未取得回执，当前移动预览已保留");
+        draftRevision = saved.revision;
+        setLayout((current) => current ? { ...current, source_sha256: saved.revision,
+          racks: current.racks.map((rack) => rack.id === id ? saved.item : rack) } : current);
+        rememberServerDraft(saved.revision);
+      }
       const validation = await mutateJson<LayoutDraftValidationResponse>(
         `/api/warehouse/twin-layout/floors/${floorCode}/draft/validate`,
         "POST",
-        { expected_revision: layout.source_sha256 }
+        { expected_revision: draftRevision }
       );
       if (!validation) return;
       setLayoutDraftControl((current) => current ? {
@@ -4858,7 +4888,7 @@ export function WarehouseTwinApp() {
         `/api/warehouse/twin-layout/floors/${floorCode}/draft/publish`,
         "POST",
         {
-          expected_published_revision: layoutDraftControl.published_revision,
+          expected_published_revision: layoutDraftControl?.published_revision || publishedFloorRevision,
           expected_draft_revision: validation.draft_revision,
           operation_key: operationKey("layout-complete-apply"),
           ...bindingConfirmation.request
@@ -5381,6 +5411,10 @@ export function WarehouseTwinApp() {
         delete next[feature.id];
         return next;
       });
+      if (!feature.formal_area_id && !feature.formal_policy_status) {
+        setLocationEditMessage("新区域尺寸与位置已保存，请填写名称、形式和容量后点击“保存区域设置”启用。");
+        return;
+      }
       await applySavedAreaGeometryRevision(
         { ...feature, ...response.item }, response.revision, expectedPublishedRevision
       );

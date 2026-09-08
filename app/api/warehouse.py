@@ -10175,6 +10175,7 @@ class TwinZoneStoragePolicyPayload(BaseModel):
     area_name: str | None = Field(default=None, max_length=100)
     existing_area_id: int | None = Field(default=None, ge=1)
     max_rack_count: int | None = Field(default=None, ge=0, le=500)
+    pallet_rotation_deg: Literal[0, 90] | None = None
 
     @field_validator("erp_area_code")
     @classmethod
@@ -10209,6 +10210,7 @@ class TwinZoneConfirmAreaPayload(BaseModel):
     ]
     storage_layout: Literal["rack", "pallet_ground", "functional"]
     max_pallet_capacity: int = Field(ge=0, le=500)
+    pallet_rotation_deg: Literal[0, 90] = 0
     erp_area_code: str = Field(min_length=1, max_length=30)
     area_name: str | None = Field(default=None, max_length=100)
     existing_area_id: int | None = Field(default=None, ge=1)
@@ -11831,13 +11833,18 @@ def _publish_twin_layout_draft_locked(
                 rack_cell_sync.bound_legacy_location_ids,
             )
         )
+        from app.services.warehouse_ground_map_application import previously_verified_area_features
+        preserved_area_features = previously_verified_area_features(
+            db, floor_layout=load_warehouse_twin_floor(floor_code),
+            previous_floor_layout=published_floor_before,
+        )
         _validate_published_area_layouts_for_floor(
             db,
             floor_code=floor_code,
             deferred_feature_id=defer_location_readiness_for_feature_id,
             allow_spatial_conflicts_for_feature_ids={
                 str(item.get("feature_id") or "") for item in coordinate_adjustments
-            },
+            } | preserved_area_features,
         )
         from app.services.warehouse_ground_map_application import record_map_applications
         ground_map_application_count = record_map_applications(
@@ -14232,6 +14239,7 @@ def _update_twin_zone_storage_policy_locked(
             formal_area_id=selected_existing_area_id,
             formal_floor_id=(formal_area.floor_id if formal_area is not None else None),
             max_rack_count=payload.max_rack_count,
+            pallet_rotation_deg=payload.pallet_rotation_deg,
             legacy_v11_name_only=legacy_v11_name_only,
         )
         mapped_area_code = str(mutation.value.get("erp_area_code") or "").strip().upper()
@@ -14505,6 +14513,7 @@ def _ensure_one_step_ground_plan(
     operation_key: str,
     operator_id: int,
     allow_reconfigure_existing: bool = False,
+    preserve_existing_locations: bool = False,
 ) -> dict:
     """Materialize real one-step ground positions in the canonical plan ledger.
 
@@ -14782,6 +14791,18 @@ def _ensure_one_step_ground_plan(
                 "该区域地堆排位已经退役，不能继续修改容量",
                 status_code=409,
             )
+        if (preserve_existing_locations and existing_plan.status == "published"
+                and existing_location_ids == expected_location_ids):
+            # Published plan/slot rows are immutable. Same-location orientation
+            # edits update only empty location geometry and receive a new map
+            # application receipt below; never delete/recreate the original plan.
+            return {
+                "available_location_count": len(rows),
+                "ground_plan_id": int(existing_plan.id),
+                "ground_plan_status": "published",
+                "location_readiness_issue": None,
+                "preserved_original_plan": True,
+            }
         existing_plan.slots.clear()
         db.flush()
         for slot in matched_slots:
@@ -14941,6 +14962,7 @@ def confirm_twin_zone_area(
                     operation_key=f'{payload.operation_key}-policy',
                     allowed_inventory_types=[payload.primary_inventory_type],
                     storage_layout=payload.storage_layout,
+                    pallet_rotation_deg=payload.pallet_rotation_deg,
                     erp_area_code=payload.erp_area_code,
                     area_name=payload.area_name,
                     existing_area_id=payload.existing_area_id,
@@ -15041,6 +15063,10 @@ def confirm_twin_zone_area(
             if (
                 existing_ground_plan_id is None
                 or active_location_count != payload.max_pallet_capacity
+                or (
+                    payload.storage_layout == 'pallet_ground'
+                    and current_feature.get('pallet_rotation_deg', 0) != payload.pallet_rotation_deg
+                )
             ):
                 (
                     created_locations,
@@ -15075,7 +15101,19 @@ def confirm_twin_zone_area(
                 operation_key=payload.operation_key,
                 operator_id=user.id,
                 allow_reconfigure_existing=existing_ground_plan_id is not None,
+                preserve_existing_locations=(
+                    existing_ground_plan_id is not None
+                    and active_location_count == payload.max_pallet_capacity
+                ),
             )
+            if ground_readiness.get("preserved_original_plan"):
+                from app.services.warehouse_ground_map_application import record_map_applications
+                record_map_applications(
+                    db, floor_layout=published_floor_layout,
+                    previous_floor_layout=published_floor_layout,
+                    actor=user, operation_key=f"{payload.operation_key}-orientation",
+                    request=request,
+                )
             available_location_count = int(
                 ground_readiness["available_location_count"]
             )

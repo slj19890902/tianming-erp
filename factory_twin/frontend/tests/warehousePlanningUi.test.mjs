@@ -108,6 +108,30 @@ function componentValue(name, context, optional = false) {
   return sandbox.value;
 }
 
+test("area settings preserve a failed name count and rotation and report beside the save control", async () => {
+  const messages = [], requests = [];
+  const draft = { name: "南B2", usage: "finished", layout: "pallet_ground", capacity: "14", rotation: 90 };
+  const cache = { current: { "3F/new-zone": draft } };
+  const noop = () => {};
+  await componentValue("confirmSelectedAreaOnce", {
+    layout: { source_sha256: "draft" }, selectedAreaFeature: { id: "new-zone", version: 1 }, spatialEditBusy: false,
+    floorCode: "3F", simpleAreaCapacity: "14", simpleAreaRotation: 90, simpleAreaUsage: "finished", simpleAreaLayout: "pallet_ground",
+    formalAreaCodeDraft: "EDIT-058", formalAreaNameDraft: "南B2", formalAreaOptions: [], selectedExistingAreaId: "",
+    planningPublishedRevision: "published", layoutDraftControl: null, operationKey: () => "confirm-test",
+    areaSettingsDraftsRef: cache, setAreaSettingsMessage: m => messages.push(m), setLocationEditMessage: noop, setSpatialEditBusy: noop,
+    mutateJson: async (_path, _method, body) => { requests.push(body); throw new Error("校验失败"); },
+  })();
+  assert.equal(requests[0].area_name, "南B2");
+  assert.equal(requests[0].max_pallet_capacity, 14);
+  assert.equal(requests[0].pallet_rotation_deg, 90);
+  assert.equal(cache.current["3F/new-zone"], draft);
+  assert.equal(messages.at(-1).key, "3F/new-zone");
+  assert.match(messages.at(-1).text, /区域保存失败.*已保留/);
+  assert.match(source, /aria-label="货位朝向"/);
+  assert.match(source, /role="status" aria-live="polite">\{areaSettingsMessage.text\}/);
+  assert.match(sceneSource, /outline.material.depthTest = false/);
+});
+
 test("scoped geometry apply keeps its retry key and distinguishes commit from readback", async () => {
   for (const stage of ["write-fails", "read-fails", "success"]) {
     const calls = [], messages = [], modes = [];
@@ -464,6 +488,7 @@ test("moving a draft boundary preserves real location coordinates and keeps loca
       layout: { id: "test-3f", features, racks: [], violations: [] }, locationEditMode: mode === "planning", locationPointEditAreaCode: null,
       moveDrafts: [], moveAction: "pallet", groundCandidates: null, groundPrimaryLocationId: null, groundSecondaryLocationId: null,
       rackDrafts: {}, displayedLocationConflicts: [] };
+    Object.assign(context, { areaSettingsDraftsRef: { current: {} }, formalAreaNameDraft: "", simpleAreaCapacity: "0", simpleAreaRotation: 0, simpleAreaLayout: "pallet_ground" });
     for (const name of ["locationProjectionFeatures", "planningVisibleFeatures", "mappedLocationPallets", "planningPreviewPallets", "previewOnlyLocationIds", "locationPointEditPalletIds", "movePreviewPallets", "groundCandidatePallets", "visualLayout"]) {
       const value = componentValue(name, context);
       if (value !== undefined) context[name] = value;
@@ -595,13 +620,14 @@ test("all map commit-and-readback actions keep acknowledged success distinct fro
     await componentValue(name, {
       layout: { source_sha256: "d2" }, floorCode: "3F", rackDrafts: {}, layoutDraftControl: { has_draft: true, status: "validated", published_revision: "p1" },
       selectedAreaFeature: { id: "zone-test", version: 1 }, simpleAreaCapacity: "1", formalAreaCodeDraft: "TEST", formalAreaNameDraft: "测试区",
+      spatialEditBusy: false, simpleAreaRotation: 0, setAreaSettingsMessage: noop, areaSettingsDraftsRef: { current: {} },
       formalAreaOptions: [], selectedExistingAreaId: "", simpleAreaUsage: "semi_finished", simpleAreaLayout: "pallet_ground", planningPublishedRevision: "p1",
       setSpatialEditBusy: noop, setLocationEditMessage: message => messages.push(message), setLayoutDraftControl: noop,
       setPlanningPublishedRevision: noop, operationKey: () => "test-once", window: { confirm: () => true },
       prepareLegacyRackBindingConfirmation: async () => ({ summary: "", request: {} }),
       mutateJson: async path => path.endsWith("validate")
         ? { status: "validated", draft_revision: "d2", warnings: [], blockers: [] }
-        : (commits++, { backup_name: "test-backup", published_revision: "p2" }),
+        : (commits++, { backup_name: "test-backup", published_revision: "p2", area: { id: 1 } }),
       refreshPublishedTwinFloor: async () => { throw new Error("simulated readback unavailable"); },
       refreshPlanningTwinFloor: async () => { throw new Error("simulated readback unavailable"); }, refreshDashboard: async () => {},
       setLocationPointEditAreaCode: noop, setLayoutMapToolsOpen: noop,

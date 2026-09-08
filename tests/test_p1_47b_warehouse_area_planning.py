@@ -4597,9 +4597,11 @@ def test_one_step_confirmation_preserves_unrelated_advanced_draft(
         engine.dispose()
 
 
+@pytest.mark.parametrize("pallet_rotation", [0, 90])
 def test_one_step_confirmation_publishes_a_zone_created_only_in_the_active_draft(
     tmp_path: Path,
     monkeypatch,
+    pallet_rotation: int,
 ) -> None:
     published, draft = _isolate_layout_paths(tmp_path, monkeypatch)
     document = json.loads(published.read_text(encoding="utf-8"))
@@ -4654,10 +4656,10 @@ def test_one_step_confirmation_publishes_a_zone_created_only_in_the_active_draft
                     revision=created.floor_revision,
                     published_revision=published_revision,
                     operation_key="p1-134-confirm-draft-only-zone",
-                    capacity=4,
+                    capacity=14,
                     area_code="H4",
-                    area_name="左区H4",
-                ),
+                    area_name="南B2",
+                ).model_copy(update={"pallet_rotation_deg": pallet_rotation}),
                 _request(),
                 db,
                 admin,
@@ -4666,9 +4668,14 @@ def test_one_step_confirmation_publishes_a_zone_created_only_in_the_active_draft
             assert result["status"] == "published"
             assert result["advanced_draft_preserved"] is False
             assert result["area"]["area_code"] == "H4"
-            assert result["created_location_count"] == 4
+            assert result["created_location_count"] == 14
+            assert result["area"]["area_name"] == "南B2"
+            assert result["available_location_count"] == 14
             assert db.scalar(select(func.count(WarehouseArea.id))) == 1
-            assert db.scalar(select(func.count(WarehouseLocation.id))) == 4
+            assert db.scalar(select(func.count(WarehouseLocation.id))) == 14
+            slots = list(db.scalars(select(WarehouseGroundLayoutSlot)))
+            expected_size = (1200, 1000) if pallet_rotation == 0 else (1000, 1200)
+            assert all((s.width_mm, s.depth_mm) == expected_size for s in slots)
 
         live = json.loads(runtime.read_text(encoding="utf-8"))
         published_zone = next(
@@ -4678,7 +4685,38 @@ def test_one_step_confirmation_publishes_a_zone_created_only_in_the_active_draft
         )
         assert published_zone["points"] == created.value["points"]
         assert published_zone["erp_area_code"] == "H4"
+        assert published_zone["formal_area_name"] == "南B2"
+        assert published_zone["pallet_rotation_deg"] == pallet_rotation
         assert not draft.exists()
+        with factory() as db:
+            from sqlalchemy import text
+            from app.services.warehouse_ground_map_application import load_map_applications
+            admin = db.scalar(select(User).where(User.username == "p1-47b-admin"))
+            plan = db.scalar(select(WarehouseGroundLayoutPlan))
+            before_slots = [(s.id, s.location_id, s.x_mm, s.y_mm, s.width_mm, s.depth_mm)
+                            for s in db.scalars(select(WarehouseGroundLayoutSlot))]
+            before_positions = [(r.id, r.floor3_layout.width_pct, r.floor3_layout.height_pct)
+                                for r in db.scalars(select(WarehouseLocation))]
+            db.execute(text("CREATE TRIGGER protect_original_slots BEFORE DELETE ON warehouse_ground_layout_slots BEGIN SELECT RAISE(ABORT, 'published ground layout slot is immutable'); END"))
+            db.commit()
+            changed = warehouse_api.confirm_twin_zone_area(
+                "3F", published_zone["id"],
+                _confirm_area_payload(
+                    revision=live["floors"]["3F"]["revision"],
+                    expected_version=published_zone["version"],
+                    operation_key="south-b2-rotate-existing-fourteen", capacity=14,
+                    area_code="H4", area_name="南B2",
+                ).model_copy(update={"pallet_rotation_deg": 90 - pallet_rotation}),
+                _request(), db, admin,
+            )
+            assert changed["available_location_count"] == 14
+            assert before_slots == [(s.id, s.location_id, s.x_mm, s.y_mm, s.width_mm, s.depth_mm)
+                                    for s in db.scalars(select(WarehouseGroundLayoutSlot))]
+            after_positions = [(r.id, r.floor3_layout.width_pct, r.floor3_layout.height_pct)
+                               for r in db.scalars(select(WarehouseLocation))]
+            assert [r[0] for r in before_positions] == [r[0] for r in after_positions]
+            assert before_positions != after_positions
+            assert load_map_applications(db, [plan.id])[plan.id]["map_revision"] == changed["published_revision"]
     finally:
         engine.dispose()
 

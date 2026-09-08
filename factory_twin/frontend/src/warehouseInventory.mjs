@@ -389,6 +389,37 @@ export function buildMeasuredDispatchPallets(
   return [];
 }
 
+// Unsaved region capacity is a display preview, never an inventory destination.
+export function buildAreaCapacityPreview(zone, count, rotation, standardPallet, layoutId = "erp-twin") {
+  const standard = normalizeStandardPalletContract(standardPallet);
+  const frame = zoneLayoutFrame(zone.points);
+  if (!standard || !frame || !Number.isInteger(count) || count < 1 || count > 500) return [];
+  const width = rotation === 90 ? standard.depth_mm : standard.width_mm;
+  const depth = rotation === 90 ? standard.width_mm : standard.depth_mm;
+  const columns = Math.min(count, Math.max(1, Math.floor(frame.width / width)));
+  const rows = Math.ceil(count / columns);
+  const stepX = Math.min(width, frame.width / columns);
+  const stepY = Math.min(depth, frame.height / rows);
+  return Array.from({ length: count }, (_, index) => {
+    const u = ((index % columns) + 0.5) * stepX / frame.width;
+    const v = (Math.floor(index / columns) + 0.5) * stepY / frame.height;
+    return {
+      id: `planning-capacity-${zone.id}-${index + 1}`, layout_id: layoutId,
+      pallet_code: "", name: `${zone.name || "新区域"} · 规划预览 ${index + 1}`,
+      zone_id: zone.id, zone_code: zone.feature_code,
+      x_mm: frame.anchor[0] + frame.right[0] * u + frame.down[0] * v,
+      y_mm: frame.anchor[1] + frame.right[1] * u + frame.down[1] * v,
+      z_mm: 0, width_mm: 0, depth_mm: 0, height_mm: 0,
+      rotation_deg: (frame.rotation_deg + rotation + 360) % 360,
+      is_logical_anchor: true, is_planning_location_slot: true,
+      planning_slot_width_mm: standard.width_mm, planning_slot_depth_mm: standard.depth_mm,
+      visual_kind: "location_anchor", visual_status: "empty", color: "#fff8e7",
+      status_note: "尚未保存的区域容量预览，不是正式货位，不可入库",
+      is_simulated: true, version: 1, snapped: false
+    };
+  });
+}
+
 export function buildMappedLocationPallets(
   features,
   locations,
@@ -453,7 +484,9 @@ export function buildMappedLocationPallets(
       const position = location.map_position;
       const mappedWidthMm = position ? (Number(position.width_pct) / 100) * (frame?.width || (Math.max(...xs) - Math.min(...xs))) : 0;
       const mappedDepthMm = position ? (Number(position.height_pct) / 100) * (frame?.height || (Math.max(...ys) - Math.min(...ys))) : 0;
-      const localRotation = mappedWidthMm > 0 && mappedDepthMm > 0 && Math.abs(mappedWidthMm - mappedDepthMm) > 50
+      const localRotation = position?.layout_kind === "logical_anchor" && location.storage_type === "ground"
+        ? (zone.pallet_rotation_deg === 90 ? 90 : 0)
+        : mappedWidthMm > 0 && mappedDepthMm > 0 && Math.abs(mappedWidthMm - mappedDepthMm) > 50
         ? (mappedWidthMm < mappedDepthMm ? 90 : 0)
         : Math.max(...ys) - Math.min(...ys) > Math.max(...xs) - Math.min(...xs) ? 90 : 0;
       const rotation = ((frame?.rotation_deg || 0) + localRotation + 360) % 360;

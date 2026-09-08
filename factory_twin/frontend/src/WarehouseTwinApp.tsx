@@ -16,6 +16,7 @@ import type { Floor1CandidateBlockingItem } from "./floor1CandidateBlockers.mjs"
 import { pointsBoundsMm, polygonAreaMm2, resizeAndMovePointsMm, translatePointsMm } from "./layoutGeometry.mjs";
 import {
   buildMappedLocationPallets,
+  buildAreaCapacityPreview,
   employeeAreaName,
   employeeLocationName,
   expandAreaInventory,
@@ -1736,6 +1737,9 @@ export function WarehouseTwinApp() {
   const [simpleAreaUsage, setSimpleAreaUsage] = useState<InventoryUsage>("finished");
   const [simpleAreaLayout, setSimpleAreaLayout] = useState<Exclude<StorageLayout, "mixed">>("pallet_ground");
   const [simpleAreaCapacity, setSimpleAreaCapacity] = useState("0");
+  const [simpleAreaRotation, setSimpleAreaRotation] = useState<0 | 90>(0);
+  const areaSettingsDraftsRef = useRef<Record<string, { name: string; usage: InventoryUsage; layout: Exclude<StorageLayout, "mixed">; capacity: string; rotation: 0 | 90 }>>({});
+  const [areaSettingsMessage, setAreaSettingsMessage] = useState<{ key: string; text: string } | null>(null);
   const [advancedAreaMaintenanceOpen, setAdvancedAreaMaintenanceOpen] = useState(false);
   const [locationPointEditAreaCode, setLocationPointEditAreaCode] = useState<string | null>(null);
   const locationLayoutOperationRef = useRef<{ signature: string; key: string } | null>(null);
@@ -2195,7 +2199,15 @@ export function WarehouseTwinApp() {
   );
   // Moving the boundary never reinterprets existing location percentages.
   // Draft locations keep absolute positions until the atomic map application.
-  const planningPreviewPallets = mappedLocationPallets;
+  const planningPreviewPallets = useMemo(() => {
+    if (!planningPreviewActive) return mappedLocationPallets;
+    const previews = planningVisibleFeatures.flatMap((zone) => {
+      const draft = areaSettingsDraftsRef.current[`${floorCode}/${zone.id}`];
+      if (zone.feature_kind !== "zone" || zone.formal_area_id || !draft || draft.layout !== "pallet_ground") return [];
+      return buildAreaCapacityPreview({ ...zone, name: draft.name }, Number(draft.capacity), draft.rotation, standardPallet, layout?.id);
+    });
+    return [...mappedLocationPallets, ...previews];
+  }, [mappedLocationPallets, planningPreviewActive, planningVisibleFeatures, floorCode, standardPallet, layout?.id, formalAreaNameDraft, simpleAreaCapacity, simpleAreaRotation, simpleAreaLayout]);
   const previewOnlyLocationIds = useMemo(() => new Set<string>(), []);
   const planningCollisionPallets = useMemo(
     () => planningPreviewPallets.filter((item) => item.is_planning_location_slot),
@@ -3003,10 +3015,20 @@ export function WarehouseTwinApp() {
       .toUpperCase()
       .slice(0, 30);
     setFormalAreaCodeDraft(selectedAreaFeature.erp_area_code || suggested);
+    const retained = areaSettingsDraftsRef.current[`${floorCode}/${selectedAreaFeature.id}`];
+    if (retained) {
+      setFormalAreaNameDraft(retained.name);
+      setSimpleAreaUsage(retained.usage);
+      setSimpleAreaLayout(retained.layout);
+      setSimpleAreaCapacity(retained.capacity);
+      setSimpleAreaRotation(retained.rotation);
+      return;
+    }
     setFormalAreaNameDraft(employeeAreaName(selectedAreaFeature, { floorCode }) || suggested);
     const currentUsage = (selectedAreaFeature.allowed_inventory_types || [])[0] as InventoryUsage | undefined;
     setSimpleAreaUsage(currentUsage || "finished");
     setSimpleAreaLayout(selectedAreaFeature.storage_layout === "rack" ? "rack" : "pallet_ground");
+    setSimpleAreaRotation(selectedAreaFeature.pallet_rotation_deg === 90 ? 90 : 0);
     setSimpleAreaCapacity(String(
       selectedAreaFeature.storage_layout === "rack"
         ? (selectedAreaFeature.max_rack_count
@@ -5286,15 +5308,31 @@ export function WarehouseTwinApp() {
     }
   };
 
+  const updateAreaSettingsDraft = (patch: Partial<{ name: string; usage: InventoryUsage; layout: Exclude<StorageLayout, "mixed">; capacity: string; rotation: 0 | 90 }>) => {
+    if (!selectedAreaFeature) return;
+    const draft = { name: formalAreaNameDraft, usage: simpleAreaUsage, layout: simpleAreaLayout, capacity: simpleAreaCapacity, rotation: simpleAreaRotation, ...patch };
+    areaSettingsDraftsRef.current[`${floorCode}/${selectedAreaFeature.id}`] = draft;
+    setFormalAreaNameDraft(draft.name);
+    setSimpleAreaUsage(draft.usage);
+    setSimpleAreaLayout(draft.layout);
+    setSimpleAreaCapacity(draft.capacity);
+    setSimpleAreaRotation(draft.rotation);
+  };
+
   const confirmSelectedAreaOnce = async () => {
-    if (!layout || !selectedAreaFeature) return;
+    if (!layout || !selectedAreaFeature || spatialEditBusy) return;
+    const settingsKey = `${floorCode}/${selectedAreaFeature.id}`;
+    const report = (text: string) => {
+      setAreaSettingsMessage({ key: settingsKey, text });
+      setLocationEditMessage(text);
+    };
     const capacity = Number(simpleAreaCapacity);
     if (!Number.isInteger(capacity) || capacity < 0 || capacity > 500) {
-      setLocationEditMessage("最大栈板数必须是 0 至 500 的整数；不放栈板的区域填写 0。");
+      report("最大栈板数必须是 0 至 500 的整数；不放栈板的区域填写 0。");
       return;
     }
     if (!formalAreaCodeDraft.trim()) {
-      setLocationEditMessage("当前地图区域缺少正式编号，无法确认启用。");
+      report("当前地图区域缺少正式编号，无法确认启用。");
       return;
     }
     const selectedExistingArea = formalAreaOptions.find((item) => String(item.id) === selectedExistingAreaId);
@@ -5303,11 +5341,11 @@ export function WarehouseTwinApp() {
         ? selectedAreaFeature.formal_area_id
         : null);
     if (selectedExistingArea && selectedExistingArea.area_code !== formalAreaCodeDraft.trim().toUpperCase()) {
-      setLocationEditMessage("所选现有区域与地图编号不一致，请重新选择；系统不会按名称猜测绑定。");
+      report("所选现有区域与地图编号不一致，请重新选择；系统不会按名称猜测绑定。");
       return;
     }
     setSpatialEditBusy(true);
-    setLocationEditMessage("正在确认并启用区域…");
+    report("正在保存区域设置，请稍候…");
     let areaAcknowledged = false;
     try {
       const result = await mutateJson<OneStepAreaConfirmResponse>(
@@ -5321,27 +5359,29 @@ export function WarehouseTwinApp() {
           primary_inventory_type: simpleAreaUsage,
           storage_layout: simpleAreaLayout,
           max_pallet_capacity: capacity,
+          pallet_rotation_deg: simpleAreaRotation,
           erp_area_code: formalAreaCodeDraft.trim().toUpperCase(),
           area_name: formalAreaNameDraft.trim() || employeeAreaName(selectedAreaFeature, { floorCode }),
           existing_area_id: existingAreaId,
           confirmed: true
         }
       );
-      if (!result) return;
+      if (!result?.published_revision || !result.area) throw new Error("未收到区域保存回执，请刷新核对；当前输入已保留。");
       areaAcknowledged = true;
       setPlanningPublishedRevision(result.published_revision);
       await Promise.all([refreshPlanningTwinFloor(), refreshDashboard()]);
       setZonePolicyDrafts({});
       replaceZoneGeometryDrafts({});
       setSelectedExistingAreaId("");
-      setLocationEditMessage(
+      delete areaSettingsDraftsRef.current[settingsKey];
+      report(
         `${result.message}；区域启用状态已写入。当前没有货物时库存数量仍显示 0。` +
         (result.advanced_draft_preserved ? "原有高级维护草稿已保留，没有随本次确认发布。" : "")
       );
     } catch (reason) {
-      setLocationEditMessage(areaAcknowledged
+      report(areaAcknowledged
         ? `区域已启用，但回读失败：${(reason as Error).message}。当前画面尚未核验，请刷新页面重读；不要重复确认。`
-        : `区域未启用：${(reason as Error).message}`);
+        : `区域保存失败：${(reason as Error).message}。名称、数量和朝向已保留，可继续修改。`);
     } finally {
       setSpatialEditBusy(false);
     }
@@ -6522,12 +6562,15 @@ export function WarehouseTwinApp() {
               <header><div><b>用途与容量</b></div>{selectedAreaHasPublishedBinding && <span>已启用，可更新</span>}</header>
               {!selectedAreaFeature.formal_area_id && formalAreaOptions.length > 0 && <label className="twin-zone-simple-existing"><span>已有区域（可选）</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">按地图编号新建</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.area_code} · {employeeAreaName(area, { floorCode: area.floor_code })}</option>)}</select></label>}
               <div className="twin-zone-primary-fields">
-                <label className="twin-zone-name-field"><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 4F 新振成品区" /></label>
-                <label><span>用途</span><select value={simpleAreaUsage} onChange={(event) => setSimpleAreaUsage(event.target.value as InventoryUsage)}><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="raw_material">原材料</option><option value="mold">模具</option><option value="print_plate">印刷版</option><option value="temporary_turnover">临时周转</option></select></label>
-                <label><span>形式</span><select value={simpleAreaLayout} onChange={(event) => setSimpleAreaLayout(event.target.value as Exclude<StorageLayout, "mixed">)}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
-                <label><span>{simpleAreaLayout === "pallet_ground" ? "栈板货位数" : "最大货架数"}</span><input type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => setSimpleAreaCapacity(event.target.value)} /></label>
+                <label className="twin-zone-name-field"><span>区域名称</span><input disabled={spatialEditBusy} maxLength={100} value={formalAreaNameDraft} onChange={(event) => updateAreaSettingsDraft({ name: event.target.value })} placeholder="例如 4F 新振成品区" /></label>
+                <label><span>用途</span><select disabled={spatialEditBusy} value={simpleAreaUsage} onChange={(event) => updateAreaSettingsDraft({ usage: event.target.value as InventoryUsage })}><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="raw_material">原材料</option><option value="mold">模具</option><option value="print_plate">印刷版</option><option value="temporary_turnover">临时周转</option></select></label>
+                <label><span>形式</span><select disabled={spatialEditBusy} value={simpleAreaLayout} onChange={(event) => updateAreaSettingsDraft({ layout: event.target.value as Exclude<StorageLayout, "mixed"> })}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
+                <label><span>{simpleAreaLayout === "pallet_ground" ? "栈板货位数" : "最大货架数"}</span><input disabled={spatialEditBusy} type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => updateAreaSettingsDraft({ capacity: event.target.value })} /></label>
+                {simpleAreaLayout === "pallet_ground" && <label><span>货位朝向</span><select aria-label="货位朝向" disabled={spatialEditBusy} value={simpleAreaRotation} onChange={(event) => updateAreaSettingsDraft({ rotation: Number(event.target.value) as 0 | 90 })}><option value={0}>0° · 1.2m × 1m</option><option value={90}>90° · 1m × 1.2m</option></select></label>}
               </div>
               <div className="twin-zone-confirm-row"><button type="button" className="confirm" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || simpleAreaCapacity === ""} onClick={confirmSelectedAreaOnce}>{spatialEditBusy ? "保存中…" : "保存区域设置"}</button><p>{simpleAreaLayout === "pallet_ground" ? "同步空货位数量，不改库存；填 0 会停用全部空货位。" : "最大货架数可在此调整；达到上限时新增货架会明确阻止，不改现有货架和库存。"}</p></div>
+              {simpleAreaLayout === "pallet_ground" && <small>默认标准栈板轮廓；朝向改变会重排空闲系统货位，有货及手动固定位置不动。重叠仍显示并提示，不代表可入库。新区域保存前仅为规划预览。</small>}
+              {areaSettingsMessage?.key === `${floorCode}/${selectedAreaFeature.id}` && <p className="twin-location-message" role="status" aria-live="polite">{areaSettingsMessage.text}</p>}
               {selectedAreaHasPublishedBinding && selectedAreaCreatesInventoryLocations && <div className="twin-location-point-planner">
                 <div><b>货位点位</b><small>{selectedAreaLocationCount} 个正式货位 · 只调整当前区域</small></div>
                 {locationPointEditAreaCode === selectedAreaCode ? <div className="actions">

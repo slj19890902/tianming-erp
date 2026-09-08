@@ -1,8 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+
+test("new region previews all fourteen standard footprints even when overlapping, and direction changes arrangement", () => {
+  const zone = { id: "south-b2", name: "南B2", feature_code: "TEST", points: [[0, 3000], [3000, 3000], [3000, 0], [0, 0]] };
+  const standard = { contract_version: "standard-pallet-v1", width_mm: 1200, depth_mm: 1000, height_mm: 150 };
+  const normal = buildAreaCapacityPreview(zone, 14, 0, standard);
+  const rotated = buildAreaCapacityPreview(zone, 14, 90, standard);
+  assert.equal(normal.length, 14);
+  assert.equal(rotated.length, 14);
+  for (const [items, angle] of [[normal, 0], [rotated, 90]]) {
+    assert.ok(items.every(p => p.planning_slot_width_mm === 1200 && p.planning_slot_depth_mm === 1000 && p.rotation_deg === angle));
+    assert.ok(items.every(p => p.is_simulated && !p.id.startsWith("erp-location-") && p.name.includes("规划预览")));
+    assert.equal(new Set(items.map(p => `${p.x_mm},${p.y_mm}`)).size, 14);
+  }
+  assert.notDeepEqual(normal.map(p => [p.x_mm, p.y_mm]), rotated.map(p => [p.x_mm, p.y_mm]));
+  assert.deepEqual(buildAreaCapacityPreview(zone, 0, 0, standard), []);
+  assert.deepEqual(buildAreaCapacityPreview(zone, 14, 0, null), []);
+});
 import {
   buildMeasuredDispatchPallets,
   buildMappedLocationPallets,
+  buildAreaCapacityPreview,
   employeeAreaName,
   employeeLocationName,
   expandAreaInventory,

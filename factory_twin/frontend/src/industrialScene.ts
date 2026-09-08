@@ -348,6 +348,17 @@ export function buildPalletMarkerVisual(pallet: Pallet, viewMode: ViewMode, viol
         new THREE.LineBasicMaterial({ color: violated ? 0xdc2626 : pallet.visual_status === "empty" ? 0x9b927d : markerColor, transparent: true, opacity: 0.95 })
       );
       outline.position.copy(fill.position);
+      // Flat planning outlines must remain visible even under overlapping
+      // translucent zones/equipment. This changes display only, not collision gates.
+      if (viewMode === "2d") {
+        fill.material.depthTest = false;
+        fill.material.depthWrite = false;
+        fill.material.opacity = 0.35;
+        fill.renderOrder = 35;
+        outline.material.depthTest = false;
+        outline.material.depthWrite = false;
+        outline.renderOrder = 36;
+      }
       group.add(fill, outline);
       return group;
     }

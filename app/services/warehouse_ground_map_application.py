@@ -57,8 +57,8 @@ def application_matches(receipt, *, plan_id, plan_version, area_id, policy,
         and receipt.get("locations", {}).get(str(location.id)) == location_signature(location, layout))
 
 
-def record_map_applications(db, *, floor_layout, actor, operation_key, request=None, previous_floor_layout=None, coordinate_adjustments=None):
-    plans = list(db.scalars(select(WarehouseGroundLayoutPlan)
+def _published_floor_plans(db, floor_layout):
+    return list(db.scalars(select(WarehouseGroundLayoutPlan)
         .join(WarehouseArea, WarehouseArea.id == WarehouseGroundLayoutPlan.area_id)
         .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
         .where(WarehouseFloor.floor_code == floor_layout["floor_code"],
@@ -67,6 +67,37 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
                  selectinload(WarehouseGroundLayoutPlan.slots)
                  .selectinload(WarehouseGroundLayoutSlot.location)
                  .selectinload(WarehouseLocation.floor3_layout))))
+
+
+def _previously_verified(plan, feature, previous_floor_layout, prior, slots):
+    previous_feature = next((f for f in (previous_floor_layout or {}).get("features", [])
+                             if f["id"] == (feature or {}).get("id")), None)
+    return bool(slots and previous_feature and feature
+        and previous_feature["points"] == feature["points"]
+        and prior.get("plan_id") == plan.id and prior.get("plan_version") == plan.version
+        and prior.get("area_id") == plan.area_id and prior.get("map_feature_id") == feature["id"]
+        and prior.get("map_revision") == previous_floor_layout.get("revision")
+        and all(s.location.floor3_layout is not None for s in slots)
+        and prior.get("locations") == {str(s.location_id): location_signature(s.location, s.location.floor3_layout) for s in slots})
+
+
+def previously_verified_area_features(db, *, floor_layout, previous_floor_layout):
+    """Retain exact already-applied geometry, including previously warned overlaps.
+
+    No new location or changed signature gains a spatial exception. Operational
+    inbound/move checks still validate actual collisions against the current map.
+    """
+    plans = _published_floor_plans(db, floor_layout)
+    receipts = load_map_applications(db, [p.id for p in plans])
+    features = {f["id"]: f for f in floor_layout.get("features", [])}
+    return {plan.area.storage_policy.map_feature_id for plan in plans
+        if plan.area.storage_policy and _previously_verified(
+            plan, features.get(plan.area.storage_policy.map_feature_id), previous_floor_layout,
+            receipts.get(plan.id) or {}, [s for s in plan.slots if s.location.is_active])}
+
+
+def record_map_applications(db, *, floor_layout, actor, operation_key, request=None, previous_floor_layout=None, coordinate_adjustments=None):
+    plans = _published_floor_plans(db, floor_layout)
     previous = load_map_applications(db, [p.id for p in plans])
     changed = 0
     adjustment_by_location = {row['location_id']: row for row in (coordinate_adjustments or [])}
@@ -89,6 +120,8 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
         adjustment_candidate = bool(slots) and all(
             slot.location_id in adjustment_by_location for slot in slots
         )
+        previously_verified = _previously_verified(
+            plan, feature, previous_floor_layout, previous.get(plan.id) or {}, slots)
         if adjustment_candidate:
             xs = [float(point[0]) for point in feature["points"]]
             ys = [float(point[1]) for point in feature["points"]]
@@ -110,7 +143,7 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
                 floor_layout,
                 feature_id=policy.map_feature_id,
                 slots=payloads,
-                allow_spatial_conflicts=adjustment_candidate,
+                allow_spatial_conflicts=adjustment_candidate or previously_verified,
             )
         except Floor1CandidatePlanningError as error:
             raise WarehouseAreaActivationError(str(error), status_code=error.status_code) from error
@@ -148,13 +181,6 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
             and all(abs(float(actual[key])-float(proof['absolute'][key])) <= tolerance
                     for key in ('x_mm','y_mm','width_mm','depth_mm'))
             for original, actual in zip(slots, measured, strict=True))
-        prior = previous.get(plan.id) or {}
-        previously_verified = bool(previous_floor_layout and previous_feature
-            and previous_feature['points'] == feature['points']
-            and prior.get('plan_id') == plan.id and prior.get('plan_version') == plan.version
-            and prior.get('area_id') == plan.area_id and prior.get('map_feature_id') == policy.map_feature_id
-            and prior.get('map_revision') == previous_floor_layout.get('revision')
-            and prior.get('locations') == {str(s.location_id): location_signature(s.location, s.location.floor3_layout) for s in slots})
         unchanged_feature_geometry = bool(
             previous_floor_layout
             and previous_feature

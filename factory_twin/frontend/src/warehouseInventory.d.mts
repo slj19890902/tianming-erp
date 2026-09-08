@@ -209,6 +209,14 @@ export function buildMappedLocationPallets(
   renderEmptyPlanningSlots?: boolean
 ): import("./types").Pallet[];
 
+export function buildAreaCapacityPreview(
+  zone: { id: string; name?: string; feature_code: string; points: number[][] },
+  count: number,
+  rotation: 0 | 90,
+  standardPallet?: StandardPalletContract | null,
+  layoutId?: string
+): import("./types").Pallet[];
+
 export function mergePublishedFeatureGeometry<T extends {
   id?: string | null;
   points?: number[][];

@@ -586,6 +586,7 @@ def measured_pallet_slots_for_zone(
     floor_layout: dict,
     *,
     feature_id: str,
+    pallet_rotation_deg: int | None = None,
 ) -> list[dict]:
     """Return real 1200x1000 pallet slots inside one measured map zone."""
 
@@ -607,7 +608,18 @@ def measured_pallet_slots_for_zone(
     points = feature.get("points") or []
     if len(points) < 3 or not _zone_inside_floor_bounds(points, bounds):
         raise Floor1CandidatePlanningError("实测区域边界无效，无法生成空货位", status_code=409)
-    slots, _orientation = _pallet_slots(points, _physical_obstacle_bounds(floor_layout))
+    obstacles = _physical_obstacle_bounds(floor_layout)
+    if pallet_rotation_deg is None:
+        slots, _orientation = _pallet_slots(points, obstacles)
+    else:
+        if pallet_rotation_deg not in (0, 90):
+            raise Floor1CandidatePlanningError("货位朝向只能为 0° 或 90°", status_code=409)
+        slots = _tile_polygon(
+            points,
+            width_mm=STANDARD_PALLET_DEPTH_MM if pallet_rotation_deg == 90 else STANDARD_PALLET_WIDTH_MM,
+            depth_mm=STANDARD_PALLET_WIDTH_MM if pallet_rotation_deg == 90 else STANDARD_PALLET_DEPTH_MM,
+        )
+        slots = [slot for slot in slots if not any(_rectangles_overlap(slot, obstacle) for obstacle in obstacles)]
     return [_percent_slot(slot, points, bounds) for slot in slots]
 
 
@@ -674,7 +686,8 @@ def confirmed_capacity_slots_for_zone(
     ]
     if prefer_standard_pallet_slots:
         measured = measured_pallet_slots_for_zone(
-            floor_layout, feature_id=feature_id
+            floor_layout, feature_id=feature_id,
+            pallet_rotation_deg=feature.get("pallet_rotation_deg", 0),
         )
         measured = [
             slot

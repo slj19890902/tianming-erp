@@ -189,6 +189,7 @@ export interface LayoutFeature {
   version: number;
   allowed_inventory_types?: Array<"finished" | "semi_finished" | "raw_material" | "mold" | "print_plate" | "temporary_turnover">;
   storage_layout?: "rack" | "pallet_ground" | "mixed";
+  pallet_rotation_deg?: 0 | 90;
 }
 
 export interface Violation {

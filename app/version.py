@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.275"
-APP_VERSION_NAME = "地图规划保存与预览一致性修复"
+APP_VERSION = "v0.22.276"
+APP_VERSION_NAME = "区域保存与货位朝向修复"
 APP_BUILD_DATE = "2026-09-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -1922,13 +1922,13 @@ _V022274_VERIFICATION_STEPS = [
     "核对库存数量未变化；在隔离回归中给旧占位加入库存时，发布仍须明确拒绝且不能停用该位置。",
 ]
 
-APP_CHANGES = [
+_V022275_CHANGES = [
     "调整地图时持续显示新区域和货架草稿，点击空白或切换选中对象不再导致区域消失、货架预览回退。",
     "新区域先保存尺寸和位置，再通过保存区域设置启用；完成并应用会先保存未提交的货架移动，按最新版本校验发布。",
     "空货架层格统一在货架层格视图查看，不再生成可拖动白点；有货与异常仍显示，货架层格只能随整架定位。本版无数据库结构迁移。",
 ]
 
-APP_VERIFICATION_STEPS = [
+_V022275_VERIFICATION_STEPS = [
     "系统版本应为 v0.22.275，数据库唯一 head 仍为 rq07v8x9z66。",
     "新增区域，修改长宽、名称、形式和容量后保存区域设置；点击空白、完成并应用并切回查货，核对区域仍在保存位置。",
     "移动货架后直接完成并应用，再刷新查货，确认货架位置保留；发布失败时继续显示待处理草稿。",
@@ -2023,9 +2023,23 @@ def current_release_metadata(
     )
 
 
+APP_CHANGES = [
+    "修复已应用区域的货位重叠导致新增区域保存被撤回；只保留有完整版本及位置签名回执的既有几何，不放宽入库和移货校验。",
+    "区域设置新增货位朝向 0°/90°，默认按 1200×1000mm 标准栈板显示与排位；修改朝向只重排空闲系统货位，稳定编号、原始排位和库存不变。",
+    "新区域填写容量即可显示全部规划轮廓，重叠仍显示提示；名称、数量和朝向草稿保留，保存结果直接显示在按钮旁。本版无数据库结构迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "系统版本应为 v0.22.276，数据库唯一 head 仍为 rq07v8x9z66。",
+    "强制刷新后选中原有待设置区域，填写南B2、14个货位并保存；确认名称不回退，显示14个标准尺寸货位。",
+    "切换货位朝向0°/90°并保存，核对空闲系统货位排列变化，货位编号和库存保持不变。",
+    "已有已应用货位重叠不再阻断无关新区域保存；重叠仍提示，保存失败时输入保留并显示明确原因。",
+]
+
 APP_CHANGELOG = [
     *(f"{APP_VERSION}：本次更新｜{item}" for item in APP_CHANGES),
     *(f"{APP_VERSION}：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.275：本次更新｜{item}" for item in _V022275_CHANGES),
+    *(f"v0.22.275：如何验证｜{item}" for item in _V022275_VERIFICATION_STEPS),
     *(f"v0.22.274：本次更新｜{item}" for item in _V022274_CHANGES),
     *(f"v0.22.274：如何验证｜{item}" for item in _V022274_VERIFICATION_STEPS),
     *(f"v0.22.273：本次更新｜{item}" for item in _V022273_CHANGES),

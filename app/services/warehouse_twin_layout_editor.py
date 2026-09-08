@@ -140,6 +140,7 @@ _ZONE_POLICY_FIELDS = (
     "formal_area_id",
     "formal_floor_id",
     "max_rack_count",
+    "pallet_rotation_deg",
 )
 
 
@@ -2610,6 +2611,7 @@ def update_warehouse_twin_zone_policy(
     formal_area_id: int | None = None,
     formal_floor_id: int | None = None,
     max_rack_count: int | None = None,
+    pallet_rotation_deg: int | None = None,
     legacy_v11_name_only: bool = False,
     path: Path | None = None,
 ) -> LayoutMutation:
@@ -2621,6 +2623,10 @@ def update_warehouse_twin_zone_policy(
             "区域展示形式必须是货架、栈板地堆、混合或无栈板功能区"
         )
     normalized_area_code = str(erp_area_code or "").strip().upper() or None
+    if pallet_rotation_deg is not None and (
+        isinstance(pallet_rotation_deg, bool) or pallet_rotation_deg not in (0, 90)
+    ):
+        raise WarehouseTwinLayoutEditError("货位朝向只能为 0° 或 90°")
     normalized_area_name = str(area_name or "").strip() or None
     if (formal_area_id is None) != (formal_floor_id is None):
         raise WarehouseTwinLayoutEditError("正式区域身份必须同时包含区域 ID 和楼层 ID")
@@ -2643,6 +2649,8 @@ def update_warehouse_twin_zone_policy(
         _ensure_version(feature, expected_version, "区域")
         feature["allowed_inventory_types"] = normalized_types
         feature["storage_layout"] = storage_layout
+        if storage_layout == "pallet_ground" and pallet_rotation_deg is not None:
+            feature["pallet_rotation_deg"] = pallet_rotation_deg
         if storage_layout == "rack":
             if max_rack_count is not None:
                 feature["max_rack_count"] = max_rack_count
@@ -2714,6 +2722,8 @@ def update_warehouse_twin_zone_policy(
             and same_identity
             and same_legacy_name_only
             and same_max_rack_count
+            and (pallet_rotation_deg is None or storage_layout != "pallet_ground"
+                 or mutation.value.get("pallet_rotation_deg") == pallet_rotation_deg)
         ):
             raise WarehouseTwinLayoutEditConflictError('该操作键已用于不同的区域策略')
     return mutation

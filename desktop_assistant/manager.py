@@ -15,6 +15,7 @@ import psutil
 
 from desktop_assistant.storage import (database_info, decrypt_file, encrypt_file,
                                       extract_verified, pack_tree, read_json, sha, write_json)
+from desktop_assistant.attachments import rebind_pdf_sources
 
 CN = timezone(timedelta(hours=8))
 
@@ -184,10 +185,14 @@ class Manager:
         shutil.copyfile(package, tree / 'release.zip')
         if database_info(tree / 'shared/data/carton_erp.sqlite3') != before:
             raise ValueError('备份数据复核不一致')
+        # Verify every registered PDF is included; the private copy keeps the original paths.
+        rebind_pdf_sources(tree / 'shared/data/carton_erp.sqlite3', self.root / 'shared',
+                           tree / 'shared', self.root / 'shared')
         stamp = datetime.now(CN).strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:8]
         raw = job / 'recovery.zip'
         pack_tree(tree, raw, {'type': 'tianming.recovery.v1', 'created': datetime.now(CN).isoformat(),
-                            'release': current, 'version': self.manifest()['version'], 'database': before})
+                            'release': current, 'version': self.manifest()['version'], 'database': before,
+                            'source_shared': str(self.root / 'shared')})
         encrypted = self.root / 'backups' / (stamp + '.tmbackup')
         encrypt_file(raw, encrypted, password)
         # Authenticate and re-read the completed local package before copying to NAS.
@@ -283,6 +288,8 @@ class Manager:
             release = self.stage_release(payload / 'release.zip')
             if release['revision'] != info['revision']:
                 raise ValueError('备份程序与数据不兼容')
+            rebind_pdf_sources(payload / 'shared/data/carton_erp.sqlite3', Path(manifest['source_shared']),
+                               payload / 'shared', self.root / 'shared')
             (self.root / 'shared').rmdir()  # proven empty above
             (payload / 'shared').rename(self.root / 'shared')
             write_json(self.root / 'state.json', {'current': release['id'], 'previous': None,

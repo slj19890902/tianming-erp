@@ -28,14 +28,20 @@ def nightly(manager):
         due -= timedelta(days=1)
     latest = manager.state.get('last_backup_at')
     if latest and datetime.fromisoformat(latest) >= due:
+        with manager.lock():
+            manager.start()
         return
     manager.backup(unprotect(settings['protected_password']), Path(settings['nas']))
+    with manager.lock():
+        manager.start()
 
 
 class App:
     def __init__(self, window, manager):
         self.window, self.manager = window, manager
         self.events = queue.Queue()
+        self.busy = False
+        window.protocol('WM_DELETE_WINDOW', self.close)
         window.title('天明ERP助手 · 更新、备份与恢复')
         window.geometry('760x620')
         window.minsize(700, 580)
@@ -49,6 +55,7 @@ class App:
         for text, action in [('打开ERP', self.open_erp), ('检查并更新', self.update),
                              ('回退到上一个版本', self.rollback), ('立即完整备份到NAS', self.backup),
                              ('从NAS恢复到本机空安装', self.restore), ('首次接入原ERP（只读复制）', self.import_old),
+                             ('设置本机局域网访问地址', self.network),
                              ('设置NAS与每天23点备份', self.configure)]:
             button = ttk.Button(box, text=text, command=action)
             button.pack(fill='x', pady=4)
@@ -68,6 +75,7 @@ class App:
                         f"备份状态：{state.get('backup_error') or '无已记录错误'}")
 
     def run(self, description, action):
+        self.busy = True
         self.log.set(description + '，请等待。')
         for button in self.buttons:
             button.configure(state='disabled')
@@ -81,6 +89,7 @@ class App:
     def poll(self):
         try:
             ok, message = self.events.get_nowait()
+            self.busy = False
             self.log.set(('完成：' if ok else '未完成：') + message)
             for button in self.buttons:
                 button.configure(state='normal')
@@ -89,6 +98,12 @@ class App:
             pass
         self.window.after(200, self.poll)
 
+    def close(self):
+        if self.busy:
+            messagebox.showinfo('操作进行中', '请等待备份、更新或恢复完成后再关闭助手。')
+        else:
+            self.window.destroy()
+
     def settings(self):
         try:
             config = preferences(self.manager)
@@ -96,6 +111,32 @@ class App:
         except Exception:
             messagebox.showinfo('先设置备份', '请先设置NAS路径和恢复口令。')
             return None
+
+    def network(self):
+        import ipaddress
+        host = simpledialog.askstring('本机地址', '输入本机局域网IPv4地址；仅本机使用可填127.0.0.1。\n此设置启用现有局域网HTTP模式，不配置公网访问。')
+        if not host:
+            return
+        try:
+            ip = ipaddress.IPv4Address(host)
+            if not (ip.is_private and not ip.is_unspecified and not ip.is_multicast):
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror('地址无效', '请输入本机私有IPv4地址。')
+            return
+        def save():
+            with self.manager.lock():
+                self.manager.stop()
+                path = self.manager.root / 'shared/environment.json'
+                config = read_json(path)
+                port = config['ERP_PORT']
+                config.update(ERP_BIND_HOST=host, ERP_PRODUCTION_TRANSPORT='lan_http',
+                              ERP_HEALTH_URL=f'http://{host}:{port}/api/health',
+                              ERP_BROWSER_URL=f'http://{host}:{port}/', ERP_SESSION_COOKIE_SECURE='false',
+                              ERP_ALLOWED_ORIGINS=f'http://{host}:{port}', ERP_TRUSTED_HOSTS=f'{host},127.0.0.1,localhost')
+                write_json(path, config)
+            return '已保存本机地址；请打开ERP。其他设备访问可能还需管理员配置Windows防火墙。'
+        self.run('设置访问地址', save)
 
     def configure(self):
         nas = filedialog.askdirectory(title='选择已有NAS完整恢复目录')
@@ -122,7 +163,8 @@ class App:
 
     def open_erp(self):
         def start():
-            self.manager.start()
+            with self.manager.lock():
+                self.manager.start()
             config = read_json(self.manager.root / 'shared/environment.json')
             webbrowser.open(config.get('ERP_BROWSER_URL', 'http://127.0.0.1:' + config['ERP_PORT'] + '/'))
         self.run('启动ERP', start)

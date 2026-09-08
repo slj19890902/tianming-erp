@@ -6,6 +6,7 @@ import socket
 import psutil
 
 from desktop_assistant.storage import database_info, read_json, sha, write_json
+from desktop_assistant.attachments import rebind_pdf_sources
 
 
 def import_existing(manager, source: Path, package: Path):
@@ -78,6 +79,7 @@ def import_existing(manager, source: Path, package: Path):
                 shutil.copytree(src, shared / new, ignore=shutil.ignore_patterns('backups', '__pycache__'))
         if sha(db) != before or sha(shared / 'data/carton_erp.sqlite3') != before:
             raise ValueError('导入期间原数据库发生变化，未启用新系统')
+        rebind_pdf_sources(shared / 'data/carton_erp.sqlite3', source, shared, shared)
         env['ERP_SECRET_KEY_FILE'] = '${SHARED}/data/session_secret.key'
         env['ERP_BACKUP_DIR'] = '${SHARED}/database_backups'
         env.setdefault('ERP_PORT', '8000')

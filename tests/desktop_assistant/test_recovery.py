@@ -96,6 +96,29 @@ class RecoveryTests(unittest.TestCase):
             new.restore(corrupt, PASSWORD)
         self.assertIsNone(new.state['current'])
 
+    def test_pdf_absolute_path_rebound_only_in_restored_copy(self):
+        shared = self.manager.root / 'shared'
+        pdf = shared / 'data/drawing.pdf'
+        database = shared / 'data/carton_erp.sqlite3'
+        with closing(sqlite3.connect(database)) as db:
+            db.execute('CREATE TABLE pdf_order_training_samples(id INTEGER PRIMARY KEY,file_path TEXT,file_sha256 TEXT)')
+            db.execute('INSERT INTO pdf_order_training_samples VALUES (1,?,?)', (str(pdf), sha(pdf)))
+            db.commit()
+        original = sha(database)
+        backup = self.manager.backup(PASSWORD, self.nas)
+        new = TestManager(self.root / 'restored-with-pdfs', self.public)
+        new.restore(backup, PASSWORD)
+        with closing(sqlite3.connect(new.root / 'shared/data/carton_erp.sqlite3')) as db:
+            rebound = Path(db.execute('SELECT file_path FROM pdf_order_training_samples').fetchone()[0])
+        self.assertEqual(rebound, new.root / 'shared/data/drawing.pdf')
+        self.assertEqual(rebound.read_bytes(), pdf.read_bytes())
+        self.assertEqual(sha(database), original)
+        pdf.unlink()
+        previous_backup = self.manager.state['last_backup']
+        with self.assertRaisesRegex(ValueError, '附件缺失'):
+            self.manager.backup(PASSWORD, self.nas)
+        self.assertEqual(self.manager.state['last_backup'], previous_backup)
+
     def test_update_then_rollback_preserves_new_orders(self):
         old = self.manager.state['current']
         self.manager.update(self.release('two'), PASSWORD, self.nas)

@@ -2346,6 +2346,26 @@ def delete_product_drawing(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post("/stocktake-create", status_code=status.HTTP_201_CREATED)
+def create_stocktake_product(
+    payload: ProductPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+) -> dict:
+    """Mobile intake uses the same validated, versioned product master writer."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="盘点补建产品仅管理员可操作")
+    require_customer_access(payload.customer_id, current_user=user, db=db)
+    code = clean_code(payload.customer_material_code)
+    if db.scalar(select(Product.id).where(
+        Product.customer_id == payload.customer_id,
+        or_(func.lower(Product.customer_material_code) == code.lower(),
+            func.lower(Product.product_code) == code.lower()),
+    ).limit(1)) is not None:
+        raise HTTPException(status_code=409, detail="此客户已有该存货编码，请搜索选用原产品；停用产品请先在产品管理中核对")
+    return create_product(payload=payload, db=db, user=user)
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_product(
     payload: ProductPayload,

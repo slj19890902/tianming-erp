@@ -1192,6 +1192,8 @@ class TwinStocktakeBatchItemPayload(BaseModel):
 class TwinStocktakeBatchPayload(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=64)
     confirmed: Literal[True]
+    initial_inventory_snapshot: str | None = Field(default=None, min_length=64, max_length=64)
+    existing_inventory_acknowledged: bool = False
     items: list[TwinStocktakeBatchItemPayload] = Field(
         min_length=1, max_length=50
     )
@@ -8889,6 +8891,25 @@ def confirm_twin_movement_batch(
             raise
 
 
+@router.get("/twin-operations/initial-stock-context")
+def get_initial_stock_context(
+    location_id: int, product_id: int,
+    db: Session = Depends(get_db), user: User = Depends(can_submit_stocktake),
+) -> dict:
+    from app.services.initial_stocktake import initial_stock_context
+    from app.services.stocktake import StocktakeError
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="首次盘点入库仅管理员可操作")
+    product = db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    require_customer_access(product.customer_id, user, db)
+    try:
+        return initial_stock_context(db, location_id=location_id, product_id=product_id)
+    except StocktakeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @router.post("/twin-operations/stocktake-batches")
 def confirm_twin_stocktake_batch(
     payload: TwinStocktakeBatchPayload,
@@ -8926,6 +8947,14 @@ def confirm_twin_stocktake_batch(
         batch_id=payload.idempotency_key,
         items=items,
     )
+    if payload.initial_inventory_snapshot is not None:
+        if len(items) != 1 or items[0].operation != "add" or items[0].inventory_type != "finished":
+            raise HTTPException(status_code=422, detail="首次盘点入库每次只保存一个货位的一款成品")
+        request_hash = hashlib.sha256(json.dumps({
+            "batch_hash": request_hash,
+            "initial_inventory_snapshot": payload.initial_inventory_snapshot,
+            "existing_inventory_acknowledged": payload.existing_inventory_acknowledged,
+        }, sort_keys=True).encode()).hexdigest()
     with WAREHOUSE_STOCKTAKE_BATCH_LOCK:
         try:
             replay = stocktake_batch_replay(
@@ -8947,6 +8976,20 @@ def confirm_twin_stocktake_batch(
                     "request_hash": request_hash,
                 }
 
+            if payload.initial_inventory_snapshot is not None:
+                from app.services.initial_stocktake import initial_stock_context
+                from app.services.stocktake import StocktakeError
+                try:
+                    context = initial_stock_context(db, location_id=items[0].location_id,
+                                                    product_id=items[0].product_id)
+                except StocktakeError as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
+                if context["snapshot"] != payload.initial_inventory_snapshot:
+                    raise HTTPException(status_code=409, detail="库存或货位已变化，请重新核对后保存")
+                if not context["can_add"]:
+                    raise HTTPException(status_code=409, detail=context["block_reason"])
+                if context["existing_quantity"] and not payload.existing_inventory_acknowledged:
+                    raise HTTPException(status_code=409, detail="此产品已有系统库存，请先核对是否只是需要移货归位")
             result = execute_warehouse_stocktake_batch(
                 db,
                 batch_id=payload.idempotency_key,

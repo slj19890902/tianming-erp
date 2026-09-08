@@ -577,7 +577,8 @@ def test_p1_42b_uses_only_measured_dispatch_zones_and_keeps_transfer_targets() -
     assert '<select value={moveTargetLocationId}' not in SOURCE
     assert 'role="radiogroup" aria-label="主货位"' in SOURCE
     assert "P1_47D_ENABLED" not in SOURCE
-    assert 'canChooseProducts={canStocktake && mapMode === "move" && moveAction === "stocktake"}' in SOURCE
+    assert 'canChooseProducts={canStocktake && mapMode === "move" && !moveSource && !spatialEditBusy}' in SOURCE
+    assert 'if (!canStocktake || mapMode !== "move" || moveSource || spatialEditBusy) return;' in SOURCE
     assert "stocktakeLocationBlockReason(location)" in STOCKTAKE_DRAFT
     assert ".twin-map-target-thumbnail" in TWIN_CSS
     assert ".twin-dispatch-label-list" in TWIN_CSS

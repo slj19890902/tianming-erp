@@ -239,9 +239,19 @@
         </div>
         <div class="lookup-filter">
           <select id="lookupCategory" aria-label="查询类别"></select>
+          <button id="unfulfilledOrders" class="small-btn" type="button">未送齐订单</button>
           <button id="clearLookup" class="small-btn" type="button">清空</button>
         </div>
-        <div id="lookupState" class="card status empty">进入页面不会读取业务列表，请输入关键词查询。</div>
+        <div id="orderLookupFilters" class="card" hidden>
+          <label><input id="lookupUnfulfilled" type="checkbox" checked> 只看未送齐订单</label>
+          <div class="lookup-filter">
+            <select id="lookupDateField" aria-label="订单时间类型"><option value="order_date">下单日期</option><option value="delivery_date">交货日期</option></select>
+            <input id="lookupDateFrom" type="date" aria-label="开始日期">
+            <input id="lookupDateTo" type="date" aria-label="结束日期">
+          </div>
+          <p class="muted">日期留空查看所有时间；输入客户名称可缩小范围。</p>
+        </div>
+        <div id="lookupState" class="card status empty">输入关键词查询，或点击未送齐订单查看全部。</div>
         <div id="lookupResults" hidden></div>
         <div id="lookupPager" class="pager" hidden>
           <button id="lookupPrev" class="small-btn" type="button">上一页</button>
@@ -849,6 +859,8 @@
           return option;
         }));
         if (!options.includes(state.lookupCategory)) state.lookupCategory = "all";
+        byId("unfulfilledOrders").hidden = !options.includes("orders");
+        byId("orderLookupFilters").hidden = state.lookupCategory !== "orders";
         select.value = state.lookupCategory;
         byId("lookupInput").value = state.lookupQuery;
       }
@@ -859,7 +871,8 @@
             title: item.order_number || item.item_order_number || "订单",
             lines: [
               `${item.customer_name || "客户未填写"}｜${item.product_code || "无存货编码"}｜${item.product_name || "产品未填写"}`,
-              `${item.specification || "规格未填写"}｜订单 ${Number(item.quantity || 0)} 只｜未送 ${Number(item.remaining_quantity || 0)} 只`,
+              `${item.specification || "规格未填写"}｜订单 ${Number(item.quantity || 0)} 只｜已送 ${Number(item.delivered_quantity || 0)} 只｜未送 ${Number(item.remaining_quantity || 0)} 只`,
+              `下单 ${item.order_date || "未填写"}｜交货 ${item.delivery_date || "未填写"}`,
               `${item.customer_po ? `客户单号 ${item.customer_po}｜` : ""}${item.delivery_date || "交期未填写"}`,
             ],
           };
@@ -989,7 +1002,9 @@
 
       async function runUnifiedSearch(page = 1) {
         const query = byId("lookupInput").value.trim();
-        if (!query) {
+        const orderSearch = byId("lookupCategory").value === "orders";
+        const unfulfilled = orderSearch && Boolean(byId("lookupUnfulfilled")?.checked);
+        if (!query && !unfulfilled) {
           showStatus("lookupState", "请输入订单、客户、产品、模具或尺寸。", "empty");
           return false;
         }
@@ -1006,6 +1021,12 @@
           page: String(state.lookupPage),
           page_size: "20",
         });
+        if (orderSearch) {
+          params.set("unfulfilled_only", String(unfulfilled));
+          params.set("date_field", byId("lookupDateField").value);
+          if (byId("lookupDateFrom").value) params.set("date_from", byId("lookupDateFrom").value);
+          if (byId("lookupDateTo").value) params.set("date_to", byId("lookupDateTo").value);
+        }
         showStatus("lookupState", "正在按当前账号权限查询…", "");
         try {
           const endpoint = "/api/mobile/erp/search";
@@ -2307,11 +2328,20 @@
       byId("lookupButton").addEventListener("click", () => runUnifiedSearch(1));
       byId("lookupCategory").addEventListener("change", () => {
         state.lookupCategory = byId("lookupCategory").value || "all";
+        byId("orderLookupFilters").hidden = state.lookupCategory !== "orders";
         state.lookupPage = 1;
-        if (byId("lookupInput").value.trim()) runUnifiedSearch(1);
+        if (byId("lookupInput").value.trim() || state.lookupCategory === "orders") runUnifiedSearch(1);
         else persistMobilePortalState();
       });
       byId("clearLookup").addEventListener("click", clearLookup);
+      byId("unfulfilledOrders").addEventListener("click", () => {
+        byId("lookupCategory").value = "orders";
+        byId("lookupUnfulfilled").checked = true;
+        byId("orderLookupFilters").hidden = false;
+        runUnifiedSearch(1);
+      });
+      ["lookupUnfulfilled", "lookupDateField", "lookupDateFrom", "lookupDateTo"].forEach(id =>
+        byId(id).addEventListener("change", () => runUnifiedSearch(1)));
       byId("lookupPrev").addEventListener("click", () => {
         if (state.lookupPage > 1) runUnifiedSearch(state.lookupPage - 1);
       });

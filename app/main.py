@@ -476,6 +476,13 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/mobile/initial-stocktake.js" for route in application.routes):
+        application.add_api_route(
+            "/mobile/initial-stocktake.js",
+            lambda: FileResponse(Path(__file__).resolve().parents[1] / "static" / "mobile_initial_stocktake.js",
+                                 media_type="text/javascript", headers={"Cache-Control": "no-store"}),
+            methods=["GET"], include_in_schema=False,
+        )
     if not any(route.path == "/mobile/delivery-pick.html" for route in application.routes):
         generic_mobile_pick_path = (
             Path(__file__).resolve().parents[1]

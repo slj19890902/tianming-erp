@@ -2039,6 +2039,10 @@ def _mobile_order_search_group(
     keyword: str,
     page: int,
     page_size: int,
+    unfulfilled_only: bool = False,
+    date_field: str = "order_date",
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> dict:
     pattern = _escaped_like(keyword)
     statement = (
@@ -2059,6 +2063,17 @@ def _mobile_order_search_group(
             )
         )
     )
+    if unfulfilled_only:
+        statement = statement.where(
+            Order.status.notin_(("archived", "closed", "dead", "cancelled")),
+            OrderItem.is_force_closed.is_(False),
+            OrderItem.quantity > func.coalesce(OrderItem.delivered_quantity, 0),
+        )
+    date_column = Order.delivery_date if date_field == "delivery_date" else Order.order_date
+    if date_from is not None:
+        statement = statement.where(date_column >= date_from)
+    if date_to is not None:
+        statement = statement.where(date_column <= date_to)
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:
         statement = statement.where(Order.customer_id.in_(visible_customer_ids))
@@ -2100,6 +2115,8 @@ def _mobile_order_search_group(
             "product_name": item.snapshot_product_name,
             "specification": item.snapshot_spec,
             "quantity": int(item.quantity or 0),
+            "delivered_quantity": int(item.delivered_quantity or 0),
+            "order_date": order.order_date.isoformat(),
             "remaining_quantity": max(
                 int(item.quantity or 0) - int(item.delivered_quantity or 0), 0
             ),
@@ -2479,12 +2496,16 @@ def _mobile_inventory_search_group(
 @router.get("/search")
 def search_mobile_portal(
     response: Response,
-    q: str = Query(min_length=1, max_length=100),
+    q: str = Query(default="", max_length=100),
     category: Literal[
         "all", "orders", "materials", "molds", "production", "inventory"
     ] = Query(default="all"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=20),
+    unfulfilled_only: bool = Query(default=False),
+    date_field: Literal["order_date", "delivery_date"] = Query(default="order_date"),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
@@ -2493,7 +2514,9 @@ def search_mobile_portal(
     _no_store(response)
     response.headers["X-ERP-Session-Identity"] = f"{user.id}:{user.auth_version}"
     keyword = q.strip()
-    if not keyword:
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+    if not keyword and not (category == "orders" and unfulfilled_only):
         raise HTTPException(status_code=422, detail="请输入订单、客户、产品、模具或尺寸")
     allowed_categories = _mobile_search_categories(user)
     if not allowed_categories:
@@ -2520,6 +2543,8 @@ def search_mobile_portal(
             keyword=keyword,
             page=resolved_page,
             page_size=resolved_page_size,
+            **({"unfulfilled_only": unfulfilled_only, "date_field": date_field,
+                "date_from": date_from, "date_to": date_to} if group == "orders" else {}),
         )
         for group in requested_categories
     ]

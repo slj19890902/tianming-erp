@@ -1539,7 +1539,7 @@ function WarehouseRackElevation({
                   const finishedBlock = stocktakeAddBlockReason(location, "finished");
                   const semiFinishedBlock = stocktakeAddBlockReason(location, "semi_finished");
                   const nextBlockReason = !canChooseProducts
-                    ? "进入盘点调整后才可选择产品。"
+                    ? "请开启移货 / 盘点；已选移货来源时请先完成或取消移货。"
                     : finishedBlock && semiFinishedBlock
                       ? finishedBlock
                       : null;
@@ -5747,10 +5747,13 @@ export function WarehouseTwinApp() {
     setSelected({ kind: "rack", id: focusedAreaRacks[nextIndex].id });
   };
   const chooseRackEmptyLocation = (locationId: number) => {
+    if (!canStocktake || mapMode !== "move" || moveSource || spatialEditBusy) return;
     setRackFocusId(null);
     setViewMode("2d");
     setMoveAction("stocktake");
     setSelected({ kind: "pallet", id: `erp-location-${locationId}` });
+    setLocationDetailOpen(true);
+    requestAnimationFrame(() => inspectorRef.current?.scrollIntoView({ block: "nearest" }));
     cameraFocusSequenceRef.current += 1;
     setCameraFocusTarget({ entity: { kind: "pallet", id: `erp-location-${locationId}` }, token: cameraFocusSequenceRef.current, source: "search" });
   };
@@ -6122,7 +6125,7 @@ export function WarehouseTwinApp() {
           area={focusedRackAreaCode ? areaStats.get(focusedRackAreaCode) : undefined}
           locations={focusedRackLocations}
           unboundLocationCount={unboundRackLocationCount}
-          canChooseProducts={canStocktake && mapMode === "move" && moveAction === "stocktake"}
+          canChooseProducts={canStocktake && mapMode === "move" && !moveSource && !spatialEditBusy}
           rackIndex={focusedRackIndex}
           rackCount={focusedAreaRacks.length || 1}
           onPrevious={() => switchFocusedRack(-1)}
@@ -6133,6 +6136,10 @@ export function WarehouseTwinApp() {
       </div>
 
       <aside className="twin-inspector" ref={inspectorRef} tabIndex={-1}>
+        {canStocktake && selectedLocation && mapMode === "move" && <section className="twin-location-readonly-note">
+          <b>{selectedLocation.location_name} · 现场盘点入库</b>
+          <a href={`/mobile/stocktake.html?location_id=${selectedLocation.location_id}`} target="_blank" rel="noopener noreferrer">打开简易盘点 / 管理员补建产品入库</a>
+        </section>}
         <div className="twin-location-readonly-note" role="status">
           <b>{!layout ? "地图尚未读取" : mapMode === "planning" ? activeObjectPreview ? "当前对象编辑预览" : "已应用地图" : "已发布地图"}</b>
           {mapMode === "planning" && (activeLocationDraftCount > 0 || Object.keys(zoneGeometryDrafts).length > 0 || Object.keys(rackDrafts).length > 0 || Object.keys(zonePolicyDrafts).length > 0) && <span>有未保存调整</span>}

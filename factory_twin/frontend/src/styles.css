@@ -131,6 +131,7 @@ button { cursor: pointer; }
 .map-scale span { min-width: 44px; height: 7px; display: block; border: solid #0f172a; border-width: 0 2px 2px; }
 .map-scale b { font-size: 10px; }
 .map-coordinate { right: 16px; bottom: 16px; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font: 700 10px Consolas, monospace; }
+.map-edit-keyboard-hint { position: absolute; left: 16px; right: 90px; top: 56px; z-index: 6; max-width: 520px; padding: 6px 9px; border-left: 3px solid #f97316; background: #fffbebeb; color: #78350f; font-size: 11px; line-height: 1.5; pointer-events: none; }
 .canvas-footnote { padding: 5px 10px; border-top: 1px solid #cbd5e1; color: #64748b; background: #f8fafc; font-size: 11px; }
 .geometry-form { margin-top: 6px; padding-top: 8px; border-top: 1px dashed #b8c2cc; }
 .nudge-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }

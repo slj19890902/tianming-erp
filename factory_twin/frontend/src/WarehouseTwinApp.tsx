@@ -1714,7 +1714,7 @@ export function WarehouseTwinApp() {
   const [locationEditMode, setLocationEditMode] = useState(false);
   const [areaPolicyEditMode, setAreaPolicyEditMode] = useState(false);
   const [locationDrafts, setLocationDrafts] = useState<Record<number, LocationLayoutGeometry>>({});
-  const locationNudgeRef = useRef<{ id: string; x: number; y: number } | null>(null);
+  const locationNudgeRef = useRef<{ id: string; x: number; y: number; geometry?: LocationLayoutGeometry } | null>(null);
   const [keyboardLocationEditActive, setKeyboardLocationEditActive] = useState(false);
   useEffect(() => {
     if (mapMode !== "planning") { setKeyboardLocationEditActive(false); locationNudgeRef.current = null; }
@@ -3607,6 +3607,7 @@ export function WarehouseTwinApp() {
     setLocationEditMessage(hitsColumn
       ? `${location.location_code} 越界，或与其他货位、柱子、设备、货架、禁放区冲突，已标红；可以保存调整，再继续整理。`
       : `${location.location_code} 已形成二维草稿；点击保存后才写入布局。`);
+    return geometry;
   };
 
   const lotMoveSource = (location: DashboardLocation, item: InventoryItem): WarehouseMoveSource | null => {
@@ -3931,9 +3932,10 @@ export function WarehouseTwinApp() {
     }
   };
 
-  const saveLocationDrafts = async () => {
+  const saveLocationDrafts = async (latestGeometry?: LocationLayoutGeometry) => {
     if (!layout || layoutMapToolsOpen || locationEditBusy) return;
-    const drafts = Object.values(locationDrafts).filter((draft) => !locationPointEditAreaCode
+    const snapshot = latestGeometry ? { ...locationDrafts, [latestGeometry.location_id]: latestGeometry } : locationDrafts;
+    const drafts = Object.values(snapshot).filter((draft) => !locationPointEditAreaCode
       || dashboard?.locations.some((location) => location.location_id === draft.location_id && location.area_code === locationPointEditAreaCode));
     if (!drafts.length) return;
     setLocationEditBusy(true);
@@ -5540,11 +5542,12 @@ export function WarehouseTwinApp() {
     void saveLayoutFeatureGeometry(feature as TwinFeature, points);
   };
 
-  const saveSelectedZoneGeometry = async () => {
-    if (!layout || !selectedAreaFeature) return;
-    const points = zoneGeometryDraftsRef.current[selectedAreaFeature.id];
+  const saveSelectedZoneGeometry = async (featureId?: string) => {
+    const target = featureId ? features.find(item => item.id === featureId && item.feature_kind === "zone") : selectedAreaFeature;
+    if (!layout || !target) return;
+    const points = zoneGeometryDraftsRef.current[target.id];
     if (!points) return;
-    await saveLayoutFeatureGeometry(selectedAreaFeature, points);
+    await saveLayoutFeatureGeometry(target as TwinFeature, points);
   };
 
   const nudgeAreaBoundaryDraft = (id: string, deltaXmm: number, deltaYmm: number) => {
@@ -5562,9 +5565,9 @@ export function WarehouseTwinApp() {
     if (!pallet) return;
     const prior = locationNudgeRef.current?.id === id ? locationNudgeRef.current : { id, x: pallet.x_mm, y: pallet.y_mm };
     const next = { id, x: prior.x + dx, y: prior.y + dy };
-    locationNudgeRef.current = next;
     setKeyboardLocationEditActive(true);
-    moveLocationDraft(id, next.x, next.y);
+    const geometry = moveLocationDraft(id, next.x, next.y);
+    locationNudgeRef.current = geometry ? { ...next, geometry } : null;
   };
 
   const createLayoutFeature = async (points: number[][]) => {
@@ -6051,7 +6054,7 @@ export function WarehouseTwinApp() {
       </div>
       {!traceReadOnly && !!dashboard?.delayed_dispatch_relocation?.candidate_count && <button type="button" className={`twin-delayed-toggle ${delayedDispatchOpen ? "active" : ""}`} aria-expanded={delayedDispatchOpen} onClick={() => setDelayedDispatchOpen((value) => !value)}>延期待送 {dashboard.delayed_dispatch_relocation.candidate_count}</button>}
       {mapMode === "planning" && floorCode === "1F" && viewMode === "2d" && canEditLocations && !locationEditMode && <button type="button" className={`twin-floor1-candidate-toggle ${floor1CandidatePlan ? "active" : ""}`} disabled={floor1CandidateBusy} onClick={previewFloor1FormalCandidates}>{floor1CandidateBusy ? "正在测算…" : "一楼区域自动生成"}</button>}
-      {mapMode === "planning" && locationEditMode && (advancedAreaMaintenanceOpen || locationPointEditAreaCode) && <><button type="button" className="twin-save-location-layout" disabled={locationEditBusy || layoutMapToolsOpen || !activeLocationDraftCount} onClick={saveLocationDrafts}>{locationPointEditAreaCode ? "保存货位调整" : "保存货位调整"} {activeLocationDraftCount || ""}</button><button type="button" className="twin-cancel-location-layout" disabled={locationEditBusy || (advancedAreaMaintenanceOpen && !activeLocationDraftCount)} onClick={locationPointEditAreaCode ? cancelLocationPointEditing : () => { setLocationDrafts({}); setSwapSourceLocationId(null); setLocationEditMessage("已取消未保存的库位位置草稿。"); }}>{locationPointEditAreaCode ? "取消点位调整" : "取消位置草稿"}</button></>}
+      {mapMode === "planning" && locationEditMode && (advancedAreaMaintenanceOpen || locationPointEditAreaCode) && <><button type="button" className="twin-save-location-layout" disabled={locationEditBusy || layoutMapToolsOpen || !activeLocationDraftCount} onClick={() => void saveLocationDrafts()}>{locationPointEditAreaCode ? "保存货位调整" : "保存货位调整"} {activeLocationDraftCount || ""}</button><button type="button" className="twin-cancel-location-layout" disabled={locationEditBusy || (advancedAreaMaintenanceOpen && !activeLocationDraftCount)} onClick={locationPointEditAreaCode ? cancelLocationPointEditing : () => { setLocationDrafts({}); setSwapSourceLocationId(null); setLocationEditMessage("已取消未保存的库位位置草稿。"); }}>{locationPointEditAreaCode ? "取消点位调整" : "取消位置草稿"}</button></>}
       {mapMode === "planning" && locationEditMode && advancedAreaMaintenanceOpen && <div className="twin-layout-draft-workflow">
         <span className={`status ${layoutDraftControl?.status || "none"}`}>{layoutDraftControl?.has_draft ? "有尚未应用的修改" : "当前修改已应用"}</span>
         <button type="button" className="publish" disabled={spatialEditBusy} onClick={previewAndPublishLayout}>完成并应用本层地图</button>
@@ -6142,9 +6145,9 @@ export function WarehouseTwinApp() {
           onMovePallet={warehouseMoveModeActive ? draftMoveFromDrag : moveLocationDraft}
           onMoveFeature={moveAreaBoundaryDraft}
           onNudgeFeature={nudgeAreaBoundaryDraft}
-          onFinishFeatureNudge={() => void saveSelectedZoneGeometry()}
+          onFinishFeatureNudge={(id) => void saveSelectedZoneGeometry(id)}
           onNudgePallet={locationEditMode && !layoutMapToolsOpen ? nudgeLocationDraft : undefined}
-          onFinishPalletNudge={() => { locationNudgeRef.current = null; void saveLocationDrafts(); }}
+          onFinishPalletNudge={() => { const geometry = locationNudgeRef.current?.geometry; locationNudgeRef.current = null; if (geometry) void saveLocationDrafts(geometry); }}
           aisleEditingEnabled={false}
           onFeatureContextMenu={locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust" ? openFeatureContextMenu : undefined}
           onEntityContextMenu={viewMode === "2d" ? openWarehouseContextMenu : undefined}
@@ -6596,15 +6599,15 @@ export function WarehouseTwinApp() {
           {selectedAreaFeature ? <>
             <div className="twin-inventory-title"><div><small>{locationEditMode && canEditLocations ? `当前规划区域 · ${selectedAreaCode || selectedAreaFeature.feature_code}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b></div><span>{selectedAreaActivationLabel}</span></div>
           {layoutMapToolsOpen && layoutMapTool === "adjust" && selectedAreaFeature && selectedAreaBoundary && <div className="twin-zone-geometry-editor">
-            <div><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><small>{selectedAreaBoundaryLocked ? "区域移动不带动货位；红色冲突可保存后继续整理。" : "方向键1mm；长按加速，松开保存。"}</small></div>
+            <div><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><small>{selectedAreaBoundaryLocked ? "区域移动不带动货位；红色冲突可保存后继续整理。" : "方向键短按10mm；按住连续移动；Shift精调1mm；松开保存草稿。"}</small></div>
             <div className="twin-zone-geometry-grid">{([['中心 X', 'centerXmm'], ['中心 Y', 'centerYmm'], ['长', 'widthMm'], ['宽', 'heightMm']] as const).map(([label, key]) => <label key={key}><span>{label} mm</span><input type="number" disabled={spatialEditBusy} value={selectedAreaBoundary[key]} onChange={(event) => {
               const next = { ...selectedAreaBoundary, [key]: Number(event.target.value) };
               replaceZoneGeometryDrafts((current) => ({ ...current, [selectedAreaFeature.id]: resizeAndMovePointsMm(selectedAreaBoundaryPoints, next.centerXmm, next.centerYmm, next.widthMm, next.heightMm) }));
-            }} onBlur={saveSelectedZoneGeometry} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>)}</div>
+            }} onBlur={() => void saveSelectedZoneGeometry()} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>)}</div>
           </div>}
             {selectedAreaBoundary && <div className="twin-selection-summary area"><span><small>区域长 × 宽</small><b>{formatNumber(selectedAreaBoundary.widthMm)} × {formatNumber(selectedAreaBoundary.heightMm)} mm</b></span><span><small>有效货位</small><b>{selectedAreaLocationCount} 个</b></span></div>}
             {locationEditMode && canEditLocations && <div className="twin-region-planning-actions">
-              <button type="button" disabled={spatialEditBusy || Boolean(locationPointEditAreaCode)} onClick={() => { setLayoutMapToolsOpen(true); setLayoutMapTool("adjust"); setLocationEditMessage("区域尺寸可输入；方向键每次1mm，长按加速，松开保存。区域外自动作为通道。"); }}>调整区域尺寸</button>
+              <button type="button" disabled={spatialEditBusy || Boolean(locationPointEditAreaCode)} onClick={() => { setLayoutMapToolsOpen(true); setLayoutMapTool("adjust"); setLocationEditMessage("区域尺寸可输入；方向键短按10mm，按住连续移动，Shift精调1mm，松开保存草稿。区域外自动作为通道。"); }}>调整区域尺寸</button>
               <button type="button" disabled={spatialEditBusy || Boolean(locationPointEditAreaCode) || !selectedAreaCreatesInventoryLocations} onClick={() => { setAdvancedAreaMaintenanceOpen(true); setLayoutMapToolsOpen(false); requestAnimationFrame(() => document.getElementById("twin-target-location-count")?.focus()); }}>调整货位数量</button>
             </div>}
             <div className="twin-selection-summary area"><span><small>区域状态</small><b>{selectedAreaActivationLabel}</b></span><span><small>最大容量</small><b>{selectedAreaCapacitySummary}</b></span><span><small>{selectedAreaIsMold ? "当前模具" : "当前库存"}</small><b>{selectedAreaIsMold ? `${moldAreaResponse?.total || 0} 件` : selectedAreaQuantitySummary === "0" ? "0 · 当前无货" : selectedAreaQuantitySummary}</b></span></div>
@@ -6662,7 +6665,7 @@ export function WarehouseTwinApp() {
               {selectedAreaHasPublishedBinding && selectedAreaCreatesInventoryLocations && <div className="twin-location-point-planner">
                 <div><b>货位点位</b><small>{selectedAreaLocationCount} 个正式货位 · 只调整当前区域</small></div>
                 {locationPointEditAreaCode === selectedAreaCode ? <div className="actions">
-                  <button type="button" className="save" disabled={locationEditBusy || layoutMapToolsOpen || !locationPointDraftCount} onClick={saveLocationDrafts}>保存货位调整{locationPointDraftCount ? ` ${locationPointDraftCount}` : ""}</button>
+                  <button type="button" className="save" disabled={locationEditBusy || layoutMapToolsOpen || !locationPointDraftCount} onClick={() => void saveLocationDrafts()}>保存货位调整{locationPointDraftCount ? ` ${locationPointDraftCount}` : ""}</button>
                   <button type="button" disabled={locationEditBusy} onClick={cancelLocationPointEditing}>取消点位调整</button>
                 </div> : null}
                 {selectedAreaFeature.ground_location_draft?.base_revision === planningPublishedLayout?.source_sha256 && <div className="actions">

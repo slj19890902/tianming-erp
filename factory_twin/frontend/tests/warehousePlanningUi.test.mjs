@@ -573,7 +573,7 @@ test("location draft can retain an out-of-zone move without clamping it back", (
 });
 
 test("location draft save permits conflicts and distinguishes write, apply readback and multi-area failures", async () => {
-  for (const failure of ["readback", "write", "multiple", "success"]) {
+  for (const failure of ["readback", "write", "multiple", "success", "latest-keyboard-frame"]) {
     const points = [[0,0],[6000,0],[6000,4000],[0,4000]];
     const features = ["TEST", "OTHER"].map(code => ({id:code, erp_area_code:code, feature_kind:"zone", version:1, points}));
     let drafts = { 151: {location_id:151, expected_version:1, left_pct:-10, top_pct:0, height_pct:25, width_pct:20} };
@@ -581,7 +581,7 @@ test("location draft save permits conflicts and distinguishes write, apply readb
     let writes=0, reads=0; const messages=[]; const noop=()=>{};
     await componentValue("saveLocationDrafts", {
       layout: {source_sha256:"d1",features}, locationEditBusy:false,
-      layoutMapToolsOpen:false, locationDrafts:drafts, locationPointEditAreaCode:null, floorCode:"3F",
+      layoutMapToolsOpen:false, locationDrafts:failure === "latest-keyboard-frame" ? {} : drafts, locationPointEditAreaCode:null, floorCode:"3F",
       dashboard:{locations:[{location_id:151,area_code:"TEST"},{location_id:152,area_code:"OTHER"}]},
       locationProjectionFeatures:features, pointsBoundsMm:()=>({centerXmm:3000,centerYmm:2000,widthMm:6000,heightMm:4000}),
       planningGeometryConflicts:[{pallet_id:"erp-location-151"}],
@@ -598,7 +598,7 @@ test("location draft save permits conflicts and distinguishes write, apply readb
       setLocationPointEditAreaCode:noop,setKeyboardLocationEditActive:noop,
       refreshPlanningTwinFloor:async()=>{reads++;},
       applySavedAreaGeometryRevision:async()=>{reads++;if(failure==="readback"){const error=new Error("simulated readback unavailable");error.applicationWritten=true;throw error;}}
-    })();
+    })(failure === "latest-keyboard-frame" ? drafts[151] : undefined);
     if(failure==="write") {assert.deepEqual(Object.keys(drafts),["151"]);assert.equal(reads,0);assert.match(messages.at(-1),/未确认保存/);}
     else if(failure==="multiple") {assert.deepEqual(Object.keys(drafts).sort(),["151","152"]);assert.equal(writes,0);assert.match(messages.at(-1),/一次只能保存并应用一个区域/);}
     else if(failure==="readback") {assert.equal(Object.keys(drafts).length,0);assert.equal(reads,2);assert.match(messages.at(-1),/已应用 1 个货位调整.*回读失败/);}
@@ -817,10 +817,20 @@ test("area planning keeps short inputs in compact rows", () => {
 test("planning dimensions save the latest input and adjustment locks map panning", () => {
   assert.match(source, /const \[layoutMapToolsOpen, setLayoutMapToolsOpen\] = useState\(false\)/);
   assert.match(source, /const zoneGeometryDraftsRef = useRef<Record<string, number\[\]\[\]>>\(\{\}\)/);
-  assert.match(source, /zoneGeometryDraftsRef\.current\[selectedAreaFeature\.id\]/);
+  assert.match(source, /zoneGeometryDraftsRef\.current\[target\.id\]/);
   assert.match(source, /mapPanLocked=\{floor4CalibrationMode \|\| \(locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust"\)\}/);
   assert.match(editorSource, /mapPanLocked\?: boolean/);
   assert.match(editorSource, /controls\.enablePan = !mapPanLocked/);
+});
+
+test("finishing an area nudge saves the gesture identity even after selection changes", async () => {
+  const a = { id: "a", feature_kind: "zone" }, b = { id: "b", feature_kind: "zone" };
+  const saved = [];
+  await componentValue("saveSelectedZoneGeometry", { layout: {}, selectedAreaFeature: b, features: [a, b],
+    zoneGeometryDraftsRef: { current: { a: [[10, 20]], b: [[80, 90]] } },
+    saveLayoutFeatureGeometry: async (feature, points) => saved.push({ feature, points }),
+  })("a");
+  assert.equal(saved[0].feature.id, "a"); assert.equal(saved[0].points[0][0], 10);
 });
 
 test("aligned floor 4 keeps one compact three-point recalibration action", () => {

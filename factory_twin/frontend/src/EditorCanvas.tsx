@@ -13,6 +13,8 @@ import {
   palletMarkerSpec
 } from "./industrialScene";
 import { snapPalletPosition } from "./palletSnap.mjs";
+import { snapRackPosition } from "./rackSnap.mjs";
+import { createMapKeyboard, MAP_KEYBOARD_HINT } from "./mapKeyboard.mjs";
 import { palletStatusInfo } from "./palletStatus";
 import {
   aisleSurfaceStyle,
@@ -77,7 +79,7 @@ interface Props {
   onMovePallet: (id: string, xMm: number, yMm: number) => void;
   onMoveFeature: (id: string, deltaXmm: number, deltaYmm: number) => void;
   onNudgeFeature?: (id: string, deltaXmm: number, deltaYmm: number) => void;
-  onFinishFeatureNudge?: () => void;
+  onFinishFeatureNudge?: (id: string) => void;
   onNudgePallet?: (id: string, deltaXmm: number, deltaYmm: number) => void;
   onFinishPalletNudge?: () => void;
   onFeatureContextMenu?: (id: string, clientX: number, clientY: number) => void;
@@ -463,49 +465,59 @@ export function EditorCanvas({
   const coordinateRef = useRef<HTMLElement>(null);
   const runtimeRef = useRef<CanvasRuntime | null>(null);
   const selectedRef = useRef<SelectedEntity>(selected);
-  const nudgeHandlers = useRef({ onNudgeFeature, onFinishFeatureNudge, onNudgePallet, onFinishPalletNudge, featureEditingEnabled });
-  nudgeHandlers.current = { onNudgeFeature, onFinishFeatureNudge, onNudgePallet, onFinishPalletNudge, featureEditingEnabled };
+  const nudgeHandlers = useRef({ onNudgeFeature, onFinishFeatureNudge, onNudgePallet, onFinishPalletNudge, featureEditingEnabled, onMoveRack });
+  nudgeHandlers.current = { onNudgeFeature, onFinishFeatureNudge, onNudgePallet, onFinishPalletNudge, featureEditingEnabled, onMoveRack };
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   useEffect(() => {
     if (readOnly || viewMode !== "2d") return;
-    let started = 0;
-    let changed: "feature" | "pallet" | null = null;
-    const finish = () => {
-      started = 0;
-      const kind = changed; changed = null;
-      if (kind) requestAnimationFrame(() => {
-        if (kind === "feature") nudgeHandlers.current.onFinishFeatureNudge?.();
-        else nudgeHandlers.current.onFinishPalletNudge?.();
-      });
-    };
-    const down = (event: KeyboardEvent) => {
-      if (!/^Arrow(Up|Down|Left|Right)$/.test(event.key) || event.altKey || event.ctrlKey || event.metaKey) return;
-      if ((event.target as HTMLElement)?.closest?.("input,select,textarea,[contenteditable=true],[role=dialog]")) return;
+    const keyboard = createMapKeyboard({ begin: () => {
       const selection = selectedRef.current;
       const runtime = runtimeRef.current;
-      if (!runtime || (selection?.kind !== "feature" && selection?.kind !== "pallet")) return;
-      const callback = selection.kind === "feature"
+      if (!runtime || (selection?.kind !== "feature" && selection?.kind !== "pallet" && selection?.kind !== "rack")) return;
+      const callback = selection.kind === "rack" ? nudgeHandlers.current.onMoveRack : selection.kind === "feature"
         ? nudgeHandlers.current.featureEditingEnabled && nudgeHandlers.current.onNudgeFeature
         : nudgeHandlers.current.onNudgePallet;
       if (!callback) return;
       const entity = runtime.entityNodes.get(`${selection.kind}:${selection.id}`);
       if (!entity?.userData.draggable) return;
-      event.preventDefault();
-      if (!event.repeat || !started) started = performance.now();
-      const held = performance.now() - started;
-      const step = held >= 2000 ? 100 : held >= 600 ? 10 : 1;
-      const direction = new THREE.Vector3(event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0,
-        event.key === "ArrowUp" ? 1 : event.key === "ArrowDown" ? -1 : 0, 0).applyQuaternion(runtime.camera.quaternion);
-      const length = Math.hypot(direction.x, direction.z);
-      if (length < .001) return;
-      changed = selection.kind;
-      callback(selection.id, direction.x / length * step, -direction.z / length * step);
-    };
-    const up = (event: KeyboardEvent) => { if (/^Arrow(Up|Down|Left|Right)$/.test(event.key)) finish(); };
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    window.addEventListener("blur", finish);
-    return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); window.removeEventListener("blur", finish); };
-  }, [readOnly, viewMode]);
+      const cameraRotation = runtime.camera.quaternion.clone();
+      const rack = layoutRef.current.racks.find(item => item.id === selection.id);
+      let dx = 0, dy = 0;
+      return {
+        move: (step, key) => {
+          const direction = new THREE.Vector3(key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0,
+            key === "ArrowUp" ? 1 : key === "ArrowDown" ? -1 : 0, 0).applyQuaternion(cameraRotation);
+          const length = Math.hypot(direction.x, direction.z);
+          if (length < .001) return;
+          const x = direction.x / length * step, y = -direction.z / length * step;
+          dx += x; dy += y;
+          if (selection.kind === "rack" && rack) {
+            const current = runtimeRef.current;
+            const node = current?.entityNodes.get(`rack:${selection.id}`);
+            const bounds = layoutRef.current.bounds_mm;
+            if (node) { node.position.x = rack.x_mm + dx - (bounds.min_x + bounds.max_x) / 2;
+              node.position.z = (bounds.min_y + bounds.max_y) / 2 - rack.y_mm - dy;
+              if (current) { syncEntityHighlights(current, selection, focusTargetRef.current); current.requestRender(); } }
+          } else if (selection.kind === "feature") nudgeHandlers.current.onNudgeFeature?.(selection.id, x, y);
+          else nudgeHandlers.current.onNudgePallet?.(selection.id, x, y);
+        },
+        finish: () => {
+          if (selection.kind === "rack" && rack) nudgeHandlers.current.onMoveRack(selection.id, rack.x_mm + dx, rack.y_mm + dy);
+          else if (selection.kind === "feature") nudgeHandlers.current.onFinishFeatureNudge?.(selection.id);
+          else nudgeHandlers.current.onFinishPalletNudge?.();
+        },
+      };
+    } });
+    const hidden = () => { if (document.hidden) keyboard.stop(); };
+    window.addEventListener("keydown", keyboard.down);
+    window.addEventListener("keyup", keyboard.up);
+    window.addEventListener("blur", keyboard.stop);
+    window.addEventListener("pointerdown", keyboard.stop);
+    document.addEventListener("visibilitychange", hidden);
+    return () => { keyboard.stop(); window.removeEventListener("keydown", keyboard.down); window.removeEventListener("keyup", keyboard.up);
+      window.removeEventListener("blur", keyboard.stop); window.removeEventListener("pointerdown", keyboard.stop); document.removeEventListener("visibilitychange", hidden); };
+  }, [readOnly, viewMode, cameraPreset, viewResetToken, selected?.kind, selected?.id, layout.id, rackEditingEnabled, featureEditingEnabled]);
   const focusTargetRef = useRef<CanvasFocusTarget | null>(focusTarget);
   const lastFocusKeyRef = useRef("");
   const handlersRef = useRef({ onSelect, onMoveEquipment, onMoveRack, onMovePallet, onMoveFeature, onFeatureContextMenu, onEntityContextMenu, onDropAsset, onDropRack, onDropPallet, onDrawPoint, onMeasurePoint });
@@ -1383,7 +1395,7 @@ export function EditorCanvas({
       handlersRef.current.onSelect({ kind: "feature", id });
       handlersRef.current.onFeatureContextMenu(id, event.clientX, event.clientY);
     };
-    const processPointerMove = (event: { clientX: number; clientY: number }) => {
+    const processPointerMove = (event: { clientX: number; clientY: number; altKey?: boolean }) => {
       if (pendingCanvasAction && Math.hypot(event.clientX - pendingCanvasAction.startX, event.clientY - pendingCanvasAction.startY) > 4) {
         pendingCanvasAction.moved = true;
       }
@@ -1419,6 +1431,14 @@ export function EditorCanvas({
             dragging.object.position.set(snapped.x, dragging.startPosition.y, snapped.z);
             showSnapGuides(result.guides);
           }
+        } else if (dragging.kind === "rack") {
+          const rack = layout.racks.find(item => item.id === dragging!.id);
+          if (rack) {
+            const result = snapRackPosition(rack, proposed.x + centerX, centerY - proposed.z, layout.racks, 120, !event.altKey);
+            const snapped = worldPoint(result.x, result.y);
+            dragging.object.position.set(snapped.x, dragging.startPosition.y, snapped.z);
+            showSnapGuides(result.guides);
+          }
         } else {
           dragging.object.position.copy(proposed);
         }
@@ -1426,9 +1446,9 @@ export function EditorCanvas({
       }
     };
     let pointerMoveFrame: number | null = null;
-    let latestPointerMove: { clientX: number; clientY: number } | null = null;
+    let latestPointerMove: { clientX: number; clientY: number; altKey: boolean } | null = null;
     const onPointerMove = (event: PointerEvent) => {
-      latestPointerMove = { clientX: event.clientX, clientY: event.clientY };
+      latestPointerMove = { clientX: event.clientX, clientY: event.clientY, altKey: event.altKey };
       if (pointerMoveFrame !== null) return;
       pointerMoveFrame = requestAnimationFrame(() => {
         pointerMoveFrame = null;
@@ -1656,6 +1676,7 @@ export function EditorCanvas({
   const compassLabel = floor4CalibratingCompass ? "对齐3F" : realEastCompass ? "现实东向" : "图纸北向";
   return <div className={`editor-canvas ${visualTheme === "warehouse" ? "warehouse-theme" : ""} ${effectiveDrawMode || measureMode ? "drawing" : ""}`} ref={containerRef}>
     <div className="canvas-mount" ref={canvasMountRef} />
+    {!readOnly && viewMode === "2d" && <small className="map-edit-keyboard-hint">{MAP_KEYBOARD_HINT}。货架拖近120mm内吸附，Alt取消吸附；调整后按原流程保存/应用。</small>}
     <div className="map-compass" aria-label={compassLabel}><span ref={northArrowRef}>↑</span><b>{compassCode}</b><small>{compassLabel}</small></div>
     {referenceLayout && referenceOverlay?.enabled && layout.floor_code.toUpperCase()==="1F" && <div className="reference-overlay-badge">{referenceOverlay.shared_coordinates ? "3F 左半区柱墙 · 同坐标复核" : "3F 左半区柱墙参照 · 草稿"}</div>}
     <div className="map-scale"><span ref={scaleBarRef} /><b ref={scaleLabelRef}>—</b></div>

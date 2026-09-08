@@ -230,6 +230,13 @@ export function buildRackVisual(
     }
   }
 
+  // Four inset rails distinguish racks without enlarging their physical footprint.
+  const border = 35;
+  const borderY = viewMode === "2d" ? 110 : height + post;
+  for (const sign of [-1, 1]) {
+    addBox(group, [width, 18, border], [0, borderY, sign * (depth - border) / 2], "#f97316");
+    addBox(group, [border, 18, depth - border * 2], [sign * (width - border) / 2, borderY, 0], "#f97316");
+  }
   if (!warehouseTheme) {
     for (const [dx, dz] of accessDirectionVectors(rack.access_side)) {
       const arrow = createGroundArrow(Math.min(Math.max(depth * 0.55, 500), 1200), beamColor);

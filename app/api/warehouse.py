@@ -17445,6 +17445,19 @@ def get_location_label_workbench(
     }
 
 
+def _shelf_label_content(db: Session, row: WarehouseLocation, user: User) -> dict | None:
+    from app.models.fixed_shelf import ShelfBinding
+    from app.services.fixed_shelf import profile_info
+    from app.api.deps import has_unrestricted_customer_access, customer_scope_ids
+    binding = db.get(ShelfBinding, row.id)
+    if binding is None:
+        return None
+    product = db.get(Product, binding.product_id)
+    if not has_unrestricted_customer_access(user, db) and product.customer_id not in customer_scope_ids(user, db):
+        return {"restricted": True}
+    return {**profile_info(db, product), "binding_priority": binding.priority}
+
+
 @router.get("/locations/labels")
 def get_location_labels(
     request: Request,
@@ -17483,12 +17496,12 @@ def get_location_labels(
     lan_ip = _lan_ip()
     return {
         "items": [
-            _location_label_dict(
+            {**_location_label_dict(
                 row,
                 request,
                 projection_contexts.get(int(row.id), {}),
                 lan_ip,
-            )
+            ), "shelf_content": _shelf_label_content(db, row, _user)}
             for row in ordered_rows
         ],
         "count": len(ordered_rows),
@@ -17517,7 +17530,8 @@ def get_location_label(
     projection_context = load_warehouse_location_projection_contexts(
         db, [row]
     ).get(int(row.id), {})
-    return _location_label_dict(row, request, projection_context)
+    return {**_location_label_dict(row, request, projection_context),
+            "shelf_content": _shelf_label_content(db, row, _user)}
 
 
 @router.get("/location-candidates")

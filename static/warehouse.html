@@ -503,7 +503,7 @@
       <div class="panel">
         <div class="location-label-head">
           <div><h2>货架与货位标签</h2><div class="muted">只读取当前正式实测地图中正在使用的货架与层格；退役、历史关联和未发布位置不在此显示。</div></div>
-          <div class="actions"><button class="btn" type="button" onclick="switchTab('finished')">返回库存台账</button><button id="refreshLocationLabelWorkbench" class="btn" type="button" onclick="loadLocationLabelWorkbench(true)">刷新</button></div>
+          <div class="actions"><button class="btn" type="button" onclick="switchTab('finished')">返回库存台账</button><a class="button" href="/static/fixed-shelf.html">固定货位与上架</a><button id="refreshLocationLabelWorkbench" class="btn" type="button" onclick="loadLocationLabelWorkbench(true)">刷新</button></div>
         </div>
         <div class="location-label-filters">
           <div class="field"><label for="locationLabelFloorFilter">楼层</label><select id="locationLabelFloorFilter" onchange="selectLocationLabelFloor(this.value)"></select></div>

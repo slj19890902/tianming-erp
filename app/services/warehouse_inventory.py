@@ -326,6 +326,11 @@ def _ensure_finished_projection_postcondition(
 
     if lot.inventory_type != "finished" or _finished_lot_physical_quantity(lot) <= 0:
         return None
+    from app.services.fixed_shelf import ShelfError, assert_destination
+    try:
+        assert_destination(db, lot)
+    except ShelfError as error:
+        raise WarehouseInventoryError(str(error), 409) from error
     if lot.warehouse_location_id is None:
         raise WarehouseInventoryError("成品库存缺少正式库位，不能完成空间投影", 409)
     location = db.get(WarehouseLocation, int(lot.warehouse_location_id))
@@ -2439,6 +2444,9 @@ def _transfer_finished_lot_location(
             idempotency_key=_transfer_key("location-transfer", key, "target"),
         )
     db.flush()
+    from app.services.fixed_shelf import copy_lot_state
+    copy_lot_state(db, lot, target_lot)
+    db.flush()
     return FinishedLotLocationTransferResult(transfer, lot, target_lot, False)
 
 
@@ -2666,6 +2674,8 @@ def manual_finished_in(
         ground_secondary_location_id=ground_secondary_location_id,
         ground_capacity_quantity=ground_capacity_quantity,
     )
+    from app.services.fixed_shelf import on_finished_in
+    on_finished_in(db, lot)
     db.flush()
     return lot
 

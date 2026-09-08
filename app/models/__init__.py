@@ -285,3 +285,4 @@ from app.models.purchase_receipt import (  # noqa: E402,F401
 from app.models.warehouse_capacity import (  # noqa: E402,F401
     WarehouseCapacityForecastPlan,
 )
+from app.models.fixed_shelf import ShelfProfile, ShelfBinding, ShelfLotState, ShelfMutation  # noqa: E402,F401

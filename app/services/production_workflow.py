@@ -3142,6 +3142,25 @@ def _stock_completion_lot(
         if is_transfer or source_type == "production_completion"
         else int(completion.stock_quantity)
     )
+    from app.services.multilevel_bom_orders import read_order_graph
+    graph = read_order_graph(db, item.id)
+    if graph is not None:
+        nodes, children, _ = graph.validated()
+        if (product_id in nodes and nodes[product_id].source == "manufactured"
+                and any(edge.relation == "assembly" for edge in children[product_id])):
+            if is_transfer or pallet_id is not None or command.pallet_code:
+                raise ProductionWorkflowError("待装配本体请使用本体库存移位流程", 409)
+            from app.services.multilevel_bom_body_inventory import receive_body_inventory
+            from app.services.bom_subkits import SubkitError
+            try:
+                return receive_body_inventory(db, completion_id=completion.id,
+                    location_id=location.id, operator_id=operator_id,
+                    idempotency_key=_stable_key(idempotency_prefix, "body-in"),
+                    expected_layout_version=(int(location.floor3_layout.version)
+                        if location_id_override is not None and location.floor3_layout is not None
+                        else command.expected_layout_version))
+            except SubkitError as error:
+                raise ProductionWorkflowError(str(error), error.status_code) from error
     lot = manual_finished_in(
         db,
         customer_id=order.customer_id,

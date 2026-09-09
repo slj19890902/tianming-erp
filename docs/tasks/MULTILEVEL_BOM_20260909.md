@@ -1,5 +1,13 @@
 # MULTILEVEL-BOM-20260909
 
+## 2026-09-10 本体完工库存写入候选
+
+新增multilevel_bom_body_inventory.receive_body_inventory内部收料适配：活动人员、真实自动完工、同订单任务、冻结图自制且有组装子件身份、订单状态和目标地图版本校验；数量从完工事实取得。写InventoryLot assembly_body、BomBodyInventoryDetail、原InventoryMovement及completion.inventory_lot_id，同一事务不commit，无finished_detail、不建成品预占。初始流水remarks保存请求摘要，重复相同请求返回原批次，异载荷/已失效来源拒绝。生产_stock_completion_lot在原位置校验后识别本体并走该分支，SubkitError映射原ProductionWorkflowError。
+
+新本体服务/真实_stock_completion_lot分支、重复/异载荷、外层回滚、写后故障、手工来源/已撤销/失效人员/结束订单拒绝，以及旧BOM和普通用途收料最终70通过180.65秒118warning；compileall/diff check通过，head77无新增迁移。测试是匿名正式表/图/完工数据，不假冒完整HTTP本体收料验收。
+
+尚未开放master manufactured+assembly：post_automatic_receipt_completion在_stock_completion_lot后仍有成品栈板绑定及任务覆盖更新；project_graph_receipts须分开本体/成品，不能把本体完工加到成品output，也需给plan_assembly显式body_stock；assemble_order_inventory与assemble_subkit_inventory须真实消费body明细及子件，成本身份读取需支持body detail。该写入尚未独立暴露API，也不得跳过这些剩余项直接上线。正式库地图草稿未改。
+
 ## 2026-09-10 本体库存真实身份迁移77候选
 
 唯一候选head sc15v8x9z77接76：InventoryLot增加assembly_body类型，数量仍原表；id/type复合唯一键加bom_body_inventory_details复合外键防止把本体明细指向finished库存。明细绑定冻结订单产品及真实ProductionCompletion，无第二数量账。库存表批量重建保存/恢复所有引用触发器，旧约束保留；有本体明细或本体库存拒绝降级，不回填任何正式事实。

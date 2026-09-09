@@ -15,7 +15,7 @@ from app.services.audit_log import append_audit_event
 from app.services.bom_transactions import atomic_bom
 from app.services.multilevel_bom_plan import BomPlanError
 from app.services.multilevel_bom_snapshot import (
-    SCHEMA_VERSION, dump_graph, graph_hash, load_graph, verify_current_identities,
+    dump_graph, graph_hash, load_graph, verify_current_identities, graph_schema_version,
 )
 
 
@@ -30,7 +30,7 @@ def read_order_graph(db, order_item_id):
         select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id == order_item_id))}
     if (item is None or order is None or item.product_id != graph.root_id
             or order.customer_id != graph.customer_id
-            or row.schema_version != SCHEMA_VERSION or row.root_product_id != graph.root_id
+            or row.schema_version != graph_schema_version(graph) or row.root_product_id != graph.root_id
             or row.customer_id != graph.customer_id
             or identities != {(n.product_id, n.version) for n in graph.nodes}):
         raise BomPlanError("订单BOM快照身份校验失败")
@@ -72,7 +72,7 @@ def freeze_order_graph(db, *, order_item_id, graph, actor: User):
             if changed.rowcount != 1:
                 raise BomPlanError("BOM产品已变化，请刷新")
         row = OrderBomGraph(order_item_id=item.id, root_product_id=graph.root_id,
-            customer_id=graph.customer_id, schema_version=SCHEMA_VERSION,
+            customer_id=graph.customer_id, schema_version=graph_schema_version(graph),
             document_json=document, content_hash=graph_hash(document), created_by=actor.id)
         db.add(row)
         db.flush()
@@ -83,7 +83,7 @@ def freeze_order_graph(db, *, order_item_id, graph, actor: User):
             module_code="orders", action_code="freeze_multilevel_bom", resource="order_bom_graph",
             actor=actor, entity_type="order_item", entity_id=item.id, customer_id=order.customer_id,
             details={"content_hash": row.content_hash, "root_product_id": graph.root_id,
-                "products": [n.product_id for n in graph.nodes], "schema_version": SCHEMA_VERSION})
+                "products": [n.product_id for n in graph.nodes], "schema_version": graph_schema_version(graph)})
     return graph
 
 

@@ -40,6 +40,13 @@ def test_external_parent_keeps_real_accompany_tree_without_phantom_board(context
     assert {m.product_id for m in plan.materials} == {3, 4}
     assert next(n for n in compiled.graph.nodes if n.product_id == 1).source == 'purchased'
     assert {(e.parent_id, e.child_id) for e in compiled.graph.edges} == {(1, 2), (2, 3), (2, 4)}
+    from app.services.multilevel_bom_purchase_units import purchase_quantity_for_stock
+    assert db.get(OrderBomGraph, item.id).schema_version == 2
+    root.external_packaging_default_purchase_quantity_basis = 7
+    root.version += 1
+    db.commit()
+    frozen = read_compiled_order_bom(db, item.id)
+    assert purchase_quantity_for_stock(next(n for n in frozen.graph.nodes if n.product_id == 1), 10) == 10
 
 
 def setup_liner(db, actor):

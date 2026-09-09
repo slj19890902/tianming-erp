@@ -29,6 +29,28 @@ class MaterialRoute:
 
 
 @dataclass(frozen=True)
+class PurchaseUnits:
+    purchase_unit: str
+    stock_basis: str
+    purchase_basis: str
+
+    def validated(self):
+        from decimal import Decimal, InvalidOperation
+        if type(self.purchase_unit) is not str or not self.purchase_unit.strip() or len(self.purchase_unit) > 30:
+            raise BomPlanError("外购采购单位无效")
+        for value in (self.stock_basis, self.purchase_basis):
+            try:
+                if type(value) is not str or len(value) > 30:
+                    raise ValueError()
+                number = Decimal(value)
+                if not number.is_finite() or number <= 0 or number >= Decimal('1e12') or number.quantize(Decimal('0.000001')) != number:
+                    raise ValueError()
+            except (ValueError, InvalidOperation):
+                raise BomPlanError("外购库存与采购比例必须为正数，最多6位小数") from None
+        return self
+
+
+@dataclass(frozen=True)
 class ProductNode:
     product_id: int
     customer_id: int
@@ -37,6 +59,7 @@ class ProductNode:
     unit: str
     source: str  # manufactured / purchased / assembled
     routes: tuple[MaterialRoute, ...] = ()
+    purchase_units: PurchaseUnits | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +124,10 @@ class FrozenBom:
                 raise BomPlanError("产品名称、库存单位不能为空")
             if node.source not in {"manufactured", "purchased", "assembled"}:
                 raise BomPlanError("未知产品来源")
+            if node.purchase_units is not None:
+                if node.source != "purchased" or not isinstance(node.purchase_units, PurchaseUnits):
+                    raise BomPlanError("只有外购节点可以配置采购比例")
+                node.purchase_units.validated()
             route_keys = set()
             for route in node.routes:
                 if not route.key.strip() or route.key in route_keys:

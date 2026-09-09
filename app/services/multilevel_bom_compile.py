@@ -14,7 +14,7 @@ from app.models.product_bom import ProductBomComponent, SalesOrderItemBomCompone
 from app.services.composite_bom import _bom_row_values, _snapshot_kwargs, _validate_die_cut_mold
 from app.services.incoming_receipts import _snapshot_component_types, _snapshot_physical_pieces
 from app.services.multilevel_bom_master import load_master_structure
-from app.services.multilevel_bom_plan import BomEdge, BomPlanError, FrozenBom, MaterialRoute, ProductNode, plan_bom
+from app.services.multilevel_bom_plan import BomEdge, BomPlanError, FrozenBom, MaterialRoute, ProductNode, PurchaseUnits, plan_bom
 from app.services.bom_physical_quantities import resolve_bom_sheet_yield
 
 
@@ -99,8 +99,15 @@ def compile_master_order_bom(db, order_item):
             order_item=order_item, parent=root, component=product, relation=relation))
         snapshot.snapshot_schema_version = 5
         routes = physical_routes(snapshot) if source == "manufactured" else ()
+        purchase_units = None
+        if source == "purchased":
+            if product.supply_mode != "external_purchase":
+                raise BomPlanError("外购节点须先在常用箱维护外购资料和采购比例")
+            purchase_units = PurchaseUnits(product.external_packaging_purchase_unit,
+                str(product.external_packaging_default_order_quantity_basis),
+                str(product.external_packaging_default_purchase_quantity_basis)).validated()
         nodes.append(ProductNode(pid, product.customer_id, product.version,
-                                 product.product_name, product.unit, source, routes))
+                                 product.product_name, product.unit, source, routes, purchase_units))
         snapshots.append(snapshot)
     graph = FrozenBom(root.id, root.customer_id, tuple(nodes), tuple(
         BomEdge(e["parent_id"], e["child_id"], e["quantity"], e["relation"]) for e in structure["edges"]))

@@ -1,5 +1,13 @@
 # MULTILEVEL-BOM-20260909
 
+## 2026-09-10 外购配套编辑入口候选
+
+移除常用箱“外购”供货方式隐藏整个组合BOM的条件；原权限、折叠和保存API不变。不自动改变已保存库存来源，也不放开正式下单门禁。增加JS外购配套编辑、payload、重读、不允许外购直接组装的行为回归；真实匿名数据库保存外购本体配套真实内衬、内衬2长6短，再冻结并重读，确认拿货本体与内衬、纸板仅长短片。前端/编译/主档51项通过43.20秒；初次夹具外购资料不完整及冻结函数调用参数已修正，未放松数据库约束。
+
+正式/远端基线实时ac02bb004b474e666e3f24a3b7c83c5456773f91，8000监听192.168.3.80 PID2648；候选唯一head rx10v8x9z72无新增迁移，diff check通过。HTML SHA256 c9a5be2e4d643a4ac58cfe7c4d39f82328f8e0cc12ef2960f4c3e9f0503a002e。正式库/地图/草稿未写，未发布或重启。本轮未做Chrome/实体打印验收。
+
+下一执行缺口已定位：ExternalPackagingPurchaseItem.order_component_id仍指向旧sales_order_item_external_components；graph_material_receipts_closed明确对待购真实节点返回False。需实现真实BOM节点外购采购/收料/成本/撤销身份契约，不可仅解除guard。NAS回执20260910-多级BOM外购配套编辑入口候选.md。
+
 老板已确认20260909通用多级BOM理解报告，允许实施，不重复申请需求确认。
 
 ## 范围

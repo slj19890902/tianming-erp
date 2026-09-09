@@ -11,6 +11,37 @@ from tests.test_multilevel_bom_orders import context
 from tests.test_multilevel_bom_master import configure_liner, save
 
 
+def test_external_parent_keeps_real_accompany_tree_without_phantom_board(context):
+    from app.services.composite_bom import get_product_bom
+    db, actor, item, _ = context
+    root = db.get(Product, 1)
+    root.supply_mode = 'external_purchase'
+    root.external_packaging_category_code = 'other_packaging'
+    root.external_packaging_specification_json = '{"summary":"外购本体"}'
+    root.external_packaging_specification_summary = '外购本体'
+    root.external_packaging_purchase_unit = '只'
+    root.external_packaging_candidate_snapshot_json = '[]'
+    root.external_packaging_default_order_quantity_basis = 1
+    root.external_packaging_default_purchase_quantity_basis = 1
+    db.commit()
+    save(db, actor, 2, 'assembled', [(3, 2, 'assembly'), (4, 6, 'assembly')])
+    saved = save(db, actor, 1, 'purchased', [(2, 1, 'accompany')])
+    db.commit()
+    reread = get_product_bom(db, 1)
+    assert reread['inventory_mode'] == 'purchased'
+    assert reread['version'] == saved['version']
+    assert reread['components'][0]['component_product_id'] == 2
+    assert reread['components'][0]['inventory_relation'] == 'accompany'
+    freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
+    db.commit()
+    compiled = read_compiled_order_bom(db, item.id)
+    plan = plan_bom(compiled.graph, 10)
+    assert plan.picking == ((1, 10), (2, 10))
+    assert {m.product_id for m in plan.materials} == {3, 4}
+    assert next(n for n in compiled.graph.nodes if n.product_id == 1).source == 'purchased'
+    assert {(e.parent_id, e.child_id) for e in compiled.graph.edges} == {(1, 2), (2, 3), (2, 4)}
+
+
 def setup_liner(db, actor):
     configure_liner(db, actor)
     for pid, mode in ((3, "一开二"), (4, "一开四")):

@@ -32,6 +32,29 @@ def run_js(body):
     assert result.returncode == 0, result.stderr
 
 
+def test_external_purchase_can_edit_and_round_trip_real_accompany_bom():
+    opening = re.search(r'<details[^>]*>\s*<summary>组合 BOM</summary>', HTML).group()
+    assert 'v-if=' not in opening
+    run_js("""
+      const ctx={...methods,bomEditor:blankBomEditor(),
+        productForm:{id:1,supply_mode:'external_purchase',composite_fulfillment_mode:'parent_delivery'},
+        spec:()=>'',modal:{type:'product'}};
+      ctx.bomEditor.enabled=true;ctx.bomEditor.inventory_mode='purchased';
+      ctx.bomEditor.components=[{...blankBomComponent(),component_product_id:2,quantity_per_set:3}];
+      ctx.onBomInventoryModeChange();
+      assert.equal(ctx.bomEditor.components[0].inventory_relation,'accompany');
+      assert.equal(ctx.validateProductBom(),'');
+      const payload=ctx.bomPayload(7);
+      assert.equal(payload.inventory_mode,'purchased');
+      assert.equal(payload.components[0].quantity_per_set,3);
+      ctx.applyBomResponse({...payload,version:8,is_composite:true});
+      assert.equal(ctx.bomEditor.inventory_mode,'purchased');
+      assert.equal(ctx._productBomDirty(),false);
+      ctx.bomEditor.components[0].inventory_relation='assembly';
+      assert.match(ctx.validateProductBom(),/只能独立配套/);
+    """)
+
+
 def test_fields_round_trip_and_no_free_text_recipe_in_new_mode():
     run_js("""
       const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1,composite_fulfillment_mode:'parent_delivery'},

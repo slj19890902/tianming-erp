@@ -7,14 +7,15 @@ import {pathToFileURL} from 'node:url';
 import {spawnSync} from 'node:child_process';
 
 const css = readFileSync(new URL('../src/warehouseTwin.css', import.meta.url), 'utf8');
-test('Chrome: rack add button has a full-size hitbox and does not overlap products', () => {
+test('Chrome: compact add button stays beside the cell number and leaves room for products', () => {
   const dir = mkdtempSync(join(tmpdir(), 'tm-rack-hitbox-'));
   const fixture = join(dir, 'fixture.html');
   writeFileSync(fixture, `<meta charset="utf-8"><style>${css}</style>
     <section class="twin-rack-focus-panel twin-rack-stage"><div class="twin-elevation-frame" style="height:220px">
     <div class="twin-elevation-level"><span>第1层 · 2格</span><div>
-    <section class="mold-rack-cell occupied can-add-product" style="height:150px"><div class="shelf-cell-heading">1格 · 有货</div>
+    <section class="mold-rack-cell occupied can-add-product" style="height:150px"><div class="shelf-cell-heading"><button class="mold-rack-cell-summary"><b>1格</b></button>
     <button type="button" class="shelf-cell-add-product">＋ 添加货物</button>
+    <span class="shelf-cell-status">有货 · 26只 · 客户</span><button class="shelf-position-print">打印货位</button></div>
     <div class="shelf-product-cards"><small class="shelf-cell-kind">混放 · 3款</small><article class="shelf-product-card"><button>TEST-001<br>原有产品<br>规格信息<br>批次信息</button></article><article class="shelf-product-card"><button>TEST-002<br>原有产品<br>规格信息</button></article><article class="shelf-product-card"><button>TEST-003<br>原有产品</button></article></div>
     </section></div></div></div></section><pre id="result"></pre>
     <script>
@@ -26,7 +27,8 @@ test('Chrome: rack add button has a full-size hitbox and does not overlap produc
       const range=document.createRange();range.selectNodeContents(button);const text=range.getBoundingClientRect();
       const x=b.x+b.width/2,y=b.y+b.height/2;
       const hit=document.elementFromPoint(x,y);
-      results.push(b.height>=44 && text.top>=b.top && text.bottom<=b.bottom && products.top>=b.bottom && hit===button);
+      const number=document.querySelector('.mold-rack-cell-summary').getBoundingClientRect();
+      results.push(b.height>=28 && b.height<=36 && b.width<110 && b.left>=number.right && Math.abs(b.top-number.top)<15 && text.top>=b.top && text.bottom<=b.bottom && products.top>=b.bottom && products.height>=90 && hit===button);
       if(hit===button)hit.click();
     }
     document.querySelector('#result').textContent=results.every(Boolean)&&clicks===3?'HITBOX_PASS':JSON.stringify({results,clicks,height:button.getBoundingClientRect().height});

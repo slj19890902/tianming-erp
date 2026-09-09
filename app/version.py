@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.302"
-APP_VERSION_NAME = "货架添加按钮点击区域修复"
+APP_VERSION = "v0.22.303"
+APP_VERSION_NAME = "货架格头紧凑操作与货物优先"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2289,15 +2289,25 @@ _V022301_VERIFICATION_STEPS = [
     "核对客户、产品和实际数量后按原流程提交；刷新确认原产品保留、新产品位于同一格，空格仍可选产品。",
     "只读账号、身份冲突或未发布位置不能通过新增入口绕过门禁；本版无数据库迁移，未自动新增现场库存。",
 ]
-APP_CHANGES = [
+_V022302_CHANGES = [
     "修复货架格添加货物按钮被产品列表挤成细线、文字超出可点击区域的问题。",
     "添加货物使用独立布局行和至少44像素高的绿色按钮，文字与按钮整体均可点击；产品列表独立滚动，权限和库存处理不变。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022302_VERIFICATION_STEPS = [
     "刷新仓库地图，移货模式打开有货货架格，确认添加货物显示为完整绿色按钮，点击文字即可进入该格添加界面。",
     "在多产品格和窄屏核对按钮不被挤压或遮挡；空格选产品、禁用状态和原产品列表保持正常。",
 ]
+APP_CHANGES = [
+    "货架添加货物移到格号旁，采用紧凑浅色按钮，不再独占一行；打印货位弱化显示，让客户、料号和数量成为主体。",
+    "保留完整文字点击范围、禁用保护与触屏点击高度，产品列表独立滚动；不修改库存、位置或业务处理。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新移货地图并打开有货货架，确认格号旁可直接点添加货物，原整行绿色按钮消失，产品信息区扩大。",
+    "窄屏核对添加按钮、打印和产品列表不重叠；新增仍进入准确正式格位，已有库存及权限保持不变。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.302：本次更新｜{item}" for item in _V022302_CHANGES),
+    *(f"v0.22.302：如何验证｜{item}" for item in _V022302_VERIFICATION_STEPS),
     *(f"v0.22.301：本次更新｜{item}" for item in _V022301_CHANGES),
     *(f"v0.22.301：如何验证｜{item}" for item in _V022301_VERIFICATION_STEPS),
     *(f"v0.22.300：本次更新｜{item}" for item in _V022300_CHANGES),

@@ -2467,9 +2467,9 @@ body.warehouse-twin-page {
 .twin-rack-stage:not(.twin-mold-rack-stage) .twin-elevation-frame { overflow: auto; }
 .twin-rack-stage:not(.twin-mold-rack-stage) .twin-elevation-level { flex: 1; min-height: 90px; }
 .twin-rack-stage:not(.twin-mold-rack-stage) .mold-rack-cell { grid-template-rows: auto minmax(0, 1fr); padding:4px; gap:3px; }
-.twin-rack-stage:not(.twin-mold-rack-stage) .mold-rack-cell.can-add-product { grid-template-rows: auto auto minmax(0, 1fr); min-height: 150px; }
-.twin-rack-stage .shelf-cell-add-product { box-sizing: border-box; width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: center; padding: 10px 12px; border: 1px solid #15803d; border-radius: 6px; background: #15803d; color: #fff; font-size: 14px; font-weight: 700; line-height: 22px; cursor: pointer; touch-action: manipulation; }
-.twin-rack-stage .shelf-cell-add-product:hover:not(:disabled) { background: #166534; }
+.twin-rack-stage:not(.twin-mold-rack-stage) .mold-rack-cell.can-add-product { min-height: 150px; }
+.twin-rack-stage .shelf-cell-add-product { box-sizing: border-box; width: auto; min-height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 3px 7px; border: 1px solid #b5d3c1; border-radius: 4px; background: #f5fbf7; color: #166534; font-size: 12px; font-weight: 600; line-height: 20px; white-space: nowrap; cursor: pointer; touch-action: manipulation; }
+.twin-rack-stage .shelf-cell-add-product:hover:not(:disabled) { background: #dcfce7; }
 .twin-rack-stage .shelf-cell-add-product:focus-visible { outline: 3px solid #2563eb; outline-offset: -3px; }
 .twin-rack-stage .shelf-cell-add-product:disabled { opacity: .5; cursor: not-allowed; }
 .twin-rack-stage:not(.twin-mold-rack-stage) .mold-rack-empty-spine { min-height: 0 !important; padding:4px; }
@@ -2497,4 +2497,8 @@ body.warehouse-twin-page {
 .shelf-lot-history details { margin: 8px 0; }
 .shelf-cell-heading,.shelf-current-heading{display:flex;align-items:center;gap:5px;justify-content:space-between}
 .shelf-cell-heading .mold-rack-cell-summary{flex:1;min-width:0}
+.twin-rack-stage:not(.twin-mold-rack-stage) .shelf-cell-heading .mold-rack-cell-summary { flex: 0 0 auto; padding: 0; border: 0; }
+.shelf-cell-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: 10px; color: #64748b; }
 .twin-rack-stage .shelf-position-print{font-size:11px!important;padding:4px 7px!important;background:#15803d!important;color:white!important;border:0!important;border-radius:4px;white-space:nowrap;flex-shrink:0}
+.twin-rack-stage:not(.twin-mold-rack-stage) .shelf-cell-heading .shelf-position-print { background: transparent !important; color: #64748b !important; padding: 4px !important; }
+@media (pointer: coarse) { .twin-rack-stage .shelf-cell-add-product { min-height: 36px; } }

@@ -72,6 +72,8 @@ test("occupied cells keep their products and can add another product to the exac
   assert.equal(emptyControls.length, 0);
   const controls = nodes.filter(node => node.props.className === "shelf-cell-add-product");
   assert.equal(controls.length, 9);
+  const headings = nodes.filter(node => node.props.className === "shelf-cell-heading");
+  assert.equal(headings.filter(node => node.children.some(child => child?.props?.className === "shelf-cell-add-product")).length, 9);
   for (const button of controls) {
     assert.equal(Boolean(button.props.disabled), false);
     button.props.onClick();

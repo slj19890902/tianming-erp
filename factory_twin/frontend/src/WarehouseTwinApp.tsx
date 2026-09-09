@@ -1580,8 +1580,7 @@ function WarehouseRackElevation({
                         onChooseEmptyLocation(location.location_id);
                       }
                     }}
-                  ><b>{bay + 1}格</b><strong>{identityConflict ? "货位身份冲突" : cellItems.length ? cellSummary : location ? "正式空货位" : "未建正式货位"}</strong></button>
-                  {location && !identityConflict && <button className="shelf-position-print" type="button" onClick={() => window.open(`/static/shelf-label.html?location_id=${location.location_id}`, '_blank', 'noopener')}>打印货位</button>}</div>
+                  ><b>{bay + 1}格</b></button>
                   {cellItems.length > 0 && canChooseProducts && <button
                     type="button"
                     className="shelf-cell-add-product"
@@ -1594,6 +1593,8 @@ function WarehouseRackElevation({
                       }
                     }}
                   >＋ 添加货物</button>}
+                  <span className="shelf-cell-status" title={cellSummary}>{identityConflict ? "货位身份冲突" : cellItems.length ? cellSummary : location ? "正式空货位" : "未建正式货位"}</span>
+                  {location && !identityConflict && <button className="shelf-position-print" type="button" title="打印货位标签" onClick={() => window.open(`/static/shelf-label.html?location_id=${location.location_id}`, '_blank', 'noopener')}>打印货位</button>}</div>
                   {cellItems.length ? <div className="shelf-product-cards">
                     <small className="shelf-cell-kind">{groupShelfProducts(cellItems).length === 1 ? "单品存放" : `混放 · ${groupShelfProducts(cellItems).length} 款`}</small>
                     {groupShelfProducts(cellItems).map(group => <article className="shelf-product-card" key={group.key}>

@@ -2486,3 +2486,7 @@ body.warehouse-twin-page {
   .twin-mold-rack-stage .twin-rack-content > aside { order: -1; flex-shrink: 0; margin: 0 0 12px; }
   .twin-mold-rack-stage .twin-elevation-shell { flex-shrink: 0; }
 }
+.twin-rack-product-label .shelf-current-fields { margin: 8px 0; }
+.twin-rack-product-label .shelf-current-code { font-size: 16px; font-weight: 800; overflow-wrap: anywhere; }
+.twin-rack-product-label .shelf-lot-times { font-size: 11px; color: #64748b; margin: 6px 0 10px; }
+.shelf-lot-history details { margin: 8px 0; }

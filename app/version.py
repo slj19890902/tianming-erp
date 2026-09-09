@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.295"
-APP_VERSION_NAME = "电脑内网与手机外网双入口登录"
+APP_VERSION = "v0.22.296"
+APP_VERSION_NAME = "手机盘点紧凑布局与货架标签信息"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2222,17 +2222,29 @@ _V022294_VERIFICATION_STEPS = [
     "选择有多款产品的格核对逐款标签、客户简称、编码、品名与规格；不显示库存、每捆或预警数量。",
     "先试打一张80×40标签，100%实际大小；扫描应查到对应正式货位，不标记拿齐，再进行整架打印。",
 ]
-APP_CHANGES = [
+_V022295_CHANGES = [
     "电脑继续通过工厂局域网地址登录，手机通过免费 HTTPS 外网地址使用手机版，两边共用原 ERP 服务、账号、权限和数据。",
     "局域网访问不经过外网穿透；仅明确配置的私网入口允许 HTTP 登录，外网保留 HTTPS 与 Secure Cookie，跨入口写请求仍受来源校验。",
     "后端仍只监听本机并保持单进程；本版无数据库迁移，不修改库存、订单或客户权限。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022295_VERIFICATION_STEPS = [
     "厂内电脑打开 http://192.168.3.80:8000/，使用原账号登录并查看仓库。",
     "手机关闭 WiFi，打开 https://tianmingerp0909.share.zrok.io/mobile/，使用原账号核对手机版和可见数据。",
     "按原账号权限使用；跨入口退出会沿用原有全会话退出规则，不需要新增或保存测试库存。",
 ]
+APP_CHANGES = [
+    "手机盘点客户、产品搜索选择同排，数量日期同排，保存取消刷新同排；保留重复库存确认及原有权限。",
+    "货架正视图精简打印入口与批次侧栏，按客户、编码、品名、尺寸、数量排列，批次时间显示北京时间到分钟。",
+    "无数据库迁移，不修改库存、订单、地图或草稿；保留内外网双入口。",
+]
+APP_VERIFICATION_STEPS = [
+    "完成未保存操作后强制刷新仓库页面，查货正视图顶部点击打印货架标签，格内点击打印本格标签；标签不含数量。",
+    "手机重新打开盘点页面，核对搜索与选择、数量日期、底部三按钮均同行；新增库存仍需确认未重复登记。",
+    "选中批次核对右栏字段顺序，入库日期与进入货位时间小字显示，无T、Z或秒。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.295：本次更新｜{item}" for item in _V022295_CHANGES),
+    *(f"v0.22.295：如何验证｜{item}" for item in _V022295_VERIFICATION_STEPS),
     *(f"v0.22.294：本次更新｜{item}" for item in _V022294_CHANGES),
     *(f"v0.22.294：如何验证｜{item}" for item in _V022294_VERIFICATION_STEPS),
     *(f"v0.22.293：本次更新｜{item}" for item in _V022293_CHANGES),

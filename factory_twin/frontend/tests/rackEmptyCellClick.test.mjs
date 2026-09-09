@@ -72,15 +72,15 @@ test("an occupied cell retains its inventory and does not render a misleading ad
   assert.equal(emptyControls.length, 0);
 });
 
-test("carton cells read product and specification before customer and retain every batch", () => {
+test("carton cells prioritize code before product details and retain every batch", () => {
   const items = [1, 2].map(lot_id => ({lot_id, product_id: 5, customer_id: 7, product_name: "中性内盒",
     specification: "400×300×200", inventory_code: "CODE-5", quantity: 15, unit: "pcs"}));
   const {nodes} = render({locations: [{...locations[0], items}]});
   const cards = nodes.filter(node => node.props.className === "shelf-product-card");
   assert.equal(cards.length, 1);
   const content = JSON.stringify(cards[0]);
-  assert.ok(content.indexOf("中性内盒") < content.indexOf("CODE-5"));
-  assert.ok(content.indexOf("400×300×200") < content.indexOf("CODE-5"));
+  assert.ok(content.indexOf("CODE-5") < content.indexOf("中性内盒"));
+  assert.ok(content.indexOf("CODE-5") < content.indexOf("400×300×200"));
   assert.ok(content.includes('30'));
   assert.equal(nodes.filter(node => node.props.className === "shelf-batch-row").length, 2);
   assert.equal(nodes.filter(node => node.props.className === "mold-rack-book-spines").length, 0);

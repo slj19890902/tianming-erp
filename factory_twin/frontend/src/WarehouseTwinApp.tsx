@@ -1528,7 +1528,7 @@ function WarehouseRackElevation({
   return <section className="twin-rack-focus-panel twin-rack-stage" role="region" aria-label={`${rack.rack_code} 参数化正视图`}>
       <header>
       <div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
-        <button type="button" disabled={!allCellsPrintable} title="80×40无数量信息标签；按当前格内正式库存逐款打印，空格打印位置标签。" onClick={() => window.open(`/static/location-label.html?content=shelf-information&location_ids=${printableLocationIds.join(',')}`, '_blank', 'noopener')}>打印整架每格信息标签（无数量）</button>
+        <button type="button" disabled={!allCellsPrintable} title="80×40无数量信息标签；按当前格内正式库存逐款打印，空格打印位置标签。" onClick={() => window.open(`/static/location-label.html?content=shelf-information&location_ids=${printableLocationIds.join(',')}`, '_blank', 'noopener')}>打印货架标签</button>
         <button type="button" onClick={onClose}>返回孪生地图</button>
       </header>
       <div className="twin-rack-content">
@@ -1551,7 +1551,7 @@ function WarehouseRackElevation({
                   const finishedBlock = stocktakeAddBlockReason(location, "finished");
                   const semiFinishedBlock = stocktakeAddBlockReason(location, "semi_finished");
                   const nextBlockReason = !canChooseProducts
-                    ? "请开启移货 / 盘点；已选移货来源时请先完成或取消移货。"
+                    ? "请切换移货/盘点；先完成当前移货。"
                     : finishedBlock && semiFinishedBlock
                       ? finishedBlock
                       : null;
@@ -1581,7 +1581,7 @@ function WarehouseRackElevation({
                       }
                     }}
                   ><b>{bay + 1}格</b><strong>{identityConflict ? "货位身份冲突" : cellItems.length ? cellSummary : location ? "正式空货位" : "未建正式货位"}</strong></button>
-                  {location && !identityConflict && <button type="button" onClick={() => window.open(`/static/location-label.html?content=shelf-information&location_id=${location.location_id}`, '_blank', 'noopener')}>打印本格信息标签</button>}
+                  {location && !identityConflict && <button type="button" onClick={() => window.open(`/static/location-label.html?content=shelf-information&location_id=${location.location_id}`, '_blank', 'noopener')}>打印本格标签</button>}
                   {cellItems.length ? <div className="shelf-product-cards">
                     <small className="shelf-cell-kind">{groupShelfProducts(cellItems).length === 1 ? "单品存放" : `混放 · ${groupShelfProducts(cellItems).length} 款`}</small>
                     {groupShelfProducts(cellItems).map(group => <article className="shelf-product-card" key={group.key}>
@@ -1617,12 +1617,15 @@ function WarehouseRackElevation({
         </div>
         <aside>
           <small>产品标签</small>
-          {!selectedItem ? <><h3>点击货架上的产品或空货位</h3><p>每一格严格读取该货架、层号和格号；同格所有批次均保留并可逐个查看。</p><strong>{items.length} 个批次 · {emptyLocationCount} 个正式空货位</strong>{unboundLocationCount > 0 && <p className="twin-mold-rack-warning">本区域还有 {unboundLocationCount} 个有货旧货位未绑定货架层格，请先转入盘点待归位。</p>}{area?.quantities.map((item) => <div className="twin-quantity-row" key={item.key}><span>{item.label}</span><b>{formatNumber(item.available)} {inventoryUnitLabel(item.unit)}</b></div>)}</> : <article className="twin-rack-product-label">
-            <span>当前批次 · 盘点信息</span>
-            <h3>{selectedItem.product_name || "产品名称待补充"}</h3>
-            <strong>{selectedItem.specification || "规格待补充"}</strong>
-            <p className="shelf-physical">实际数量 {formatNumber(inventoryLabelQuantity(selectedItem))} {inventoryUnitLabel(selectedItem.unit)}</p>
-            <dl><div><dt>客户</dt><dd>{employeeCustomerName(selectedItem)}</dd></div><div><dt>存货编码</dt><dd>{selectedItem.inventory_code || "待补充"}</dd></div></dl>
+          {!selectedItem ? <><h3>请选择货位</h3><p>点击产品查看批次</p><strong>{items.length} 个批次 · {emptyLocationCount} 个正式空货位</strong>{unboundLocationCount > 0 && <p className="twin-mold-rack-warning">本区域还有 {unboundLocationCount} 个有货旧货位未绑定货架层格，请先转入盘点待归位。</p>}{area?.quantities.map((item) => <div className="twin-quantity-row" key={item.key}><span>{item.label}</span><b>{formatNumber(item.available)} {inventoryUnitLabel(item.unit)}</b></div>)}</> : <article className="twin-rack-product-label">
+            <span>当前批次</span>
+            <dl className="shelf-current-fields">
+              <div><dt>客户</dt><dd>{employeeCustomerName(selectedItem)}</dd></div>
+              <div><dt>存货编码</dt><dd className="shelf-current-code">{selectedItem.inventory_code || "待补充"}</dd></div>
+              <div><dt>产品名称</dt><dd>{selectedItem.product_name || "待补充"}</dd></div>
+              <div><dt>尺寸</dt><dd>{selectedItem.specification || "待补充"}</dd></div>
+              <div><dt>数量</dt><dd>{formatNumber(inventoryLabelQuantity(selectedItem))} {inventoryUnitLabel(selectedItem.unit)}</dd></div>
+            </dl>
             <ShelfLotHistory lotId={selectedItem.lot_id} load={requestJson} />
             <button type="button" className="twin-rack-detail-toggle" aria-expanded={detailOpen} onClick={() => setDetailOpen((value) => !value)}>{detailOpen ? "收起详情" : "查看详情"}</button>
             {detailOpen && <dl className="twin-rack-product-detail"><div><dt>可用数量</dt><dd>{formatNumber(selectedItem.available_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>已预占</dt><dd>{formatNumber(selectedItem.reserved_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>实际位置</dt><dd>{selectedItem.location_name || "位置名称待完善"}</dd></div><div><dt>存放方式</dt><dd>{selectedItem.pallet_code ? "已绑定实物栈板" : "地堆或散存"}</dd></div><div><dt>批次</dt><dd>{selectedItem.lot_number || "—"}</dd></div></dl>}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { beijingDisplay } from './beijingDisplay.mjs';
 
 interface History {
   id: number;
@@ -31,20 +32,19 @@ export function ShelfLotHistory({lotId, load}: {lotId: number; load: (url: strin
   const reservations = (data.reservations || []).filter(row => row.remaining_reserved_stock_quantity > 0);
   const deliveries = data.shelf_deliveries || [];
   return <section className="shelf-lot-history" aria-label="当前批次时间和订单">
-    <dl><div><dt>库存形成日期</dt><dd>{archive.formed_on || '历史日期待确认'}{archive.formed_on && archive.formation_accuracy !== 'exact' ? '（非精确日期）' : ''}</dd></div>
-      <div><dt>进入当前货位</dt><dd>{archive.entered_current_location_at || '尚无可靠记录'}</dd></div>
-      <div><dt>最近实际送货</dt><dd>{deliveries[0]?.dispatched_at || '无可见正式发货记录'}</dd></div></dl>
-    <h4>当前占用订单</h4>
-    <p>来源订单：{data.shelf_related_inventory?.source_order?.order_number || '无可确认的生产来源订单'}</p>
+    <dl className="shelf-lot-times"><div><dt>入库日期</dt><dd>{beijingDisplay(archive.formed_on)}{archive.formed_on && archive.formation_accuracy !== 'exact' ? '（约）' : ''}</dd></div>
+      <div><dt>进入货位</dt><dd>{beijingDisplay(archive.entered_current_location_at)}</dd></div></dl>
+    <details><summary>关联订单与送货</summary>
+    <p>来源订单：{data.shelf_related_inventory?.source_order?.order_number || '—'}</p>
     {reservations.length ? reservations.map(row => <p key={row.id}>{row.order_number || '关联订单待确认'} · 占用 {row.remaining_reserved_stock_quantity}</p>) : <p>无可见未消耗预占记录</p>}
-    <details><summary>实际送货记录（{deliveries.length}）</summary>{deliveries.map(row => <p key={row.delivery_id}>{row.delivery_number} · {row.dispatched_at}</p>)}</details>
+    <details><summary>送货记录（{deliveries.length}）</summary>{deliveries.map(row => <p key={row.delivery_id}>{row.delivery_number} · {beijingDisplay(row.dispatched_at)}</p>)}</details>
+    </details>
     <details><summary>同款库存位置</summary>
       {(data.shelf_related_inventory?.same_product_locations || []).map(row => <p key={row.lot_id}>
-        <a href={`/factory-twin-assets/warehouse-twin.html?floor=${row.floor}F&location_id=${row.location_id}&lot_id=${row.lot_id}`} target="_blank" rel="noopener noreferrer">{row.location_name}</a>
+        <a href={`/warehouse.html?floor=${row.floor}F&location_id=${row.location_id}&lot_id=${row.lot_id}`} target="_blank" rel="noopener noreferrer">{row.location_name}</a>
         {' · '}实物 {row.physical_quantity} · 可用 {row.available_quantity} · 占用 {row.reserved_quantity}{row.status === 'frozen' ? ' · 已冻结' : ''}
       </p>)}
-      <small>同客户、同产品及相同规格材质的位置；不代表全部可用于新订单。请在订单库存抵扣中核对并确认，不直接减少报料数量。</small>
+      <small>库存抵扣须在订单中确认。</small>
     </details>
-    <small>以上为当前批次关联事实，不代表同款全部库存；扫码拿齐和集货不算发货。</small>
   </section>;
 }

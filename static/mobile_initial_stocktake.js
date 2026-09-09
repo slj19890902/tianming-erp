@@ -33,7 +33,7 @@ function renderInitialInbound() {
   }
   $("inboundFields").disabled = false;
   $("inboundRefresh").disabled = false;
-  $("inboundContext").textContent = "可在同一货位添加不同产品。只填写尚未登记的新增实物；已有批次数量请在上方盘点修改，其他货位已登记的实物请移库。";
+  $("inboundContext").textContent = "仅添加未登记实物；已有库存请盘点或移货。";
   try {
     const saved = JSON.parse(sessionStorage.getItem(inboundAttemptStorageKey()) || "null");
     if (saved?.items?.[0]?.location_id === Number(pick(state.selectedLocation, ["id", "location_id"]))) {
@@ -77,7 +77,7 @@ async function findInboundCustomers() {
     const data = await api(`/api/master/customers?${params}`);
     if (generation !== inbound.generation) return;
     $("inboundCustomer").innerHTML += (data.items || []).map(row => `<option value="${Number(row.id)}">${h(row.chinese_short_name || row.name)} · ${h(row.name)}</option>`).join("");
-    $("inboundContext").textContent = "请选择客户；结果最多50条，找不到时请补全客户名称。";
+    $("inboundContext").textContent = "请选择客户（最多50条）";
   } catch (error) { if (generation === inbound.generation) showMessage(error.message); }
 }
 
@@ -92,7 +92,7 @@ async function findInboundProducts() {
     const data = await api(`/api/warehouse/floor3/product-candidates?${params}`);
     if (generation !== inbound.generation || customer !== $("inboundCustomer").value) return;
     $("inboundProduct").innerHTML += (data.items || []).map(row => `<option value="${Number(row.product_id)}">${h(row.product_code || row.customer_material_code)} · ${h(row.product_name)}</option>`).join("");
-    $("inboundContext").textContent = data.items?.length ? "请选择产品，结果最多50条，可输入完整存货编码缩小范围。" : "未找到产品，可核对存货编码后展开管理员新增。";
+    $("inboundContext").textContent = data.items?.length ? "请选择产品（最多50条）" : "未找到，可新增产品";
   } catch (error) { if (generation === inbound.generation) showMessage(error.message); }
 }
 
@@ -110,7 +110,7 @@ async function refreshInboundContext() {
     if (generation !== inbound.generation) return;
     inbound.context = data;
     $("inboundContext").textContent = data.can_add
-      ? `该产品系统已登记 ${data.existing_quantity} 只，分布在 ${data.existing_location_count} 个位置。${data.existing_quantity ? "请先核对是否为同一批实物；已登记货物应移货归位。" : "可填写当前货位尚未登记的实际数量。"}`
+      ? `已登记 ${data.existing_quantity} 只 · ${data.existing_location_count} 个货位`
       : data.block_reason;
     $("inboundExistingLabel").classList.toggle("hidden", !data.existing_quantity);
     $("inboundSave").disabled = !data.can_add;

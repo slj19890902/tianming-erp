@@ -42,6 +42,23 @@ class OrderBomGraphProduct(Base):
     product_version: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class OrderBomExternalComponent(Base):
+    """Stable link between a procurement snapshot and its real frozen node."""
+    __tablename__ = "order_bom_external_components"
+    __table_args__ = (
+        ForeignKeyConstraint(["order_item_id", "product_id"],
+            ["order_bom_graph_products.order_item_id", "order_bom_graph_products.product_id"],
+            ondelete="RESTRICT", name="fk_bom_external_frozen_product"),
+        UniqueConstraint("order_item_id", "product_id", name="uq_bom_external_product"),
+    )
+    external_component_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_order_item_external_components.id", ondelete="RESTRICT"), primary_key=True)
+    order_item_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    product_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    bom_snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_order_item_bom_components.id", ondelete="RESTRICT"), nullable=False, unique=True)
+
+
 class ProductBomProfile(Base):
     """Explicit physical source; absent rows retain the legacy contract."""
     __tablename__ = "product_bom_profiles"

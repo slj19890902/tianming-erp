@@ -1920,6 +1920,10 @@ def _composite_parent_requisition_is_suppressed(
     board again when the operator saves the reviewed draft.
     """
 
+    # Schema5 includes the root's own manufactured route as a real snapshot.
+    # The separate legacy parent source would purchase that same board twice.
+    if any(s.snapshot_schema_version == 5 and s.component_product_id == item.product_id for s in snapshots):
+        return True
     return bool(
         getattr(item, "is_virtual_composite_parent_snapshot", False)
     ) or _is_set_only_a3_surround_bom(snapshots)
@@ -2583,7 +2587,7 @@ class _PendingRequisitionReadContext:
         *,
         snapshots: list[SalesOrderItemBomComponent],
     ) -> list[dict]:
-        if item.id not in self._bom_batch_supported_item_ids:
+        if item.id not in self._bom_batch_supported_item_ids or any(s.snapshot_schema_version == 5 for s in snapshots):
             return _bom_pending_component_requirements(
                 db, item, snapshots=snapshots
             )
@@ -2950,6 +2954,23 @@ def _bom_snapshots_for_order_item(
     ).all()
 
 
+def _bom_snapshot_inventory_source(db: Session, snapshot: SalesOrderItemBomComponent) -> str:
+    if snapshot.snapshot_schema_version != 5:
+        return "manufactured"
+    from app.services.multilevel_bom_orders import read_order_graph
+    from app.services.multilevel_bom_plan import BomPlanError
+    try:
+        graph = read_order_graph(db, snapshot.sales_order_item_id)
+        if graph is None:
+            raise BomPlanError("多级BOM缺少冻结产品图")
+        node = next((n for n in graph.nodes if n.product_id == snapshot.component_product_id), None)
+        if node is None:
+            raise BomPlanError("组件不属于冻结BOM产品图")
+        return node.source
+    except BomPlanError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 def _bom_snapshot_requirements(
     db: Session,
     snapshot: SalesOrderItemBomComponent,
@@ -2962,6 +2983,18 @@ def _bom_snapshot_requirements(
     inventory_coverage_override: dict[str, int] | None = None,
 ) -> dict:
     """Return one immutable BOM snapshot physical source requirement."""
+    graph_requirements = None
+    if snapshot.snapshot_schema_version == 5:
+        from app.services.multilevel_bom_requirements import read_graph_requirements
+        from app.services.multilevel_bom_plan import BomPlanError
+        try:
+            graph_requirements = read_graph_requirements(db, snapshot.sales_order_item_id)
+            if graph_requirements is None:
+                raise BomPlanError("多级BOM缺少冻结产品图")
+            if graph_requirements.source(snapshot.component_product_id) != "manufactured":
+                raise BomPlanError("组套成品或外购产品不能作为纸板材料报料")
+        except BomPlanError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
     component = _bom_snapshot_component_type(snapshot, component_type)
     demand = None
     if (
@@ -3009,6 +3042,17 @@ def _bom_snapshot_requirements(
             component_type=component,
         )
     )
+    if graph_requirements is not None:
+        effective_sets = graph_requirements.order_quantity
+        physical_multiplier = _bom_snapshot_physical_pieces_per_component(snapshot, component)
+        finished_credit = graph_requirements.finished_units[snapshot.component_product_id] * physical_multiplier
+        semi_credit = graph_requirements.physical_credits[snapshot.component_product_id, component]
+        coverage = {"finished_piece_quantity": finished_credit, "semi_piece_quantity": semi_credit,
+                    "total_piece_quantity": finished_credit + semi_credit}
+        # Ancestor finished stock reduces assembly-child demand BEFORE the
+        # node's own finished and physical-stock credits are applied once.
+        required_piece_quantity_override = next(p.required_units for p in graph_requirements.plan.products
+                                               if p.product_id == snapshot.component_product_id)
     finished_reserved = coverage["finished_piece_quantity"]
     semi_reserved = coverage["semi_piece_quantity"]
     component_unit_quantity = int(
@@ -3027,7 +3071,8 @@ def _bom_snapshot_requirements(
     )
     remaining = max(required_piece_quantity - inventory_covered, 0)
     net_sheets = (remaining + yield_per_sheet - 1) // yield_per_sheet
-    requisition_qty = net_sheets + int(snapshot.spare_sheet_quantity or 0)
+    spare_sheets = int(snapshot.spare_sheet_quantity or 0) if graph_requirements is None or remaining > 0 else 0
+    requisition_qty = net_sheets + spare_sheets
     is_base = component == "base"
     component_suffix = "底" if is_base else "盖" if component == "cover" else ""
     product_name = snapshot.snapshot_component_product_name
@@ -3096,7 +3141,7 @@ def _bom_snapshot_requirements(
         "actual_yield_per_sheet": actual_yield_per_sheet,
         "yield_per_sheet": yield_per_sheet,
         "requisition_qty": requisition_qty,
-        "spare_sheet_quantity": int(snapshot.spare_sheet_quantity or 0),
+        "spare_sheet_quantity": spare_sheets,
         "cutting_mode": resolved_cutting_mode,
         "cutting_factor": cutting_factor,
         "is_die_cut": bool(snapshot.is_die_cut),
@@ -3337,6 +3382,13 @@ def _bom_snapshot_is_fully_requisitioned(
     db: Session,
     snapshot: SalesOrderItemBomComponent,
 ) -> bool:
+    source = _bom_snapshot_inventory_source(db, snapshot)
+    if source == "assembled":
+        return True
+    if source == "purchased":
+        # A purchased node is never implicitly marked supplied by a paperboard
+        # requisition. Its external-purchase adapter must prove fulfillment.
+        return False
     for component in _bom_snapshot_component_types(snapshot):
         requirements = _bom_snapshot_requirements(
             db,
@@ -3413,6 +3465,8 @@ def _bom_pending_component_requirements(
         else _bom_snapshots_for_order_item(db, item.id)
     )
     for snapshot in resolved_snapshots:
+        if _bom_snapshot_inventory_source(db, snapshot) != "manufactured":
+            continue
         for component_type in _bom_snapshot_component_types(snapshot):
             requirements = _bom_snapshot_requirements(
                 db,
@@ -12634,6 +12688,7 @@ def _create_batch_locked(
                 pending_source_keys = {
                     (snapshot.id, component_type)
                     for snapshot in bom_snapshots
+                    if _bom_snapshot_inventory_source(db, snapshot) == "manufactured"
                     for component_type in _bom_snapshot_component_types(snapshot)
                     if int(
                         _bom_snapshot_requirements(

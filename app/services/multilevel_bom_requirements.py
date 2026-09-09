@@ -1,0 +1,65 @@
+"""Read real graph procurement demand using authoritative reserved stock.
+
+Free warehouse stock is never silently credited. Finished units propagate
+through assembly edges; physical semi stock stays scoped to its own route.
+"""
+from dataclasses import dataclass
+
+from sqlalchemy import select
+
+from app.models.order import OrderItem
+from app.models.warehouse_inventory import InventoryReservation
+from app.services.composite_bom_workflow import effective_component_demands
+from app.services.multilevel_bom_compile import CompiledMasterBom
+from app.services.multilevel_bom_orders import read_compiled_order_bom
+from app.services.multilevel_bom_plan import BomPlan, BomPlanError, plan_bom
+from app.services.warehouse_inventory import (
+    active_finished_component_reserved_qty, active_finished_reserved_qty, component_inventory_coverage,
+)
+
+
+@dataclass(frozen=True)
+class GraphRequirements:
+    order_quantity: int
+    compiled: CompiledMasterBom
+    plan: BomPlan
+    finished_units: dict[int, int]
+    physical_credits: dict[tuple[int, str], int]
+
+    def source(self, product_id):
+        return next(n.source for n in self.compiled.graph.nodes if n.product_id == product_id)
+
+
+def read_graph_requirements(db, order_item_id):
+    compiled = read_compiled_order_bom(db, order_item_id)
+    if compiled is None:
+        return None
+    item = db.get(OrderItem, order_item_id)
+    graph = compiled.graph
+    demands = {d.component_product_id: d for d in effective_component_demands(db, order_item_id)}
+    multipliers = {d.product_id: d.required_units for d in plan_bom(graph, 1).products}
+    if any(d.effective_sets != item.quantity or d.required_piece_quantity != item.quantity * multipliers[pid]
+           for pid, d in demands.items()):
+        raise BomPlanError("多级BOM数量调整必须保持冻结组套关系，请先核对订单数量")
+    snapshots = {s.component_product_id: s for s in compiled.snapshots}
+    finished, pieces = {}, {}
+    for node in graph.nodes:
+        row = snapshots[node.product_id]
+        if node.product_id == graph.root_id:
+            # Root delivery already appears in the canonical order coverage;
+            # add only still-unconsumed root-component reservations, not their
+            # historical consumed credit a second time.
+            root_reservations = db.scalars(select(InventoryReservation).where(
+                InventoryReservation.sales_order_item_bom_component_id == row.id,
+                InventoryReservation.reservation_type == "finished_order",
+                InventoryReservation.status != "cancelled"))
+            finished[node.product_id] = active_finished_reserved_qty(db, item.id) + sum(
+                max(int(r.credited_requirement_quantity or 0) - int(r.consumed_requirement_quantity or 0)
+                    - int(r.released_requirement_quantity or 0), 0) for r in root_reservations)
+        else:
+            finished[node.product_id] = active_finished_component_reserved_qty(db, row.id)
+        for route in node.routes:
+            coverage = component_inventory_coverage(db, row.id, component_type=route.key)
+            pieces[node.product_id, route.key] = coverage["semi_piece_quantity"]
+    return GraphRequirements(item.quantity, compiled, plan_bom(graph, item.quantity,
+        eligible_stock=finished, eligible_pieces=pieces), finished, pieces)

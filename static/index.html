@@ -3012,6 +3012,21 @@
         .erp-enterprise-ui .panel { max-width: 100%; }
         .erp-enterprise-ui .table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }
       }
+      .finance-task-nav { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-bottom:16px; }
+      .finance-tone-slate { --task-ink:#344054; --task-bg:#f2f4f7; }
+      .finance-tone-blue { --task-ink:#1849a9; --task-bg:#eff6ff; }
+      .finance-tone-cyan { --task-ink:#155e75; --task-bg:#ecfeff; }
+      .finance-tone-orange { --task-ink:#9a3412; --task-bg:#fff7ed; }
+      .finance-tone-purple { --task-ink:#6b21a8; --task-bg:#faf5ff; }
+      .finance-task-link { cursor:pointer; text-align:left; font:inherit; color:var(--task-ink); background:var(--task-bg); border:1px solid var(--line); border-top:4px solid var(--task-ink); border-radius:8px; padding:12px; min-width:0; min-height:76px; display:flex; flex-direction:column; gap:5px; }
+      .finance-task-link strong { font-size:16px; }
+      .finance-task-link span { font-size:12px; line-height:1.5; }
+      .finance-task-link[aria-pressed="true"] { outline:2px solid var(--task-ink); outline-offset:1px; }
+      .finance-task-link:focus-visible { outline:3px solid #155eef; outline-offset:3px; }
+      .finance-task-link:hover { border-color:var(--task-ink); }
+      .finance-step-guide { display:flex; flex-wrap:wrap; gap:8px 24px; padding:12px 16px; margin-bottom:12px; border-left:4px solid var(--task-ink); border-radius:6px; color:var(--task-ink); background:var(--task-bg); line-height:1.7; }
+      @media(max-width:1000px) { .finance-task-nav { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+      @media(max-width:600px) { .finance-task-nav { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; } .finance-step-guide { flex-direction:column; gap:4px; } }
     </style>
   </head>
   <body>
@@ -4830,14 +4845,14 @@
             </template>
 
             <template v-else-if="activePage === 'finance'">
-              <div class="page-head finance-page-head"><div><h2>对账与开票</h2><div class="muted">客户对账、开票、应付和费用记账集中处理；收款仍以银行和承兑记录为准。</div></div>
-                <div class="toolbar-group">
-                  <button :class="['btn',{primary:financeView==='overview'}]" @click="setFinanceView('overview')">经营概览</button>
-                  <button :class="['btn',{primary:financeView==='current'}]" @click="setFinanceView('current')">客户对账</button>
-                  <button v-if="canViewInvoiceTasks" :class="['btn',{primary:financeView==='invoice_tasks'}]" @click="setFinanceView('invoice_tasks')">开票任务</button>
-                  <button :class="['btn',{primary:financeView==='payables'}]" @click="setFinanceView('payables')">应付支出</button>
-                </div>
-              </div>
+              <div class="page-head finance-page-head"><div><h2>财务办理</h2><div class="muted">先选要办的事，再选月份和单位；保存草稿不等于确认账单或实际付款。</div></div></div>
+              <nav class="finance-task-nav" aria-label="财务办理事项">
+                <button class="finance-task-link finance-tone-slate" :aria-pressed="financeView==='overview'" @click="setFinanceView('overview')"><strong>经营概览</strong><span>看待办与管理月报</span></button>
+                <button class="finance-task-link finance-tone-blue" :aria-pressed="financeView==='current'" @click="setFinanceView('current')"><strong>客户对账</strong><span>核对送货、生成账单</span></button>
+                <button v-if="canViewInvoiceTasks" class="finance-task-link finance-tone-cyan" :aria-pressed="financeView==='invoice_tasks'" @click="setFinanceView('invoice_tasks')"><strong>开票办理</strong><span>核对资料、登记开票结果</span></button>
+                <button class="finance-task-link finance-tone-orange" :aria-pressed="financeView==='payables'" @click="setFinanceView('payables')"><strong>供应商付款</strong><span>核账、抵扣余额、银行补差</span></button>
+                <button v-if="canViewFinanceCosts" class="finance-task-link finance-tone-purple" :aria-pressed="financeView==='expenses'" @click="setFinanceView('expenses')"><strong>日常费用</strong><span>工资、房租、水电与成本检查</span></button>
+              </nav>
               <template v-if="financeView==='overview'">
                 <div v-if="financeOverviewState.error" class="notice warning" style="margin-bottom:10px">经营概览读取失败：{{ financeOverviewState.error }}</div>
                 <div v-if="financeOverviewState.loading" class="empty">正在读取近六个月经营趋势…</div>
@@ -4854,7 +4869,7 @@
                       <button class="finance-month-action" @click="openFinanceMonthlyAction('pending_reconciliation')"><span>1 · 客户对账</span><strong>¥ {{ money(financeOverview.workbench_summary.pending_reconciliation_amount) }}</strong><span class="muted">待生成或确认的对账明细</span></button>
                       <button class="finance-month-action" @click="openFinanceMonthlyAction('pending_invoice')"><span>2 · 开票准备</span><strong>¥ {{ money(financeOverview.workbench_summary.pending_invoice_amount) }}</strong><span class="muted">已对账、尚未登记开票</span></button>
                       <button class="finance-month-action" :disabled="!canViewFinanceCosts" @click="openFinanceMonthlyAction('cost_drafts')"><span>3 · 费用复核</span><strong>¥ {{ money(financeOverview.cost_pool.status_totals?.draft?.amount || 0) }}</strong><span class="muted">工资、费用等草稿待确认</span></button>
-                      <button class="finance-month-action" :disabled="!canViewFinanceCosts" @click="openFinanceMonthlyAction('close_readiness')"><span>4 · 月报检查</span><strong>{{ financeOverview.cost_pool.close_ready ? '可结转' : '资料待补' }}</strong><span class="muted">{{ financeOverview.cost_pool.blockers?.[0]?.message || '核对成本资料与来源' }}</span></button>
+                      <button class="finance-month-action" :disabled="!canViewFinanceCosts" @click="openFinanceMonthlyAction('close_readiness')"><span>4 · 月报检查</span><strong>{{ financeReadinessLabel(financeOverview.cost_pool) }}</strong><span class="muted">{{ financeReadinessHint(financeOverview.cost_pool) }}</span></button>
                     </div>
                   </div>
                   <div class="dashboard-detail-summary">
@@ -4882,6 +4897,7 @@
                 </template>
               </template>
               <template v-if="financeView==='current'">
+              <div class="finance-step-guide finance-tone-blue"><strong>客户对账怎么做</strong><span>1 选月份和客户</span><span>2 点“去对账”核对回单数量</span><span>3 确认账单后再办理开票</span></div>
               <div class="panel finance-filter-panel" style="margin-bottom:10px">
                 <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
                   <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
@@ -5057,7 +5073,8 @@
                   </div>
                 </template>
               </template>
-              <template v-else-if="financeView==='payables'">
+              <template v-else-if="financeView==='payables' || financeView==='expenses'">
+                <template v-if="financeView==='payables'">
                 <input v-if="canViewFinanceCosts" ref="financeCostFileInput" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" @change="onFinanceCostFileSelected" />
                 <input v-if="canViewFinanceCosts" ref="supplierInvoicePdfInput" type="file" accept="application/pdf,.pdf" style="display:none" @change="onSupplierInvoicePdfSelected" />
                 <div v-if="canViewFinanceCosts" class="panel finance-filter-panel" style="margin-bottom:10px">
@@ -5126,9 +5143,12 @@
                     </template>
                   </details>
                 </div>
+                </template>
+                <template v-if="financeView==='expenses' && canViewFinanceCosts">
+                <div class="finance-step-guide finance-tone-purple"><strong>日常费用怎么做</strong><span>1 选费用月份</span><span>2 核对固定草稿，补水电或其他费用</span><span>3 检查后确认；材料采购不用重复记一笔</span></div>
                 <div v-if="canViewFinanceCosts" class="panel finance-filter-panel" style="margin-bottom:10px">
                   <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
-                    <div><div class="section-title">每月只看四类支出</div><div class="muted">材料自动归集；工资、房租和月供只配置一次；水电按表数与发票；所有自动项先生成草稿。</div></div>
+                    <div><div class="section-title">本月费用</div><div class="muted">工资、房租和月供配置后可生成草稿；水电填写本月账单金额。</div></div>
                     <div class="toolbar-group"><div class="field" style="width:150px"><label>费用月份</label><input class="input" type="month" v-model="financeCostMonth" @change="onFinanceCostMonthChange" /></div><button class="btn" :disabled="simpleFinanceState.loading" @click="loadSimpleFinance">刷新</button><button v-if="canManageFinanceCosts" class="btn" :disabled="!!simpleFinanceState.action" @click="generateFinanceRecurringDrafts">{{ simpleFinanceState.action==='generate' ? '生成中…' : '生成本月固定草稿' }}</button><button v-if="canExportFinanceCosts" class="btn primary" @click="exportFinanceMaterialReconciliation">导出材料核票</button></div>
                   </div>
                   <div class="finance-cost-summary" style="margin-top:10px">
@@ -5182,7 +5202,7 @@
                     <div class="table-wrap"><table><thead><tr><th>客户 / 承兑号</th><th>金额</th><th>收到 / 到期</th><th>状态</th><th>供应商月结 / 操作</th></tr></thead><tbody><tr v-for="row in financeAcceptances" :key="row.id"><td><strong>{{ row.customer_name }}</strong><div class="muted">{{ row.bill_number }}</div></td><td class="sensitive-price">¥ {{ money(row.amount) }}</td><td>{{ row.received_date }} / {{ row.maturity_date }}</td><td><span :class="['status',row.status==='held'?'orange':row.status==='endorsed'?'blue':row.status==='matured'?'green':'gray']">{{ row.status_label }}</span><div v-if="row.supplier_name" class="muted">{{ row.supplier_name }}</div></td><td><div v-if="row.status==='held'" class="toolbar-group"><select class="select" style="max-width:310px" v-model.number="row._statementId"><option :value="null">选择供应商月结</option><option v-for="item in simpleFinanceMeta.supplier_statements" :key="item.id" :value="item.id" :disabled="Number(row.amount)>Number(item.available_payment_amount)">{{ item.supplier_name }} · {{ item.statement_number }} · 可抵付 {{ money(item.available_payment_amount) }}{{ Number(row.amount)>Number(item.available_payment_amount) ? '（余额不足）' : '' }}</option></select><button v-if="canFinance" class="btn small primary" :disabled="!!simpleFinanceState.action" @click="endorseFinanceAcceptance(row)">背书抵付</button><button v-if="canFinance" class="btn small" :disabled="!!simpleFinanceState.action" @click="transitionFinanceAcceptance(row,'matured')">到期</button><button v-if="canFinance" class="btn small danger" :disabled="!!simpleFinanceState.action" @click="transitionFinanceAcceptance(row,'returned')">退回</button></div><span v-else class="muted">{{ row.supplier_statement_id ? `已关联月结 #${row.supplier_statement_id}` : '-' }}</span></td></tr><tr v-if="!financeAcceptances.length"><td colspan="5" class="empty">尚无承兑记录。</td></tr></tbody></table></div>
                   </details>
                 </div>
-                <details v-if="canViewFinanceCosts" class="panel finance-filter-panel" style="margin-bottom:10px">
+                <details v-if="canViewFinanceCosts" :open="financeCostDetailsVisible" @toggle="financeCostDetailsVisible=$event.target.open" class="panel finance-filter-panel" style="margin-bottom:10px">
                   <summary style="cursor:pointer"><strong>费用明细与高级筛选</strong>　<span class="muted">日常只需处理上方四类支出；这里用于查看历史细类、导入和导出。</span></summary>
                   <div style="margin-top:10px">
                   <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
@@ -5204,7 +5224,7 @@
                     <div class="finance-report-card"><span class="muted">已确认</span><strong class="cost-sensitive">¥ {{ money(financeCostStatusAmount('confirmed')) }}</strong></div>
                     <div class="finance-report-card"><span class="muted">待复核草稿</span><strong class="cost-sensitive">¥ {{ money(financeCostStatusAmount('draft')) }}</strong></div>
                     <div class="finance-report-card"><span class="muted">已冻结实际材料（含税）</span><strong class="cost-sensitive">¥ {{ money(financeCostSummary.material_cost?.actual_material_cost || 0) }}</strong><span class="muted">送货明细 {{ financeCostSummary.material_cost?.covered_delivery_lines || 0 }}/{{ financeCostSummary.material_cost?.total_delivery_lines || 0 }}</span></div>
-                    <div class="finance-report-card"><span class="muted">月度状态</span><strong>{{ financeCostSummary.close_ready ? '可结转' : '暂不可结转' }}</strong><span class="muted">当前只形成管理费用汇总</span></div>
+                    <div class="finance-report-card"><span class="muted">月报资料检查</span><strong>{{ financeReadinessLabel(financeCostSummary) }}</strong><span class="muted">{{ financeReadinessHint(financeCostSummary) }}</span></div>
                   </div>
                   <div v-if="financeCostState.error" class="notice danger" style="margin-top:10px">成本费用读取失败：{{ financeCostState.error }}</div>
                   <div v-else-if="financeCostPrimaryBlocker" class="notice warning" style="margin-top:10px">{{ financeCostPrimaryBlocker }}</div>
@@ -5326,8 +5346,9 @@
                   <pager :page="pages.financeCosts" :total="financeCostTotal" :page-size="pageSize" @change="pages.financeCosts=$event; loadFinanceCosts()"></pager>
                 </div>
 
-                <div v-if="!canViewFinanceCosts" class="notice warning" style="margin-bottom:10px">成本费用属于公司级敏感数据，仅对拥有成本权限且可查看全部客户的账号开放。</div>
-                <details class="panel finance-cost-legacy">
+                </template>
+                <div v-if="!canViewFinanceCosts" class="notice warning" style="margin-bottom:10px">此账号没有公司成本查看权限；下方仅显示原有权限允许的应付登记。</div>
+                <details v-if="financeView==='payables'" class="panel finance-cost-legacy">
                   <summary>供应商应付登记（原应付流程）</summary>
                   <div class="finance-cost-legacy-body">
                     <div class="toolbar"><div><div class="section-title">新增应付 / 支出</div><div class="muted">用于供应商到期付款跟踪，不会自动重复计入上方成本费用。</div></div><button class="btn" :disabled="financePayableState.loading" @click="loadFinancePayables">刷新</button></div>
@@ -5347,12 +5368,13 @@
                 </details>
               </template>
               <template v-else-if="financeView==='invoice_tasks'">
+                <div class="finance-step-guide finance-tone-cyan"><strong>开票怎么做</strong><span>1 预览客户和金额，补齐提示资料</span><span>2 按现有流程在税局开具</span><span>3 回来登记结果、上传原始 PDF</span></div>
                 <input ref="invoiceTaskPdfInput" type="file" accept="application/pdf,.pdf" style="display:none" @change="onInvoiceTaskPdfSelected" />
                 <div v-if="invoiceTaskUploadState.error" class="notice danger" style="margin-bottom:10px">原始 PDF 上传失败：{{ invoiceTaskUploadState.error }} <button class="btn small" type="button" :disabled="invoiceTaskUploadState.uploading" @click="retryInvoiceTaskPdf">重新选择</button></div>
                 <div class="panel" style="margin-bottom:10px"><div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap"><div class="field" style="width:220px"><label>客户</label><search-select v-model="invoiceTaskFilters.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="全部客户" :disabled="invoiceTaskState.loading"></search-select></div><div class="field" style="width:150px"><label>月份</label><input class="input" type="month" v-model="invoiceTaskFilters.statement_month" :disabled="invoiceTaskState.loading" /></div><div class="field" style="width:145px"><label>状态</label><select class="select" v-model="invoiceTaskFilters.status" :disabled="invoiceTaskState.loading"><option value="">全部状态</option><option value="draft">待补资料</option><option value="ready">可导出</option><option value="exported">已导出待登记</option><option value="issued">已开票</option><option value="failed">失败</option></select></div><button class="btn primary" :disabled="invoiceTaskState.loading" @click="loadInvoiceTasks">{{ invoiceTaskState.loading ? '查询中…' : '查询' }}</button><button v-if="canManageInvoiceProfiles" class="btn" @click="openInvoiceSellers">维护销方主体</button></div></div>
                 <div class="panel"><div class="section-title">开票任务（人工登录税局、核对后再正式开具）</div><div v-if="invoiceTaskState.loading" class="empty">正在读取开票任务…</div><div v-else-if="invoiceTaskState.error" class="empty"><div class="notice danger" style="margin-bottom:10px">开票任务读取失败：{{ invoiceTaskState.error }}</div><button class="btn" type="button" @click="loadInvoiceTasks">重新查询</button></div><div v-else-if="!invoiceTasks.length" class="empty">暂无开票任务。先在对账单完成“核对并确认”，再生成任务。</div><div v-else class="table-wrap"><table><thead><tr><th>任务号</th><th>客户 / 月份</th><th>销方</th><th class="sensitive-price">价税合计</th><th>状态</th><th>缺项 / 操作</th></tr></thead><tbody><tr v-for="task in invoiceTasks" :key="task.id"><td><strong>{{ task.task_number }}</strong><div class="muted">v{{ task.version || '-' }}</div></td><td>{{ task.customer_name }}<div class="muted">{{ task.statement_month }}</div></td><td>{{ task.seller_name || '待选择销方' }}</td><td class="sensitive-price">¥ {{ money(task.total_amount) }}</td><td><span :class="['status',task.status==='issued'?'green':task.status==='failed'?'red':'blue']">{{ invoiceTaskStatusText(task.status) }}</span></td><td><div v-if="(task.missing_items||[]).length" class="danger-text">{{ task.missing_items.join('；') }} <button v-if="canManageInvoiceProfiles" class="btn small" @click="openCustomerInvoiceProfile(task.customer_id)">进入客户税务资料</button></div><div v-else class="toolbar-group"><button class="btn small" :disabled="invoiceTaskOperationState.detailLoading && Number(invoiceTaskOperationState.detailTaskId)===Number(task.id)" @click="openInvoiceTask(task)">{{ invoiceTaskOperationState.detailLoading && Number(invoiceTaskOperationState.detailTaskId)===Number(task.id) ? '读取中…' : '预览' }}</button><button v-if="canConfirmInvoiceTask" class="btn small success" :disabled="invoiceTaskOperationState.confirmingTaskId!==null" @click="confirmInvoiceTask(task)">{{ Number(invoiceTaskOperationState.confirmingTaskId)===Number(task.id) ? '确认中…' : '确认任务' }}</button><button v-if="canRegisterInvoiceResult" class="btn small" :disabled="invoiceTaskOperationState.resultSaving" @click="openInvoiceTaskResult(task)">登记成功/失败</button><details class="finance-row-more"><summary class="btn small">更多</summary><div class="finance-row-more-panel"><button v-if="canGenerateInvoiceTask" class="btn small" @click="downloadInvoiceTaxTemplate(task)">下载税局 Excel</button><button v-if="canManageInvoiceAttachment && task.status==='issued'" class="btn small" :disabled="invoiceTaskUploadState.uploading" @click="uploadInvoiceTaskPdf(task)">{{ invoiceTaskUploadState.uploading && Number(invoiceTaskUploadState.taskId)===Number(task.id) ? '上传中…' : '上传原始 PDF' }}</button></div></details></div></td></tr></tbody></table></div></div>
               </template>
-              <template v-else>
+              <template v-else-if="financeView==='statements'">
                 <div class="toolbar"><div><button v-if="canFinance" class="btn primary" @click="openStatement">生成月结对账单</button></div><div><button class="btn" @click="loadFinance">刷新</button></div></div>
                 <div class="panel">
                   <div class="section-title">全部对账单</div>
@@ -9914,7 +9936,7 @@
             financeView: "overview",
             financeOverviewMonth: month(),
             financeOverview: { trend:[], payable_aging:{}, expense_structure:[], cost_coverage:{covered_lines:0,total_lines:0,coverage_rate:0,covered_revenue:0,material_gross_profit_reference:0,label:"材料毛利参考"}, workbench_summary:{}, cost_pool:{status_totals:{},close_ready:false,blockers:[]}, collection_note:"" },
-            financeOverviewState: { loading:false, exporting:false, error:"" }, financeOverviewDetailsVisible:false,
+            financeOverviewState: { loading:false, exporting:false, error:"" }, financeOverviewDetailsVisible:false, financeCostDetailsVisible:false,
             financeStatementSort: "business",
             financeFilters: { statement_month:month(), balance_type:"", customer_id:"" },
             financeCurrentRows: [], financeCurrentTotal: 0, financeCurrentSummary: {}, financeCurrentCustomerOptions: [],
@@ -10719,7 +10741,7 @@
           canConfirmFinanceCosts() { return this.canViewFinanceCosts && this.hasPermission("finance.cost.confirm"); },
           canExportFinanceCosts() { return this.canViewFinanceCosts && this.hasPermission("finance.cost.export"); },
           financeCostActiveCenters() { return (this.financeCostMeta.centers || []).filter(row=>row.is_active); },
-          financeCostPrimaryBlocker() { return (this.financeCostSummary.blockers || [])[0]?.message || ""; },
+          financeCostPrimaryBlocker() { return (this.financeCostSummary.blockers || []).find(item=>item.code!=="month_close_workflow_pending")?.message || ""; },
           financeProcessingWorkerCostText() {
             const value = this.financeProcessingSettings.worker_day_cost;
             if (value !== null && value !== undefined && value !== "") return `日人工 ¥ ${this.money(value)}`;
@@ -21291,7 +21313,11 @@
             if (this.financeView === "payables") {
               const payableRequest = this.loadFinancePayables({authGeneration:requestAuthGeneration,userId:requestUserId});
               if (!this.canViewFinanceCosts) return payableRequest;
-              return Promise.all([this.loadFinanceCosts(),this.loadSupplierSettlements(),this.loadSimpleFinance(),payableRequest]);
+              return Promise.all([this.loadSupplierSettlements(),payableRequest]);
+            }
+            if (this.financeView === "expenses") {
+              if (!this.canViewFinanceCosts) return false;
+              return Promise.all([this.loadFinanceCosts(),this.loadSimpleFinance()]);
             }
             if (this.financeView === "invoice_tasks") {
               return this.loadInvoiceTasks({authGeneration:requestAuthGeneration,userId:requestUserId});
@@ -21470,6 +21496,15 @@
             const maxValue = Math.max(1,...(this.financeOverview.expense_structure||[]).map(row=>Number(row.amount||0)));
             return `${Math.max(Number(value||0)>0?4:0,Math.round(Number(value||0)/maxValue*100))}%`;
           },
+          financeReadinessLabel(summary) {
+            if (!summary || !Array.isArray(summary.blockers)) return "尚未读取";
+            return summary.blockers.some(item=>item.code!=="month_close_workflow_pending") ? "有资料待补" : "资料已齐";
+          },
+          financeReadinessHint(summary) {
+            const gap = summary?.blockers?.find(item=>item.code!=="month_close_workflow_pending");
+            if (gap) return gap.message;
+            return "可以查看管理月报；正式锁月功能尚未启用。";
+          },
           openFinanceMonthlyAction(action) {
             const selectedMonth = this.financeOverviewMonth || month();
             if (action === "pending_reconciliation" || action === "pending_invoice") {
@@ -21479,9 +21514,10 @@
               return this.setFinanceView("current");
             }
             this.financeCostMonth = selectedMonth;
+            this.financeCostDetailsVisible = action === "close_readiness";
             this.financeCostFilters.status = action === "cost_drafts" ? "draft" : "";
             this.pages.financeCosts = 1;
-            return this.setFinanceView("payables");
+            return this.setFinanceView("expenses");
           },
           async exportFinanceManagementReport() {
             if (!this.canExportFinanceCosts || this.financeOverviewState.exporting) return false;
@@ -22593,7 +22629,8 @@
             return `${row.year}:${row.statement_month}:${row.customer_id}`;
           },
           async setFinanceView(view) {
-            if (!['overview','current','invoice_tasks','payables'].includes(view)) return;
+            if (!['overview','current','invoice_tasks','payables','expenses'].includes(view)) return;
+            if (view==='expenses' && !this.canViewFinanceCosts) return;
             this.financeOverviewDetailsVisible = false;
             this.financeView = view;
             this.invalidatePageCache("finance");

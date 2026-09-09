@@ -7,6 +7,16 @@ import {pathToFileURL} from 'node:url';
 import {spawnSync} from 'node:child_process';
 
 const css = readFileSync(new URL('../src/warehouseTwin.css', import.meta.url), 'utf8');
+test('Chrome: three compact product cards fit with customer/name/quantity in order', () => {
+  const dir=mkdtempSync(join(tmpdir(),'tm-three-products-')), fixture=join(dir,'fixture.html');
+  const cards=[1,2,3].map(id=>`<article class="shelf-product-card"><div class="shelf-product-summary"><span class="shelf-product-customer">驿力</span><span class="shelf-product-name">风机纸箱${id}</span><strong class="shelf-product-quantity">120只</strong></div><div class="shelf-product-code-row"><button class="shelf-product-label-button"><strong class="shelf-inventory-code">Z.001.00013${id}</strong></button><button class="shelf-product-details-toggle">1个批次 · 查看明细</button></div><div class="shelf-product-description">630×480mm</div></article>`).join('');
+  writeFileSync(fixture,`<meta charset="utf-8"><style>${css}</style><section class="twin-rack-stage"><div class="mold-rack-cell" style="height:250px"><div class="shelf-cell-heading"><b>1格</b><small class="shelf-cell-kind">混放 · 3款</small></div><div class="shelf-product-cards">${cards}</div></div></section><pre id="result"></pre><script>
+  const checks=[];for(const width of [450,300]){document.querySelector('section').style.width=width+'px';const area=document.querySelector('.shelf-product-cards').getBoundingClientRect();const cards=[...document.querySelectorAll('.shelf-product-card')];checks.push(cards[2].getBoundingClientRect().bottom<=area.bottom);for(const card of cards){const a=card.querySelector('.shelf-product-customer').getBoundingClientRect(),b=card.querySelector('.shelf-product-name').getBoundingClientRect(),c=card.querySelector('.shelf-product-quantity').getBoundingClientRect();checks.push(a.right<=b.left&&b.right<=c.left&&Math.abs(a.top-c.top)<3);}}document.querySelector('#result').textContent=checks.every(Boolean)?'THREE_PASS':JSON.stringify(checks);
+  </script>`);
+  const result=spawnSync(process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless=new','--disable-gpu','--no-first-run','--user-data-dir='+join(dir,'profile'),'--dump-dom',pathToFileURL(fixture).href],{encoding:'utf8',timeout:30000});
+  assert.equal(result.status,0,result.error?.message || result.stderr);
+  assert.ok(result.stdout.includes('<pre id="result">THREE_PASS</pre>'),result.stdout.slice(-1400));
+});
 test('Chrome: compact add button stays beside the cell number and leaves room for products', () => {
   const dir = mkdtempSync(join(tmpdir(), 'tm-rack-hitbox-'));
   const fixture = join(dir, 'fixture.html');

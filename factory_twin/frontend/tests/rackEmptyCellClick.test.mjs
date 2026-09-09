@@ -108,7 +108,7 @@ test("carton cells prioritize code before product details and retain every batch
   assert.equal(cards.length, 1);
   const visibleText = node => node && typeof node === "object" ? node.children.map(visibleText).join(" ") : String(node ?? "");
   const content = visibleText(cards[0]);
-  assert.ok(content.indexOf("CODE-5") < content.indexOf("中性内盒"));
+  assert.ok(content.indexOf("中性内盒") < content.indexOf("CODE-5"));
   assert.ok(content.indexOf("CODE-5") < content.indexOf("400×300×200"));
   assert.ok(content.includes('30'));
   assert.equal(nodes.filter(node => node.props.className === "shelf-batch-row").length, 2);
@@ -116,6 +116,11 @@ test("carton cells prioritize code before product details and retain every batch
   const codeRow = nodes.find(node => node.props.className === "shelf-product-code-row");
   assert.ok(codeRow, "code and details must share a row with separate controls");
   assert.equal(codeRow.children.filter(node => node?.type === "button").length, 2);
+  const summary = nodes.find(node => node.props.className === "shelf-product-summary");
+  assert.ok(summary);
+  assert.deepEqual(summary.children.map(node => node.props.className), ['shelf-product-customer','shelf-product-name','shelf-product-quantity']);
+  const heading = nodes.find(node => node.props.className === 'shelf-cell-heading' && node.children.some(child => child?.props?.className === 'shelf-cell-kind'));
+  assert.ok(heading, 'single/mixed summary must be in cell heading');
 });
 
 test("the selected empty cell opens its stocktake inspector without writing inventory", () => {

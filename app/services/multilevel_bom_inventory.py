@@ -42,7 +42,9 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
         if compiled is None:
             raise SubkitError("订单缺少完整多级BOM快照")
         nodes, children, topo = compiled.graph.validated()
-        product_ids = [pid for pid in reversed(topo) if nodes[pid].source == "assembled"]
+        body_ids = {pid for pid in topo if nodes[pid].source == "manufactured"
+                    and any(e.relation == "assembly" for e in children[pid])}
+        product_ids = [pid for pid in reversed(topo) if nodes[pid].source == "assembled" or pid in body_ids]
         keys = _node_keys(operation_key, product_ids)
         if not product_ids:
             raise SubkitError("订单没有需要逐层组装的产品")
@@ -93,21 +95,31 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
             reserved[r.inventory_lot_id] += _remaining_reservation_quantity(r)
         from app.services.fixed_shelf_staging import staging_owner
         lots, balances, eligible_by_lot = {}, defaultdict(int), {}
+        body_balances = defaultdict(int)
+        identities = {}
         for lid, version in source_lot_versions.items():
             lot = db.get(InventoryLot, lid)
-            if (lot is None or lot.version != version or lot.status != "active"
-                    or lot.inventory_type != "finished" or lot.finished_detail is None):
+            if lot is None or lot.version != version or lot.status != "active":
                 raise SubkitError("逐层组装来源库存状态或版本已变化")
-            detail = lot.finished_detail
+            from app.services.multilevel_bom_body_inventory import stock_product_identity
+            pid, customer_id = stock_product_identity(db, lot)
+            is_body = lot.inventory_type == "assembly_body"
+            if is_body:
+                from app.models.multilevel_bom import BomBodyInventoryDetail
+                body = db.get(BomBodyInventoryDetail, lid)
+                if (pid not in body_ids or body.order_item_id != item.id
+                        or lot.quantity_reserved or reserved[lid]):
+                    raise SubkitError("组装本体与订单不一致或存在异常预占")
             owner = active_subkit_order(db, lot)
-            if (detail.product_id not in nodes or detail.owner_customer_id != order.customer_id
-                    or detail.is_general or staging_owner(db, lid)
+            if (pid not in nodes or customer_id != order.customer_id
+                    or (not is_body and lot.finished_detail.is_general) or staging_owner(db, lid)
                     or (owner is not None and owner != item.id)):
                 raise SubkitError("逐层组装来源产品、客户、订单或集货状态不匹配")
             if reserved[lid] > lot.quantity_reserved:
                 raise SubkitError("组装预占余额不一致")
             eligible = (lot.quantity_available if lid in free_ids else 0) + reserved[lid]
-            balances[detail.product_id] += eligible
+            (body_balances if is_body else balances)[pid] += eligible
+            identities[lid] = pid
             eligible_by_lot[lid] = eligible
             lots[lid] = lot
 
@@ -130,13 +142,15 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
                 raise SubkitError("组装来源抵扣与库存流水不一致")
             fulfilled[conversion.output_product_id] += credit
         plan = plan_assembly(compiled.graph, item.quantity,
-                             eligible_stock=balances, fulfilled_stock=fulfilled)
+                             eligible_stock=balances, fulfilled_stock=fulfilled,
+                             body_stock=body_balances)
         steps = {s.product_id: s for s in plan.steps}
         results = []
         for pid in product_ids:
             child_ids = {e.child_id for e in children[pid] if e.relation == "assembly"}
             inputs = {lid: lot.version for lid, lot in lots.items()
-                      if lot.finished_detail.product_id in child_ids}
+                      if (lot.inventory_type == "finished" and identities[lid] in child_ids)
+                      or (lot.inventory_type == "assembly_body" and identities[lid] == pid)}
             expected = steps[pid].produced_units if pid in steps else 0
             result = assemble_subkit_inventory(db, order_item_id=item.id, graph_product_id=pid,
                 source_lot_versions=inputs, target_location_id=target_locations[pid],
@@ -152,6 +166,7 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
             if result.output_lot_id:
                 output = db.get(InventoryLot, result.output_lot_id)
                 lots[output.id] = output
+                identities[output.id] = pid
                 free_ids.add(output.id)
         db.flush()
         return tuple(results)
@@ -163,8 +178,9 @@ def reverse_order_assembly(db, *, order_item_id, operation_key, operator_id):
         compiled = read_compiled_order_bom(db, order_item_id)
         if compiled is None:
             raise SubkitError("订单缺少完整多级BOM快照")
-        nodes, _, topo = compiled.graph.validated()
-        pids = [pid for pid in reversed(topo) if nodes[pid].source == "assembled"]
+        nodes, children, topo = compiled.graph.validated()
+        pids = [pid for pid in reversed(topo) if nodes[pid].source == "assembled"
+                or (nodes[pid].source == "manufactured" and any(e.relation == "assembly" for e in children[pid]))]
         keys = _node_keys(operation_key, pids)
         rows = {r.output_product_id: r for r in db.scalars(select(BomAssembly).where(
             BomAssembly.idempotency_key.in_(keys.values()), BomAssembly.order_item_id == order_item_id))}

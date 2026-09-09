@@ -40,6 +40,24 @@ def body_completion_identity(db, completion):
     return item, graph, pid
 
 
+def stock_product_identity(db, lot):
+    """Real product/customer identity; never infer an ID from names or cost JSON."""
+    if lot is not None and lot.inventory_type == "finished" and lot.finished_detail is not None:
+        return lot.finished_detail.product_id, lot.finished_detail.owner_customer_id
+    if lot is None or lot.inventory_type != "assembly_body" or lot.finished_detail is not None:
+        raise SubkitError("库存产品身份不完整")
+    detail = db.get(BomBodyInventoryDetail, lot.id)
+    if (detail is None or detail.inventory_type != "assembly_body" or lot.unit != "boxes"
+            or lot.source_ref_type != "production_completion"
+            or lot.source_ref_id != detail.production_completion_id):
+        raise SubkitError("本体库存缺少真实完工来源")
+    completion = db.get(ProductionCompletion, detail.production_completion_id)
+    item, graph, pid = body_completion_identity(db, completion)
+    if detail.order_item_id != item.id or detail.product_id != pid:
+        raise SubkitError("本体库存与冻结完工产品不一致")
+    return pid, graph.customer_id
+
+
 def receive_body_inventory(db, *, completion_id, location_id, operator_id,
                            idempotency_key, expected_layout_version=None):
     from app.services.production_workflow import lock_order_rows_for_production_transition

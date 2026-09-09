@@ -33,18 +33,24 @@ def source_cost(db, lot, take):
         original = db.get(InventoryLot, completion.inventory_lot_id) if completion else None
         frozen = json.loads(original.cost_snapshot_detail_json or "{}") if original else {}
         if "bom_material_product_id" in detail or "bom_material_product_id" in frozen:
+            from app.services.multilevel_bom_body_inventory import stock_product_identity
+            identity = stock_product_identity(db, lot)
+            original_identity = stock_product_identity(db, original)
             if (completion is None or completion.status != "posted" or original is None
                     or original.source_ref_type != lot.source_ref_type or original.source_ref_id != lot.source_ref_id
-                    or not lot.finished_detail or not original.finished_detail
-                    or lot.finished_detail.product_id != frozen.get("bom_material_product_id")
-                    or lot.finished_detail.product_id != original.finished_detail.product_id
-                    or lot.finished_detail.owner_customer_id != original.finished_detail.owner_customer_id
+                    or lot.inventory_type != original.inventory_type
+                    or identity[0] != frozen.get("bom_material_product_id")
+                    or identity != original_identity
                     or detail != frozen):
                 raise SubkitError("多级BOM完工成本身份不完整")
             used = lineage_used(db, lot)
             if used + take > completion.quantity:
+                if lot.inventory_type == "assembly_body":
+                    raise SubkitError("本体数量超出真实完工成本来源")
                 return estimated_slice(lot, take)
             return cost_slice(Decimal(frozen["capitalized_material_cost"]), completion.quantity, used, take), frozen
+    if lot.inventory_type == "assembly_body":
+        raise SubkitError("本体库存缺少冻结完工成本，不能按估算组装")
     source = db.get(SubkitReceiptOutput, lot.source_ref_id) if lot.source_ref_type == "subkit_receipt" else None
     if source:
         from app.models.purchase_receipt import IncomingReceiptPurposeAllocation, PurchaseReceiptFact

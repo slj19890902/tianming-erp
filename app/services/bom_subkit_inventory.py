@@ -64,6 +64,7 @@ def assemble_subkit_inventory(
         item = db.get(OrderItem, order_item_id)
         snapshot = db.get(OrderSubkit, order_item_id)
         recipe = None
+        body_product_id = None
         if graph_product_id is not None:
             from app.services.multilevel_bom_orders import read_compiled_order_bom
             from app.services.multilevel_bom_plan import plan_bom
@@ -71,8 +72,11 @@ def assemble_subkit_inventory(
             if compiled is None or item is None:
                 raise SubkitError("订单缺少完整多级BOM快照")
             node = next((n for n in compiled.graph.nodes if n.product_id == graph_product_id), None)
-            if node is None or node.source != "assembled":
+            has_assembly = any(e.parent_id == graph_product_id and e.relation == "assembly"
+                               for e in compiled.graph.edges)
+            if node is None or not has_assembly or node.source not in ("assembled", "manufactured"):
                 raise SubkitError("只能组装冻结BOM中的组套成品")
+            body_product_id = graph_product_id if node.source == "manufactured" else None
             sources = {r.component_product_id: r.id for r in compiled.snapshots}
             recipe = [{"product_id": e.child_id, "pieces_per_kit": e.quantity,
                        "bom_snapshot_id": sources[e.child_id]} for e in compiled.graph.edges
@@ -110,25 +114,40 @@ def assemble_subkit_inventory(
                         for lid, rows in reserved_by_lot.items()}
         lots = []
         available = {pid: 0 for pid in member_ids}
+        body_available = 0
+        product_by_lot = {}
         free_by_lot = {}
         from app.services.fixed_shelf_staging import staging_owner
         for lot_id, version in source_lot_versions.items():
             lot = db.get(InventoryLot, lot_id)
-            if (lot is None or lot.status != "active" or lot.version != version
-                    or lot.finished_detail is None or lot.inventory_type != "finished"):
+            if lot is None or lot.status != "active" or lot.version != version:
                 raise SubkitError("组套原片库存状态或版本已变化")
-            detail = lot.finished_detail
+            from app.services.multilevel_bom_body_inventory import stock_product_identity
+            pid, customer_id = stock_product_identity(db, lot)
+            is_body = lot.inventory_type == "assembly_body"
+            if is_body:
+                from app.models.multilevel_bom import BomBodyInventoryDetail
+                body = db.get(BomBodyInventoryDetail, lot.id)
+                if (pid != body_product_id or body.order_item_id != item.id
+                        or lot.quantity_reserved or reserved_qty.get(lot.id, 0)):
+                    raise SubkitError("组装本体与订单不一致或存在异常预占")
+            elif pid not in member_ids or lot.finished_detail.is_general:
+                raise SubkitError("组套原片产品、客户或集货状态不匹配")
             from app.services.bom_subkits import active_subkit_order
             owner = active_subkit_order(db, lot)
             if owner is not None and owner != item.id:
                 raise SubkitError("组装库存已保留给其他未完成订单")
-            if (detail.product_id not in member_ids or detail.owner_customer_id != order.customer_id
-                    or detail.is_general or staging_owner(db, lot.id)):
+            if customer_id != order.customer_id or staging_owner(db, lot.id):
                 raise SubkitError("组套原片产品、客户或集货状态不匹配")
             if reserved_qty.get(lot.id, 0) > lot.quantity_reserved:
                 raise SubkitError("原片预占余额不一致")
             free_by_lot[lot.id] = lot.quantity_available if available_lot_ids is None or lot.id in available_lot_ids else 0
-            available[detail.product_id] += free_by_lot[lot.id] + reserved_qty.get(lot.id, 0)
+            eligible = free_by_lot[lot.id] + reserved_qty.get(lot.id, 0)
+            if is_body:
+                body_available += eligible
+            else:
+                available[pid] += eligible
+            product_by_lot[lot.id] = pid
             lots.append(lot)
         completed = int(db.scalar(select(func.coalesce(func.sum(
             InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_consumed), 0))
@@ -140,6 +159,8 @@ def assemble_subkit_inventory(
         remaining = max(item.quantity * snapshot.kits_per_parent - completed, 0)
         if quantity_limit is not None:
             remaining = min(remaining, quantity_limit)
+        if body_product_id is not None:
+            remaining = min(remaining, body_available)
         plan = plan_receipt_assembly(parent_product_id=item.product_id,
             kit_product_id=snapshot.kit_product_id,
             members=[SubkitMember(r["product_id"], r["pieces_per_kit"]) for r in recipe],
@@ -153,10 +174,14 @@ def assemble_subkit_inventory(
         db.add(conversion)
         db.flush()
         to_consume = {row.product_id: row.consumed_pieces for row in plan.components}
+        if body_product_id is not None:
+            # Stage-qualified body stock is separate from the child recipe.
+            # Never add a self-referencing BOM edge or consume finished output.
+            to_consume[body_product_id] = plan.kit_quantity
         cost = Decimal(0)
         cost_sources = []
         for lot in sorted(lots, key=inventory_fifo_sort_key):
-            pid = lot.finished_detail.product_id
+            pid = product_by_lot[lot.id]
             take = min(free_by_lot[lot.id] + reserved_qty.get(lot.id, 0), to_consume[pid])
             if not take:
                 continue

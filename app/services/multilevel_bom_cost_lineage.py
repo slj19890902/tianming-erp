@@ -17,6 +17,7 @@ from app.models.purchase_receipt import IncomingReceiptPurposeAllocation, Purcha
 from app.models.warehouse_inventory import InventoryLot
 from app.services.bom_subkits import SubkitError
 from app.services.bom_subkit_costs import cost_slice
+from app.services.multilevel_bom_body_inventory import stock_product_identity
 
 QUANTUM = Decimal("0.0001")
 
@@ -91,8 +92,8 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
         original = db.get(InventoryLot, assembly.output_lot_id) if assembly else None
         if assembly is None or assembly.status != "posted" or original is None:
             raise SubkitError("组套材料成本产出来源无效")
-        _same_output(lot, original)
-        if assembly.output_product_id != lot.finished_detail.product_id:
+        identity = _same_output(db, lot, original)
+        if assembly.output_product_id != identity[0]:
             raise SubkitError("组套材料产出产品不一致")
         detail = json.loads(assembly.cost_detail_json or "{}")
         inputs = list(db.scalars(select(BomAssemblyInput).where(
@@ -104,9 +105,10 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
         for source in inputs:
             evidence = frozen.get(source.lot_id)
             child = db.get(InventoryLot, source.lot_id)
-            if (evidence is None or child is None or not child.finished_detail
-                    or child.finished_detail.product_id != source.product_id
-                    or child.finished_detail.owner_customer_id != lot.finished_detail.owner_customer_id
+            child_identity = stock_product_identity(db, child)
+            if (evidence is None or child is None
+                    or child_identity[0] != source.product_id
+                    or child_identity[1] != identity[1]
                     or evidence["quantity"] != source.quantity
                     or _amount(evidence["cost"]) != source.total_cost):
                 raise SubkitError("组套材料成本投入身份不一致")
@@ -125,11 +127,11 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
     original = db.get(InventoryLot, completion.inventory_lot_id) if completion else None
     if completion is None or completion.status != "posted" or original is None:
         raise SubkitError("组套材料完工成本来源无效")
-    _same_output(lot, original)
+    identity = _same_output(db, lot, original)
     detail = json.loads(original.cost_snapshot_detail_json or "{}")
     if "bom_material_product_id" not in detail:
         return None
-    if detail["bom_material_product_id"] != lot.finished_detail.product_id:
+    if detail["bom_material_product_id"] != identity[0]:
         raise SubkitError("组套材料完工产品身份不一致")
     rows = []
     for source in detail.get("bom_material_inputs", []):
@@ -153,9 +155,9 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
         snapshot = db.get(SalesOrderItemBomComponent, bom_source.sales_order_item_bom_component_id) if bom_source else None
         purpose = db.get(PurchasePurposeSourceSnapshot, allocation.purchase_purpose_source_snapshot_id)
         if (snapshot is None or purpose is None
-                or allocation.customer_id != lot.finished_detail.owner_customer_id
+                or allocation.customer_id != identity[1]
                 or snapshot.sales_order_item_id != completion.order_item_id
-                or snapshot.component_product_id != lot.finished_detail.product_id
+                or snapshot.component_product_id != identity[0]
                 or snapshot.id != detail["bom_snapshot_id"]):
             raise SubkitError("组套材料采购产品或客户不一致")
         expected = cost_slice(allocation.order_purpose_cost,
@@ -171,10 +173,12 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
     return rows
 
 
-def _same_output(lot, original):
+def _same_output(db, lot, original):
+    identity = stock_product_identity(db, lot)
+    original_identity = stock_product_identity(db, original)
     if (lot.source_ref_type != original.source_ref_type or lot.source_ref_id != original.source_ref_id
-            or not lot.finished_detail or not original.finished_detail
-            or lot.finished_detail.product_id != original.finished_detail.product_id
-            or lot.finished_detail.owner_customer_id != original.finished_detail.owner_customer_id
+            or lot.inventory_type != original.inventory_type
+            or identity != original_identity
             or json.loads(lot.cost_snapshot_detail_json or "{}") != json.loads(original.cost_snapshot_detail_json or "{}")):
         raise SubkitError("组套材料批次成本身份不一致")
+    return identity

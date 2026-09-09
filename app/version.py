@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.308"
-APP_VERSION_NAME = "合并栈板确认与主货位高亮"
+APP_VERSION = "v0.22.309"
+APP_VERSION_NAME = "外购常用箱标签设置与数量保存"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2337,15 +2337,25 @@ _V022307_VERIFICATION_STEPS = [
     "刷新货架正视图，核对客户、品名、规格同排，数量在编码右侧、查看明细左侧且字号一致。",
     "展开混放产品明细，确认不重复品名规格，入库日期与批次入口保留；编码仍打开产品标签。",
 ]
-APP_CHANGES = [
+_V022308_CHANGES = [
     "修复HTTPS下合并栈板幂等键65字符超过接口64限制导致422；保留完整随机凭证、版本和幂等校验。",
     "选定主货位在地图以橙色高亮并显示名称；合并结果和失败原因在底部确认区直接显示。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022308_VERIFICATION_STEPS = [
     "刷新仓库，合并栈板选择两块及主货位，核对主货位所在楼层橙色高亮和底部名称。",
     "现场确认确需合并后提交，检查底部成功或明确失败提示；失败草稿保留，库存不可重复处理。",
 ]
+APP_CHANGES = [
+    "箱型其他的外购材料常用箱也显示打印标签和每张数量，前后端保存不再强制清空标签设置。",
+    "修改每张标签数量后可保存回读，后续新标签按当前设置计算；保留采购比例、业务数量、权限和历史打印冻结。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新常用箱，编辑箱型其他的外购材料，勾选打印标签并填写每张数量，保存后重新打开核对。",
+    "修改每张数量后保存，核对后续新标签的每张数量和张数；已有打印历史及订单、采购、库存数量不应被改写。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.308：本次更新｜{item}" for item in _V022308_CHANGES),
+    *(f"v0.22.308：如何验证｜{item}" for item in _V022308_VERIFICATION_STEPS),
     *(f"v0.22.307：本次更新｜{item}" for item in _V022307_CHANGES),
     *(f"v0.22.307：如何验证｜{item}" for item in _V022307_VERIFICATION_STEPS),
     *(f"v0.22.306：本次更新｜{item}" for item in _V022306_CHANGES),

@@ -1547,7 +1547,7 @@ function WarehouseRackElevation({
                 const location = cellLocations.length === 1 ? cellLocations[0] : null;
                 const identityConflict = cellLocations.length > 1;
                 let blockReason: string | null = null;
-                if (location && cellItems.length === 0) {
+                if (location) {
                   const finishedBlock = stocktakeAddBlockReason(location, "finished");
                   const semiFinishedBlock = stocktakeAddBlockReason(location, "semi_finished");
                   const nextBlockReason = !canChooseProducts
@@ -1582,6 +1582,18 @@ function WarehouseRackElevation({
                     }}
                   ><b>{bay + 1}格</b><strong>{identityConflict ? "货位身份冲突" : cellItems.length ? cellSummary : location ? "正式空货位" : "未建正式货位"}</strong></button>
                   {location && !identityConflict && <button className="shelf-position-print" type="button" onClick={() => window.open(`/static/shelf-label.html?location_id=${location.location_id}`, '_blank', 'noopener')}>打印货位</button>}</div>
+                  {cellItems.length > 0 && canChooseProducts && <button
+                    type="button"
+                    className="shelf-cell-add-product"
+                    aria-label={`${cellTitle}：添加货物`}
+                    disabled={identityConflict || !location || Boolean(blockReason)}
+                    title={blockReason || "保留已有货物，向此货架格添加产品"}
+                    onClick={() => {
+                      if (canChooseProducts && location && !identityConflict && !blockReason) {
+                        onChooseEmptyLocation(location.location_id);
+                      }
+                    }}
+                  >＋ 添加货物</button>}
                   {cellItems.length ? <div className="shelf-product-cards">
                     <small className="shelf-cell-kind">{groupShelfProducts(cellItems).length === 1 ? "单品存放" : `混放 · ${groupShelfProducts(cellItems).length} 款`}</small>
                     {groupShelfProducts(cellItems).map(group => <article className="shelf-product-card" key={group.key}>

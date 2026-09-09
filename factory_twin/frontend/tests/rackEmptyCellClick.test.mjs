@@ -67,9 +67,33 @@ test("missing permission, missing formal identity, duplicate identity and blocke
   }
 });
 
-test("an occupied cell retains its inventory and does not render a misleading add control", () => {
-  const {emptyControls} = render({locations: locations.map(row => ({...row, items: [{lot_id: row.location_id}]}))});
+test("occupied cells keep their products and can add another product to the exact formal location", () => {
+  const {emptyControls, nodes, selected} = render({locations: locations.map(row => ({...row, items: [{lot_id: row.location_id}]}))});
   assert.equal(emptyControls.length, 0);
+  const controls = nodes.filter(node => node.props.className === "shelf-cell-add-product");
+  assert.equal(controls.length, 9);
+  for (const button of controls) {
+    assert.equal(Boolean(button.props.disabled), false);
+    button.props.onClick();
+  }
+  assert.deepEqual(selected, [107, 108, 109, 104, 105, 106, 101, 102, 103]);
+  assert.equal(nodes.filter(node => node.props.className === "shelf-product-card").length, 9);
+});
+
+test("occupied cells cannot bypass permissions, blocked policy or duplicate location identity", () => {
+  const occupied = locations.map(row => ({...row, items: [{lot_id: row.location_id}]}));
+  for (const overrides of [
+    {locations: occupied, canChooseProducts: false},
+    {locations: occupied.map(row => ({...row, blockReason: "规划尚未发布"}))},
+    {locations: occupied.flatMap(row => [row, {...row, location_id: row.location_id + 1000}])},
+  ]) {
+    const {nodes, selected} = render(overrides);
+    for (const button of nodes.filter(node => node.props.className === "shelf-cell-add-product")) {
+      assert.equal(button.props.disabled, true);
+      button.props.onClick();
+    }
+    assert.deepEqual(selected, []);
+  }
 });
 
 test("carton cells prioritize code before product details and retain every batch", () => {

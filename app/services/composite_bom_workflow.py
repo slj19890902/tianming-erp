@@ -338,6 +338,9 @@ def append_component_demand_adjustment(
     if target == current:
         return None, False
 
+    if (snapshot.snapshot_schema_version or 0) >= 5:
+        raise CompositeBomWorkflowError("真实BOM组件数量须符合组套关系，请维护配方或备料量，不能按旧子件单独改数")
+
     row = SalesOrderItemBomDemandAdjustment(
         sales_order_item_bom_component_id=snapshot_id,
         event_type="component_demand_adjusted",
@@ -356,10 +359,15 @@ def ensure_component_production_tasks(
     db: Session,
     order_item_id: int,
 ) -> list[ProductionTask]:
-    """Create/refresh only snapshot-bound tasks; leave the regular task alone."""
+    """Refresh the graph's single main task or legacy snapshot-bound tasks."""
     item = db.get(OrderItem, order_item_id)
     if item is None:
         raise CompositeBomWorkflowError("订单明细不存在")
+    from app.models.multilevel_bom import OrderBomGraph
+    if db.get(OrderBomGraph, order_item_id) is not None:
+        from app.services.multilevel_bom_receipts import refresh_graph_main_task
+        task = refresh_graph_main_task(db, item, create_if_missing=True)
+        return [task] if task is not None else []
     demands = effective_component_demands(db, order_item_id)
     tasks: list[ProductionTask] = []
     for demand in demands:

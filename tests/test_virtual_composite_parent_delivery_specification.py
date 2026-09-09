@@ -52,4 +52,6 @@ def test_common_box_explains_the_parent_dimensions_are_delivery_only() -> None:
     source = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(
         encoding="utf-8"
     )
-    assert "仅用于送货规格展示" in source
+    # The compact editor keeps this distinction in a tooltip, not an extra
+    # explanatory row. Verify both halves of the business meaning.
+    assert 'title="父件只表示整套数量和价格，不报料、不生产；尺寸用于送货规格"' in source

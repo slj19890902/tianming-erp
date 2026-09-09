@@ -3,7 +3,7 @@
 No order lines, inventory or procurement facts are manufactured here. Each
 product occurs once, including shared descendants. The original graph retains
 all parent/child edges; a flattened material row is not a replacement recipe.
-Order entry stays gated until the execution adapters consume this contract.
+Order entry freezes this contract through the atomic procurement adapter.
 """
 from dataclasses import dataclass
 from decimal import Decimal

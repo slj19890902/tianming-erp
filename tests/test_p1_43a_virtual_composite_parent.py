@@ -80,13 +80,13 @@ def test_virtual_parent_api_marker_clears_parent_physical_facts() -> None:
     assert payload.is_virtual_composite_parent is True
     assert payload.combination_mode == "parent_priced_set"
     assert payload.sale_unit_price == Decimal("12.50")
+    # Since 4c9d20ba, these are optional finished delivery display fields,
+    # not board procurement/manufacturing facts. Keep both contracts explicit.
+    assert (payload.length_mm, payload.width_mm, payload.height_mm) == (780, 500, 300)
+    assert payload.box_style == "模切内盒"
     for field in (
         "material_id",
         "mold_tool_id",
-        "length_mm",
-        "width_mm",
-        "height_mm",
-        "box_style",
         "report_length_mm",
         "report_width_mm",
         "production_process",

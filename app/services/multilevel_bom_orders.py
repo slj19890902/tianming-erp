@@ -1,8 +1,8 @@
 """Freeze one canonical graph atomically; caller owns permission and commit.
 
 An existing snapshot is never replaced using changed Common Box master data.
-This adapter is not registered with order entry until receipt/dispatch adapters
-have passed acceptance; schema creation alone does not enable nested orders.
+Public order entry uses the procurement adapter to freeze graph, material and
+external-node identities together; schema creation alone is not that contract.
 """
 
 from sqlalchemy import select, update
@@ -124,7 +124,8 @@ def freeze_master_order_bom(db, *, order_item_id, actor: User):
 
     All nodes have one source row, including the root and intermediate outputs.
     Execution must select sources by frozen node.source, NOT assume every row
-    is a material to buy. This entry remains internal until adapters are ready.
+    is a material to buy. Public order entry uses freeze_order_procurement so
+    external-node identities are frozen in the same transaction.
     """
     from app.models.product_bom import SalesOrderItemBomComponent
     from app.services.multilevel_bom_compile import compile_master_order_bom

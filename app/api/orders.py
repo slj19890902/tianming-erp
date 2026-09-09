@@ -6441,6 +6441,7 @@ def _apply_new_order_component_demands(
         return
     preview = get_order_item_bom_preview(db, item.id)
     components = preview["components"]
+    graph_components = any((row.get("snapshot_schema_version") or 0) >= 5 for row in components)
     by_relation_id = {
         int(component["product_bom_component_id"]): component
         for component in components
@@ -6461,6 +6462,8 @@ def _apply_new_order_component_demands(
         desired = target.required_piece_quantity
         if desired == current:
             continue
+        if graph_components:
+            raise HTTPException(status_code=409, detail="真实BOM组件数量须符合组套关系，请在常用箱维护配方或备料量")
         key = target.idempotency_key.strip()
         _adjustment, created = append_component_demand_adjustment(
             db,
@@ -6482,7 +6485,8 @@ def _apply_new_order_component_demands(
                 after_quantity=desired,
                 idempotency_key=key,
             )
-    ensure_component_production_tasks(db, item.id)
+    if not graph_components:
+        ensure_component_production_tasks(db, item.id)
 
 
 def _validate_existing_component_demands(
@@ -6723,6 +6727,9 @@ def _create_order_impl(
     observability: dict[str, object] | None = None,
     request: Request | None = None,
 ):
+    from app.models.multilevel_bom import ProductBomProfile
+    from app.services.multilevel_bom_external_freeze import freeze_order_procurement
+    from app.services.multilevel_bom_plan import BomPlanError
     pending_drawing_consumptions: list[PendingTemporaryConsumption] = []
     _set_order_save_stage(observability, "customer_scope")
     if payload.customer_id is not None:
@@ -6803,6 +6810,7 @@ def _create_order_impl(
 
         new_product_cache: dict[str, Product] = {}
         resolved_products: dict[int, Product] = {}
+        graph_modes: dict[int, str | None] = {}
         validated_quantities: dict[int, int] = {}
         validated_layer_flutes: dict[
             int,
@@ -6941,7 +6949,9 @@ def _create_order_impl(
                     index=index,
                 )
             )
-            if bool(getattr(product, "is_virtual_composite_parent", False)):
+            profile = db.get(ProductBomProfile, product.id) if product.id is not None else None
+            graph_modes[index] = profile.source if profile else None
+            if graph_modes[index] == "assembled" or bool(getattr(product, "is_virtual_composite_parent", False)):
                 validated_layer_flutes[index] = (None, None, None, None)
                 resolved_products[index] = product
                 combination_provenances[index] = _validated_combination_provenance(
@@ -7172,6 +7182,10 @@ def _create_order_impl(
             ).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
             total += subtotal
             item_sequence = reserve_next_item_sequence(db, order.id)
+            # This is a second loop: do not reuse the last validated line's
+            # PDF flag (assembled/virtual lines may skip that assignment).
+            is_pdf_matched_product = bool(payload.pdf_import_confirmation is not None
+                and item_payload.product_id is not None and not item_payload.is_new_product)
             initial_material_code = (
                 (
                     selected_material.code
@@ -7211,7 +7225,7 @@ def _create_order_impl(
                         "flap_mm": None,
                         "default_cutting_mode": DEFAULT_CUTTING_MODE,
                     }
-                    if bool(
+                    if graph_modes[index] == "assembled" or bool(
                         getattr(product, "is_virtual_composite_parent", False)
                     )
                     else _order_snapshot_box_configuration(product)
@@ -7438,6 +7452,15 @@ def _create_order_impl(
         db.flush()  # 获取 item.id 以便处理图纸
         for index, created_item in enumerate(created_items, start=1):
             product = resolved_products[index]
+            if graph_modes[index] is not None:
+                # Freeze graph and external-node identities together BEFORE the
+                # legacy external writer can create unrelated parent-only rows.
+                freeze_order_procurement(db, order_item_id=created_item.id, actor=user)
+                _apply_new_order_component_demands(db, item=created_item,
+                    targets=payload.items[index - 1].bom_component_demands,
+                    user=user, order=order, request=request)
+                create_or_refresh_production_task(db, created_item.id)
+                continue
             try:
                 freeze_order_item_external_components(db, order_item=created_item)
             except OrderExternalPackagingSnapshotError as error:
@@ -7543,7 +7566,7 @@ def _create_order_impl(
             observability=observability,
         )
         raise raise_composite_bom_http(error) from error
-    except CompositeBomWorkflowError as error:
+    except (CompositeBomWorkflowError, BomPlanError) as error:
         db.rollback()
         _rollback_order_drawing_consumptions(
             pending_drawing_consumptions,

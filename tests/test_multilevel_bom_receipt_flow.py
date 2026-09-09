@@ -255,7 +255,7 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False):
     return material_id, snapshots
 
 
-def purchase_sources(client, factory, material_id, snapshots, *, a3=False, splice=False):
+def purchase_sources(client, factory, material_id, snapshots, *, a3=False, splice=False, order_item_id=1):
     from app.models.supplier_requisition_order import PurchasePurposeSourceSnapshot
     from app.models.product_bom import RequisitionItemBomSource
     from app.models.requisition import RequisitionItem
@@ -263,6 +263,7 @@ def purchase_sources(client, factory, material_id, snapshots, *, a3=False, splic
     for sid, pid in snapshots:
         for route in (["cover", "base"] if a3 and pid == 2 else ["whole"]):
             items.append({**_component_payload(sid), "component_type": route,
+                          "order_item_id": order_item_id,
                           "special_process": "一开四" if splice and pid == 2 else "一开一"})
     saved = client.post("/api/requisition/batches", json={"request_key": "graph-requisition",
         "supplier_name": "苏州纸板供应商", "items": items})

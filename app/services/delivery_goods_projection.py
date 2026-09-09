@@ -7,7 +7,7 @@ from app.services.composite_bom_workflow import (
     delivered_component_quantities,
     delivery_component_required_quantities,
     delivery_item_component_quantities,
-    effective_component_demands,
+    delivery_component_demands,
 )
 
 
@@ -33,7 +33,7 @@ def delivery_component_lines(
 ) -> list[dict]:
     """Project the BOM component quantities used by a delivery document."""
 
-    demands = effective_component_demands(db, order_item.id)
+    demands = delivery_component_demands(db, order_item.id)
     if not demands:
         return []
     cumulative = delivered_component_quantities(db, order_item.id)

@@ -13,6 +13,55 @@ from tests.test_multilevel_bom_master import save
 
 
 @pytest.mark.parametrize("liner", [False, True])
+def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_app, _p181_published_map_identity, liner):
+    from app.api.deliveries import router
+    from app.models.warehouse_inventory import InventoryLot
+    from app.models.order import OrderItem
+    app, factory = composite_requisition_app
+    app.include_router(router, prefix="/api/deliveries")
+    material_id, snapshots = seed_graph(factory, liner=liner)
+    with TestClient(app) as client:
+        _login(client)
+        for index, source in enumerate(purchase_sources(client, factory, material_id, snapshots)):
+            fact = _freeze_receipt_fact(client, source, idempotency_key=f"api-price-{index}", unit_price="0.1234")
+            assert fact.status_code == 200, fact.text
+            receipt = _receive(client, source, fact.json(), quantity=source.order_purpose_sheet_qty,
+                               idempotency_key=f"api-receipt-{index}")
+            assert receipt.status_code == 200, receipt.text
+        pending = client.get("/api/deliveries/pending_items")
+        assert pending.status_code == 200, pending.text
+        pending_line = next(row for row in pending.json()["items"] if row["order_item_id"] == 1)
+        assert pending_line["remaining_quantity"] == 10
+        expected_products = {1, 4} if liner else {1}
+        assert {row["component_product_id"] for row in pending_line["component_lines"]} == expected_products
+        assert len(pending_line["inventory_sources"]) == len(expected_products)
+        assert all(row["location_id"] and row["quantity_to_pick_stock"] == 10 for row in pending_line["inventory_sources"])
+        created = client.post("/api/deliveries", json={"customer_id": 1,
+            "items": [{"order_item_id": 1, "delivered_quantity": 4}]})
+        assert created.status_code == 201, created.text
+        did = created.json()["id"]
+        dispatched = client.put(f"/api/deliveries/{did}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+        detail = client.get(f"/api/deliveries/{did}")
+        assert detail.status_code == 200, detail.text
+        detail_line = detail.json()["items"][0]
+        assert {row["component_product_id"] for row in detail_line["component_lines"]} == expected_products
+        assert len(detail_line["inventory_sources"]) == len(expected_products)
+        assert all(row["location_id"] and row["quantity_to_pick_stock"] == 4 for row in detail_line["inventory_sources"])
+        def check(expected):
+            with factory() as db:
+                assert db.get(OrderItem, 1).delivered_quantity == expected
+                for pid in ([1, 4] if liner else [1]):
+                    lots = [lot for lot in db.scalars(select(InventoryLot)) if lot.finished_detail and lot.finished_detail.product_id == pid]
+                    assert sum(lot.quantity_consumed for lot in lots) == expected
+                    assert sum(lot.quantity_reserved for lot in lots) == 10-expected
+        check(4)
+        cancelled = client.put(f"/api/deliveries/{did}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+        check(0)
+
+
+@pytest.mark.parametrize("liner", [False, True])
 def test_delivery_requires_only_real_pick_products(composite_requisition_app, _p181_published_map_identity, liner):
     from app.models.product_bom import SalesOrderItemBomComponent
     from app.services.composite_bom_workflow import delivery_component_required_quantities

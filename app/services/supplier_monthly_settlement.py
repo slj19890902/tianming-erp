@@ -887,8 +887,11 @@ def _create_statement_from_candidates(
     document_revision: int = 1,
     supersedes_statement_id: int | None = None,
     supersede_reason: str | None = None,
+    empty_basis: SupplierMonthlyStatement | None = None,
 ) -> SupplierMonthlyStatement:
-    first = candidates[0]
+    first = candidates[0] if candidates else empty_basis
+    if first is None:
+        raise ValueError("Empty statement requires an existing currency/tax basis")
     row = SupplierMonthlyStatement(
         statement_number=_statement_number(
             db,
@@ -898,7 +901,7 @@ def _create_statement_from_candidates(
             tax_basis=first.tax_basis,
         ),
         supplier_id=supplier.id,
-        supplier_name_snapshot=first.supplier_name,
+        supplier_name_snapshot=(first.supplier_name if candidates else supplier.standard_name),
         settlement_month=settlement_month,
         period_start=period_start,
         period_end=period_end,
@@ -931,6 +934,7 @@ def _replace_draft_statement(
     reason: str,
     period_start: date | None = None,
     period_end: date | None = None,
+    allow_empty: bool = False,
 ) -> tuple[SupplierMonthlyStatement, int]:
     if row.status not in ACTIVE_DRAFT_STATUSES or row.active_guard != 1:
         raise SupplierSettlementError(
@@ -942,7 +946,7 @@ def _replace_draft_statement(
             "SUPPLIER_SETTLEMENT_REGENERATION_DOWNSTREAM_EXISTS",
             "该月结已有应付、发票或付款事实，不能重生成",
         )
-    if not candidates:
+    if not candidates and not allow_empty:
         raise SupplierSettlementError(
             "SUPPLIER_SETTLEMENT_REGENERATION_EMPTY",
             "当前周期没有可生成的有效实收，原草稿保持不变",
@@ -1002,6 +1006,7 @@ def _replace_draft_statement(
         document_revision=next_document_revision,
         supersedes_statement_id=statement_id,
         supersede_reason=reason,
+        empty_basis=row if allow_empty else None,
     )
     return replacement, released
 
@@ -1291,7 +1296,12 @@ def generate_or_refresh_settlements(
                     )
                 )
                 continue
-            if not replace_changed_drafts:
+            # A background refresh must not discard an operator's reconciliation
+            # or adjustments. Those drafts require an explicit revision action.
+            unattended_protected = generation_origin == "automatic" and (
+                existing.reviewed_at is not None or bool(existing.adjustments)
+            )
+            if not replace_changed_drafts or unattended_protected:
                 issues.append(
                     _issue(
                         source_type="supplier_statement",
@@ -1310,7 +1320,8 @@ def generate_or_refresh_settlements(
                 supplier=supplier,
                 candidates=group_candidates,
                 user=user,
-                reason="人工重新生成：结算周期或实收来源发生变化",
+                reason=("自动重新生成：实收来源发生变化" if generation_origin == "automatic"
+                        else "人工重新生成：结算周期或实收来源发生变化"),
                 period_start=period_start,
                 period_end=period_end,
             )
@@ -1353,6 +1364,7 @@ def regenerate_statement(
     expected_version: int,
     reason: str | None,
     user: User,
+    allow_empty: bool = False,
 ) -> SupplierMonthlyStatement:
     _begin_settlement_write_snapshot(db)
     row = _editable_statement(
@@ -1401,6 +1413,7 @@ def regenerate_statement(
         candidates=selected,
         user=user,
         reason=str(reason or "").strip() or "人工核对后重生成",
+        allow_empty=allow_empty,
         period_start=period_start,
         period_end=period_end,
     )
@@ -1409,7 +1422,8 @@ def regenerate_statement(
 
 
 def generate_due_supplier_settlements(
-    db: Session, *, user: User, business_date: date | None = None
+    db: Session, *, user: User, business_date: date | None = None,
+    replace_changed_drafts: bool = False,
 ) -> dict[str, Any]:
     today = business_date or beijing_today()
     suppliers = list(db.scalars(select(Supplier)).all())
@@ -1417,6 +1431,17 @@ def generate_due_supplier_settlements(
     for supplier in suppliers:
         month = default_closed_settlement_month(today, int(supplier.settlement_day or 20))
         grouped.setdefault(month, set()).add(supplier.id)
+        if replace_changed_drafts:
+            # Late source repairs must refresh older open drafts too, not only
+            # the latest month. Confirmed documents are never selected here.
+            draft_months = db.scalars(select(SupplierMonthlyStatement.settlement_month).where(
+                SupplierMonthlyStatement.supplier_id == supplier.id,
+                SupplierMonthlyStatement.active_guard == 1,
+                SupplierMonthlyStatement.status.in_(ACTIVE_DRAFT_STATUSES),
+                SupplierMonthlyStatement.settlement_month <= month,
+            )).all()
+            for draft_month in draft_months:
+                grouped.setdefault(draft_month, set()).add(supplier.id)
     results = []
     for month, ids in sorted(grouped.items()):
         results.append(
@@ -1426,7 +1451,7 @@ def generate_due_supplier_settlements(
                 user=user,
                 business_date=today,
                 generation_origin="automatic",
-                replace_changed_drafts=False,
+                replace_changed_drafts=replace_changed_drafts,
                 supplier_ids=ids,
             )
         )

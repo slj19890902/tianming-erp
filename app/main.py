@@ -119,7 +119,21 @@ async def phase2_lifespan(_: FastAPI):
 
         validate_uat_process_ownership()
     write_uat_attestation(current)
-    yield
+    # Only the formal runtime starts the draft scheduler. Test/UAT apps stay
+    # explicit; the job uses the same configured DB, never a guessed path.
+    import asyncio
+    from app.core.database import SessionLocal
+    from app.services.supplier_settlement_automation import settlement_loop
+    stop = asyncio.Event()
+    job = None
+    if current.is_production and not os.getenv("ERP_UAT_ROOT"):
+        job = asyncio.create_task(settlement_loop(stop, SessionLocal))
+    try:
+        yield
+    finally:
+        stop.set()
+        if job is not None:
+            await job
 
 
 def apply_production_security(application: FastAPI, current) -> None:

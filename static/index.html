@@ -35668,7 +35668,18 @@
                 }
                 const payload = this.buildProductWritePayload(masterOptions);
                 let saved;
-                if (this.productForm.id) {
+                if (bomDirty) {
+                  const combined = { product:payload, bom:this.bomPayload(this.productForm.id ? null : 1) };
+                  const response = this.productForm.id
+                    ? await axios.put(`/api/master/products/${this.productForm.id}/with-bom`, combined)
+                    : await axios.post("/api/master/products/with-bom", combined);
+                  saved = response.data.product;
+                  this.productForm = this.hydrateProductForm(saved);
+                  this.beginMasterEdit("product",this.productForm);
+                  this.applyBomResponse(response.data.bom);
+                  this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
+                }
+                else if (this.productForm.id) {
                   saved = { id: this.productForm.id };
                   if (productDirty) {
                     saved=(await axios.put(`/api/master/products/${this.productForm.id}`, payload)).data;
@@ -35682,7 +35693,6 @@
                   const form=new FormData(); form.append("file",this.drawingFile);
                   await axios.post(`/api/master/products/${saved.id}/drawings`,form);
                 }
-                if (saved?.id && bomDirty) await this.saveProductBom(saved.id, saved.version ?? null);
                 try {
                   const refreshed = await this.loadProducts();
                   if (!refreshed) throw new Error(this.productsError || "常用箱列表刷新未完成");

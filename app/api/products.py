@@ -775,6 +775,16 @@ class ProductUpdatePayload(ProductPayload):
         return reason or None
 
 
+class ProductWithBOMCreatePayload(BaseModel):
+    product: ProductPayload
+    bom: ProductBOMUpdatePayload
+
+
+class ProductWithBOMUpdatePayload(BaseModel):
+    product: ProductUpdatePayload
+    bom: ProductBOMUpdatePayload
+
+
 class ProductUpdatePreviewPayload(ProductPayload):
     expected_version: int = Field(ge=1)
 
@@ -2173,6 +2183,10 @@ def update_product_bom(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
+    return _update_product_bom(product_id, payload, db, user)
+
+
+def _update_product_bom(product_id, payload, db, user, *, commit=True) -> dict:
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
     try:
@@ -2205,7 +2219,8 @@ def update_product_bom(
             except (SubkitError, CompositeBOMExecutionError) as error:
                 raise HTTPException(status_code=getattr(error, "status_code", 400), detail=str(error)) from error
         result["subkit"] = read_subkit(db, product_id)
-        db.commit()
+        if commit:
+            db.commit()
         return result
     except CompositeBOMError as error:
         db.rollback()
@@ -2416,6 +2431,10 @@ def create_product(
     db: Session = Depends(get_db),
     user: User = Depends(can_create),
 ) -> dict:
+    return _create_product(payload, db, user)
+
+
+def _create_product(payload, db, user, *, commit=True) -> dict:
     require_customer_access(payload.customer_id, current_user=user, db=db)
     supply_updates = _normalize_product_external_supply(db, payload=payload)
     _normalize_product_joining_method(payload)
@@ -2459,7 +2478,8 @@ def create_product(
             resource_id=product.id,
             details=data,
         )
-        db.commit()
+        if commit:
+            db.commit()
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(
@@ -2480,6 +2500,10 @@ def update_product(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
+    return _update_product(product_id, payload, db, user)
+
+
+def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
     require_customer_access(payload.customer_id, current_user=user, db=db)
@@ -2513,7 +2537,8 @@ def update_product(
         if revision is not None:
             product.manual_modified = True
             product.manual_modified_at = beijing_now_naive()
-        db.commit()
+        if commit:
+            db.commit()
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(
@@ -2525,6 +2550,42 @@ def update_product(
         raise
     db.refresh(product)
     return _response(product, user)
+
+
+def _save_product_with_bom(payload, db, user, product_id=None):
+    from app.services.bom_transactions import atomic_bom
+
+    expected = payload.product.expected_version if product_id is not None else 1
+    if payload.bom.expected_version != expected:
+        raise HTTPException(409, "产品与 BOM 版本不一致，请刷新后重试")
+    try:
+        with atomic_bom(db):
+            saved = (_create_product(payload.product, db, user, commit=False)
+                     if product_id is None else
+                     _update_product(product_id, payload.product, db, user, commit=False))
+            product = _product_or_404(db, saved["id"])
+            bom_payload = payload.bom.model_copy(update={"expected_version": product.version})
+            bom = _update_product_bom(product.id, bom_payload, db, user, commit=False)
+            db.flush()
+            db.refresh(product)
+            result = {"product": _response(product, user), "bom": bom}
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/with-bom", status_code=status.HTTP_201_CREATED, dependencies=[Depends(can_write)])
+def create_product_with_bom(payload: ProductWithBOMCreatePayload,
+                            db: Session = Depends(get_db), user: User = Depends(can_create)) -> dict:
+    return _save_product_with_bom(payload, db, user)
+
+
+@router.put("/{product_id}/with-bom")
+def update_product_with_bom(product_id: int, payload: ProductWithBOMUpdatePayload,
+                            db: Session = Depends(get_db), user: User = Depends(can_write)) -> dict:
+    return _save_product_with_bom(payload, db, user, product_id)
 
 
 @router.put("/{product_id}/status")

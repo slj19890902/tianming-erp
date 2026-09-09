@@ -85,7 +85,8 @@ def test_n034_bom_save_does_not_change_sales_order_item_flow() -> None:
     save_start = INDEX.index('if (this.modal.type === "product") {')
     save_end = INDEX.index('if (this.modal.type === "material") {', save_start)
     save_block = INDEX[save_start:save_end]
-    assert "saveProductBom(saved.id, saved.version ?? null)" in save_block
+    assert "/with-bom" in save_block
+    assert "saveProductBom(saved.id" not in save_block
     assert "/api/orders" not in save_block
     assert "sales_order_items" not in save_block
 

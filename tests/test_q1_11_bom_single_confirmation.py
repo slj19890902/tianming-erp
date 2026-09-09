@@ -4,7 +4,7 @@ import inspect
 from pathlib import Path
 
 from app.api.products import ProductBOMUpdatePayload
-from app.services.composite_bom import replace_product_bom
+from app.services.composite_bom import _replace_product_bom
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,12 +34,13 @@ def test_bom_editor_saves_with_the_same_single_click_without_fabricated_reason()
 
 
 def test_product_and_bom_combined_save_passes_latest_product_version() -> None:
-    assert "saveProductBom(saved.id, saved.version ?? null)" in INDEX
+    assert "/with-bom" in INDEX
+    assert "saveProductBom(saved.id" not in INDEX
     assert "expected_version: expectedVersion ?? fields.expected_version ?? 1" in INDEX
 
 
 def test_bom_service_keeps_no_change_zero_write_and_optional_audit_reason() -> None:
-    source = inspect.getsource(replace_product_bom)
+    source = inspect.getsource(_replace_product_bom)
     assert 'bool(before["is_composite"]) == bool(normalized)' in source
     assert "return before" in source
     assert 'reason=(change_reason or "").strip() or None' in source

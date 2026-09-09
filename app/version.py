@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.306"
-APP_VERSION_NAME = "货架三款紧凑展示"
+APP_VERSION = "v0.22.307"
+APP_VERSION_NAME = "货架规格与数量两行展示"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2321,15 +2321,25 @@ _V022305_VERIFICATION_STEPS = [
     "iPhone Safari 打开 HTTPS 手机版仓库，点摄像头扫码查货 / 盘点，再点开启摄像头扫码并允许相机。",
     "连续扫描两个现有货位码，确认货位和库存切换；拒绝授权可重试，退出页面停止摄像头；内网 HTTP 显示 HTTPS 入口提示。",
 ]
-APP_CHANGES = [
+_V022306_CHANGES = [
     "货架每款顶行按客户简称、品名、数量排列，数量靠右；单品/混放款数移到格号旁，减少重复占行。",
     "缩小卡片间距并按最多三款适当增加层格显示高度，混放也直接显示品名规格；保留编码看标签、明细独立展开及滚动查看。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022306_VERIFICATION_STEPS = [
     "刷新货架正视图，核对客户简称在左、品名随后、数量靠右同排，混放款数位于格号旁。",
     "查看三款混放格，核对三张卡信息可读，长名称或更多产品仍可滚动；编码和明细点击互不干扰。",
 ]
+APP_CHANGES = [
+    "货架格内第一行显示客户简称、产品名称和规格；第二行显示存货编码、同字号数量及独立明细入口。",
+    "展开明细不再重复品名规格，保留入库日期、可用占用和批次记录入口；不修改库存与地图事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新货架正视图，核对客户、品名、规格同排，数量在编码右侧、查看明细左侧且字号一致。",
+    "展开混放产品明细，确认不重复品名规格，入库日期与批次入口保留；编码仍打开产品标签。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.306：本次更新｜{item}" for item in _V022306_CHANGES),
+    *(f"v0.22.306：如何验证｜{item}" for item in _V022306_VERIFICATION_STEPS),
     *(f"v0.22.305：本次更新｜{item}" for item in _V022305_CHANGES),
     *(f"v0.22.305：如何验证｜{item}" for item in _V022305_VERIFICATION_STEPS),
     *(f"v0.22.304：本次更新｜{item}" for item in _V022304_CHANGES),

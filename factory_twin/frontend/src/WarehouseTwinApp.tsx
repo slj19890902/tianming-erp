@@ -1603,16 +1603,15 @@ function WarehouseRackElevation({
                   {location && !identityConflict && <button className="shelf-position-print" type="button" title="打印货位标签" onClick={() => window.open(`/static/shelf-label.html?location_id=${location.location_id}`, '_blank', 'noopener')}>打印货位</button>}</div>
                   {cellItems.length ? <div className="shelf-product-cards">
                     {groupShelfProducts(cellItems).map(group => <article className="shelf-product-card" key={group.key}>
-                      <div className="shelf-product-summary"><span className="shelf-product-customer">{employeeCustomerName(group.item)}</span><span className="shelf-product-name">{group.item.product_name || "产品名称待补充"}</span><strong className="shelf-product-quantity">{formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</strong></div>
+                      <div className="shelf-product-summary"><span className="shelf-product-customer">{employeeCustomerName(group.item)}</span><span className="shelf-product-name">{group.item.product_name || "产品名称待补充"}</span><span className="shelf-specification">{group.item.specification || "规格待补充"}</span></div>
                       <div className="shelf-product-code-row">
                       <button type="button" title="查看产品标签" aria-label={`${group.item.inventory_code || "当前产品"}：查看产品标签`} className={`shelf-product-label-button ${group.items.some(item => selectedItem?.lot_id === item.lot_id) ? "selected" : ""}`} onClick={() => { setSelectedItem(group.item); setDetailOpen(false); }}>
                         <strong className="shelf-inventory-code">{group.item.inventory_code || "存货编码待补充"}</strong>
                       </button>
+                      <strong className="shelf-product-quantity">{formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</strong>
                       <button type="button" className="shelf-product-details-toggle" aria-expanded={Boolean(expandedProductGroups[group.key])} onClick={() => setExpandedProductGroups(current => ({ ...current, [group.key]: !current[group.key] }))}>{group.items.length} 个批次 · {expandedProductGroups[group.key] ? "收起明细" : "查看明细"}</button>
                       </div>
-                      <div className="shelf-product-description"><span className="shelf-specification">{group.item.specification || "规格待补充"}</span></div>
                       <div className="shelf-product-details" hidden={!expandedProductGroups[group.key]}>
-                        {groupShelfProducts(cellItems).length > 1 && <div className="shelf-expanded-description"><b>{group.item.product_name || "产品名称待补充"}</b><span>{group.item.specification || "规格待补充"}</span></div>}
                         <small>可用 {formatNumber(group.available)} · 已占用 {formatNumber(group.reserved)}{group.damaged ? ` · 异常 ${formatNumber(group.damaged)}` : ""}</small>
                         <small>首次入库 {shelfStockDates(group.items).first || "待确认"} · 最近入库 {shelfStockDates(group.items).latest || "待确认"}</small>
                         {(shelfStockDates(group.items).incomplete || shelfStockDates(group.items).approximate) && <small>部分入库日期不明或非精确，见批次详情</small>}

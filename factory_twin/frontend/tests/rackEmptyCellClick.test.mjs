@@ -109,7 +109,7 @@ test("carton cells prioritize code before product details and retain every batch
   const visibleText = node => node && typeof node === "object" ? node.children.map(visibleText).join(" ") : String(node ?? "");
   const content = visibleText(cards[0]);
   assert.ok(content.indexOf("中性内盒") < content.indexOf("CODE-5"));
-  assert.ok(content.indexOf("CODE-5") < content.indexOf("400×300×200"));
+  assert.ok(content.indexOf("400×300×200") < content.indexOf("CODE-5"));
   assert.ok(content.includes('30'));
   assert.equal(nodes.filter(node => node.props.className === "shelf-batch-row").length, 2);
   assert.equal(nodes.filter(node => node.props.className === "mold-rack-book-spines").length, 0);
@@ -118,7 +118,12 @@ test("carton cells prioritize code before product details and retain every batch
   assert.equal(codeRow.children.filter(node => node?.type === "button").length, 2);
   const summary = nodes.find(node => node.props.className === "shelf-product-summary");
   assert.ok(summary);
-  assert.deepEqual(summary.children.map(node => node.props.className), ['shelf-product-customer','shelf-product-name','shelf-product-quantity']);
+  assert.deepEqual(summary.children.map(node => node.props.className), ['shelf-product-customer','shelf-product-name','shelf-specification']);
+  assert.equal(codeRow.children[1].props.className, 'shelf-product-quantity');
+  const details = nodes.find(node => node.props.className === 'shelf-product-details');
+  assert.ok(!visibleText(details).includes('中性内盒'));
+  assert.ok(!visibleText(details).includes('400×300×200'));
+  assert.ok(visibleText(details).includes('首次入库'));
   const heading = nodes.find(node => node.props.className === 'shelf-cell-heading' && node.children.some(child => child?.props?.className === 'shelf-cell-kind'));
   assert.ok(heading, 'single/mixed summary must be in cell heading');
 });

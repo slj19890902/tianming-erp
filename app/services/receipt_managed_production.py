@@ -597,6 +597,12 @@ def receipt_purpose_summaries_by_order_item_ids(
         )
 
     for order_item_id, summary in summaries.items():
+        from app.models.multilevel_bom import OrderBomGraph
+        if db.get(OrderBomGraph, order_item_id) is not None:
+            from app.services.multilevel_bom_receipt_projection import project_graph_receipts
+            project_graph_receipts(db, order_item_id, summary,
+                component_state.get(order_item_id, {}).values(), semi_credits_by_item_component)
+            continue
         states = list(component_state.get(order_item_id, {}).values())
         component_rows: list[dict[str, Any]] = []
         received_capacities: list[int] = []

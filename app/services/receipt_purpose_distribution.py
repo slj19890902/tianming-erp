@@ -2027,6 +2027,19 @@ def serialize_receipt_purpose_reversal(
         sheet_map[sid] = sheet_map.get(sid, 0) + int(
             row.receipt_order_purpose_sheet_qty
         )
+    from app.services.multilevel_bom_receipts import node_receipt_context, node_purpose_snapshots
+    graph_context = node_receipt_context(db, allocation.incoming_receipt_item.order_item_id,
+        db.get(PurchasePurposeSourceSnapshot, allocation.purchase_purpose_source_snapshot_id))
+    if graph_context is not None:
+        from app.services.multilevel_bom_requirements import read_graph_requirements
+        requirements = read_graph_requirements(db, allocation.incoming_receipt_item.order_item_id)
+        physical = {route.key: requirements.physical_credits.get((graph_context.node.product_id, route.key), 0)
+                    for route in graph_context.node.routes}
+        for source in node_purpose_snapshots(db, graph_context, snapshots):
+            physical[source.component_type] += sheet_map.get(source.id, 0) * int(source.yield_per_sheet_snapshot)
+        capacity = min(physical[route.key] // route.pieces_per_unit for route in graph_context.node.routes)
+    else:
+        capacity = _finished_capacity(db, snapshots, sheet_map)
     return {
         "valid_received_cumulative": sum(
             int(row.receipt_total_sheet_qty) for row in active_source
@@ -2037,6 +2050,6 @@ def serialize_receipt_purpose_reversal(
         "reserve_sheet_cumulative": sum(
             int(row.receipt_reserve_purpose_sheet_qty) for row in active_source
         ),
-        "theoretical_finished_cumulative": _finished_capacity(db, snapshots, sheet_map),
+        "theoretical_finished_cumulative": capacity,
         "trace_id": f"receipt-purpose-reversal:{reversal.id}",
     }

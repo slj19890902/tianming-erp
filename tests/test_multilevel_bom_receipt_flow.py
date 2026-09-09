@@ -192,6 +192,12 @@ def test_real_receipts_create_nodes_then_sets_not_flat_children(composite_requis
             # New output is already paid for by this order's requisitions;
             # do not count it again as prior-stock procurement credit.
             assert not any(read_graph_requirements(db, 1).finished_units.values())
+            from app.services.receipt_managed_production import receipt_purpose_summaries_by_order_item_ids
+            summary = receipt_purpose_summaries_by_order_item_ids(db, [1])[1]
+            assert summary["automatic_finished_output_qty"] == 10
+            assert summary["current_theoretical_finished_capacity_qty"] == 10
+            assert summary["projection_inconsistent"] is False
+            assert summary["product_output_quantities"] == ({1: 10, 2: 20, 3: 60, 4: 10} if liner else {1: 10, 2: 30, 3: 40})
         for rid in reversed(receipt_ids):
             reverted = client.put(f"/api/incoming/receipt-items/{rid}/revert", json={})
             assert reverted.status_code == 200, reverted.text
@@ -356,5 +362,11 @@ def test_a3_reserved_cover_consumption_can_unwind_partial_batches(composite_requ
         for rid, remaining in zip(reversed(ids), (5, 0)):
             result = client.put(f"/api/incoming/receipt-items/{rid}/revert", json={})
             assert result.status_code == 200, result.text
+            assert result.json()["purpose_reversal"]["theoretical_finished_cumulative"] == remaining
             with factory() as db:
                 assert db.get(InventoryReservation, reservation_id).consumed_stock_quantity == remaining
+                from app.services.receipt_managed_production import receipt_purpose_summaries_by_order_item_ids
+                projection = receipt_purpose_summaries_by_order_item_ids(db, [1])[1]
+                assert projection["automatic_finished_output_qty"] == 0
+                assert projection["product_output_quantities"][2] == remaining
+                assert projection["projection_inconsistent"] is False

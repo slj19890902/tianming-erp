@@ -84,7 +84,10 @@ def assemble_subkit_inventory(
             free_by_lot[lot.id] = lot.quantity_available if available_lot_ids is None or lot.id in available_lot_ids else 0
             available[detail.product_id] += free_by_lot[lot.id] + reserved_qty.get(lot.id, 0)
             lots.append(lot)
-        completed = int(db.scalar(select(func.coalesce(func.sum(SubkitConversion.quantity), 0)).where(
+        completed = int(db.scalar(select(func.coalesce(func.sum(
+            InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_consumed), 0))
+            .join(SubkitConversion, SubkitConversion.id == InventoryLot.source_ref_id).where(
+            InventoryLot.source_ref_type == "subkit_conversion",
             SubkitConversion.order_item_id == item.id, SubkitConversion.status == "posted"
         )) or 0)
         plan = plan_receipt_assembly(parent_product_id=item.product_id,
@@ -134,6 +137,9 @@ def assemble_subkit_inventory(
                 debit = min(reserved_take, _remaining_reservation_quantity(reservation))
                 if debit:
                     reservation.consumed_stock_quantity += debit
+                    reservation.consumed_requirement_quantity += debit
+                    reservation.consumed_by = operator_id
+                    reservation.consumed_at = utc_now_naive()
                     reservation.status = _reservation_status(reservation)
                     used_reservations.append({"id": reservation.id, "quantity": debit})
                     reserved_take -= debit
@@ -209,6 +215,7 @@ def reverse_subkit_conversion(db: Session, *, conversion_id: int, operator_id: i
                 if reservation is None or reservation.consumed_stock_quantity < record["quantity"]:
                     raise SubkitError("原片预占消耗来源不完整")
                 reservation.consumed_stock_quantity -= record["quantity"]
+                reservation.consumed_requirement_quantity -= record["quantity"]
                 reservation.status = _reservation_status(reservation)
             changed = db.execute(update(InventoryLot).where(InventoryLot.id == lot.id, InventoryLot.version == version).values(
                 quantity_available=InventoryLot.quantity_available + source.quantity - reserved_restore,

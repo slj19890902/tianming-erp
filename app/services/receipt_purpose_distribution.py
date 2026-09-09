@@ -380,6 +380,14 @@ def _finished_capacity(
     *,
     semi_piece_credits_by_component: dict[str, int] | None = None,
 ) -> int:
+    # Parent cartons and assembled liners are separate inventory outputs. The
+    # receipt preview must use the same parent-only basis as actual posting.
+    from app.models.bom_subkit import OrderSubkit
+    order_ids = {row.source_order_item_id for row in snapshots if row.source_order_item_id}
+    grouped_ids = set(db.scalars(select(OrderSubkit.order_item_id).where(
+        OrderSubkit.order_item_id.in_(order_ids)))) if order_ids else set()
+    snapshots = [row for row in snapshots if not (
+        row.source_order_item_id in grouped_ids and row.source_bom_requisition_source_id is not None)]
     by_component: dict[str, Decimal] = {}
     pieces_per_finished_by_component: dict[str, int] = {}
     for snapshot in snapshots:
@@ -1499,6 +1507,7 @@ def post_receipt_purpose_allocation(
     if subkit:
         from app.services.bom_subkit_receipts import post_component_receipt, assemble_after_receipt
         from app.services.bom_subkits import SubkitError
+        from app.services.warehouse_inventory import WarehouseInventoryError
         try:
             if subkit_component_receipt:
                 post_component_receipt(db, allocation=allocation, purpose_snapshot=snapshot,
@@ -1506,7 +1515,7 @@ def post_receipt_purpose_allocation(
             else:
                 assemble_after_receipt(db, order_item_id=order_item_id, allocation_id=allocation.id,
                     operator_id=operator_id)
-        except SubkitError as error:
+        except (SubkitError, WarehouseInventoryError) as error:
             raise ReceiptPurposeFlowError("SUBKIT_RECEIPT_FAILED", str(error), error.status_code) from error
     return allocation
 

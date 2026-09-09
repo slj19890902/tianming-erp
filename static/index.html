@@ -1630,8 +1630,9 @@
         flex-wrap: wrap; margin-bottom: 8px;
       }
       .bom-editor-heading h4 { margin: 0; font-size: 14px; color: #075985; }
-      .bom-editor-heading-controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-      .bom-editor-heading-controls .select { width:auto; min-width:260px; }
+      .bom-editor-heading-controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; min-width:0; max-width:100%; }
+      .bom-editor-heading-controls .remember-line { flex-wrap:wrap; min-width:0; max-width:100%; }
+      .bom-editor-heading-controls .select { width:auto; min-width:120px; max-width:100%; }
       .bom-editor-note { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.55; }
       .bom-component-list { display: grid; gap: 8px; min-width: 0; }
       .bom-component-card {

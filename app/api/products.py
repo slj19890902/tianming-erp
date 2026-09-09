@@ -2474,6 +2474,15 @@ def update_product(
         payload=payload,
         user=user,
     )
+    from app.models.bom_subkit import ProductSubkit
+    group = db.get(ProductSubkit, product.id)
+    if group and group.enabled and (
+        updates.get("is_virtual_composite_parent", product.is_virtual_composite_parent)
+        or not updates.get("is_composite", product.is_composite)
+        or updates.get("composite_fulfillment_mode", product.composite_fulfillment_mode) != "parent_delivery"
+        or updates.get("customer_id", product.customer_id) != product.customer_id
+    ):
+        raise HTTPException(409, "请先停用子套件，再修改客户或父件交付方式")
     try:
         revision = apply_versioned_update(
             db,

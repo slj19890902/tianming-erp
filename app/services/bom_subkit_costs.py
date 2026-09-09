@@ -25,14 +25,15 @@ def source_cost(db, lot, take):
         if fact is None:
             raise SubkitError("原片缺少冻结采购成本来源")
         used = lineage_used(db, lot)
+        if used + take > source.quantity:
+            return estimated_slice(lot, take)
         amount = cost_slice(source.total_cost, source.quantity, used, take)
         return amount, {"currency": fact.currency, "actual": True,
                         "purchase_receipt_fact_id": fact.id, "allocation_id": allocation.id}
     if lot.estimated_unit_cost_snapshot is None or lot.estimated_unit_cost_snapshot < 0:
         raise SubkitError("组套原片缺少有效来源成本")
     # Legacy stock is not promoted to actual purchase cost merely by assembling it.
-    amount = (lot.estimated_unit_cost_snapshot * take).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-    return amount, {"currency": "", "actual": False, "lot_id": lot.id}
+    return estimated_slice(lot, take)
 
 
 def delivery_cost(db, lot, take):
@@ -40,9 +41,19 @@ def delivery_cost(db, lot, take):
     if conversion is None or conversion.status != "posted":
         raise SubkitError("内衬缺少组套成本来源")
     used = lineage_used(db, lot)
+    if used + take > conversion.quantity:
+        return estimated_slice(lot, take)
     amount = cost_slice(conversion.total_cost, conversion.quantity, used, take)
     detail = json.loads(conversion.cost_detail_json or "{}")
     return amount, detail
+
+
+def estimated_slice(lot, take):
+    if lot.estimated_unit_cost_snapshot is None or lot.estimated_unit_cost_snapshot < 0:
+        raise SubkitError("库存缺少有效成本")
+    amount = (lot.estimated_unit_cost_snapshot * take).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    return amount, {"currency": "", "actual": False, "lot_id": lot.id,
+                    "reason": "库存超出冻结采购来源或仅有估算成本"}
 
 
 def lineage_used(db, lot):

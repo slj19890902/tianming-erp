@@ -188,3 +188,34 @@ def test_exact_cost_slices_conserve_rounded_total():
     assert sum(cost_slice(Decimal("1"), 6, n, 1) for n in range(6)) == Decimal("1")
     with pytest.raises(SubkitError):
         cost_slice(Decimal("1"), 6, 5, 2)
+
+
+def test_liner_is_retained_for_original_unfinished_order(db):
+    from app.services.bom_subkits import active_subkit_order, require_free_subkit_stock
+    actor, item, _ = setup_order(db)
+    lots = [raw(db, actor, 3788, 200), raw(db, actor, 3789, 600)]
+    conversion = convert(db, actor, item, lots)
+    db.commit()
+    output = db.get(InventoryLot, conversion.output_lot_id)
+    assert active_subkit_order(db, output) == item.id
+    with pytest.raises(SubkitError, match="保留给原订单"):
+        require_free_subkit_stock(db, output)
+    assert active_subkit_order(db, lots[0]) is None
+    item.is_force_closed = True
+    db.flush()
+    assert active_subkit_order(db, output) is None
+
+
+def test_damaged_liner_can_be_replaced_without_exceeding_order(db):
+    actor, item, _ = setup_order(db)
+    lots = [raw(db, actor, 3788, 220), raw(db, actor, 3789, 660)]
+    conversion = convert(db, actor, item, lots)
+    db.commit()
+    output = db.get(InventoryLot, conversion.output_lot_id)
+    from app.services.warehouse_inventory import mutate_lot
+    mutate_lot(db, lot_id=output.id, expected_version=output.version, quantity=1,
+        operation="damage", operator_id=actor.id, reason="isolated damaged liner", idempotency_key="test-damage")
+    db.commit()
+    replacement = convert(db, actor, item, lots, key="replacement")
+    assert replacement.quantity == 1
+    assert [lot.quantity_available for lot in lots] == [18, 54]

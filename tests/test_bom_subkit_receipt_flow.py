@@ -14,8 +14,35 @@ from tests.test_p1_80_purchase_purpose_allocation import (
 )
 
 
-@pytest.mark.parametrize("parent_last", [False, True])
-def test_parent_and_liner_receipt_dispatch_cancel_are_separate(composite_requisition_app, _p181_published_map_identity, parent_last):
+def test_common_box_subkit_save_read_stale_and_disabled_access(composite_requisition_app):
+    from app.api.products import router
+    from app.models.product import Product
+    app, factory = composite_requisition_app
+    app.include_router(router, prefix="/api/products")
+    with factory() as db:
+        parent = db.get(Product, 1)
+        parent.composite_fulfillment_mode = "parent_delivery"
+        parent.is_virtual_composite_parent = False
+        db.commit()
+    with TestClient(app) as client:
+        assert client.get("/api/products/1/bom").status_code in (401, 403)
+        _login(client)
+        current = client.get("/api/products/1/bom").json()
+        payload = {"expected_version":current["version"], "change_reason":"isolated subkit test",
+            "components":[{"component_product_id":2,"quantity_per_set":2},
+                          {"component_product_id":3,"quantity_per_set":6}],
+            "subkit":{"name":"000148内衬","kits_per_parent":1,"version":0,"enabled":True}}
+        saved = client.put("/api/products/1/bom", json=payload)
+        assert saved.status_code == 200, saved.text
+        loaded = client.get("/api/products/1/bom").json()
+        assert loaded["subkit"]["name"] == "000148内衬"
+        assert loaded["subkit"]["version"] == 1
+        assert client.put("/api/products/1/bom", json=payload).status_code == 409
+        assert client.get("/api/products/1/bom").json() == loaded
+
+
+@pytest.mark.parametrize("parent_last,split_short", [(False, False), (True, False), (False, True)])
+def test_parent_and_liner_receipt_dispatch_cancel_are_separate(composite_requisition_app, _p181_published_map_identity, parent_last, split_short):
     from app.api.deliveries import router
     from app.models.product import Product
     from app.models.order import OrderItem
@@ -91,17 +118,24 @@ def test_parent_and_liner_receipt_dispatch_cancel_are_separate(composite_requisi
         for index, source in enumerate(sources):
             fact = _freeze_receipt_fact(client, source, idempotency_key=f"subkit-price-{index}", unit_price="0.1234")
             assert fact.status_code == 200, fact.text
-            received = _receive(client, source, fact.json(), quantity=source.order_purpose_sheet_qty,
+            if split_short and source.order_purpose_sheet_qty == 60:
+                first = _receive(client, source, fact.json(), quantity=30,
+                    idempotency_key=f"subkit-in-first-{index}")
+                assert first.status_code == 200, first.text
+                with factory() as db:
+                    assert sum(row.quantity for row in db.scalars(select(SubkitConversion))) == 5
+            received_quantity = 30 if split_short and source.order_purpose_sheet_qty == 60 else source.order_purpose_sheet_qty
+            received = _receive(client, source, fact.json(), quantity=received_quantity,
                 idempotency_key=f"subkit-in-{index}")
             assert received.status_code == 200, (received.text, source, client.get("/api/incoming/pending").json())
-            repeated = _receive(client, source, fact.json(), quantity=source.order_purpose_sheet_qty,
+            repeated = _receive(client, source, fact.json(), quantity=received_quantity,
                 idempotency_key=f"subkit-in-{index}")
             assert repeated.status_code == 200, repeated.text
         with factory() as db:
             conversions = list(db.scalars(select(SubkitConversion)))
             assert sum(row.quantity for row in conversions) == 10
             kit = db.get(InventoryLot, next(row.output_lot_id for row in conversions if row.quantity))
-            assert kit.quantity_available == 10
+            assert sum(db.get(InventoryLot, row.output_lot_id).quantity_available for row in conversions if row.quantity) == 10
             assert kit.finished_detail.product_name_snapshot == "000148内衬"
             assert sum(row.total_cost for row in conversions) == Decimal("9.8720")
         delivery = client.post("/api/deliveries", json={"customer_id":1,"items":[{"order_item_id":1,"delivered_quantity":10}]})
@@ -110,9 +144,10 @@ def test_parent_and_liner_receipt_dispatch_cancel_are_separate(composite_requisi
         dispatched = client.put(f"/api/deliveries/{delivery_id}/dispatch", json={})
         assert dispatched.status_code == 200, dispatched.text
         with factory() as db:
-            allocation = db.scalar(select(SubkitDeliveryAllocation).where(SubkitDeliveryAllocation.reversed.is_(False)))
-            assert allocation.quantity == 10
-            assert allocation.total_cost == Decimal("9.8720")
+            allocations = list(db.scalars(select(SubkitDeliveryAllocation).where(SubkitDeliveryAllocation.reversed.is_(False))))
+            allocation = allocations[0]
+            assert sum(row.quantity for row in allocations) == 10
+            assert sum(row.total_cost for row in allocations) == Decimal("9.8720")
             assert db.get(InventoryLot, allocation.lot_id).quantity_available == 0
             from app.services.material_cost_lineage import material_cost_coverage_report
             from app.models.delivery import Delivery
@@ -123,4 +158,4 @@ def test_parent_and_liner_receipt_dispatch_cancel_are_separate(composite_requisi
         cancelled = client.put(f"/api/deliveries/{delivery_id}/cancel", json={})
         assert cancelled.status_code == 200, cancelled.text
         with factory() as db:
-            assert db.get(InventoryLot, kit.id).quantity_available == 10
+            assert sum(db.get(InventoryLot, row.lot_id).quantity_available for row in allocations) == 10

@@ -3044,6 +3044,11 @@ def reserve_finished_inventory_for_bom_component(
     lot = db.get(InventoryLot, inventory_lot_id)
     if lot is None or lot.finished_detail is None or lot.inventory_type != "finished" or lot.status != "active":
         raise WarehouseInventoryError("组件成品库存批次当前不可预占", 409)
+    from app.services.bom_subkits import require_free_subkit_stock, SubkitError
+    try:
+        require_free_subkit_stock(db, lot)
+    except SubkitError as error:
+        raise WarehouseInventoryError(str(error), error.status_code) from error
     from app.services.fixed_shelf_staging import staging_owner
     if staging_owner(db, lot.id):
         raise WarehouseInventoryError("该批次已为送货单集货，不能重复预占", 409)
@@ -3297,6 +3302,11 @@ def reserve_finished_inventory(
     detail = lot.finished_detail
     if lot.inventory_type != "finished" or lot.status != "active":
         raise WarehouseInventoryError("该库存批次当前不可预占", 409)
+    from app.services.bom_subkits import require_free_subkit_stock, SubkitError
+    try:
+        require_free_subkit_stock(db, lot)
+    except SubkitError as error:
+        raise WarehouseInventoryError(str(error), error.status_code) from error
     from app.services.fixed_shelf_staging import staging_owner
     if staging_owner(db, lot.id):
         raise WarehouseInventoryError('该批次已集货待送，不能再抵扣其他订单', 409)

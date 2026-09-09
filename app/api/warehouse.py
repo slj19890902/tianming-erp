@@ -2715,6 +2715,7 @@ def _lot_dict(
     *,
     location_projection_context: Mapping[str, object] | None = None,
 ) -> dict:
+    from app.services.warehouse_display_units import lot_display_unit
     warning = inventory_age_warning(row)
     pallet_item = row.pallet_item
     pallet = pallet_item.pallet if pallet_item is not None else None
@@ -2792,6 +2793,7 @@ def _lot_dict(
         "quantity_damaged": row.quantity_damaged,
         "quantity_scrapped": row.quantity_scrapped,
         "unit": row.unit,
+        "display_unit": lot_display_unit(row),
         "status": row.status,
         "source_type": row.source_type,
         "stock_date": row.stock_date,

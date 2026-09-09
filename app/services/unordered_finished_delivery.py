@@ -222,6 +222,11 @@ def _validated_customer_lot(
     detail = db.get(FinishedGoodsInventoryDetail, allocation.inventory_lot_id)
     if lot is None or detail is None:
         raise WarehouseInventoryError("所选成品库存批次不存在", 409)
+    from app.services.bom_subkits import require_free_subkit_stock, SubkitError
+    try:
+        require_free_subkit_stock(db, lot)
+    except SubkitError as error:
+        raise WarehouseInventoryError(str(error), error.status_code) from error
     from app.services.fixed_shelf_staging import staging_owner
     owner = staging_owner(db, lot.id)
     if owner and owner != delivery_item.id:

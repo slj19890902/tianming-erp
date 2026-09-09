@@ -204,6 +204,7 @@ def _parent_delivery_inventory_projections(
     lot_map = {int(row.id): row for row in lots if int(row.id or 0) > 0}
     if not lot_map:
         return {}
+    from app.models.bom_subkit import OrderSubkit
     rows = db.execute(
         select(
             InventoryReservation,
@@ -225,6 +226,7 @@ def _parent_delivery_inventory_projections(
             > InventoryReservation.consumed_stock_quantity
             + InventoryReservation.released_stock_quantity,
             OrderItem.composite_fulfillment_mode_snapshot == "parent_delivery",
+            ~OrderItem.id.in_(select(OrderSubkit.order_item_id)),
         )
         .order_by(InventoryReservation.id)
     ).all()

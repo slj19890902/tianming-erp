@@ -24,6 +24,30 @@ def recipe_rows(row: ProductSubkit | OrderSubkit) -> list[dict]:
     return json.loads(row.recipe_json)
 
 
+def active_subkit_order(db: Session, lot) -> int | None:
+    """Conversion stock belongs to its unfinished parent order, even after moving."""
+    if lot.source_ref_type != "subkit_conversion":
+        return None
+    from app.models.bom_subkit import SubkitConversion
+    from app.models.order import Order
+    conversion = db.get(SubkitConversion, lot.source_ref_id)
+    if conversion is None or conversion.status != "posted":
+        raise SubkitError("内衬组套来源失效，请核对")
+    item = db.get(OrderItem, conversion.order_item_id)
+    order = db.get(Order, item.order_id)
+    if (not item.is_force_closed and item.delivered_quantity < item.quantity
+            and order.status not in ("cancelled", "closed", "已作废", "已结单")):
+        return item.id
+    return None
+
+
+def require_free_subkit_stock(db: Session, lot) -> None:
+    # The dedicated parent dispatch consumes both parent and liner atomically.
+    # Never let an ordinary reservation or unordered dispatch steal that liner.
+    if active_subkit_order(db, lot) is not None:
+        raise SubkitError("该内衬已保留给原订单，随父件送货，不能另行预占或无单出库")
+
+
 def read_subkit(db: Session, parent_product_id: int) -> dict | None:
     definition = db.get(ProductSubkit, parent_product_id)
     if definition is None:
@@ -75,7 +99,7 @@ def save_subkit(
                 or not component.is_active or component.deleted_at is not None
                 or component.is_composite or not relation.is_required):
             raise SubkitError("组件必须为同客户的有效必需组件，不能嵌套组套")
-        if int(relation.quantity_per_set) != member.pieces_per_kit * count:
+        if relation.quantity_per_set != member.pieces_per_kit * count:
             raise SubkitError("每套用量×每父件套数必须与BOM每父件用量一致")
     # Serialize writes against parent version too, including concurrent BOM edits.
     parent_version = int(parent.version)
@@ -125,6 +149,9 @@ def freeze_order_subkit(db: Session, *, order_item_id: int, actor_id: int | None
     definition = db.get(ProductSubkit, item.product_id)
     if definition is None or not definition.enabled:
         return None
+    parent = db.get(Product, item.product_id)
+    if parent.is_virtual_composite_parent or parent.composite_fulfillment_mode != "parent_delivery":
+        raise SubkitError("请先停用子套件，再修改父件交付方式")
     snapshots = list(db.scalars(select(SalesOrderItemBomComponent).where(
         SalesOrderItemBomComponent.sales_order_item_id == item.id
     )))

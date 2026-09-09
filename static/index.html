@@ -8099,6 +8099,7 @@
             <div v-else-if="modal.type === 'externalPurchase'">
               <div v-if="externalPurchase.loading" class="empty">正在读取冻结候选和有效价格…</div>
               <div v-else-if="externalPurchase.error" class="notice danger">{{ externalPurchase.error }}</div>
+              <div v-else-if="externalPurchase.status === 'stock_covered'" class="notice success">已由预占库存覆盖，无需采购。预占变更后重新打开核对。</div>
               <template v-else-if="externalPurchase.status === 'confirmed' && externalPurchase.confirmation">
                 <div class="notice success">已确认采购；这里只查看冻结结果，不会自动收货或增加库存。</div>
                 <div v-for="purchase in externalPurchase.confirmation.purchase_orders" :key="purchase.id" class="external-purchase-confirmed">

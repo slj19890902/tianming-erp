@@ -74,21 +74,23 @@ def read_external_node(db, external_component_id):
 
 
 def frozen_purchase_quantities(db, components, order_items):
-    """Whole frozen procurement demand, matching the existing one-batch API.
+    """Uncovered procurement demand from authoritative order reservations.
 
     Missing graph links must not fall back to approximate legacy multipliers.
     Ordinary orders take only one batched graph-presence lookup.
     """
     from app.models.multilevel_bom import OrderBomGraph
     from app.services.multilevel_bom_purchase_units import purchase_quantity_for_stock
+    from app.services.multilevel_bom_requirements import read_graph_requirements
     ids = {c.sales_order_item_id for c in components}
     if not ids:
         return {}
     graph_ids = set(db.scalars(select(OrderBomGraph.order_item_id).where(OrderBomGraph.order_item_id.in_(ids))))
     result = {}
-    compiled_by_id = {oid: read_compiled_order_bom(db, oid) for oid in graph_ids}
-    demands = {oid: {d.product_id: d.required_units for d in plan_bom(compiled.graph, int(order_items[oid].quantity)).products}
-               for oid, compiled in compiled_by_id.items()}
+    requirements = {oid: read_graph_requirements(db, oid) for oid in graph_ids}
+    compiled_by_id = {oid: requirement.compiled for oid, requirement in requirements.items()}
+    demands = {oid: {d.product_id: d.make_units for d in requirement.plan.products}
+               for oid, requirement in requirements.items()}
     for component in components:
         oid = component.sales_order_item_id
         if oid not in graph_ids:

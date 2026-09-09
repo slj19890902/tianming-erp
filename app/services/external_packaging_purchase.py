@@ -1287,6 +1287,8 @@ def build_external_purchase_preview(
     graph_quantities = _graph_purchase_quantities(db, components, order_items)
     items: list[dict[str, Any]] = []
     for component in components:
+        if graph_quantities.get(component.id) == 0:
+            continue
         order_item = order_items[component.sales_order_item_id]
         default_candidate = next(
             (row for row in component.candidates if row.is_default), None
@@ -1327,7 +1329,7 @@ def build_external_purchase_preview(
     return {
         "order_id": order.id,
         "order_number": order.order_number,
-        "status": "pending",
+        "status": "stock_covered" if not items else "pending",
         "as_of": as_of.isoformat(),
         "history": history,
         "items": items,
@@ -1777,6 +1779,7 @@ def confirm_external_purchase(
     component_by_id = {
         row.id: row
         for row in components
+        if graph_quantities.get(row.id) != 0
         if _external_item_forward_block(
             order=order,
             order_item=order_items[row.sales_order_item_id],
@@ -1785,7 +1788,7 @@ def confirm_external_purchase(
     }
     if not component_by_id:
         raise ExternalPurchaseContractError(
-            "该订单没有仍可继续履约的外购包材明细"
+            "外购需求已由预占库存覆盖，无需采购" if graph_quantities and all(q == 0 for q in graph_quantities.values()) else "该订单没有仍可继续履约的外购包材明细"
         )
     line_by_component: dict[int, dict[str, Any]] = {}
     for raw in lines:
@@ -1802,6 +1805,8 @@ def confirm_external_purchase(
         )
     blocked_submissions = set(line_by_component) - set(component_by_id)
     if blocked_submissions:
+        if any(graph_quantities.get(cid) == 0 for cid in blocked_submissions):
+            raise ExternalPurchaseContractError('所选外购需求已由预占库存覆盖，请刷新后采购剩余项')
         component = next(
             row for row in components if row.id == min(blocked_submissions)
         )

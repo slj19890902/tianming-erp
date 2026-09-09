@@ -120,3 +120,30 @@ def test_ordinary_order_retains_legacy_purchase_calculation(context):
     quantities = _graph_purchase_quantities(db, [component], {item.id:item})
     assert quantities == {}
     assert _suggested_quantity(component, 3, graph_quantities=quantities) == 5
+
+
+@pytest.mark.parametrize('reserved,expected', [(50,450), (200,0)])
+def test_reserved_stock_reduces_purchase_and_cancellation_restores_it(context, reserved, expected):
+    from tests.test_multilevel_bom_requisition import reserve
+    from app.services.multilevel_bom_orders import read_compiled_order_bom
+    from app.services.external_packaging_purchase import _graph_purchase_quantities, build_external_purchase_preview, confirm_external_purchase, ExternalPurchaseContractError
+    from app.models.warehouse_inventory import InventoryReservation
+    from app.models.external_packaging_purchase import ExternalPackagingPurchaseBatch
+    db, actor, item, _ = context
+    row = prepare(db, actor, item)
+    bind_external_component(db, external_component_id=row.id, order_item_id=item.id, product_id=3, actor=actor)
+    db.commit()
+    snapshot = next(s for s in read_compiled_order_bom(db, item.id).snapshots if s.component_product_id == 3)
+    reserve(db, item, snapshot, reserved)
+    assert _graph_purchase_quantities(db, [row], {item.id:item}) == {row.id:Decimal(expected)}
+    if expected == 0:
+        preview = build_external_purchase_preview(db, item.order_id)
+        assert preview['status'] == 'stock_covered'
+        assert preview['items'] == []
+        with pytest.raises(ExternalPurchaseContractError, match='无需采购'):
+            confirm_external_purchase(db, order_id=item.order_id, idempotency_key='covered-no-purchase', lines=[], user=actor)
+        assert db.scalar(select(func.count()).select_from(ExternalPackagingPurchaseBatch)) == 0
+    reservation = db.scalar(select(InventoryReservation).where(InventoryReservation.order_item_id == item.id))
+    reservation.status = 'cancelled'
+    db.commit()
+    assert _graph_purchase_quantities(db, [row], {item.id:item}) == {row.id:Decimal(600)}

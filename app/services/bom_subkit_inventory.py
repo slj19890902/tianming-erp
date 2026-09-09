@@ -12,6 +12,7 @@ from app.models.order import Order, OrderItem
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryLot, InventoryReservation, WarehouseLocation
 from app.services.audit_log import append_audit_event
+from app.services.bom_transactions import atomic_bom
 from app.services.bom_subkit_planning import SubkitMember, plan_receipt_assembly
 from app.services.bom_subkits import SubkitError, recipe_rows
 from app.services.warehouse_inventory import _balances, _movement, manual_finished_in, inventory_fifo_sort_key
@@ -42,7 +43,7 @@ def assemble_subkit_inventory(
         if existing.request_hash != request_hash or existing.status != "posted":
             raise SubkitError("组套操作标识已使用或该组套已撤销")
         return existing
-    with db.begin_nested():
+    with atomic_bom(db):
         item = db.get(OrderItem, order_item_id)
         snapshot = db.get(OrderSubkit, order_item_id)
         if item is None or snapshot is None:
@@ -180,7 +181,7 @@ def assemble_subkit_inventory(
 
 
 def reverse_subkit_conversion(db: Session, *, conversion_id: int, operator_id: int) -> None:
-    with db.begin_nested():
+    with atomic_bom(db):
         conversion = db.get(SubkitConversion, conversion_id)
         if conversion is None:
             raise SubkitError("组套记录不存在", 404)

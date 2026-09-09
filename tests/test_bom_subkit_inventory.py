@@ -241,3 +241,27 @@ def test_split_move_preserves_liner_order_and_available_sets(db):
     assert moved.quantity_available == 40
     assert active_subkit_order(db, moved) == item.id
     assert limit_by_subkit_stock(db, {item.id:100}) == {item.id:100}
+
+
+def test_outer_rollback_undoes_conversion_after_read_only_entry(db):
+    actor, item, _ = setup_order(db)
+    lots = [raw(db, actor, 3788, 200), raw(db, actor, 3789, 600)]
+    lot_ids = [lot.id for lot in lots]
+    result = convert(db, actor, item, lots, key="outer-rollback-assembly")
+    conversion_id, output_id = result.id, result.output_lot_id
+    db.rollback()
+    assert db.get(SubkitConversion, conversion_id) is None
+    assert db.get(InventoryLot, output_id) is None
+    assert [db.get(InventoryLot, lid).quantity_available for lid in lot_ids] == [200, 600]
+
+
+def test_outer_rollback_undoes_reversal_after_read_only_entry(db):
+    actor, item, _ = setup_order(db)
+    lots = [raw(db, actor, 3788, 200), raw(db, actor, 3789, 600)]
+    result = convert(db, actor, item, lots, key="outer-rollback-reversal")
+    db.commit()
+    conversion_id, output_id, actor_id = result.id, result.output_lot_id, actor.id
+    reverse_subkit_conversion(db, conversion_id=conversion_id, operator_id=actor_id)
+    db.rollback()
+    assert db.get(SubkitConversion, conversion_id).status == "posted"
+    assert db.get(InventoryLot, output_id).quantity_available == 100

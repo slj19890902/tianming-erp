@@ -20,7 +20,7 @@ from test_p1_33c5_external_packaging_receiving import _login, _confirm
 from tests.test_p1_81_receipt_purpose_flow import _seed_material_and_staging, _p181_published_map_identity
 
 
-def prepare(app, *, stock_basis=1, purchase_basis=3, two=False):
+def prepare(app, *, stock_basis=1, purchase_basis=3, two=False, direct=False):
     with app.state.session_factory() as db:
         actor = db.scalar(select(User).where(User.username == 'purchase-admin'))
         old = db.get(Order, app.state.fixture['order_id'])
@@ -49,7 +49,11 @@ def prepare(app, *, stock_basis=1, purchase_basis=3, two=False):
             db.add(second)
             db.flush()
             components.append((second.id, 6, 'assembly'))
-        save(db, actor, root.id, 'assembled', components)
+        if direct:
+            root = child
+            save(db, actor, root.id, 'purchased', [])
+        else:
+            save(db, actor, root.id, 'assembled', components)
         order = Order(order_number='GRAPH-RECEIPT', customer_id=old.customer_id, order_date=date(2026,9,10))
         db.add(order)
         db.flush()

@@ -21,6 +21,7 @@ from app.core.time_contract import (
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.incoming_receipt import IncomingReceiptItem
+from app.models.external_packaging_purchase import ExternalPackagingReceiptItem
 from app.models.multilevel_bom import BomAssembly
 from app.models.order import Order, OrderItem
 from app.models.product import Product
@@ -2869,7 +2870,7 @@ def _consume_completion_semi_reservations(
 def _reserve_component_completion_lot(
     db: Session,
     *,
-    completion: ProductionCompletion | BomAssembly,
+    completion: ProductionCompletion | BomAssembly | ExternalPackagingReceiptItem,
     order: Order,
     item: OrderItem,
     snapshot_id: int,
@@ -2878,8 +2879,9 @@ def _reserve_component_completion_lot(
     idempotency_key: str,
     reserve_quantity: int | None = None,
     reservation_number_prefix: str = "CPRS",
+    movement_reason: str = "复合 BOM 组件生产完工自动预占",
 ) -> InventoryReservation:
-    """Reserve a just-created completion/assembly lot for its BOM snapshot.
+    """Reserve a just-created completion/assembly/external lot for its BOM snapshot.
 
     The legacy helper checks the parent product, which is intentionally wrong
     for a component.  This narrow variant preserves the same inventory
@@ -2899,7 +2901,9 @@ def _reserve_component_completion_lot(
         ):
             raise ProductionWorkflowError("组件完工库存预占幂等标识冲突", 409)
         return existing
-    quantity = int(completion.quantity if reserve_quantity is None else reserve_quantity)
+    output_quantity = (completion.converted_finished_quantity
+        if isinstance(completion, ExternalPackagingReceiptItem) else completion.quantity)
+    quantity = int(output_quantity if reserve_quantity is None else reserve_quantity)
     if quantity <= 0 or int(lot.quantity_available or 0) < quantity or (
         reserve_quantity is None and int(lot.quantity_available or 0) != quantity
     ):
@@ -2953,7 +2957,7 @@ def _reserve_component_completion_lot(
         quantity=quantity,
         before=before,
         operator_id=operator_id,
-        reason="复合 BOM 组件生产完工自动预占",
+        reason=movement_reason,
         idempotency_key=idempotency_key,
         reservation_id=reservation.id,
         related_order_id=order.id,

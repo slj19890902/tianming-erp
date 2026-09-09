@@ -90,3 +90,54 @@ def post_graph_receipt_inventory(db, *, purchase_item, receipt_item, customer_id
     lot.cost_snapshot_detail_json = json.dumps(detail, ensure_ascii=False)
     db.flush()
     return lot
+
+
+def reserve_external_picking(db, *, receipt_id, item, operator_id):
+    """Reserve only this receipt's unconsumed real picking nodes, up to demand."""
+    from app.models.external_packaging_purchase import ExternalPackagingReceiptItem, ExternalPackagingPurchaseItem
+    from app.models.warehouse_inventory import InventoryLot, InventoryReservation
+    from app.models.order import Order
+    from app.services.multilevel_bom_plan import plan_bom
+    from app.services.production_workflow import _reserve_component_completion_lot
+    compiled = read_compiled_order_bom(db, item.id)
+    order = db.get(Order, item.order_id)
+    if compiled is None or order is None or order.customer_id != compiled.graph.customer_id:
+        raise BomPlanError('外购预占缺少有效订单和客户')
+    picking = dict(plan_bom(compiled.graph, item.quantity).picking)
+    snapshots = {s.component_product_id: s for s in compiled.snapshots}
+    credits = {pid: int(item.delivered_quantity or 0) if pid == compiled.graph.root_id else 0 for pid in picking}
+    for reservation in db.scalars(select(InventoryReservation).where(
+            InventoryReservation.order_item_id == item.id,
+            InventoryReservation.reservation_type == 'finished_order', InventoryReservation.status != 'cancelled')):
+        pid = compiled.graph.root_id if reservation.sales_order_item_bom_component_id is None else next(
+            (pid for pid, s in snapshots.items() if s.id == reservation.sales_order_item_bom_component_id), None)
+        if pid not in credits:
+            continue
+        reserved_lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        if (reserved_lot is None or reserved_lot.finished_detail is None
+                or reserved_lot.finished_detail.product_id != pid
+                or reserved_lot.finished_detail.owner_customer_id != order.customer_id
+                or reservation.credited_requirement_quantity is None):
+            raise BomPlanError('既有预占与真实BOM产品或客户不一致')
+        credited = int(reservation.credited_requirement_quantity or 0) - int(reservation.released_requirement_quantity or 0)
+        if pid == compiled.graph.root_id:
+            credited -= int(reservation.consumed_requirement_quantity or 0)
+        credits[pid] += max(credited, 0)
+    sources = {r.id:r for r in db.scalars(select(ExternalPackagingReceiptItem).join(ExternalPackagingPurchaseItem,
+        ExternalPackagingPurchaseItem.id == ExternalPackagingReceiptItem.purchase_item_id).where(
+            ExternalPackagingReceiptItem.receipt_id == receipt_id, ExternalPackagingPurchaseItem.sales_order_item_id == item.id))}
+    lots = db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type == 'bom_external_receipt',
+        InventoryLot.source_ref_id.in_(sources), InventoryLot.quantity_available > 0).order_by(InventoryLot.id))
+    for lot in lots:
+        pid = lot.finished_detail.product_id
+        if pid not in picking:
+            continue
+        quantity = min(lot.quantity_available, max(picking[pid] - credits[pid], 0))
+        if quantity <= 0:
+            continue
+        _reserve_component_completion_lot(db, completion=sources[lot.source_ref_id], order=order, item=item,
+            snapshot_id=snapshots[pid].id, lot=lot, operator_id=operator_id, reserve_quantity=quantity,
+            idempotency_key=f'bom-external-pick:{receipt_id}:{lot.id}', reservation_number_prefix='BEPR',
+            movement_reason='外购BOM产品收料自动预占')
+        credits[pid] += quantity
+    db.flush()

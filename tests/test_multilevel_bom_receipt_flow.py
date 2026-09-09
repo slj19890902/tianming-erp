@@ -13,7 +13,7 @@ from tests.test_multilevel_bom_master import save
 
 
 @pytest.mark.parametrize("liner", [False, True])
-def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_app, _p181_published_map_identity, liner):
+def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_app, _p181_published_map_identity, liner, monkeypatch):
     from app.api.deliveries import router
     from app.models.warehouse_inventory import InventoryLot
     from app.models.order import OrderItem
@@ -59,10 +59,23 @@ def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_ap
         assert {row["component_product_id"] for row in pending_line["component_lines"]} == expected_products
         assert len(pending_line["inventory_sources"]) == len(expected_products)
         assert all(row["location_id"] and row["quantity_to_pick_stock"] == 10 for row in pending_line["inventory_sources"])
-        created = client.post("/api/deliveries", json={"customer_id": 1,
+        created = client.post("/api/deliveries", json={"customer_id": 1, "delivery_date": "2026-09-10",
             "items": [{"order_item_id": 1, "delivered_quantity": 4}]})
         assert created.status_code == 201, created.text
         did = created.json()["id"]
+        from app.services import graph_delivery_cost
+        from app.models.graph_material_cost import FinanceDeliveryGraphCostFact, FinanceDeliveryGraphCostPortion
+        from app.models.delivery import Delivery
+        with monkeypatch.context() as patch:
+            def fail_portion(**kwargs):
+                raise SubkitError("模拟成本明细写入失败")
+            patch.setattr(graph_delivery_cost, "Portion", fail_portion)
+            failed = client.put(f"/api/deliveries/{did}/dispatch")
+            assert failed.status_code == 409, failed.text
+        with factory() as db:
+            assert db.get(Delivery, did).status == "pending"
+            assert db.get(OrderItem, 1).delivered_quantity == 0
+            assert list(db.scalars(select(FinanceDeliveryGraphCostFact))) == []
         dispatched = client.put(f"/api/deliveries/{did}/dispatch")
         assert dispatched.status_code == 200, dispatched.text
         detail = client.get(f"/api/deliveries/{did}")
@@ -79,9 +92,27 @@ def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_ap
                     assert sum(lot.quantity_consumed for lot in lots) == expected
                     assert sum(lot.quantity_reserved for lot in lots) == 10-expected
         check(4)
+        from app.services.material_cost_lineage import material_cost_coverage_report
+        with factory() as db:
+            report = material_cost_coverage_report(db, month="2026-09")
+            assert report["covered_delivery_lines"] == 1, report
+            assert report["actual_material_cost"] == Decimal("4.44" if liner else "3.46")
+            cost_facts = list(db.scalars(select(FinanceDeliveryGraphCostFact)))
+            assert len(cost_facts) == len(expected_products)
+            frozen_ids = [f.id for f in cost_facts]
+            assert len(list(db.scalars(select(FinanceDeliveryGraphCostPortion)))) == (3 if liner else 2)
+            from app.models.warehouse_inventory import DeliveryInventoryAllocation
+            for f in cost_facts:
+                allocation = db.get(DeliveryInventoryAllocation, f.delivery_inventory_allocation_id)
+                replay = graph_delivery_cost.freeze_graph_delivery_cost(db, allocation=allocation,
+                    lot=db.get(InventoryLot, f.inventory_lot_id), operator_id=1)
+                assert replay.id == f.id
         cancelled = client.put(f"/api/deliveries/{did}/cancel")
         assert cancelled.status_code == 200, cancelled.text
         check(0)
+        with factory() as db:
+            assert material_cost_coverage_report(db, month="2026-09")["actual_material_cost"] == 0
+            assert [f.id for f in db.scalars(select(FinanceDeliveryGraphCostFact))] == frozen_ids
 
 
 @pytest.mark.parametrize("liner", [False, True])

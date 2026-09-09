@@ -191,6 +191,7 @@ from app.models.processing_cost import (  # noqa: E402,F401
 from app.models.material_cost import (  # noqa: E402,F401
     FinanceDeliveryMaterialCostFact,
 )
+from app.models.graph_material_cost import FinanceDeliveryGraphCostFact, FinanceDeliveryGraphCostPortion  # noqa: E402,F401
 from app.models.fulfillment_reminder import (  # noqa: E402,F401
     FulfillmentReminder,
     FulfillmentReminderMutation,

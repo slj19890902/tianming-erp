@@ -440,6 +440,9 @@ def estimate_order_item_material_cost(
         if graph_inputs is None and item.supply_mode_snapshot in {"external_purchase", "mixed_bom"}
         else {"components": [], "missing_items": []}
     )
+    if graph_inputs is not None:
+        from app.services.multilevel_bom_external_estimate import estimate_graph_external_materials
+        external = estimate_graph_external_materials(db, item, as_of=beijing_today())
     calculated.extend(external["components"])
     missing.extend(external["missing_items"])
 
@@ -469,7 +472,7 @@ def estimate_order_item_material_cost(
         "material_cost_scope_label": "当前材料成本（未计生产损耗和加工费）",
         "material_cost_is_current_estimate": True,
         "material_cost_formula_version": (
-            "multilevel-bom-material-v1" if graph_inputs is not None else
+            "multilevel-bom-material-v2" if graph_inputs is not None else
             "p1-43b-material-external-v1"
             if item.supply_mode_snapshot in {"external_purchase", "mixed_bom"}
             else "p1-28a-material-v1"

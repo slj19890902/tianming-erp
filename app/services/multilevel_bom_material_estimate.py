@@ -36,7 +36,4 @@ def graph_material_estimate_inputs(db, item):
             "source_identity": {"product_id": node.product_id,
                 "bom_snapshot_id": snapshot.id, "route_key": demand.route_key},
         })
-    # Do not run the legacy per-parent external ratio on nested purchase nodes.
-    # A missing quote adapter is explicit, not a phantom board or zero cost.
-    missing = [f"{node.name}外购节点成本待核定" for node in graph.nodes if node.source == "purchased"]
-    return sources, missing
+    return sources, []

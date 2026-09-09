@@ -37,3 +37,21 @@ test('plain HTTP never requests camera and offers HTTPS entry',async()=>{
   let calls=0;const {ctx,$}=harness(async()=>{calls++;});ctx.window.isSecureContext=false;
   await ctx.startCamera();assert.equal(calls,0);assert.equal($('cameraHttps').hidden,false);
 });
+
+test('old LAN and new public mold QR resolve on the current ERP origin',async()=>{
+  const {ctx,loads}=harness(); const paths=[];ctx.location.assign=path=>paths.push(path);
+  for(const text of ['HTTP://192.168.3.80:8000/M/5','https://tianmingerp0909.share.zrok.io/M/5']) {
+    assert.equal(await ctx.acceptShelf(text),true);
+    assert.equal(paths.at(-1),'/M/5');
+  }
+  assert.equal(ctx.moldIdentity('http://192.168.3.80:8000/M/5?production_task_id=12'),'/M/5?production_task_id=12');
+  assert.equal(await ctx.acceptShelf('http://192.168.3.80:8000/mobile/mold-lookup?mold_id=5&readonly=1'),true);
+  assert.equal(paths.at(-1),'/mobile/mold-lookup?mold_id=5&readonly=1');
+  assert.equal(loads(),0);
+});
+
+test('mold QR cannot navigate to an arbitrary host or execute code',()=>{
+  const {ctx}=harness();
+  for(const text of ['https://evil.example/M/5','https://192.168.3.80.evil.example/M/5','http://user:pass@192.168.3.80/M/5','javascript:alert(1)','/M/0','/M/5?production_task_id=bad','/mobile/mold-lookup?mold_id=bad']) assert.equal(ctx.moldIdentity(text),null,text);
+  assert.equal(ctx.moldIdentity('/M/5?next=https://evil.example'),'/M/5');
+});

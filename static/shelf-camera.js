@@ -14,6 +14,24 @@ function shelfIdentity(text) {
   } catch (_) { /* A QR may contain text rather than an ERP URL. */ }
   return null;
 }
+function moldIdentity(text) {
+  try {
+    const url = new URL(text, location.origin);
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return null;
+    if (![location.hostname, 'tianmingerp0909.share.zrok.io', '192.168.3.80'].includes(url.hostname)) return null;
+    const match = url.pathname.match(/^\/M\/([1-9]\d*)\/?$/);
+    if (match) {
+      const task = url.searchParams.get('production_task_id');
+      if (task && !/^[1-9]\d*$/.test(task)) return null;
+      return `/M/${match[1]}${task ? '?production_task_id='+task : ''}`;
+    }
+    if (['/mobile/mold-lookup', '/static/mobile_mold_lookup.html'].includes(url.pathname)) {
+      const moldId = url.searchParams.get('mold_id');
+      if (/^[1-9]\d*$/.test(moldId || '')) return `/mobile/mold-lookup?mold_id=${moldId}&readonly=1`;
+    }
+  } catch (_) { /* Only recognized ERP identities are accepted. */ }
+  return null;
+}
 let cameraStream = null, cameraEpoch = 0, cameraTimer = null, decoderPromise = null;
 function decoderReady() {
   if (typeof window.jsQR === 'function') return Promise.resolve();
@@ -38,8 +56,15 @@ function stopCamera() {
   $('cameraStart').disabled = false;
 }
 async function acceptShelf(text) {
+  const mold = moldIdentity(text);
+  if (mold) {
+    stopCamera();
+    $('cameraStatus').textContent = '已识别模具，正在打开当前 ERP 信息';
+    location.assign(mold);
+    return true;
+  }
   const target = shelfIdentity(text);
-  if (!target) { $('cameraStatus').textContent='请扫描本 ERP 的货位或货位产品二维码'; return false; }
+  if (!target) { $('cameraStatus').textContent='请扫描本 ERP 的货位或模具二维码'; return false; }
   stopCamera();
   id = target.id; product = target.product;
   $('cameraStatus').textContent = '已识别，正在读取货位库存';
@@ -59,8 +84,8 @@ function scanFrame(epoch) {
       context.drawImage(video,0,0,canvas.width,canvas.height);
       const pixels=context.getImageData(0,0,canvas.width,canvas.height);
       const result=window.jsQR(pixels.data,pixels.width,pixels.height,{inversionAttempts:'attemptBoth'});
-      if (result && shelfIdentity(result.data)) { void acceptShelf(result.data); return; }
-      if (result) $('cameraStatus').textContent='这不是本 ERP 的货位二维码，请换一个';
+      if (result && (shelfIdentity(result.data) || moldIdentity(result.data))) { void acceptShelf(result.data); return; }
+      if (result) $('cameraStatus').textContent='未识别为本 ERP 的货位或模具二维码，请核对标签';
     }
     cameraTimer=setTimeout(()=>scanFrame(epoch),180);
   } catch (_) {stopCamera(); $('cameraStatus').textContent='摄像头画面读取失败，请重新开启';}
@@ -83,7 +108,7 @@ async function startCamera() {
     const video=$('cameraVideo'); video.srcObject=stream; video.hidden=false;
     await video.play();
     if(epoch!==cameraEpoch)return;
-    $('cameraStatus').textContent='请将货位二维码放入画面';
+    $('cameraStatus').textContent='请将货位或模具二维码放入画面';
     scanFrame(epoch);
   } catch(e) {
     if(epoch!==cameraEpoch)return;

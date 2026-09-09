@@ -20,7 +20,7 @@ from test_p1_33c5_external_packaging_receiving import _login, _confirm
 from tests.test_p1_81_receipt_purpose_flow import _seed_material_and_staging, _p181_published_map_identity
 
 
-def prepare(app):
+def prepare(app, *, stock_basis=1, purchase_basis=3):
     with app.state.session_factory() as db:
         actor = db.scalar(select(User).where(User.username == 'purchase-admin'))
         old = db.get(Order, app.state.fixture['order_id'])
@@ -30,7 +30,7 @@ def prepare(app):
             supply_mode='external_purchase', external_packaging_category_code=external.category_code,
             external_packaging_specification_json=external.specification_json,
             external_packaging_specification_summary='测试规格', external_packaging_purchase_unit=external.purchase_unit,
-            external_packaging_default_order_quantity_basis=1, external_packaging_default_purchase_quantity_basis=3,
+            external_packaging_default_order_quantity_basis=stock_basis, external_packaging_default_purchase_quantity_basis=purchase_basis,
             external_packaging_candidate_snapshot_json=json.dumps([dict(external_product_id=external.id,
                 external_product_version=external.version, supplier_id=external.supplier_id,
                 supplier_name='供应商甲', product_name=external.product_name,
@@ -98,7 +98,11 @@ def test_actual_receipt_route_converts_cumulatively_and_replays_frozen_facts(pur
             assert lot.finished_detail.product_id == child_id
             assert lot.finished_detail.product_name_snapshot == '真实子件'
             assert lot.source_ref_type == 'bom_external_receipt'
-            assert lot.estimated_unit_cost_snapshot is None
+            assert lot.estimated_unit_cost_snapshot == Decimal('29.7000')
+            from app.services.bom_subkit_costs import source_cost
+            amount, cost = source_cost(db, lot, 1)
+            assert amount == Decimal('29.7000') and cost['actual'] is True
+            assert [Decimal(p['amount']) for p in cost['sources']] == [Decimal('19.8000'), Decimal('9.9000')]
             assert db.scalar(select(func.count()).select_from(InventoryMovement).where(
                 InventoryMovement.inventory_lot_id == lot.id)) == 1
 

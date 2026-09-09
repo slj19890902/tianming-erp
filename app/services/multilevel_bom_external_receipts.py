@@ -47,11 +47,12 @@ def graph_receipt_conversions(db, normalized, totals, *, customer_id):
 def post_graph_receipt_inventory(db, *, purchase_item, receipt_item, customer_id, operator_id):
     """Post the real child, never a fabricated parent production completion.
 
-    Caller owns the receipt transaction, permissions and order lock. Until the
-    external cost-source adapter is connected, do not inherit a guessed paper
-    cost from the product master or allow that guess to fund an assembly.
+    Caller owns the receipt transaction, permissions and order lock. Costs use
+    the frozen external purchase contract, not the current paper master.
     """
     import json
+    from decimal import Decimal, ROUND_HALF_UP
+    from app.services.multilevel_bom_external_costs import receipt_output_cost
     from app.core.time_contract import beijing_today, utc_now_naive
     from app.services.production_workflow import _receipt_auto_finished_ground_target
     from app.services.warehouse_inventory import manual_finished_in
@@ -79,15 +80,13 @@ def post_graph_receipt_inventory(db, *, purchase_item, receipt_item, customer_id
     snapshot = next(s for s in compiled.snapshots if s.id == link.bom_snapshot_id)
     lot.finished_detail.inventory_code_snapshot = snapshot.snapshot_component_product_code
     lot.finished_detail.product_name_snapshot = node.name
-    lot.estimated_unit_cost_snapshot = None
+    detail = receipt_output_cost(db, receipt_item.id)
+    lot.estimated_unit_cost_snapshot = (Decimal(detail['capitalized_material_cost']) / quantity).quantize(
+        Decimal('0.0001'), rounding=ROUND_HALF_UP)
     lot.estimated_square_price_snapshot = None
     lot.estimated_cost_area_m2_snapshot = None
-    lot.cost_snapshot_source = 'external_bom_pending_cost'
+    lot.cost_snapshot_source = 'external_bom_receipt'
     lot.cost_snapshot_at = utc_now_naive()
-    lot.cost_snapshot_detail_json = json.dumps(dict(actual=False,
-        external_receipt_item_id=receipt_item.id, external_purchase_item_id=purchase_item.id,
-        bom_snapshot_id=link.bom_snapshot_id, product_id=node.product_id,
-        quantity=quantity, stock_unit=node.unit, currency=purchase_item.currency,
-        reason='等待外购真实采购成本来源接入'), ensure_ascii=False)
+    lot.cost_snapshot_detail_json = json.dumps(detail, ensure_ascii=False)
     db.flush()
     return lot

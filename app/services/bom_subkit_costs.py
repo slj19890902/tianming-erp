@@ -17,6 +17,9 @@ def cost_slice(total, quantity, used, take):
 
 
 def source_cost(db, lot, take):
+    if lot.source_ref_type == 'bom_external_receipt':
+        from app.services.multilevel_bom_external_costs import external_lot_cost
+        return external_lot_cost(db, lot, take)
     # A real assembled product can be an input of the next assembly level.
     # Carry its exact frozen total and purchase lineage forward; multiplying
     # its rounded display unit cost would lose both cents and cost provenance.

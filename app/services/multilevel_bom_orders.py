@@ -119,7 +119,7 @@ def read_compiled_order_bom(db, order_item_id):
     return CompiledMasterBom(graph, rows)
 
 
-def freeze_master_order_bom(db, *, order_item_id, actor: User):
+def freeze_master_order_bom(db, *, order_item_id, actor: User, root_order_snapshot=False):
     """Atomically freeze the real recipe and existing material/process columns.
 
     All nodes have one source row, including the root and intermediate outputs.
@@ -139,7 +139,7 @@ def freeze_master_order_bom(db, *, order_item_id, actor: User):
         item = db.get(OrderItem, order_item_id)
         if item is None:
             raise BomPlanError("订单明细不存在")
-        compiled = compile_master_order_bom(db, item)
+        compiled = compile_master_order_bom(db, item, root_order_snapshot=root_order_snapshot)
         freeze_order_graph(db, order_item_id=order_item_id, graph=compiled.graph, actor=actor)
         db.add_all(compiled.snapshots)
         db.flush()

@@ -7455,7 +7455,8 @@ def _create_order_impl(
             if graph_modes[index] is not None:
                 # Freeze graph and external-node identities together BEFORE the
                 # legacy external writer can create unrelated parent-only rows.
-                freeze_order_procurement(db, order_item_id=created_item.id, actor=user)
+                freeze_order_procurement(db, order_item_id=created_item.id, actor=user,
+                                         root_order_snapshot=True)
                 _apply_new_order_component_demands(db, item=created_item,
                     targets=payload.items[index - 1].bom_component_demands,
                     user=user, order=order, request=request)

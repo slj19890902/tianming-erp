@@ -24,6 +24,58 @@ def payload(factory, *, key="new-real-bom"):
             "quantity": 10, "unit_price": "100"}]}
 
 
+def test_new_order_root_uses_order_material_and_notes_not_child_master(composite_requisition_app, _p181_published_map_identity):
+    from app.models.material import Material
+    app, factory = composite_requisition_app
+    original_material_id, _ = seed_graph(factory, liner=True)
+    with factory() as db:
+        original = db.get(Material, original_material_id)
+        alternate = Material(code="ORDER-ONLY-BOARD", supplier_name=original.supplier_name,
+            layer_count=original.layer_count, flute_type=original.flute_type,
+            quote_price=original.quote_price, price_unit=original.price_unit,
+            purchase_currency=original.purchase_currency,
+            purchase_tax_included=original.purchase_tax_included,
+            purchase_tax_rate=original.purchase_tax_rate)
+        db.add(alternate)
+        db.flush()
+        alternate_id = alternate.id
+        db.commit()
+    body = payload(factory, key="order-specific-root")
+    body["items"][0].update(material_id=alternate_id, production_notes="本单标签朝外")
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post("/api/orders", json=body)
+        assert response.status_code == 201, response.text
+    item_id = response.json()["items"][0]["id"]
+    with factory() as db:
+        item = db.get(OrderItem, item_id)
+        assert item.material_id == alternate_id
+        compiled = read_compiled_order_bom(db, item_id)
+        rows = {row.component_product_id: row for row in compiled.snapshots}
+        assert rows[1].snapshot_component_material_id == alternate_id
+        assert rows[1].snapshot_component_production_notes == "本单标签朝外"
+        assert rows[2].snapshot_component_material_id == original_material_id
+        assert rows[3].snapshot_component_material_id == original_material_id
+        assert db.get(Product, 1).material_id == original_material_id
+        from app.services.multilevel_bom_material_estimate import graph_material_estimate_inputs
+        sources, missing = graph_material_estimate_inputs(db, item)
+        assert not missing
+        assert next(row for row in sources if row["source_identity"]["product_id"] == 1)["material_id"] == alternate_id
+        # Existing frozen orders are never rewritten to the new order's input.
+        old = read_compiled_order_bom(db, 1)
+        assert next(row for row in old.snapshots if row.component_product_id == 1).snapshot_component_material_id == original_material_id
+        # Replay reads the frozen contract, never reinterprets even changed
+        # order/master display data as permission to replace it.
+        from app.models.user import User
+        from app.services.multilevel_bom_external_freeze import freeze_order_procurement
+        item.snapshot_production_notes = "后续输入"
+        item.material_id = original_material_id
+        replay = freeze_order_procurement(db, order_item_id=item_id, actor=db.get(User, 1), root_order_snapshot=True)
+        root = next(row for row in replay.snapshots if row.component_product_id == 1)
+        assert root.snapshot_component_material_id == alternate_id
+        assert root.snapshot_component_production_notes == "本单标签朝外"
+
+
 @pytest.mark.parametrize("liner", [False, True])
 def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition_app, _p181_published_map_identity, liner):
     app, factory = composite_requisition_app

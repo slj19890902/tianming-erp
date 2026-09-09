@@ -1,7 +1,7 @@
 """Atomically produce procurement snapshots from real versioned BOM nodes.
 
 Supplier prices are still resolved/frozen by the existing purchase confirmation.
-This is not yet the public order-entry adapter: receipt acceptance remains gated.
+Public order entry opts into its already validated root order snapshots.
 """
 import json
 from fractions import Fraction
@@ -20,9 +20,10 @@ from app.services.multilevel_bom_external_identity import bind_external_componen
 from app.services.order_external_packaging import _freeze_direct_product_component, OrderExternalPackagingSnapshotError
 
 
-def freeze_order_procurement(db, *, order_item_id, actor):
+def freeze_order_procurement(db, *, order_item_id, actor, root_order_snapshot=False):
     with atomic_bom(db):
-        compiled = freeze_master_order_bom(db, order_item_id=order_item_id, actor=actor)
+        compiled = freeze_master_order_bom(db, order_item_id=order_item_id, actor=actor,
+                                         root_order_snapshot=root_order_snapshot)
         nodes = [n for n in compiled.graph.nodes if n.source == 'purchased']
         existing = list(db.scalars(select(OrderBomExternalComponent).where(OrderBomExternalComponent.order_item_id == order_item_id)))
         if existing:

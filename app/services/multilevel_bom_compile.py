@@ -35,7 +35,7 @@ def physical_routes(snapshot):
                  for kind in _snapshot_component_types(snapshot))
 
 
-def compile_master_order_bom(db, order_item):
+def compile_master_order_bom(db, order_item, *, root_order_snapshot=False):
     if type(order_item.quantity) is not int or order_item.quantity <= 0:
         raise BomPlanError("订单数量必须为正整数")
     structure = load_master_structure(db, order_item.product_id)
@@ -97,6 +97,23 @@ def compile_master_order_bom(db, order_item):
         relation["_mold_tool"] = mold
         snapshot = SalesOrderItemBomComponent(**_snapshot_kwargs(SalesOrderItemBomComponent,
             order_item=order_item, parent=root, component=product, relation=relation))
+        if root_order_snapshot and pid == root.id and source == "manufactured":
+            # Public creation already validated and froze the order's chosen
+            # material/process. NULL is intentional, not a reason to read the
+            # master again. Child identities retain their own master inputs.
+            snapshot.snapshot_component_material_id = order_item.material_id
+            snapshot.snapshot_component_material = order_item.snapshot_material
+            snapshot.snapshot_component_supplier_name = order_item.snapshot_supplier_name
+            snapshot.snapshot_component_layer_count = order_item.layer_count
+            snapshot.snapshot_component_flute_type = order_item.flute_type
+            snapshot.snapshot_component_production_notes = order_item.snapshot_production_notes
+            for field in ("report_length_mm", "report_width_mm", "crease_type", "crease_left_mm",
+                          "crease_middle_mm", "crease_right_mm", "report_notes", "base_report_length_mm",
+                          "base_report_width_mm", "base_crease_type", "base_crease_left_mm",
+                          "base_crease_middle_mm", "base_crease_right_mm", "base_report_notes",
+                          "splice_mode", "pieces_per_box", "flap_mm"):
+                setattr(snapshot, f"snapshot_component_{field}", getattr(order_item, f"snapshot_{field}"))
+            snapshot.snapshot_component_default_cutting_mode = order_item.special_process
         snapshot.snapshot_schema_version = 5
         routes = physical_routes(snapshot) if source == "manufactured" else ()
         purchase_units = None

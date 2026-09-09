@@ -7,6 +7,7 @@ from app.models.multilevel_bom import OrderBomGraphProduct
 from app.services.multilevel_bom_orders import validate_order_graph_rows, validate_compiled_order_rows
 from app.services.multilevel_bom_plan import BomPlanError
 from app.services.composite_bom_workflow import project_graph_delivery_demands
+from app.services.multilevel_bom_production_versions import production_revisions_by_order_ids, project_production_versions
 
 
 def project_page_graph_demands(db, *, graphs, order_items, orders, snapshots, demands):
@@ -19,11 +20,13 @@ def project_page_graph_demands(db, *, graphs, order_items, orders, snapshots, de
     if graphs:
         for row in db.scalars(select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id.in_(graphs))):
             identities[row.order_item_id].add((row.product_id, row.product_version))
+    revisions = production_revisions_by_order_ids(db, graphs)
     roots = {}
     for item_id, row in graphs.items():
         item = order_items[item_id]
         graph = validate_order_graph_rows(row, item, orders.get(item.order_id), identities[item_id])
         compiled = validate_compiled_order_rows(graph, tuple(grouped[item_id]))
+        compiled = project_production_versions(compiled, revisions[item_id])
         demands[item_id] = project_graph_delivery_demands(compiled, item, demands.get(item_id, []))
         roots[item_id] = next(d.snapshot_id for d in demands[item_id] if d.is_graph_root)
     return roots
@@ -47,11 +50,13 @@ def summary_graph_contracts(db, item_ids):
     identities = defaultdict(set)
     for row in db.scalars(select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id.in_(item_ids))):
         identities[row.order_item_id].add((row.product_id, row.product_version))
+    revisions = production_revisions_by_order_ids(db, item_ids)
     picks, roots, excluded = {}, {}, set()
     for item, order, row in rows:
         graph = validate_order_graph_rows(row, item, order, identities[item.id])
         compiled = validate_compiled_order_rows(graph, tuple(snapshots[item.id]))
-        required = dict(plan_bom(graph, 1).picking)
+        compiled = project_production_versions(compiled, revisions[item.id])
+        required = dict(plan_bom(compiled.graph, 1).picking)
         for snapshot in compiled.snapshots:
             if snapshot.component_product_id not in required:
                 excluded.add(snapshot.id)

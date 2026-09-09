@@ -22,6 +22,17 @@ def production_revisions(db, order_item_id):
         OrderBomProductionRevision.order_item_id == order_item_id).order_by(OrderBomProductionRevision.revision)))
 
 
+def production_revisions_by_order_ids(db, order_item_ids):
+    from collections import defaultdict
+    grouped = defaultdict(list)
+    if order_item_ids:
+        for row in db.scalars(select(OrderBomProductionRevision).where(
+                OrderBomProductionRevision.order_item_id.in_(order_item_ids)).order_by(
+                    OrderBomProductionRevision.order_item_id, OrderBomProductionRevision.revision)):
+            grouped[row.order_item_id].append(row)
+    return grouped
+
+
 def project_complete_order_material_rows(db, rows):
     """Batch adapter for complete order snapshots, never partial historical rows."""
     from collections import defaultdict
@@ -34,12 +45,10 @@ def project_complete_order_material_rows(db, rows):
             groups[row.sales_order_item_id].append(row)
     if not groups:
         return rows
-    identities, revisions = defaultdict(set), defaultdict(list)
+    identities = defaultdict(set)
     for row in db.scalars(select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id.in_(groups))):
         identities[row.order_item_id].add((row.product_id, row.product_version))
-    for row in db.scalars(select(OrderBomProductionRevision).where(
-            OrderBomProductionRevision.order_item_id.in_(groups)).order_by(OrderBomProductionRevision.revision)):
-        revisions[row.order_item_id].append(row)
+    revisions = production_revisions_by_order_ids(db, groups)
     projected = {}
     graph_rows = db.execute(select(OrderBomGraph, OrderItem, Order).join(
         OrderItem, OrderItem.id == OrderBomGraph.order_item_id).join(Order, Order.id == OrderItem.order_id)

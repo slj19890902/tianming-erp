@@ -23,7 +23,7 @@ def inputs(db, items):
         snapshots=snapshots, demands=_delivery_list_component_demands(snapshots, {}))
 
 
-def test_graph_page_has_one_identity_query_for_one_or_multiple_orders(context):
+def test_graph_page_has_fixed_identity_and_revision_queries_for_multiple_orders(context):
     db, actor, first, _ = context
     setup_liner(db, actor)
     freeze_master_order_bom(db, order_item_id=first.id, actor=actor)
@@ -44,7 +44,7 @@ def test_graph_page_has_one_identity_query_for_one_or_multiple_orders(context):
             roots = project_page_graph_demands(db, **payload)
         finally:
             event.remove(db.bind, "before_cursor_execute", capture)
-        assert len(queries) == 1
+        assert len(queries) == 2  # one identity batch and one amendment batch
         assert set(roots) == {item.id for item in selected}
         for item in selected:
             assert {d.component_product_id for d in payload["demands"][item.id]} == {1, 2}
@@ -56,7 +56,7 @@ def test_graph_page_has_one_identity_query_for_one_or_multiple_orders(context):
             picks, summary_roots, excluded = summary_graph_contracts(db, [item.id for item in selected])
         finally:
             event.remove(db.bind, "before_cursor_execute", capture)
-        assert len(queries) == 3
+        assert len(queries) == 4  # three original batches plus all amendments
         assert summary_roots == roots
         assert len(picks) == len(selected) * 2 and len(excluded) == len(selected) * 2
 
@@ -114,3 +114,25 @@ def test_collapsed_graph_missing_facts_do_not_become_legacy(context, missing):
         db.execute(delete(SalesOrderItemBomComponent).where(SalesOrderItemBomComponent.sales_order_item_id == item.id))
     with pytest.raises(BomPlanError):
         _delivery_list_summary_context(db, [delivery.id])
+
+
+@pytest.mark.parametrize("summary", [False, True])
+def test_batch_delivery_rejects_corrupt_production_revision(context, summary):
+    from app.services.multilevel_bom_production_versions import append_order_production_revision
+    from app.services.multilevel_bom_delivery_page import summary_graph_contracts
+    db, actor, item, _ = context
+    setup_liner(db, actor)
+    freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
+    db.commit()
+    revision = append_order_production_revision(db, order_item_id=item.id,
+        changes={"1": {"report_width_mm": 710}}, expected_revision=0, actor=actor)
+    db.commit()
+    # Isolated corruption injection: keep the old checksum to prove readers
+    # cannot bypass the amendment chain simply because pick counts match.
+    revision.document_json = revision.document_json.replace("710", "711")
+    db.flush()
+    with pytest.raises(BomPlanError, match="修订校验失败"):
+        if summary:
+            summary_graph_contracts(db, [item.id])
+        else:
+            project_page_graph_demands(db, **inputs(db, [item]))

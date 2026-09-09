@@ -1284,13 +1284,14 @@ def build_external_purchase_preview(
         raise ExternalPurchaseContractError(
             "该订单没有仍可继续履约的外购包材明细"
         )
+    graph_quantities = _graph_purchase_quantities(db, components, order_items)
     items: list[dict[str, Any]] = []
     for component in components:
         order_item = order_items[component.sales_order_item_id]
         default_candidate = next(
             (row for row in component.candidates if row.is_default), None
         )
-        suggested_quantity = _suggested_quantity(component, int(order_item.quantity))
+        suggested_quantity = _suggested_quantity(component, int(order_item.quantity), graph_quantities=graph_quantities)
         candidate_rows = [
             _candidate_preview(
                 db,
@@ -1566,9 +1567,19 @@ def refresh_pending_external_purchase_candidates(
     }
 
 
+def _graph_purchase_quantities(db, components, order_items):
+    from app.services.multilevel_bom_external_identity import frozen_purchase_quantities
+    from app.services.multilevel_bom_plan import BomPlanError
+    try:
+        return frozen_purchase_quantities(db, components, order_items)
+    except BomPlanError as error:
+        raise ExternalPurchaseContractError(str(error), status_code=409) from error
+
+
 def _suggested_quantity(
     component: SalesOrderItemExternalComponent,
     order_quantity: int,
+    *, graph_quantities=None,
 ) -> Decimal:
     default_candidate = next(
         (row for row in component.candidates if row.is_default), None
@@ -1577,6 +1588,10 @@ def _suggested_quantity(
         raise ExternalPurchaseContractError(
             f"组件“{component.purpose}”没有冻结默认候选"
         )
+    if graph_quantities is not None and component.id in graph_quantities:
+        if default_candidate.purchase_unit_snapshot != component.consumption_unit:
+            raise ExternalPurchaseContractError('真实BOM外购候选单位与冻结采购单位不一致')
+        return graph_quantities[component.id]
     required = (
         Decimal(order_quantity)
         * Decimal(component.quantity_per_finished_unit)
@@ -1758,6 +1773,7 @@ def confirm_external_purchase(
         order=order,
         components=components,
     )
+    graph_quantities = _graph_purchase_quantities(db, components, order_items)
     component_by_id = {
         row.id: row
         for row in components
@@ -1870,7 +1886,7 @@ def confirm_external_purchase(
         )
         order_item = order_items[component.sales_order_item_id]
         minimum_quantity = _suggested_quantity(
-            component, int(order_item.quantity)
+            component, int(order_item.quantity), graph_quantities=graph_quantities
         )
         if quantity < minimum_quantity:
             raise ExternalPurchaseContractError(

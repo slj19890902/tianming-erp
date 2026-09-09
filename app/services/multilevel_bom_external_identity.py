@@ -71,3 +71,31 @@ def read_external_node(db, external_component_id):
     if snapshot.id != link.bom_snapshot_id:
         raise BomPlanError('外购BOM来源快照身份不一致')
     return link
+
+
+def frozen_purchase_quantities(db, components, order_items):
+    """Whole frozen procurement demand, matching the existing one-batch API.
+
+    Missing graph links must not fall back to approximate legacy multipliers.
+    Ordinary orders take only one batched graph-presence lookup.
+    """
+    from app.models.multilevel_bom import OrderBomGraph
+    from app.services.multilevel_bom_purchase_units import purchase_quantity_for_stock
+    ids = {c.sales_order_item_id for c in components}
+    if not ids:
+        return {}
+    graph_ids = set(db.scalars(select(OrderBomGraph.order_item_id).where(OrderBomGraph.order_item_id.in_(ids))))
+    result = {}
+    compiled_by_id = {oid: read_compiled_order_bom(db, oid) for oid in graph_ids}
+    demands = {oid: {d.product_id: d.required_units for d in plan_bom(compiled.graph, int(order_items[oid].quantity)).products}
+               for oid, compiled in compiled_by_id.items()}
+    for component in components:
+        oid = component.sales_order_item_id
+        if oid not in graph_ids:
+            continue
+        link = read_external_node(db, component.id)
+        if link is None:
+            raise BomPlanError('真实BOM外购节点关联不完整，不能按旧组件数量采购')
+        node = next(n for n in compiled_by_id[oid].graph.nodes if n.product_id == link.product_id)
+        result[component.id] = purchase_quantity_for_stock(node, demands[oid][node.product_id])
+    return result

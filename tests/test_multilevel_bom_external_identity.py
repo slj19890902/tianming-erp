@@ -85,3 +85,38 @@ def test_inactive_actor_and_other_order_rejected(context):
     with pytest.raises(BomPlanError, match='操作人已失效'):
         bind_external_component(db, external_component_id=row.id, order_item_id=item.id, product_id=3, actor=actor)
     assert db.scalar(select(func.count()).select_from(OrderBomExternalComponent)) == 0
+
+
+def test_purchase_entry_uses_frozen_node_and_rejects_missing_link(context):
+    from types import SimpleNamespace
+    from app.services.external_packaging_purchase import _graph_purchase_quantities, _suggested_quantity, ExternalPurchaseContractError
+    db, actor, item, _ = context
+    row = prepare(db, actor, item)
+    with pytest.raises(ExternalPurchaseContractError, match='关联不完整'):
+        _graph_purchase_quantities(db, [row], {item.id:item})
+    bind_external_component(db, external_component_id=row.id, order_item_id=item.id, product_id=3, actor=actor)
+    db.commit()
+    product = db.get(Product, 3)
+    product.external_packaging_default_purchase_quantity_basis = 9
+    product.version += 1
+    db.commit()
+    quantities = _graph_purchase_quantities(db, [row], {item.id:item})
+    assert quantities == {row.id:Decimal(600)}
+    candidate = SimpleNamespace(is_default=True, purchase_unit_snapshot='片')
+    view = SimpleNamespace(id=row.id, candidates=[candidate], consumption_unit='片', purpose='子件')
+    assert _suggested_quantity(view, 100, graph_quantities=quantities) == 600
+    candidate.purchase_unit_snapshot = '箱'
+    with pytest.raises(ExternalPurchaseContractError, match='单位'):
+        _suggested_quantity(view, 100, graph_quantities=quantities)
+
+
+def test_ordinary_order_retains_legacy_purchase_calculation(context):
+    from types import SimpleNamespace
+    from app.services.external_packaging_purchase import _graph_purchase_quantities, _suggested_quantity
+    db, actor, item, _ = context
+    component = SimpleNamespace(id=1, sales_order_item_id=item.id, purpose='旧外购',
+        candidates=[SimpleNamespace(is_default=True, purchase_unit_snapshot='片')],
+        consumption_unit='片', quantity_per_finished_unit=Decimal('1.5'), waste_rate=Decimal(0))
+    quantities = _graph_purchase_quantities(db, [component], {item.id:item})
+    assert quantities == {}
+    assert _suggested_quantity(component, 3, graph_quantities=quantities) == 5

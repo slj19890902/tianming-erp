@@ -732,6 +732,15 @@ def record_external_purchase_receipt(
             )
         normalized.append((item, quantity))
 
+    from app.services.multilevel_bom_external_receipts import graph_receipt_conversions
+    from app.services.multilevel_bom_plan import BomPlanError
+    try:
+        graph_conversions = graph_receipt_conversions(
+            db, normalized, totals, customer_id=source_customer_id
+        )
+    except BomPlanError as error:
+        raise ExternalPurchaseContractError(str(error), status_code=409) from error
+
     ordinal = int(
         db.scalar(
             select(func.count(ExternalPackagingReceipt.id)).where(
@@ -750,8 +759,7 @@ def record_external_purchase_receipt(
     db.add(receipt)
     db.flush()
     for item, quantity in normalized:
-        converted_quantity = 0
-        remainder = Decimal("0")
+        converted_quantity, remainder = graph_conversions.get(item.id, (0, Decimal("0")))
         stock_item: StockReplenishmentOrderItem | None = None
         if replenishment_order is not None:
             stock_item = stock_items[int(item.stock_replenishment_item_id)]

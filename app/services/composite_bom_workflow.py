@@ -9,7 +9,7 @@ no BOM snapshots.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from math import ceil, floor
@@ -666,6 +666,23 @@ def delivery_item_component_quantities(
     return result
 
 
+def delivery_component_demands(db: Session, order_item_id: int) -> list[ComponentDemand]:
+    """Physical pick nodes only; consumed assembly children are not dispatched again."""
+    from app.models.multilevel_bom import OrderBomGraph
+    demands = effective_component_demands(db, order_item_id)
+    if db.get(OrderBomGraph, order_item_id) is None:
+        return demands
+    from app.services.multilevel_bom_orders import read_compiled_order_bom
+    from app.services.multilevel_bom_plan import plan_bom
+    compiled = read_compiled_order_bom(db, order_item_id)
+    item = db.get(OrderItem, order_item_id)
+    picking = dict(plan_bom(compiled.graph, 1).picking)
+    return [replace(d, quantity_per_set=picking[d.component_product_id],
+                    effective_sets=item.quantity, required_piece_quantity=item.quantity*picking[d.component_product_id],
+                    is_required=True, show_on_delivery=d.component_product_id == compiled.graph.root_id)
+            for d in demands if d.component_product_id in picking]
+
+
 def delivery_component_required_quantities(
     db: Session,
     *,
@@ -687,7 +704,7 @@ def delivery_component_required_quantities(
     delivered_before = max(int(item.delivered_quantity or 0), 0) if item else 0
     delivered_after = delivered_before + sets
     result: dict[int, int] = {}
-    for demand in effective_component_demands(db, order_item_id):
+    for demand in delivery_component_demands(db, order_item_id):
         consumed = _delivered_component_quantity(db, demand.snapshot_id)
         target_after_dispatch = min(
             delivered_after * demand.quantity_per_set,
@@ -699,12 +716,14 @@ def delivery_component_required_quantities(
 
 def kit_availability(db: Session, order_item_id: int) -> dict:
     """Return parent delivery capacity while respecting component piece targets."""
-    demands = effective_component_demands(db, order_item_id)
+    demands = delivery_component_demands(db, order_item_id)
     if not demands:
         return {"applicable": False, "available_sets": 0, "missing_components": [], "components": []}
     item = db.get(OrderItem, order_item_id)
     demand_by_snapshot = {demand.snapshot_id: demand for demand in demands}
-    component_rows = [component_availability(db, demand.snapshot_id) for demand in demands]
+    component_rows = [replace(component_availability(db, demand.snapshot_id),
+        quantity_per_set=demand.quantity_per_set, is_required=demand.is_required,
+        required_piece_quantity=demand.required_piece_quantity) for demand in demands]
     effective_sets = (
         max(int(item.quantity or 0), 0)
         if item is not None
@@ -777,6 +796,13 @@ def kit_available_sets_by_order_item_ids(
     item_ids = sorted({int(value) for value in order_item_ids if int(value) > 0})
     if not item_ids:
         return {}
+    from app.models.multilevel_bom import OrderBomGraph
+    graph_ids = set(db.scalars(select(OrderBomGraph.order_item_id).where(OrderBomGraph.order_item_id.in_(item_ids))))
+    if graph_ids:
+        # Retain the fixed-query legacy path. Graph orders must use their real
+        # pick nodes, not all manufacturing snapshots including consumed parts.
+        return {**kit_available_sets_by_order_item_ids(db, [i for i in item_ids if i not in graph_ids]),
+                **{i: kit_availability(db, i)["available_sets"] for i in sorted(graph_ids)}}
 
     items = {
         int(item.id): item
@@ -1043,7 +1069,7 @@ def build_delivery_component_consumption_plan(
     delivery_item = db.get(DeliveryItem, delivery_item_id)
     if delivery_item is None:
         raise CompositeBomWorkflowError("送货明细不存在")
-    demands = effective_component_demands(db, delivery_item.order_item_id)
+    demands = delivery_component_demands(db, delivery_item.order_item_id)
     if not demands:
         return []
     required_quantities = delivery_component_required_quantities(
@@ -1107,7 +1133,7 @@ def execute_delivery_component_consumption(
     delivery_item = db.get(DeliveryItem, delivery_item_id)
     if delivery_item is None:
         raise CompositeBomWorkflowError("送货明细不存在")
-    demands = effective_component_demands(db, delivery_item.order_item_id)
+    demands = delivery_component_demands(db, delivery_item.order_item_id)
     if not demands:
         return []
     existing_direct = db.scalar(

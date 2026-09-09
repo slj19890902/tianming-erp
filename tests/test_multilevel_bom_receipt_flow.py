@@ -12,6 +12,28 @@ from tests.test_p1_81_receipt_purpose_flow import (
 from tests.test_multilevel_bom_master import save
 
 
+@pytest.mark.parametrize("liner", [False, True])
+def test_delivery_requires_only_real_pick_products(composite_requisition_app, _p181_published_map_identity, liner):
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.services.composite_bom_workflow import delivery_component_required_quantities
+    _, factory = composite_requisition_app
+    seed_graph(factory, liner=liner)
+    with factory() as db:
+        requested = delivery_component_required_quantities(db, order_item_id=1, delivery_sets=4)
+        by_product = {db.get(SalesOrderItemBomComponent, sid).component_product_id: qty for sid, qty in requested.items()}
+        assert by_product == ({1: 4, 4: 4} if liner else {1: 4})
+        from app.services.composite_bom_workflow import kit_availability, kit_available_sets_by_order_item_ids, delivery_component_demands
+        from tests.test_multilevel_bom_requisition import reserve
+        from app.models.order import OrderItem
+        for sid in requested:
+            reserve(db, db.get(OrderItem, 1), db.get(SalesOrderItemBomComponent, sid), 10)
+        available = kit_availability(db, 1)
+        assert available["available_sets"] == 10
+        assert len(available["components"]) == (2 if liner else 1)
+        assert kit_available_sets_by_order_item_ids(db, [1]) == {1: 10}
+        assert [d.component_product_id for d in delivery_component_demands(db, 1) if d.show_on_delivery] == [1]
+
+
 @pytest.mark.parametrize("move_before_assembly", [True, False])
 def test_split_movement_keeps_receipt_cost_and_finished_coverage(
     composite_requisition_app, _p181_published_map_identity, move_before_assembly

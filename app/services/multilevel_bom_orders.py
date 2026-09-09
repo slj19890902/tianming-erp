@@ -85,3 +85,66 @@ def freeze_order_graph(db, *, order_item_id, graph, actor: User):
             details={"content_hash": row.content_hash, "root_product_id": graph.root_id,
                 "products": [n.product_id for n in graph.nodes], "schema_version": SCHEMA_VERSION})
     return graph
+
+
+def read_compiled_order_bom(db, order_item_id):
+    """Read graph AND material facts; never repair missing facts from master."""
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.services.multilevel_bom_compile import CompiledMasterBom, physical_routes
+    from app.services.multilevel_bom_plan import plan_bom
+
+    graph = read_order_graph(db, order_item_id)
+    if graph is None:
+        return None
+    rows = tuple(db.scalars(select(SalesOrderItemBomComponent).where(
+        SalesOrderItemBomComponent.sales_order_item_id == order_item_id).order_by(
+        SalesOrderItemBomComponent.display_order)))
+    nodes = {n.product_id: n for n in graph.nodes}
+    if len(rows) != len(nodes) or {r.component_product_id for r in rows} != set(nodes):
+        raise BomPlanError("订单多级BOM材料快照不完整，不能用当前主档补写")
+    gross = {d.product_id: d.required_units for d in plan_bom(graph, 1).products}
+    if len({row.order_set_quantity for row in rows}) != 1:
+        raise BomPlanError("订单多级BOM冻结数量不一致")
+    for row in rows:
+        node = nodes[row.component_product_id]
+        if (row.snapshot_schema_version != 5 or row.component_product_version != node.version
+                or row.parent_product_version != nodes[graph.root_id].version
+                or row.snapshot_component_product_name != node.name
+                or row.quantity_per_set != gross[node.product_id]
+                or row.required_piece_quantity != row.order_set_quantity * row.quantity_per_set
+                or row.order_set_quantity <= 0):
+            raise BomPlanError("订单多级BOM材料身份或数量校验失败")
+        if node.source == "manufactured" and sorted(physical_routes(row), key=lambda r: r.key) != sorted(node.routes, key=lambda r: r.key):
+            raise BomPlanError("订单多级BOM物理片组校验失败")
+    return CompiledMasterBom(graph, rows)
+
+
+def freeze_master_order_bom(db, *, order_item_id, actor: User):
+    """Atomically freeze the real recipe and existing material/process columns.
+
+    All nodes have one source row, including the root and intermediate outputs.
+    Execution must select sources by frozen node.source, NOT assume every row
+    is a material to buy. This entry remains internal until adapters are ready.
+    """
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.services.multilevel_bom_compile import compile_master_order_bom
+
+    with atomic_bom(db):
+        if db.get(OrderBomGraph, order_item_id) is not None:
+            return read_compiled_order_bom(db, order_item_id)
+        if db.scalar(select(SalesOrderItemBomComponent.id).where(
+                SalesOrderItemBomComponent.sales_order_item_id == order_item_id).limit(1)) is not None:
+            raise BomPlanError("已有旧BOM冻结事实，必须通过审计转换，不能覆盖")
+        item = db.get(OrderItem, order_item_id)
+        if item is None:
+            raise BomPlanError("订单明细不存在")
+        compiled = compile_master_order_bom(db, item)
+        freeze_order_graph(db, order_item_id=order_item_id, graph=compiled.graph, actor=actor)
+        db.add_all(compiled.snapshots)
+        db.flush()
+        append_audit_event(db, event_category="business", result="success", source="web",
+            module_code="orders", action_code="freeze_multilevel_materials", resource="order_bom_graph",
+            actor=actor, entity_type="order_item", entity_id=order_item_id, customer_id=compiled.graph.customer_id,
+            details={"sources": [{"product_id": r.component_product_id, "snapshot_id": r.id}
+                                 for r in compiled.snapshots]})
+        return read_compiled_order_bom(db, order_item_id)

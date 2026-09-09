@@ -39,3 +39,25 @@ class OrderBomGraphProduct(Base):
     product_id: Mapped[int] = mapped_column(
         ForeignKey("products.id", ondelete="RESTRICT"), primary_key=True)
     product_version: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class ProductBomProfile(Base):
+    """Explicit physical source; absent rows retain the legacy contract."""
+    __tablename__ = "product_bom_profiles"
+    __table_args__ = (
+        CheckConstraint("source IN ('manufactured','purchased','assembled')", name="ck_product_bom_profile_source"),
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"), primary_key=True)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class ProductBomInventoryRelation(Base):
+    """Meaning of an existing real BOM edge, not a parallel recipe."""
+    __tablename__ = "product_bom_inventory_relations"
+    __table_args__ = (
+        CheckConstraint("relation IN ('assembly','accompany')", name="ck_product_bom_inventory_relation"),
+    )
+    bom_component_id: Mapped[int] = mapped_column(
+        ForeignKey("product_bom_components.id", ondelete="CASCADE"), primary_key=True)
+    relation: Mapped[str] = mapped_column(String(20), nullable=False)

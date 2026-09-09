@@ -694,6 +694,7 @@ class ProductResponse(ProductPayload):
 
 class ProductBOMComponentPayload(BaseModel):
     component_product_id: int = Field(gt=0)
+    inventory_relation: Literal["assembly", "accompany"] | None = None
     quantity_per_set: Decimal = Field(gt=0)
     is_die_cut: bool = False
     mold_tool_id: int | None = Field(default=None, gt=0)
@@ -735,6 +736,7 @@ class ProductSubkitPayload(BaseModel):
 
 class ProductBOMUpdatePayload(BaseModel):
     expected_version: int = Field(ge=1)
+    inventory_mode: Literal["manufactured", "purchased", "assembled"] | None = None
     change_reason: str | None = Field(default=None, max_length=500)
     components: list[ProductBOMComponentPayload] = Field(max_length=99)
     subkit: ProductSubkitPayload | None = None
@@ -2181,6 +2183,7 @@ def update_product_bom(
             expected_version=payload.expected_version,
             user=user,
             change_reason=payload.change_reason,
+            inventory_mode=payload.inventory_mode,
         )
         from app.services.bom_subkits import read_subkit, save_subkit, SubkitError
         from app.services.composite_bom_execution import CompositeBOMExecutionError
@@ -2216,6 +2219,20 @@ def update_product_bom(
     except Exception:
         db.rollback()
         raise
+
+
+@router.get("/{product_id}/bom/structure")
+def read_product_bom_structure(
+    product_id: int, db: Session = Depends(get_db), user: User = Depends(can_read),
+) -> dict:
+    product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
+    from app.services.multilevel_bom_master import preview_master_structure
+    from app.services.multilevel_bom_plan import BomPlanError
+    try:
+        return preview_master_structure(db, product_id)
+    except BomPlanError as error:
+        raise HTTPException(409, str(error)) from error
 
 
 async def _create_drawing_version(

@@ -27,6 +27,8 @@ from app.models.mold_tool import MoldTool, MoldToolCustomer
 from app.models.order import OrderItem
 from app.models.product import Product
 from app.models.user import User
+from app.models.multilevel_bom import ProductBomProfile, ProductBomInventoryRelation
+from app.services.bom_transactions import atomic_bom
 from app.services.master_data_versioning import apply_versioned_update
 from app.services.product_specification import product_dimension_specification
 from app.services.requisition_quantities import (
@@ -113,6 +115,7 @@ def validate_component_graph(
     parent_product_id: int,
     component_product_ids: Sequence[int],
     adjacency: Mapping[int, Iterable[int]],
+    allow_nested: bool = False,
 ) -> None:
     """Reject self-links, duplicates, nested composites, and any cycle."""
 
@@ -123,7 +126,7 @@ def validate_component_graph(
 
     for component_id in component_product_ids:
         children = set(adjacency.get(component_id, ()))
-        if children:
+        if children and not allow_nested:
             raise CompositeBOMError("BOM 组件不能再是组合品（禁止嵌套 BOM）")
 
         pending = [component_id]
@@ -320,11 +323,16 @@ def get_product_bom(db: Session, parent_product_id: int) -> dict[str, Any]:
         ).all()
     } if component_ids else {}
     components: list[dict[str, Any]] = []
+    profile = db.get(ProductBomProfile, parent_product_id)
+    inventory_relations = {r.bom_component_id: r.relation for r in db.scalars(
+        select(ProductBomInventoryRelation).where(ProductBomInventoryRelation.bom_component_id.in_([r.id for r in rows]))
+    )} if rows else {}
     for value in values:
         component = products.get(value["component_product_id"])
         components.append(
             {
                 **value,
+                "inventory_relation": inventory_relations.get(value["id"]),
                 "component": (
                     _component_product_summary(component) if component is not None else None
                 ),
@@ -332,6 +340,7 @@ def get_product_bom(db: Session, parent_product_id: int) -> dict[str, Any]:
         )
     return {
         "parent_product_id": parent.id,
+        "inventory_mode": profile.source if profile else "legacy",
         "parent_product_code": parent.product_code,
         "version": parent.version,
         "is_composite": bool(getattr(parent, "is_composite", bool(components))),
@@ -435,6 +444,17 @@ def _relation_kwargs(
 
 
 def replace_product_bom(
+    db: Session, *, parent_product_id: int, components: Sequence[Mapping[str, Any]],
+    expected_version: int, user: User, change_reason: str | None = None,
+    inventory_mode: str | None = None,
+) -> dict[str, Any]:
+    with atomic_bom(db):
+        return _replace_product_bom(db, parent_product_id=parent_product_id,
+            components=components, expected_version=expected_version, user=user,
+            change_reason=change_reason, inventory_mode=inventory_mode)
+
+
+def _replace_product_bom(
     db: Session,
     *,
     parent_product_id: int,
@@ -442,6 +462,7 @@ def replace_product_bom(
     expected_version: int,
     user: User,
     change_reason: str | None = None,
+    inventory_mode: str | None = None,
 ) -> dict[str, Any]:
     """Atomically replace one parent BOM and advance the parent version."""
 
@@ -463,10 +484,33 @@ def replace_product_bom(
         raise CompositeBOMError("已删除产品不能维护 BOM", 409)
     if not parent.is_active:
         raise CompositeBOMError("已停用产品不能维护 BOM", 409)
-    if bool(getattr(parent, "is_internal_component", False)):
+    profile = db.get(ProductBomProfile, parent_product_id)
+    mode = inventory_mode or (profile.source if profile else "legacy")
+    if mode not in {"legacy", "manufactured", "purchased", "assembled"}:
+        raise CompositeBOMError("请选择产品的自制、外购或组套来源")
+    advanced = mode != "legacy"
+    if advanced:
+        from app.models.bom_subkit import ProductSubkit
+        old_group = db.get(ProductSubkit, parent.id)
+        if old_group is not None and old_group.enabled:
+            raise CompositeBOMError("旧旁路组套须先受控转换为真实子件关系，不能与多级BOM同时启用", 409)
+    if profile and not advanced:
+        raise CompositeBOMError("已配置真实BOM的产品不能退回旧旁路模式")
+    if bool(getattr(parent, "is_internal_component", False)) and not advanced:
         raise CompositeBOMError("内部组件不能同时作为组合品父产品")
     if len(components) > 99:
         raise CompositeBOMError("一个组合品最多允许99个组件")
+    if mode == "assembled" and not any(c.get("inventory_relation") == "assembly" for c in components):
+        raise CompositeBOMError("组套成品至少需要一个组装子件")
+    if advanced:
+        for component in components:
+            relation = component.get("inventory_relation")
+            if relation not in {"assembly", "accompany"}:
+                raise CompositeBOMError("每个子件请选择组装或配套")
+            if relation == "assembly" and mode != "assembled":
+                raise CompositeBOMError("需要消耗子件时请选择组套成品；自制本体请作为独立子件加入")
+            if not component.get("is_required", True):
+                raise CompositeBOMError("真实BOM的组装和配套子件必须为必需项")
 
     virtual_parent = bool(
         getattr(parent, "is_virtual_composite_parent", False)
@@ -506,6 +550,7 @@ def replace_product_bom(
         normalized.append(
             {
                 "component_product_id": component_id,
+                "inventory_relation": component.get("inventory_relation") if advanced else None,
                 "quantity_per_set": _as_decimal(
                     component.get("quantity_per_set"),
                     label=f"第{position}个组件用量",
@@ -585,6 +630,10 @@ def replace_product_bom(
 
     component_ids = [row["component_product_id"] for row in normalized]
     all_rows = _active_bom_rows(db)
+    if advanced and normalized:
+        for incoming in all_rows:
+            if incoming.component_product_id == parent.id and db.get(ProductBomProfile, incoming.parent_product_id) is None:
+                raise CompositeBOMError("请先把上级组合品设置为真实BOM，再为这个子件添加下级BOM")
     adjacency = _graph(all_rows)
     # The current parent edges are being replaced, so they do not participate
     # in cycle/nesting validation of the proposed graph.
@@ -593,6 +642,7 @@ def replace_product_bom(
         parent_product_id=parent.id,
         component_product_ids=component_ids,
         adjacency=adjacency,
+        allow_nested=advanced,
     )
 
     products = {
@@ -613,10 +663,12 @@ def replace_product_bom(
             or component.purged_at is not None
         ):
             raise CompositeBOMError(f"第{position}个组件必须是启用中的产品")
-        if bool(getattr(component, "is_composite", False)) or bool(
+        if not advanced and (bool(getattr(component, "is_composite", False)) or bool(
             getattr(component, "is_virtual_composite_parent", False)
-        ):
+        )):
             raise CompositeBOMError("BOM 组件不能再是组合品（禁止嵌套 BOM）")
+        if advanced and adjacency.get(component.id) and db.get(ProductBomProfile, component.id) is None:
+            raise CompositeBOMError(f"请先设置子件 {component.product_name} 的真实BOM来源")
         relation = normalized[position - 1]
         if virtual_parent:
             is_die_cut = bool(
@@ -668,6 +720,7 @@ def replace_product_bom(
     before = get_product_bom(db, parent.id)
     comparison_fields = (
         "component_product_id",
+        "inventory_relation",
         "quantity_per_set",
         "display_order",
         "internal_component_code",
@@ -686,7 +739,8 @@ def replace_product_bom(
         return tuple(row.get(field) for field in comparison_fields)
 
     if (
-        bool(before["is_composite"]) == bool(normalized)
+        before["inventory_mode"] == mode
+        and bool(before["is_composite"]) == bool(normalized)
         and [comparison_value(row) for row in before["components"]]
         == [comparison_value(row) for row in normalized]
     ):
@@ -701,6 +755,8 @@ def replace_product_bom(
     product_updates: dict[str, Any] = {}
     if hasattr(Product, "is_composite"):
         product_updates["is_composite"] = bool(normalized)
+    if mode == "assembled":
+        product_updates.update(unit="套", is_virtual_composite_parent=False)
     apply_versioned_update(
         db,
         object_type="product",
@@ -759,6 +815,22 @@ def replace_product_bom(
                 setattr(relation_row, field, value)
     db.flush()
 
+    if advanced:
+        if profile is None:
+            profile = ProductBomProfile(product_id=parent.id, source=mode)
+            db.add(profile)
+        else:
+            profile.source = mode
+        relation_by_product = {r.component_product_id: r for r in _active_bom_rows(db, parent.id)}
+        for row in normalized:
+            edge = relation_by_product[row["component_product_id"]]
+            meaning = db.get(ProductBomInventoryRelation, edge.id)
+            if meaning is None:
+                db.add(ProductBomInventoryRelation(bom_component_id=edge.id, relation=row["inventory_relation"]))
+            else:
+                meaning.relation = row["inventory_relation"]
+        db.flush()
+
     if hasattr(parent, "is_composite"):
         parent.is_composite = bool(normalized)
     for component in products.values():
@@ -778,6 +850,13 @@ def replace_product_bom(
     db.flush()
 
     after = get_product_bom(db, parent.id)
+    if advanced:
+        from app.services.multilevel_bom_master import load_master_structure
+        from app.services.multilevel_bom_plan import BomPlanError
+        try:
+            load_master_structure(db, parent.id)
+        except BomPlanError as error:
+            raise CompositeBOMError(str(error)) from error
     db.add(
         OperationLog(
             user_id=user.id,
@@ -794,6 +873,8 @@ def replace_product_bom(
                     "from_version": expected_version,
                     "to_version": parent.version,
                     "reason": (change_reason or "").strip() or None,
+                    "before_inventory_mode": before["inventory_mode"],
+                    "after_inventory_mode": after["inventory_mode"],
                     "before_components": before["components"],
                     "after_components": after["components"],
                 },
@@ -1162,6 +1243,11 @@ def create_order_item_bom_snapshots(
             _snapshot_response(row, fallback_position=index)
             for index, row in enumerate(existing, start=1)
         ]
+
+    # Candidate gate: remove only when graph-backed requisition, receipt and
+    # dispatch adapters are wired together. Never fall back to flat quantities.
+    if db.get(ProductBomProfile, parent_product.id) is not None:
+        raise CompositeBOMError("多级BOM业务接入尚未完成，当前候选不能用于正式下单", 409)
 
     _bom_model, snapshot_model = _models()
     relations = _active_bom_rows(db, parent_product.id)

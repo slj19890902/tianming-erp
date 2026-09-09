@@ -46,3 +46,28 @@ def test_downgrade_with_frozen_order_is_refused_before_deleting_tables(migration
         migration.downgrade()
     assert {"order_bom_graphs", "order_bom_graph_products"} <= set(inspect(connection).get_table_names())
     assert connection.scalar(text("SELECT count(*) FROM order_bom_graphs")) == 1
+
+
+def test_real_bom_profiles_upgrade_round_trip_and_nonempty_downgrade_guard(tmp_path):
+    path = Path(__file__).resolve().parents[1] / "alembic/versions/rv09v8x9z70_product_bom_relations.py"
+    spec = importlib.util.spec_from_file_location("bom_profile_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    engine = create_engine(f"sqlite:///{tmp_path / 'profile-migration.sqlite3'}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        for table in ("products", "product_bom_components"):
+            connection.exec_driver_sql(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)")
+            connection.exec_driver_sql(f"INSERT INTO {table} (id) VALUES (1)")
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.upgrade()
+            migration.downgrade()
+            migration.upgrade()
+            connection.exec_driver_sql("INSERT INTO product_bom_profiles VALUES (1, 'assembled')")
+            connection.exec_driver_sql("INSERT INTO product_bom_inventory_relations VALUES (1, 'assembly')")
+            with pytest.raises(RuntimeError, match="已有多级BOM设置"):
+                migration.downgrade()
+            assert connection.scalar(text("SELECT count(*) FROM product_bom_profiles")) == 1
+            assert connection.scalar(text("SELECT count(*) FROM product_bom_components")) == 1
+            assert connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall() == []
+    engine.dispose()

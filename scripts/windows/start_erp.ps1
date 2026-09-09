@@ -7,6 +7,7 @@ Set-Location -LiteralPath $ProjectRoot
 $ExternalHealthUrl = $null
 $LocalHealthUrl = $null
 $BrowserUrl = $null
+$LanHttpOrigin = $null
 $ErpPort = $null
 $BindHost = $null
 $RuntimeEnvironment = $null
@@ -69,6 +70,10 @@ function Confirm-ProductionExternalHealth {
 
 function Open-Browser {
     if ($NoBrowser) { return }
+    if ($LanHttpOrigin) {
+        Start-Process ($LanHttpOrigin + "/") | Out-Null
+        return
+    }
     Start-Process $BrowserUrl | Out-Null
 }
 
@@ -120,12 +125,14 @@ try {
     }
 
     $runtimeConfig = @(
-        & $Python -X utf8 -c "import base64; from app.core.config import load_settings; s=load_settings(); print(s.bind_host); print(s.port); print(s.workers); print(s.environment); print(s.production_transport); print(s.health_url); print(s.browser_url); print(base64.b64encode(str(s.database_path).encode('utf-8')).decode('ascii'))" 2>&1
+        & $Python -X utf8 -c "import base64; from app.core.config import load_settings; s=load_settings(); print(s.lan_http_origin or '-'); print(s.bind_host); print(s.port); print(s.workers); print(s.environment); print(s.production_transport); print(s.health_url); print(s.browser_url); print(base64.b64encode(str(s.database_path).encode('utf-8')).decode('ascii'))" 2>&1
     )
-    if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 8) {
+    if ($LASTEXITCODE -ne 0 -or $runtimeConfig.Count -lt 9) {
         $runtimeConfig | ForEach-Object { Write-Log $_ }
         throw "ERP runtime configuration is invalid."
     }
+    $LanHttpOrigin = $runtimeConfig[-9].ToString().Trim()
+    if ($LanHttpOrigin -eq "-") { $LanHttpOrigin = $null }
     $BindHost = $runtimeConfig[-8].ToString().Trim()
     $ErpPort = [int]$runtimeConfig[-7].ToString().Trim()
     $Workers = [int]$runtimeConfig[-6].ToString().Trim()

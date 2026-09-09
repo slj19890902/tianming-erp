@@ -785,7 +785,7 @@ def login(
         "key": current.session_cookie_name,
         "value": token,
         "httponly": True,
-        "secure": current.session_cookie_secure,
+        "secure": current.cookie_secure_for(request.scope),
         "samesite": "lax",
         "path": "/",
     }
@@ -861,7 +861,7 @@ def logout(
     response.delete_cookie(
         key=current.session_cookie_name,
         path="/",
-        secure=current.session_cookie_secure,
+        secure=current.cookie_secure_for(request.scope),
         httponly=True,
         samesite="lax",
     )

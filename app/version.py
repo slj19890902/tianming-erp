@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.294"
-APP_VERSION_NAME = "货架每格无数量信息标签打印"
+APP_VERSION = "v0.22.295"
+APP_VERSION_NAME = "电脑内网与手机外网双入口登录"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2212,17 +2212,29 @@ _V022293_VERIFICATION_STEPS = [
     "混放货架默认查看客户数量和编码，点击货位或展开电脑端批次明细后查看品名规格；单品格继续显示完整信息。",
     "核对多个批次和不同单位不丢失，盘点和返回原区域操作不变，仓库地图样式正常。",
 ]
-APP_CHANGES = [
+_V022294_CHANGES = [
     "查货模式纸箱货架正视图提供本格与整架信息标签打印，80×40版式不含数量。",
     "直接按格内正式成品库存逐款打印客户简称、存货编码、产品名称与规格，混放多款分别出标签，空格打印位置标签。",
     "信息标签二维码仅查货位，使用当前正式访问地址；原固定货架拿齐标签保持独立，不自动创建绑定。无库存或地图变更。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022294_VERIFICATION_STEPS = [
     "版本v0.22.294；刷新仓库地图，在查货模式点击纸箱货架正视图，选择打印本格信息标签。",
     "选择有多款产品的格核对逐款标签、客户简称、编码、品名与规格；不显示库存、每捆或预警数量。",
     "先试打一张80×40标签，100%实际大小；扫描应查到对应正式货位，不标记拿齐，再进行整架打印。",
 ]
+APP_CHANGES = [
+    "电脑继续通过工厂局域网地址登录，手机通过免费 HTTPS 外网地址使用手机版，两边共用原 ERP 服务、账号、权限和数据。",
+    "局域网访问不经过外网穿透；仅明确配置的私网入口允许 HTTP 登录，外网保留 HTTPS 与 Secure Cookie，跨入口写请求仍受来源校验。",
+    "后端仍只监听本机并保持单进程；本版无数据库迁移，不修改库存、订单或客户权限。",
+]
+APP_VERIFICATION_STEPS = [
+    "厂内电脑打开 http://192.168.3.80:8000/，使用原账号登录并查看仓库。",
+    "手机关闭 WiFi，打开 https://tianmingerp0909.share.zrok.io/mobile/，使用原账号核对手机版和可见数据。",
+    "按原账号权限使用；跨入口退出会沿用原有全会话退出规则，不需要新增或保存测试库存。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.294：本次更新｜{item}" for item in _V022294_CHANGES),
+    *(f"v0.22.294：如何验证｜{item}" for item in _V022294_VERIFICATION_STEPS),
     *(f"v0.22.293：本次更新｜{item}" for item in _V022293_CHANGES),
     *(f"v0.22.293：如何验证｜{item}" for item in _V022293_VERIFICATION_STEPS),
     *(f"v0.22.292：本次更新｜{item}" for item in _V022292_CHANGES),

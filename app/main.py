@@ -66,7 +66,7 @@ from app.api.tianhua_pre_delivery import (
     mobile_router as tianhua_mobile_router,
     router as tianhua_pre_delivery_router,
 )
-from app.core.config import load_settings
+from app.core.config import is_lan_http_scope, load_settings
 from app.core.uat_isolation import write_uat_attestation
 from app.middleware.performance import (
     PerformanceObservabilityMiddleware,
@@ -137,13 +137,16 @@ def apply_production_security(application: FastAPI, current) -> None:
 
 
 class HSTSMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, include_hsts: bool = True) -> None:
+    def __init__(
+        self, app, *, include_hsts: bool = True, lan_http_origin: str = ""
+    ) -> None:
         super().__init__(app)
         self.include_hsts = include_hsts
+        self.lan_http_origin = lan_http_origin
 
     async def dispatch(self, request, call_next):
         response = await call_next(request)
-        if self.include_hsts:
+        if self.include_hsts and not is_lan_http_scope(request.scope, self.lan_http_origin):
             response.headers["Strict-Transport-Security"] = "max-age=63072000"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -178,12 +181,14 @@ class CookieOriginCSRFMiddleware(BaseHTTPMiddleware):
         *,
         allowed_origins: tuple[str, ...],
         session_cookie_name: str,
+        require_same_origin: bool = False,
     ) -> None:
         super().__init__(app)
         self.allowed_origins = frozenset(
             origin.rstrip("/") for origin in allowed_origins
         )
         self.session_cookie_name = session_cookie_name
+        self.require_same_origin = require_same_origin
 
     async def dispatch(self, request, call_next):
         if request.method in self.SAFE_METHODS:
@@ -194,7 +199,10 @@ class CookieOriginCSRFMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         origin = (request.headers.get("origin") or "").rstrip("/")
-        if origin not in self.allowed_origins:
+        request_origin = f"{request.url.scheme}://{request.url.netloc}"
+        if origin not in self.allowed_origins or (
+            self.require_same_origin and origin != request_origin
+        ):
             return JSONResponse(
                 status_code=403,
                 content={"detail": "安全校验失败：请求来源无效，请刷新页面后重试。"},
@@ -204,6 +212,10 @@ class CookieOriginCSRFMiddleware(BaseHTTPMiddleware):
 
 class HTTPSRedirectMiddleware(StarletteHTTPSRedirectMiddleware):
     """Keep the loopback liveness probe HTTP-only without weakening public HTTPS."""
+
+    def __init__(self, app, *, lan_http_origin: str = "") -> None:
+        super().__init__(app)
+        self.lan_http_origin = lan_http_origin
 
     @staticmethod
     def _is_loopback_health(scope) -> bool:
@@ -230,7 +242,7 @@ class HTTPSRedirectMiddleware(StarletteHTTPSRedirectMiddleware):
             return False
 
     async def __call__(self, scope, receive, send):
-        if self._is_loopback_health(scope):
+        if self._is_loopback_health(scope) or is_lan_http_scope(scope, self.lan_http_origin):
             await self.app(scope, receive, send)
             return
         await super().__call__(scope, receive, send)
@@ -261,9 +273,12 @@ def apply_transport_security(application: FastAPI, current) -> None:
         CookieOriginCSRFMiddleware,
         allowed_origins=current.allowed_origins,
         session_cookie_name=current.session_cookie_name,
+        require_same_origin=bool(current.lan_http_origin),
     )
     if current.uses_https_proxy:
-        application.add_middleware(HTTPSRedirectMiddleware)
+        application.add_middleware(
+            HTTPSRedirectMiddleware, lan_http_origin=current.lan_http_origin
+        )
     application.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=[
@@ -276,6 +291,7 @@ def apply_transport_security(application: FastAPI, current) -> None:
     application.add_middleware(
         HSTSMiddleware,
         include_hsts=current.uses_https_proxy,
+        lan_http_origin=current.lan_http_origin,
     )
     if current.trusted_proxy_ips:
         application.add_middleware(

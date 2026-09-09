@@ -75,6 +75,12 @@ class Settings:
     session_cookie_name: str = "erp_session"
     session_expire_minutes: int = 480
     session_cookie_secure: bool = False
+    lan_http_origin: str = ""
+
+    def cookie_secure_for(self, scope) -> bool:
+        return self.session_cookie_secure and not is_lan_http_scope(
+            scope, self.lan_http_origin
+        )
 
     @property
     def database_url(self) -> str:
@@ -175,6 +181,49 @@ def _production_transport(*, production: bool) -> str:
             "ERP_PRODUCTION_TRANSPORT must be one of: https_proxy, lan_http"
         )
     return value
+
+
+def _lan_http_origin(*, production: bool, transport: str) -> str:
+    if not production:
+        return ""
+    value = os.getenv("ERP_LAN_HTTP_ORIGIN", "").strip().rstrip("/")
+    if not value:
+        return ""
+    if transport != "https_proxy":
+        raise ValueError("ERP_LAN_HTTP_ORIGIN 仅用于生产 https_proxy 双入口")
+    parsed = urlsplit(value)
+    try:
+        address = ip_address(parsed.hostname or "")
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("ERP_LAN_HTTP_ORIGIN 必须是明确的私网 HTTP IP 和端口") from error
+    if (
+        parsed.scheme != "http"
+        or not any(address in network for network in PRIVATE_LAN_NETWORKS)
+        or not port
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("ERP_LAN_HTTP_ORIGIN 必须是明确的私网 HTTP IP 和端口")
+    return value
+
+
+def is_lan_http_scope(scope, origin: str) -> bool:
+    """Only an explicit private origin and a private client may use LAN HTTP."""
+    if not origin or scope.get("type") != "http" or scope.get("scheme") != "http":
+        return False
+    client = scope.get("client")
+    if not client or not _is_private_lan_host(client[0]):
+        return False
+    try:
+        ip_address(client[0])
+    except ValueError:
+        return False
+    host = dict(scope.get("headers", ())).get(b"host", b"").decode("latin-1")
+    return f"http://{host}" == origin
 
 
 def _production_allowed_origins(
@@ -358,6 +407,11 @@ def load_settings() -> Settings:
         if is_production
         else _allowed_origins()
     )
+    lan_http_origin = _lan_http_origin(
+        production=is_production, transport=production_transport
+    )
+    if lan_http_origin:
+        allowed_origins = (*allowed_origins, lan_http_origin)
     health_url = _service_url(
         "ERP_HEALTH_URL",
         production=is_production,
@@ -389,7 +443,10 @@ def load_settings() -> Settings:
         backup_dir=backup_dir,
         allowed_origins=allowed_origins,
         allowed_origin_regex=None if is_production else PRIVATE_LAN_ORIGIN_REGEX,
-        trusted_hosts=_trusted_hosts(production=is_production),
+        trusted_hosts=(
+            *_trusted_hosts(production=is_production),
+            *((urlsplit(lan_http_origin).hostname,) if lan_http_origin else ()),
+        ),
         trusted_proxy_ips=_trusted_proxy_ips(
             production=is_production,
             transport=production_transport,
@@ -416,6 +473,7 @@ def load_settings() -> Settings:
         ),
         session_cookie_secure=(is_production and production_transport == "https_proxy")
         or cookie_secure_requested,
+        lan_http_origin=lan_http_origin,
     )
     if os.getenv("ERP_UAT_ROOT"):
         validate_uat_environment(result)

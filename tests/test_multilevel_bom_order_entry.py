@@ -77,7 +77,8 @@ def test_new_order_root_uses_order_material_and_notes_not_child_master(composite
 
 
 @pytest.mark.parametrize("liner", [False, True])
-def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition_app, _p181_published_map_identity, liner):
+@pytest.mark.parametrize("legacy_root", [False, True])
+def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition_app, _p181_published_map_identity, liner, legacy_root):
     app, factory = composite_requisition_app
     from app.api.deliveries import router
     app.include_router(router, prefix="/api/deliveries")
@@ -122,6 +123,24 @@ def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition
             "items": [{"order_item_id": item_id, "delivered_quantity": 4}]})
         assert created.status_code == 201, created.text
         did = created.json()["id"]
+        if legacy_root:
+            from app.models.warehouse_inventory import InventoryReservation
+            with factory() as db:
+                root_sid = next(row.id for row in read_compiled_order_bom(db, item_id).snapshots if row.component_product_id == 1)
+                for reservation in db.scalars(select(InventoryReservation).where(
+                    InventoryReservation.order_item_id == item_id,
+                    InventoryReservation.sales_order_item_bom_component_id == root_sid)):
+                    reservation.sales_order_item_bom_component_id = None
+                db.commit()
+        from app.api.deliveries import _delivery_list_page_context, _delivery_response
+        def compare_page():
+            with factory() as db:
+                page = _delivery_list_page_context(db, [did])
+                listed = _delivery_response(db, did, list_context=page)
+                detailed = _delivery_response(db, did)
+                for field in ("component_lines", "actual_goods_lines", "inventory_sources", "available_sets"):
+                    assert listed["items"][0][field] == detailed["items"][0][field], field
+        compare_page()
         dispatched = client.put(f"/api/deliveries/{did}/dispatch")
         assert dispatched.status_code == 200, dispatched.text
         with factory() as db:
@@ -133,12 +152,27 @@ def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition
         detail = client.get(f"/api/deliveries/{did}")
         assert detail.status_code == 200, detail.text
         line = detail.json()["items"][0]
+        full_page = client.get("/api/deliveries", params={"view": "full"})
+        assert full_page.status_code == 200, full_page.text
+        public_listed = next(row for row in full_page.json()["items"] if row["id"] == did)["items"][0]
+        assert public_listed["component_lines"] == line["component_lines"]
+        assert public_listed["inventory_sources"] == line["inventory_sources"]
         assert {row["component_product_id"] for row in line["component_lines"]} == picking_products
         assert all(row["unit"] == expected_units[row["component_product_id"]] for row in line["component_lines"])
         assert len(line["actual_goods_lines"]) == 1
         goods = line["actual_goods_lines"][0]
         assert goods["line_type"] == "parent" and goods["quantity"] == 4
         assert goods["unit"] == expected_units[1]
+        from app.api.deliveries import _delivery_list_page_context, _delivery_response
+        with factory() as db:
+            context = _delivery_list_page_context(db, [did])
+            listed = _delivery_response(db, did, list_context=context)
+            detailed = _delivery_response(db, did)
+            for field in ("component_lines", "actual_goods_lines", "inventory_sources", "available_sets"):
+                if field == "inventory_sources":
+                    for a, b in zip(listed["items"][0][field], detailed["items"][0][field]):
+                        assert a == b, {key: (a.get(key), b.get(key)) for key in a.keys() | b.keys() if a.get(key) != b.get(key)}
+                assert listed["items"][0][field] == detailed["items"][0][field], field
         assert {row["component_snapshot_id"] for row in line["inventory_sources"]} == picking_snapshots
         assert all(row["location_id"] and row["quantity_to_pick_stock"] == 4 for row in line["inventory_sources"])
         printed = client.get(f"/api/deliveries/{did}/print")
@@ -152,6 +186,7 @@ def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition
             assert db.get(OrderItem, 1).delivered_quantity == 0
         cancelled = client.put(f"/api/deliveries/{did}/cancel", json={"reason": "隔离验收撤销"})
         assert cancelled.status_code == 200, cancelled.text
+        compare_page()
         with factory() as db:
             assert db.get(OrderItem, item_id).delivered_quantity == 0
 

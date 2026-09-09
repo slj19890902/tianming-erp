@@ -715,9 +715,14 @@ def delivery_component_demands(db: Session, order_item_id: int) -> list[Componen
     if db.get(OrderBomGraph, order_item_id) is None:
         return demands
     from app.services.multilevel_bom_orders import read_compiled_order_bom
-    from app.services.multilevel_bom_plan import plan_bom
     compiled = read_compiled_order_bom(db, order_item_id)
     item = db.get(OrderItem, order_item_id)
+    return project_graph_delivery_demands(compiled, item, demands)
+
+
+def project_graph_delivery_demands(compiled, item, demands):
+    """Pure projection shared by detail and page-batched readers."""
+    from app.services.multilevel_bom_plan import plan_bom
     picking = dict(plan_bom(compiled.graph, 1).picking)
     units = {node.product_id: node.unit for node in compiled.graph.nodes}
     return [replace(d, quantity_per_set=picking[d.component_product_id],

@@ -23,11 +23,16 @@ def read_order_graph(db, order_item_id):
     row = db.get(OrderBomGraph, order_item_id)
     if row is None:
         return None
-    graph = load_graph(row.document_json, expected_hash=row.content_hash)
     item = db.get(OrderItem, order_item_id)
     order = db.get(Order, item.order_id) if item else None
     identities = {(r.product_id, r.product_version) for r in db.scalars(
         select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id == order_item_id))}
+    return validate_order_graph_rows(row, item, order, identities)
+
+
+def validate_order_graph_rows(row, item, order, identities):
+    """Same identity/hash gate for individual and batched read paths."""
+    graph = load_graph(row.document_json, expected_hash=row.content_hash)
     if (item is None or order is None or item.product_id != graph.root_id
             or order.customer_id != graph.customer_id
             or row.schema_version != graph_schema_version(graph) or row.root_product_id != graph.root_id
@@ -90,8 +95,6 @@ def freeze_order_graph(db, *, order_item_id, graph, actor: User):
 def read_compiled_order_bom(db, order_item_id):
     """Read graph AND material facts; never repair missing facts from master."""
     from app.models.product_bom import SalesOrderItemBomComponent
-    from app.services.multilevel_bom_compile import CompiledMasterBom, physical_routes
-    from app.services.multilevel_bom_plan import plan_bom
 
     graph = read_order_graph(db, order_item_id)
     if graph is None:
@@ -99,6 +102,12 @@ def read_compiled_order_bom(db, order_item_id):
     rows = tuple(db.scalars(select(SalesOrderItemBomComponent).where(
         SalesOrderItemBomComponent.sales_order_item_id == order_item_id).order_by(
         SalesOrderItemBomComponent.display_order)))
+    return validate_compiled_order_rows(graph, rows)
+
+
+def validate_compiled_order_rows(graph, rows):
+    from app.services.multilevel_bom_compile import CompiledMasterBom, physical_routes
+    from app.services.multilevel_bom_plan import plan_bom
     nodes = {n.product_id: n for n in graph.nodes}
     if len(rows) != len(nodes) or {r.component_product_id for r in rows} != set(nodes):
         raise BomPlanError("订单多级BOM材料快照不完整，不能用当前主档补写")

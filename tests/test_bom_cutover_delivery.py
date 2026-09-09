@@ -61,13 +61,13 @@ def test_pending_delivery_actual_summary_uses_only_new_epoch(cutover_read_fixtur
     assert summary["total_actual_goods_quantity"] == 2
 
 
-def test_historical_delivery_summary_keeps_old_source_allocations(cutover_read_fixture):
+def historical_delivery_fixture(cutover_read_fixture, *, source=None):
     from datetime import datetime
     from app.models.production import ProductionTask, ProductionCompletionBatch, ProductionCompletion
     from app.models.product_bom import BomComponentDirectDeliveryAllocation
-    from app.api.deliveries import _delivery_list_summary_context, _delivery_summary_response
     from tests.test_composite_component_delivery_quantities import _delivery
     db, _, item, history, _, _ = cutover_read_fixture
+    history = source if source is not None else history
     item.composite_fulfillment_mode_snapshot = "component_delivery"
     delivery, line = _delivery(db, customer_id=136, order_item_id=item.id, number="CUTOVER-OLD", quantity=20)
     delivery.status = "dispatched"
@@ -90,6 +90,13 @@ def test_historical_delivery_summary_keeps_old_source_allocations(cutover_read_f
         consumed_quantity=20, reversed_quantity=0, status="active")
     db.add(allocation)
     db.commit()
+    return delivery, line, allocation
+
+
+def test_historical_delivery_summary_keeps_old_source_allocations(cutover_read_fixture):
+    from app.api.deliveries import _delivery_list_summary_context, _delivery_summary_response
+    db, _, _, _, _, _ = cutover_read_fixture
+    delivery, _, allocation = historical_delivery_fixture(cutover_read_fixture)
     summary = _delivery_summary_response(delivery.id, context=_delivery_list_summary_context(db, [delivery.id]))
     assert summary["total_actual_goods_quantity"] == 20
     assert allocation.consumed_quantity == 20 and allocation.reversed_quantity == 0

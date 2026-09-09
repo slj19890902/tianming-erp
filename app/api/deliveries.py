@@ -10489,6 +10489,21 @@ def _cancel_delivery(
             .order_by(DeliveryItem.id)
         ).all()
         order_lines = [line for line in lines if line.source_type == "order"]
+        from app.services.multilevel_bom_delivery_boundary import validate_cancel_execution_boundary
+        from app.services.multilevel_bom_plan import BomPlanError
+        grouped_order_lines = {}
+        for line in order_lines:
+            grouped_order_lines.setdefault(line.order_item_id, []).append(line)
+        for item_id, item_lines in grouped_order_lines.items():
+            item = db.get(OrderItem, item_id)
+            if item is None:
+                raise HTTPException(status_code=409, detail=f"订单明细{item_id}不存在，无法回滚")
+            try:
+                validate_cancel_execution_boundary(db, item=item,
+                    delivery_item_ids=[line.id for line in item_lines],
+                    quantity=sum(line.delivered_quantity for line in item_lines))
+            except BomPlanError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
         unordered_lines = [
             line for line in lines if line.source_type == "unordered_finished"
         ]

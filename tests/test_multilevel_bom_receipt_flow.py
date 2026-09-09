@@ -206,9 +206,8 @@ def test_real_receipts_create_nodes_then_sets_not_flat_children(composite_requis
             assert kit.finished_detail.product_id == (4 if liner else 1)
             assert kit.quantity_available == 0
             assert kit.quantity_reserved == 10
-            if not liner:
-                from app.services.composite_bom_workflow import kit_availability
-                assert kit_availability(db, 1)["available_sets"] == 10
+            from app.services.composite_bom_workflow import kit_availability
+            assert kit_availability(db, 1)["available_sets"] == 10
             completed = list(db.scalars(select(ProductionCompletion)))
             products = {db.get(InventoryLot, c.inventory_lot_id).finished_detail.product_id: c.quantity for c in completed}
             assert products == ({1: 10, 2: 20, 3: 60} if liner else {2: 30, 3: 40})
@@ -232,6 +231,29 @@ def test_real_receipts_create_nodes_then_sets_not_flat_children(composite_requis
             assert summary["current_theoretical_finished_capacity_qty"] == 10
             assert summary["projection_inconsistent"] is False
             assert summary["product_output_quantities"] == ({1: 10, 2: 20, 3: 60, 4: 10} if liner else {1: 10, 2: 30, 3: 40})
+        with factory() as db:
+            from app.services.bom_transactions import atomic_bom
+            from tests.test_composite_component_delivery_quantities import _delivery
+            from app.services.composite_bom_workflow import (
+                execute_delivery_component_consumption, reverse_delivery_component_allocations,
+                delivery_item_component_quantities, kit_availability,
+            )
+            from app.models.product_bom import SalesOrderItemBomComponent
+            with atomic_bom(db):
+                _, line = _delivery(db, customer_id=1, order_item_id=1, number="GRAPH-DISPATCH", quantity=4)
+                execute_delivery_component_consumption(db, delivery_item_id=line.id, delivery_sets=4,
+                    operator_id=1, operation_key="graph-dispatch")
+                actual = delivery_item_component_quantities(db, line.id)
+                assert {db.get(SalesOrderItemBomComponent, sid).component_product_id: qty for sid, qty in actual.items()} == ({1: 4, 4: 4} if liner else {1: 4})
+                assert execute_delivery_component_consumption(db, delivery_item_id=line.id, delivery_sets=4,
+                    operator_id=1, operation_key="graph-dispatch") == []
+                reverse_delivery_component_allocations(db, delivery_item_id=line.id, operator_id=1,
+                    operation_key="graph-dispatch-reverse")
+                assert all(q == 0 for q in delivery_item_component_quantities(db, line.id).values())
+                assert kit_availability(db, 1)["available_sets"] == 10
+            # This tests the inventory transaction, not the delivery API status
+            # transitions. Leave the separate receipt-reversal scenario intact.
+            db.rollback()
         for rid in reversed(receipt_ids):
             reverted = client.put(f"/api/incoming/receipt-items/{rid}/revert", json={})
             assert reverted.status_code == 200, reverted.text

@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from math import ceil, floor
 from typing import Iterable
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, and_, or_
 from sqlalchemy.orm import Session
 
 from app.models.delivery import DeliveryItem
@@ -471,6 +471,19 @@ def ensure_component_production_tasks(
     return tasks
 
 
+def _snapshot_reservation_condition(db, snapshot_id):
+    """A graph's root may retain its original ordinary-product reservation."""
+    from app.models.multilevel_bom import OrderBomGraph
+    condition = InventoryReservation.sales_order_item_bom_component_id == snapshot_id
+    snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
+    graph = db.get(OrderBomGraph, snapshot.sales_order_item_id) if snapshot else None
+    if graph is not None and graph.root_product_id == snapshot.component_product_id:
+        condition = or_(condition, and_(InventoryReservation.sales_order_item_bom_component_id.is_(None),
+            InventoryReservation.order_item_id == snapshot.sales_order_item_id,
+            InventoryReservation.reservation_type == "finished_order"))
+    return condition
+
+
 def _stock_reservations(
     db: Session,
     snapshot_id: int,
@@ -479,7 +492,7 @@ def _stock_reservations(
         db.scalars(
             select(InventoryReservation)
             .where(
-                InventoryReservation.sales_order_item_bom_component_id == snapshot_id,
+                _snapshot_reservation_condition(db, snapshot_id),
                 InventoryReservation.reservation_type == "finished_order",
                 InventoryReservation.status.in_(ACTIVE_RESERVATION_STATUSES),
             )
@@ -588,7 +601,7 @@ def _delivered_component_quantity(db: Session, snapshot_id: int) -> int:
             InventoryReservation.id == DeliveryInventoryAllocation.reservation_id,
         )
         .where(
-            InventoryReservation.sales_order_item_bom_component_id == snapshot_id,
+            _snapshot_reservation_condition(db, snapshot_id),
             DeliveryInventoryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
         )
     )
@@ -606,11 +619,30 @@ def delivered_component_quantities(
     }
 
 
+def _delivery_graph_root_snapshot(db, delivery_item_id):
+    from app.models.multilevel_bom import OrderBomGraph
+    line = db.get(DeliveryItem, delivery_item_id)
+    graph = db.get(OrderBomGraph, line.order_item_id) if line else None
+    if graph is None:
+        return None
+    return db.scalar(select(SalesOrderItemBomComponent.id).where(
+        SalesOrderItemBomComponent.sales_order_item_id == graph.order_item_id,
+        SalesOrderItemBomComponent.component_product_id == graph.root_product_id))
+
+
+def _delivery_reservation_condition(db, delivery_item_id):
+    root = _delivery_graph_root_snapshot(db, delivery_item_id)
+    return or_(InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+               _snapshot_reservation_condition(db, root)) if root else InventoryReservation.sales_order_item_bom_component_id.is_not(None)
+
+
 def delivery_item_component_quantities(
     db: Session,
     delivery_item_id: int,
 ) -> dict[int, int]:
     """Return actual active component pieces attached to one delivery line."""
+    effective_snapshot = func.coalesce(InventoryReservation.sales_order_item_bom_component_id,
+                                      _delivery_graph_root_snapshot(db, delivery_item_id))
     result: dict[int, int] = {}
     direct_rows = db.execute(
         select(
@@ -639,7 +671,7 @@ def delivery_item_component_quantities(
         )
     stock_rows = db.execute(
         select(
-            InventoryReservation.sales_order_item_bom_component_id,
+            effective_snapshot,
             func.coalesce(
                 func.sum(
                     DeliveryInventoryAllocation.credited_requirement_quantity
@@ -654,10 +686,10 @@ def delivery_item_component_quantities(
         )
         .where(
             DeliveryInventoryAllocation.delivery_item_id == delivery_item_id,
-            InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+            _delivery_reservation_condition(db, delivery_item_id),
             DeliveryInventoryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
         )
-        .group_by(InventoryReservation.sales_order_item_bom_component_id)
+        .group_by(effective_snapshot)
     ).all()
     for snapshot_id, quantity in stock_rows:
         result[int(snapshot_id)] = result.get(int(snapshot_id), 0) + int(
@@ -1151,7 +1183,7 @@ def execute_delivery_component_consumption(
         .where(
             DeliveryInventoryAllocation.delivery_item_id == delivery_item_id,
             DeliveryInventoryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
-            InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+            _delivery_reservation_condition(db, delivery_item_id),
         )
         .limit(1)
     )
@@ -1219,7 +1251,9 @@ def execute_delivery_component_consumption(
                     continue
 
                 reservation = db.get(InventoryReservation, part.source_id)
-                if reservation is None or reservation.sales_order_item_bom_component_id != part.snapshot_id:
+                if reservation is None or (reservation.sales_order_item_bom_component_id != part.snapshot_id
+                    and db.scalar(select(InventoryReservation.id).where(
+                        InventoryReservation.id == part.source_id, _snapshot_reservation_condition(db, part.snapshot_id))) is None):
                     raise CompositeBomWorkflowError("组件成品预占记录已变化，请刷新后重试")
                 lot = db.get(InventoryLot, reservation.inventory_lot_id)
                 if lot is None or _remaining_reservation_quantity(reservation) < part.quantity:
@@ -1297,7 +1331,7 @@ def reverse_delivery_component_allocations(
             .where(
                 DeliveryInventoryAllocation.delivery_item_id == delivery_item_id,
                 DeliveryInventoryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
-                InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+                _delivery_reservation_condition(db, delivery_item_id),
             )
             .distinct()
         ).all()
@@ -1326,7 +1360,7 @@ def reverse_delivery_component_allocations(
             .where(
                 DeliveryInventoryAllocation.delivery_item_id == delivery_item_id,
                 DeliveryInventoryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
-                InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+                _delivery_reservation_condition(db, delivery_item_id),
             )
         ).all()
         for allocation in allocations:

@@ -9,6 +9,19 @@ from app.services.bom_subkit_costs import source_cost
 from app.services.bom_subkits import SubkitError
 
 
+def test_graph_receipt_portion_rounding_is_nonnegative_and_conserved(monkeypatch):
+    from app.services import multilevel_bom_cost_lineage as lineage
+    portions = [{"purchase_receipt_fact_id": index, "amount": Decimal(amount)}
+                for index, amount in enumerate(["0.0002", "0.0001", "0.0002"])]
+    monkeypatch.setattr(lineage, "graph_material_sources", lambda *_: portions)
+    db = SimpleNamespace(get=lambda *_: SimpleNamespace(quantity=5))
+    lot = SimpleNamespace(source_ref_type="bom_assembly", source_ref_id=1)
+    slices = [lineage.graph_material_cost_slice(db, lot, used=i, take=1) for i in range(5)]
+    assert all(row["amount"] >= 0 for chunk in slices for row in chunk)
+    for index, portion in enumerate(portions):
+        assert sum(chunk[index]["amount"] for chunk in slices) == portion["amount"]
+
+
 class SourceSession:
     def __init__(self, conversion, used=0):
         self.conversion = conversion

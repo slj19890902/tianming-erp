@@ -29,6 +29,29 @@ def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_ap
                                idempotency_key=f"api-receipt-{index}")
             assert receipt.status_code == 200, receipt.text
         pending = client.get("/api/deliveries/pending_items")
+        from app.services.multilevel_bom_cost_lineage import graph_material_sources, graph_material_cost_slice
+        with factory() as db:
+            for lot in db.scalars(select(InventoryLot).where(InventoryLot.quantity_reserved > 0)):
+                evidence = graph_material_sources(db, lot)
+                assert evidence is not None
+                pid = lot.finished_detail.product_id
+                expected = Decimal("9.8720") if pid == 4 else Decimal("1.2340") if liner else Decimal("8.6380")
+                assert sum(row["amount"] for row in evidence) == expected
+                assert len({row["purchase_receipt_fact_id"] for row in evidence}) == (1 if liner and pid == 1 else 2)
+                first = graph_material_cost_slice(db, lot, used=0, take=4)
+                second = graph_material_cost_slice(db, lot, used=4, take=6)
+                assert sum(r["amount"] for r in first + second) == expected
+                assert [a["amount"]+b["amount"] for a, b in zip(first, second)] == [r["amount"] for r in evidence]
+                from app.services.bom_subkits import SubkitError
+                with pytest.raises(SubkitError):
+                    graph_material_cost_slice(db, lot, used=4, take=7)
+            from app.models.product_bom import SalesOrderItemBomComponent
+            bad_snapshot = db.scalar(select(SalesOrderItemBomComponent).where(SalesOrderItemBomComponent.component_product_id == 2))
+            bad_snapshot.component_product_id = 1
+            with pytest.raises(SubkitError, match="产品或客户不一致"):
+                assembled = next(l for l in db.scalars(select(InventoryLot)) if l.source_ref_type == "bom_assembly")
+                graph_material_sources(db, assembled)
+            db.rollback()
         assert pending.status_code == 200, pending.text
         pending_line = next(row for row in pending.json()["items"] if row["order_item_id"] == 1)
         assert pending_line["remaining_quantity"] == 10

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.307"
-APP_VERSION_NAME = "货架规格与数量两行展示"
+APP_VERSION = "v0.22.308"
+APP_VERSION_NAME = "合并栈板确认与主货位高亮"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2329,15 +2329,25 @@ _V022306_VERIFICATION_STEPS = [
     "刷新货架正视图，核对客户简称在左、品名随后、数量靠右同排，混放款数位于格号旁。",
     "查看三款混放格，核对三张卡信息可读，长名称或更多产品仍可滚动；编码和明细点击互不干扰。",
 ]
-APP_CHANGES = [
+_V022307_CHANGES = [
     "货架格内第一行显示客户简称、产品名称和规格；第二行显示存货编码、同字号数量及独立明细入口。",
     "展开明细不再重复品名规格，保留入库日期、可用占用和批次记录入口；不修改库存与地图事实。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022307_VERIFICATION_STEPS = [
     "刷新货架正视图，核对客户、品名、规格同排，数量在编码右侧、查看明细左侧且字号一致。",
     "展开混放产品明细，确认不重复品名规格，入库日期与批次入口保留；编码仍打开产品标签。",
 ]
+APP_CHANGES = [
+    "修复HTTPS下合并栈板幂等键65字符超过接口64限制导致422；保留完整随机凭证、版本和幂等校验。",
+    "选定主货位在地图以橙色高亮并显示名称；合并结果和失败原因在底部确认区直接显示。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库，合并栈板选择两块及主货位，核对主货位所在楼层橙色高亮和底部名称。",
+    "现场确认确需合并后提交，检查底部成功或明确失败提示；失败草稿保留，库存不可重复处理。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.307：本次更新｜{item}" for item in _V022307_CHANGES),
+    *(f"v0.22.307：如何验证｜{item}" for item in _V022307_VERIFICATION_STEPS),
     *(f"v0.22.306：本次更新｜{item}" for item in _V022306_CHANGES),
     *(f"v0.22.306：如何验证｜{item}" for item in _V022306_VERIFICATION_STEPS),
     *(f"v0.22.305：本次更新｜{item}" for item in _V022305_CHANGES),

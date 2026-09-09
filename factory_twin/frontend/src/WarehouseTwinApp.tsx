@@ -1053,7 +1053,9 @@ function operationKey(prefix: string) {
   const suffix = typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  return `${prefix}-${suffix}`;
+  // Keep the full random suffix while respecting the merge API's 64-character limit.
+  const keyPrefix = prefix === "warehouse-pallet-merge-batch" ? "pallet-merge-batch" : prefix;
+  return `${keyPrefix}-${suffix}`;
 }
 
 function rackClearHeights(rack: Pick<Rack, "levels" | "height_mm" | "level_heights_mm">) {
@@ -6198,6 +6200,7 @@ export function WarehouseTwinApp() {
           productionProjections={productionProjection?.items || EMPTY_PRODUCTION_PROJECTIONS}
           highlightFeatureIds={searchHighlightFeatureIds}
           highlightedPalletIds={mapHighlightPalletIds}
+          mergeTargetPalletId={mapMode === "move" && moveAction === "merge" && mergeTarget ? `erp-location-${mergeTarget.location_id}` : undefined}
           focusTarget={cameraFocusTarget}
           palletEditingOnly={locationEditMode || warehouseMoveModeActive}
           rackEditingEnabled={locationEditMode && Boolean(selectedRackEditDraft) && !spatialEditBusy}
@@ -6837,6 +6840,8 @@ export function WarehouseTwinApp() {
         {stocktakeLastResult.length > 0 && <div className="twin-stocktake-label-results"><b>本次新增已入账，可贴标签</b>{stocktakeLastResult.map((item) => <span key={`stocktake-label-${item.lot_id}`}><button type="button" onClick={() => window.open(`/static/location-label.html?location_id=${encodeURIComponent(item.location_id)}`, "_blank", "noopener")}>打印位置标签</button>{item.inventory_type === "finished" && <button type="button" onClick={() => window.open(`/static/finished-goods-label.html?lot_id=${encodeURIComponent(item.lot_id)}&version=${encodeURIComponent(item.version_after)}`, "_blank", "noopener")}>打印产品标签</button>}</span>)}</div>}
       </> : moveAction === "merge" ? <>
         <div className="twin-move-draft-heading"><b>{mergeSources.length ? `已选 ${mergeSources.length} 块` : "请选择货位"}</b></div>
+        {mergeTarget && <p style={{ color: "#b45309" }}>橙色高亮为主货位：{mergeTarget.floor_code} · {mergeTarget.location_name}（切到该楼层查看）</p>}
+        {warehouseOperationMessage && <div className="twin-location-message" role="status" aria-live="polite">{warehouseOperationMessage}</div>}
         <div className="twin-move-draft-list twin-merge-draft-line">{mergeSources.map((item) => <article className={mergeTarget?.pallet_id === item.pallet_id ? "merge-target" : ""} key={item.client_item_id || item.pallet_id}>
           <b>{item.location_code || item.location_name || "位置待确认"}{mergeTarget?.pallet_id === item.pallet_id && <i>主货位</i>}</b>
           <strong>{formatNumber(item.total_quantity)} {inventoryUnitLabel(item.unit)}</strong>

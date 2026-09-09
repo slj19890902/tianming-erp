@@ -57,6 +57,7 @@ interface Props {
   productionProjections?: ProductionTaskProjection[];
   highlightFeatureIds?: string[];
   highlightedPalletIds?: string[];
+  mergeTargetPalletId?: string;
   draggablePalletIds?: string[];
   focusTarget?: CanvasFocusTarget | null;
   palletEditingOnly?: boolean;
@@ -177,7 +178,7 @@ function syncEntityHighlights(runtime: CanvasRuntime, selected: SelectedEntity, 
   runtime.requestRender();
 }
 
-function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], palletIds: string[]) {
+function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], palletIds: string[], mergeTargetPalletId?: string) {
   clearHighlightGroup(runtime.resultHighlight);
   for (const id of featureIds) {
     const object = runtime.entityNodes.get(`feature:${id}`);
@@ -186,6 +187,10 @@ function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], pall
   for (const id of palletIds) {
     const object = runtime.entityNodes.get(`pallet:${id}`);
     if (object) addEntityHighlight(runtime.resultHighlight, object, 0x2563eb, 100);
+  }
+  if (mergeTargetPalletId) {
+    const target = runtime.entityNodes.get(`pallet:${mergeTargetPalletId}`);
+    if (target) addEntityHighlight(runtime.resultHighlight, target, 0xf59e0b, 200);
   }
   runtime.requestRender();
 }
@@ -420,6 +425,7 @@ export function EditorCanvas({
   productionProjections = [],
   highlightFeatureIds = [],
   highlightedPalletIds = [],
+  mergeTargetPalletId,
   draggablePalletIds,
   focusTarget = null,
   palletEditingOnly = false,
@@ -1584,7 +1590,7 @@ export function EditorCanvas({
     };
     runtimeRef.current = runtime;
     syncEntityHighlights(runtime, selectedRef.current, focusTargetRef.current);
-    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds);
+    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId);
     if (focusTargetRef.current) {
       const nextFocusKey = `${focusTargetRef.current.token}:${layout.id}:${viewMode}`;
       if (lastFocusKeyRef.current !== nextFocusKey && animateFocus(runtime, focusTargetRef.current)) {
@@ -1667,8 +1673,8 @@ export function EditorCanvas({
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds);
-  }, [highlightFeatureIds, highlightedPalletIds]);
+    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId);
+  }, [highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId]);
 
   const realEastCompass = usesRealEastCompass(layout);
   const floor4CalibratingCompass = layout.floor_code.toUpperCase() === "4F" && calibrationMode;

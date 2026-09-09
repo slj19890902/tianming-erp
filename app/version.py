@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.311"
-APP_VERSION_NAME = "ERP扫码兼容新旧模具标签"
+APP_VERSION = "v0.22.312"
+APP_VERSION_NAME = "模具外网二维码清晰预览与旧码兼容"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2361,15 +2361,25 @@ _V022310_VERIFICATION_STEPS = [
     "刷新生产包装标签，选择长存货编码及长品名，检查完整两行、无裁切并可进入打印。",
     "检查自定义布局和普通标签；特别长文字会缩小字号，实体试打确认清晰度，标签数量保持不变。",
 ]
-APP_CHANGES = [
+_V022311_CHANGES = [
     "ERP摄像头支持现行模具码和旧内网模具码，识别稳定模具身份后通过当前ERP入口打开信息，不再只识别货位码。",
     "兼容旧模具查询链接并保留只读查看及任务定向；拒绝未知外部地址，原有登录和客户权限继续生效。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022311_VERIFICATION_STEPS = [
     "Safari打开HTTPS的/mobile/scan，扫描旧内网/M/模具码与当前外网模具码，核对显示同一模具信息。",
     "用旧/mobile/mold-lookup?mold_id=链接核对只读查看；实体旧码网址尚需核实，微信直接打开内网码在5G下仍不可达。",
 ]
+APP_CHANGES = [
+    "模具标签兼容当前外网网址生成的第3版二维码，不再因固定第2版限制阻止40×30标签预览。",
+    "保留203dpi每模块至少3点和四模块静区的物理清晰度门禁，域名使用等价大写编码；稳定模具ID、旧码和权限保持不变。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新模具标签预览，确认当前公网网址可生成二维码，试打一张40×30标签扫码核对对应模具。",
+    "工厂WiFi可访问旧内网模具码；手机5G请用ERP摄像头扫描旧码，自动通过当前ERP入口读取。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.311：本次更新｜{item}" for item in _V022311_CHANGES),
+    *(f"v0.22.311：如何验证｜{item}" for item in _V022311_VERIFICATION_STEPS),
     *(f"v0.22.310：本次更新｜{item}" for item in _V022310_CHANGES),
     *(f"v0.22.310：如何验证｜{item}" for item in _V022310_VERIFICATION_STEPS),
     *(f"v0.22.309：本次更新｜{item}" for item in _V022309_CHANGES),

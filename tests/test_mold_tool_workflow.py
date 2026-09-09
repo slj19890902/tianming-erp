@@ -846,8 +846,24 @@ def test_ordinary_mold_disable_is_retired_and_legacy_restore_is_audited(
         assert log.description == "历史普通停用模具恢复使用"
 
 
+def test_mold_qr_keeps_physical_readability_limit(monkeypatch):
+    from app.api import warehouse
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+    monkeypatch.setattr(warehouse, 'load_settings', lambda: SimpleNamespace(browser_url='https://'+'LONGDOMAIN'*15+'.example/'))
+    monkeypatch.setattr(warehouse, '_visible_mold_products', lambda *_: [])
+    with pytest.raises(HTTPException) as error:
+        warehouse._mold_label_dict(SimpleNamespace(id=5), None)
+    assert error.value.status_code == 409
+    assert '203dpi' in error.value.detail
+
+
+@pytest.mark.parametrize('browser_url,qr_version,modules', [
+    ('http://192.168.3.80:8000/', 2, 33),
+    ('https://tianmingerp0909.share.zrok.io/', 3, 37),
+])
 def test_workshop_can_open_structured_location_label_and_qr(
-    mold_app, monkeypatch
+    mold_app, monkeypatch, browser_url, qr_version, modules
 ) -> None:
     app, factory = mold_app
     from app.api import warehouse
@@ -857,7 +873,7 @@ def test_workshop_can_open_structured_location_label_and_qr(
     monkeypatch.setattr(
         warehouse,
         "load_settings",
-        lambda: type("Settings", (), {"browser_url": "http://192.168.3.80:8000/"})(),
+        lambda: type("Settings", (), {"browser_url": browser_url})(),
     )
     with factory() as db:
         mold = MoldTool(
@@ -901,7 +917,7 @@ def test_workshop_can_open_structured_location_label_and_qr(
         assert label.status_code == 200, label.text
         data = label.json()
         assert data["lookup_url"] == (
-            f"HTTP://192.168.3.80:8000/M/{mold_id}"
+            browser_url.rstrip('/').upper() + f"/M/{mold_id}"
         )
         assert label.headers["cache-control"] == "private, no-store, max-age=0"
         assert data["qr_data_url"].startswith("data:image/png;base64,")
@@ -910,7 +926,8 @@ def test_workshop_can_open_structured_location_label_and_qr(
 
         qr_bytes = base64.b64decode(data["qr_data_url"].split(",", 1)[1])
         with Image.open(BytesIO(qr_bytes)) as qr_image:
-            assert qr_image.size == (99, 99)
+            assert qr_image.size == (modules * 3, modules * 3)
+            assert modules * 3 / 203 * 25.4 <= 13.9
             try:
                 import cv2
                 import numpy as np
@@ -929,8 +946,8 @@ def test_workshop_can_open_structured_location_label_and_qr(
         )
         qr_contract.add_data(data["lookup_url"])
         qr_contract.make(fit=True)
-        assert qr_contract.version == 2
-        assert len(qr_contract.get_matrix()) == 33
+        assert qr_contract.version == qr_version
+        assert len(qr_contract.get_matrix()) == modules
         assert data["label_identity"].endswith("MJ-MOBILE-001")
         assert set(data) == {
             "mold_code",

@@ -20042,7 +20042,7 @@ def _mold_live_url(mold_id: int) -> str:
     return urlunsplit(
         (
             configured.scheme.upper(),
-            configured.netloc,
+            configured.netloc.upper(),
             f"/M/{int(mold_id)}",
             "",
             "",
@@ -20403,14 +20403,17 @@ def _mold_label_dict(
     products = _visible_mold_products(row, allowed_customer_ids)
     lookup_url = _mold_live_url(row.id)
     qr = qrcode.QRCode(
-        version=None,
+        version=2,
         error_correction=qrcode.constants.ERROR_CORRECT_M,
         box_size=3,
         border=4,
     )
     qr.add_data(lookup_url)
     qr.make(fit=True)
-    if qr.version != 2 or len(qr.get_matrix()) != 33:
+    # The 13.9 mm square provides 111 printer dots at 203 dpi. Including
+    # four quiet modules per edge, versions 2/3 require 99/111 dots at 3/module.
+    # Keep the physical readability bound, not the old LAN URL's exact version.
+    if len(qr.get_matrix()) * 3 > int(13.9 * 203 / 25.4):
         raise HTTPException(
             status_code=409,
             detail=(

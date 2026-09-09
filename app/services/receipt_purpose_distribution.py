@@ -1204,6 +1204,14 @@ def post_receipt_purpose_allocation(
     order_item_id = int(target.order_item.id)
     snapshots = _order_item_snapshots(db, order_item_id)
     active_item_allocations = _active_order_item_allocations(db, order_item_id)
+    from app.models.bom_subkit import OrderSubkit
+    subkit = db.get(OrderSubkit, order_item_id)
+    subkit_component_receipt = subkit is not None and snapshot.source_bom_requisition_source_id is not None
+    if subkit is not None:
+        # The physical parent and its liner are distinct stock identities.
+        # Only parent material can create/capitalize the parent carton.
+        snapshots = [row for row in snapshots if row.source_bom_requisition_source_id is None]
+        active_item_allocations = [row for row in active_item_allocations if row.source_bom_requisition_source_id is None]
     before_sheets: dict[int, int] = {}
     for row in active_item_allocations:
         sid = int(row.purchase_purpose_source_snapshot_id or 0)
@@ -1269,7 +1277,7 @@ def post_receipt_purpose_allocation(
         )
     )
     capitalized_cost = (
-        _money(max(prior_unallocated_cost, Decimal("0")) + order_cost)
+        _money(max(prior_unallocated_cost, Decimal("0")) + (Decimal("0") if subkit_component_receipt else order_cost))
         if finished_delta > 0
         else Decimal("0.0000")
     )
@@ -1488,6 +1496,18 @@ def post_receipt_purpose_allocation(
     )
     db.add(allocation)
     db.flush()
+    if subkit:
+        from app.services.bom_subkit_receipts import post_component_receipt, assemble_after_receipt
+        from app.services.bom_subkits import SubkitError
+        try:
+            if subkit_component_receipt:
+                post_component_receipt(db, allocation=allocation, purpose_snapshot=snapshot,
+                    operator_id=operator_id, order_item_id=order_item_id)
+            else:
+                assemble_after_receipt(db, order_item_id=order_item_id, allocation_id=allocation.id,
+                    operator_id=operator_id)
+        except SubkitError as error:
+            raise ReceiptPurposeFlowError("SUBKIT_RECEIPT_FAILED", str(error), error.status_code) from error
     return allocation
 
 
@@ -1795,6 +1815,12 @@ def reverse_receipt_purpose_allocation(
             "该订单明细存在更晚的用途收料，请先撤销最新一笔。",
         )
 
+    from app.services.bom_subkit_receipts import reverse_component_receipt
+    from app.services.bom_subkits import SubkitError
+    try:
+        reverse_component_receipt(db, allocation_id=allocation.id, operator_id=operator_id)
+    except SubkitError as error:
+        raise ReceiptPurposeFlowError("SUBKIT_REVERSAL_FAILED", str(error), error.status_code) from error
     completion_reversed = False
     if int(allocation.production_completion_id or 0) > 0:
         remaining_material_input = sum(

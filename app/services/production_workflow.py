@@ -1333,11 +1333,12 @@ def receipt_auto_deliverable_quantity_by_item_ids(
             pair = (int(customer_id), int(product_id))
             if pair in pairs:
                 available_by_pair[pair] = max(int(quantity or 0), 0)
-    return {
+    from app.services.bom_subkit_delivery import limit_by_subkit_stock
+    return limit_by_subkit_stock(db, {
         item_id: max(int(order_credit.get(item_id, 0)), 0)
         + max(int(available_by_pair.get(pair, 0)), 0)
         for item_id, pair in item_pairs.items()
-    }
+    })
 
 
 def production_ready_quantity(db: Session, order_item: OrderItem | int) -> int:

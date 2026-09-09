@@ -50,6 +50,7 @@ from app.models.printing_plate import (  # noqa: E402,F401
     PrintingPlateResinReuse,
 )
 from app.models.product import Product  # noqa: E402,F401
+from app.models.bom_subkit import ProductSubkit, OrderSubkit, SubkitConversion, SubkitConversionInput, SubkitReceiptOutput, SubkitDeliveryAllocation  # noqa: E402,F401
 from app.models.product_bom import (  # noqa: E402,F401
     BomComponentDirectDeliveryAllocation,
     ProductBomComponent,

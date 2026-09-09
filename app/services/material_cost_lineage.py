@@ -124,6 +124,11 @@ def _purpose_allocation_for_lot(
         return None
     visited.add(int(lot.id))
 
+    if lot.source_ref_type == "subkit_receipt" and lot.source_ref_id:
+        allocation = db.get(IncomingReceiptPurposeAllocation, lot.source_ref_id)
+        if allocation and _is_active_purpose_allocation(db, allocation):
+            return allocation
+
     direct_rows = list(
         db.scalars(
             select(IncomingReceiptPurposeAllocation)
@@ -644,6 +649,15 @@ def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
                     }
                 )
 
+    from app.models.bom_subkit import SubkitDeliveryAllocation
+    if delivery_item_ids:
+        for allocation in db.scalars(select(SubkitDeliveryAllocation).where(
+            SubkitDeliveryAllocation.delivery_item_id.in_(delivery_item_ids),
+            SubkitDeliveryAllocation.reversed.is_(False))):
+            sources_by_item[allocation.delivery_item_id].append({
+                "kind": "subkit", "id": allocation.id, "active_quantity": allocation.quantity,
+                "frozen_cost": allocation.total_cost,
+                "cost_detail": json.loads(allocation.cost_detail_json or "{}")})
     facts = _latest_facts_by_source(db, delivery_item_ids)
     frozen_sources = 0
     eligible_unfrozen_sources = 0
@@ -664,6 +678,22 @@ def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
         if not sources:
             line_reasons.add("no_delivery_cost_source")
         for source in sources:
+            if source["kind"] == "subkit":
+                detail = source["cost_detail"]
+                if not detail.get("actual"):
+                    estimate_only_sources += 1
+                    line_reasons.add("estimate_only")
+                    continue
+                frozen_sources += 1
+                currency = str(detail.get("currency") or "").strip().upper()
+                currency_totals[currency] = currency_totals.get(currency, Decimal(0)) + source["frozen_cost"]
+                if currency == "CNY":
+                    line_frozen += 1
+                    line_cost += source["frozen_cost"]
+                else:
+                    foreign_currency_sources += 1
+                    line_reasons.add("foreign_currency_rate_missing")
+                continue
             key = (str(source["kind"]), int(source["id"]))
             fact = facts.get(key)
             if fact is not None:

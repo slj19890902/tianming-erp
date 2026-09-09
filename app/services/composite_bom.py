@@ -1226,6 +1226,11 @@ def create_order_item_bom_snapshots(
             )
         )
     db.flush()
+    from app.services.bom_subkits import freeze_order_subkit, SubkitError
+    try:
+        freeze_order_subkit(db, order_item_id=order_item.id)
+    except SubkitError as error:
+        raise CompositeBOMError(str(error), error.status_code) from error
     return get_order_item_bom_preview(db, order_item.id)["components"]
 
 

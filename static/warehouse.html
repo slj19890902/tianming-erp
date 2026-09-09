@@ -1853,7 +1853,8 @@
         const staging=row.location?.location_code==="F1-DISPATCH-01"&&(Number(row.quantity_available||0)+Number(row.quantity_reserved||0)>0)?`<button class="btn primary" onclick="openStagingTransfer(${row.id})">转入库位</button>`:"";
         if(state.user.role!=="admin")return detail+label+staging;
         const edit=`<button class="btn primary" onclick="openLotEditor(${row.id})">编辑</button>`;
-        return detail+label+staging+edit;
+        const loss=row.subkit_role==="component"&&Number(row.quantity_available)>0?`<button class="btn danger" onclick="operate(${row.id},'scrap',${row.version})">余料损耗</button>`:"";
+        return detail+label+staging+edit+loss;
       }
       const adjust=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'adjust',${row.version})">调整</button>`:"";
       const freeze=row.status==="active"?`<button class="btn" onclick="operate(${row.id},'freeze',${row.version})">冻结</button>`:row.status==="frozen"?`<button class="btn" onclick="operate(${row.id},'unfreeze',${row.version})">解冻</button>`:"";

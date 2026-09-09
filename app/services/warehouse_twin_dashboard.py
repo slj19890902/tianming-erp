@@ -341,6 +341,7 @@ def _lot_payload(
     composite_projection: dict | None = None,
     stocktake_decrease_issues: dict[int, str | None] | None = None,
 ) -> dict:
+    from app.services.warehouse_display_units import lot_display_unit
     business = _lot_business_fields(row)
     age_days = _age_days(row, as_of)
     payload = {
@@ -352,7 +353,7 @@ def _lot_payload(
         "available_quantity": int(row.quantity_available),
         "reserved_quantity": int(row.quantity_reserved),
         "damaged_quantity": int(row.quantity_damaged),
-        "unit": row.unit,
+        "unit": lot_display_unit(row),
         "age_days": age_days,
         "age_bucket": _age_bucket_key(age_days),
         "stock_date_accuracy": row.stock_date_accuracy,

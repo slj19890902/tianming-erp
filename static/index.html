@@ -6731,6 +6731,12 @@
                   <h4>组合产品 / 内部 BOM</h4>
                   <div class="bom-editor-heading-controls">
                     <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="!productForm.id" /> 启用组合产品</label>
+                    <button v-if="bomEditor.enabled && !productForm.is_virtual_composite_parent && productForm.composite_fulfillment_mode === 'parent_delivery' && !bomEditor.subkit" type="button" class="btn small" @click="bomEditor.subkit = {name:'内衬',kits_per_parent:1,version:0,enabled:true}">组成子套件</button>
+                    <span v-if="bomEditor.subkit" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap">
+                      <label class="remember-line"><input type="checkbox" v-model="bomEditor.subkit.enabled" />收料组套</label>
+                      <input class="input" aria-label="子套件名称" v-model="bomEditor.subkit.name" placeholder="内衬名称" style="width:130px" />
+                      <label style="display:inline-flex;align-items:center;gap:4px">每父件<input class="input" aria-label="每父件子套件数" type="number" min="1" step="1" v-model.number="bomEditor.subkit.kits_per_parent" style="width:54px" />套</label>
+                    </span>
                     <label v-if="bomEditor.enabled" class="remember-line">交付标签和成品方式
                       <select class="select" v-model="productForm.composite_fulfillment_mode" :disabled="productForm.combination_mode === 'component_priced'">
                         <option value="component_delivery">子件交付</option>
@@ -9543,6 +9549,7 @@
       });
       const blankBomEditor = () => ({
         enabled: false, expected_version: null, components: [], componentOptions: [],
+        subkit: null,
         loading: false, saving: false, error: "", notice: "",
       });
       const blankMaterial = () => ({
@@ -24927,6 +24934,7 @@
             if (response.composite_fulfillment_mode) this.productForm.composite_fulfillment_mode = response.composite_fulfillment_mode;
             this.bomEditor.expected_version = response.expected_version ?? response.version ?? null;
             this.bomEditor.components = components;
+            this.bomEditor.subkit = response.subkit ? {name:response.subkit.name, kits_per_parent:response.subkit.kits_per_parent, version:response.subkit.version, enabled:response.subkit.enabled} : null;
             this.bomEditor.error = "";
             this.bomEditor.notice = "";
             this.mergeBomComponentOptions(components);
@@ -25048,6 +25056,7 @@
             const editor = this.bomEditor || blankBomEditor();
             return {
               enabled: Boolean(editor.enabled), expected_version: editor.expected_version,
+              subkit: editor.subkit ? {...editor.subkit} : null,
               components: (editor.components || []).map(component => ({
                 component_product_id: component.component_product_id || null,
                 quantity_per_set: component.quantity_per_set,
@@ -25088,6 +25097,7 @@
             return {
               expected_version: expectedVersion ?? fields.expected_version ?? 1,
               components: fields.components,
+              subkit: fields.subkit,
             };
           },
           async saveProductBom(productId, expectedVersion=null) {

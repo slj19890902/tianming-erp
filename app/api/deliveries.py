@@ -7952,7 +7952,8 @@ class _PendingDeliveryReadContext:
 
     def remaining_quantity(self, db: Session, order_item: OrderItem) -> int:
         if order_item.id in self.receipt_auto_item_ids:
-            return max(int(self.remaining_by_item.get(order_item.id, 0)), 0)
+            from app.services.bom_subkit_delivery import limit_by_subkit_stock
+            return limit_by_subkit_stock(db, {order_item.id: max(int(self.remaining_by_item.get(order_item.id, 0)), 0)})[order_item.id]
         if order_item.id in self.composite_ids:
             return max(
                 int(self.composite_available_sets.get(order_item.id, 0)),
@@ -9048,6 +9049,12 @@ def _dispatch_delivery(
             operation_key = (
                 f"d{delivery_id}-{dispatched_at:%Y%m%d%H%M%S%f}-i{line.id}"
             )
+            from app.services.bom_subkit_delivery import consume_delivery_subkits
+            from app.services.bom_subkits import SubkitError
+            try:
+                consume_delivery_subkits(db, delivery_item_id=line.id, operator_id=user.id, operation_key=operation_key)
+            except SubkitError as error:
+                raise HTTPException(status_code=error.status_code, detail=str(error)) from error
             if is_composite_order_item(
                 db, order_item.id
             ) and not _has_receipt_auto_finished_fact(db, order_item.id):
@@ -10489,6 +10496,12 @@ def _cancel_delivery(
             operation_key = (
                 f"c{delivery_id}-{cancelled_at:%Y%m%d%H%M%S%f}-i{line.id}"
             )
+            from app.services.bom_subkit_delivery import reverse_delivery_subkits
+            from app.services.bom_subkits import SubkitError
+            try:
+                reverse_delivery_subkits(db, delivery_item_id=line.id, operator_id=user.id, operation_key=operation_key)
+            except SubkitError as error:
+                raise HTTPException(status_code=error.status_code, detail=str(error)) from error
             if is_composite_order_item(
                 db, order_item.id
             ) and not _has_receipt_auto_finished_fact(db, order_item.id):

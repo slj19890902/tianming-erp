@@ -726,10 +726,18 @@ class ProductBOMComponentPayload(BaseModel):
         return self
 
 
+class ProductSubkitPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=250)
+    kits_per_parent: int = Field(default=1, ge=1)
+    version: int = Field(default=0, ge=0)
+    enabled: bool = True
+
+
 class ProductBOMUpdatePayload(BaseModel):
     expected_version: int = Field(ge=1)
     change_reason: str | None = Field(default=None, max_length=500)
     components: list[ProductBOMComponentPayload] = Field(max_length=99)
+    subkit: ProductSubkitPayload | None = None
 
     @field_validator("change_reason")
     @classmethod
@@ -2152,7 +2160,8 @@ def read_product_bom(
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
     try:
-        return get_product_bom(db, product_id)
+        from app.services.bom_subkits import read_subkit
+        return {**get_product_bom(db, product_id), "subkit": read_subkit(db, product_id)}
     except CompositeBOMError as error:
         raise raise_composite_bom_http(error) from error
 
@@ -2175,6 +2184,26 @@ def update_product_bom(
             user=user,
             change_reason=payload.change_reason,
         )
+        from app.services.bom_subkits import read_subkit, save_subkit, SubkitError
+        from app.services.composite_bom_execution import CompositeBOMExecutionError
+        existing_group = read_subkit(db, product_id)
+        if payload.subkit is None and existing_group and existing_group["enabled"]:
+            expected = {row["product_id"]: row["pieces_per_kit"] * existing_group["kits_per_parent"]
+                        for row in existing_group["members"]}
+            if {row.component_product_id: row.quantity_per_set for row in payload.components} != expected:
+                raise HTTPException(409, "请同时更新子套件配方，不能只修改组件用量")
+        if payload.subkit is not None:
+            try:
+                members = [{"product_id": row.component_product_id,
+                    "pieces_per_kit": row.quantity_per_set / payload.subkit.kits_per_parent}
+                    for row in payload.components]
+                save_subkit(db, parent_product_id=product_id, name=payload.subkit.name,
+                    kits_per_parent=payload.subkit.kits_per_parent, members=members,
+                    expected_version=payload.subkit.version, actor=user, enabled=payload.subkit.enabled)
+                result = get_product_bom(db, product_id)
+            except (SubkitError, CompositeBOMExecutionError) as error:
+                raise HTTPException(status_code=getattr(error, "status_code", 400), detail=str(error)) from error
+        result["subkit"] = read_subkit(db, product_id)
         db.commit()
         return result
     except CompositeBOMError as error:

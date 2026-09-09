@@ -81,6 +81,6 @@
 - 修复取消启用BOM仍发送原子件列表的问题：关闭发送空配方，未保存的本地列表仍保留，重新勾选可恢复；组套缺少组装子件仍拒绝。
 - 36项定向测试通过（真实JS方法执行、旧BOM前端、紧凑布局、主档API及既有收料/发货/取消），8条旧测试JWT短密钥warning；33.44秒。旧静态断言按关闭BOM的正确payload更新，新增行为用例覆盖，未删除权限/版本/数量校验。
 - Chrome隔离预览HTTP200及初始无写入表单可读；后续调试连接两次返回Debugger unattached，未使用IAB替代。不能算展开布局、真实手机、登录API保存或工厂屏幕验收。只停止本轮loopback18219预览服务。
-- git diff --check通过；唯一head仍rv09v8x9z70，本轮无迁移。正式仓库HEAD仍df70d12d，正式服务192.168.3.80:8000 PID2648未停服。远端首次fetch无返回后中止，带超时重试成功；正式分支名以origin/HEAD→origin/main为准，不是origin/master。
+- git diff --check通过；唯一head仍rv09v8x9z70，本轮无迁移。正式仓库HEAD仍df70d12d，正式服务192.168.3.80:8000 PID2648未停服。远端首次fetch无返回后中止，带超时重试成功；正式上游实时读取为origin/factory-current-baseline，不能用origin/HEAD指向的旧origin/main替代正式基线。
 - 入口HTML引用product-editor-compact.css存在；HTML SHA256 b1a6571cae8a8fad8e0dd3c74f1efaa401af14f9298bdd6caafd27798d4f9ac1；CSS SHA256 d49682786e823fe62378d66011d2183448eaede83daa0b335f83c353c3c3eeb6。
 - **未正式部署、未写正式业务数据或地图。持续目标仍active。** 下一闭环是将真实主档树及原物理片组快照编译并接入订单/报料，再贯通多组收料、库存、成本、预占、发货/拿货和撤销；不得移除现有未接完业务的下单拒绝门禁来冒充上线。

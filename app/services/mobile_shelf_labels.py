@@ -63,6 +63,7 @@ def product_fields(db, lot):
     customer = db.get(Customer, detail.owner_customer_id) if detail and detail.owner_customer_id else None
     return {
         "customer": (customer.chinese_short_name or customer.name) if customer else "通用库存",
+        "customer_name": customer.name if customer else "通用库存",
         "code": getattr(detail, "inventory_code_snapshot", None) or "待补充",
         "name": getattr(detail, "product_name_snapshot", None) or "待补充",
         "specification": "×".join(format(value, "g") for value in

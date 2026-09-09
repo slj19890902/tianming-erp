@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.298"
-APP_VERSION_NAME = "货架产品标签PDF样式"
+APP_VERSION = "v0.22.299"
+APP_VERSION_NAME = "扫码免登录与库存双栏"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2252,16 +2252,27 @@ _V022297_VERIFICATION_STEPS = [
     "混放格逐款选择产品并打印，核对客户、编码、品名、规格无数量；按80×40mm实际大小试打一张。",
     "手机5G扫描新码，应直接打开手机库存页，未登录在本页登录；核对产品数量及展开批次关联订单，观察实际加载速度。",
 ]
-APP_CHANGES = [
+_V022298_CHANGES = [
     "80×40mm产品标签按样稿排列：区域-货架号、层格、二维码同排，下行楼层；客户、编码、名称、规格依次排列。",
     "放大编码和客户简称，区域与货架使用真实可读名称，不显示EDIT编码、不打印实时数量；纯货位标签和手机扫码身份保持不变。",
     "本版仅调整标签展示，不更改地图、库存、产品绑定或生产规则。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022298_VERIFICATION_STEPS = [
     "刷新查货页面，选择货架中的产品并打印，确认区域与货架号分开显示、编码加粗、四项信息无重叠。",
     "按80×40mm、100%实际大小试打一张，再用手机扫描核对该格该款实时库存。",
 ]
+APP_CHANGES = [
+    "扫码页登录增加此手机30天免登录选项，使用现有安全Cookie，不保存明文密码；公用手机可取消。",
+    "扫码库存卡左侧显示编码、品名和规格，右侧显示客户简称/全名及实时数量；boxes等单位转为中文显示。",
+    "客户权限、订单按需查询、库存事实与失效会话保护不变；未登录不展示业务信息。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机扫码登录，勾选此手机30天免登录；用同一浏览器再次扫码确认无需重复输入账号密码。",
+    "核对产品卡左右信息及中文单位，数量与库存台账一致；改密、退出或清除浏览器数据后应重新登录。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.298：本次更新｜{item}" for item in _V022298_CHANGES),
+    *(f"v0.22.298：如何验证｜{item}" for item in _V022298_VERIFICATION_STEPS),
     *(f"v0.22.297：本次更新｜{item}" for item in _V022297_CHANGES),
     *(f"v0.22.297：如何验证｜{item}" for item in _V022297_VERIFICATION_STEPS),
     *(f"v0.22.296：本次更新｜{item}" for item in _V022296_CHANGES),

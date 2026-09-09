@@ -2,7 +2,10 @@ const $ = id => document.getElementById(id), params = new URLSearchParams(locati
 const shortPath = location.pathname.match(/^\/q\/([1-9]\d*)(?:\/([a-f0-9]{24}))?$/);
 const id = shortPath ? shortPath[1] : params.get('location_id'), product = shortPath ? shortPath[2] : params.get('product');
 const h = value => String(value ?? '').replace(/[&<>"']/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
-const unit = v => ({pcs:'只',piece:'片',pieces:'片',set:'套',sets:'套',sheet:'张',sheets:'张'}[v] || v);
+const unit = v => ({pcs:'只',pc:'只',piece:'片',pieces:'片',set:'套',sets:'套',sheet:'张',sheets:'张',box:'箱',boxes:'箱',carton:'箱',cartons:'箱',bundle:'捆',bundles:'捆',kg:'千克',roll:'卷',rolls:'卷',pallet:'托',pallets:'托'}[String(v||'').trim().toLowerCase()] || v || '');
+function productCard(item) {
+  return `<article><div class="product-grid"><div class="product-main"><small>存货编码</small><div class="code">${h(item.code)}</div><div class="product-name">${h(item.name)}</div><div class="spec">${h(item.specification)}</div></div><aside class="product-side"><small>客户</small><b class="customer">${h(item.customer)}</b>${item.customer_name&&item.customer_name!==item.customer?`<small class="customer-full">${h(item.customer_name)}</small>`:''}<small class="quantity-label">实时数量</small><div class="quantity">${h(item.quantity)} <span>${h(unit(item.unit))}</span></div></aside></div><div class="balances"><span>可用 <b>${h(item.available)}</b></span><span>预占 <b>${h(item.reserved)}</b></span>${item.damaged?'<span>异常 <b>'+h(item.damaged)+'</b></span>':''}</div>${item.lots.map(lot=>`<details data-lot="${lot.id}"><summary>批次 · ${h(lot.quantity)} ${h(unit(item.unit))}${lot.status==='frozen'?' · 已冻结':''} · 订单</summary><div class="orders"></div></details>`).join('')}</article>`;
+}
 let generation = 0;
 async function request(url, options={}) {
   const r = await fetch(url, {credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(12000),...options});
@@ -19,7 +22,11 @@ async function load() {
     $('login').hidden=true; $('address').textContent=data.address;
     $('message').textContent=data.items.length?'':product?'本格已无此产品或无查看权限':'本格暂无可见库存';
     $('updated').textContent='更新于 '+new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(data.refreshed_at));
-    $('items').innerHTML=data.items.map(item=>`<article><b>${h(item.customer)}</b><div class="code">${h(item.code)}</div><div>${h(item.name)} · ${h(item.specification)}</div><div class="quantity">${h(item.quantity)} ${h(unit(item.unit))}</div><small>可用 ${h(item.available)} · 预占 ${h(item.reserved)}${item.damaged?' · 异常 '+h(item.damaged):''}</small>${item.lots.map(lot=>`<details data-lot="${lot.id}"><summary>批次 · ${h(lot.quantity)} ${h(unit(item.unit))}${lot.status==='frozen'?' · 已冻结':''} · 订单</summary><div class="orders"></div></details>`).join('')}</article>`).join('');
+    $('items').innerHTML=data.items.map(productCard).join('');
+    for(const node of document.querySelectorAll('.quantity')) {
+      let size=parseFloat(getComputedStyle(node).fontSize);
+      while(node.scrollWidth>node.clientWidth+1&&size>12){size-=.5;node.style.fontSize=size+'px';}
+    }
     for(const node of document.querySelectorAll('details[data-lot]'))node.addEventListener('toggle',()=>{if(node.open&&!node.dataset.loaded)loadOrders(node,current)});
   } catch(e) {if(current!==generation)return; $('message').textContent=e.status===401?'登录后查看当前货位':e.message; if(e.status===401)$('login').hidden=false;}
   finally {if(current===generation)$('refresh').disabled=false;}
@@ -39,7 +46,7 @@ async function loadOrders(node,current){
   finally{delete node.dataset.busy;}
 }
 $('refresh').onclick=load;
-$('login').onsubmit=async e=>{e.preventDefault();$('loginButton').disabled=true;try{await request('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('username').value.trim(),password:$('password').value})});$('password').value='';await load();}catch(e){$('message').textContent=e.message;}finally{$('loginButton').disabled=false;}};
+$('login').onsubmit=async e=>{e.preventDefault();$('loginButton').disabled=true;try{await request('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('username').value.trim(),password:$('password').value,remember_me:$('remember').checked})});$('password').value='';await load();}catch(e){$('message').textContent=e.message;}finally{$('loginButton').disabled=false;}};
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&$('login').hidden)load();});
 setInterval(()=>{if(!document.hidden&&$('login').hidden&&!document.querySelector('details[open]'))load();},30000);
 load();

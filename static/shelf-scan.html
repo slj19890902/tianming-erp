@@ -5,12 +5,13 @@
 header{background:white;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:8px}h1{font-size:20px;margin:0}main{max-width:640px;margin:auto;padding:10px}
 button{border:0;border-radius:7px;padding:10px 14px;background:#15803d;color:white;font:inherit;min-height:44px}button:disabled{opacity:.5}
 article,form{background:white;padding:12px;margin:10px 0;border:1px solid #dbe3ed;border-radius:10px}
-.code{font-size:21px;font-weight:800;overflow-wrap:anywhere}.quantity{font-size:25px;font-weight:800;color:#15803d;margin:8px 0}
+.product-grid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);gap:12px}.product-main,.product-side{min-width:0;overflow-wrap:anywhere}.product-side{text-align:right;border-left:1px solid #edf0f5;padding-left:10px}.product-side>small,.customer{display:block}.customer{font-size:17px}.customer-full{font-size:11px;margin-top:3px}.code{font-size:21px;font-weight:800;overflow-wrap:anywhere;line-height:1.25;margin:3px 0 7px}.product-name{font-size:17px;font-weight:600}.spec{margin-top:5px;color:#475569;font-size:14px}.quantity-label{margin-top:10px}.quantity{font-size:27px;line-height:1.2;font-weight:800;color:#15803d;margin:3px 0}.quantity span{font-size:15px;font-weight:500}.balances{display:flex;justify-content:flex-end;gap:14px;flex-wrap:wrap;margin-top:12px;padding-top:8px;border-top:1px solid #edf0f5;font-size:13px;color:#475569}.remember{display:flex;align-items:center;gap:8px;font-size:14px;padding:5px 0 10px}.remember input{width:20px;height:20px;margin:0;flex:none}
 small{color:#64748b}details{margin-top:10px}summary{padding:8px 0;cursor:pointer}a{color:#1768ba}input{display:block;width:100%;padding:10px;margin:8px 0;font-size:16px}
 [hidden]{display:none!important}#message{padding:8px 0;color:#9a3412}
+header button{flex:none;white-space:nowrap}header h1{min-width:0;overflow-wrap:anywhere}.quantity{white-space:nowrap;font-size:clamp(18px,5.5vw,25px)}
 </style></head><body>
 <header><h1 id="address">货位库存</h1><button id="refresh">刷新</button></header><main>
 <div id="message" role="status">读取实时库存…</div>
-<form id="login" hidden><b>请登录</b><input id="username" autocomplete="username" placeholder="账号" required><input id="password" type="password" autocomplete="current-password" placeholder="密码" required><button id="loginButton">登录</button></form>
+<form id="login" hidden><b>请登录</b><input id="username" autocomplete="username" placeholder="账号" required><input id="password" type="password" autocomplete="current-password" placeholder="密码" required><label class="remember"><input id="remember" type="checkbox" checked>此手机30天免登录（公用手机勿选）</label><button id="loginButton">登录</button></form>
 <small id="updated"></small><section id="items"></section><a href="/mobile/#warehouse">仓库地图</a>
 </main><script src="/static/shelf-scan.js"></script></body></html>

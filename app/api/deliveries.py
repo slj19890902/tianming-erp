@@ -3636,7 +3636,7 @@ def _delivery_list_component_required_quantities(
     for demand in context["component_demands_by_order_item"].get(order_item.id, []):
         consumed = context["component_delivered_by_snapshot"].get(demand.snapshot_id, 0)
         target_after_dispatch = min(
-            delivered_after * demand.quantity_per_set,
+            max(delivered_after - demand.delivered_before_cutover, 0) * demand.quantity_per_set,
             demand.required_piece_quantity,
         )
         result[demand.snapshot_id] = max(target_after_dispatch - consumed, 0)
@@ -4176,12 +4176,14 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         for row in item_rows
         if row.get("order_item_id") is not None
     }
-    from app.models.multilevel_bom import OrderBomGraph
-    item_graph_rows = db.execute(select(OrderItem, OrderBomGraph).outerjoin(
+    from app.models.multilevel_bom import OrderBomGraph, OrderBomExecutionCutover
+    item_graph_rows = db.execute(select(OrderItem, OrderBomGraph, OrderBomExecutionCutover).outerjoin(
         OrderBomGraph, OrderBomGraph.order_item_id == OrderItem.id
+    ).outerjoin(OrderBomExecutionCutover, OrderBomExecutionCutover.order_item_id == OrderItem.id
     ).where(OrderItem.id.in_(order_item_ids))).all() if order_item_ids else []
-    order_items = {item.id: item for item, _graph in item_graph_rows}
-    graphs = {item.id: graph for item, graph in item_graph_rows if graph is not None}
+    order_items = {item.id: item for item, _graph, _cutover in item_graph_rows}
+    graphs = {item.id: graph for item, graph, _cutover in item_graph_rows if graph is not None}
+    cutovers = {item.id: cutover for item, _graph, cutover in item_graph_rows if cutover is not None}
     snapshots = list(
         db.scalars(
             select(SalesOrderItemBomComponent)
@@ -4230,7 +4232,7 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         adjustments,
     )
     from app.services.multilevel_bom_delivery_page import project_page_graph_demands
-    graph_roots = project_page_graph_demands(db, graphs=graphs, order_items=order_items,
+    graph_roots = project_page_graph_demands(db, graphs=graphs, cutovers=cutovers, order_items=order_items,
         orders=orders, snapshots=snapshots, demands=component_demands_by_order_item)
     requirements = list(
         db.scalars(
@@ -4893,8 +4895,9 @@ def _delivery_summary_component_quantities(
     if not composite_rows:
         return {}
     from app.services.multilevel_bom_delivery_page import summary_graph_contracts
-    graph_picks, graph_roots, excluded = summary_graph_contracts(db,
+    contracts = summary_graph_contracts(db,
         {row.graph_order_item_id for row in composite_rows if getattr(row, "graph_order_item_id", None) is not None})
+    graph_picks, graph_roots, excluded = contracts.picks, contracts.roots, contracts.excluded
     stock_snapshot_id = InventoryReservation.sales_order_item_bom_component_id
     if graph_roots:
         stock_snapshot_id = func.coalesce(stock_snapshot_id, case(
@@ -5086,7 +5089,7 @@ def _delivery_summary_component_quantities(
                 int(row.order_item_id), []
             ):
                 snapshot_id = int(snapshot.id)
-                if snapshot_id in excluded:
+                if snapshot_id in excluded or snapshot_id in contracts.history_ids:
                     continue
                 delta_sets, delta_pieces = adjustment_totals.get(
                     snapshot_id, (0, 0)
@@ -5105,7 +5108,8 @@ def _delivery_summary_component_quantities(
                 multiplier = int(snapshot.quantity_per_set or 0)
                 if snapshot_id in graph_picks:
                     multiplier, target = graph_picks[snapshot_id]
-                target_after = min(delivered_after * multiplier, target)
+                current_delivered_after = max(delivered_after - contracts.delivered_before.get(int(row.order_item_id), 0), 0)
+                target_after = min(current_delivered_after * multiplier, target)
                 component_quantity += max(
                     target_after - consumed_quantities.get(snapshot_id, 0), 0
                 )

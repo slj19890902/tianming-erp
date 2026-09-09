@@ -1217,7 +1217,9 @@ def get_order_item_bom_components_by_item_ids(
     queried = db.execute(statement).all()
     from app.services.multilevel_bom_production_versions import project_complete_order_material_rows
     effective_rows = project_complete_order_material_rows(db, [row for row, _, _ in queried])
-    for row, (_, delta_sets, delta_pieces) in zip(effective_rows, queried):
+    adjustments_by_id = {row.id: (delta_sets, delta_pieces) for row, delta_sets, delta_pieces in queried}
+    for row in effective_rows:
+        delta_sets, delta_pieces = adjustments_by_id[row.id]
         item_id = int(_mapped_value(row, "sales_order_item_id", "order_item_id"))
         components = result.setdefault(item_id, [])
         component = _snapshot_response(row, fallback_position=len(components) + 1)

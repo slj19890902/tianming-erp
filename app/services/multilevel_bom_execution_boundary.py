@@ -9,7 +9,7 @@ import hashlib
 import json
 from types import SimpleNamespace
 
-from sqlalchemy import Numeric, exists, or_
+from sqlalchemy import Numeric, exists, or_, select
 
 from app.models.multilevel_bom import OrderBomExecutionCutover, OrderBomCutoverSource
 from app.models.product_bom import SalesOrderItemBomComponent
@@ -22,6 +22,17 @@ def current_snapshot_predicate(snapshot=SalesOrderItemBomComponent):
         OrderBomCutoverSource.order_item_id == snapshot.sales_order_item_id,
         OrderBomCutoverSource.role == "current")
     return or_(~cutover, current)
+
+
+def cutover_roles_by_order(db, order_item_ids):
+    """One explicit role query for all converted orders; none for ordinary ones."""
+    from collections import defaultdict
+    result = defaultdict(dict)
+    if order_item_ids:
+        for row in db.scalars(select(OrderBomCutoverSource).where(
+                OrderBomCutoverSource.order_item_id.in_(order_item_ids))):
+            result[row.order_item_id][row.snapshot_id] = row.role
+    return result
 
 
 @dataclass(frozen=True)

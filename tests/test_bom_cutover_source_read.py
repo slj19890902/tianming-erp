@@ -29,7 +29,7 @@ def seed_read_boundary(db, actor, item, compiled):
     original = next(row for row in current if row.component_product_id != compiled.graph.root_id)
     history = Snapshot(**{column.key: getattr(original, column.key)
         for column in Snapshot.__table__.columns if column.key not in {"id", "created_at"}})
-    history.display_order = 500
+    history.display_order = 0
     history.product_bom_component_id = None
     history.snapshot_schema_version = 4
     history.order_set_quantity = 100

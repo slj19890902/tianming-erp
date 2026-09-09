@@ -36,31 +36,46 @@ def production_revisions_by_order_ids(db, order_item_ids):
 def project_complete_order_material_rows(db, rows):
     """Batch adapter for complete order snapshots, never partial historical rows."""
     from collections import defaultdict
-    from app.models.multilevel_bom import OrderBomGraph, OrderBomGraphProduct
+    from app.models.multilevel_bom import OrderBomGraph, OrderBomGraphProduct, OrderBomExecutionCutover
     from app.models.order import Order
-    from app.services.multilevel_bom_orders import validate_order_graph_rows, validate_compiled_order_rows
+    from app.services.multilevel_bom_orders import validate_order_graph_rows
+    from app.services.multilevel_bom_execution_boundary import cutover_roles_by_order, select_execution_sources
+    rows = list(rows)
     groups = defaultdict(list)
     for row in rows:
-        if (getattr(row, "snapshot_schema_version", 0) or 0) >= 5:
-            groups[row.sales_order_item_id].append(row)
+        groups[row.sales_order_item_id].append(row)
     if not groups:
         return rows
-    identities = defaultdict(set)
-    for row in db.scalars(select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id.in_(groups))):
-        identities[row.order_item_id].add((row.product_id, row.product_version))
-    revisions = production_revisions_by_order_ids(db, groups)
-    projected = {}
-    graph_rows = db.execute(select(OrderBomGraph, OrderItem, Order).join(
-        OrderItem, OrderItem.id == OrderBomGraph.order_item_id).join(Order, Order.id == OrderItem.order_id)
-        .where(OrderBomGraph.order_item_id.in_(groups))).all()
-    if len(graph_rows) != len(groups):
+    # Query headers even when all supplied rows appear legacy: losing all
+    # current rows must not silently reactivate the historical epoch.
+    headers = db.execute(select(OrderBomGraph, OrderItem, Order, OrderBomExecutionCutover)
+        .select_from(OrderItem).join(Order, Order.id == OrderItem.order_id)
+        .outerjoin(OrderBomGraph, OrderBomGraph.order_item_id == OrderItem.id)
+        .outerjoin(OrderBomExecutionCutover, OrderBomExecutionCutover.order_item_id == OrderItem.id)
+        .where(OrderItem.id.in_(groups))).all()
+    if len(headers) != len(groups):
+        raise BomPlanError("BOM生产资料缺少原订单身份")
+    graph_rows = [row for row in headers if row[0] is not None]
+    graph_ids = {item.id for _, item, _, _ in graph_rows}
+    if (any(cutover is not None and graph is None for graph, _, _, cutover in headers)
+            or any((row.snapshot_schema_version or 0) >= 5 and row.sales_order_item_id not in graph_ids for row in rows)):
         raise BomPlanError("BOM生产资料缺少原冻结图")
-    for graph_row, item, order in graph_rows:
+    if not graph_rows:
+        return rows
+    identities = defaultdict(set)
+    for row in db.scalars(select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id.in_(graph_ids))):
+        identities[row.order_item_id].add((row.product_id, row.product_version))
+    revisions = production_revisions_by_order_ids(db, graph_ids)
+    roles = cutover_roles_by_order(db, {item.id for _, item, _, cutover in graph_rows if cutover is not None})
+    projected = {}
+    for graph_row, item, order, cutover in graph_rows:
         graph = validate_order_graph_rows(graph_row, item, order, identities[item.id])
-        compiled = validate_compiled_order_rows(graph, tuple(groups[item.id]))
+        compiled = select_execution_sources(graph=graph, item=item, cutover=cutover,
+            rows_with_roles=((row, roles[item.id].get(row.id)) for row in groups[item.id]))
         compiled = project_production_versions(compiled, revisions[item.id])
         projected.update((row.id, row) for row in compiled.snapshots)
-    return [projected.get(row.id, row) for row in rows]
+    return [projected.get(row.id, row) for row in rows
+            if row.sales_order_item_id not in graph_ids or row.id in projected]
 
 
 def project_production_versions(compiled, revisions):

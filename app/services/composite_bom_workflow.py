@@ -76,6 +76,7 @@ class ComponentDemand:
     show_on_delivery: bool = True
     unit: str = "PCS"
     is_graph_root: bool = False
+    delivered_before_cutover: int = 0
 
 
 @dataclass(frozen=True)
@@ -734,11 +735,15 @@ def project_graph_delivery_demands(compiled, item, demands):
     from app.services.multilevel_bom_plan import plan_bom
     picking = dict(plan_bom(compiled.graph, 1).picking)
     units = {node.product_id: node.unit for node in compiled.graph.nodes}
+    current_ids = {row.id for row in compiled.snapshots}
+    window = compiled.execution_window
+    quantity = window.execution_quantity if window else item.quantity
     return [replace(d, quantity_per_set=picking[d.component_product_id],
-                    effective_sets=item.quantity, required_piece_quantity=item.quantity*picking[d.component_product_id],
+                    effective_sets=quantity, required_piece_quantity=quantity*picking[d.component_product_id],
+                    delivered_before_cutover=window.delivered_before if window else 0,
                     unit=units[d.component_product_id], is_graph_root=d.component_product_id == compiled.graph.root_id,
                     is_required=True, show_on_delivery=d.component_product_id == compiled.graph.root_id)
-            for d in demands if d.component_product_id in picking]
+            for d in demands if d.snapshot_id in current_ids and d.component_product_id in picking]
 
 
 def delivery_component_required_quantities(
@@ -765,7 +770,7 @@ def delivery_component_required_quantities(
     for demand in delivery_component_demands(db, order_item_id):
         consumed = _delivered_component_quantity(db, demand.snapshot_id)
         target_after_dispatch = min(
-            delivered_after * demand.quantity_per_set,
+            max(delivered_after - demand.delivered_before_cutover, 0) * demand.quantity_per_set,
             demand.required_piece_quantity,
         )
         result[demand.snapshot_id] = max(target_after_dispatch - consumed, 0)

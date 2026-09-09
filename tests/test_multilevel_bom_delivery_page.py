@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import event, select
 
 from app.models.order import Order, OrderItem
-from app.models.multilevel_bom import OrderBomGraph, OrderBomGraphProduct
+from app.models.multilevel_bom import OrderBomGraph, OrderBomGraphProduct, OrderBomExecutionCutover
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.api.deliveries import _delivery_list_component_demands
 from app.services.multilevel_bom_orders import freeze_master_order_bom
@@ -18,6 +18,8 @@ def inputs(db, items):
     snapshots = list(db.scalars(select(SalesOrderItemBomComponent).where(
         SalesOrderItemBomComponent.sales_order_item_id.in_([item.id for item in items]))))
     return dict(graphs={item.id: db.get(OrderBomGraph, item.id) for item in items},
+        cutovers={row.order_item_id: row for row in db.scalars(select(OrderBomExecutionCutover).where(
+            OrderBomExecutionCutover.order_item_id.in_([item.id for item in items])))},
         order_items={item.id: item for item in items},
         orders={item.order_id: db.get(Order, item.order_id) for item in items},
         snapshots=snapshots, demands=_delivery_list_component_demands(snapshots, {}))
@@ -53,12 +55,12 @@ def test_graph_page_has_fixed_identity_and_revision_queries_for_multiple_orders(
         queries.clear()
         event.listen(db.bind, "before_cursor_execute", capture)
         try:
-            picks, summary_roots, excluded = summary_graph_contracts(db, [item.id for item in selected])
+            contracts = summary_graph_contracts(db, [item.id for item in selected])
         finally:
             event.remove(db.bind, "before_cursor_execute", capture)
         assert len(queries) == 4  # three original batches plus all amendments
-        assert summary_roots == roots
-        assert len(picks) == len(selected) * 2 and len(excluded) == len(selected) * 2
+        assert contracts.roots == roots
+        assert len(contracts.picks) == len(selected) * 2 and len(contracts.excluded) == len(selected) * 2
 
 
 @pytest.mark.parametrize("damage", ["hash", "identity", "missing_snapshot", "missing_graph"])

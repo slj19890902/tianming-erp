@@ -260,28 +260,43 @@ class AssemblyStep:
     product_id: int
     produced_units: int
     consumed: tuple[tuple[int, int], ...]
+    consumed_body_units: int = 0
 
 
 @dataclass(frozen=True)
 class ReceiptAssemblyPlan:
     steps: tuple[AssemblyStep, ...]
     remaining_stock: tuple[tuple[int, int], ...]
+    remaining_body_stock: tuple[tuple[int, int], ...] = ()
 
 
 def plan_assembly(graph: FrozenBom, quantity: int, *, eligible_stock: Mapping[int, int],
-                  fulfilled_stock: Mapping[int, int] | None = None) -> ReceiptAssemblyPlan:
+                  fulfilled_stock: Mapping[int, int] | None = None,
+                  body_stock: Mapping[int, int] | None = None) -> ReceiptAssemblyPlan:
     """Incremental, bottom-up short-board plan; retains every excess unit.
 
     Callers must supply currently eligible balances, never cumulative receipts.
-    Manufactured nodes need their own material-completion evidence and are NOT
-    synthesized here; this planner only credits explicit assembled products.
+    A manufactured node with assembly children needs separate body-completion
+    balances. Body stock is never finished stock or child stock. Omitting the
+    argument keeps legacy callers fail-closed until their ledger adapter can
+    debit those exact body lots atomically with the assembly children.
     Database adapters still must enforce reservations, idempotency, cost,
     versions, audit and atomic debits/credits before applying any step.
     """
     nodes, children, order = graph.validated()
+    body_ids = {pid for pid in order if nodes[pid].source == "manufactured"
+                and any(e.relation == "assembly" for e in children[pid])}
+    if body_ids and body_stock is None:
+        raise BomPlanError("自制本体加子件组装需要本体完工来源，不能仅凭子件余额入库")
+    for pid, count in (body_stock or {}).items():
+        if type(pid) is not int or pid not in body_ids:
+            raise BomPlanError("本体完工库存包含无关产品")
+        _integer(count, "本体完工库存")
+    bodies = {pid: (body_stock or {}).get(pid, 0) for pid in order if pid in body_ids}
     credits = dict(eligible_stock)
     for pid, count in (fulfilled_stock or {}).items():
-        if type(pid) is not int or pid not in nodes or nodes[pid].source != "assembled":
+        if (type(pid) is not int or pid not in nodes
+                or (nodes[pid].source != "assembled" and pid not in body_ids)):
             raise BomPlanError("历史组装抵扣包含无关产品")
         _integer(count, "历史组装抵扣")
         credits[pid] = credits.get(pid, 0) + count
@@ -289,20 +304,23 @@ def plan_assembly(graph: FrozenBom, quantity: int, *, eligible_stock: Mapping[in
     # assembly consumed into an outer assembly must not be credited twice.
     demand = plan_bom(graph, quantity, eligible_stock=credits)
     needs = {p.product_id: p.make_units for p in demand.products}
-    if any(nodes[pid].source == "manufactured" and any(e.relation == "assembly" for e in children[pid]) for pid in order):
-        raise BomPlanError("自制本体加子件组装需要本体完工来源，不能仅凭子件余额入库")
     balances = {pid: eligible_stock.get(pid, 0) for pid in order}
     steps = []
     for pid in reversed(order):
-        if nodes[pid].source != "assembled":
+        if nodes[pid].source != "assembled" and pid not in body_ids:
             continue
         inputs = [edge for edge in children[pid] if edge.relation == "assembly"]
         make = min(needs[pid], *(balances[e.child_id] // e.quantity for e in inputs))
+        if pid in body_ids:
+            make = min(make, bodies[pid])
         if not make:
             continue
         consumed = tuple((e.child_id, make * e.quantity) for e in inputs)
         for child_id, count in consumed:
             balances[child_id] -= count
         balances[pid] += make
-        steps.append(AssemblyStep(pid, make, consumed))
-    return ReceiptAssemblyPlan(tuple(steps), tuple((pid, balances[pid]) for pid in order))
+        if pid in body_ids:
+            bodies[pid] -= make
+        steps.append(AssemblyStep(pid, make, consumed, make if pid in body_ids else 0))
+    return ReceiptAssemblyPlan(tuple(steps), tuple((pid, balances[pid]) for pid in order),
+                               tuple(bodies.items()))

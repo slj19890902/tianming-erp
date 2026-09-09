@@ -1,5 +1,13 @@
 # MULTILEVEL-BOM-20260909
 
+## 2026-09-10 自制本体与装配成品分账计算候选
+
+plan_assembly新增显式body_stock，仅接受有assembly子件的manufactured真实产品ID及非负整数；与eligible_stock成品分开。产量同时受本体、子件、订单缺口限制；AssemblyStep单独记录consumed_body_units，结果返回remaining_body_stock。没有传body_stock的旧调用仍拒绝这类图，不允许从子件凭空制造本体。历史已满足成品仅抵需求，不可作为本体或可消耗库存。父子都组装时，自制中间本体先组装，再由上层按真实配方消耗一次。
+
+失败先复现新参数缺失；最终新/旧planner38通过0.44秒，含120组本体/子件短缺余量守恒及输入不变；指定隔离源的库存组装/撤销旧回归10通过9.62秒，无skip。初次未指定隔离源10skip不算验收，随后明确环境重跑。唯一head76无迁移，diff check通过。现仅完成计算合同，不宣称API/库存写入已放行；master loader/writer原门禁仍保留。
+
+下一步证据：InventoryLot仅finished/semi_finished，semi明细是纸板尺寸/片组，不是可装配本体产品；不能伪装成成品可送，或用状态frozen代替正式阶段身份。需要为本体建立可追溯的产品/完工来源及库存阶段合同，接入收料、组装消耗、成本和撤销，并确保普通出库/预占不把本体当成品。原生产完工source_ref可追成本，BomAssemblyInput可记录输入，但目前各写入/读取均假定finished_detail，必须贯通后才开放manufactured+assembly。
+
 ## 2026-09-10 常用箱产品与 BOM 原子保存候选
 
 新增 POST /api/master/products/with-bom 和 PUT /{id}/with-bom。复用原产品及 BOM 校验/审计逻辑但关闭内部提交，真实外层事务统一提交；新建同时要求 create/edit 权限，编辑保留客户范围、产品CAS和确认令牌。产品与BOM输入版本必须一致，产品修改后的版本仅在已校验事务内传给BOM；响应产品/BOM版本一致。原单独入口仍按原合同提交。前端产品+BOM有改动时只发一个组合请求，新建/编辑均不再先保存产品再保存BOM。图纸仍为独立上传，不宣称图纸原子保存。

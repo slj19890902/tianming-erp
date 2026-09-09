@@ -227,6 +227,9 @@
     .warehouse-rack-product-preview { gap:2px; font-size:11px; overflow-wrap:anywhere; }
     .warehouse-rack-product-preview > strong { font-size:16px; font-weight:900; line-height:1.2; }
     .warehouse-rack-cell-head { display:block; min-width:0; white-space:nowrap; overflow-x:auto; font-size:11px; }
+    .warehouse-goods-identity,.warehouse-goods-description { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; min-width:0; overflow-wrap:anywhere; }
+    .warehouse-goods-identity strong { font-size:18px; font-weight:900; }
+    .warehouse-goods-description { font-size:14px; color:#475569; }
   </style>
 </head>
 <body>
@@ -1602,15 +1605,15 @@
               button.replaceChildren(node("span", "warehouse-rack-cell-head", heading));
               button.title = heading;
             }
-            visibleGoods.slice(0, 2).forEach(good => {
+            const productGroups = groupWarehouseRackGoods(visibleGoods);
+            productGroups.slice(0, 2).forEach(good => {
               const preview = node("span", "warehouse-rack-product-preview");
-              if (visibleGoods.length > 1) preview.append(node("small", "", `${customerLabel(good)} · ${good.quantity_total ?? "待核对"}${good.unit || ""}`));
-              preview.append(node("strong", "", good.product_code || "编码待补充"),
-                node("span", "", good.product_name || "名称待补充"),
-                node("small", "", good.specification || "规格待补充"));
+              if (productGroups.length > 1) preview.append(node("small", "", `${customerLabel(good)} · ${good.quantity_total ?? "待核对"}${good.unit || ""}`));
+              preview.append(node("strong", "", good.product_code || "编码待补充"));
+              if (productGroups.length === 1) preview.append(node("span", "", good.product_name || "名称待补充"), node("small", "", good.specification || "规格待补充"));
               button.append(preview);
             });
-            if (visibleGoods.length > 2) button.append(node("small", "", `还有 ${visibleGoods.length - 2} 个批次，点击查看全部`));
+            if (productGroups.length > 2) button.append(node("small", "", `还有 ${productGroups.length - 2} 款，点击查看全部`));
           }
           button.disabled = location.can_select_target !== true;
           button.addEventListener("click", () => {
@@ -1641,6 +1644,30 @@
         } else {
           byId("warehouseMapState").hidden = true;
         }
+      }
+
+      function groupWarehouseRackGoods(goods) {
+        const groups = new Map();
+        for (const good of goods) {
+          const key = JSON.stringify([good.customer_id, good.product_id ?? `lot:${good.lot_id}`, good.unit]);
+          const quantity = good.quantity_total == null ? null : Number(good.quantity_total);
+          const current = groups.get(key);
+          if (!current) groups.set(key, {...good, quantity_total: Number.isFinite(quantity) ? quantity : null});
+          else current.quantity_total = current.quantity_total == null || !Number.isFinite(quantity) ? null : current.quantity_total + quantity;
+        }
+        return [...groups.values()];
+      }
+
+      function warehouseGoodsIdentity(good) {
+        const row = node("div", "warehouse-goods-identity");
+        row.append(node("span", "", good.customer_short_name || good.customer_name || "客户待补充"), node("strong", "", good.product_code || "存货编码待补充"));
+        return row;
+      }
+
+      function warehouseGoodsDescription(good) {
+        const row = node("div", "warehouse-goods-description");
+        row.append(node("span", "", good.product_name || "名称待补充"), node("span", "", good.specification || "规格待补充"));
+        return row;
       }
 
       function renderWarehouseLocationGoods(location, preferredLotId = null) {
@@ -1684,10 +1711,10 @@
         goods.forEach(good => {
           const card = node("section", "candidate");
           card.append(
-            node("strong", "warehouse-stocktake-name", good.product_name || "未填写名称"),
-            node("span", "warehouse-stocktake-spec", good.specification || "未填写规格"),
+            warehouseGoodsIdentity(good),
+            warehouseGoodsDescription(good),
             node("strong", "warehouse-stocktake-quantity", `实际数量 ${good.quantity_total ?? "待核对"}${good.unit || ""}`),
-            node("small", "muted", `${good.customer_name || "未填写客户"}｜${good.product_code || "无存货编码"}｜${readableLocation(location)}`)
+            node("small", "muted", readableLocation(location))
           );
           const actions = node("div", "warehouse-map-item-actions");
           const move = node("button", "small-btn", "搬运 / 拆分数量");

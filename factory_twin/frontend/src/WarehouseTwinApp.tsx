@@ -1582,10 +1582,11 @@ function WarehouseRackElevation({
                       <button type="button" className={group.items.some(item => selectedItem?.lot_id === item.lot_id) ? "selected" : ""} onClick={() => { setSelectedItem(group.item); setDetailOpen(false); }}>
                         {groupShelfProducts(cellItems).length > 1 && <small>{employeeCustomerName(group.item)} · {formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</small>}
                         <strong className="shelf-inventory-code">{group.item.inventory_code || "存货编码待补充"}</strong>
-                        <span>{group.item.product_name || "产品名称待补充"}</span>
-                        <span className="shelf-specification">{group.item.specification || "规格待补充"}</span>
+                        {groupShelfProducts(cellItems).length === 1 && <><span>{group.item.product_name || "产品名称待补充"}</span>
+                        <span className="shelf-specification">{group.item.specification || "规格待补充"}</span></>}
                       </button>
                       <details><summary>{group.items.length} 个批次 · 查看明细</summary>
+                        {groupShelfProducts(cellItems).length > 1 && <div className="shelf-expanded-description"><b>{group.item.product_name || "产品名称待补充"}</b><span>{group.item.specification || "规格待补充"}</span></div>}
                         <small>可用 {formatNumber(group.available)} · 已占用 {formatNumber(group.reserved)}{group.damaged ? ` · 异常 ${formatNumber(group.damaged)}` : ""}</small>
                         <small>首次入库 {shelfStockDates(group.items).first || "待确认"} · 最近入库 {shelfStockDates(group.items).latest || "待确认"}</small>
                         {(shelfStockDates(group.items).incomplete || shelfStockDates(group.items).approximate) && <small>部分入库日期不明或非精确，见批次详情</small>}

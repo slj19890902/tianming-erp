@@ -20,7 +20,7 @@ from test_p1_33c5_external_packaging_receiving import _login, _confirm
 from tests.test_p1_81_receipt_purpose_flow import _seed_material_and_staging, _p181_published_map_identity
 
 
-def prepare(app, *, stock_basis=1, purchase_basis=3):
+def prepare(app, *, stock_basis=1, purchase_basis=3, two=False):
     with app.state.session_factory() as db:
         actor = db.scalar(select(User).where(User.username == 'purchase-admin'))
         old = db.get(Order, app.state.fixture['order_id'])
@@ -38,7 +38,18 @@ def prepare(app, *, stock_basis=1, purchase_basis=3):
                 customer_scope_id=old.customer_id, is_default=True)]))
         db.add_all([root, child])
         db.flush()
-        save(db, actor, root.id, 'assembled', [(child.id, 2, 'assembly')])
+        components = [(child.id, 2, 'assembly')]
+        if two:
+            second = Product(customer_id=old.customer_id, product_code='GRAPH-SECOND', customer_material_code='GRAPH-SECOND',
+                product_name='第二子件', unit='套', **{key:getattr(child, key) for key in (
+                    'supply_mode', 'external_packaging_category_code', 'external_packaging_specification_json',
+                    'external_packaging_specification_summary', 'external_packaging_purchase_unit',
+                    'external_packaging_default_order_quantity_basis', 'external_packaging_default_purchase_quantity_basis',
+                    'external_packaging_candidate_snapshot_json')})
+            db.add(second)
+            db.flush()
+            components.append((second.id, 6, 'assembly'))
+        save(db, actor, root.id, 'assembled', components)
         order = Order(order_number='GRAPH-RECEIPT', customer_id=old.customer_id, order_date=date(2026,9,10))
         db.add(order)
         db.flush()

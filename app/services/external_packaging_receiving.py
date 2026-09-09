@@ -833,5 +833,20 @@ def record_external_purchase_receipt(
                     raise ExternalPurchaseContractError(
                         str(error), status_code=error.status_code
                     ) from error
+    graph_output_orders = {item.sales_order_item_id for item, _ in normalized
+        if item.id in graph_conversions and graph_conversions[item.id][0] > 0}
+    if graph_output_orders:
+        from app.services.multilevel_bom_receipts import assemble_graph_order_receipt, refresh_graph_main_task
+        from app.services.multilevel_bom_orders import read_compiled_order_bom
+        from app.services.bom_subkits import SubkitError
+        from app.services.production_workflow import ProductionWorkflowError
+        from app.services.warehouse_inventory import WarehouseInventoryError
+        try:
+            for oid in sorted(graph_output_orders):
+                assemble_graph_order_receipt(db, compiled=read_compiled_order_bom(db, oid),
+                    order_item_id=oid, operation_key=f'bom-external-receipt:{receipt.id}:{oid}', operator_id=user.id)
+                refresh_graph_main_task(db, target_order_items[oid], create_if_missing=True)
+        except (BomPlanError, SubkitError, ProductionWorkflowError, WarehouseInventoryError) as error:
+            raise ExternalPurchaseContractError(str(error), status_code=409) from error
     db.flush()
     return _load_receipt(db, receipt.id), True

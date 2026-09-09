@@ -39,15 +39,16 @@ def test_fractional_cost_conserves_purchase_line_across_receipts(purchase_app, _
         second = receive(client, purchase_id, line_id, 'cost-second', 6)
         assert second.status_code == 200, second.text
         with purchase_app.state.session_factory() as db:
-            lots = own_output_lots(db, item_id)
-            assert sorted(l.quantity_available for l in lots) == [3,18]
+            lots = [l for l in own_output_lots(db, item_id) if l.source_ref_type == 'bom_external_receipt']
+            assert sorted(l.quantity_available + l.quantity_consumed for l in lots) == [3,18]
             costs = [receipt_output_cost(db, l.source_ref_id) for l in lots]
             assert sum((Decimal(c['capitalized_material_cost']) for c in costs), Decimal(0)) == Decimal('0.1600')
             assert all(c['tax_included'] == (tax_mode == 'tax_inclusive') for c in costs)
             assert all(c['currency'] == 'CNY' and Decimal(c['tax_rate']) == Decimal('0.13') for c in costs)
             for lot, detail in zip(lots, costs):
                 total = Decimal(detail['capitalized_material_cost'])
-                assert source_cost(db, lot, lot.quantity_available)[0] == total
+                assert source_cost(db, lot, lot.quantity_available)[0] == cost_slice(
+                    total, detail['quantity'], lot.quantity_consumed, lot.quantity_available)
                 assert sum((cost_slice(total, detail['quantity'], i, 1) for i in range(detail['quantity'])), Decimal(0)) == total
             # Corrupting the stored provenance cannot silently fall back to an estimate.
             lot = lots[0]

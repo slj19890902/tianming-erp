@@ -187,12 +187,23 @@ def own_output_lots(db, order_item_id):
 
 
 def assemble_graph_receipt(db, *, context, allocation, operator_id):
+    return assemble_graph_order_receipt(db, compiled=context.compiled,
+        order_item_id=context.snapshot.sales_order_item_id,
+        operation_key=f"bom-receipt:{allocation.id}", operator_id=operator_id)
+
+
+def assemble_graph_order_receipt(db, *, compiled, order_item_id, operation_key, operator_id):
+    """Shared assembly path for board and external receipt facts.
+
+    Each adapter supplies its own namespaced receipt key, not a synthetic board
+    allocation or production completion. The original caller owns the commit.
+    """
     from app.services.multilevel_bom_inventory import assemble_order_inventory
     from app.services.production_workflow import _receipt_auto_finished_ground_target
-    pids = {n.product_id for n in context.compiled.graph.nodes if n.source == "assembled"}
+    pids = {n.product_id for n in compiled.graph.nodes if n.source == "assembled"}
     if not pids:
         return ()
-    oid = context.snapshot.sales_order_item_id
+    oid = order_item_id
     own_ids = {lot.id for lot in own_output_lots(db, oid)}
     reserved_ids = set(db.scalars(select(InventoryReservation.inventory_lot_id).where(
         InventoryReservation.order_item_id == oid, InventoryReservation.reservation_type == "finished_order",
@@ -200,18 +211,18 @@ def assemble_graph_receipt(db, *, context, allocation, operator_id):
     lots = list(db.scalars(select(InventoryLot).where(InventoryLot.id.in_(own_ids | reserved_ids),
         InventoryLot.status == "active", InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0)))
     targets = {pid: _receipt_auto_finished_ground_target(db, claim=True,
-        customer_id=context.compiled.graph.customer_id, product_id=pid).location.id for pid in sorted(pids)}
+        customer_id=compiled.graph.customer_id, product_id=pid).location.id for pid in sorted(pids)}
     results = assemble_order_inventory(db, order_item_id=oid,
         source_lot_versions={lot.id: lot.version for lot in lots}, target_locations=targets,
-        operation_key=f"bom-receipt:{allocation.id}", operator_id=operator_id,
+        operation_key=operation_key, operator_id=operator_id,
         available_lot_ids=sorted(own_ids.intersection(lot.id for lot in lots)))
     from app.models.order import OrderItem, Order
     from app.services.multilevel_bom_plan import plan_bom
     from app.services.production_workflow import _reserve_component_completion_lot
     item = db.get(OrderItem, oid)
     order = db.get(Order, item.order_id)
-    picking = dict(plan_bom(context.compiled.graph, item.quantity).picking)
-    snapshots = {s.component_product_id: s for s in context.compiled.snapshots}
+    picking = dict(plan_bom(compiled.graph, item.quantity).picking)
+    snapshots = {s.component_product_id: s for s in compiled.snapshots}
     for result in results:
         if result.output_product_id not in picking or not result.output_lot_id:
             continue

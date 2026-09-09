@@ -613,6 +613,7 @@ class PdfImportConfirmation(BaseModel):
 
 
 class OrderItemUpdate(BaseModel):
+    bom_production_expected_revision: int | None = Field(default=None, ge=0)
     mold_repair_confirmation_token: str | None = Field(default=None, max_length=4000)
     quantity: int
     unit_price: Decimal
@@ -2479,6 +2480,7 @@ def _order_response(
                 "combination_set_quantity_snapshot": item.combination_set_quantity_snapshot,
                 "combination_quantity_per_set_snapshot": item.combination_quantity_per_set_snapshot,
                 "bom_components": item_bom_components,
+                "bom_production_revision": max((row.get("production_revision", 0) for row in item_bom_components), default=0),
                 "external_packaging_requirements": external_components_by_item_id.get(
                     item.id, []
                 ),
@@ -7902,6 +7904,9 @@ def update_order_item(
     item = db.get(OrderItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
+    from app.services.multilevel_bom_production_versions import order_production_values
+    original_production_values = order_production_values(item)
+    current_bom_production_revision = 0
     order_for_scope = db.get(Order, item.order_id)
     if order_for_scope is None:
         raise HTTPException(status_code=404, detail="订单不存在")
@@ -8590,6 +8595,25 @@ def update_order_item(
             ),
             confirmation_token=payload.product_confirmation_token,
         )
+    from app.models.multilevel_bom import OrderBomGraph
+    if db.get(OrderBomGraph, item.id) is not None:
+        from app.services.multilevel_bom_orders import read_compiled_order_bom
+        from app.services.multilevel_bom_production_versions import append_order_production_revision
+        from app.services.multilevel_bom_plan import BomPlanError
+        try:
+            compiled = read_compiled_order_bom(db, item.id)
+            current_bom_production_revision = max((getattr(row, "production_revision", 0) for row in compiled.snapshots), default=0)
+            root = next(node for node in compiled.graph.nodes if node.product_id == item.product_id)
+            changes = {field: value for field, value in order_production_values(item).items()
+                       if value != original_production_values[field]}
+            if changes and root.source == "manufactured":
+                revision = append_order_production_revision(db, order_item_id=item.id,
+                    changes={str(item.product_id): changes},
+                    expected_revision=payload.bom_production_expected_revision, actor=user)
+                current_bom_production_revision = revision.revision
+        except BomPlanError as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=str(error)) from error
     db.flush()
     try:
         if is_composite_order_item(db, item.id):
@@ -8646,6 +8670,7 @@ def update_order_item(
     db.refresh(item)
     return {
         "id": item.id,
+        "bom_production_revision": current_bom_production_revision,
         "product_id": item.product_id,
         "item_order_number": item.item_order_number,
         "item_sequence": item.item_sequence,

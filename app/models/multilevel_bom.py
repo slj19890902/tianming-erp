@@ -30,6 +30,29 @@ class OrderBomGraph(Base):
         DateTime, server_default=func.current_timestamp(), nullable=False)
 
 
+class OrderBomProductionRevision(Base):
+    """Append-only production amendments; original graph/material rows stay intact."""
+    __tablename__ = "order_bom_production_revisions"
+    __table_args__ = (
+        UniqueConstraint("order_item_id", "revision", name="uq_bom_production_revision"),
+        UniqueConstraint("id", "order_item_id", name="uq_bom_production_revision_identity"),
+        ForeignKeyConstraint(["previous_id", "order_item_id"],
+            ["order_bom_production_revisions.id", "order_bom_production_revisions.order_item_id"],
+            ondelete="RESTRICT", name="fk_bom_production_previous"),
+        CheckConstraint("revision > 0 AND length(content_hash) = 64", name="ck_bom_production_revision"),
+        CheckConstraint("(revision = 1 AND previous_id IS NULL) OR (revision > 1 AND previous_id IS NOT NULL)",
+            name="ck_bom_production_previous"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_item_id: Mapped[int] = mapped_column(ForeignKey("order_bom_graphs.order_item_id", ondelete="RESTRICT"), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_id: Mapped[int | None] = mapped_column(Integer)
+    document_json: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp(), nullable=False)
+
+
 class OrderBomGraphProduct(Base):
     __tablename__ = "order_bom_graph_products"
     __table_args__ = (

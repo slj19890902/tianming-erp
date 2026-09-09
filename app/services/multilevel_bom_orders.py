@@ -102,7 +102,9 @@ def read_compiled_order_bom(db, order_item_id):
     rows = tuple(db.scalars(select(SalesOrderItemBomComponent).where(
         SalesOrderItemBomComponent.sales_order_item_id == order_item_id).order_by(
         SalesOrderItemBomComponent.display_order)))
-    return validate_compiled_order_rows(graph, rows)
+    compiled = validate_compiled_order_rows(graph, rows)
+    from app.services.multilevel_bom_production_versions import production_revisions, project_production_versions
+    return project_production_versions(compiled, production_revisions(db, order_item_id))
 
 
 def validate_compiled_order_rows(graph, rows):

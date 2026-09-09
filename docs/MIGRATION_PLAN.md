@@ -82,3 +82,7 @@ BoxDB20_REPRO
 - 隔离副本 `D:\tm-uat\composite_bom_n034_20260718_130112\carton_erp_uat.sqlite3` 已完成 `head -> base -> head`，最终 `integrity_check=ok`、`foreign_key_check=0`；测试 `144 passed`；UAT 端口 `18068`。
 - 正式库未写入；本阶段未 commit、未 push。
 
+## 多级BOM生产资料修订（候选，2026-09-10）
+
+`sa13v8x9z75 -> sb14v8x9z76`，新增追加式`order_bom_production_revisions`，不回填或覆写原订单BOM快照。版本/订单唯一与前版本同订单复合外键保留身份。表内存在任一修订时拒绝降级；正式回退必须使用已验证备份。旧系统抽取内容仍退役，不执行以上历史命令。隔离演练与完整任务状态见`docs/tasks/MULTILEVEL_BOM_20260909.md`，尚未正式部署。
+

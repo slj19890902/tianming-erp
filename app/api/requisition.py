@@ -2079,6 +2079,8 @@ class _PendingRequisitionReadContext:
                 SalesOrderItemBomComponent.id,
             )
         ).all()
+        from app.services.multilevel_bom_production_versions import project_complete_order_material_rows
+        bom_snapshots = project_complete_order_material_rows(db, bom_snapshots)
         for snapshot in bom_snapshots:
             self._bom_snapshots_by_item_id.setdefault(
                 int(snapshot.sales_order_item_id), []
@@ -2944,7 +2946,7 @@ def _bom_snapshots_for_order_item(
     db: Session,
     order_item_id: int,
 ) -> list[SalesOrderItemBomComponent]:
-    return db.scalars(
+    rows = db.scalars(
         select(SalesOrderItemBomComponent)
         .where(SalesOrderItemBomComponent.sales_order_item_id == order_item_id)
         .order_by(
@@ -2952,6 +2954,8 @@ def _bom_snapshots_for_order_item(
             SalesOrderItemBomComponent.id,
         )
     ).all()
+    from app.services.multilevel_bom_production_versions import project_complete_order_material_rows
+    return project_complete_order_material_rows(db, rows)
 
 
 def _bom_snapshot_inventory_source(db: Session, snapshot: SalesOrderItemBomComponent) -> str:
@@ -12829,10 +12833,7 @@ def _create_batch_locked(
                         item.cardboard_len = line.cardboard_len
                         item.cardboard_width = line.cardboard_width
                         continue
-                    snapshot = db.get(
-                        SalesOrderItemBomComponent,
-                        line.bom_snapshot_id,
-                    )
+                    snapshot = selected_snapshot_by_id.get(line.bom_snapshot_id)
                     if (
                         snapshot is None
                         or snapshot.sales_order_item_id != item.id

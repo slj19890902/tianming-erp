@@ -76,12 +76,17 @@ def _inputs(db, item, compiled):
         raise BomPlanError("多级加工成本产品身份不一致")
     # Previously unknown assembly labour can be completed by the existing
     # authorized profile editor. Resolved historical values are never replaced.
+    effective_snapshots = {s.component_product_id: s for s in compiled.snapshots}
     for row in rows:
+        if row["source"] == "manufactured":
+            row["product"]["splice_mode"] = effective_snapshots[row["product_id"]].snapshot_component_splice_mode
         if row["source"] == "assembled" and row["profile"]["assembly_worker_days_per_1000"] is None:
             profile = get_product_processing_profile(db, row["product_id"])
             if profile is not None and profile.assembly_worker_days_per_1000 is not None:
                 row["profile"] = _profile_values(profile)
-    return dict(schema=1, graph_hash=graph_row.content_hash, nodes=rows, inputs_hash=_hash(rows))
+    from app.services.multilevel_bom_production_revision import production_basis
+    return dict(schema=1, graph_hash=graph_row.content_hash, nodes=rows, inputs_hash=_hash(rows),
+                production_basis=production_basis(compiled))
 
 
 def estimate_graph_processing_cost(db, item):

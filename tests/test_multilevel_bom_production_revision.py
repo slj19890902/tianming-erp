@@ -77,3 +77,26 @@ def test_revision_chain_requires_exact_previous_material_basis(context):
     malformed = json.dumps({"schema": True, "basis": production_basis(original), "changes": {"1": {"report_width_mm": 710}}})
     with pytest.raises(BomPlanError):
         apply_production_revision(original, malformed, expected_hash=hashlib.sha256(malformed.encode()).hexdigest())
+
+
+def test_stored_chain_cas_and_outer_rollback(context):
+    from sqlalchemy import select, func
+    from app.models.multilevel_bom import OrderBomProductionRevision
+    from app.services.multilevel_bom_production_versions import append_order_production_revision
+    original = frozen(context)
+    before = production_basis(original)
+    db, actor, item, _ = context
+    first = append_order_production_revision(db, order_item_id=item.id,
+        changes={"1": {"report_width_mm": 710}}, expected_revision=0, actor=actor)
+    assert first.revision == 1
+    with pytest.raises(BomPlanError, match="已更新"):
+        append_order_production_revision(db, order_item_id=item.id,
+            changes={"1": {"report_width_mm": 720}}, expected_revision=0, actor=actor)
+    second = append_order_production_revision(db, order_item_id=item.id,
+        changes={"1": {"report_width_mm": 720}}, expected_revision=1, actor=actor)
+    assert second.previous_id == first.id and second.revision == 2
+    assert next(row for row in read_compiled_order_bom(db, item.id).snapshots
+                if row.component_product_id == 1).snapshot_component_report_width_mm == 720
+    db.rollback()
+    assert db.scalar(select(func.count()).select_from(OrderBomProductionRevision)) == 0
+    assert production_basis(read_compiled_order_bom(db, item.id)) == before

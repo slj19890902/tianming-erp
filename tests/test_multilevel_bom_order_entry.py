@@ -69,7 +69,9 @@ def test_edit_order_sets_preserves_recipe_and_refreshes_demands(composite_requis
             assert read_graph_requirements(db, iid).order_quantity == 14
 
 
-def test_edit_graph_quantity_cost_failure_rolls_back(composite_requisition_app, _p181_published_map_identity, monkeypatch):
+@pytest.mark.parametrize("production_edit", [False, True])
+def test_edit_graph_quantity_cost_failure_rolls_back(composite_requisition_app, _p181_published_map_identity, monkeypatch, production_edit):
+    from app.models.multilevel_bom import OrderBomProductionRevision
     from app.api import orders as api
     from app.models.product_bom import SalesOrderItemBomDemandAdjustment, SalesOrderItemBomComponent
     app, factory = composite_requisition_app
@@ -89,16 +91,82 @@ def test_edit_graph_quantity_cost_failure_rolls_back(composite_requisition_app, 
             item = db.get(OrderItem, iid)
             edit = dict(quantity=12, unit_price="100", product_code=item.snapshot_product_code,
                         product_name=item.snapshot_product_name, material=item.snapshot_material)
+            if production_edit:
+                edit.update(quantity=item.quantity, snapshot_report_width_mm=710, bom_production_expected_revision=0)
         response = client.put(f"/api/orders/items/{iid}", json=edit)
         assert response.status_code == 500
     with factory() as db:
         assert db.get(OrderItem, iid).quantity == 10
+        assert db.scalar(select(func.count()).select_from(OrderBomProductionRevision).where(
+            OrderBomProductionRevision.order_item_id == iid)) == 0
         assert db.scalar(select(func.count()).select_from(SalesOrderItemBomDemandAdjustment).join(
             SalesOrderItemBomComponent, SalesOrderItemBomComponent.id == SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id
         ).where(SalesOrderItemBomComponent.sales_order_item_id == iid)) == 0
         assert db.scalar(select(func.count()).select_from(SalesOrderItemEstimatedCostSnapshot).where(
             SalesOrderItemEstimatedCostSnapshot.sales_order_item_id == iid)) == 1
         assert db.scalar(select(ProductionTask).where(ProductionTask.order_item_id == iid)).ordered_quantity_snapshot == 10
+
+
+def test_edit_manufactured_root_updates_effective_material_dimensions(composite_requisition_app, _p181_published_map_identity):
+    from app.models.multilevel_bom import OrderBomProductionRevision
+    from app.models.product_bom import SalesOrderItemBomComponent, RequisitionItemBomSource
+    from app.models.requisition import RequisitionItem
+    from app.services.multilevel_bom_material_estimate import graph_material_estimate_inputs
+    app, factory = composite_requisition_app
+    material_id, _ = seed_graph(factory, liner=True)
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post("/api/orders", json=payload(factory, key="edit-root-dimensions"))
+        assert created.status_code == 201, created.text
+        iid = created.json()["items"][0]["id"]
+        with factory() as db:
+            item = db.get(OrderItem, iid)
+            original = read_compiled_order_bom(db, iid)
+            root = next(row for row in original.snapshots if row.component_product_id == 1)
+            width = int(root.snapshot_component_report_width_mm or 100) + 10
+            root_id = root.id
+            edit = dict(quantity=item.quantity, unit_price="100", product_code=item.snapshot_product_code,
+                        product_name=item.snapshot_product_name, material=item.snapshot_material,
+                        snapshot_report_width_mm=width, bom_production_expected_revision=0)
+        response = client.put(f"/api/orders/items/{iid}", json=edit)
+        assert response.status_code == 200, response.text
+        assert response.json()["bom_production_revision"] == 1
+        reopened = client.get(f"/api/orders/{created.json()['id']}")
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json()["items"][0]["bom_production_revision"] == 1
+        assert client.put(f"/api/orders/items/{iid}", json=edit).status_code == 200
+        stale = client.put(f"/api/orders/items/{iid}", json={**edit, "snapshot_report_width_mm": width + 10})
+        assert stale.status_code == 409, stale.text
+        with factory() as db:
+            item = db.get(OrderItem, iid)
+            assert item.snapshot_report_width_mm == width
+            effective = read_compiled_order_bom(db, iid)
+            root = next(row for row in effective.snapshots if row.component_product_id == 1)
+            assert root.snapshot_component_report_width_mm == width
+            assert db.get(SalesOrderItemBomComponent, root_id).snapshot_component_report_width_mm == width - 10
+            revisions = list(db.scalars(select(OrderBomProductionRevision).where(OrderBomProductionRevision.order_item_id == iid)))
+            assert len(revisions) == 1 and revisions[0].revision == 1
+            sources, missing = graph_material_estimate_inputs(db, item)
+            assert not missing
+            assert next(row for row in sources if row["source_identity"]["product_id"] == 1)["width_mm"] == width
+            snapshots = [(row.id, row.component_product_id) for row in effective.snapshots
+                         if next(node for node in effective.graph.nodes if node.product_id == row.component_product_id).source == "manufactured"]
+        pending = client.get("/api/requisition/pending")
+        assert pending.status_code == 200, pending.text
+        pending_item = next(row for row in pending.json()["items"] if row["item_id"] == iid)
+        assert next(row for row in pending_item["component_requirements"] if row["snapshot_id"] == root_id)["report_width_mm"] == width
+        sources = purchase_sources(client, factory, material_id, snapshots, order_item_id=iid)
+        with factory() as db:
+            requisition = db.scalar(select(RequisitionItem).join(RequisitionItemBomSource,
+                RequisitionItemBomSource.requisition_item_id == RequisitionItem.id).where(
+                    RequisitionItemBomSource.sales_order_item_bom_component_id == root_id))
+            assert requisition.cardboard_width == width
+        for index, source in enumerate(sources):
+            fact = _freeze_receipt_fact(client, source, idempotency_key=f"revised-price-{index}", unit_price="0.1234")
+            assert fact.status_code == 200, fact.text
+            received = _receive(client, source, fact.json(), quantity=source.order_purpose_sheet_qty,
+                                idempotency_key=f"revised-receipt-{index}")
+            assert received.status_code == 200, received.text
 
 
 def test_new_order_root_uses_order_material_and_notes_not_child_master(composite_requisition_app, _p181_published_map_identity):

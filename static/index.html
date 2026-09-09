@@ -31741,6 +31741,7 @@
                 product_name:itemSnapshot.snapshot_product_name || "", material:itemSnapshot.display_material || this.displayMaterialText(itemSnapshot.snapshot_material) || "",
                 specification:this.orderSpecificationText(itemSnapshot.snapshot_spec, ""), production_notes:itemSnapshot.snapshot_production_notes || "",
                 quantity:itemSnapshot.quantity, unit_price:this.money(itemSnapshot.unit_price),
+                bom_production_expected_revision:Number(itemSnapshot.bom_production_revision || 0),
                 requisition_status:itemSnapshot.requisition_status || "未报料",
                 finished_inventory_reserved_qty:Number(itemSnapshot.finished_inventory_reserved_qty || 0),
                 production_required_qty:Number(itemSnapshot.production_required_qty ?? itemSnapshot.quantity),

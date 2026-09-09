@@ -1150,7 +1150,7 @@ def get_order_item_bom_components_by_item_ids(
     db: Session,
     order_item_ids: Iterable[int],
 ) -> dict[int, list[dict[str, Any]]]:
-    """Load immutable BOM previews for many order items with one query."""
+    """Load original quantities and versioned production previews in batches."""
 
     item_ids = sorted({int(item_id) for item_id in order_item_ids})
     if not item_ids:
@@ -1214,10 +1214,15 @@ def get_order_item_bom_components_by_item_ids(
             getattr(snapshot_model, item_field), snapshot_model.id
         )
     result: dict[int, list[dict[str, Any]]] = {item_id: [] for item_id in item_ids}
-    for row, delta_sets, delta_pieces in db.execute(statement).all():
+    queried = db.execute(statement).all()
+    from app.services.multilevel_bom_production_versions import project_complete_order_material_rows
+    effective_rows = project_complete_order_material_rows(db, [row for row, _, _ in queried])
+    for row, (_, delta_sets, delta_pieces) in zip(effective_rows, queried):
         item_id = int(_mapped_value(row, "sales_order_item_id", "order_item_id"))
         components = result.setdefault(item_id, [])
         component = _snapshot_response(row, fallback_position=len(components) + 1)
+        if (getattr(row, "snapshot_schema_version", 0) or 0) >= 5:
+            component["production_revision"] = getattr(row, "production_revision", 0)
         component["effective_order_set_quantity"] = (
             int(component["order_set_quantity"]) + int(delta_sets or 0)
         )

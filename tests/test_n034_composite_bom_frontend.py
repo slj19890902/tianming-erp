@@ -38,7 +38,7 @@ def test_n034_bom_uses_same_customer_products_and_versioned_get_put() -> None:
     assert 'axios.put(`/api/master/products/${productId}/bom`, this.bomPayload(expectedVersion))' in INDEX
     assert "expected_version: expectedVersion ?? fields.expected_version ?? 1" in INDEX
     assert 'change_reason: "维护父产品内部 BOM"' not in INDEX
-    assert "components: fields.components" in INDEX
+    assert "components: fields.enabled ? fields.components : []" in INDEX
     assert "const requestedCustomerId = Number(this.productForm.customer_id || 0)" in INDEX
     assert "customer_id: requestedCustomerId" in INDEX
     assert "String(row.id) !== String(requestedProductId)" in INDEX

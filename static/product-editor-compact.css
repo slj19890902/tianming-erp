@@ -66,6 +66,8 @@
 .product-editor-modal .bom-component-compact-row .field { display: flex; gap: 6px; align-items: center; }
 .product-editor-modal .bom-component-compact-row .field > label { margin: 0; flex-shrink: 0; }
 .product-editor-modal .bom-component-compact-row .input { min-width: 0; width: 100%; }
+.product-editor-modal .bom-component-relation { width: 112px; min-width: 112px; }
+.product-editor-modal .bom-component-actions { display: inline-flex; gap: 4px; white-space: nowrap; }
 .product-editor-modal .bom-subkit-trigger { order: 5; }
 .product-editor-modal .bom-subkit-controls { order: 6; flex-basis: 100%; }
 @media (max-width: 1050px) {

@@ -211,6 +211,22 @@
       .topbar { padding-inline: 11px; }
       .stock-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
+    .warehouse-map-toolbar { display:flex; align-items:center; gap:5px; margin:6px 0; }
+    .warehouse-map-toolbar .small-btn { min-width:44px; min-height:44px; padding:6px 9px; font-size:13px; }
+    #warehouseMapCompass { flex:1; color:#9a3412; font-size:11px; }
+    #warehouseMapOptions > summary { padding:6px 0; font-size:13px; color:#475569; }
+    #warehouseMapTitle { flex:1; text-align:left; font-size:15px; }
+    .warehouse-map-viewport { max-height:calc(100dvh - 170px); overflow:auto; }
+    .warehouse-map-stage { min-height:0; box-sizing:content-box; margin:0 auto; border-radius:4px; }
+    .warehouse-rack-elevation { border:3px solid #ea7c24; padding:6px; }
+    .warehouse-rack-elevation > summary { min-height:44px; padding:8px 2px; font-size:15px; }
+    .warehouse-rack-elevation > section { border-bottom:5px solid #ea7c24; }
+    .warehouse-rack-elevation > section > strong { font-size:12px; }
+    .warehouse-rack-level { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(72px,1fr); gap:4px; margin:4px 0; overflow-x:auto; }
+    .warehouse-rack-level .warehouse-map-location { min-width:0; min-height:64px; height:clamp(76px,18dvh,130px); padding:5px; font-size:12px; align-content:start; overflow:auto; }
+    .warehouse-rack-product-preview { gap:2px; font-size:11px; overflow-wrap:anywhere; }
+    .warehouse-rack-product-preview > strong { font-size:16px; font-weight:900; line-height:1.2; }
+    .warehouse-rack-cell-head { display:block; min-width:0; white-space:nowrap; overflow-x:auto; font-size:11px; }
   </style>
 </head>
 <body>
@@ -361,25 +377,34 @@
   <section id="warehouseMapLayer" class="map-layer" hidden aria-label="实测仓库地图">
     <div class="map-layer-head">
       <button id="closeWarehouseMap" class="small-btn" type="button">返回仓库</button>
-      <strong id="warehouseMapTitle">实测仓库地图</strong>
+      <button id="warehouseMapTitle" class="small-btn" type="button" aria-controls="warehouseMapOptions" aria-expanded="false">实测仓库地图</button>
     </div>
     <div class="warehouse-map-body">
       <div id="warehouseAreaOverview">
+      <details id="warehouseMapOptions">
+      <summary>切换楼层 / 区域 · 更多</summary>
       <div class="warehouse-map-controls">
         <select id="warehouseMapFloor" aria-label="楼层"></select>
         <select id="warehouseMapGroup" aria-label="区域字母分组"></select>
         <select id="warehouseMapArea" aria-label="区域"></select>
       </div>
       <div class="warehouse-map-actions">
-        <button id="warehouseFloorOverviewButton" class="small-btn" type="button">楼层总览</button>
-        <button id="warehouseMapZoomOut" class="small-btn" type="button">缩小</button>
-        <button id="warehouseMapZoomIn" class="small-btn" type="button">放大</button>
         <button id="warehouseMapRefresh" class="small-btn" type="button">刷新当前位置</button>
         <button id="warehouseDiscrepancyListButton" class="small-btn" type="button" hidden>待核对报告</button>
       </div>
-      <div id="warehouseMapState" class="card status">进入后才读取一层一片区域。</div>
       <p id="warehouseMapGuidance" class="warehouse-map-note" hidden></p>
+      </details>
+      <div id="warehouseMapState" class="card status">进入后才读取一层一片区域。</div>
+      <div class="warehouse-map-toolbar">
+        <button id="warehouseFloorOverviewButton" class="small-btn" type="button">楼层总览</button>
+        <span id="warehouseMapCompass" aria-label="地图方向"></span>
+        <button id="warehouseMapFit" class="small-btn" type="button">全图</button>
+        <button id="warehouseMapZoomOut" class="small-btn" type="button" aria-label="缩小地图">−</button>
+        <button id="warehouseMapZoomIn" class="small-btn" type="button" aria-label="放大地图">＋</button>
+      </div>
+      <div id="warehouseMapViewport" class="warehouse-map-viewport">
       <div id="warehouseMapStage" class="warehouse-map-stage" hidden></div>
+      </div>
       <div id="warehouseFloorOverview" hidden></div>
       <div id="warehouseRackList"></div>
       </div>
@@ -1388,6 +1413,7 @@
       async function loadWarehouseFloorOverview() {
         showWarehouseArea();
         state.warehouseMapOverview = true;
+        ["warehouseMapFit", "warehouseMapZoomOut", "warehouseMapZoomIn"].forEach(id => { byId(id).disabled = true; });
         state.warehouseMapController?.abort();
         const controller = new AbortController();
         state.warehouseMapController = controller;
@@ -1402,6 +1428,7 @@
           if (generation !== state.warehouseMapGeneration) return;
           const container = byId("warehouseFloorOverview"); container.replaceChildren();
           byId("warehouseMapTitle").textContent = `${data.floor_name}｜楼层总览`;
+          byId("warehouseMapCompass").textContent = data.compass?.label ? `↑ ${data.compass.label}` : "方向待校准";
           byId("warehouseMapGuidance").textContent = "先选A–Z分组或直接点击区域；总览不显示、不操作具体货位。";
           byId("warehouseMapGuidance").hidden = false;
           const areas = data.areas || [], points = areas.flatMap(area => area.points);
@@ -1455,6 +1482,7 @@
           const data = await apiGet(url, { signal: controller.signal });
           if (generation !== state.warehouseMapGeneration) return;
           state.warehouseMapData = data;
+          byId("warehouseMapOptions").open = false;
           if (preferredLocationId) state.warehouseMapFocusLocationId = Number(preferredLocationId);
           if (!preserveMove) state.warehouseMapSource = null;
           state.warehouseMapTarget = null;
@@ -1486,7 +1514,9 @@
       function renderWarehouseMap() {
         const data = state.warehouseMapData || {};
         const stage = byId("warehouseMapStage");
+        ["warehouseMapFit", "warehouseMapZoomOut", "warehouseMapZoomIn"].forEach(id => { byId(id).disabled = false; });
         stage.replaceChildren();
+        byId("warehouseMapCompass").textContent = data.compass?.label ? `↑ ${data.compass.label}` : "方向待校准";
         byId("warehouseMapTitle").textContent = `${data.floor_name || "楼层名称待完善"}｜${data.area_name || "区域名称待完善"}`;
         byId("warehouseMapGuidance").textContent = data.guidance || "以地图高亮位置为准，到现场后核对相邻位置。";
         byId("warehouseMapGuidance").hidden = false;
@@ -1496,23 +1526,25 @@
         const width = Number(bounds.max_x) - minX;
         const height = Number(bounds.max_y) - minY;
         if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
-          const availableWidth = Math.max(280, Number(stage.parentElement?.clientWidth || 320) - 20);
-          const fittedHeight = Math.max(430, Math.min(1800, availableWidth * height / width));
-          stage.style.height = `${Math.round(fittedHeight)}px`;
+          const availableWidth = Math.max(1, Number(stage.parentElement?.clientWidth || 320) - 4);
+          const availableHeight = Math.max(180, window.innerHeight - 170);
+          const scale = Math.min(availableWidth / width, availableHeight / height) * state.warehouseMapZoom;
+          stage.style.width = `${width * scale}px`;
+          stage.style.height = `${height * scale}px`;
           const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
           svg.classList.add("warehouse-map-features");
-          svg.setAttribute("viewBox", `${minX} ${minY} ${width} ${height}`);
-          svg.setAttribute("preserveAspectRatio", "none");
+          svg.setAttribute("viewBox", `${minX} ${-Number(bounds.max_y)} ${width} ${height}`);
+          svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
           (data.features || []).forEach(feature => {
             if (!Array.isArray(feature.points) || feature.points.length < 3) return;
             const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-            polygon.setAttribute("points", feature.points.map(point => `${point[0]},${point[1]}`).join(" "));
+            polygon.setAttribute("points", feature.points.map(point => `${point[0]},${-point[1]}`).join(" "));
             polygon.setAttribute("class", feature.feature_kind === "aisle" ? "warehouse-map-feature-aisle" : "warehouse-map-feature-zone");
             svg.append(polygon);
           });
           stage.append(svg);
         }
-        const locations = Array.isArray(data.locations) ? data.locations : [];
+        const locations = (Array.isArray(data.locations) ? [...data.locations] : []).sort((a, b) => String(a.rack_display_name).localeCompare(String(b.rack_display_name), "zh-CN", { numeric: true }) || Number(b.level_no) - Number(a.level_no) || Number(a.slot_no) - Number(b.slot_no));
         const racks = byId("warehouseRackList");
         racks.replaceChildren();
         const rackLevels = new Map();
@@ -1525,7 +1557,7 @@
           const key = `${location.map_rack_id}/${location.level_no}`;
           if (!rackLevels.has(key)) {
             if (!rackCards.has(location.map_rack_id)) {
-              const rack = node("details", "card");
+              const rack = node("details", "card warehouse-rack-elevation");
               rack.open = state.warehouseSelectedRack === location.map_rack_id;
               const rackName = /^EDIT-\d+/.test(location.rack_display_name || "") ? `未命名货架（第${rackCards.size + 1}架）` : location.rack_display_name || "货架";
               rack.append(node("summary", "", `${rackName} · 点击查看正视图`));
@@ -1558,22 +1590,43 @@
             button.style.width = `${location.geometry.width_pct}%`;
             button.style.height = `${location.geometry.height_pct}%`;
           } else if (location.map_rack_id) button.textContent = `${location.slot_no}格${occupied ? " · 有货" : notDisclosed ? " · 状态未公开" : " · 空"}${hasRedIssue ? " · 待核对" : ""}`;
+          if (location.map_rack_id && Number(location.slot_no) > 0) button.style.gridColumn = String(Number(location.slot_no));
           if (location.map_rack_id && !notDisclosed) {
             const visibleGoods = location.goods || [];
+            const customerLabel = good => good.customer_short_name || (good.customer_id ? "简称待补充" : good.customer_name || "通用库存");
+            const totals = new Map();
+            visibleGoods.forEach(good => { const unit = good.unit || ""; const quantity = Number(good.quantity_total); if (Number.isFinite(quantity)) totals.set(unit, (totals.get(unit) || 0) + quantity); });
+            if (visibleGoods.length) {
+              const quantity = [...totals].map(([unit, value]) => `${value}${unit}`).join(" / ");
+              const heading = `${location.slot_no}格 · 有货 · ${quantity || "数量待核对"} · ${[...new Set(visibleGoods.map(customerLabel))].join("、")}${hasRedIssue ? " · 待核对" : ""}`;
+              button.replaceChildren(node("span", "warehouse-rack-cell-head", heading));
+              button.title = heading;
+            }
             visibleGoods.slice(0, 2).forEach(good => {
               const preview = node("span", "warehouse-rack-product-preview");
-              preview.append(node("strong", "", good.product_name || "名称待补充"),
-                node("small", "", good.specification || "规格待补充"),
-                node("small", "", `实物 ${good.quantity_total ?? "待核对"}${good.unit || ""}`));
+              if (visibleGoods.length > 1) preview.append(node("small", "", `${customerLabel(good)} · ${good.quantity_total ?? "待核对"}${good.unit || ""}`));
+              preview.append(node("strong", "", good.product_code || "编码待补充"),
+                node("span", "", good.product_name || "名称待补充"),
+                node("small", "", good.specification || "规格待补充"));
               button.append(preview);
             });
             if (visibleGoods.length > 2) button.append(node("small", "", `还有 ${visibleGoods.length - 2} 个批次，点击查看全部`));
           }
           button.disabled = location.can_select_target !== true;
           button.addEventListener("click", () => {
+            if (!location.map_rack_id && location.storage_type !== "rack" && state.warehouseMapZoom < 8) {
+              const rect = button.getBoundingClientRect();
+              if (Math.min(rect.width, rect.height) < 44) {
+                state.warehouseMapZoom = Math.min(8, state.warehouseMapZoom * 44 / Math.max(1, Math.min(rect.width, rect.height)));
+                renderWarehouseMap();
+                stage.querySelector(`[data-location-id="${Number(location.location_id)}"]`)?.scrollIntoView({block:"center", inline:"center"});
+                return;
+              }
+            }
             if (location.map_rack_id) state.warehouseSelectedRack = location.map_rack_id;
             if (state.warehouseMapSource) selectWarehouseMapTarget(location);
             else {
+              state.warehouseAreaScrollTop = byId("warehouseMapLayer").querySelector(".warehouse-map-body").scrollTop;
               state.warehouseMapFocusLocationId = Number(location.location_id);
               renderWarehouseMap();
               renderWarehouseLocationGoods(location);
@@ -1581,7 +1634,7 @@
           });
           (location.map_rack_id ? rackLevels.get(`${location.map_rack_id}/${location.level_no}`) : location.storage_type === "rack" ? legacyRackCells : stage).append(button);
         });
-        stage.style.transform = `scale(${state.warehouseMapZoom})`;
+        stage.style.transform = "none";
         stage.hidden = data.map_status !== "ready" || !locations.some(location => !location.map_rack_id && location.storage_type !== "rack" && location.geometry);
         if (data.map_status !== "ready") {
           showStatus("warehouseMapState", data.map_status_text || "未建立实测地图", "empty", loadWarehouseMapArea);
@@ -2055,6 +2108,7 @@
         if (state.warehouseLocationPage) {
           state.warehouseMapFocusLocationId = null;
           showWarehouseArea();
+          byId("warehouseMapLayer").querySelector(".warehouse-map-body").scrollTop = state.warehouseAreaScrollTop || 0;
           return;
         }
         state.warehouseMapController?.abort();
@@ -2628,13 +2682,19 @@
           });
         }
       });
+      byId("warehouseMapTitle").addEventListener("click", () => { byId("warehouseMapOptions").open = !byId("warehouseMapOptions").open; });
+      window.addEventListener("resize", () => {
+        if (!byId("warehouseMapLayer").hidden && state.warehouseMapData && !state.warehouseMapOverview && !state.warehouseLocationPage) renderWarehouseMap();
+      });
+      byId("warehouseMapOptions").addEventListener("toggle", () => { byId("warehouseMapTitle").setAttribute("aria-expanded", String(byId("warehouseMapOptions").open)); });
+      byId("warehouseMapFit").addEventListener("click", () => { state.warehouseMapZoom = 1; if (state.warehouseMapData && !state.warehouseMapOverview) renderWarehouseMap(); });
       byId("warehouseMapZoomIn").addEventListener("click", () => {
-        state.warehouseMapZoom = Math.min(1.8, state.warehouseMapZoom + 0.2);
-        if (state.warehouseMapData) renderWarehouseMap();
+        state.warehouseMapZoom = Math.min(8, state.warehouseMapZoom * 1.4);
+        if (state.warehouseMapData && !state.warehouseMapOverview) renderWarehouseMap();
       });
       byId("warehouseMapZoomOut").addEventListener("click", () => {
-        state.warehouseMapZoom = Math.max(0.6, state.warehouseMapZoom - 0.2);
-        if (state.warehouseMapData) renderWarehouseMap();
+        state.warehouseMapZoom = Math.max(1, state.warehouseMapZoom / 1.4);
+        if (state.warehouseMapData && !state.warehouseMapOverview) renderWarehouseMap();
       });
       byId("warehouseMapConfirmMove").addEventListener("click", confirmWarehouseMapMove);
       byId("warehouseMapMoveQuantity").addEventListener("input", () => { state.warehouseMapMoveRequestKey = null; });

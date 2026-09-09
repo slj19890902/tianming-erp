@@ -3192,6 +3192,17 @@ def mobile_warehouse_map_floors(
     }
 
 
+def _mobile_map_compass(layout: dict | None) -> dict:
+    """Match EditorCanvas's published-layout east calibration, never phone heading."""
+    layout = layout or {}
+    floor_code = str(layout.get("floor_code") or "").upper()
+    calibration = (layout.get("metadata") or {}).get("calibration") or layout.get("calibration") or {}
+    aligned = (calibration.get("status") == "aligned" and calibration.get("applied") is True) or (
+        layout.get("alignment_status") == "aligned" and layout.get("alignment_applied") is True)
+    real_east = floor_code in {"1F", "3F"} or (floor_code == "4F" and aligned)
+    return {"code": "E" if real_east else "N", "label": "现实东向 E" if real_east else "图纸北向 N（未校准）"}
+
+
 @router.get("/warehouse/map/overview/{floor_code}")
 def mobile_warehouse_floor_overview(
     floor_code: str,
@@ -3218,6 +3229,7 @@ def mobile_warehouse_floor_overview(
              if feature.get("feature_kind") == "zone" and feature.get("erp_area_code") in by_code
              and len(feature.get("points") or []) >= 3]
     return {"floor_code": normalized, "floor_name": floor["floor_name"], "areas": areas,
+            "compass": _mobile_map_compass(layout),
             "map_status": "ready" if areas else "unmeasured"}
 
 
@@ -3375,11 +3387,14 @@ def mobile_warehouse_map_area(
             }
         )
     goods_by_location: dict[int, list[dict]] = {}
-    for lot in lots:
-        if _mobile_lot_is_visible(lot, visible_customer_ids):
-            goods_by_location.setdefault(int(lot.warehouse_location_id), []).append(
-                _mobile_goods_payload(lot)
-            )
+    visible_lots = [lot for lot in lots if _mobile_lot_is_visible(lot, visible_customer_ids)]
+    customer_ids = {_mobile_lot_customer_id(lot) for lot in visible_lots} - {None}
+    customer_short_names = dict(db.execute(select(Customer.id, Customer.chinese_short_name).where(Customer.id.in_(customer_ids))).all()) if customer_ids else {}
+    for lot in visible_lots:
+        goods_by_location.setdefault(int(lot.warehouse_location_id), []).append({
+            **_mobile_goods_payload(lot),
+            "customer_short_name": customer_short_names.get(_mobile_lot_customer_id(lot)),
+        })
     map_floor: dict | None = None
     try:
         map_floor = overlay_formal_area_bindings(
@@ -3495,6 +3510,7 @@ def mobile_warehouse_map_area(
             else "未建立实测地图，只能查看文字区域和库位；系统不会生成假坐标或编号格子。"
         ),
         "bounds_mm": area_display_bounds,
+        "compass": _mobile_map_compass(map_floor),
         "features": features,
         "locations": location_payloads,
         "can_execute": has_permission(user, "warehouse.execute"),

@@ -1553,6 +1553,12 @@ function WarehouseRackElevation({
                   blockReason = nextBlockReason;
                 }
                 const cellSelected = cellItems.some((item) => item.lot_id === selectedItem?.lot_id);
+                const cellTotals = cellItems.reduce<Record<string, number>>((totals, item) => {
+                  const unit = inventoryUnitLabel(item.unit);
+                  totals[unit] = (totals[unit] || 0) + inventoryLabelQuantity(item);
+                  return totals;
+                }, {});
+                const cellSummary = cellItems.length ? `有货 · ${Object.entries(cellTotals).map(([unit, quantity]) => `${formatNumber(quantity)}${unit}`).join(" / ")} · ${[...new Set(cellItems.map(employeeCustomerName))].join("、")}` : "";
                 const cellTitle = identityConflict
                   ? `该层格关联 ${cellLocations.length} 个正式货位，请管理员处理身份冲突。`
                   : location?.location_name || "暂无已建空货位";
@@ -1569,20 +1575,21 @@ function WarehouseRackElevation({
                         onChooseEmptyLocation(location.location_id);
                       }
                     }}
-                  ><b>第 {bay + 1} 格</b><strong>{identityConflict ? "货位身份冲突" : cellItems.length ? `${cellItems.length} 个批次` : location ? "正式空货位" : "未建正式货位"}</strong></button>
+                  ><b>{bay + 1}格</b><strong>{identityConflict ? "货位身份冲突" : cellItems.length ? cellSummary : location ? "正式空货位" : "未建正式货位"}</strong></button>
                   {cellItems.length ? <div className="shelf-product-cards">
                     <small className="shelf-cell-kind">{groupShelfProducts(cellItems).length === 1 ? "单品存放" : `混放 · ${groupShelfProducts(cellItems).length} 款`}</small>
                     {groupShelfProducts(cellItems).map(group => <article className="shelf-product-card" key={group.key}>
                       <button type="button" className={group.items.some(item => selectedItem?.lot_id === item.lot_id) ? "selected" : ""} onClick={() => { setSelectedItem(group.item); setDetailOpen(false); }}>
-                        <strong>{group.item.product_name || "产品名称待补充"}</strong>
+                        {groupShelfProducts(cellItems).length > 1 && <small>{employeeCustomerName(group.item)} · {formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</small>}
+                        <strong className="shelf-inventory-code">{group.item.inventory_code || "存货编码待补充"}</strong>
+                        <span>{group.item.product_name || "产品名称待补充"}</span>
                         <span className="shelf-specification">{group.item.specification || "规格待补充"}</span>
-                        <b className="shelf-physical">实物 {formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</b>
-                        <small>{employeeCustomerName(group.item)} · {group.item.inventory_code || "存货编码待补充"}</small>
+                      </button>
+                      <details><summary>{group.items.length} 个批次 · 查看明细</summary>
                         <small>可用 {formatNumber(group.available)} · 已占用 {formatNumber(group.reserved)}{group.damaged ? ` · 异常 ${formatNumber(group.damaged)}` : ""}</small>
                         <small>首次入库 {shelfStockDates(group.items).first || "待确认"} · 最近入库 {shelfStockDates(group.items).latest || "待确认"}</small>
                         {(shelfStockDates(group.items).incomplete || shelfStockDates(group.items).approximate) && <small>部分入库日期不明或非精确，见批次详情</small>}
-                      </button>
-                      <details><summary>{group.items.length} 个批次 · 查看明细</summary>{group.items.map(item => <button type="button" className="shelf-batch-row" key={item.lot_id} onClick={() => { setSelectedItem(item); setDetailOpen(true); }}><span>{item.lot_number || "批次号待补充"}</span><b>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</b></button>)}</details>
+                        {group.items.map(item => <button type="button" className="shelf-batch-row" key={item.lot_id} onClick={() => { setSelectedItem(item); setDetailOpen(true); }}><span>{item.lot_number || "批次号待补充"}</span><b>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</b></button>)}</details>
                     </article>)}
                   </div> : <button
                     type="button"

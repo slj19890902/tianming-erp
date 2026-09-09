@@ -78,3 +78,16 @@ ERP_SECRET_KEY_FILE=D:\secure\erp-session-secret.key
 - NGINX：`docs/go_live_checklists/nginx.n031.example.conf`
 
 示例域名和证书路径必须替换，且不得写入真实密码或会话密钥。
+
+## 8. 工厂免费接入实例（2026-09-09）
+
+- 老板限定免费、无自有域名、手机浏览器直接访问。当前入口为 `https://tianmingerp0909.share.zrok.io/`，由老板持有的 zrok 免费账号保留；免费额度与可用性以服务商实时规则为准。
+- 手机直达 `https://tianmingerp0909.share.zrok.io/mobile/`。代理把 Android/iPhone/iPad/iPod/Mobile 的无参数 `/` 或 `/index.html` 临时跳转到 `/mobile/`；电脑首页不跳转。带 `redirect` 的登录回跳和其他有参数入口保留原路径，防止未登录循环；同源原账号及后端权限继续生效。首页返回 `Vary: User-Agent`，移动跳转不缓存。
+- 请求路径：手机 HTTPS → zrok → 工厂本机 Caddy `127.0.0.1:18180` → ERP `127.0.0.1:8000`。TLS 在服务商入口终止；工厂侧穿透连接由 zrok 加密，Caddy 的 HTTP 监听只在 loopback。没有开放路由器公网 8000 端口。
+- `.env` 使用 `production / https_proxy`、精确 HTTPS 来源和可信域名、loopback 可信代理、Secure Cookie；数据库仍为本工厂原库。原局域网 HTTP 直连已关闭，电脑和手机使用上述 HTTPS 入口。外部通道或工厂宽带不可用时，该入口不能使用；旧二维码中的私网地址不会自动变成外网可达地址。
+- 部署目录为 `D:\tm-remote-access`，仅管理员和 SYSTEM 可访问；包含 Caddy 配置、已核验官方发布哈希的 zrok 1.1.11/Caddy 2.11.4、切换脚本和受限回滚目录。实际任务使用原生 EXE，不依赖 PowerShell 执行策略。
+- 已部署的非敏感代理配置存档见 `caddy.n031.factory.example.conf`。生效文件是 `D:\tm-remote-access\Caddyfile`，ERP 恢复副本为 `Caddyfile.erp`；修改后先用 Caddy `validate`，再向 loopback `127.0.0.1:20190` 执行 `reload`，无需为入口跳转重启 ERP。
+- Windows 任务 `Tianming ERP Free Tunnel`、`Tianming ERP HTTPS Proxy` 以 SYSTEM 开机运行，配置退出失败后重试。zrok 使用 SYSTEM profile 下的 `.zrok` 设备身份；不得提交、打印或上传身份文件、授权码与会话密钥到 Git/知识库。
+- 开机/恢复后检查两个任务运行、三个端口 8000/18180/20190 仅 loopback、外网 `/api/health`、未登录 API 拒绝，以及手机真实登录。Caddy 的 20190 管理接口只用于本机配置重载。
+- 当前 `.env` 必须与代理配置一起保留。仅恢复 ERP 代码和数据库不能自动恢复 Windows 任务与 zrok 设备身份；设备更换后需由账号持有人重新授权连接，随后重新验证固定地址和手机访问。不要恢复旧例子的 LAN 配置后仍保留公网转发。
+- 回滚仅恢复原运行配置并将代理切回独立测试页，使用标准发布库停启 ERP；不覆盖或恢复数据库。时点备份、结果、当前人工验收状态见 NAS 独立回执 `20260909-手机5G免费HTTPS接入正式切换.md`。

@@ -1,5 +1,11 @@
 # Codex 项目交接
 
+## 2026-09-09 手机 5G 免费 HTTPS 入口
+
+- 工厂已切为 `https_proxy`，入口 `https://tianmingerp0909.share.zrok.io/`；手机直达 `/mobile/`，手机打开无参数首页自动转手机版。后端仅监听 `127.0.0.1:8000`，原 `192.168.3.80:8000` 直连已关闭。本任务只改运行配置，无迁移或业务数据改写；不要用旧 `lan_http` 配置覆盖当前启动参数。
+- Windows 开机任务 `Tianming ERP Free Tunnel`、`Tianming ERP HTTPS Proxy` 使用 `D:\tm-remote-access`；恢复 ERP 仓库本身不等于恢复外网连接，详情见 `docs/go_live_checklists/N031_REMOTE_ACCESS_RUNBOOK.md` 的工厂实例段。
+- 老板手机 5G 独立测试页往返 1369ms，已确认正式 ERP 可打开，并确认修正后的手机版显示正常；正式首页、仓库资源、健康、未登录/CSRF 拦截检查见 NAS 回执 `20260909-手机5G免费HTTPS接入正式切换.md`。时点备份与回滚配置保存在本机受限目录，凭据不入 Git 或知识库。
+
 ## 2026-09-09 v0.22.293 货位信息层级
 
 - 正式代码1661ca568c098b27391c0df92828e435f9dd3863；手机货位三行和混放正视图两行摘要。发布子进程HTTPS来源隔离修复，安全测试19项通过，UI定向6项通过；报告release_runtime_20260909_112605.json，head rs08v8x9z67、正式库哈希未变。NAS回执20260909-v022293-货位信息层级.md；Chrome连接超时，真机待验收。此前标签候选与BOM历史转换未纳入。

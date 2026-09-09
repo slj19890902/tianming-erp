@@ -78,7 +78,8 @@ test("carton cells prioritize code before product details and retain every batch
   const {nodes} = render({locations: [{...locations[0], items}]});
   const cards = nodes.filter(node => node.props.className === "shelf-product-card");
   assert.equal(cards.length, 1);
-  const content = JSON.stringify(cards[0]);
+  const visibleText = node => node && typeof node === "object" ? node.children.map(visibleText).join(" ") : String(node ?? "");
+  const content = visibleText(cards[0]);
   assert.ok(content.indexOf("CODE-5") < content.indexOf("中性内盒"));
   assert.ok(content.indexOf("CODE-5") < content.indexOf("400×300×200"));
   assert.ok(content.includes('30'));

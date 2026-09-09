@@ -1586,7 +1586,7 @@ function WarehouseRackElevation({
                     <small className="shelf-cell-kind">{groupShelfProducts(cellItems).length === 1 ? "单品存放" : `混放 · ${groupShelfProducts(cellItems).length} 款`}</small>
                     {groupShelfProducts(cellItems).map(group => <article className="shelf-product-card" key={group.key}>
                       <button type="button" className={group.items.some(item => selectedItem?.lot_id === item.lot_id) ? "selected" : ""} onClick={() => { setSelectedItem(group.item); setDetailOpen(false); }}>
-                        {groupShelfProducts(cellItems).length > 1 && <small>{employeeCustomerName(group.item)} · {formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</small>}
+                        <small>{employeeCustomerName(group.item)} · {formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</small>
                         <strong className="shelf-inventory-code">{group.item.inventory_code || "存货编码待补充"}</strong>
                         {groupShelfProducts(cellItems).length === 1 && <><span>{group.item.product_name || "产品名称待补充"}</span>
                         <span className="shelf-specification">{group.item.specification || "规格待补充"}</span></>}

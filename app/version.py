@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.303"
-APP_VERSION_NAME = "货架格头紧凑操作与货物优先"
+APP_VERSION = "v0.22.304"
+APP_VERSION_NAME = "货架料号与批次明细同行"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2297,15 +2297,25 @@ _V022302_VERIFICATION_STEPS = [
     "刷新仓库地图，移货模式打开有货货架格，确认添加货物显示为完整绿色按钮，点击文字即可进入该格添加界面。",
     "在多产品格和窄屏核对按钮不被挤压或遮挡；空格选产品、禁用状态和原产品列表保持正常。",
 ]
-APP_CHANGES = [
+_V022303_CHANGES = [
     "货架添加货物移到格号旁，采用紧凑浅色按钮，不再独占一行；打印货位弱化显示，让客户、料号和数量成为主体。",
     "保留完整文字点击范围、禁用保护与触屏点击高度，产品列表独立滚动；不修改库存、位置或业务处理。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022303_VERIFICATION_STEPS = [
     "刷新移货地图并打开有货货架，确认格号旁可直接点添加货物，原整行绿色按钮消失，产品信息区扩大。",
     "窄屏核对添加按钮、打印和产品列表不重叠；新增仍进入准确正式格位，已有库存及权限保持不变。",
 ]
+APP_CHANGES = [
+    "货架产品卡的存货编码与批次明细入口同排，客户数量在上、品名规格在下，窄卡自动换行保证编码完整。",
+    "点击编码查看右侧产品标签；点击批次明细仅展开或收起当前产品明细，两处操作独立，库存与批次身份不变。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新货架正视图，确认编码左侧、批次明细入口靠右；点击编码显示对应产品标签，不自动展开批次。",
+    "点击查看明细展开当前产品全部批次，再点编码不收起明细；点击收起明细不切换产品标签。窄屏无重叠。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.303：本次更新｜{item}" for item in _V022303_CHANGES),
+    *(f"v0.22.303：如何验证｜{item}" for item in _V022303_VERIFICATION_STEPS),
     *(f"v0.22.302：本次更新｜{item}" for item in _V022302_CHANGES),
     *(f"v0.22.302：如何验证｜{item}" for item in _V022302_VERIFICATION_STEPS),
     *(f"v0.22.301：本次更新｜{item}" for item in _V022301_CHANGES),

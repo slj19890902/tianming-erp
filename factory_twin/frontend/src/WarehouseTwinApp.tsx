@@ -1493,6 +1493,7 @@ function WarehouseRackElevation({
   const levelCellCounts = rackLevelCellCounts(rack);
   const [selectedItem, setSelectedItem] = useState<RackInventoryItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [expandedProductGroups, setExpandedProductGroups] = useState<Record<string, boolean>>({});
   const rackCells = useMemo(() => {
     const grouped = new Map<string, DashboardLocation[]>();
     for (const location of locations) {
@@ -1515,7 +1516,7 @@ function WarehouseRackElevation({
     () => locations.filter((location) => rackLocationInventoryItems(location).length === 0).length,
     [locations]
   );
-  useEffect(() => { setSelectedItem(null); setDetailOpen(false); }, [rack.id]);
+  useEffect(() => { setSelectedItem(null); setDetailOpen(false); setExpandedProductGroups({}); }, [rack.id]);
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -1598,18 +1599,20 @@ function WarehouseRackElevation({
                   {cellItems.length ? <div className="shelf-product-cards">
                     <small className="shelf-cell-kind">{groupShelfProducts(cellItems).length === 1 ? "单品存放" : `混放 · ${groupShelfProducts(cellItems).length} 款`}</small>
                     {groupShelfProducts(cellItems).map(group => <article className="shelf-product-card" key={group.key}>
-                      <button type="button" className={group.items.some(item => selectedItem?.lot_id === item.lot_id) ? "selected" : ""} onClick={() => { setSelectedItem(group.item); setDetailOpen(false); }}>
-                        <small>{employeeCustomerName(group.item)} · {formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</small>
+                      <small className="shelf-product-customer">{employeeCustomerName(group.item)} · {formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</small>
+                      <div className="shelf-product-code-row">
+                      <button type="button" title="查看产品标签" aria-label={`${group.item.inventory_code || "当前产品"}：查看产品标签`} className={`shelf-product-label-button ${group.items.some(item => selectedItem?.lot_id === item.lot_id) ? "selected" : ""}`} onClick={() => { setSelectedItem(group.item); setDetailOpen(false); }}>
                         <strong className="shelf-inventory-code">{group.item.inventory_code || "存货编码待补充"}</strong>
-                        {groupShelfProducts(cellItems).length === 1 && <><span>{group.item.product_name || "产品名称待补充"}</span>
-                        <span className="shelf-specification">{group.item.specification || "规格待补充"}</span></>}
                       </button>
-                      <details><summary>{group.items.length} 个批次 · 查看明细</summary>
+                      <button type="button" className="shelf-product-details-toggle" aria-expanded={Boolean(expandedProductGroups[group.key])} onClick={() => setExpandedProductGroups(current => ({ ...current, [group.key]: !current[group.key] }))}>{group.items.length} 个批次 · {expandedProductGroups[group.key] ? "收起明细" : "查看明细"}</button>
+                      </div>
+                      {groupShelfProducts(cellItems).length === 1 && <div className="shelf-product-description"><span>{group.item.product_name || "产品名称待补充"}</span><span className="shelf-specification">{group.item.specification || "规格待补充"}</span></div>}
+                      <div className="shelf-product-details" hidden={!expandedProductGroups[group.key]}>
                         {groupShelfProducts(cellItems).length > 1 && <div className="shelf-expanded-description"><b>{group.item.product_name || "产品名称待补充"}</b><span>{group.item.specification || "规格待补充"}</span></div>}
                         <small>可用 {formatNumber(group.available)} · 已占用 {formatNumber(group.reserved)}{group.damaged ? ` · 异常 ${formatNumber(group.damaged)}` : ""}</small>
                         <small>首次入库 {shelfStockDates(group.items).first || "待确认"} · 最近入库 {shelfStockDates(group.items).latest || "待确认"}</small>
                         {(shelfStockDates(group.items).incomplete || shelfStockDates(group.items).approximate) && <small>部分入库日期不明或非精确，见批次详情</small>}
-                        {group.items.map(item => <button type="button" className="shelf-batch-row" key={item.lot_id} onClick={() => { setSelectedItem(item); setDetailOpen(true); }}><span>{item.lot_number || "批次号待补充"}</span><b>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</b></button>)}</details>
+                        {group.items.map(item => <button type="button" className="shelf-batch-row" key={item.lot_id} onClick={() => { setSelectedItem(item); setDetailOpen(true); }}><span>{item.lot_number || "批次号待补充"}</span><b>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</b></button>)}</div>
                     </article>)}
                   </div> : <button
                     type="button"

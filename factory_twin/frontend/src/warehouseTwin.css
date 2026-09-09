@@ -2443,6 +2443,16 @@ body.warehouse-twin-page {
 
 /* Reading view: positions retain their identity; text does not mimic narrow physical edges. */
 .shelf-product-cards { display: grid; gap: 8px; align-content: start; overflow: auto; }
+.shelf-product-customer { display: block; padding: 5px 6px 0; }
+.shelf-product-code-row { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; padding: 0 6px; }
+.shelf-product-code-row .shelf-product-label-button { flex: 1 1 130px; min-width: 0; padding: 3px 0; border: 0; background: transparent; color: #172033; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.shelf-product-label-button .shelf-inventory-code { font-size: 18px; font-weight: 900; line-height: 1.2; }
+.shelf-product-code-row .shelf-product-details-toggle { flex: 0 0 auto; margin-left: auto; min-height: 28px; padding: 3px 0; border: 0; background: transparent; color: #475569; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.shelf-product-description { display: grid; gap: 3px; padding: 0 6px 5px; font-size: 12px; }
+.shelf-product-details { border-top: 1px solid #dbe3ef; padding-top: 5px; }
+.shelf-product-details[hidden] { display: none; }
+.shelf-product-details > small { display: block; padding: 2px 6px; }
+.shelf-product-code-row button:focus-visible { outline: 2px solid #2563eb; outline-offset: -2px; }
 .shelf-cell-kind { color: #475569; font-size: 12px; }
 .shelf-product-card { min-width: 0; border: 1px solid #b8cbd2; border-radius: 5px; background: #fff; }
 .shelf-product-card > button, .shelf-mold-summary { width: 100%; display: grid; gap: 7px; text-align: left; padding: 10px; color: #172033; background: #fff; border: 0; min-width: 0; overflow-wrap: anywhere; }

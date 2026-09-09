@@ -38,3 +38,27 @@ test('Chrome: compact add button stays beside the cell number and leaves room fo
   assert.equal(result.status,0,result.error?.message || result.stderr);
   assert.ok(result.stdout.includes('<pre id="result">HITBOX_PASS</pre>'),result.stdout.slice(-1500));
 });
+
+test('Chrome: product code and details share a row, wrap on narrow cards and have separate hitboxes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tm-product-row-'));
+  const fixture = join(dir, 'fixture.html');
+  writeFileSync(fixture, `<meta charset="utf-8"><style>${css}</style>
+  <article class="shelf-product-card" style="width:450px"><small class="shelf-product-customer">客户 · 26只</small>
+  <div class="shelf-product-code-row"><button class="shelf-product-label-button"><strong class="shelf-inventory-code">Z.001.000096</strong></button><button class="shelf-product-details-toggle">2个批次 · 查看明细</button></div>
+  <div class="shelf-product-description">产品名称 · 400×300</div><div class="shelf-product-details" hidden>批次1、批次2</div></article><pre id="result"></pre>
+  <script>
+  const code=document.querySelector('.shelf-product-label-button'),toggle=document.querySelector('.shelf-product-details-toggle'),details=document.querySelector('.shelf-product-details'),card=document.querySelector('article');let labels=0;code.onclick=()=>labels++;toggle.onclick=()=>details.hidden=!details.hidden;
+  const checks=[];
+  for(const width of [450,300,180]) {
+    card.style.width=width+'px';const c=code.getBoundingClientRect(),t=toggle.getBoundingClientRect(),r=card.getBoundingClientRect();
+    checks.push(width>=300 ? Math.abs(c.top-t.top)<8 && c.right<=t.left : c.bottom<=t.top);
+    checks.push(t.right<=r.right && c.right<=r.right);
+    document.elementFromPoint(c.x+c.width/2,c.y+c.height/2).click();checks.push(details.hidden);
+    document.elementFromPoint(t.x+t.width/2,t.y+t.height/2).click();checks.push(!details.hidden);toggle.click();
+  }
+  document.querySelector('#result').textContent=checks.every(Boolean)&&labels===3?'INLINE_PASS':JSON.stringify({checks,labels});
+  </script>`);
+  const result=spawnSync(process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless=new','--disable-gpu','--no-first-run','--user-data-dir='+join(dir,'profile'),'--dump-dom',pathToFileURL(fixture).href],{encoding:'utf8',timeout:30000});
+  assert.equal(result.status,0,result.error?.message || result.stderr);
+  assert.ok(result.stdout.includes('<pre id="result">INLINE_PASS</pre>'),result.stdout.slice(-1500));
+});

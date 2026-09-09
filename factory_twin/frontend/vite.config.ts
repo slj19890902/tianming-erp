@@ -9,7 +9,8 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     build: {
       outDir: "../../static/factory-twin-assets",
-      emptyOutDir: true,
+      // Keep immutable hashed assets for tabs still using a previous entry document.
+      emptyOutDir: false,
       rollupOptions: {
         input: {
           editor: "index.html",

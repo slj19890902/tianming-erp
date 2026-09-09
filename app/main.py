@@ -579,7 +579,7 @@ def create_app() -> FastAPI:
         )
         application.add_api_route(
             "/warehouse.html",
-            lambda: FileResponse(warehouse_twin_path),
+            lambda: FileResponse(warehouse_twin_path, headers={"Cache-Control": "no-store"}),
             methods=["GET"],
             include_in_schema=False,
         )

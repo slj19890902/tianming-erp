@@ -14,6 +14,7 @@ function resetInitialInbound() {
   inbound.attempt = null;
   $("initialInbound").classList.add("hidden");
   $("inboundQuantity").value = "";
+  $("inboundProduct").value = "";
   $("inboundExistingAcknowledged").checked = false;
   $("inboundResult").textContent = "";
   $("inboundSave").disabled = true;
@@ -51,6 +52,7 @@ function setInboundBusy(value) {
   $("inboundFields").disabled = value || Boolean(inbound.attempt);
   $("inboundSave").disabled = value || (!inbound.context && !inbound.attempt);
   $("inboundRefresh").disabled = value || Boolean(inbound.attempt);
+  $("inboundCancel").disabled = value || Boolean(inbound.attempt);
   ["backToLocations", "openCurrentMap", "fillAllButton"].forEach(id => $(id).disabled = value || Boolean(inbound.attempt));
   updateSubmitState();
   if (inbound.attempt) $("submitButton").disabled = true;
@@ -62,6 +64,7 @@ function invalidateInboundSelection() {
   $("inboundSave").disabled = true;
   $("inboundExistingAcknowledged").checked = false;
   $("inboundExistingLabel").classList.add("hidden");
+  updateSubmitState();
 }
 
 async function findInboundCustomers() {
@@ -189,4 +192,11 @@ $("inboundProduct").onchange = refreshInboundContext;
 $("inboundRefresh").onclick = refreshInboundContext;
 $("inboundCreateProduct").onclick = createInboundProduct;
 $("inboundSave").onclick = saveInitialInbound;
+$("inboundQuantity").oninput = updateSubmitState;
+$("inboundCancel").onclick = () => {
+  if (inbound.busy || inbound.attempt) return;
+  resetInitialInbound();
+  renderInitialInbound();
+  updateSubmitState();
+};
 renderInitialInbound();

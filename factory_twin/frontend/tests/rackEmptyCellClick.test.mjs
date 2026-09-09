@@ -14,6 +14,8 @@ const locations = Array.from({length: 9}, (_, index) => ({
   slot_no: index % 3 + 1, location_name: `F9第${Math.floor(index / 3) + 1}层第${index % 3 + 1}格`, items: [],
 }));
 const sandbox = {
+  ShelfLotHistory: () => null,
+  requestJson: () => { throw new Error('interaction fixture must not request business data'); },
   groupShelfProducts,
   shelfStockDates,
   React: {createElement: (type, props, ...children) => ({type, props: props || {}, children: children.flat(Infinity)})},
@@ -72,6 +74,8 @@ test("occupied cells keep their products and can add another product to the exac
   assert.equal(emptyControls.length, 0);
   const controls = nodes.filter(node => node.props.className === "shelf-cell-add-product");
   assert.equal(controls.length, 9);
+  const headings = nodes.filter(node => node.props.className === "shelf-cell-heading");
+  assert.equal(headings.filter(node => node.children.some(child => child?.props?.className === "shelf-cell-add-product")).length, 9);
   for (const button of controls) {
     assert.equal(Boolean(button.props.disabled), false);
     button.props.onClick();
@@ -104,11 +108,24 @@ test("carton cells prioritize code before product details and retain every batch
   assert.equal(cards.length, 1);
   const visibleText = node => node && typeof node === "object" ? node.children.map(visibleText).join(" ") : String(node ?? "");
   const content = visibleText(cards[0]);
-  assert.ok(content.indexOf("CODE-5") < content.indexOf("中性内盒"));
-  assert.ok(content.indexOf("CODE-5") < content.indexOf("400×300×200"));
+  assert.ok(content.indexOf("中性内盒") < content.indexOf("CODE-5"));
+  assert.ok(content.indexOf("400×300×200") < content.indexOf("CODE-5"));
   assert.ok(content.includes('30'));
   assert.equal(nodes.filter(node => node.props.className === "shelf-batch-row").length, 2);
   assert.equal(nodes.filter(node => node.props.className === "mold-rack-book-spines").length, 0);
+  const codeRow = nodes.find(node => node.props.className === "shelf-product-code-row");
+  assert.ok(codeRow, "code and details must share a row with separate controls");
+  assert.equal(codeRow.children.filter(node => node?.type === "button").length, 2);
+  const summary = nodes.find(node => node.props.className === "shelf-product-summary");
+  assert.ok(summary);
+  assert.deepEqual(summary.children.map(node => node.props.className), ['shelf-product-customer','shelf-product-name','shelf-specification']);
+  assert.equal(codeRow.children[1].props.className, 'shelf-product-quantity');
+  const details = nodes.find(node => node.props.className === 'shelf-product-details');
+  assert.ok(!visibleText(details).includes('中性内盒'));
+  assert.ok(!visibleText(details).includes('400×300×200'));
+  assert.ok(visibleText(details).includes('首次入库'));
+  const heading = nodes.find(node => node.props.className === 'shelf-cell-heading' && node.children.some(child => child?.props?.className === 'shelf-cell-kind'));
+  assert.ok(heading, 'single/mixed summary must be in cell heading');
 });
 
 test("the selected empty cell opens its stocktake inspector without writing inventory", () => {
@@ -128,4 +145,33 @@ test("the selected empty cell opens its stocktake inspector without writing inve
       assert.ok(actions.some(([name, value]) => name === "setLocationDetailOpen" && value === true));
     } else assert.deepEqual(actions, []);
   }
+});
+
+test("code opens its product label while details only toggles that product's batches", () => {
+  const original = sandbox.useState;
+  const states = []; let index = 0;
+  sandbox.useState = initial => {
+    const slot = index++;
+    if (!(slot in states)) states[slot] = initial;
+    return [states[slot], value => { states[slot] = typeof value === 'function' ? value(states[slot]) : value; }];
+  };
+  const product = {lot_id: 71, product_id: 5, customer_id: 7, inventory_code: 'CODE-5', unit: 'pcs'};
+  const overrides = {locations: [{...locations[0], items: [product]}]};
+  const draw = () => { index = 0; return render(overrides).nodes; };
+  try {
+    let nodes = draw();
+    const toggle = nodes.find(n => n.props.className === 'shelf-product-details-toggle');
+    assert.equal(toggle.props['aria-expanded'], false);
+    toggle.props.onClick();
+    assert.equal(states[0], null, 'opening details must not select a product label');
+    nodes = draw();
+    assert.equal(nodes.find(n => n.props.className === 'shelf-product-details').props.hidden, false);
+    nodes.find(n => n.props.className?.includes('shelf-product-label-button')).props.onClick();
+    assert.equal(states[0], product);
+    assert.equal(states[1], false);
+    nodes = draw();
+    assert.equal(nodes.find(n => n.props.className === 'shelf-product-details-toggle').props['aria-expanded'], true, 'label click does not collapse details');
+    nodes.find(n => n.props.className === 'shelf-product-details-toggle').props.onClick();
+    assert.equal(draw().find(n => n.props.className === 'shelf-product-details').props.hidden, true);
+  } finally { sandbox.useState = original; }
 });

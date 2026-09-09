@@ -1,0 +1,9 @@
+<section aria-label="摄像头扫码" style="background:white;padding:12px;border-radius:10px">
+  <p>开启摄像头，对准货位或货位产品二维码。识别后在本页查看库存，再点“继续扫码”。</p>
+  <button id="cameraStart" type="button">开启摄像头扫码</button>
+  <button id="cameraStop" type="button" hidden>关闭摄像头</button>
+  <p id="cameraStatus" role="status">摄像头仅用于手机本地识别，不上传视频。</p>
+  <video id="cameraVideo" muted playsinline hidden style="display:block;width:100%;max-height:45vh;background:#111;border-radius:10px"></video>
+  <canvas id="cameraCanvas" hidden></canvas>
+  <p id="cameraHttps" hidden>当前内网 HTTP 页面不能开启摄像头。请用 Safari 打开 <a href="https://tianmingerp0909.share.zrok.io/mobile/scan">HTTPS 扫码入口</a>。</p>
+</section>

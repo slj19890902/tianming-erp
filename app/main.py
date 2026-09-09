@@ -165,7 +165,9 @@ class HSTSMiddleware(BaseHTTPMiddleware):
         else:
             response.headers["X-Frame-Options"] = "DENY"
         response.headers["Permissions-Policy"] = (
-            "camera=(), microphone=(), geolocation=()"
+            "camera=(self), microphone=(), geolocation=()"
+            if request.url.path == "/mobile/scan"
+            else "camera=(), microphone=(), geolocation=()"
         )
         return response
 
@@ -586,6 +588,11 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/mobile/scan" for route in application.routes):
+        def mobile_camera_scan_entry():
+            from app.services.mobile_shelf_labels import camera_page_html
+            return HTMLResponse(camera_page_html(), headers={"Cache-Control": "no-store"})
+        application.add_api_route("/mobile/scan", mobile_camera_scan_entry, methods=["GET"], include_in_schema=False)
     if not any(route.path == "/q/{location_id}" for route in application.routes):
         def shelf_scan_entry(location_id: int, product: str | None = None):
             from app.services.mobile_shelf_labels import scan_page_html

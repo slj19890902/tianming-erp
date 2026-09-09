@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id), params = new URLSearchParams(location.search);
 const shortPath = location.pathname.match(/^\/q\/([1-9]\d*)(?:\/([a-f0-9]{24}))?$/);
-const id = shortPath ? shortPath[1] : params.get('location_id'), product = shortPath ? shortPath[2] : params.get('product');
+let id = shortPath ? shortPath[1] : params.get('location_id'), product = shortPath ? shortPath[2] : params.get('product');
 const h = value => String(value ?? '').replace(/[&<>"']/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
 const unit = v => ({pcs:'只',pc:'只',piece:'片',pieces:'片',set:'套',sets:'套',sheet:'张',sheets:'张',box:'箱',boxes:'箱',carton:'箱',cartons:'箱',bundle:'捆',bundles:'捆',kg:'千克',roll:'卷',rolls:'卷',pallet:'托',pallets:'托'}[String(v||'').trim().toLowerCase()] || v || '');
 function productCard(item) {
@@ -52,4 +52,4 @@ $('login').onsubmit=async e=>{e.preventDefault();$('loginButton').disabled=true;
 // Browser back from a stocktake may restore this page from bfcache.
 // Refresh once on that actual navigation, never on a timer or window focus.
 window.addEventListener('pageshow',event=>{if(event.persisted)load();});
-load();
+if (location.pathname !== '/mobile/scan') load();

@@ -98,6 +98,38 @@ class ExternalReceiptPayload(BaseModel):
         return str(value or "").strip()
 
 
+class ExternalReceiptReversePayload(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    reason: str = Field(min_length=1, max_length=500)
+    confirmed: Literal[True]
+
+
+@router.post('/external-packaging-receipts/{receipt_id}/reverse')
+def reverse_external_bom_receipt(receipt_id: int, payload: ExternalReceiptReversePayload,
+        db: Session = Depends(get_db), user: User = Depends(admin_only),
+        _incoming_user: User = Depends(can_incoming_execute)):
+    from app.services.multilevel_bom_external_reversal import reverse_graph_external_receipt
+    from app.services.multilevel_bom_plan import BomPlanError
+    from app.services.bom_subkits import SubkitError
+    from app.services.warehouse_inventory import WarehouseInventoryError
+    try:
+        reversal, created = reverse_graph_external_receipt(db, receipt_id=receipt_id,
+            idempotency_key=payload.idempotency_key, reason=payload.reason, user=user,
+            visible_customer_ids=_visible_customer_ids(user, db))
+        if created:
+            db.commit()
+        return {'reversed':True, 'created':created, 'receipt_id':reversal.receipt_id}
+    except ExternalPurchaseContractError as error:
+        db.rollback()
+        raise _translate(error) from error
+    except (SubkitError, BomPlanError, WarehouseInventoryError) as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (IntegrityError, OperationalError) as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail='实收或库存已变化，请刷新后重试') from error
+
+
 def _translate(error: ExternalPurchaseContractError) -> HTTPException:
     return HTTPException(status_code=error.status_code, detail=error.message)
 

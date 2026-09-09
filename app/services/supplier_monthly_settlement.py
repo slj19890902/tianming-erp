@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.external_receipt_state import active_receipt_item
 
 import calendar
 from dataclasses import dataclass
@@ -600,6 +601,7 @@ def _scan_external_packaging(
             == ExternalPackagingPurchaseOrder.id,
         )
         .where(
+            active_receipt_item(),
             ExternalPackagingReceipt.received_at >= start_utc,
             ExternalPackagingReceipt.received_at < end_utc,
             ExternalPackagingPurchaseCancellation.id.is_(None),

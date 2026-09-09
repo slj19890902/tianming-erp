@@ -55,7 +55,7 @@ def test_graph_cost_real_isolated_copy_roundtrip(monkeypatch, tmp_path):
         counts = {table: db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
                   for table in ("sales_orders", "sales_order_items", "inventory_lots", "warehouse_locations")}
     config = _config(monkeypatch, database)
-    assert ScriptDirectory.from_config(config).get_heads() == ["rz12v8x9z74"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["sa13v8x9z75"]
     command.upgrade(config, "rx10v8x9z72")
     command.downgrade(config, "rw09v8x9z71")
     command.upgrade(config, "rx10v8x9z72")

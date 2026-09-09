@@ -177,9 +177,10 @@ def own_output_lots(db, order_item_id):
     assemblies = select(BomAssembly.id).where(
         BomAssembly.order_item_id == order_item_id, BomAssembly.status == "posted")
     from app.models.external_packaging_purchase import ExternalPackagingReceiptItem, ExternalPackagingPurchaseItem
+    from app.services.external_receipt_state import active_receipt_item
     external = select(ExternalPackagingReceiptItem.id).join(ExternalPackagingPurchaseItem,
         ExternalPackagingPurchaseItem.id == ExternalPackagingReceiptItem.purchase_item_id).where(
-            ExternalPackagingPurchaseItem.sales_order_item_id == order_item_id)
+            ExternalPackagingPurchaseItem.sales_order_item_id == order_item_id, active_receipt_item())
     return list(db.scalars(select(InventoryLot).where(or_(
         and_(InventoryLot.source_ref_type == "production_completion", InventoryLot.source_ref_id.in_(completions)),
         and_(InventoryLot.source_ref_type == "bom_external_receipt", InventoryLot.source_ref_id.in_(external)),

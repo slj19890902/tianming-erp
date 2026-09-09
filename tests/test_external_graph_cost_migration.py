@@ -72,7 +72,7 @@ def test_external_cost_isolated_copy_roundtrip(monkeypatch, tmp_path):
         counts = {t: db.execute(f'SELECT count(*) FROM {t}').fetchone()[0]
                   for t in ('sales_orders','sales_order_items','inventory_lots','warehouse_locations')}
     config = _config(monkeypatch, target)
-    assert ScriptDirectory.from_config(config).get_heads() == ['rz12v8x9z74']
+    assert ScriptDirectory.from_config(config).get_heads() == ['sa13v8x9z75']
     command.upgrade(config, 'rz12v8x9z74')
     command.downgrade(config, 'ry11v8x9z73')
     command.upgrade(config, 'rz12v8x9z74')

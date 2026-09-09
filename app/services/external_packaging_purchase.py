@@ -500,6 +500,7 @@ def _received_totals_by_purchase_item_ids(
     db: Session,
     purchase_item_ids: set[int],
 ) -> dict[int, Decimal]:
+    from app.services.external_receipt_state import active_receipt_item
     if not purchase_item_ids:
         return {}
     return {
@@ -510,6 +511,7 @@ def _received_totals_by_purchase_item_ids(
                 func.sum(ExternalPackagingReceiptItem.received_quantity),
             )
             .where(
+                active_receipt_item(),
                 ExternalPackagingReceiptItem.purchase_item_id.in_(
                     purchase_item_ids
                 )

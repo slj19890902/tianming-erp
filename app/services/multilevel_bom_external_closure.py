@@ -10,6 +10,7 @@ from app.models.external_packaging_purchase import (
 from app.services.multilevel_bom_external_identity import read_external_node
 from app.services.multilevel_bom_plan import BomPlanError
 from app.services.multilevel_bom_purchase_units import cumulative_receipt_conversion
+from app.services.external_receipt_state import active_receipt_item
 
 
 def external_graph_receipts_closed(db, *, item, requirements):
@@ -26,6 +27,7 @@ def external_graph_receipts_closed(db, *, item, requirements):
     totals = _received_totals(db, {p.id for p in purchases})
     outputs = dict(db.execute(select(ExternalPackagingReceiptItem.purchase_item_id,
         func.sum(ExternalPackagingReceiptItem.converted_finished_quantity)).where(
+            active_receipt_item(),
             ExternalPackagingReceiptItem.purchase_item_id.in_([p.id for p in purchases]))
         .group_by(ExternalPackagingReceiptItem.purchase_item_id)).all())
     received_stock = defaultdict(int)

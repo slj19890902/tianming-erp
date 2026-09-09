@@ -67,6 +67,9 @@ def test_external_real_receipts_dispatch_cost_and_cancel(purchase_app, _p181_pub
             assert sum(l.quantity_reserved for l in db.scalars(select(InventoryLot))) == 2
         dispatched = client.put(f'/api/deliveries/{did}/dispatch')
         assert dispatched.status_code == 200, dispatched.text
+        from tests.test_multilevel_bom_external_reversal import reverse
+        blocked = reverse(client, last.json()['receipt']['id'])
+        assert blocked.status_code == 409, blocked.text
         with factory() as db:
             report = material_cost_coverage_report(db, month='2026-09')
             assert report['covered_delivery_lines'] == 1, report

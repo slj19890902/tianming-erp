@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.external_receipt_state import active_receipt_item
 
 import hashlib
 import json
@@ -470,6 +471,7 @@ def _external_packaging_received(db: Session, order_item_id: int) -> bool:
             )
         )
         .where(
+            active_receipt_item(),
             ExternalPackagingReceiptItem.purchase_item_id
             == ExternalPackagingPurchaseItem.id
         )
@@ -2238,6 +2240,7 @@ def _pending_query(
                 )
             )
             .where(
+                active_receipt_item(),
                 ExternalPackagingReceiptItem.purchase_item_id
                 == ExternalPackagingPurchaseItem.id
             )

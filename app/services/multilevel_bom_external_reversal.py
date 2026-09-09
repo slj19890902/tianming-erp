@@ -1,0 +1,139 @@
+"""Reverse a graph receipt as one audited transaction, never delete its facts."""
+import hashlib
+import json
+from sqlalchemy import select, update
+
+from app.models.external_packaging_purchase import (
+    ExternalPackagingReceipt, ExternalPackagingReceiptItem, ExternalPackagingReceiptReversal,
+    ExternalPackagingPurchaseItem,
+)
+from app.models.order import Order, OrderItem
+from app.models.supplier_settlement import SupplierMonthlyStatement, SupplierMonthlyStatementLine
+from app.models.warehouse_inventory import InventoryLot, InventoryMovement, InventoryReservation
+from app.services.audit_log import append_audit_event
+from app.services.bom_transactions import atomic_bom
+from app.services.bom_subkits import SubkitError
+from app.services.bom_subkit_inventory import _only_reversed_graph_consumptions
+from app.services.external_packaging_purchase import ExternalPurchaseContractError
+from app.services.external_receipt_state import active_receipt_item
+from app.services.multilevel_bom_external_identity import read_external_node
+from app.services.multilevel_bom_external_costs import validated_external_lot_detail
+from app.services.multilevel_bom_inventory import reverse_order_assembly
+from app.services.multilevel_bom_orders import read_compiled_order_bom
+from app.services.multilevel_bom_receipts import graph_material_receipts_closed, refresh_graph_main_task
+from app.services.warehouse_inventory import _balances, _movement, release_finished_reservation
+
+
+def _reverse_output(db, row, *, order_item_id, user):
+    lots = list(db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type == 'bom_external_receipt',
+        InventoryLot.source_ref_id == row.id)))
+    if not row.converted_finished_quantity:
+        if lots:
+            raise SubkitError('无整件实收却有库存，不能撤销')
+        return
+    if len(lots) != 1:
+        raise SubkitError('实收库存已拆分或身份不完整，请先还原后续操作')
+    lot = lots[0]
+    validated_external_lot_detail(db, lot)
+    reservation = db.scalar(select(InventoryReservation).where(
+        InventoryReservation.idempotency_key == f'bom-external-pick:{row.receipt_id}:{lot.id}'))
+    released = False
+    if reservation is not None:
+        movement = db.scalar(select(InventoryMovement).where(
+            InventoryMovement.idempotency_key == reservation.idempotency_key))
+        if (reservation.inventory_lot_id != lot.id or reservation.order_item_id != order_item_id
+                or reservation.consumed_stock_quantity or reservation.released_stock_quantity
+                or movement is None or movement.movement_type != 'reserve'
+                or movement.inventory_lot_id != lot.id or movement.reservation_id != reservation.id
+                or movement.quantity != reservation.reserved_stock_quantity
+                or not _only_reversed_graph_consumptions(db, lot, ignored_reserve_id=movement.id)):
+            raise SubkitError('外购自动预占已有后续使用，请先还原后续操作')
+        release_finished_reservation(db, reservation_id=reservation.id, operator_id=user.id,
+            release_reason='撤销外购实收自动预占', idempotency_key=f'bom-external-unreserve:{row.id}',
+            allow_downstream=True, allow_production_reversal=True)
+        db.refresh(lot)
+        released = True
+    if (lot.status != 'active' or lot.quantity_available != row.converted_finished_quantity
+            or lot.quantity_reserved or lot.quantity_consumed or lot.quantity_damaged or lot.quantity_scrapped
+            or (lot.version != 1 and not released and not _only_reversed_graph_consumptions(db, lot))):
+        raise SubkitError('外购库存已移库、盘点或使用，请先还原后续操作')
+    before = _balances(lot)
+    result = db.execute(update(InventoryLot).where(InventoryLot.id == lot.id, InventoryLot.version == lot.version).values(
+        quantity_available=0, quantity_consumed=row.converted_finished_quantity, status='closed', version=lot.version+1))
+    if result.rowcount != 1:
+        raise SubkitError('外购库存已变化，请刷新重试')
+    db.refresh(lot)
+    _movement(db, lot=lot, movement_type='consume', quantity=row.converted_finished_quantity, before=before,
+        operator_id=user.id, reason='撤销外购实收库存', idempotency_key=f'bom-external-reverse:{row.id}')
+
+
+def reverse_graph_external_receipt(db, *, receipt_id, idempotency_key, reason, user, visible_customer_ids):
+    reason = reason.strip()
+    if not reason or len(reason) > 500 or not idempotency_key.strip() or len(idempotency_key) > 120:
+        raise ExternalPurchaseContractError('撤销原因或请求编号无效', status_code=422)
+    fingerprint = hashlib.sha256(json.dumps({'receipt_id':receipt_id, 'reason':reason}, sort_keys=True).encode()).hexdigest()
+    with atomic_bom(db):
+        receipt = db.get(ExternalPackagingReceipt, receipt_id)
+        if receipt is None:
+            raise ExternalPurchaseContractError('实收记录不存在', status_code=404)
+        rows = list(db.scalars(select(ExternalPackagingReceiptItem).where(ExternalPackagingReceiptItem.receipt_id == receipt.id)))
+        items = {}
+        graphs = {}
+        for row in rows:
+            purchase = db.get(ExternalPackagingPurchaseItem, row.purchase_item_id)
+            item = db.get(OrderItem, purchase.sales_order_item_id) if purchase and purchase.sales_order_item_id else None
+            order = db.get(Order, item.order_id) if item else None
+            if order is None or (visible_customer_ids is not None and order.customer_id not in visible_customer_ids):
+                raise ExternalPurchaseContractError('无权撤销该客户实收或订单来源不完整', status_code=403)
+            if purchase.purchase_order_id != receipt.purchase_order_id or purchase.sales_order_id != order.id:
+                raise SubkitError('外购实收订单身份不一致')
+            link = read_external_node(db, purchase.order_component_id)
+            graph = read_compiled_order_bom(db, item.id)
+            if link is None or link.order_item_id != item.id or graph is None or graph.graph.customer_id != order.customer_id:
+                raise SubkitError('该实收不是完整真实BOM来源，不能按组套撤销')
+            items[item.id] = item
+            graphs[item.id] = graph
+        if not rows:
+            raise SubkitError('实收明细缺失，不能撤销')
+        existing = db.get(ExternalPackagingReceiptReversal, receipt_id)
+        if existing:
+            if existing.idempotency_key != idempotency_key or existing.request_fingerprint != fingerprint:
+                raise SubkitError('该实收已撤销，请刷新后查看')
+            return existing, False
+        if db.scalar(select(ExternalPackagingReceiptReversal.receipt_id).where(ExternalPackagingReceiptReversal.idempotency_key == idempotency_key)):
+            raise SubkitError('撤销请求编号已用于其他内容')
+        for row in rows:
+            if db.scalar(select(ExternalPackagingReceiptItem.id).where(
+                    ExternalPackagingReceiptItem.purchase_item_id == row.purchase_item_id,
+                    ExternalPackagingReceiptItem.id > row.id, active_receipt_item()).limit(1)):
+                raise SubkitError('同采购行还有后续实收，请从最后一次实收开始撤销')
+        statement = db.scalar(select(SupplierMonthlyStatement.id).join(SupplierMonthlyStatementLine,
+            SupplierMonthlyStatementLine.statement_id == SupplierMonthlyStatement.id).where(
+                SupplierMonthlyStatementLine.external_receipt_item_id.in_([r.id for r in rows]),
+                SupplierMonthlyStatement.status != 'voided').limit(1))
+        if statement:
+            raise SubkitError('实收已进入供应商月结，请先作废相关月结记录')
+        for oid, graph in graphs.items():
+            own_rows = [r for r in rows if db.get(ExternalPackagingPurchaseItem, r.purchase_item_id).sales_order_item_id == oid]
+            if any(r.converted_finished_quantity for r in own_rows) and any(n.source == 'assembled' for n in graph.graph.nodes):
+                reverse_order_assembly(db, order_item_id=oid, operation_key=f'bom-external-receipt:{receipt.id}:{oid}', operator_id=user.id)
+            for row in own_rows:
+                _reverse_output(db, row, order_item_id=oid, user=user)
+        reversal = ExternalPackagingReceiptReversal(receipt_id=receipt.id, idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint, reason=reason, reversed_by=user.id)
+        db.add(reversal)
+        db.flush()
+        for item in items.values():
+            if not graph_material_receipts_closed(db, item):
+                item.material_status = 'pending'
+                if item.requisition_status == '已入库':
+                    item.requisition_status = '已报料'
+                item.material_received_at = item.material_received_by = None
+            refresh_graph_main_task(db, item, create_if_missing=False)
+        append_audit_event(db, event_category='business', result='success', source='web',
+            module_code='external_packaging_receiving', action_code='external_packaging.receipt.reverse',
+            resource='ExternalPackagingReceipt', actor=user, entity_type='external_packaging_receipt',
+            entity_id=receipt.id, description='撤销外购BOM实收',
+            details={'reason':reason, 'receipt_item_ids':[r.id for r in rows], 'order_item_ids':sorted(items), 'original_facts_preserved':True})
+        db.flush()
+        return reversal, True

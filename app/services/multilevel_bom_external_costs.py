@@ -10,6 +10,7 @@ from app.services.multilevel_bom_external_identity import read_external_node
 from app.services.multilevel_bom_orders import read_compiled_order_bom
 from app.services.multilevel_bom_plan import BomPlanError
 from app.services.multilevel_bom_purchase_units import cumulative_receipt_conversion
+from app.services.external_receipt_state import active_receipt_item
 
 
 def _rounded(value):
@@ -24,7 +25,8 @@ def receipt_output_cost(db, receipt_item_id):
     The purchase line amount retains its quoted tax basis. Separately charged
     freight/tooling is not silently invented or blended into material cost.
     """
-    receipt = db.get(ExternalPackagingReceiptItem, receipt_item_id)
+    receipt = db.scalar(select(ExternalPackagingReceiptItem).where(
+        ExternalPackagingReceiptItem.id == receipt_item_id, active_receipt_item()))
     purchase = db.get(ExternalPackagingPurchaseItem, receipt.purchase_item_id) if receipt else None
     link = read_external_node(db, purchase.order_component_id) if purchase else None
     if link is None or link.order_item_id != purchase.sales_order_item_id:
@@ -39,6 +41,7 @@ def receipt_output_cost(db, receipt_item_id):
             or purchase.line_amount < 0 or purchase.purchase_quantity <= 0):
         raise BomPlanError('外购成本冻结价格、客户或单位无效')
     history = list(db.scalars(select(ExternalPackagingReceiptItem).where(
+        active_receipt_item(),
         ExternalPackagingReceiptItem.purchase_item_id == purchase.id,
         ExternalPackagingReceiptItem.id <= receipt.id).order_by(ExternalPackagingReceiptItem.id)))
     total_received, total_output = Decimal(0), 0

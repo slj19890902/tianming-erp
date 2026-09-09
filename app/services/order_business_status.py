@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.external_receipt_state import active_receipt_item
 
 from collections import Counter, defaultdict
 from decimal import Decimal
@@ -221,6 +222,7 @@ def build_order_business_statuses(
                     func.sum(ExternalPackagingReceiptItem.received_quantity),
                 )
                 .where(
+                    active_receipt_item(),
                     ExternalPackagingReceiptItem.purchase_item_id.in_(
                         external_purchase_item_ids
                     )

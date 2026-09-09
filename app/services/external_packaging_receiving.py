@@ -89,12 +89,13 @@ def _request_fingerprint(
 def _received_quantity_aggregate(
     purchase_item_ids: set[int] | None = None,
 ):
+    from app.services.external_receipt_state import active_receipt_item
     statement = select(
         ExternalPackagingReceiptItem.purchase_item_id.label("purchase_item_id"),
         func.sum(ExternalPackagingReceiptItem.received_quantity).label(
             "received_quantity"
         ),
-    ).group_by(ExternalPackagingReceiptItem.purchase_item_id)
+    ).where(active_receipt_item()).group_by(ExternalPackagingReceiptItem.purchase_item_id)
     if purchase_item_ids is not None:
         statement = statement.where(
             ExternalPackagingReceiptItem.purchase_item_id.in_(purchase_item_ids)
@@ -572,6 +573,9 @@ def record_external_purchase_receipt(
         )
     )
     if existing is not None:
+        from app.models.external_packaging_purchase import ExternalPackagingReceiptReversal
+        if db.get(ExternalPackagingReceiptReversal, existing.id) is not None:
+            raise ExternalPurchaseContractError('该实收已撤销，请使用新的收料请求')
         if (
             existing.purchase_order_id != purchase_order_id
             or existing.request_fingerprint != fingerprint

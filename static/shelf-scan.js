@@ -14,14 +14,16 @@ async function request(url, options={}) {
   return data;
 }
 async function load() {
-  const current=++generation; $('refresh').disabled=true; $('message').textContent='读取实时库存…'; $('items').innerHTML=''; $('updated').textContent='';
+  const current=++generation; $('refresh').disabled=true; $('stocktake').hidden=true; $('message').textContent='读取当前库存…'; $('items').innerHTML=''; $('updated').textContent='';
   try {
     if (!/^[1-9]\d*$/.test(id||'') || (product && !/^[a-f0-9]{24}$/.test(product))) throw Error('二维码无效');
     const data=await request(`/api/warehouse/locations/${id}/scan${product?'?product='+product:''}`);
     if(current!==generation)return;
     $('login').hidden=true; $('address').textContent=data.address;
+    $('stocktake').href=`/mobile/stocktake.html?location_id=${encodeURIComponent(id)}&return_scan=1`;
+    $('stocktake').hidden=false;
     $('message').textContent=data.items.length?'':product?'本格已无此产品或无查看权限':'本格暂无可见库存';
-    $('updated').textContent='更新于 '+new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(data.refreshed_at));
+    $('updated').textContent='读取于 '+new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(data.refreshed_at));
     $('items').innerHTML=data.items.map(productCard).join('');
     for(const node of document.querySelectorAll('.quantity')) {
       let size=parseFloat(getComputedStyle(node).fontSize);
@@ -47,6 +49,7 @@ async function loadOrders(node,current){
 }
 $('refresh').onclick=load;
 $('login').onsubmit=async e=>{e.preventDefault();$('loginButton').disabled=true;try{await request('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('username').value.trim(),password:$('password').value,remember_me:$('remember').checked})});$('password').value='';await load();}catch(e){$('message').textContent=e.message;}finally{$('loginButton').disabled=false;}};
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&$('login').hidden)load();});
-setInterval(()=>{if(!document.hidden&&$('login').hidden&&!document.querySelector('details[open]'))load();},30000);
+// Browser back from a stocktake may restore this page from bfcache.
+// Refresh once on that actual navigation, never on a timer or window focus.
+window.addEventListener('pageshow',event=>{if(event.persisted)load();});
 load();

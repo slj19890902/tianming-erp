@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.299"
-APP_VERSION_NAME = "扫码免登录与库存双栏"
+APP_VERSION = "v0.22.300"
+APP_VERSION_NAME = "扫码减载与直达盘点"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2261,16 +2261,28 @@ _V022298_VERIFICATION_STEPS = [
     "刷新查货页面，选择货架中的产品并打印，确认区域与货架号分开显示、编码加粗、四项信息无重叠。",
     "按80×40mm、100%实际大小试打一张，再用手机扫描核对该格该款实时库存。",
 ]
-APP_CHANGES = [
+_V022299_CHANGES = [
     "扫码页登录增加此手机30天免登录选项，使用现有安全Cookie，不保存明文密码；公用手机可取消。",
     "扫码库存卡左侧显示编码、品名和规格，右侧显示客户简称/全名及实时数量；boxes等单位转为中文显示。",
     "客户权限、订单按需查询、库存事实与失效会话保护不变；未登录不展示业务信息。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022299_VERIFICATION_STEPS = [
     "手机扫码登录，勾选此手机30天免登录；用同一浏览器再次扫码确认无需重复输入账号密码。",
     "核对产品卡左右信息及中文单位，数量与库存台账一致；改密、退出或清除浏览器数据后应重新登录。",
 ]
+APP_CHANGES = [
+    "扫码短地址内联轻量脚本，减少一次外网串行请求；同款多批次不重复读取产品展示信息。",
+    "取消30秒自动刷新和窗口切换刷新，仅首次、手动刷新或盘点返回时读取库存，并显示读取时间。",
+    "新增盘点本货位入口，直接打开当前整格盘点；管理员确认及添加实际产品复用正式流程，员工仍提交审核，返回原扫码货位。",
+]
+APP_VERIFICATION_STEPS = [
+    "扫码后停留一分钟，不应自动刷新；点击刷新才更新，登录记忆和中文单位保持。",
+    "进入盘点本货位，核对货位及整格产品，按实盘提交；返回扫码页应读取整格最新信息。",
+    "公网仍可能有网络等待；实体手机实际加载速度与盘点需现场核对，不把页面减载当成公网链路已无延迟。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.299：本次更新｜{item}" for item in _V022299_CHANGES),
+    *(f"v0.22.299：如何验证｜{item}" for item in _V022299_VERIFICATION_STEPS),
     *(f"v0.22.298：本次更新｜{item}" for item in _V022298_CHANGES),
     *(f"v0.22.298：如何验证｜{item}" for item in _V022298_VERIFICATION_STEPS),
     *(f"v0.22.297：本次更新｜{item}" for item in _V022297_CHANGES),

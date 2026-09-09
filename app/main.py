@@ -13,7 +13,7 @@ from fastapi.middleware.httpsredirect import (
     HTTPSRedirectMiddleware as StarletteHTTPSRedirectMiddleware,
 )
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -588,8 +588,8 @@ def create_app() -> FastAPI:
         )
     if not any(route.path == "/q/{location_id}" for route in application.routes):
         def shelf_scan_entry(location_id: int, product: str | None = None):
-            return FileResponse(Path(__file__).resolve().parents[1] / "static" / "shelf-scan.html",
-                                headers={"Cache-Control": "no-store"})
+            from app.services.mobile_shelf_labels import scan_page_html
+            return HTMLResponse(scan_page_html(), headers={"Cache-Control": "no-store"})
         application.add_api_route("/q/{location_id}", shelf_scan_entry, methods=["GET"], include_in_schema=False)
         application.add_api_route("/q/{location_id}/{product}", shelf_scan_entry, methods=["GET"], include_in_schema=False)
     if not any(route.path == "/warehouse.html" for route in application.routes):

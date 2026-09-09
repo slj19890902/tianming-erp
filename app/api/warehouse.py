@@ -17618,8 +17618,10 @@ def mobile_shelf_scan(location_id: int, response: Response,
         key = product_key(lot)
         if product and key != product:
             continue
-        item = groups.setdefault(key, dict(key=key, **product_fields(db, lot), unit=lot.unit,
-            quantity=0, available=0, reserved=0, damaged=0, lots=[]))
+        if key not in groups:
+            groups[key] = dict(key=key, **product_fields(db, lot), unit=lot.unit,
+                               quantity=0, available=0, reserved=0, damaged=0, lots=[])
+        item = groups[key]
         item["quantity"] += lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged
         item["available"] += lot.quantity_available
         item["reserved"] += lot.quantity_reserved

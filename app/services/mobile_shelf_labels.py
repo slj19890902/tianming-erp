@@ -2,9 +2,25 @@
 import hashlib
 import json
 import re
+from functools import lru_cache
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
+
+
+@lru_cache(maxsize=1)
+def scan_page_html():
+    """Bundle the small static scanner, avoiding one serial public-network trip.
+
+    Only public shell/code is cached; no identity or inventory is embedded.
+    A release restarts the worker, so this cache cannot survive a code upgrade.
+    """
+    root = Path(__file__).resolve().parents[2] / "static"
+    shell = (root / "shelf-scan.html").read_text(encoding="utf-8")
+    script = (root / "shelf-scan.js").read_text(encoding="utf-8")
+    return shell.replace('<script src="/static/shelf-scan.js"></script>',
+                         '<script>' + script.replace('</script', '<\\/script') + '</script>')
 
 
 def product_key(lot):

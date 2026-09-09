@@ -2,7 +2,7 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 from fastapi import Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -11,7 +11,7 @@ def function(name):
     tree=ast.parse((ROOT/"app/main.py").read_text(encoding="utf-8"))
     node=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name==name)
     code=ast.Module(body=[node],type_ignores=[])
-    ns=dict(Request=Request,Path=Path,FileResponse=FileResponse,RedirectResponse=RedirectResponse,
+    ns=dict(Request=Request,Path=Path,FileResponse=FileResponse,RedirectResponse=RedirectResponse,HTMLResponse=HTMLResponse,
             __file__=str(ROOT/"app/main.py"),warehouse_twin_path=ROOT/"static/factory-twin-assets/warehouse-twin.html")
     exec(compile(ast.fix_missing_locations(code),"<entry>","exec"),ns)
     return ns[name]
@@ -20,10 +20,12 @@ def function(name):
 def test_short_qr_serves_mobile_shell_without_redirect_or_inventory():
     response=function("shelf_scan_entry")(1884,"a"*24)
     assert response.status_code==200
-    assert str(response.path).endswith("shelf-scan.html")
     assert response.headers["cache-control"]=="no-store"
-    shell=Path(response.path).read_text(encoding="utf-8")
-    assert 'viewport' in shell and '/static/shelf-scan.js' in shell
+    shell=response.body.decode()
+    assert 'viewport' in shell and 'function productCard(' in shell
+    assert '<script src=' not in shell
+    assert 'setInterval(' not in shell
+    assert 'return_scan=1' in shell
     assert "warehouseTwin" not in shell
 
 

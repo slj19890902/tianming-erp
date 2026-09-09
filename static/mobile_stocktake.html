@@ -132,6 +132,16 @@
     async function login(event){event.preventDefault();if($('loginButton').disabled)return;$('loginButton').disabled=true;$('loginButton').textContent='登录中…';showMessage('');try{const data=await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:$('loginUsername').value.trim(),password:$('loginPassword').value})});state.user=data.user||data;$('loginPassword').value='';$('loginPanel').classList.add('hidden');showMessage('登录成功','success');await loadLocations()}catch(error){showMessage(`登录失败：${error.message}`)}finally{$('loginButton').disabled=false;$('loginButton').textContent='登录'}}
     function restoreWarehouseAreaReturn(){
       const params=new URLSearchParams(window.location.search),floor=params.get('return_floor'),area=params.get('return_area');
+      if(params.get('return_scan')==='1'){
+        const scanLocationId=params.get('location_id')||'';
+        if(!/^[1-9]\d*$/.test(scanLocationId))return;
+        const target='/q/'+scanLocationId;
+        const link=document.querySelector('.header-link');link.href=target;link.textContent='返回扫码页';
+        $('backToLocations').textContent='返回扫码页';
+        const back=event=>{event.preventDefault();event.stopImmediatePropagation();if(state.submitting||(typeof inbound!=='undefined'&&(inbound.busy||inbound.attempt)))return;window.location.assign(target)};
+        link.addEventListener('click',back,true);$('backToLocations').addEventListener('click',back,true);
+        return;
+      }
       if(!floor||!area)return;
       const returnParams=new URLSearchParams({warehouse_map:'1',floor_code:floor,area_code:area});
       const locationId=Number(params.get('location_id')||0);
@@ -141,7 +151,7 @@
       $('backToLocations').textContent='返回原区域';
       $('backToLocations').addEventListener('click',event=>{event.preventDefault();event.stopImmediatePropagation();if(state.submitting||(typeof inbound!=='undefined'&&inbound.busy))return;window.location.assign(target)},true);
     }
-    async function init(){restoreWarehouseAreaReturn();try{const data=await api('/api/auth/me');state.user=data.user||data;$('loginPanel').classList.add('hidden');await loadLocations()}catch(error){if(error.status===401){showLogin();return}showMessage(`登录状态检查失败：${error.message}`)}}
+    async function init(){restoreWarehouseAreaReturn();try{const data=await api('/api/auth/me');state.user=data.user||data;$('loginPanel').classList.add('hidden');const params=new URLSearchParams(window.location.search),id=params.get('location_id')||'';if(params.get('return_scan')==='1'&&/^[1-9]\d*$/.test(id)){await openLocation(id)}else{await loadLocations()}}catch(error){if(error.status===401){showLogin();return}showMessage(`登录状态检查失败：${error.message}`)}}
     $('loginForm').onsubmit=login;$('floorFilter').onchange=()=>{renderAreas();renderLocations()};$('areaFilter').onchange=renderLocations;$('locationSearch').oninput=renderLocations;$('retryLocations').onclick=loadLocations;$('openCurrentMap').onclick=()=>openWarehouseMap();$('backToLocations').onclick=()=>resetToLocations('');$('fillAllButton').onclick=fillAll;$('submitButton').onclick=submitStocktake;init();
   </script>
   <script src="/mobile/initial-stocktake.js"></script>

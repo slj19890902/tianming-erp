@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.310"
-APP_VERSION_NAME = "标签长字段完整换行"
+APP_VERSION = "v0.22.311"
+APP_VERSION_NAME = "ERP扫码兼容新旧模具标签"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2353,15 +2353,25 @@ _V022309_VERIFICATION_STEPS = [
     "刷新常用箱，编辑箱型其他的外购材料，勾选打印标签并填写每张数量，保存后重新打开核对。",
     "修改每张数量后保存，核对后续新标签的每张数量和张数；已有打印历史及订单、采购、库存数量不应被改写。",
 ]
-APP_CHANGES = [
+_V022310_CHANGES = [
     "标签品名、存货编码等长文字自动换为最多两行并适配字号，自定义文字框不再截掉上下半行。",
     "打印和模板预检共用长文字适配，不再因原最小字号限制阻止打印；保留纸型、权限、数量和历史冻结校验。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022310_VERIFICATION_STEPS = [
     "刷新生产包装标签，选择长存货编码及长品名，检查完整两行、无裁切并可进入打印。",
     "检查自定义布局和普通标签；特别长文字会缩小字号，实体试打确认清晰度，标签数量保持不变。",
 ]
+APP_CHANGES = [
+    "ERP摄像头支持现行模具码和旧内网模具码，识别稳定模具身份后通过当前ERP入口打开信息，不再只识别货位码。",
+    "兼容旧模具查询链接并保留只读查看及任务定向；拒绝未知外部地址，原有登录和客户权限继续生效。",
+]
+APP_VERIFICATION_STEPS = [
+    "Safari打开HTTPS的/mobile/scan，扫描旧内网/M/模具码与当前外网模具码，核对显示同一模具信息。",
+    "用旧/mobile/mold-lookup?mold_id=链接核对只读查看；实体旧码网址尚需核实，微信直接打开内网码在5G下仍不可达。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.310：本次更新｜{item}" for item in _V022310_CHANGES),
+    *(f"v0.22.310：如何验证｜{item}" for item in _V022310_VERIFICATION_STEPS),
     *(f"v0.22.309：本次更新｜{item}" for item in _V022309_CHANGES),
     *(f"v0.22.309：如何验证｜{item}" for item in _V022309_VERIFICATION_STEPS),
     *(f"v0.22.308：本次更新｜{item}" for item in _V022308_CHANGES),

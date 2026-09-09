@@ -1067,6 +1067,7 @@ def _snapshot_response(row: Any, *, fallback_position: int) -> dict[str, Any]:
             row, "product_bom_component_id"
         ),
         "component_product_id": _mapped_value(row, "component_product_id"),
+        "snapshot_schema_version": _mapped_value(row, "snapshot_schema_version"),
         "internal_component_code": internal_code,
         "internal_code": internal_code,
         "display_order": display_order,

@@ -37,6 +37,7 @@ class MaterialCostEstimateContext:
     flute_rules_by_key: Mapping[
         tuple[str, int, str], tuple[Decimal, int | None]
     ]
+    graph_inputs_by_item_id: Mapping[int, tuple[list[dict[str, Any]], list[str]]] | None = None
 
 
 def _decimal(value: object) -> Decimal | None:
@@ -90,6 +91,8 @@ def _component(
     layer_count: int | None,
     flute_type: str | None,
     spare_sheet_quantity: int = 0,
+    physical_yield: int | None = None,
+    source_identity: Mapping[str, Any] | None = None,
     context: MaterialCostEstimateContext | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     missing: list[str] = []
@@ -123,8 +126,9 @@ def _component(
         return None, missing
 
     mode = (cutting_mode or "").strip() or DEFAULT_CUTTING_MODE
-    factor = cutting_factor(mode)
-    sheets = purchase_sheet_quantity(required_piece_qty, 0, mode) + max(
+    factor = physical_yield if physical_yield is not None else cutting_factor(mode)
+    sheets = ((int(required_piece_qty) + factor - 1) // factor
+              if physical_yield is not None else purchase_sheet_quantity(required_piece_qty, 0, mode)) + max(
         int(spare_sheet_quantity or 0), 0
     )
     raw_area = length * width / SQUARE_MM_PER_M2
@@ -136,6 +140,7 @@ def _component(
         COST_QUANTUM, rounding=ROUND_HALF_UP
     )
     return {
+        **(source_identity or {}),
         "source_type": source_type,
         "label": label,
         "report_length_mm": str(length),
@@ -274,16 +279,20 @@ def build_material_cost_estimate_context(
     """
 
     sources_by_item_id: dict[int, list[dict[str, Any]]] = {}
+    graph_inputs_by_item_id = {}
     material_ids: set[int] = set()
     for item in items:
-        sources = (
+        components = tuple(bom_components_by_item_id.get(int(item.id), ()))
+        graph_inputs = _graph_inputs(db, item, components)
+        if graph_inputs is not None:
+            graph_inputs_by_item_id[int(item.id)] = graph_inputs
+        sources = graph_inputs[0] if graph_inputs is not None else (
             []
             if item.supply_mode_snapshot == "external_purchase"
             else _main_sources(item)
         )
-        sources.extend(
-            _bom_sources(bom_components_by_item_id.get(int(item.id), ()))
-        )
+        if graph_inputs is None:
+            sources.extend(_bom_sources(components))
         sources_by_item_id[int(item.id)] = sources
         for source in sources:
             try:
@@ -372,14 +381,24 @@ def build_material_cost_estimate_context(
     return MaterialCostEstimateContext(
         materials_by_id=materials_by_id,
         flute_rules_by_key=rules_by_key,
+        graph_inputs_by_item_id=graph_inputs_by_item_id,
     )
+
+
+def _graph_inputs(db, item, components):
+    # Batch callers pass the complete immutable preview from the common loader.
+    # The schema discriminator adds no per-item graph queries to legacy pages.
+    if not any((row.get("snapshot_schema_version") or 0) >= 5 for row in components):
+        return None
+    from app.services.multilevel_bom_material_estimate import graph_material_estimate_inputs
+    return graph_material_estimate_inputs(db, item)
 
 
 def estimate_order_item_material_cost(
     db: Session,
     item: OrderItem,
     *,
-    bom_components: Iterable[Mapping[str, Any]] = (),
+    bom_components: Iterable[Mapping[str, Any]] | None = None,
     context: MaterialCostEstimateContext | None = None,
 ) -> dict[str, Any]:
     """Build a read-only current material estimate from frozen physical inputs.
@@ -388,14 +407,24 @@ def estimate_order_item_material_cost(
     order and never derives report dimensions from a box-style name.
     """
 
-    sources = (
+    if bom_components is None:
+        from app.services.composite_bom import get_order_item_bom_components_by_item_ids
+        bom_components = (get_order_item_bom_components_by_item_ids(db, [item.id]).get(item.id, ())
+                          if item.id is not None else ())
+    bom_components = tuple(bom_components)
+    graph_inputs = ((context.graph_inputs_by_item_id or {}).get(item.id)
+                    if context is not None else None)
+    if graph_inputs is None:
+        graph_inputs = _graph_inputs(db, item, bom_components)
+    sources = graph_inputs[0] if graph_inputs is not None else (
         []
         if item.supply_mode_snapshot == "external_purchase"
         else _main_sources(item)
     )
-    sources.extend(_bom_sources(bom_components))
+    if graph_inputs is None:
+        sources.extend(_bom_sources(bom_components))
     calculated: list[dict[str, Any]] = []
-    missing: list[str] = []
+    missing: list[str] = list(graph_inputs[1]) if graph_inputs is not None else []
     for source in sources:
         component, component_missing = _component(db, **source, context=context)
         if component is not None:
@@ -408,7 +437,7 @@ def estimate_order_item_material_cost(
             item,
             as_of=beijing_today(),
         )
-        if item.supply_mode_snapshot in {"external_purchase", "mixed_bom"}
+        if graph_inputs is None and item.supply_mode_snapshot in {"external_purchase", "mixed_bom"}
         else {"components": [], "missing_items": []}
     )
     calculated.extend(external["components"])
@@ -440,6 +469,7 @@ def estimate_order_item_material_cost(
         "material_cost_scope_label": "当前材料成本（未计生产损耗和加工费）",
         "material_cost_is_current_estimate": True,
         "material_cost_formula_version": (
+            "multilevel-bom-material-v1" if graph_inputs is not None else
             "p1-43b-material-external-v1"
             if item.supply_mode_snapshot in {"external_purchase", "mixed_bom"}
             else "p1-28a-material-v1"

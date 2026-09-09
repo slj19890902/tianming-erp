@@ -231,7 +231,7 @@ def assemble_subkit_inventory(
         return conversion
 
 
-def _only_reversed_graph_consumptions(db, output):
+def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False):
     """Allow unwinding a deeper assembly only after each child use reversed.
 
     Equal balances alone are not proof: moves, counts or arbitrary adjustments
@@ -244,6 +244,8 @@ def _only_reversed_graph_consumptions(db, output):
     if not movements or output.version != len(movements):
         return False
     later = movements[1:]
+    if allow_initial_reserve and later and later[0].movement_type == "reserve":
+        later = later[1:]
     sources = list(db.scalars(select(BomAssemblyInput).where(BomAssemblyInput.lot_id == output.id)))
     consumes = {r.consume_movement_id: r for r in sources}
     if not consumes or len(later) != 2 * len(consumes):

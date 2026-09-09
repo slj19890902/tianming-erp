@@ -947,7 +947,7 @@ def test_pending_projection_refreshes_frozen_receipt_tokens_and_keeps_legacy_ope
         assert frozen_before["expected_order_purpose_sheet_qty"] == 500
         assert frozen_before["expected_reserve_purpose_sheet_qty"] == 100
         assert frozen_before["expected_finished_output_qty"] == 500
-        assert "FIN-001-1" in frozen_before["finished_location_name"]
+        assert frozen_before["finished_location_name"] == "一楼 匿名真实成品待送区-01"
         assert frozen_before["reserve_location_name"]
         assert frozen_before["purpose_issue"]
 
@@ -986,7 +986,7 @@ def test_pending_projection_refreshes_frozen_receipt_tokens_and_keeps_legacy_ope
         assert frozen_after["expected_order_purpose_sheet_qty"] == 500
         assert frozen_after["expected_reserve_purpose_sheet_qty"] == 100
         assert frozen_after["expected_finished_output_qty"] == 500
-        assert "FIN-001-1" in frozen_after["finished_location_name"]
+        assert frozen_after["finished_location_name"] == "一楼 匿名真实成品待送区-01"
         assert frozen_after["reserve_location_name"]
         assert "purpose_issue" not in frozen_after
 
@@ -1194,7 +1194,7 @@ def test_pending_frozen_preview_reports_capacity_warning_without_blocking(
             if str(item["item_id"]) == source.route_key
         )
         assert row["receipt_fact_ready"] is True
-        assert "FIN-001-2" in row["finished_location_name"]
+        assert row["finished_location_name"] == "一楼 匿名真实成品待送区-02"
         assert row["finished_location_ready"] is True
         assert row["finished_capacity_warning"]
 
@@ -1292,8 +1292,8 @@ def test_frozen_500_600_receipts_split_450_580_600_and_block_duplicate_overrecei
     assert third["reserve_planned_sheet_qty"] == 100
     assert third["reserve_actual_sheet_qty"] == 100
     assert third["reserve_variance_sheet_qty"] == 0
-    assert "FIN-001" in third["finished_location_name"]
-    assert "RAW-001-1" in third["reserve_location_name"]
+    assert third["finished_location_name"] == "一楼 匿名真实成品待送区-02"
+    assert third["reserve_location_name"] == "三楼 匿名三楼左区原料备料区-01"
     assert "F1-DISPATCH-01" not in third["finished_location_name"]
 
     from app.models.production import ProductionTask
@@ -2943,13 +2943,13 @@ def test_legacy_unset_keeps_old_receive_contract_without_new_auto_finished(
     )
 
     app, session_factory = requisition_app
-    _seed_material_and_staging(session_factory)
+    material_id = _seed_material_and_staging(session_factory)
     with session_factory() as session:
         from app.models.order import OrderItem
 
         order = SupplierRequisitionOrder(
             order_number="SRO-P181-LEGACY",
-            supplier_name="匿名历史供应商",
+            supplier_name="苏州纸板供应商",
             total_quantity=500,
             stock_deduction_qty=0,
             requisition_qty=500,
@@ -2963,7 +2963,9 @@ def test_legacy_unset_keeps_old_receive_contract_without_new_auto_finished(
             order_item_id=1,
             source_key="order_item:1:whole",
             product_id=1,
-            material_id=None,
+            material_id=material_id,
+            report_length_mm=800,
+            report_width_mm=200,
             product_code="P181-LEGACY",
             product_name="匿名历史纸箱",
             quantity=500,
@@ -4008,7 +4010,9 @@ def test_inactive_frozen_snapshot_keeps_only_received_plan_capacity(
 
     with session_factory() as session:
         inconsistent = receipt_purpose_summaries_by_order_item_ids(session, [1])[1]
-    assert inconsistent["automatic_finished_output_qty"] == 11
+    # A contradictory allocation is flagged, but must not invent an extra
+    # finished unit over the authoritative posted ProductionCompletion.
+    assert inconsistent["automatic_finished_output_qty"] == 10
     assert inconsistent["current_theoretical_finished_capacity_qty"] == 10
     assert inconsistent["projection_inconsistent"] is True
 

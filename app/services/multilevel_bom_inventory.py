@@ -9,7 +9,7 @@ import hashlib
 import json
 from collections import defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import select, or_
 
 from app.models.multilevel_bom import BomAssembly, BomAssemblyInput
 from app.models.order import Order, OrderItem
@@ -84,7 +84,9 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
         reserved = defaultdict(int)
         for r in db.scalars(select(InventoryReservation).where(
             InventoryReservation.order_item_id == item.id,
-            InventoryReservation.sales_order_item_bom_component_id.in_(snapshot_ids),
+            or_(InventoryReservation.sales_order_item_bom_component_id.in_(snapshot_ids),
+                InventoryReservation.sales_order_item_bom_component_id.is_(None)),
+            InventoryReservation.reservation_type == "finished_order",
             InventoryReservation.inventory_lot_id.in_(source_lot_versions),
             InventoryReservation.status.in_(("active", "partial")),
         )):

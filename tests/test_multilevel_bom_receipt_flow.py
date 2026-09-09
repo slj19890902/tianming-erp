@@ -1,0 +1,301 @@
+"""Real HTTP receipt posting against a disposable anonymous map/database."""
+from decimal import Decimal
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import select, delete
+
+from tests.test_n039_composite_bom_requisition import composite_requisition_app, _login, _component_payload
+from tests.test_p1_81_receipt_purpose_flow import (
+    _p181_published_map_identity, _seed_material_and_staging, FrozenSource, _freeze_receipt_fact, _receive,
+)
+from tests.test_multilevel_bom_master import save
+
+
+def seed_graph(factory, *, liner=False, a3=False, splice=False):
+    from app.models.warehouse_inventory import WarehouseLocation
+    from app.models.product import Product
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.models.supplier import Supplier
+    from app.models.order import OrderItem
+    from app.models.user import User
+    from app.services.supplier_master import normalize_supplier_identity
+    from app.services.multilevel_bom_orders import freeze_master_order_bom
+    with factory() as db:
+        db.get(WarehouseLocation, 1).location_code = "GRAPH-OLD-FIXTURE"
+        db.commit()
+    material_id = _seed_material_and_staging(factory)
+    with factory() as db:
+        db.execute(delete(SalesOrderItemBomComponent))
+        db.add(Supplier(standard_name="苏州纸板供应商", normalized_name=normalize_supplier_identity("苏州纸板供应商"),
+            display_name="苏州纸板供应商", sort_order=20, is_active=True, version=1))
+        actor = db.get(User, 1)
+        item = db.get(OrderItem, 1)
+        item.composite_fulfillment_mode_snapshot = "parent_delivery"
+        for pid in (1, 2, 3):
+            p = db.get(Product, pid)
+            p.material_id = material_id
+            p.box_style = "隔板"
+            p.report_length_mm = 1000
+            p.report_width_mm = 700
+            p.pieces_per_box = 1
+            p.default_cutting_mode = "一开一"
+        if liner:
+            kit = Product(customer_id=1, product_code="LINER", customer_material_code="LINER",
+                          product_name="真实内衬", unit="套")
+            db.add(kit)
+            db.flush()
+            save(db, actor, kit.id, "assembled", [(2, 2, "assembly"), (3, 6, "assembly")])
+            save(db, actor, 1, "manufactured", [(kit.id, 1, "accompany")])
+        else:
+            save(db, actor, 1, "assembled", [(2, 3, "assembly"), (3, 4, "assembly")])
+        if a3:
+            p = db.get(Product, 2)
+            p.box_style = "A3 天地盖"
+            p.base_report_length_mm = 900
+            p.base_report_width_mm = 600
+        if splice:
+            p = db.get(Product, 2)
+            p.pieces_per_box = 2
+            p.default_cutting_mode = "一开四"
+        compiled = freeze_master_order_bom(db, order_item_id=1, actor=actor)
+        db.commit()
+        snapshots = [(s.id, s.component_product_id) for s in compiled.snapshots
+                     if next(n.source for n in compiled.graph.nodes if n.product_id == s.component_product_id) == "manufactured"]
+    return material_id, snapshots
+
+
+def purchase_sources(client, factory, material_id, snapshots, *, a3=False, splice=False):
+    from app.models.supplier_requisition_order import PurchasePurposeSourceSnapshot
+    from app.models.product_bom import RequisitionItemBomSource
+    from app.models.requisition import RequisitionItem
+    items = []
+    for sid, pid in snapshots:
+        for route in (["cover", "base"] if a3 and pid == 2 else ["whole"]):
+            items.append({**_component_payload(sid), "component_type": route,
+                          "special_process": "一开四" if splice and pid == 2 else "一开一"})
+    saved = client.post("/api/requisition/batches", json={"request_key": "graph-requisition",
+        "supplier_name": "苏州纸板供应商", "items": items})
+    assert saved.status_code == 201, saved.text
+    with factory() as db:
+        result = []
+        for snapshot in db.scalars(select(PurchasePurposeSourceSnapshot).order_by(PurchasePurposeSourceSnapshot.id)):
+            bom = db.get(RequisitionItemBomSource, snapshot.source_bom_requisition_source_id)
+            source = db.get(RequisitionItem, bom.requisition_item_id)
+            result.append(FrozenSource(source_key=snapshot.source_key, route_key=f"r{source.id}",
+                supplier_item_id=source.id, source_version=getattr(source, "version", 1),
+                purpose_snapshot_id=snapshot.id, purpose_snapshot_version=snapshot.snapshot_version,
+                receipt_plan_fingerprint=snapshot.preview_fingerprint, component_type=snapshot.component_type,
+                material_id=material_id, order_purpose_sheet_qty=snapshot.order_purpose_sheet_qty,
+                reserve_purpose_sheet_qty=snapshot.reserve_purpose_sheet_qty))
+        return result
+
+
+@pytest.mark.parametrize("liner", [False, True])
+def test_real_receipts_create_nodes_then_sets_not_flat_children(composite_requisition_app, _p181_published_map_identity, liner):
+    from app.models.multilevel_bom import BomAssembly
+    from app.models.production import ProductionCompletion
+    from app.models.warehouse_inventory import InventoryLot
+    app, factory = composite_requisition_app
+    material_id, snapshots = seed_graph(factory, liner=liner)
+    with TestClient(app) as client:
+        _login(client)
+        sources = purchase_sources(client, factory, material_id, snapshots)
+        receipt_ids = []
+        for i, source in enumerate(sources):
+            fact = _freeze_receipt_fact(client, source, idempotency_key=f"graph-price-{i}", unit_price="0.1234")
+            assert fact.status_code == 200, fact.text
+            received = _receive(client, source, fact.json(), quantity=source.order_purpose_sheet_qty,
+                                idempotency_key=f"graph-in-{i}")
+            assert received.status_code == 200, received.text
+            receipt_ids.append(received.json()["receipt_item_id"])
+            replay = _receive(client, source, fact.json(), quantity=source.order_purpose_sheet_qty,
+                              idempotency_key=f"graph-in-{i}")
+            assert replay.status_code == 200, replay.text
+        with factory() as db:
+            assemblies = list(db.scalars(select(BomAssembly).where(BomAssembly.status == "posted")))
+            assert sum(r.quantity for r in assemblies) == 10
+            kit = db.get(InventoryLot, next(r.output_lot_id for r in assemblies if r.quantity))
+            assert kit.finished_detail.product_id == (4 if liner else 1)
+            assert kit.quantity_available == 10
+            completed = list(db.scalars(select(ProductionCompletion)))
+            products = {db.get(InventoryLot, c.inventory_lot_id).finished_detail.product_id: c.quantity for c in completed}
+            assert products == ({1: 10, 2: 20, 3: 60} if liner else {2: 30, 3: 40})
+            assert sum(r.total_cost for r in assemblies) > Decimal("0")
+            from app.models.production import ProductionTask
+            from app.models.order import OrderItem
+            main = db.scalar(select(ProductionTask).where(ProductionTask.sales_order_item_bom_component_id.is_(None)))
+            assert main.status == "completed"
+            assert main.finished_coverage_snapshot == 10
+            assert len(list(db.scalars(select(ProductionTask)))) == 3
+            assert db.get(OrderItem, 1).material_status == "received"
+            from app.services.multilevel_bom_requirements import read_graph_requirements
+            # New output is already paid for by this order's requisitions;
+            # do not count it again as prior-stock procurement credit.
+            assert not any(read_graph_requirements(db, 1).finished_units.values())
+        for rid in reversed(receipt_ids):
+            reverted = client.put(f"/api/incoming/receipt-items/{rid}/revert", json={})
+            assert reverted.status_code == 200, reverted.text
+        with factory() as db:
+            assert all(r.status == "reversed" for r in db.scalars(select(BomAssembly)))
+            assert all(r.status == "reversed" for r in db.scalars(select(ProductionCompletion)))
+
+
+def test_a3_partial_route_cost_remains_with_unused_material(composite_requisition_app, _p181_published_map_identity):
+    import json
+    from app.models.production import ProductionCompletion, ProductionTask
+    from app.models.warehouse_inventory import InventoryLot
+    from app.models.multilevel_bom import BomAssembly
+    app, factory = composite_requisition_app
+    material_id, snapshots = seed_graph(factory, a3=True)
+    with TestClient(app) as client:
+        _login(client)
+        sources = purchase_sources(client, factory, material_id, snapshots, a3=True)
+        assert len(sources) == 3
+        facts = [_freeze_receipt_fact(client, s, idempotency_key=f"a3-price-{i}", unit_price="0.1234") for i, s in enumerate(sources)]
+        assert all(f.status_code == 200 for f in facts)
+        # Thirty lids, half the bases, then the other component, then bases.
+        for sequence, (index, qty) in enumerate(((0, 30), (1, 15), (2, 40), (1, 15))):
+            result = _receive(client, sources[index], facts[index].json(), quantity=qty,
+                              idempotency_key=f"a3-in-{sequence}")
+            assert result.status_code == 200, result.text
+            with factory() as db:
+                rows = db.scalars(select(ProductionCompletion).join(ProductionTask).where(
+                    ProductionTask.sales_order_item_bom_component_id == snapshots[0][0])).all()
+                if index == 0:
+                    assert not rows  # A lid is not one complete A3 product.
+                for row in rows:
+                    lot = db.get(InventoryLot, row.inventory_lot_id)
+                    assert row.quantity == 15
+                    detail = json.loads(lot.cost_snapshot_detail_json)
+                    assert Decimal(detail["capitalized_material_cost"]) == Decimal("3.7020")
+        with factory() as db:
+            assert sum(r.quantity for r in db.scalars(select(BomAssembly))) == 10
+
+
+def test_component_semi_stock_used_once_and_restored_on_receipt_reversal(composite_requisition_app, _p181_published_map_identity):
+    from tests.test_p1_81_receipt_purpose_flow import _seed_order_semi_reservation
+    from app.models.warehouse_inventory import InventoryReservation, InventoryLot, OrderItemSemiRequirement, SemiFinishedLotAllowedProduct
+    from app.models.production import ProductionCompletion
+    app, factory = composite_requisition_app
+    material_id, snapshots = seed_graph(factory)
+    _seed_order_semi_reservation(factory, credited_piece_quantity=6, pieces_per_box=1)
+    with factory() as db:
+        reservation = db.scalar(select(InventoryReservation))
+        reservation.sales_order_item_bom_component_id = snapshots[0][0]
+        req = db.get(OrderItemSemiRequirement, reservation.semi_requirement_id)
+        req.sales_order_item_bom_component_id = snapshots[0][0]
+        req.required_piece_quantity = 30
+        req.board_length_mm, req.board_width_mm = 1000, 700
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        lot.estimated_unit_cost_snapshot = Decimal("0.5")
+        lot.semi_finished_detail.board_length_mm, lot.semi_finished_detail.board_width_mm = 1000, 700
+        allowed = db.scalar(select(SemiFinishedLotAllowedProduct))
+        allowed.product_id = 2
+        lot_id, reservation_id = lot.id, reservation.id
+        db.commit()
+    with TestClient(app) as client:
+        _login(client)
+        sources = purchase_sources(client, factory, material_id, snapshots)
+        source = sources[0]
+        assert source.order_purpose_sheet_qty == 24
+        fact = _freeze_receipt_fact(client, source, idempotency_key="semi-graph-price", unit_price="0.1234")
+        assert fact.status_code == 200, fact.text
+        receipt_ids = []
+        for i in range(2):
+            result = _receive(client, source, fact.json(), quantity=12, idempotency_key=f"semi-graph-in-{i}")
+            assert result.status_code == 200, result.text
+            receipt_ids.append(result.json()["receipt_item_id"])
+        with factory() as db:
+            assert [c.quantity for c in db.scalars(select(ProductionCompletion).order_by(ProductionCompletion.id))] == [18, 12]
+            assert db.get(InventoryLot, lot_id).quantity_consumed == 6
+            assert db.get(InventoryReservation, reservation_id).consumed_stock_quantity == 6
+        for rid in reversed(receipt_ids):
+            result = client.put(f"/api/incoming/receipt-items/{rid}/revert", json={})
+            assert result.status_code == 200, result.text
+        with factory() as db:
+            assert db.get(InventoryLot, lot_id).quantity_reserved == 6
+            assert db.get(InventoryLot, lot_id).quantity_consumed == 0
+
+
+def test_failure_after_component_posting_rolls_back_entire_receipt(composite_requisition_app, _p181_published_map_identity, monkeypatch):
+    from app.services import multilevel_bom_receipts as service
+    from app.services.bom_subkits import SubkitError
+    from app.models.production import ProductionCompletion
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.purchase_receipt import IncomingReceiptPurposeAllocation
+    from app.models.warehouse_inventory import InventoryLot
+    app, factory = composite_requisition_app
+    material_id, snapshots = seed_graph(factory)
+    def fail(*args, **kwargs):
+        raise SubkitError("注入组件入库后组套失败")
+    with TestClient(app) as client:
+        _login(client)
+        source = purchase_sources(client, factory, material_id, snapshots)[0]
+        fact = _freeze_receipt_fact(client, source, idempotency_key="fault-graph-price", unit_price="0.1234")
+        assert fact.status_code == 200, fact.text
+        monkeypatch.setattr(service, "assemble_graph_receipt", fail)
+        result = _receive(client, source, fact.json(), quantity=source.order_purpose_sheet_qty, idempotency_key="fault-graph-in")
+        assert result.status_code == 409, result.text
+        with factory() as db:
+            for model in (ProductionCompletion, IncomingReceiptItem, IncomingReceiptPurposeAllocation, InventoryLot):
+                assert db.scalar(select(model)) is None
+
+
+def test_cut_yield_and_splice_each_applied_once_on_real_receipt(composite_requisition_app, _p181_published_map_identity):
+    from app.models.production import ProductionCompletion
+    from app.models.multilevel_bom import BomAssembly
+    app, factory = composite_requisition_app
+    material_id, snapshots = seed_graph(factory, splice=True)
+    with TestClient(app) as client:
+        _login(client)
+        sources = purchase_sources(client, factory, material_id, snapshots, splice=True)
+        assert sources[0].order_purpose_sheet_qty == 15  # 30 products x2 pieces /4 per sheet.
+        fact = _freeze_receipt_fact(client, sources[0], idempotency_key="splice-price", unit_price="0.1234")
+        assert fact.status_code == 200, fact.text
+        for i, qty in enumerate((1, 14)):
+            received = _receive(client, sources[0], fact.json(), quantity=qty, idempotency_key=f"splice-in-{i}")
+            assert received.status_code == 200, received.text
+        with factory() as db:
+            assert [c.quantity for c in db.scalars(select(ProductionCompletion).order_by(ProductionCompletion.id))] == [2, 28]
+            assert sum(a.quantity for a in db.scalars(select(BomAssembly))) == 0
+
+
+def test_a3_reserved_cover_consumption_can_unwind_partial_batches(composite_requisition_app, _p181_published_map_identity):
+    from tests.test_p1_81_receipt_purpose_flow import _seed_order_semi_reservation
+    from app.models.warehouse_inventory import InventoryReservation, InventoryLot, OrderItemSemiRequirement, SemiFinishedLotAllowedProduct
+    app, factory = composite_requisition_app
+    material_id, snapshots = seed_graph(factory, a3=True)
+    _seed_order_semi_reservation(factory, credited_piece_quantity=20, pieces_per_box=1)
+    with factory() as db:
+        reservation = db.scalar(select(InventoryReservation))
+        reservation.sales_order_item_bom_component_id = snapshots[0][0]
+        req = db.get(OrderItemSemiRequirement, reservation.semi_requirement_id)
+        req.sales_order_item_bom_component_id = snapshots[0][0]
+        req.component_type = "cover"
+        req.required_piece_quantity = 30
+        req.board_length_mm, req.board_width_mm = 1000, 700
+        lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        lot.estimated_unit_cost_snapshot = Decimal("0.5")
+        lot.semi_finished_detail.board_length_mm, lot.semi_finished_detail.board_width_mm = 1000, 700
+        lot.semi_finished_detail.component_type = "cover"
+        db.scalar(select(SemiFinishedLotAllowedProduct)).product_id = 2
+        reservation_id = reservation.id
+        db.commit()
+    with TestClient(app) as client:
+        _login(client)
+        sources = purchase_sources(client, factory, material_id, snapshots, a3=True)
+        assert sources[0].order_purpose_sheet_qty == 10
+        source = sources[1]  # Bases complete only the matching number of covers.
+        fact = _freeze_receipt_fact(client, source, idempotency_key="a3-semi-price", unit_price="0.1234")
+        assert fact.status_code == 200, fact.text
+        ids = []
+        for i in range(2):
+            result = _receive(client, source, fact.json(), quantity=5, idempotency_key=f"a3-semi-in-{i}")
+            assert result.status_code == 200, result.text
+            ids.append(result.json()["receipt_item_id"])
+        for rid, remaining in zip(reversed(ids), (5, 0)):
+            result = client.put(f"/api/incoming/receipt-items/{rid}/revert", json={})
+            assert result.status_code == 200, result.text
+            with factory() as db:
+                assert db.get(InventoryReservation, reservation_id).consumed_stock_quantity == remaining

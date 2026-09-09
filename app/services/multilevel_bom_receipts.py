@@ -6,7 +6,7 @@ the finished-output fact. No second inventory ledger or guessed product ID.
 from dataclasses import dataclass
 from decimal import Decimal
 
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, and_
 
 from app.models.multilevel_bom import OrderBomGraph
 from app.models.product_bom import RequisitionItemBomSource, SalesOrderItemBomComponent
@@ -165,19 +165,30 @@ def consume_node_semi_inputs(db, *, completion, inputs, operator_id):
                 delivery_item_id=None, reason="多级BOM物理用料完工消耗预占")
 
 
-def assemble_graph_receipt(db, *, context, allocation, operator_id):
+def own_output_lots(db, order_item_id):
+    """Include real transfer descendants, not only the original output lot.
+
+    Warehouse transfers preserve source_ref_type/id and frozen cost identity.
+    Location and lot IDs may change; names and product codes are not lineage.
+    """
     from app.models.multilevel_bom import BomAssembly
+    completions = select(ProductionCompletion.id).where(
+        ProductionCompletion.order_item_id == order_item_id, ProductionCompletion.status == "posted")
+    assemblies = select(BomAssembly.id).where(
+        BomAssembly.order_item_id == order_item_id, BomAssembly.status == "posted")
+    return list(db.scalars(select(InventoryLot).where(or_(
+        and_(InventoryLot.source_ref_type == "production_completion", InventoryLot.source_ref_id.in_(completions)),
+        and_(InventoryLot.source_ref_type == "bom_assembly", InventoryLot.source_ref_id.in_(assemblies))))))
+
+
+def assemble_graph_receipt(db, *, context, allocation, operator_id):
     from app.services.multilevel_bom_inventory import assemble_order_inventory
     from app.services.production_workflow import _receipt_auto_finished_ground_target
     pids = {n.product_id for n in context.compiled.graph.nodes if n.source == "assembled"}
     if not pids:
         return ()
     oid = context.snapshot.sales_order_item_id
-    own_ids = set(db.scalars(select(ProductionCompletion.inventory_lot_id).where(
-        ProductionCompletion.order_item_id == oid, ProductionCompletion.status == "posted",
-        ProductionCompletion.inventory_lot_id.is_not(None))))
-    own_ids.update(db.scalars(select(BomAssembly.output_lot_id).where(
-        BomAssembly.order_item_id == oid, BomAssembly.status == "posted", BomAssembly.output_lot_id.is_not(None))))
+    own_ids = {lot.id for lot in own_output_lots(db, oid)}
     reserved_ids = set(db.scalars(select(InventoryReservation.inventory_lot_id).where(
         InventoryReservation.order_item_id == oid, InventoryReservation.reservation_type == "finished_order",
         InventoryReservation.status.in_(("active", "partial")))))
@@ -228,17 +239,14 @@ def refresh_graph_main_task(db, item, *, create_if_missing):
         if not create_if_missing:
             return None
         task = ensure_receipt_auto_main_task(db, order_item_id=item.id)
-    own_ids = set(db.scalars(select(ProductionCompletion.inventory_lot_id).where(
-        ProductionCompletion.order_item_id == item.id, ProductionCompletion.status == "posted",
-        ProductionCompletion.inventory_lot_id.is_not(None))))
-    own_ids.update(db.scalars(select(BomAssembly.output_lot_id).where(BomAssembly.order_item_id == item.id,
-        BomAssembly.status == "posted", BomAssembly.output_lot_id.is_not(None))))
+    own_lots = own_output_lots(db, item.id)
+    own_ids = {lot.id for lot in own_lots}
     consumed = defaultdict(int)
     for source in db.scalars(select(BomAssemblyInput).join(BomAssembly).where(
         BomAssembly.order_item_id == item.id, BomAssembly.status == "posted")):
         consumed[source.lot_id] += source.quantity
     quantities = defaultdict(int)
-    for lot in db.scalars(select(InventoryLot).where(InventoryLot.id.in_(own_ids))):
+    for lot in own_lots:
         quantities[lot.finished_detail.product_id] += max(lot.quantity_available + lot.quantity_reserved
                                                         + lot.quantity_consumed - consumed[lot.id], 0)
     for reserve in db.scalars(select(InventoryReservation).where(InventoryReservation.order_item_id == item.id,

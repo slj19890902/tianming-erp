@@ -24,16 +24,24 @@ def source_cost(db, lot, take):
         return delivery_cost(db, lot, take)
     if lot.source_ref_type == "production_completion":
         from app.models.production import ProductionCompletion
+        from app.models.warehouse_inventory import InventoryLot
         completion = db.get(ProductionCompletion, lot.source_ref_id)
         detail = json.loads(lot.cost_snapshot_detail_json or "{}")
-        if "bom_material_product_id" in detail:
-            if (completion is None or completion.status != "posted" or completion.inventory_lot_id != lot.id
-                    or not lot.finished_detail or lot.finished_detail.product_id != detail["bom_material_product_id"]):
+        original = db.get(InventoryLot, completion.inventory_lot_id) if completion else None
+        frozen = json.loads(original.cost_snapshot_detail_json or "{}") if original else {}
+        if "bom_material_product_id" in detail or "bom_material_product_id" in frozen:
+            if (completion is None or completion.status != "posted" or original is None
+                    or original.source_ref_type != lot.source_ref_type or original.source_ref_id != lot.source_ref_id
+                    or not lot.finished_detail or not original.finished_detail
+                    or lot.finished_detail.product_id != frozen.get("bom_material_product_id")
+                    or lot.finished_detail.product_id != original.finished_detail.product_id
+                    or lot.finished_detail.owner_customer_id != original.finished_detail.owner_customer_id
+                    or detail != frozen):
                 raise SubkitError("多级BOM完工成本身份不完整")
             used = lineage_used(db, lot)
             if used + take > completion.quantity:
                 return estimated_slice(lot, take)
-            return cost_slice(Decimal(detail["capitalized_material_cost"]), completion.quantity, used, take), detail
+            return cost_slice(Decimal(frozen["capitalized_material_cost"]), completion.quantity, used, take), frozen
     source = db.get(SubkitReceiptOutput, lot.source_ref_id) if lot.source_ref_type == "subkit_receipt" else None
     if source:
         from app.models.purchase_receipt import IncomingReceiptPurposeAllocation, PurchaseReceiptFact

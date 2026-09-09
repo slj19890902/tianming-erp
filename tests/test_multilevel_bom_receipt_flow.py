@@ -12,6 +12,65 @@ from tests.test_p1_81_receipt_purpose_flow import (
 from tests.test_multilevel_bom_master import save
 
 
+@pytest.mark.parametrize("move_before_assembly", [True, False])
+def test_split_movement_keeps_receipt_cost_and_finished_coverage(
+    composite_requisition_app, _p181_published_map_identity, move_before_assembly
+):
+    from app.models.multilevel_bom import BomAssembly
+    from app.models.order import OrderItem
+    from app.models.production import ProductionCompletion
+    from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
+    from app.services.warehouse_inventory import transfer_finished_lot_between_locations
+    from app.services.multilevel_bom_receipts import refresh_graph_main_task
+    app, factory = composite_requisition_app
+    material_id, snapshots = seed_graph(factory)
+    with TestClient(app) as client:
+        _login(client)
+        sources = purchase_sources(client, factory, material_id, snapshots)
+        for index, source in enumerate(sources):
+            fact = _freeze_receipt_fact(client, source, idempotency_key=f"move-price-{index}", unit_price="0.1234")
+            assert fact.status_code == 200, fact.text
+            response = _receive(client, source, fact.json(), quantity=source.order_purpose_sheet_qty,
+                                idempotency_key=f"move-receipt-{index}")
+            assert response.status_code == 200, response.text
+            if (move_before_assembly and index == 0) or (not move_before_assembly and index == 1):
+                with factory() as db:
+                    if move_before_assembly:
+                        lot_id = db.scalar(select(ProductionCompletion.inventory_lot_id))
+                    else:
+                        lot_id = db.scalar(select(BomAssembly.output_lot_id).where(BomAssembly.quantity > 0))
+                    lot = db.get(InventoryLot, lot_id)
+                    target = db.scalar(select(WarehouseLocation).where(WarehouseLocation.area_code == "FIN-001",
+                        WarehouseLocation.source_version == "TWIN_V1",
+                        WarehouseLocation.id != lot.warehouse_location_id).order_by(WarehouseLocation.id))
+                    try:
+                        moved = transfer_finished_lot_between_locations(db, lot_id=lot.id, expected_version=lot.version,
+                            quantity=15 if move_before_assembly else 4, location_id=target.id,
+                            expected_target_layout_version=target.floor3_layout.version,
+                            operator_id=1, idempotency_key=f"graph-move-{index}")
+                    except ValueError as error:
+                        origin = db.get(WarehouseLocation, lot.warehouse_location_id)
+                        pytest.fail(f"{error}: {origin.location_code}/{origin.placement_status} -> {target.location_code}/{target.placement_status}")
+                    if move_before_assembly:
+                        from app.services.bom_subkit_costs import source_cost
+                        from app.services.bom_subkits import SubkitError
+                        target_lot = moved.target_lot
+                        original_cost = target_lot.cost_snapshot_detail_json
+                        assert source_cost(db, target_lot, 15)[0] == Decimal("1.8510")
+                        target_lot.cost_snapshot_detail_json = "{}"
+                        with pytest.raises(SubkitError, match="成本身份"):
+                            source_cost(db, target_lot, 15)
+                        target_lot.cost_snapshot_detail_json = original_cost
+                    db.commit()
+        with factory() as db:
+            assemblies = list(db.scalars(select(BomAssembly).where(BomAssembly.status == "posted")))
+            assert sum(a.quantity for a in assemblies) == 10
+            assert sum(a.total_cost for a in assemblies) == Decimal("8.6380")
+            task = refresh_graph_main_task(db, db.get(OrderItem, 1), create_if_missing=False)
+            assert task.finished_coverage_snapshot == 10
+            assert task.status == "completed"
+
+
 def seed_graph(factory, *, liner=False, a3=False, splice=False):
     from app.models.warehouse_inventory import WarehouseLocation
     from app.models.product import Product

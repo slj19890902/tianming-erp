@@ -87,7 +87,9 @@ def _parameters(latest: SalesOrderItemEstimatedCostSnapshot | None, values: Mapp
     if loss_rate not in ALLOWED_LOSS_RATES:
         raise ValueError("生产加报损耗只能选择 3% 或 5%")
     return {
-        "loss_rate": loss_rate,
+        # SQLite Numeric reloads 0.03 as 0.030000. Canonicalize the input
+        # before fingerprinting so an unchanged estimate stays idempotent.
+        "loss_rate": loss_rate.normalize(),
         **{key: _money(values.get(key, 0)) for key in ONE_TIME_FEE_KEYS},
     }
 
@@ -141,6 +143,9 @@ def freeze_order_item_estimated_cost(
     params = _parameters(latest, parameters)
     quantity = max(int(item.quantity or 0), 1)
     standard_processing = estimate_order_item_processing_cost(db, item)
+    rule_version = ("multilevel-bom-estimated-v1"
+                    if standard_processing.get("rule_version") == "multilevel-bom-processing-v1"
+                    else RULE_VERSION)
     printing = standard_processing["printing"]
     die_cut = standard_processing["die_cut"]
     joining = standard_processing["joining"]
@@ -181,7 +186,8 @@ def freeze_order_item_estimated_cost(
         missing.extend(json.loads(material.missing_items_json or "[]") if material else ["材料成本快照缺失"])
     missing = list(dict.fromkeys(str(value) for value in missing if str(value).strip()))
     one_time = sum((params[key] for key in ONE_TIME_FEE_KEYS), Decimal("0")).quantize(MONEY)
-    known_processing = processing_total or Decimal("0")
+    known_processing = (processing_total if processing_total is not None else
+                        Decimal(str(standard_processing.get("known_processing_subtotal") or 0)))
     known = (material_known + loss_total + known_processing + one_time).quantize(MONEY, rounding=ROUND_HALF_UP)
     complete = (
         material_status == "calculated"
@@ -231,7 +237,7 @@ def freeze_order_item_estimated_cost(
         "estimated_order_total_cost": str(total) if total is not None else None,
         "breakdown": breakdown,
         "missing_items": missing,
-        "rule_version": RULE_VERSION,
+        "rule_version": rule_version,
         "precision_version": PRECISION_VERSION,
     }
     fingerprint = hashlib.sha256(_json(payload).encode("utf-8")).hexdigest()
@@ -260,7 +266,7 @@ def freeze_order_item_estimated_cost(
         material_cost_snapshot_version=payload["material_cost_snapshot_version"],
         calculation_status=status,
         scope_code="estimated_total",
-        rule_version=RULE_VERSION,
+        rule_version=rule_version,
         precision_version=PRECISION_VERSION,
         order_quantity_snapshot=quantity,
         loss_rate=params["loss_rate"],

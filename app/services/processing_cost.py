@@ -13,6 +13,7 @@ from app.services.box_type_rules import box_type_code
 
 
 RULE_VERSION = "p1-131-standard-processing-v1"
+_MASTER_PROFILE = object()
 HOUR = Decimal("0.000001")
 DAY = Decimal("0.000001")
 MONEY = Decimal("0.01")
@@ -436,13 +437,15 @@ def estimate_standard_processing_cost(
     quantity: int,
     splice_mode: str | None = None,
     supply_mode: str | None = None,
+    profile_override: Any = _MASTER_PROFILE,
 ) -> dict[str, Any]:
     """Calculate advisory standard labour without writing actual cost facts."""
 
     if quantity <= 0:
         raise ValueError("加工估算数量必须大于 0")
     settings = get_processing_cost_settings(db)
-    profile = get_product_processing_profile(db, int(product.id))
+    profile = (get_product_processing_profile(db, int(product.id))
+               if profile_override is _MASTER_PROFILE else profile_override)
     effective_splice_mode = splice_mode if splice_mode is not None else product.splice_mode
     effective_supply_mode = (
         str(supply_mode).strip()
@@ -530,6 +533,10 @@ def estimate_standard_processing_cost(
 def estimate_order_item_processing_cost(
     db: Session, item: OrderItem
 ) -> dict[str, Any]:
+    from app.models.multilevel_bom import OrderBomGraph
+    if getattr(item, "id", None) is not None and db.get(OrderBomGraph, item.id) is not None:
+        from app.services.multilevel_bom_processing_estimate import estimate_graph_processing_cost
+        return estimate_graph_processing_cost(db, item)
     return estimate_standard_processing_cost(
         db,
         product=item.product,

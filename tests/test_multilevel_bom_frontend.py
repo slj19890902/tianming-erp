@@ -22,7 +22,7 @@ def run_js(body):
         pytest.skip("Node.js unavailable")
     names = ["bomComponentOption", "normalizeBomComponent", "applyBomResponse", "mergeBomComponentOptions",
         "onBomInventoryModeChange", "_productBomSaveFields", "_productBomDirty", "validateProductBom",
-        "bomPayload", "openBomChildEditor", "returnFromCommonBoxEditor"]
+        "bomPayload", "openBomChildEditor", "returnFromCommonBoxEditor", "bindBomYieldToCurrentProduct", "selectBomComponent"]
     constants = HTML[HTML.index("      let bomComponentKeyCounter"):HTML.index("      const blankMaterial =")]
     script = "const assert=require('node:assert/strict');\n" + constants
     script += "\nconst methods={" + "\n".join(method(name) for name in names) + "};\n"
@@ -126,6 +126,65 @@ def test_new_controls_are_inline_and_no_new_free_text_subkit_button():
     assert 'class="bom-component-actions"' in panel
     assert 'openBomChildEditor(component)' in panel
     assert '>组成子套件</button>' not in panel
+    assert 'aria-label="子件备用纸张"' in panel
+    assert 'aria-label="子件最大模切出数"' in panel
+    assert 'v-show="component._planningOpen"' in panel
+
+
+def test_yield_edit_reads_current_real_mold_and_round_trips_limits():
+    run_js("""
+      const row={...blankBomComponent(),component_product_id:2,inventory_relation:'assembly',
+        mold_max_yield_per_sheet:4,spare_sheet_quantity:5};
+      const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1,customer_id:9},errorMessage:e=>e.message,spec:()=>''};
+      ctx.bomEditor.enabled=true;ctx.bomEditor.inventory_mode='assembled';ctx.bomEditor.components=[row];
+      axios.get=async()=>({data:{id:2,customer_id:9,is_active:true,box_category:'die_cut',mold_tool_id:40}});
+      await ctx.bindBomYieldToCurrentProduct(row);
+      assert.equal(row.mold_tool_id,40);assert.equal(row.is_die_cut,true);
+      assert.equal(ctx.validateProductBom(),'');
+      const sent=ctx.bomPayload().components[0];
+      assert.equal(sent.mold_max_yield_per_sheet,4);assert.equal(sent.spare_sheet_quantity,5);
+      ctx.applyBomResponse({is_composite:true,inventory_mode:'assembled',components:[sent],version:8});
+      assert.equal(ctx.bomEditor.components[0].mold_max_yield_per_sheet,4);
+      assert.equal(ctx.bomEditor.components[0].spare_sheet_quantity,5);
+      ctx.bomEditor.components[0].spare_sheet_quantity='';
+      assert.equal(ctx.bomPayload().components[0].spare_sheet_quantity,0);
+    """)
+
+
+def test_yield_lookup_failure_and_stale_response_do_not_overwrite_another_product():
+    run_js("""
+      const row={...blankBomComponent(),component_product_id:2,inventory_relation:'assembly',mold_max_yield_per_sheet:4};
+      const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1,customer_id:9},errorMessage:e=>e.message};
+      ctx.bomEditor.enabled=true;ctx.bomEditor.inventory_mode='assembled';ctx.bomEditor.components=[row];
+      let resolve;axios.get=()=>new Promise(r=>{resolve=r});
+      const pending=ctx.bindBomYieldToCurrentProduct(row);
+      assert.match(ctx.validateProductBom(),/正在核对/);
+      row.component_product_id=3;
+      resolve({data:{id:2,customer_id:9,box_category:'die_cut',mold_tool_id:40}});await pending;
+      assert.equal(row.mold_tool_id,null);
+      axios.get=async()=>{throw new Error('读取失败')};
+      await ctx.bindBomYieldToCurrentProduct(row);
+      assert.equal(ctx.validateProductBom(),'读取失败');
+      row.mold_max_yield_per_sheet='';await ctx.bindBomYieldToCurrentProduct(row);
+      assert.equal(row._yieldError,'');assert.equal(row._yieldLoading,false);
+    """)
+
+
+def test_invalid_bom_is_checked_before_product_or_drawing_write():
+    block = HTML[HTML.index('                const productDirty = this._productFormDirty();'):]
+    assert block.index('this.validateProductBom()') < block.index('this.buildProductWritePayload(masterOptions)')
+
+
+def test_product_reselection_does_not_reuse_previous_mold_or_yield():
+    run_js("""
+      const row={...blankBomComponent(),component_product_id:2,is_die_cut:true,mold_tool_id:40,mold_max_yield_per_sheet:4,quantity_per_set:6};
+      const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1},spec:()=>''};
+      ctx.bomEditor.components=[row];ctx.bomEditor.componentOptions=[{id:3,box_category:'normal',product_name:'普通子件'}];
+      await ctx.selectBomComponent(row,3);
+      assert.equal(row.component_product_id,3);assert.equal(row.is_die_cut,false);
+      assert.equal(row.mold_tool_id,null);assert.equal(row.mold_max_yield_per_sheet,null);
+      assert.equal(row.quantity_per_set,6);
+    """)
 
 
 def test_disable_bom_sends_empty_recipe_without_discarding_local_draft():

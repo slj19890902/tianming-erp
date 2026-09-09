@@ -68,6 +68,10 @@
 .product-editor-modal .bom-component-compact-row .input { min-width: 0; width: 100%; }
 .product-editor-modal .bom-component-relation { width: 112px; min-width: 112px; }
 .product-editor-modal .bom-component-actions { display: inline-flex; gap: 4px; white-space: nowrap; }
+.product-editor-modal .bom-component-planning { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding-top: 4px; }
+.product-editor-modal .bom-component-planning > label { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
+.product-editor-modal .bom-component-planning .input { width: 84px; min-width: 0; }
+.product-editor-modal .bom-component-planning .status { white-space: normal; }
 .product-editor-modal .bom-subkit-trigger { order: 5; }
 .product-editor-modal .bom-subkit-controls { order: 6; flex-basis: 100%; }
 @media (max-width: 1050px) {
@@ -81,9 +85,16 @@
   .product-editor-modal .product-material-controls { grid-template-columns: minmax(0, 1fr) 80px 90px; }
   .product-editor-modal .product-material-picker { grid-column: 1 / -1; }
   .product-editor-modal .product-print-row { display: flex; flex-direction: column; }
+  .product-editor-modal .product-print-row > * { flex: 0 1 auto; max-width: 100%; }
+  .product-editor-modal .field > .input,
+  .product-editor-modal .field > .select,
+  .product-editor-modal .field > .search-select { min-width: 0; max-width: 100%; }
   .product-editor-modal .product-final-row { grid-template-columns: minmax(0, 1fr); }
-  .product-editor-modal .bom-component-compact-row { grid-template-columns: minmax(120px, 1fr) auto auto; }
+  .product-editor-modal .bom-component-card,
+  .product-editor-modal .bom-component-compact-row { min-width: 0; }
+  .product-editor-modal .bom-component-compact-row { grid-template-columns: minmax(0, 1fr) auto; }
   .product-editor-modal .bom-component-product { grid-column: 1 / -1; }
+  .product-editor-modal .bom-component-actions { grid-column: 1 / -1; justify-content: flex-end; }
   .product-editor-modal .product-printing-plate-row,
   .product-editor-modal .product-printing-plate-parameters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

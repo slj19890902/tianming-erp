@@ -3013,7 +3013,7 @@
         .erp-enterprise-ui .table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }
       }
     </style>
-    <link rel="stylesheet" href="/static/product-editor-compact.css?v=multilevel-bom-1" />
+    <link rel="stylesheet" href="/static/product-editor-compact.css?v=97f748069cdf" />
   </head>
   <body>
     <div id="app" v-cloak>
@@ -6776,7 +6776,12 @@
                           <option value="assembly" :disabled="bomEditor.inventory_mode !== 'assembled'">组装消耗</option>
                           <option value="accompany">独立配套</option>
                         </select>
-                        <span class="bom-component-actions"><button type="button" class="btn small" :disabled="!component.component_product_id || bomEditor.loading || masterSavePending || !canEditProducts" @click="openBomChildEditor(component)">编辑</button><button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button></span>
+                        <span class="bom-component-actions"><button type="button" class="btn small" :aria-expanded="!!component._planningOpen" @click="component._planningOpen = !component._planningOpen">备料</button><button type="button" class="btn small" :disabled="!component.component_product_id || bomEditor.loading || masterSavePending || !canEditProducts" @click="openBomChildEditor(component)">编辑</button><button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button></span>
+                      </div>
+                      <div v-show="component._planningOpen" class="bom-component-planning">
+                        <label>备用纸张<input class="input" aria-label="子件备用纸张" type="number" min="0" step="1" v-model.number="component.spare_sheet_quantity" />张</label>
+                        <label>最大模切出数<input class="input" aria-label="子件最大模切出数" type="number" min="1" step="1" placeholder="留空" v-model.number="component.mold_max_yield_per_sheet" @change="bindBomYieldToCurrentProduct(component)" /></label>
+                        <span v-if="component._yieldLoading" class="muted">核对模具…</span><span v-else-if="component._yieldError" class="status orange">{{ component._yieldError }}</span>
                       </div>
                     </div>
                   </div>
@@ -25061,6 +25066,11 @@
           },
           async selectBomComponent(component, productId) {
             const selected = (this.bomEditor.componentOptions || []).find(row => String(row.id) === String(productId));
+            component._yieldToken = Symbol(); component._yieldLoading = false; component._yieldError = "";
+            component.is_die_cut = selected?.box_category === "die_cut";
+            component.mold_tool_id = component.is_die_cut ? (selected?.mold_tool_id || null) : null;
+            component.mold_max_yield_per_sheet = null;
+            component.component = selected || null;
             if (!selected) {
             component.component_product_id = null;
             component.product_code = "";
@@ -25088,6 +25098,27 @@
               }
             }
           },
+          async bindBomYieldToCurrentProduct(component) {
+            const editor = this.bomEditor, productId = Number(component.component_product_id);
+            const token = Symbol(); component._yieldToken = token;
+            component._yieldError = ""; component._yieldLoading = false;
+            if (editor.inventory_mode === "legacy" || component.mold_max_yield_per_sheet === "" || component.mold_max_yield_per_sheet == null) return;
+            component._yieldLoading = true;
+            const current = () => this.bomEditor === editor && editor.components.includes(component)
+              && Number(component.component_product_id) === productId && component._yieldToken === token;
+            try {
+              const {data} = await axios.get(`/api/master/products/${productId}`);
+              if (!current()) return;
+              if (Number(data.id) !== productId || Number(data.customer_id) !== Number(this.productForm.customer_id) || data.is_active === false) throw new Error("子件已变化，请重新选择");
+              if (data.box_category !== "die_cut" || !data.mold_tool_id) throw new Error("请先在子件中设置模切和模具");
+              component.is_die_cut = true; component.mold_tool_id = data.mold_tool_id;
+              component.component = data;
+            } catch (error) {
+              if (current()) component._yieldError = this.errorMessage(error);
+            } finally {
+              if (component._yieldToken === token) component._yieldLoading = false;
+            }
+          },
           _productBomSaveFields() {
             const editor = this.bomEditor || blankBomEditor();
             return {
@@ -25101,7 +25132,7 @@
                 is_die_cut: component.is_die_cut === true,
                 mold_tool_id: component.mold_tool_id || null,
                 mold_max_yield_per_sheet: component.mold_max_yield_per_sheet === "" ? null : component.mold_max_yield_per_sheet,
-                spare_sheet_quantity: component.spare_sheet_quantity,
+                spare_sheet_quantity: Number(component.spare_sheet_quantity || 0),
                 display_mode: this.productForm.composite_fulfillment_mode === "component_delivery" ? "show_on_delivery" : "internal_only",
                 show_on_delivery: this.productForm.composite_fulfillment_mode === "component_delivery",
                 is_required: component.is_required !== false,
@@ -25120,6 +25151,8 @@
             if (!this.bomEditor.components.length) return "启用组合产品后至少添加一个内部组件";
             const ids = new Set();
             for (const component of this.bomEditor.components) {
+              if (component._yieldLoading) return "正在核对子件模具，请稍后保存";
+              if (component._yieldError) return component._yieldError;
               if (!component.component_product_id) return "每个内部组件都必须选择同客户常用箱";
               if (String(component.component_product_id) === String(this.productForm.id)) return "组合产品不能把自己作为内部组件";
               if (ids.has(String(component.component_product_id))) return "同一个内部组件不能重复添加";
@@ -25131,7 +25164,9 @@
               if (component.is_die_cut && !component.mold_tool_id) return "模切组件必须选择生产模具";
               if (!component.is_die_cut && (component.mold_tool_id || component.mold_max_yield_per_sheet)) return "非模切组件不能填写模具或最大产出";
               if (component.mold_max_yield_per_sheet !== null && component.mold_max_yield_per_sheet !== "" && (!Number.isFinite(Number(component.mold_max_yield_per_sheet)) || Number(component.mold_max_yield_per_sheet) <= 0)) return "模具最大产出必须大于0或留空";
+              if (component.mold_max_yield_per_sheet != null && component.mold_max_yield_per_sheet !== "" && !Number.isInteger(Number(component.mold_max_yield_per_sheet))) return "最大模切出数必须为整数";
               if (!Number.isFinite(Number(component.spare_sheet_quantity)) || Number(component.spare_sheet_quantity) < 0) return "备用纸张不能小于0";
+              if (!Number.isInteger(Number(component.spare_sheet_quantity))) return "备用纸张必须为整数";
             }
             return "";
           },
@@ -35625,6 +35660,10 @@
               if (this.modal.type === "product") {
                 const productDirty = this._productFormDirty();
                 const bomDirty = this._productBomDirty();
+                if (bomDirty) {
+                  const bomError = this.validateProductBom();
+                  if (bomError) throw new Error(bomError);
+                }
                 const payload = this.buildProductWritePayload(masterOptions);
                 let saved;
                 if (this.productForm.id) {

@@ -160,6 +160,34 @@ def test_child_new_die_cut_cannot_silently_skip_missing_mold(context):
         compile_master_order_bom(db, item)
 
 
+def test_editable_yield_and_spare_limits_persist_and_freeze(context):
+    from app.models.mold_tool import MoldTool
+    from app.services.composite_bom import replace_product_bom, get_product_bom
+    db, actor, item, _ = context
+    setup_liner(db, actor)
+    mold = MoldTool(mold_code="EDIT-LIMIT", mold_name="匿名编辑模具", rack_location="TEST-R1", is_active=True)
+    db.add(mold)
+    db.flush()
+    child = db.get(Product, 3)
+    child.box_category = "die_cut"
+    child.mold_tool_id = mold.id
+    db.commit()
+    replace_product_bom(db, parent_product_id=2, inventory_mode="assembled",
+        expected_version=db.get(Product, 2).version, user=actor, components=[
+            {"component_product_id":3, "quantity_per_set":2, "inventory_relation":"assembly",
+             "is_die_cut":True, "mold_tool_id":mold.id, "mold_max_yield_per_sheet":4, "spare_sheet_quantity":5},
+            {"component_product_id":4, "quantity_per_set":6, "inventory_relation":"assembly"}])
+    db.commit()
+    saved = next(row for row in get_product_bom(db, 2)["components"] if row["component_product_id"] == 3)
+    assert saved["mold_max_yield_per_sheet"] == 4
+    assert saved["spare_sheet_quantity"] == 5
+    frozen = freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
+    snapshot = next(row for row in frozen.snapshots if row.component_product_id == 3)
+    assert snapshot.mold_max_yield_per_sheet == 4
+    assert snapshot.spare_sheet_quantity == 5
+    assert snapshot.snapshot_mold_tool_id == mold.id
+
+
 @pytest.mark.parametrize("changed_mold", [False, True])
 def test_child_process_refresh_keeps_explicit_mold_yield_guard(context, changed_mold):
     from app.models.mold_tool import MoldTool

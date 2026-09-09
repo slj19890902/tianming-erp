@@ -280,7 +280,8 @@ def test_external_product_candidates_scope_and_single_default(p1_40a_app: FastAP
         assert body["report_length_mm"] is None
         assert body["production_process"] is None
         assert body["print_content"] == "无印刷"
-        assert body["production_label_enabled"] is False
+        assert body["production_label_enabled"] is True
+        assert body["production_label_units_per_label"] == 50
         assert body["readiness"]["ready"] is True
         assert body["external_supply"]["specification"]["length_mm"] == 870.0
         assert body["external_supply"]["candidates"][0]["is_default"] is True

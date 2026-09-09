@@ -1507,7 +1507,6 @@ def post_receipt_purpose_allocation(
     if subkit:
         from app.services.bom_subkit_receipts import post_component_receipt, assemble_after_receipt
         from app.services.bom_subkits import SubkitError
-        from app.services.warehouse_inventory import WarehouseInventoryError
         try:
             if subkit_component_receipt:
                 post_component_receipt(db, allocation=allocation, purpose_snapshot=snapshot,

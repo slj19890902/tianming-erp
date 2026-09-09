@@ -2987,54 +2987,19 @@ def _bom_snapshot_requirements(
         else demand.effective_sets
     )
     try:
-        if actual_yield_per_sheet is not None:
-            actual_yield_per_sheet = require_positive_integer(
-                actual_yield_per_sheet,
-                label="实际模切出数",
-            )
-            if not snapshot.is_die_cut:
-                raise CompositeBOMExecutionError("非模切组件不能填写实际模切出数")
-            if snapshot.mold_max_yield_per_sheet is None:
-                raise CompositeBOMExecutionError("模切组件缺少最大模切出数")
-            if actual_yield_per_sheet > int(snapshot.mold_max_yield_per_sheet):
-                raise CompositeBOMExecutionError("实际模切出数不能超过模具最大出数")
+        from app.services.bom_physical_quantities import resolve_bom_sheet_yield
+        physical_yield = resolve_bom_sheet_yield(snapshot, cutting_mode=cutting_mode,
+                                               actual_yield_per_sheet=actual_yield_per_sheet)
         quantity_per_set = require_positive_integer(
             snapshot.quantity_per_set,
             label="组件每套用量",
         )
     except CompositeBOMExecutionError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    allowed_cutting_mode = (
-        (snapshot.snapshot_component_box_style or "").strip()
-        in CUTTING_MODE_BOX_STYLES
-    )
-    frozen_cutting_mode = (
-        snapshot.snapshot_component_default_cutting_mode or DEFAULT_CUTTING_MODE
-    )
-    resolved_cutting_mode = (
-        (cutting_mode or frozen_cutting_mode)
-        if allowed_cutting_mode
-        else DEFAULT_CUTTING_MODE
-    )
-    resolved_cutting_mode = normalize_cutting_mode(resolved_cutting_mode)
-    cutting_factor = _cutting_factor(resolved_cutting_mode)
-    if actual_yield_per_sheet is not None:
-        yield_per_sheet = actual_yield_per_sheet
-    elif cutting_factor > 1:
-        if (
-            snapshot.is_die_cut
-            and snapshot.mold_max_yield_per_sheet is not None
-            and cutting_factor > int(snapshot.mold_max_yield_per_sheet)
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="默认开料每张产出不能超过模具最大出数",
-            )
-        yield_per_sheet = cutting_factor
-    elif snapshot.is_die_cut and snapshot.mold_max_yield_per_sheet is not None:
-        yield_per_sheet = int(snapshot.mold_max_yield_per_sheet)
-    else:
-        yield_per_sheet = 1
+    resolved_cutting_mode = physical_yield.cutting_mode
+    cutting_factor = physical_yield.cutting_factor
+    yield_per_sheet = physical_yield.yield_per_sheet
+    actual_yield_per_sheet = physical_yield.actual_yield_per_sheet
     coverage = (
         inventory_coverage_override
         if inventory_coverage_override is not None

@@ -15,7 +15,7 @@ from app.services.composite_bom import _bom_row_values, _snapshot_kwargs, _valid
 from app.services.incoming_receipts import _snapshot_component_types, _snapshot_physical_pieces
 from app.services.multilevel_bom_master import load_master_structure
 from app.services.multilevel_bom_plan import BomEdge, BomPlanError, FrozenBom, MaterialRoute, ProductNode, plan_bom
-from app.services.requisition_quantities import cutting_factor, normalize_cutting_mode
+from app.services.bom_physical_quantities import resolve_bom_sheet_yield
 
 
 @dataclass(frozen=True)
@@ -27,8 +27,11 @@ class CompiledMasterBom:
 
 def physical_routes(snapshot):
     """Use the same whole/cover/base and splice rules as actual receipt."""
-    mode = normalize_cutting_mode(snapshot.snapshot_component_default_cutting_mode, strict=True)
-    return tuple(MaterialRoute(kind, _snapshot_physical_pieces(snapshot, kind), cutting_factor(mode))
+    try:
+        output = resolve_bom_sheet_yield(snapshot, strict=True)
+    except ValueError as error:
+        raise BomPlanError(str(error)) from error
+    return tuple(MaterialRoute(kind, _snapshot_physical_pieces(snapshot, kind), output.yield_per_sheet)
                  for kind in _snapshot_component_types(snapshot))
 
 

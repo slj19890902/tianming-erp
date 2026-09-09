@@ -3292,22 +3292,15 @@ def auto_cover_bom_component_inventory(
                     OrderItemSemiRequirement.component_type == component_type,
                 )
             )
-            yield_per_sheet = cutting_factor(
-                snapshot.snapshot_component_default_cutting_mode
-            )
+            from app.services.bom_physical_quantities import resolve_bom_sheet_yield
+            from app.services.semi_finished_inventory import semi_finished_candidates_for_bom_component
+            try:
+                yield_per_sheet = resolve_bom_sheet_yield(snapshot, strict=True).yield_per_sheet
+            except ValueError as error:
+                raise WarehouseInventoryError(str(error), 409) from error
             if requirement is None:
-                preview_candidates = semi_finished_candidates_for_product(
-                    db,
-                    product_id=snapshot.component_product_id,
-                    customer_id=order.customer_id,
-                    board_length_mm=int(physical_facts["board_length_mm"]),
-                    board_width_mm=int(physical_facts["board_width_mm"]),
-                    material_code=str(snapshot.snapshot_component_material),
-                    flute_type=str(snapshot.snapshot_component_flute_type),
-                    component_type=component_type,
-                    pieces_per_box=physical_pieces_per_component,
-                    stock_yield_per_sheet=yield_per_sheet,
-                )
+                preview_candidates = semi_finished_candidates_for_bom_component(
+                    db, snapshot_id=snapshot.id, component_type=component_type)
             else:
                 preview_candidates = semi_finished_inventory_candidates(
                     db, requirement.id

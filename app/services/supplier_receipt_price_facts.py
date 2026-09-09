@@ -225,6 +225,18 @@ def _receipt_source_context(db: Session, item: IncomingReceiptItem) -> ReceiptSo
                 "PAPERBOARD_PURCHASE_SOURCE_MISSING",
                 "纸板实收缺少旧报料采购来源",
             )
+        from app.models.product_bom import RequisitionItemBomSource, SalesOrderItemBomComponent
+        component_material_ids = list(db.scalars(select(
+            SalesOrderItemBomComponent.snapshot_component_material_id).join(
+                RequisitionItemBomSource,
+                RequisitionItemBomSource.sales_order_item_bom_component_id == SalesOrderItemBomComponent.id,
+            ).where(RequisitionItemBomSource.requisition_item_id == source.id)))
+        # A component source must not borrow the commercial parent's material
+        # or price. Ambiguous/missing frozen child identities stay fail-closed.
+        material_id = order_item.material_id
+        if component_material_ids:
+            unique_ids = set(component_material_ids)
+            material_id = next(iter(unique_ids)) if len(unique_ids) == 1 and None not in unique_ids else None
         return ReceiptSourceContext(
             receipt_item_id=int(item.id),
             receipt_number=str(receipt.receipt_number),
@@ -234,7 +246,7 @@ def _receipt_source_context(db: Session, item: IncomingReceiptItem) -> ReceiptSo
             purchase_document_number=str(header.requisition_number),
             supplier_name=str(header.supplier_name or "").strip(),
             material_id=(
-                int(order_item.material_id) if order_item.material_id is not None else None
+                int(material_id) if material_id is not None else None
             ),
             material_code=str(source.material_snapshot or "").strip(),
             report_length_mm=_positive_dimension(source.cardboard_len, "报料长"),

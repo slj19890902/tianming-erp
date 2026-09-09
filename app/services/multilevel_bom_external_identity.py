@@ -4,6 +4,7 @@ This internal adapter owns no commit and does not enable external receipt paths.
 The route/caller must enforce its existing customer and procurement permission.
 """
 from fractions import Fraction
+from decimal import Decimal
 from sqlalchemy import select
 
 from app.models.multilevel_bom import OrderBomExternalComponent
@@ -28,10 +29,19 @@ def _validate(db, *, external_component_id, order_item_id, product_id):
         raise BomPlanError('外购组件与真实BOM订单、版本或单位不一致')
     gross = next(p.required_units for p in plan_bom(compiled.graph, 1).products if p.product_id == product_id)
     ratio = Fraction(gross) * Fraction(node.purchase_units.purchase_basis) / Fraction(node.purchase_units.stock_basis)
-    if Fraction(row.quantity_per_finished_unit) != ratio:
+    if row.quantity_per_finished_unit != legacy_multiplier(ratio):
         raise BomPlanError('外购组件用量与真实BOM冻结比例不一致，禁止近似绑定')
     snapshot = next(s for s in compiled.snapshots if s.component_product_id == product_id)
     return snapshot
+
+
+def legacy_multiplier(ratio):
+    """Bounded compatibility projection; exact graph ratio owns arithmetic."""
+    scaled = ratio * 1_000_000
+    value = Decimal(-(-scaled.numerator // scaled.denominator)) / Decimal(1_000_000)
+    if not 0 < value < Decimal('1e12'):
+        raise BomPlanError('外购每父件采购比例超出数据库精度')
+    return value
 
 
 def bind_external_component(db, *, external_component_id, order_item_id, product_id, actor):

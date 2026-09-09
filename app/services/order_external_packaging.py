@@ -152,6 +152,7 @@ def _freeze_direct_product_component(
     db: Session,
     *,
     order_item: OrderItem,
+    display_order: int = 1,
 ) -> list[dict[str, Any]]:
     category = str(order_item.external_packaging_category_code_snapshot or "").strip()
     specification_json = str(
@@ -201,7 +202,7 @@ def _freeze_direct_product_component(
         source_component_set_id=None,
         source_component_id=None,
         source_component_set_version=source_version,
-        display_order=1,
+        display_order=display_order,
         purpose=order_item.snapshot_product_name,
         quantity_per_finished_unit=Decimal(quantity_ratio),
         waste_rate=Decimal("0"),

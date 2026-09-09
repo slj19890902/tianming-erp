@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import sqlite3
+import shutil
 
 import pytest
 from sqlalchemy import select, text
@@ -23,7 +24,7 @@ from tests.test_multilevel_bom_master import save
 
 
 @pytest.fixture
-def factory_copy(tmp_path):
+def factory_copy(tmp_path, monkeypatch):
     source = os.environ.get("ERP_MULTILEVEL_UAT_SOURCE")
     if not source:
         pytest.skip("explicit isolated source required")
@@ -34,8 +35,15 @@ def factory_copy(tmp_path):
     target = tmp_path / "multilevel-factory-test.sqlite3"
     with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as src, sqlite3.connect(target) as dest:
         src.backup(dest)
+    backup = tmp_path / "before-upgrade.sqlite3"
+    shutil.copy2(target, backup)
+    assert hashlib.sha256(backup.read_bytes()).digest() == hashlib.sha256(target.read_bytes()).digest()
+    with sqlite3.connect(backup) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    from alembic import command
+    from tests.test_p1_131_material_cost_lineage_migration import _config
+    command.upgrade(_config(monkeypatch, target), "head")
     engine = create_sqlite_engine(target)
-    Base.metadata.create_all(engine)
     with Session(engine) as db:
         yield db
         db.rollback()

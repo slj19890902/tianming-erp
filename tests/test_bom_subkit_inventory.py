@@ -4,6 +4,8 @@ from decimal import Decimal
 import os
 from pathlib import Path
 import shutil
+import hashlib
+import sqlite3
 
 import pytest
 from sqlalchemy import select, func
@@ -22,7 +24,7 @@ from app.services.warehouse_inventory import manual_finished_in
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(tmp_path, monkeypatch):
     source = os.environ.get("ERP_SUBKIT_UAT_SOURCE")
     if not source:
         pytest.skip("requires an explicitly prepared isolated factory database copy")
@@ -30,13 +32,22 @@ def db(tmp_path):
     if path.name != "source-isolated.sqlite3" or "tm-uat" not in path.parts:
         pytest.fail("not the prepared isolated database")
     target = tmp_path / "subkit-test.sqlite3"
+    before = hashlib.sha256(path.read_bytes()).digest()
     shutil.copy2(path, target)
+    backup = tmp_path / "subkit-before.sqlite3"
+    shutil.copy2(target, backup)
+    assert hashlib.sha256(backup.read_bytes()).digest() == before
+    with sqlite3.connect(backup) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    from alembic import command
+    from tests.test_p1_131_material_cost_lineage_migration import _config
+    command.upgrade(_config(monkeypatch, target), "head")
     engine = create_sqlite_engine(target)
-    Base.metadata.create_all(engine)
     with Session(engine) as session:
         yield session
         session.rollback()
     engine.dispose()
+    assert hashlib.sha256(path.read_bytes()).digest() == before
 
 
 def setup_order(db):

@@ -104,6 +104,27 @@ class ProductBomInventoryRelation(Base):
     relation: Mapped[str] = mapped_column(String(20), nullable=False)
 
 
+class BomBodyInventoryDetail(Base):
+    """Identity of unassembled manufactured bodies; balances remain in InventoryLot."""
+    __tablename__ = "bom_body_inventory_details"
+    __table_args__ = (
+        ForeignKeyConstraint(["inventory_lot_id", "inventory_type"],
+            ["inventory_lots.id", "inventory_lots.inventory_type"],
+            ondelete="RESTRICT", name="fk_bom_body_lot_type"),
+        ForeignKeyConstraint(["order_item_id", "product_id"],
+            ["order_bom_graph_products.order_item_id", "order_bom_graph_products.product_id"],
+            ondelete="RESTRICT", name="fk_bom_body_frozen_product"),
+        CheckConstraint("inventory_type = 'assembly_body'", name="ck_bom_body_type"),
+    )
+    inventory_lot_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    inventory_type: Mapped[str] = mapped_column(String(30), nullable=False,
+        default="assembly_body", server_default="assembly_body")
+    order_item_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    product_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    production_completion_id: Mapped[int] = mapped_column(
+        ForeignKey("production_completions.id", ondelete="RESTRICT"), nullable=False, index=True)
+
+
 class BomAssembly(Base):
     """Conversion provenance only; all stock balances stay in InventoryLot."""
     __tablename__ = "bom_assemblies"

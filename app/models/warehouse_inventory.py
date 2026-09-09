@@ -1161,7 +1161,7 @@ class InventoryLot(Base):
     __tablename__ = "inventory_lots"
     __table_args__ = (
         CheckConstraint(
-            "inventory_type IN ('finished','semi_finished')",
+            "inventory_type IN ('finished','semi_finished','assembly_body')",
             name="ck_inventory_lots_type",
         ),
         CheckConstraint("unit IN ('boxes','sheets')", name="ck_inventory_lots_unit"),
@@ -1185,6 +1185,7 @@ class InventoryLot(Base):
         CheckConstraint("quantity_damaged >= 0", name="ck_inventory_lots_damaged"),
         CheckConstraint("quantity_scrapped >= 0", name="ck_inventory_lots_scrapped"),
         UniqueConstraint("lot_number", name="uq_inventory_lots_number"),
+        UniqueConstraint("id", "inventory_type", name="uq_inventory_lot_type_identity"),
         Index("ix_inventory_lots_type_status", "inventory_type", "status"),
         Index("ix_inventory_lots_location_status", "warehouse_location_id", "status"),
         Index("ix_inventory_lots_stock_date", "stock_date"),

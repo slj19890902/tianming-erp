@@ -55,7 +55,7 @@ def test_isolated_copy_upgrade_downgrade_reupgrade(monkeypatch, tmp_path):
         counts = {t: db.execute(f'SELECT count(*) FROM {t}').fetchone()[0]
                   for t in ('sales_orders','sales_order_items','inventory_lots','warehouse_locations')}
     config = _config(monkeypatch, database)
-    assert ScriptDirectory.from_config(config).get_heads() == ['sb14v8x9z76']
+    assert ScriptDirectory.from_config(config).get_heads() == ['sc15v8x9z77']
     command.upgrade(config, 'ry11v8x9z73')
     command.downgrade(config, 'rx10v8x9z72')
     command.upgrade(config, 'ry11v8x9z73')

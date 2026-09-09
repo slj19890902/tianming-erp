@@ -1,5 +1,13 @@
 # MULTILEVEL-BOM-20260909
 
+## 2026-09-10 本体库存真实身份迁移77候选
+
+唯一候选head sc15v8x9z77接76：InventoryLot增加assembly_body类型，数量仍原表；id/type复合唯一键加bom_body_inventory_details复合外键防止把本体明细指向finished库存。明细绑定冻结订单产品及真实ProductionCompletion，无第二数量账。库存表批量重建保存/恢复所有引用触发器，旧约束保留；有本体明细或本体库存拒绝降级，不回填任何正式事实。
+
+新增迁移失败先复现。指定67隔离源复制+备份哈希和完整性后升76→77→76→77，逐行比对库存/流水/位置/订单及触发器SQL完全不变，旧负数/状态/来源约束仍拒绝。错误类型、非冻结产品、失效完工、改本体为成品被外键拒绝。首批35项中25通过10失败，定位旧test_bom_subkit_inventory副本仅create_all不升级现有表，造成新表引用旧表无复合唯一键；改为真正升级隔离复制品，未关闭外键。factory_copy亦改真实迁移及备份。最终相关迁移/实际收料/组装库存35通过102.87秒22warning；指定68隔离源实际000148/00205编译另1通过5.55秒。源文件哈希不变，compileall/diff check通过。
+
+本轮三迁移文档已完整读取，退役抽取命令未执行。正式远端仍ac02bb004b474e666e3f24a3b7c83c5456773f91，api/health ok=true；未写正式库、地图草稿，未发布。只新增身份合同，不宣称本体入库已接通。下一步：receipt_purpose_distribution.py约1230/1317实际收料上下文；production_workflow.py约3145库存输出仍manual_finished_in并预占；需本体专用输出与不预占成品，绑定completion，接入multilevel_bom_inventory及bom_subkit_inventory的body_stock/输入消费。bom_subkit_costs.py和multilevel_bom_cost_lineage.py仍要求finished_detail，需按本体真实身份保留同源成本/转移/撤销。全部接通后再开放master manufactured+assembly；普通出库/预占须继续排除assembly_body。
+
 ## 2026-09-10 自制本体与装配成品分账计算候选
 
 plan_assembly新增显式body_stock，仅接受有assembly子件的manufactured真实产品ID及非负整数；与eligible_stock成品分开。产量同时受本体、子件、订单缺口限制；AssemblyStep单独记录consumed_body_units，结果返回remaining_body_stock。没有传body_stock的旧调用仍拒绝这类图，不允许从子件凭空制造本体。历史已满足成品仅抵需求，不可作为本体或可消耗库存。父子都组装时，自制中间本体先组装，再由上层按真实配方消耗一次。

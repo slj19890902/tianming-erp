@@ -16,6 +16,7 @@ from app.services.incoming_receipts import _snapshot_component_types, _snapshot_
 from app.services.multilevel_bom_master import load_master_structure
 from app.services.multilevel_bom_plan import BomEdge, BomPlanError, FrozenBom, MaterialRoute, ProductNode, PurchaseUnits, plan_bom
 from app.services.bom_physical_quantities import resolve_bom_sheet_yield
+from app.services.multilevel_bom_execution_boundary import ExecutionWindow
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class CompiledMasterBom:
     graph: FrozenBom
     # Detached ORM rows, never added to a session by the compiler.
     snapshots: tuple[SalesOrderItemBomComponent, ...]
+    execution_window: ExecutionWindow | None = None
 
 
 def physical_routes(snapshot):

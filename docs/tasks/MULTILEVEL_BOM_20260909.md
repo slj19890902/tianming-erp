@@ -1,5 +1,19 @@
 # MULTILEVEL-BOM-20260909
 
+## 2026-09-10 旧来源摘要校验、单单读取及剩余组装候选
+
+make_cutover_basis冻结graph hash、订单/历史已送边界以及history/current全部快照ID、产品ID、业务列摘要；只排除created_at及依法ON DELETE SET NULL的可空主档模板外键，原快照ID和冻结产品/数量/工艺不排除。支持迭代输入一次固化、Numeric按列类型规范化，防止flush前int与重读Decimal产生假冲突。缺源/重复/跨订单/旧schema或数量不符/新执行量非剩余量均拒绝。
+
+read_compiled_order_bom在原单次材料查询中关联边界/来源角色/订单，读取两期用于摘要验证，只返回current；无额外逐子件查询。CompiledMasterBom新增execution_window可选元数据，原普通订单仍None；生产资料修订投影保留该窗口。缺映射、历史或当前业务列变化、摘要损坏、跨历史边界撤销或订单量变化均拒绝。后续删除可空主档边不破坏冻结事实读取，已测试。
+
+先在真实迁移隔离库复现单层及逐层组装仍按100而非执行80。现bom_subkit_inventory和multilevel_bom_inventory使用已校验execution_window，普通旧逻辑不变。订单100/历史已送20，只产80，原料220/660剩60/180；再次新键执行产0，撤销本次逐层组装恢复220/660，商业订单100及旧已送20不变。此是合成边界下真实库存服务验收，不是实际00205订单已转换或旧预占已切换。
+
+最初共享fixture尝试修改已冻结current行，被真实库immutable触发器拒绝；已改为初始生成80当前快照，再独立构造测试历史行/商业边界，不删除触发器或修改冻结行。生产转换仍须追加独立新行，不能导入seed_read_boundary测试助手。新来源读取/原订单/编译及新鲜工厂副本编译45通过52.13秒；生产修订14通过16.10秒；新来源/两组装窗口及原逐层编排最终26通过60.87秒；最后补反向和迭代输入3通过9.16秒（不累计重复）。compileall/diff check通过，唯一head78，无新migration或本轮UI改动。
+
+本轮末正式基线发生变化：远端从ac02bb00更新为3fc9ce1a1868578353c9eb8b683a7d03db0bf2ea（7fcc37b2供应商付款三步UI、3fc9ce1a发布v0.22.317回执）。无迁移；正式库只读仍rt09v8x9z68、health ok=true。需将这两个正式提交合入候选并验证静态共用入口，保留供应商新UI；不覆盖回退为旧正式版本。未写正式库地图草稿，未部署。
+
+下一项：专用原子旧订单转换写入还不存在；必须核对真实旧快照全量、追加current新ID/来源对应、库存及剩余预占转换，保留旧已消费和成本来源。批量production_versions、delivery_page/list/summary及报料/收料汇总仍未按cutover来源和执行窗口适配，不能据单单读取通过直接上线。实际00205位置仍盘点待归位，历史成本仍估算；不能假装实际采购。完整任务和正式发布门禁保持active。
+
 ## 2026-09-10 旧订单执行边界78存储及选择合同候选
 
 实查旧快照表按订单/显示序号和订单/主档边唯一，但允许同产品多个快照；不能直接追加schema5后继续SELECT同订单全部行。read_compiled_order_bom、delivery_page、production_versions批量投影均校验全部行；inventory/receipt等还直接用item.quantity。00205若不记录1500历史边界，会重新按1800计划或把旧长短片与新来源双计。因此新增显式历史/当前源映射，而非删除schema4或解除已有送货门禁。

@@ -16,7 +16,7 @@ from tests.test_bom_subkit_inventory import db, setup_order, raw
 from tests.test_multilevel_bom_master import save
 
 
-def setup_graph(db, *, root_assembly=False):
+def setup_graph(db, *, root_assembly=False, quantity=100):
     actor, old_item, definition = setup_order(db)
     kid = definition["kit_product_id"]
     save_subkit(db, parent_product_id=3765, name="000148内衬", kits_per_parent=1,
@@ -28,8 +28,8 @@ def setup_graph(db, *, root_assembly=False):
     order = Order(order_number="TEST-REAL-GRAPH", customer_id=136, order_date=date.today())
     db.add(order)
     db.flush()
-    item = OrderItem(order_id=order.id, product_id=3765, quantity=100,
-        unit_price=Decimal("5"), subtotal=Decimal("500"), snapshot_product_name="测试真实父件",
+    item = OrderItem(order_id=order.id, product_id=3765, quantity=quantity,
+        unit_price=Decimal("5"), subtotal=Decimal(5 * quantity), snapshot_product_name="测试真实父件",
         composite_fulfillment_mode_snapshot="parent_delivery")
     db.add(item)
     db.flush()

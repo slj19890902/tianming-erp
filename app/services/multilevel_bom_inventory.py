@@ -141,7 +141,9 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
             if credit < 0:
                 raise SubkitError("组装来源抵扣与库存流水不一致")
             fulfilled[conversion.output_product_id] += credit
-        plan = plan_assembly(compiled.graph, item.quantity,
+        execution_quantity = (compiled.execution_window.execution_quantity
+                              if compiled.execution_window is not None else item.quantity)
+        plan = plan_assembly(compiled.graph, execution_quantity,
                              eligible_stock=balances, fulfilled_stock=fulfilled,
                              body_stock=body_balances)
         steps = {s.product_id: s for s in plan.steps}

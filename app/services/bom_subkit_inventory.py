@@ -65,12 +65,15 @@ def assemble_subkit_inventory(
         snapshot = db.get(OrderSubkit, order_item_id)
         recipe = None
         body_product_id = None
+        execution_quantity = item.quantity if item is not None else 0
         if graph_product_id is not None:
             from app.services.multilevel_bom_orders import read_compiled_order_bom
             from app.services.multilevel_bom_plan import plan_bom
             compiled = read_compiled_order_bom(db, order_item_id)
             if compiled is None or item is None:
                 raise SubkitError("订单缺少完整多级BOM快照")
+            if compiled.execution_window is not None:
+                execution_quantity = compiled.execution_window.execution_quantity
             node = next((n for n in compiled.graph.nodes if n.product_id == graph_product_id), None)
             has_assembly = any(e.parent_id == graph_product_id and e.relation == "assembly"
                                for e in compiled.graph.edges)
@@ -156,7 +159,7 @@ def assemble_subkit_inventory(
             Conversion.order_item_id == item.id, Conversion.status == "posted",
             Conversion.output_product_id == graph_product_id if graph_product_id is not None else True,
         )) or 0)
-        remaining = max(item.quantity * snapshot.kits_per_parent - completed, 0)
+        remaining = max(execution_quantity * snapshot.kits_per_parent - completed, 0)
         if quantity_limit is not None:
             remaining = min(remaining, quantity_limit)
         if body_product_id is not None:

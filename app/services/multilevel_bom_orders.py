@@ -99,10 +99,23 @@ def read_compiled_order_bom(db, order_item_id):
     graph = read_order_graph(db, order_item_id)
     if graph is None:
         return None
-    rows = tuple(db.scalars(select(SalesOrderItemBomComponent).where(
-        SalesOrderItemBomComponent.sales_order_item_id == order_item_id).order_by(
-        SalesOrderItemBomComponent.display_order)))
-    compiled = validate_compiled_order_rows(graph, rows)
+    from app.models.multilevel_bom import OrderBomExecutionCutover, OrderBomCutoverSource
+    from app.services.multilevel_bom_execution_boundary import select_execution_sources
+    # One source query still covers ordinary and converted orders. Historical
+    # rows are read for checksum validation, never returned as current demand.
+    records = db.execute(select(SalesOrderItemBomComponent, OrderBomExecutionCutover,
+        OrderBomCutoverSource.role, OrderItem).join(OrderItem,
+            OrderItem.id == SalesOrderItemBomComponent.sales_order_item_id)
+        .outerjoin(OrderBomExecutionCutover, OrderBomExecutionCutover.order_item_id == OrderItem.id)
+        .outerjoin(OrderBomCutoverSource,
+            (OrderBomCutoverSource.snapshot_id == SalesOrderItemBomComponent.id)
+            & (OrderBomCutoverSource.order_item_id == OrderItem.id))
+        .where(SalesOrderItemBomComponent.sales_order_item_id == order_item_id)
+        .order_by(SalesOrderItemBomComponent.display_order)).all()
+    if not records:
+        raise BomPlanError("订单多级BOM材料快照不完整，不能用当前主档补写")
+    compiled = select_execution_sources(graph=graph, item=records[0][3], cutover=records[0][1],
+        rows_with_roles=((row, role) for row, _, role, _ in records))
     from app.services.multilevel_bom_production_versions import production_revisions, project_production_versions
     return project_production_versions(compiled, production_revisions(db, order_item_id))
 

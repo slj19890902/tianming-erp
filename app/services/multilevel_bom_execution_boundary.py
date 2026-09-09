@@ -3,9 +3,13 @@
 Not an authorization to create or infer a cutover from delivered quantities.
 Historical document lookups still use their original direct snapshot IDs.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from decimal import Decimal
+import hashlib
+import json
+from types import SimpleNamespace
 
-from sqlalchemy import exists, or_
+from sqlalchemy import Numeric, exists, or_
 
 from app.models.multilevel_bom import OrderBomExecutionCutover, OrderBomCutoverSource
 from app.models.product_bom import SalesOrderItemBomComponent
@@ -45,3 +49,87 @@ def execution_window(*, order_quantity, delivered_quantity, cutover=None):
     # Authorized excess delivery is possible; do not make a negative demand.
     return ExecutionWindow(order_quantity, baseline, order_quantity - baseline,
         delivered_quantity - baseline, max(order_quantity - delivered_quantity, 0))
+
+
+def _canonical(value):
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (ValueError, TypeError) as error:
+        raise BomPlanError("BOM转换来源内容无效") from error
+
+
+def _digest(value):
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _source_identity(row):
+    # Match the immutable production-basis contract. The optional master edge
+    # legally becomes NULL on later template deletion; frozen snapshot/product
+    # IDs and the graph remain authoritative, not that disposable template link.
+    fields = {}
+    for column in SalesOrderItemBomComponent.__table__.columns:
+        if column.key in {"created_at", "product_bom_component_id"}:
+            continue
+        value = getattr(row, column.key)
+        if value is not None and isinstance(column.type, Numeric):
+            value = str(Decimal(str(value)).normalize())
+        fields[column.key] = value
+    return {"snapshot_id": row.id, "product_id": row.component_product_id,
+            "hash": _digest(_canonical(fields))}
+
+
+def make_cutover_basis(*, graph, order_item_id, order_quantity, delivered_before,
+                       history_rows, current_rows):
+    """Build an exact source manifest, after IDs exist, without changing any row.
+
+    This is not a conversion writer. Permission, CAS, inventory/reservation
+    cutover and transaction ownership remain the dedicated adapter's job.
+    """
+    from app.services.multilevel_bom_orders import validate_compiled_order_rows
+    from app.services.multilevel_bom_snapshot import dump_graph
+    history_rows, current_rows = tuple(history_rows), tuple(current_rows)
+    window = execution_window(order_quantity=order_quantity, delivered_quantity=delivered_before,
+        cutover=SimpleNamespace(order_quantity=order_quantity, delivered_before=delivered_before))
+    rows = history_rows + current_rows
+    ids = [row.id for row in rows]
+    if (type(order_item_id) is not int or order_item_id <= 0 or not history_rows or not current_rows
+            or len(rows) > 2000 or any(type(i) is not int or i <= 0 for i in ids)
+            or len(set(ids)) != len(ids)
+            or any(row.sales_order_item_id != order_item_id for row in rows)):
+        raise BomPlanError("BOM转换来源缺失、重复或不属于当前订单")
+    for row in history_rows:
+        if (type(row.snapshot_schema_version) is not int or not 1 <= row.snapshot_schema_version <= 4
+                or row.order_set_quantity != order_quantity or row.quantity_per_set <= 0
+                or row.required_piece_quantity != order_quantity * row.quantity_per_set):
+            raise BomPlanError("旧BOM冻结数量或版本不一致，不能自动转换")
+    validate_compiled_order_rows(graph, tuple(current_rows))
+    if any(row.order_set_quantity != window.execution_quantity for row in current_rows):
+        raise BomPlanError("新BOM必须仅包含转换后的待执行数量")
+    document = _canonical({"schema": 1, "order_item_id": order_item_id,
+        "order_quantity": order_quantity, "delivered_before": delivered_before,
+        "graph_hash": _digest(dump_graph(graph)),
+        "history": [_source_identity(row) for row in sorted(history_rows, key=lambda row: row.id)],
+        "current": [_source_identity(row) for row in sorted(current_rows, key=lambda row: row.id)]})
+    return document, _digest(document)
+
+
+def select_execution_sources(*, graph, item, cutover, rows_with_roles):
+    """Validate both epochs, then return current sources plus quantity window."""
+    from app.services.multilevel_bom_orders import validate_compiled_order_rows
+    pairs = tuple(rows_with_roles)
+    if cutover is None:
+        if any(role is not None for _, role in pairs):
+            raise BomPlanError("BOM来源存在无执行边界的归属")
+        return validate_compiled_order_rows(graph, tuple(row for row, _ in pairs))
+    if cutover.order_item_id != item.id or any(role not in {"history", "current"} for _, role in pairs):
+        raise BomPlanError("BOM转换来源归属不完整")
+    history = tuple(row for row, role in pairs if role == "history")
+    current = tuple(row for row, role in pairs if role == "current")
+    window = execution_window(order_quantity=item.quantity, delivered_quantity=item.delivered_quantity or 0,
+                              cutover=cutover)
+    document, checksum = make_cutover_basis(graph=graph, order_item_id=item.id,
+        order_quantity=cutover.order_quantity, delivered_before=cutover.delivered_before,
+        history_rows=history, current_rows=current)
+    if (cutover.basis_json != document or cutover.basis_hash != checksum):
+        raise BomPlanError("BOM转换原始来源摘要不一致，禁止继续执行")
+    return replace(validate_compiled_order_rows(graph, current), execution_window=window)

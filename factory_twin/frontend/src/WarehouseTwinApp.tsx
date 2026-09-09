@@ -1503,6 +1503,10 @@ function WarehouseRackElevation({
     }
     return grouped;
   }, [locations, rack.id]);
+  const plannedCells = levels.flatMap(level => Array.from({ length: levelCellCounts[level - 1] || 0 }, (_, bay) =>
+    rackCells.get(rackCellIdentityKey(rack.id, level, bay + 1) || '') || []));
+  const printableLocationIds = plannedCells.filter(rows => rows.length === 1).map(rows => rows[0].location_id);
+  const allCellsPrintable = plannedCells.length > 0 && plannedCells.every(rows => rows.length === 1);
   const items = useMemo(
     () => locations.flatMap((location) => rackLocationInventoryItems(location)),
     [locations]
@@ -1524,6 +1528,7 @@ function WarehouseRackElevation({
   return <section className="twin-rack-focus-panel twin-rack-stage" role="region" aria-label={`${rack.rack_code} 参数化正视图`}>
       <header>
       <div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
+        <button type="button" disabled={!allCellsPrintable} title="沿用80×40固定货位信息标签，不含数量；未绑定产品会在预览中提示补齐。" onClick={() => window.open(`/static/location-label.html?content=shelf-information&location_ids=${printableLocationIds.join(',')}`, '_blank', 'noopener')}>打印整架每格信息标签（无数量）</button>
         <button type="button" onClick={onClose}>返回孪生地图</button>
       </header>
       <div className="twin-rack-content">
@@ -1576,6 +1581,7 @@ function WarehouseRackElevation({
                       }
                     }}
                   ><b>{bay + 1}格</b><strong>{identityConflict ? "货位身份冲突" : cellItems.length ? cellSummary : location ? "正式空货位" : "未建正式货位"}</strong></button>
+                  {location && !identityConflict && <button type="button" onClick={() => window.open(`/static/location-label.html?content=shelf-information&location_id=${location.location_id}`, '_blank', 'noopener')}>打印本格信息标签</button>}
                   {cellItems.length ? <div className="shelf-product-cards">
                     <small className="shelf-cell-kind">{groupShelfProducts(cellItems).length === 1 ? "单品存放" : `混放 · ${groupShelfProducts(cellItems).length} 款`}</small>
                     {groupShelfProducts(cellItems).map(group => <article className="shelf-product-card" key={group.key}>

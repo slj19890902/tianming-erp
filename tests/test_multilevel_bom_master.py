@@ -89,7 +89,6 @@ def test_cycle_and_legacy_parent_cannot_be_bypassed(context):
 @pytest.mark.parametrize("mode,rows", [
     ("assembled", []),
     ("assembled", [(3, 1, "accompany")]),
-    ("manufactured", [(3, 1, "assembly")]),
     ("purchased", [(3, 1, "assembly")]),
     ("assembled", [(3, 1, "unknown")]),
 ])
@@ -100,6 +99,16 @@ def test_invalid_source_or_relationship_is_rejected_before_writes(context, mode,
     db.commit()
     assert db.get(ProductBomProfile, 1) is None
     assert db.scalar(select(func.count()).select_from(ProductBomComponent)) == 0
+
+
+def test_manufactured_body_can_assemble_real_children(context):
+    db, actor, _, _ = context
+    save(db, actor, 1, "manufactured", [(3, 2, "assembly"), (4, 1, "accompany")])
+    db.commit()
+    from app.services.multilevel_bom_master import load_master_structure
+    structure = load_master_structure(db, 1)
+    assert structure["profiles"][1] == "manufactured"
+    assert {(e["child_id"],e["quantity"],e["relation"]) for e in structure["edges"]} == {(3,2,"assembly"),(4,1,"accompany")}
 
 
 def test_failed_deep_validation_rolls_back_all_master_changes(context):

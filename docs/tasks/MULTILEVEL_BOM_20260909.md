@@ -1,5 +1,17 @@
 # MULTILEVEL-BOM-20260909
 
+## 2026-09-10 自制组装公开编辑及加工费用候选
+
+主档writer/loader与前端原组装下拉已允许manufactured+assembly；purchased仍只配套，assembled仍要求非空组装子件，循环/跨客户/失效/正整数门禁不变。无新按钮/行数，仅原选项可用性和校验文案改变。receipt_flow匿名body夹具现改成真实主档保存及freeze_master_order_bom，不再手工替换冻结图。
+
+先复现主档拒自制组装及缺组装人工仍calculated。加工估算按真实assembly边判定人工必填；补录自制本体原未知人工仅补assembly_worker_days_per_1000，单独记录assembly_profile_source id/version，不替换冻结printer/die模式。已有完整成本不覆盖。实际测试先partial冻结、改主档打印模式并补3工日，再冻结新成本，原记录不变且打印仍none、人工正确。
+
+新增公开PUT /master/products/1/with-bom（保留必要的原确认令牌）→POST /orders→报料→三路实际价格收料，形成10套最终成品预占、本体只被组装消耗；原订单仍配套，新订单组装，真实外键关系不靠名称。新/旧前端Node行为、主档、加工估算、本体HTTP回归最终46通过58.51秒10warning；初次工日格式断言4/6小数不同改数值比较，旧提示文案断言同步。compileall/diff check通过、唯一head77，无新增迁移。
+
+static/index.html直接引用内联方法，SHA256 7F56D2254D0B30F6F79315F64F9B0BCEAC7276459DDE523FF6B0F4776FDAF1E9，无新bundle/布局资产。本轮尚无真实Chrome登录/打印验收，未动正式数据库地图草稿，未部署。
+
+接下来优先回到000148/00205实际未完成订单受控转换（已送/已完历史不覆写），使用新鲜正式隔离副本核对位置/库存/材料/预占/成本证据，不使用旧测试副本替代发布备份。另保留既有取消发货后更深撤销门禁、旧查询上限、真实UI和最终迁移/备份/发布/实体扫码等完整剩余项。禁止继续把已完成本体入口反复当新任务重做。
+
 ## 2026-09-10 本体自动收料、汇总及反向入口候选
 
 先复现project_graph_receipts未传body_stock报错、自动完工按成品绑定栈板被拒、真实HTTP撤销body被finished类型门禁拒。现本体单独计理论capacity，不把body completion加到成品output；最终BomAssembly才加成品产量。自动完工识别冻结图自制+assembly，order_reserved=0、direct=0、stock=delta，保持真实货位/地图CAS但不创建成品栈板。assemble_graph_order_receipt包括自制组装节点，主任务汇总校验并排除body。反向库存入口按真实body明细/完工身份支持body，同时禁止body异常预占/栈板/人工调整及保留后续流水门禁。

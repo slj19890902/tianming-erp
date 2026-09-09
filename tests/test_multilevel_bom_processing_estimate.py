@@ -15,11 +15,13 @@ from tests.test_multilevel_bom_compile import setup_liner
 from tests.test_multilevel_bom_material_estimate import materialize
 
 
-def prepare(db, actor, item, *, kit=False, shared=False):
+def prepare(db, actor, item, *, kit=False, shared=False, body=False):
     from tests.test_multilevel_bom_master import save
     setup_liner(db, actor)
     if kit:
         save(db, actor, 1, "assembled", [(3, 3, "assembly"), (4, 4, "assembly")])
+    elif body:
+        save(db, actor, 1, "manufactured", [(2, 1, "assembly")])
     elif shared:
         save(db, actor, 1, "manufactured", [(2, 1, "accompany"), (3, 1, "accompany")])
     materialize(db)
@@ -35,6 +37,29 @@ def prepare(db, actor, item, *, kit=False, shared=False):
     db.commit()
     freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
     db.commit()
+
+
+def test_body_assembly_labor_missing_then_completed_without_changing_frozen_printing(context):
+    db, actor, item, _ = context
+    prepare(db, actor, item, body=True)
+    result = estimate_order_item_processing_cost(db, item)
+    assert result["calculation_status"] == "incomplete"
+    assert any("组装人工" in text for text in result["missing_items"])
+    material, _ = freeze_order_item_material_cost(db, item)
+    first, _ = freeze_order_item_estimated_cost(db, item, material_snapshot=material)
+    db.commit()
+    original = first.breakdown_json
+    profile = db.scalar(select(ProductProcessingProfile).where(ProductProcessingProfile.product_id == 1))
+    profile.assembly_worker_days_per_1000 = Decimal(3)
+    profile.printer_mode = "new"
+    profile.version += 1
+    db.commit()
+    second, created = freeze_order_item_estimated_cost(db, item, material_snapshot=material)
+    assert created and second.calculation_status == "calculated"
+    root = next(r for r in json.loads(second.breakdown_json)["standard_processing"]["nodes"] if r["product_id"] == 1)
+    assert root["processing"]["printing"]["printer_mode"] == "none"
+    assert Decimal(root["processing"]["extra_assembly"]["assembly_worker_days_per_1000"]) == Decimal(3)
+    assert first.breakdown_json == original
 
 
 def test_liner_processing_counts_real_nodes_not_only_root(context):

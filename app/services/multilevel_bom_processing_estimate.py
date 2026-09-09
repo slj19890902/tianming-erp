@@ -77,13 +77,20 @@ def _inputs(db, item, compiled):
     # Previously unknown assembly labour can be completed by the existing
     # authorized profile editor. Resolved historical values are never replaced.
     effective_snapshots = {s.component_product_id: s for s in compiled.snapshots}
+    assembly_ids = {e.parent_id for e in compiled.graph.edges if e.relation == "assembly"}
     for row in rows:
         if row["source"] == "manufactured":
             row["product"]["splice_mode"] = effective_snapshots[row["product_id"]].snapshot_component_splice_mode
-        if row["source"] == "assembled" and row["profile"]["assembly_worker_days_per_1000"] is None:
+        if row["product_id"] in assembly_ids and row["profile"]["assembly_worker_days_per_1000"] is None:
             profile = get_product_processing_profile(db, row["product_id"])
             if profile is not None and profile.assembly_worker_days_per_1000 is not None:
-                row["profile"] = _profile_values(profile)
+                if row["source"] == "manufactured":
+                    # Fill only the previously unknown labour. The original
+                    # printer/die-cut modes remain frozen even if master changed.
+                    row["profile"]["assembly_worker_days_per_1000"] = str(profile.assembly_worker_days_per_1000)
+                    row["assembly_profile_source"] = {"id":profile.id,"version":profile.version}
+                else:
+                    row["profile"] = _profile_values(profile)
     from app.services.multilevel_bom_production_revision import production_basis
     return dict(schema=1, graph_hash=graph_row.content_hash, nodes=rows, inputs_hash=_hash(rows),
                 production_basis=production_basis(compiled))
@@ -94,6 +101,7 @@ def estimate_graph_processing_cost(db, item):
     inputs = _inputs(db, item, compiled)
     demand = {row.product_id: row.required_units for row in plan_bom(compiled.graph, item.quantity).products}
     names = {node.product_id: node.name for node in compiled.graph.nodes}
+    assembly_ids = {e.parent_id for e in compiled.graph.edges if e.relation == "assembly"}
     results, missing = [], []
     for row in inputs["nodes"]:
         profile = dict(row["profile"])
@@ -105,7 +113,7 @@ def estimate_graph_processing_cost(db, item):
         detail = estimate_standard_processing_cost(db, product=SimpleNamespace(**row["product"]),
             quantity=demand[row["product_id"]], profile_override=SimpleNamespace(**profile),
             supply_mode="corrugated_production" if source == "manufactured" else "external_purchase")
-        if source == "assembled" and profile["assembly_worker_days_per_1000"] is None:
+        if row["product_id"] in assembly_ids and profile["assembly_worker_days_per_1000"] is None:
             detail["missing_items"].append("组装人工定额待维护")
             detail.update(calculation_status="incomplete", estimated_processing_cost=None)
         missing.extend(f"{names[row['product_id']]}：{text}" for text in detail["missing_items"])

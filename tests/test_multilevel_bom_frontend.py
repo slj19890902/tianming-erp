@@ -51,7 +51,7 @@ def test_external_purchase_can_edit_and_round_trip_real_accompany_bom():
       assert.equal(ctx.bomEditor.inventory_mode,'purchased');
       assert.equal(ctx._productBomDirty(),false);
       ctx.bomEditor.components[0].inventory_relation='assembly';
-      assert.match(ctx.validateProductBom(),/只能独立配套/);
+      assert.match(ctx.validateProductBom(),/请选择自制或组套/);
     """)
 
 
@@ -80,12 +80,14 @@ def test_fields_round_trip_and_no_free_text_recipe_in_new_mode():
     """)
 
 
-def test_invalid_assembly_cannot_be_saved_as_ordinary_manufacture():
+def test_body_assembly_is_editable_and_invalid_sources_still_rejected():
     run_js("""
       const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1}};
       ctx.bomEditor.enabled=true;ctx.bomEditor.inventory_mode='manufactured';
       ctx.bomEditor.components=[{...blankBomComponent(),component_product_id:2,inventory_relation:'assembly'}];
-      assert.match(ctx.validateProductBom(),/只能独立配套/);
+      assert.equal(ctx.validateProductBom(),'');
+      ctx.bomEditor.inventory_mode='purchased';
+      assert.match(ctx.validateProductBom(),/请选择自制或组套/);
       ctx.bomEditor.inventory_mode='assembled';ctx.bomEditor.components=[];
       assert.match(ctx.validateProductBom(),/至少需要一个组装子件/);
     """)

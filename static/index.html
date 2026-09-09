@@ -6773,7 +6773,7 @@
                         <div class="field"><label>每套用量</label><input class="input" type="number" min="1" step="1" v-model.number="component.quantity_per_set" /></div>
                         <label v-if="bomEditor.inventory_mode === 'legacy'" class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> 必需</label>
                         <select v-else class="select bom-component-relation" aria-label="子件库存关系" v-model="component.inventory_relation">
-                          <option value="assembly" :disabled="bomEditor.inventory_mode !== 'assembled'">组装消耗</option>
+                          <option value="assembly" :disabled="!['assembled', 'manufactured'].includes(bomEditor.inventory_mode)">组装消耗</option>
                           <option value="accompany">独立配套</option>
                         </select>
                         <span class="bom-component-actions"><button type="button" class="btn small" :aria-expanded="!!component._planningOpen" @click="component._planningOpen = !component._planningOpen">备料</button><button type="button" class="btn small" :disabled="!component.component_product_id || bomEditor.loading || masterSavePending || !canEditProducts" @click="openBomChildEditor(component)">编辑</button><button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button></span>
@@ -25159,7 +25159,7 @@
               if (ids.has(String(component.component_product_id))) return "同一个内部组件不能重复添加";
               ids.add(String(component.component_product_id));
               if (mode !== "legacy" && !["assembly", "accompany"].includes(component.inventory_relation)) return "请选择子件的组装或配套关系";
-              if (mode !== "legacy" && mode !== "assembled" && component.inventory_relation === "assembly") return "自制或外购产品只能独立配套，需组装请选择组套成品";
+              if (mode !== "legacy" && !["assembled", "manufactured"].includes(mode) && component.inventory_relation === "assembly") return "组装消耗请选择自制或组套来源";
               if (!Number.isFinite(Number(component.quantity_per_set)) || Number(component.quantity_per_set) <= 0) return "每套数量必须大于0";
               if (mode !== "legacy" && !Number.isInteger(Number(component.quantity_per_set))) return "每套用量必须为正整数";
               if (component.is_die_cut && !component.mold_tool_id) return "模切组件必须选择生产模具";

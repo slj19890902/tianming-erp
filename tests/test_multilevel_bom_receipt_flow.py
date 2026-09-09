@@ -236,7 +236,7 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False):
             db.add(kit)
             db.flush()
             save(db, actor, kit.id, "assembled", [(2, 2, "assembly"), (3, 6, "assembly")])
-            save(db, actor, 1, "manufactured", [(kit.id, 1, "accompany")])
+            save(db, actor, 1, "manufactured", [(kit.id, 1, "assembly" if body else "accompany")])
         else:
             save(db, actor, 1, "assembled", [(2, 3, "assembly"), (3, 4, "assembly")])
         if a3:
@@ -248,21 +248,7 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False):
             p = db.get(Product, 2)
             p.pieces_per_box = 2
             p.default_cutting_mode = "一开四"
-        if body:
-            # Freeze an explicit anonymous body recipe before any purchase.
-            # Keep the public master gate closed until the full adapter passes.
-            assert liner
-            from dataclasses import replace
-            from app.services.multilevel_bom_compile import compile_master_order_bom
-            from app.services.multilevel_bom_orders import freeze_order_graph
-            compiled = compile_master_order_bom(db, item)
-            graph = replace(compiled.graph, edges=tuple(replace(e, relation="assembly")
-                if e.parent_id == 1 else e for e in compiled.graph.edges))
-            freeze_order_graph(db, order_item_id=1, graph=graph, actor=actor)
-            db.add_all(compiled.snapshots)
-            db.flush()
-        else:
-            compiled = freeze_master_order_bom(db, order_item_id=1, actor=actor)
+        compiled = freeze_master_order_bom(db, order_item_id=1, actor=actor)
         db.commit()
         snapshots = [(s.id, s.component_product_id) for s in compiled.snapshots
                      if next(n.source for n in compiled.graph.nodes if n.product_id == s.component_product_id) == "manufactured"]

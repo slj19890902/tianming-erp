@@ -13,7 +13,7 @@ from tests.test_multilevel_bom_external_receipts import prepare, receive, _login
 from tests.test_p1_81_receipt_purpose_flow import _seed_material_and_staging, _p181_published_map_identity
 
 
-@pytest.mark.parametrize('old_reserved', [0,3])
+@pytest.mark.parametrize('old_reserved', [0,3,10])
 @pytest.mark.parametrize('split', [False, True])
 def test_direct_purchased_root_reserves_only_missing_units(purchase_app, _p181_published_map_identity, old_reserved, split):
     factory = purchase_app.state.session_factory
@@ -35,11 +35,17 @@ def test_direct_purchased_root_reserves_only_missing_units(purchase_app, _p181_p
             db.commit()
     with TestClient(purchase_app) as client:
         _login(client, 'purchase-admin')
+        from app.services.multilevel_bom_receipts import graph_material_receipts_closed
+        with factory() as db:
+            assert graph_material_receipts_closed(db, db.get(OrderItem, item_id)) == (old_reserved == 10)
+        if old_reserved == 10:
+            return
         _confirm(client, order_id)
         with factory() as db:
             row = db.scalar(select(ExternalPackagingPurchaseItem).where(ExternalPackagingPurchaseItem.sales_order_item_id == item_id))
             purchase_id, line_id, quantity = row.purchase_order_id, row.id, row.purchase_quantity
             assert quantity == (4 if old_reserved == 0 else 3)
+            assert graph_material_receipts_closed(db, db.get(OrderItem, item_id)) is False
         if split:
             response = receive(client, purchase_id, line_id, 'direct-first', 1)
             assert response.status_code == 200, response.text
@@ -58,3 +64,5 @@ def test_direct_purchased_root_reserves_only_missing_units(purchase_app, _p181_p
             assert len(rows) == 1 + bool(old_reserved) + split
             task = db.scalar(select(ProductionTask).where(ProductionTask.order_item_id == item_id))
             assert task.finished_coverage_snapshot == 10
+            assert graph_material_receipts_closed(db, db.get(OrderItem, item_id)) is True
+            assert db.get(OrderItem, item_id).material_status == 'received'

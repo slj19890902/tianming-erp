@@ -244,8 +244,9 @@ def graph_material_receipts_closed(db, item):
     requirements = read_graph_requirements(db, item.id)
     if requirements is None:
         return None
-    if any(p.make_units and requirements.source(p.product_id) == "purchased" for p in requirements.plan.products):
-        return False  # External purchase fulfillment has its own adapter.
+    from app.services.multilevel_bom_external_closure import external_graph_receipts_closed
+    if not external_graph_receipts_closed(db, item=item, requirements=requirements):
+        return False
     received = defaultdict(int)
     for source, row, purpose in db.execute(select(RequisitionItemBomSource, RequisitionItem, PurchasePurposeSourceSnapshot)
         .join(RequisitionItem, RequisitionItem.id == RequisitionItemBomSource.requisition_item_id)

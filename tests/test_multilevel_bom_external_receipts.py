@@ -20,7 +20,7 @@ from test_p1_33c5_external_packaging_receiving import _login, _confirm
 from tests.test_p1_81_receipt_purpose_flow import _seed_material_and_staging, _p181_published_map_identity
 
 
-def prepare(app, *, stock_basis=1, purchase_basis=3, two=False, direct=False):
+def prepare(app, *, stock_basis=1, purchase_basis=3, two=False, direct=False, quantity=10):
     with app.state.session_factory() as db:
         actor = db.scalar(select(User).where(User.username == 'purchase-admin'))
         old = db.get(Order, app.state.fixture['order_id'])
@@ -57,8 +57,8 @@ def prepare(app, *, stock_basis=1, purchase_basis=3, two=False, direct=False):
         order = Order(order_number='GRAPH-RECEIPT', customer_id=old.customer_id, order_date=date(2026,9,10))
         db.add(order)
         db.flush()
-        item = OrderItem(order_id=order.id, product_id=root.id, quantity=10, unit_price=Decimal(5),
-            subtotal=Decimal(50), snapshot_product_name=root.product_name)
+        item = OrderItem(order_id=order.id, product_id=root.id, quantity=quantity, unit_price=Decimal(5),
+            subtotal=Decimal(5)*quantity, snapshot_product_name=root.product_name)
         db.add(item)
         db.flush()
         freeze_order_procurement(db, order_item_id=item.id, actor=actor)

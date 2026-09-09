@@ -1,5 +1,17 @@
 # MULTILEVEL-BOM-20260909
 
+## 2026-09-10 当前正式未完单及库存转换证据
+
+当前正式head仍rt09v8x9z68，代码ac02bb00。只读SQLite Backup API创建新鲜隔离源D:/tm-uat/multilevel-bom-20260910-live-review/order-graph-source-isolated.sqlite3，SHA256 4b08930f2b73aaa80ef71a764c81c3536c60ca339f04f2c7a48108d28dbd0ead，integrity ok/FK空；未升级或写正式库。正式地图另复制到同目录twin_layout_v1.json，后续隔离验证使用该配对，不导入家庭地图；复制时间和数据库快照非同一事务，使用前仍核对地图版本。
+
+新增只读audit_multilevel_bom_transition.py（mode=ro、query_only、BEGIN一致读，无apply模式），按明确父ID递归真实BOM及旧subkit，列未完单/原冻结行/库存/预占/位置/成本来源并给指纹。4测试通过4.95秒，含前后DB哈希一致、关闭单排除及无效范围拒；compileall/diff check通过。实际父3765/3799核对指纹410b9a193860cb1c098cfc6745b2fae868d4b5ab7ea1eb5288e1d84d62144c06。
+
+实查：000148当前无未完成单，旧subkit 3765→3822仍启用2长3788+6短3789；3765库存lot600=550、location1890（三楼北货架G1·G2·1层1格）保持。00205唯一未完item10050/order9662/TM20260818002，1800已送1500，剩300。schema4旧source2/3为长3771×3、短3783×4。lot365/366剩余预占900/1200，已耗4500/6000；res334/335原5400/7200不应覆盖。完工219/220是manual历史，成本material_quote_area仅估算，不能升级成实际采购成本。
+
+两个00205批次均location656 RECOUNT-PENDING盘点待归位，floor/area为空，非真实放置位置；已向老板异步询问300套的实际楼层区域货架层格，尚未答复时不得擅自定货位。这不阻止继续隔离转换代码/历史保护设计。不能把lot600的000148位置移用给00205。
+
+下一项受控转换须保留已送1500的原订单/组件/库存消耗/成本/预占/单据外键，只处理剩余300套并记录新组装及剩余预占切换。现freeze_order_graph拒已有发货，read_compiled_order_bom要求全部schema5；不能删旧schema4行或把原消费预占指向新快照以绕开。需明确历史/当前执行版本分界及新来源映射，同时旧订单回看不能被新图覆盖。此轮是转换前证据，不是数据转换完成；完整目标仍active。
+
 ## 2026-09-10 自制组装公开编辑及加工费用候选
 
 主档writer/loader与前端原组装下拉已允许manufactured+assembly；purchased仍只配套，assembled仍要求非空组装子件，循环/跨客户/失效/正整数门禁不变。无新按钮/行数，仅原选项可用性和校验文案改变。receipt_flow匿名body夹具现改成真实主档保存及freeze_master_order_bom，不再手工替换冻结图。

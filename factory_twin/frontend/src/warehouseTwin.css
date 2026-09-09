@@ -2467,6 +2467,11 @@ body.warehouse-twin-page {
 .twin-rack-stage:not(.twin-mold-rack-stage) .twin-elevation-frame { overflow: auto; }
 .twin-rack-stage:not(.twin-mold-rack-stage) .twin-elevation-level { flex: 1; min-height: 90px; }
 .twin-rack-stage:not(.twin-mold-rack-stage) .mold-rack-cell { grid-template-rows: auto minmax(0, 1fr); padding:4px; gap:3px; }
+.twin-rack-stage:not(.twin-mold-rack-stage) .mold-rack-cell.can-add-product { grid-template-rows: auto auto minmax(0, 1fr); min-height: 150px; }
+.twin-rack-stage .shelf-cell-add-product { box-sizing: border-box; width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: center; padding: 10px 12px; border: 1px solid #15803d; border-radius: 6px; background: #15803d; color: #fff; font-size: 14px; font-weight: 700; line-height: 22px; cursor: pointer; touch-action: manipulation; }
+.twin-rack-stage .shelf-cell-add-product:hover:not(:disabled) { background: #166534; }
+.twin-rack-stage .shelf-cell-add-product:focus-visible { outline: 3px solid #2563eb; outline-offset: -3px; }
+.twin-rack-stage .shelf-cell-add-product:disabled { opacity: .5; cursor: not-allowed; }
 .twin-rack-stage:not(.twin-mold-rack-stage) .mold-rack-empty-spine { min-height: 0 !important; padding:4px; }
 .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-product-card > button { padding:5px; gap:3px; }
 .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-product-card > button > strong { font-size:13px; }

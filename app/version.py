@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.301"
-APP_VERSION_NAME = "有货货架格添加产品"
+APP_VERSION = "v0.22.302"
+APP_VERSION_NAME = "货架添加按钮点击区域修复"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2280,16 +2280,26 @@ _V022300_VERIFICATION_STEPS = [
     "进入盘点本货位，核对货位及整格产品，按实盘提交；返回扫码页应读取整格最新信息。",
     "公网仍可能有网络等待；实体手机实际加载速度与盘点需现场核对，不把页面减载当成公网链路已无延迟。",
 ]
-APP_CHANGES = [
+_V022301_CHANGES = [
     "移货模式的货架正视图中，有货的正式层格增加添加货物入口，可继续选择客户和产品补录实际库存。",
     "空格选产品、已有产品及独立批次展示保持不变；沿用正式位置身份、权限、容量、版本和盘点提交校验，不覆盖原有货物。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022301_VERIFICATION_STEPS = [
     "刷新仓库地图，进入移货模式并点击货架，在已有产品的格子点击添加货物，确认进入该格的盘点新增界面。",
     "核对客户、产品和实际数量后按原流程提交；刷新确认原产品保留、新产品位于同一格，空格仍可选产品。",
     "只读账号、身份冲突或未发布位置不能通过新增入口绕过门禁；本版无数据库迁移，未自动新增现场库存。",
 ]
+APP_CHANGES = [
+    "修复货架格添加货物按钮被产品列表挤成细线、文字超出可点击区域的问题。",
+    "添加货物使用独立布局行和至少44像素高的绿色按钮，文字与按钮整体均可点击；产品列表独立滚动，权限和库存处理不变。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，移货模式打开有货货架格，确认添加货物显示为完整绿色按钮，点击文字即可进入该格添加界面。",
+    "在多产品格和窄屏核对按钮不被挤压或遮挡；空格选产品、禁用状态和原产品列表保持正常。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.301：本次更新｜{item}" for item in _V022301_CHANGES),
+    *(f"v0.22.301：如何验证｜{item}" for item in _V022301_VERIFICATION_STEPS),
     *(f"v0.22.300：本次更新｜{item}" for item in _V022300_CHANGES),
     *(f"v0.22.300：如何验证｜{item}" for item in _V022300_VERIFICATION_STEPS),
     *(f"v0.22.299：本次更新｜{item}" for item in _V022299_CHANGES),

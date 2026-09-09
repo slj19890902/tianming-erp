@@ -1567,7 +1567,7 @@ function WarehouseRackElevation({
                 const cellTitle = identityConflict
                   ? `该层格关联 ${cellLocations.length} 个正式货位，请管理员处理身份冲突。`
                   : location?.location_name || "暂无已建空货位";
-                return <section className={`mold-rack-cell ${cellItems.length ? "occupied" : "empty"} ${cellSelected ? "selected" : ""}`} key={cellKey || `${rack.id}-${level}-${bay + 1}`} title={cellTitle}>
+                return <section className={`mold-rack-cell ${cellItems.length ? "occupied" : "empty"} ${cellItems.length && canChooseProducts ? "can-add-product" : ""} ${cellSelected ? "selected" : ""}`} key={cellKey || `${rack.id}-${level}-${bay + 1}`} title={cellTitle}>
                   <div className="shelf-cell-heading"><button
                     type="button"
                     className="mold-rack-cell-summary"

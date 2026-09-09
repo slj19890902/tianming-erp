@@ -467,6 +467,32 @@ def update_supplier(
     _set_aliases(supplier, aliases)
     _set_supply_categories(supplier, desired_categories)
     _flush_or_conflict(db)
+    refreshed_statements = []
+    if before.get("settlement_day", 20) != supplier.settlement_day:
+        from app.core.time_contract import beijing_today
+        from app.models.supplier_settlement import SupplierMonthlyStatement
+        from app.services.supplier_monthly_settlement import (
+            ACTIVE_DRAFT_STATUSES, SupplierSettlementError, regenerate_statement,
+        )
+        drafts = list(db.scalars(select(SupplierMonthlyStatement).where(
+            SupplierMonthlyStatement.supplier_id == supplier.id,
+            SupplierMonthlyStatement.settlement_month == beijing_today().strftime("%Y-%m"),
+            SupplierMonthlyStatement.active_guard == 1,
+            SupplierMonthlyStatement.status.in_(ACTIVE_DRAFT_STATUSES),
+        )).all())
+        for draft in drafts:
+            try:
+                replacement = regenerate_statement(
+                    db, statement_id=draft.id, expected_version=draft.version,
+                    reason="供应商对账日调整，自动重算当月未确认草稿", user=user,
+                    allow_empty=True,
+                )
+                refreshed_statements.append(replacement.id)
+            except SupplierSettlementError as error:
+                if error.code == "SUPPLIER_SETTLEMENT_REGENERATION_NO_CHANGE":
+                    continue
+                db.rollback()
+                raise HTTPException(status_code=409, detail=str(error)) from error
     after = supplier_snapshot(supplier)
     audit_master_change(
         db,
@@ -474,7 +500,8 @@ def update_supplier(
         action="UPDATE",
         resource="Supplier",
         resource_id=supplier.id,
-        details={"before": before, "after": after},
+        details={"before": before, "after": after,
+                 "refreshed_statement_ids": refreshed_statements},
     )
     _commit_or_conflict(db)
     return supplier_snapshot(_supplier_or_404(db, supplier.id))

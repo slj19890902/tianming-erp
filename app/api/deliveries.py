@@ -10963,7 +10963,8 @@ def get_delivery_print_data(
                 "product_code": _print_product_code(product_code),
                 "product_name": product_name,
                 "specification": specification,
-                "unit": row.unit_snapshot or "PCS",
+                "unit": next((component["unit"] for component in kit_metadata["component_lines"]
+                              if component.get("is_graph_root")), row.unit_snapshot or "PCS"),
                 "quantity": row.quantity,
                 "ordered_quantity": row.ordered_quantity_snapshot,
                 "over_delivery_quantity": row.over_delivery_quantity,

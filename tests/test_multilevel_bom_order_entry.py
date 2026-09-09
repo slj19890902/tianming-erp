@@ -82,6 +82,9 @@ def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition
     from app.api.deliveries import router
     app.include_router(router, prefix="/api/deliveries")
     material_id, _ = seed_graph(factory, liner=liner)
+    with factory() as db:
+        db.get(Product, 1).composite_fulfillment_mode = "parent_delivery"
+        db.commit()
     with TestClient(app) as client:
         _login(client)
         response = client.post("/api/orders", json=payload(factory))
@@ -103,6 +106,9 @@ def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition
         assert db.scalar(select(func.count()).select_from(ProductionTask).where(
             ProductionTask.order_item_id == item_id)) == 1
         source_ids = {node.product_id for node in compiled.graph.nodes if node.source == "manufactured"}
+        expected_units = {node.product_id: node.unit for node in compiled.graph.nodes}
+        picking_products = {pid for pid, _ in plan_bom(compiled.graph, 10).picking}
+        picking_snapshots = {row.id for row in compiled.snapshots if row.component_product_id in picking_products}
         snapshots = [(row.id, row.component_product_id) for row in compiled.snapshots if row.component_product_id in source_ids]
     with TestClient(app) as client:
         _login(client)
@@ -118,6 +124,29 @@ def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition
         did = created.json()["id"]
         dispatched = client.put(f"/api/deliveries/{did}/dispatch")
         assert dispatched.status_code == 200, dispatched.text
+        with factory() as db:
+            for pid in picking_products:
+                product = db.get(Product, pid)
+                product.unit = "后续新单位"
+                product.version += 1
+            db.commit()
+        detail = client.get(f"/api/deliveries/{did}")
+        assert detail.status_code == 200, detail.text
+        line = detail.json()["items"][0]
+        assert {row["component_product_id"] for row in line["component_lines"]} == picking_products
+        assert all(row["unit"] == expected_units[row["component_product_id"]] for row in line["component_lines"])
+        assert len(line["actual_goods_lines"]) == 1
+        goods = line["actual_goods_lines"][0]
+        assert goods["line_type"] == "parent" and goods["quantity"] == 4
+        assert goods["unit"] == expected_units[1]
+        assert {row["component_snapshot_id"] for row in line["inventory_sources"]} == picking_snapshots
+        assert all(row["location_id"] and row["quantity_to_pick_stock"] == 4 for row in line["inventory_sources"])
+        printed = client.get(f"/api/deliveries/{did}/print")
+        assert printed.status_code == 200, printed.text
+        printed_line = printed.json()["items"][0]
+        assert printed_line["actual_goods_lines"][0]["quantity"] == 4
+        assert printed_line["actual_goods_lines"][0]["unit"] == expected_units[1]
+        assert printed_line["unit"] == expected_units[1]
         with factory() as db:
             assert db.get(OrderItem, item_id).delivered_quantity == 4
             assert db.get(OrderItem, 1).delivered_quantity == 0

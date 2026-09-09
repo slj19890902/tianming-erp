@@ -74,6 +74,8 @@ class ComponentDemand:
     # Keep this trailing default for compatibility with older internal callers
     # that construct ComponentDemand positionally.
     show_on_delivery: bool = True
+    unit: str = "PCS"
+    is_graph_root: bool = False
 
 
 @dataclass(frozen=True)
@@ -717,8 +719,10 @@ def delivery_component_demands(db: Session, order_item_id: int) -> list[Componen
     compiled = read_compiled_order_bom(db, order_item_id)
     item = db.get(OrderItem, order_item_id)
     picking = dict(plan_bom(compiled.graph, 1).picking)
+    units = {node.product_id: node.unit for node in compiled.graph.nodes}
     return [replace(d, quantity_per_set=picking[d.component_product_id],
                     effective_sets=item.quantity, required_piece_quantity=item.quantity*picking[d.component_product_id],
+                    unit=units[d.component_product_id], is_graph_root=d.component_product_id == compiled.graph.root_id,
                     is_required=True, show_on_delivery=d.component_product_id == compiled.graph.root_id)
             for d in demands if d.component_product_id in picking]
 

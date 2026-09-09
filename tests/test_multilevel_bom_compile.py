@@ -118,6 +118,70 @@ def test_detached_material_snapshot_not_changed_by_later_master_edit(context):
     assert next(m.purchase_sheets for m in plan_bom(compiled.graph, 100).materials if m.product_id == 3) == 100
 
 
+def test_child_master_process_is_used_without_resaving_its_parent(context):
+    from app.models.mold_tool import MoldTool
+    db, actor, item, _ = context
+    setup_liner(db, actor)
+    mold = MoldTool(mold_code="GRAPH-PROCESS", mold_name="匿名子件模具", rack_location="TEST-R1", is_active=True)
+    db.add(mold)
+    db.flush()
+    child = db.get(Product, 3)
+    child.box_category = "die_cut"
+    child.mold_tool_id = mold.id
+    child.die_cut_path = "child-current.svg"
+    child.default_cutting_mode = "一开四"
+    child.version += 1
+    db.commit()
+    # The old edge is deliberately not rewritten by the child editor.
+    edge = db.scalar(select(ProductBomComponent).where(ProductBomComponent.component_product_id == 3))
+    assert edge.is_die_cut is False
+    frozen = freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
+    snapshot = next(s for s in frozen.snapshots if s.component_product_id == 3)
+    assert snapshot.is_die_cut is True
+    assert snapshot.snapshot_mold_tool_id == mold.id
+    assert snapshot.snapshot_die_cut_path == "child-current.svg"
+    assert next(m.purchase_sheets for m in plan_bom(frozen.graph, 100).materials if m.product_id == 3) == 50
+    db.commit()
+    child.box_category = "normal"
+    child.version += 1
+    db.commit()
+    current = compile_master_order_bom(db, item)
+    assert next(s for s in current.snapshots if s.component_product_id == 3).is_die_cut is False
+    assert next(s for s in read_compiled_order_bom(db, item.id).snapshots if s.component_product_id == 3).is_die_cut is True
+
+
+def test_child_new_die_cut_cannot_silently_skip_missing_mold(context):
+    from app.services.composite_bom import CompositeBOMError
+    db, actor, item, _ = context
+    setup_liner(db, actor)
+    db.get(Product, 3).box_category = "die_cut"
+    db.commit()
+    with pytest.raises(CompositeBOMError, match="启用中的模具"):
+        compile_master_order_bom(db, item)
+
+
+@pytest.mark.parametrize("changed_mold", [False, True])
+def test_child_process_refresh_keeps_explicit_mold_yield_guard(context, changed_mold):
+    from app.models.mold_tool import MoldTool
+    db, actor, item, _ = context
+    setup_liner(db, actor)
+    molds = [MoldTool(mold_code=f"LIMIT-{i}", mold_name="匿名限额模具",
+                     rack_location="TEST-R1", is_active=True) for i in range(2)]
+    db.add_all(molds)
+    db.flush()
+    child = db.get(Product, 3)
+    child.box_category = "die_cut"
+    child.mold_tool_id = molds[1 if changed_mold else 0].id
+    child.default_cutting_mode = "一开四"
+    edge = db.scalar(select(ProductBomComponent).where(ProductBomComponent.component_product_id == 3))
+    edge.is_die_cut = True
+    edge.mold_tool_id = molds[0].id
+    edge.mold_max_yield_per_sheet = 2
+    db.commit()
+    with pytest.raises(BomPlanError, match="模具已变更" if changed_mold else "不能超过模具最大出数"):
+        compile_master_order_bom(db, item)
+
+
 def test_invalid_or_legacy_root_never_compiles_by_guessing(context):
     db, actor, item, _ = context
     with pytest.raises(BomPlanError, match="尚未配置"):

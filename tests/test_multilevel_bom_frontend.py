@@ -68,6 +68,20 @@ def test_invalid_assembly_cannot_be_saved_as_ordinary_manufacture():
     """)
 
 
+def test_real_product_use_is_integer_without_changing_legacy_decimal_contract():
+    run_js("""
+      const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1}};
+      ctx.bomEditor.enabled=true;ctx.bomEditor.inventory_mode='assembled';
+      ctx.bomEditor.components=[{...blankBomComponent(),component_product_id:2,
+        inventory_relation:'assembly',quantity_per_set:1.5}];
+      assert.match(ctx.validateProductBom(),/正整数/);
+      ctx.bomEditor.components[0].quantity_per_set=2;
+      assert.equal(ctx.validateProductBom(),'');
+      ctx.bomEditor.inventory_mode='legacy';ctx.bomEditor.components[0].quantity_per_set=1.5;
+      assert.equal(ctx.validateProductBom(),'');
+    """)
+
+
 def test_child_editor_cancel_restores_unsaved_parent_and_original_return_context():
     run_js("""
       const form={id:1,product_name:'父产品未保存备注'};

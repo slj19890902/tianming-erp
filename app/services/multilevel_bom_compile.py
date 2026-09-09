@@ -50,8 +50,10 @@ def compile_master_order_bom(db, order_item):
     root = products[order_item.product_id]
     snapshots, nodes = [], []
     # Configuration conflicts on a shared product must not be silently netted.
-    process_fields = ("is_die_cut", "die_cut_path", "mold_tool_id", "mold_max_yield_per_sheet",
-                      "spare_sheet_quantity")
+    # In real-product mode, the child editor owns its current manufacturing
+    # process. Edge-local safety limits and spare quantities remain explicit;
+    # cached mold/flag/path fields must not override a later child master edit.
+    process_fields = ("mold_max_yield_per_sheet", "spare_sheet_quantity")
     for position, pid in enumerate(structure["order"], 1):
         product = products[pid]
         source = profiles.get(pid, "purchased" if product.supply_mode == "external_purchase" else "manufactured")
@@ -75,6 +77,15 @@ def compile_master_order_bom(db, order_item):
         # source edge. Those relationships remain in the frozen graph.
         if len(values) > 1:
             relation["id"] = None
+        if source == "manufactured":
+            die_cut = product.box_category == "die_cut"
+            if die_cut and any(v["mold_max_yield_per_sheet"] is not None
+                    and v["mold_tool_id"] not in (None, product.mold_tool_id) for v in values):
+                raise BomPlanError("子件模具已变更，请先核对BOM最大模切出数")
+            relation.update(is_die_cut=die_cut,
+                die_cut_path=product.die_cut_path if die_cut else None,
+                mold_tool_id=product.mold_tool_id if die_cut else None,
+                mold_max_yield_per_sheet=relation.get("mold_max_yield_per_sheet") if die_cut else None)
         if source != "manufactured":
             # An assembled/purchased stock identity has no own board process.
             # Old descriptive master fields must not demand a phantom mold.

@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.models.multilevel_bom import BomAssembly, BomAssemblyInput
 from app.models.production import ProductionCompletion
+from app.models.external_packaging_purchase import ExternalPackagingReceiptItem
 from app.models.product_bom import RequisitionItemBomSource, SalesOrderItemBomComponent
 from app.models.supplier_requisition_order import PurchasePurposeSourceSnapshot
 from app.models.purchase_receipt import IncomingReceiptPurposeAllocation, PurchaseReceiptFact
@@ -20,19 +21,26 @@ from app.services.bom_subkit_costs import cost_slice
 QUANTUM = Decimal("0.0001")
 
 
+def graph_output_quantity(db, lot):
+    if lot.source_ref_type == "bom_external_receipt":
+        output = db.get(ExternalPackagingReceiptItem, lot.source_ref_id)
+        return output.converted_finished_quantity
+    model = BomAssembly if lot.source_ref_type == "bom_assembly" else ProductionCompletion
+    return db.get(model, lot.source_ref_id).quantity
+
+
 def graph_material_cost_slice(db, lot, *, used, take):
     """Explicit source-output offset; independent of mutable current balances."""
     rows = graph_material_sources(db, lot)
     if rows is None:
         return None
-    model = BomAssembly if lot.source_ref_type == "bom_assembly" else ProductionCompletion
-    output = db.get(model, lot.source_ref_id)
+    quantity = graph_output_quantity(db, lot)
     total = sum((r["amount"] for r in rows), Decimal(0))
     # Validate the whole interval before calculating either endpoint.
-    cost_slice(total, output.quantity, used, take)
+    cost_slice(total, quantity, used, take)
     # Round each real receipt cumulatively, then sum the portions. Re-apportioning
     # a rounded aggregate at both endpoints can produce a negative tiny portion.
-    return [{**row, "amount": cost_slice(row["amount"], output.quantity, used, take)}
+    return [{**row, "amount": cost_slice(row["amount"], quantity, used, take)}
             for row in rows]
 
 
@@ -71,6 +79,13 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
     if identity in _visited:
         raise SubkitError("组套材料成本来源循环")
     visited = _visited | {identity}
+    if lot.source_ref_type == "bom_external_receipt":
+        from app.services.multilevel_bom_external_costs import validated_external_lot_detail
+        detail = validated_external_lot_detail(db, lot)
+        return [{"external_receipt_item_id": row["external_receipt_item_id"],
+                 "amount": _amount(row["amount"]), "currency": detail["currency"],
+                 "tax_included": detail["tax_included"], "tax_rate": _amount(detail["tax_rate"])}
+                for row in detail["sources"]]
     if lot.source_ref_type == "bom_assembly":
         assembly = db.get(BomAssembly, lot.source_ref_id)
         original = db.get(InventoryLot, assembly.output_lot_id) if assembly else None

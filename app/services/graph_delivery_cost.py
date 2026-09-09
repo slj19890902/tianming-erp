@@ -6,17 +6,15 @@ from sqlalchemy import select
 
 from app.models.graph_material_cost import FinanceDeliveryGraphCostFact as Fact, FinanceDeliveryGraphCostPortion as Portion
 from app.models.delivery import Delivery, DeliveryItem
-from app.models.multilevel_bom import BomAssembly
-from app.models.production import ProductionCompletion
 from app.models.warehouse_inventory import InventoryMovement, InventoryReservation
 from app.services.bom_subkit_costs import lineage_used, cost_slice
 from app.services.bom_subkits import SubkitError
-from app.services.multilevel_bom_cost_lineage import graph_material_sources
+from app.services.multilevel_bom_cost_lineage import graph_material_sources, graph_output_quantity
 
 
 def is_graph_output(lot):
     source_type = getattr(lot, "source_ref_type", None)
-    return source_type == "bom_assembly" or (
+    return source_type in ("bom_assembly", "bom_external_receipt") or (
         source_type == "production_completion"
         and "bom_material_product_id" in json.loads(lot.cost_snapshot_detail_json or "{}"))
 
@@ -41,30 +39,31 @@ def freeze_graph_delivery_cost(db, *, allocation, lot, operator_id, unordered=Fa
     rows = graph_material_sources(db, lot)
     if rows is None:
         return None
-    output = db.get(BomAssembly if lot.source_ref_type == "bom_assembly" else ProductionCompletion, lot.source_ref_id)
+    output_quantity = graph_output_quantity(db, lot)
     offset = lineage_used(db, lot) - quantity
-    if offset < 0 or offset + quantity > output.quantity:
+    if offset < 0 or offset + quantity > output_quantity:
         # Counts above the frozen output remain an explicit accounting gap.
         return None
     currencies = {str(r["currency"]).upper() for r in rows}
     if len(currencies) != 1 or len(next(iter(currencies))) != 3:
         raise SubkitError("发货成本币种来源不完整")
-    amounts = [cost_slice(r["amount"], output.quantity, offset, quantity) for r in rows]
-    payload = {"movement": movement.id, "lot": lot.id, "source_quantity": output.quantity,
+    amounts = [cost_slice(r["amount"], output_quantity, offset, quantity) for r in rows]
+    payload = {"movement": movement.id, "lot": lot.id, "source_quantity": output_quantity,
                "offset": offset, "quantity": quantity, "sources": rows, "amounts": amounts}
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
     fact = Fact(delivery_item_id=line.id, inventory_lot_id=lot.id, consume_movement_id=movement.id,
         delivery_inventory_allocation_id=None if unordered else allocation.id,
         unordered_allocation_id=allocation.id if unordered else None,
         snapshot_version=latest.snapshot_version + 1 if latest else 1,
-        source_quantity=output.quantity, source_offset=offset, consumed_quantity=quantity,
+        source_quantity=output_quantity, source_offset=offset, consumed_quantity=quantity,
         total_cost=sum(amounts, Decimal(0)), currency=next(iter(currencies)),
         source_fingerprint=fingerprint, created_by=operator_id)
     db.add(fact)
     db.flush()
     for index, (row, amount) in enumerate(zip(rows, amounts)):
-        db.add(Portion(fact_id=fact.id, ordinal=index, purchase_receipt_fact_id=row["purchase_receipt_fact_id"],
-            purpose_allocation_id=row["allocation_id"], full_output_cost=row["amount"], charged_cost=amount,
+        db.add(Portion(fact_id=fact.id, ordinal=index, purchase_receipt_fact_id=row.get("purchase_receipt_fact_id"),
+            purpose_allocation_id=row.get("allocation_id"), external_receipt_item_id=row.get("external_receipt_item_id"),
+            full_output_cost=row["amount"], charged_cost=amount,
             tax_included=row["tax_included"], tax_rate=row["tax_rate"]))
     db.flush()
     return fact

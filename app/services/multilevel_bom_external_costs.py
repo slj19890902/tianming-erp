@@ -78,10 +78,9 @@ def receipt_output_cost(db, receipt_item_id):
         capitalized_material_cost=str(total), sources=portions)
 
 
-def external_lot_cost(db, lot, take):
+def validated_external_lot_detail(db, lot):
     """Validate transferred descendants against authoritative receipt evidence."""
     import json
-    from app.services.bom_subkit_costs import cost_slice, lineage_used, estimated_slice
     from app.services.bom_subkits import SubkitError
     try:
         detail = receipt_output_cost(db, lot.source_ref_id)
@@ -92,6 +91,12 @@ def external_lot_cost(db, lot, take):
             raise BomPlanError('外购库存成本身份不一致')
     except (BomPlanError, ValueError, TypeError) as error:
         raise SubkitError(str(error)) from error
+    return detail
+
+
+def external_lot_cost(db, lot, take):
+    from app.services.bom_subkit_costs import cost_slice, lineage_used, estimated_slice
+    detail = validated_external_lot_detail(db, lot)
     used = lineage_used(db, lot)
     if used + take > detail['quantity']:
         return estimated_slice(lot, take)

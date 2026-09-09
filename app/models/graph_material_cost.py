@@ -38,12 +38,14 @@ class FinanceDeliveryGraphCostPortion(Base):
     __table_args__ = (
         UniqueConstraint("fact_id", "ordinal", name="uq_graph_cost_portion"),
         CheckConstraint("ordinal >= 0 AND full_output_cost >= 0 AND charged_cost >= 0 AND tax_rate >= 0 AND tax_rate <= 1", name="ck_graph_cost_portion_amount"),
+        CheckConstraint("(purchase_receipt_fact_id IS NOT NULL AND purpose_allocation_id IS NOT NULL AND external_receipt_item_id IS NULL) OR (purchase_receipt_fact_id IS NULL AND purpose_allocation_id IS NULL AND external_receipt_item_id IS NOT NULL)", name="ck_graph_cost_portion_source"),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     fact_id: Mapped[int] = mapped_column(ForeignKey("finance_delivery_graph_cost_facts.id", ondelete="RESTRICT"), index=True)
     ordinal: Mapped[int] = mapped_column(Integer)
-    purchase_receipt_fact_id: Mapped[int] = mapped_column(ForeignKey("purchase_receipt_facts.id", ondelete="RESTRICT"))
-    purpose_allocation_id: Mapped[int] = mapped_column(ForeignKey("incoming_receipt_purpose_allocations.id", ondelete="RESTRICT"))
+    purchase_receipt_fact_id: Mapped[int | None] = mapped_column(ForeignKey("purchase_receipt_facts.id", ondelete="RESTRICT"))
+    purpose_allocation_id: Mapped[int | None] = mapped_column(ForeignKey("incoming_receipt_purpose_allocations.id", ondelete="RESTRICT"))
+    external_receipt_item_id: Mapped[int | None] = mapped_column(ForeignKey("external_packaging_receipt_items.id", ondelete="RESTRICT"))
     full_output_cost: Mapped[Decimal] = mapped_column(Numeric(20, 6))
     charged_cost: Mapped[Decimal] = mapped_column(Numeric(20, 6))
     tax_included: Mapped[bool]

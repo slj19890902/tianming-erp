@@ -44,6 +44,19 @@ def mobile_url(browser_url, location_id, key=None):
     return f"{origin.scheme}://{origin.netloc}/q/{location_id}" + (f"/{key}" if key else "")
 
 
+def print_address(label):
+    """Separate the published human area/rack names, never derive from internal codes."""
+    title, position, _ = readable_address(label)
+    parts = [p.strip() for p in re.split(r"[·・]", label.get("display_path", "")) if p.strip()]
+    head = [p for p in parts if not re.fullmatch(r"\d+层|\d+格", p)]
+    if label.get("level_no") and label.get("slot_no") and len(head) >= 3:
+        floor, area, rack = head[0], head[1], head[2]
+        rack = rack if rack.endswith("架") else rack + "架"
+        return dict(print_title=f"{area}-{rack}", print_floor=floor,
+                    print_position=position.replace("-", " "))
+    return dict(print_title=title, print_floor="", print_position=position.replace("-", " "))
+
+
 def product_fields(db, lot):
     from app.models.customer import Customer
     detail = lot.finished_detail or lot.semi_finished_detail

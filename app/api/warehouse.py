@@ -17559,7 +17559,7 @@ def get_location_label(
 
 
 def _mobile_shelf_location(db, location_id):
-    from app.services.mobile_shelf_labels import readable_address
+    from app.services.mobile_shelf_labels import readable_address, print_address
     row = db.get(WarehouseLocation, location_id)
     if row is None:
         raise HTTPException(404, "货位不存在")
@@ -17568,7 +17568,8 @@ def _mobile_shelf_location(db, location_id):
     path = employee_location_name(row, area=context.get("area"), floor=context.get("floor"),
                                   area_sequence=context.get("area_sequence"))
     title, position, address = readable_address(dict(display_path=path, level_no=row.level_no, slot_no=row.slot_no))
-    return row, dict(location_id=row.id, title=title, position=position, address=address)
+    return row, dict(location_id=row.id, title=title, position=position, address=address,
+                     **print_address(dict(display_path=path, level_no=row.level_no, slot_no=row.slot_no)))
 
 
 @router.get("/locations/{location_id}/mobile-label")

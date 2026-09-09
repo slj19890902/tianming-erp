@@ -9,7 +9,16 @@ from tests.test_p1_47d_inventory_adjustment import stocktake_app, _login
 from app.models.customer import Customer
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryLot, WarehouseArea, WarehouseLocation
-from app.services.mobile_shelf_labels import readable_address, product_key, mobile_url
+from app.services.mobile_shelf_labels import readable_address, product_key, mobile_url, print_address
+
+
+def test_pdf_print_address_uses_area_and_human_rack_not_internal_code():
+    result = print_address(dict(display_path="三楼·D02·A·2层·3格", level_no=2, slot_no=3))
+    assert result == dict(print_title="D02-A架", print_floor="三楼", print_position="02层 03格")
+    assert print_address(dict(display_path="三楼·北货架G1·G1·2层·1格", level_no=2, slot_no=1))["print_title"] == "北货架G1-G1架"
+    assert print_address(dict(display_path="三楼·D02·A架·2层·3格", level_no=2, slot_no=3))["print_title"] == "D02-A架"
+    with pytest.raises(HTTPException):
+        print_address(dict(display_path="三楼·EDIT-076·A·2层·1格", level_no=2, slot_no=1))
 
 
 def test_readable_address_hides_internal_identity():

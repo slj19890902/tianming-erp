@@ -8,7 +8,8 @@ function label(row) {
   const heading = `<div><h1 class="fit">${h(row.title)}</h1><strong class="fit">${h(row.position)}</strong></div><img src="${h(row.qr_data_url)}" alt="手机查询二维码">`;
   if (!row.product) return `<article class="label"><div class="location">${heading}</div></article>`;
   const p = row.product;
-  return `<article class="label"><div class="product-head">${heading}</div><div class="fields">${[['客户',p.customer],['存货编码',p.code],['产品名称',p.name],['规格',p.specification]].map(([key,value]) => `<div class="field"><span>${key}：</span><span class="value fit ${key==='存货编码'?'code':''}">${h(value)}</span></div>`).join('')}</div></article>`;
+  const productHeading = `<div class="product-address"><div class="product-title-row"><h1 class="fit">${h(row.print_title || row.title)}</h1><strong>${h(row.print_position || row.position)}</strong></div><div class="product-floor fit">${h(row.print_floor || '')}</div></div><img src="${h(row.qr_data_url)}" alt="手机查询二维码">`;
+  return `<article class="label"><div class="product-head">${productHeading}</div><div class="fields">${[['客户',p.customer],['存货编码',p.code],['产品名称',p.name],['规格',p.specification]].map(([key,value]) => `<div class="field"><span>${key}：</span><span class="value fit ${key==='存货编码'?'code':key==='客户'?'customer':''}">${h(value)}</span></div>`).join('')}</div></article>`;
 }
 async function load() {
   if (busy) return false;

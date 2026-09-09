@@ -56,7 +56,7 @@
       max-width:100%;
       color:#000;
       font-weight:800;
-      line-height:1.02;
+      line-height:1.15;
       text-align:center;
       white-space:normal;
       overflow-wrap:anywhere;
@@ -86,6 +86,7 @@
     .layout-print-element.align-center { justify-content:center; text-align:center; }
     .layout-print-element.align-right { justify-content:flex-end; text-align:right; }
     .layout-print-element.code { font-family:"Arial","Microsoft YaHei",sans-serif; word-break:break-all; }
+    .layout-print-element:not(.quantity) > strong { display:block; width:100%; min-width:0; white-space:normal; overflow-wrap:anywhere; word-break:break-all; line-height:1.15; }
     .layout-print-element.quantity { gap:.7mm; line-height:1; }
     .layout-print-element.quantity .layout-unit { font-size:.5em; font-weight:900; }
     html[data-template="legacy_65x45_v1"] .label-card { grid-template-rows:6.4mm 9.8mm 6.3mm 6.3mm 1fr; }
@@ -702,15 +703,37 @@
 
       function fitElement(element) {
         const container = element.parentElement;
-        let fontSize = Number.parseFloat(getComputedStyle(element).fontSize);
-        while (fontSize > MIN_TEXT_SIZE_PX && (element.scrollWidth > container.clientWidth + 1 || element.scrollHeight > container.clientHeight + 1)) {
-          fontSize = Math.max(MIN_TEXT_SIZE_PX, fontSize - .25);
-          element.style.fontSize = `${fontSize}px`;
+        const style = getComputedStyle(container);
+        const rect = container.getBoundingClientRect();
+        const width = Math.min(container.clientWidth, rect.width) - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - .5;
+        const height = Math.min(container.clientHeight, rect.height) - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - .5;
+        if (width <= 0 || height <= 0) return false;
+        element.style.maxWidth = `${width}px`;
+        element.style.wordBreak = "break-all";
+        element.style.lineHeight = "1.15";
+        const initial = Number.parseFloat(getComputedStyle(element).fontSize);
+        const fits = () => element.scrollWidth <= width + .5
+          && element.getBoundingClientRect().height <= Math.min(height, parseFloat(getComputedStyle(element).fontSize) * 1.15 * 2) + .1;
+        if (!fits()) {
+          // Fit complete text to at most two lines, without truncating text or imposing
+          // the old minimum-font cutoff that prevented otherwise valid printing.
+          let low = .1, high = initial;
+          for (let step = 0; step < 16; step++) {
+            const size = (low + high) / 2;
+            element.style.fontSize = `${size}px`;
+            if (fits()) low = size; else high = size;
+          }
+          element.style.fontSize = `${low}px`;
         }
-        return element.scrollWidth <= container.clientWidth + 1 && element.scrollHeight <= container.clientHeight + 1;
+        return fits();
+      }
+
+      function fitLayoutText(surface) {
+        surface.querySelectorAll(".layout-print-element:not(.quantity) > strong").forEach(fitElement);
       }
 
       function validateRenderedLabels() {
+        fitLayoutText(labelList);
         const textFits = [...labelList.querySelectorAll(".fit-value")].every(fitElement);
         const layoutTextFits = [...labelList.querySelectorAll(".layout-print-element")].every((element) =>
           element.scrollWidth <= element.clientWidth + 1 && element.scrollHeight <= element.clientHeight + 1
@@ -719,7 +742,7 @@
           card.scrollWidth <= card.clientWidth + 1 && card.scrollHeight <= card.clientHeight + 1
         );
         if (!textFits || !layoutTextFits || !cardsFit) {
-          throw new Error("核心字段过长，无法在当前纸型完整显示；已停止打印，请先缩短主档字段或联系管理员调整模板");
+          throw new Error("标签纸型或文字框尺寸无效，请检查模板尺寸；长文字会自动换行缩放，无需修改产品资料");
         }
       }
 
@@ -733,6 +756,7 @@
         try {
           if (document.fonts?.ready) await document.fonts.ready;
           await new Promise((resolve) => requestAnimationFrame(resolve));
+          fitLayoutText(surface);
           const overflow = [...surface.querySelectorAll(".layout-print-element")].find((element) =>
             element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1
           );

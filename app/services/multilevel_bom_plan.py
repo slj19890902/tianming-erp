@@ -241,7 +241,8 @@ class ReceiptAssemblyPlan:
     remaining_stock: tuple[tuple[int, int], ...]
 
 
-def plan_assembly(graph: FrozenBom, quantity: int, *, eligible_stock: Mapping[int, int]) -> ReceiptAssemblyPlan:
+def plan_assembly(graph: FrozenBom, quantity: int, *, eligible_stock: Mapping[int, int],
+                  fulfilled_stock: Mapping[int, int] | None = None) -> ReceiptAssemblyPlan:
     """Incremental, bottom-up short-board plan; retains every excess unit.
 
     Callers must supply currently eligible balances, never cumulative receipts.
@@ -250,8 +251,16 @@ def plan_assembly(graph: FrozenBom, quantity: int, *, eligible_stock: Mapping[in
     Database adapters still must enforce reservations, idempotency, cost,
     versions, audit and atomic debits/credits before applying any step.
     """
-    demand = plan_bom(graph, quantity, eligible_stock=eligible_stock)
     nodes, children, order = graph.validated()
+    credits = dict(eligible_stock)
+    for pid, count in (fulfilled_stock or {}).items():
+        if type(pid) is not int or pid not in nodes or nodes[pid].source != "assembled":
+            raise BomPlanError("历史组装抵扣包含无关产品")
+        _integer(count, "历史组装抵扣")
+        credits[pid] = credits.get(pid, 0) + count
+    # Fulfilled credits are NOT available inputs. In particular, an inner
+    # assembly consumed into an outer assembly must not be credited twice.
+    demand = plan_bom(graph, quantity, eligible_stock=credits)
     needs = {p.product_id: p.make_units for p in demand.products}
     if any(nodes[pid].source == "manufactured" and any(e.relation == "assembly" for e in children[pid]) for pid in order):
         raise BomPlanError("自制本体加子件组装需要本体完工来源，不能仅凭子件余额入库")

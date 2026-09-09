@@ -84,6 +84,12 @@ def assemble_subkit_inventory(
         if item is None or snapshot is None:
             raise SubkitError("订单缺少冻结的子套件配方")
         order = db.get(Order, item.order_id)
+        if graph_product_id is not None:
+            actor = db.get(User, operator_id)
+            if actor is None or not actor.is_active:
+                raise SubkitError("操作人已失效")
+            if order.status in ("dead", "completed", "archived", "delivered"):
+                raise SubkitError("已结束订单不能继续组套")
         if item.is_force_closed or int(item.delivered_quantity or 0) >= item.quantity or order.status in ("cancelled", "closed", "已作废", "已结单"):
             raise SubkitError("已结束订单不能继续组套")
         from app.services.production_workflow import lock_order_rows_for_production_transition

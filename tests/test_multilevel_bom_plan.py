@@ -147,3 +147,11 @@ def test_manufactured_assembly_requires_own_completion_evidence():
     graph = replace(graph, edges=(E(1, 2, 1, "assembly"),) + graph.edges[1:])
     with pytest.raises(BomPlanError, match="本体完工来源"):
         plan_assembly(graph, 10, eligible_stock={2: 10})
+
+
+def test_fulfilled_stock_limits_new_assembly_but_is_not_a_physical_input():
+    result = plan_assembly(liner_graph(), 100, eligible_stock={3: 200, 4: 600}, fulfilled_stock={2: 50})
+    assert [(s.product_id, s.produced_units) for s in result.steps] == [(2, 50)]
+    assert dict(result.remaining_stock)[2] == 50
+    with pytest.raises(BomPlanError):
+        plan_assembly(liner_graph(), 100, eligible_stock={}, fulfilled_stock={1: 50})

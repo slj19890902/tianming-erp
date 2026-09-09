@@ -13,7 +13,7 @@ from fastapi.middleware.httpsredirect import (
     HTTPSRedirectMiddleware as StarletteHTTPSRedirectMiddleware,
 )
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -586,6 +586,12 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/q/{location_id}" for route in application.routes):
+        def shelf_scan_entry(location_id: int, product: str | None = None):
+            return FileResponse(Path(__file__).resolve().parents[1] / "static" / "shelf-scan.html",
+                                headers={"Cache-Control": "no-store"})
+        application.add_api_route("/q/{location_id}", shelf_scan_entry, methods=["GET"], include_in_schema=False)
+        application.add_api_route("/q/{location_id}/{product}", shelf_scan_entry, methods=["GET"], include_in_schema=False)
     if not any(route.path == "/warehouse.html" for route in application.routes):
         warehouse_twin_path = (
             Path(__file__).resolve().parents[1]
@@ -593,9 +599,18 @@ def create_app() -> FastAPI:
             / "factory-twin-assets"
             / "warehouse-twin.html"
         )
+        def warehouse_entry(request: Request):
+            location_id = request.query_params.get("location_id", "")
+            if (request.query_params.get("tab") == "locations"
+                    and location_id.isascii() and location_id.isdigit() and int(location_id) > 0
+                    and any(marker in request.headers.get("user-agent", "").lower()
+                            for marker in ("iphone", "ipad", "android", "mobile"))):
+                return RedirectResponse(f"/static/shelf-scan.html?location_id={int(location_id)}",
+                                        status_code=307, headers={"Cache-Control": "no-store"})
+            return FileResponse(warehouse_twin_path, headers={"Cache-Control": "no-store"})
         application.add_api_route(
             "/warehouse.html",
-            lambda: FileResponse(warehouse_twin_path, headers={"Cache-Control": "no-store"}),
+            warehouse_entry,
             methods=["GET"],
             include_in_schema=False,
         )

@@ -1528,7 +1528,7 @@ function WarehouseRackElevation({
   return <section className="twin-rack-focus-panel twin-rack-stage" role="region" aria-label={`${rack.rack_code} 参数化正视图`}>
       <header>
       <div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
-        <button type="button" disabled={!allCellsPrintable} title="80×40无数量信息标签；按当前格内正式库存逐款打印，空格打印位置标签。" onClick={() => window.open(`/static/location-label.html?content=shelf-information&location_ids=${printableLocationIds.join(',')}`, '_blank', 'noopener')}>打印货架标签</button>
+        <button type="button" disabled={!allCellsPrintable} title="80×40货位标签，不含产品信息" onClick={() => window.open(`/static/shelf-label.html?location_ids=${printableLocationIds.join(',')}`, '_blank', 'noopener')}>打印货架标签</button>
         <button type="button" onClick={onClose}>返回孪生地图</button>
       </header>
       <div className="twin-rack-content">
@@ -1568,7 +1568,7 @@ function WarehouseRackElevation({
                   ? `该层格关联 ${cellLocations.length} 个正式货位，请管理员处理身份冲突。`
                   : location?.location_name || "暂无已建空货位";
                 return <section className={`mold-rack-cell ${cellItems.length ? "occupied" : "empty"} ${cellSelected ? "selected" : ""}`} key={cellKey || `${rack.id}-${level}-${bay + 1}`} title={cellTitle}>
-                  <button
+                  <div className="shelf-cell-heading"><button
                     type="button"
                     className="mold-rack-cell-summary"
                     disabled={!cellItems.length && (identityConflict || !location || Boolean(blockReason))}
@@ -1581,7 +1581,7 @@ function WarehouseRackElevation({
                       }
                     }}
                   ><b>{bay + 1}格</b><strong>{identityConflict ? "货位身份冲突" : cellItems.length ? cellSummary : location ? "正式空货位" : "未建正式货位"}</strong></button>
-                  {location && !identityConflict && <button type="button" onClick={() => window.open(`/static/location-label.html?content=shelf-information&location_id=${location.location_id}`, '_blank', 'noopener')}>打印本格标签</button>}
+                  {location && !identityConflict && <button className="shelf-position-print" type="button" onClick={() => window.open(`/static/shelf-label.html?location_id=${location.location_id}`, '_blank', 'noopener')}>打印货位</button>}</div>
                   {cellItems.length ? <div className="shelf-product-cards">
                     <small className="shelf-cell-kind">{groupShelfProducts(cellItems).length === 1 ? "单品存放" : `混放 · ${groupShelfProducts(cellItems).length} 款`}</small>
                     {groupShelfProducts(cellItems).map(group => <article className="shelf-product-card" key={group.key}>
@@ -1618,7 +1618,10 @@ function WarehouseRackElevation({
         <aside>
           <small>产品标签</small>
           {!selectedItem ? <><h3>请选择货位</h3><p>点击产品查看批次</p><strong>{items.length} 个批次 · {emptyLocationCount} 个正式空货位</strong>{unboundLocationCount > 0 && <p className="twin-mold-rack-warning">本区域还有 {unboundLocationCount} 个有货旧货位未绑定货架层格，请先转入盘点待归位。</p>}{area?.quantities.map((item) => <div className="twin-quantity-row" key={item.key}><span>{item.label}</span><b>{formatNumber(item.available)} {inventoryUnitLabel(item.unit)}</b></div>)}</> : <article className="twin-rack-product-label">
-            <span>当前批次</span>
+            <div className="shelf-current-heading"><span>当前批次</span><button type="button" className="shelf-position-print" onClick={() => {
+              const at = locations.find(location => rackLocationInventoryItems(location).some(item => item.lot_id === selectedItem.lot_id));
+              if (at) window.open(`/static/shelf-label.html?location_id=${at.location_id}&lot_id=${selectedItem.lot_id}`, '_blank', 'noopener');
+            }}>打印产品标签</button></div>
             <dl className="shelf-current-fields">
               <div><dt>客户</dt><dd>{employeeCustomerName(selectedItem)}</dd></div>
               <div><dt>存货编码</dt><dd className="shelf-current-code">{selectedItem.inventory_code || "待补充"}</dd></div>

@@ -1,0 +1,89 @@
+from urllib.parse import urlsplit, parse_qs
+from types import SimpleNamespace
+from pathlib import Path
+import pytest
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from tests.test_p1_47d_inventory_adjustment import stocktake_app, _login
+from app.models.customer import Customer
+from app.models.user import User
+from app.models.warehouse_inventory import InventoryLot, WarehouseArea, WarehouseLocation
+from app.services.mobile_shelf_labels import readable_address, product_key, mobile_url
+
+
+def test_readable_address_hides_internal_identity():
+    assert readable_address(dict(display_path="三楼·北货架G1·G1·2层·1格", level_no=2, slot_no=1)) == (
+        "三楼 北货架G1", "02层-01格", "三楼 北货架G1 -02层-01格")
+    with pytest.raises(HTTPException):
+        readable_address(dict(display_path="3F-EDIT-076-A-2-1"))
+    assert mobile_url("https://example.com/", 10, "abc") == "https://example.com/q/10/abc"
+
+
+def test_identity_keeps_customer_spec_unit_and_product_separate():
+    def lot(**kwargs):
+        return SimpleNamespace(id=1, inventory_type="finished", unit=kwargs.pop("unit", "pcs"),
+            finished_detail=SimpleNamespace(owner_customer_id=kwargs.pop("customer",1), product_id=kwargs.pop("product",2),
+                                            length_mm=kwargs.pop("length",100), **kwargs))
+    first=product_key(lot())
+    assert first==product_key(lot())
+    assert len({first, product_key(lot(customer=2)),product_key(lot(product=3)),
+                product_key(lot(length=101)),product_key(lot(unit="sets"))})==5
+
+
+def test_labels_scan_live_filter_scope_and_no_inventory_writes(stocktake_app):
+    app,factory,ids,_=stocktake_app
+    with factory() as db:
+        db.get(Customer, ids["customer"]).chinese_short_name="甲客户"
+        db.get(User, ids["other"]).customer_access_mode="selected"
+        for area in db.scalars(select(WarehouseArea)):
+            area.area_name="成品"+str(area.id)+"区"
+        for location in db.scalars(select(WarehouseLocation)):
+            location.location_name="成品货位"+str(location.id)
+        db.commit()
+        lot=db.scalar(select(InventoryLot).where(InventoryLot.warehouse_location_id==ids["loc_fg1"],
+                                               InventoryLot.inventory_type=="finished"))
+        lot_id=lot.id
+        before=[(x.id,x.quantity_available,x.quantity_reserved,x.warehouse_location_id) for x in db.scalars(select(InventoryLot))]
+    endpoint=f"/api/warehouse/locations/{ids['loc_fg1']}"
+    with TestClient(app) as client:
+        assert client.get(endpoint+"/scan").status_code==401
+        _login(client,"p147d-admin")
+        position=client.get(endpoint+"/mobile-label")
+        assert position.status_code==200,position.text
+        assert "product" not in position.json()
+        assert f"/q/{ids['loc_fg1']}" in position.json()["lookup_url"]
+        label=client.get(endpoint+f"/mobile-label?lot_id={lot_id}")
+        assert label.status_code==200,label.text
+        assert not any("quantity" in x for x in label.json()["product"])
+        key=urlsplit(label.json()["lookup_url"]).path.rsplit("/",1)[1]
+        scan=client.get(endpoint+"/scan?product="+key)
+        assert scan.status_code==200,scan.text
+        assert scan.headers["cache-control"]=="no-store"
+        assert len(scan.json()["items"])==1
+        original=scan.json()["items"][0]["quantity"]
+        assert client.get(endpoint+"/scan?product="+"0"*24).json()["items"]==[]
+        assert client.get(f"/api/warehouse/locations/{ids['loc_fg1_add']}/mobile-label?lot_id={lot_id}").status_code==409
+        with factory() as db:
+            assert before==[(x.id,x.quantity_available,x.quantity_reserved,x.warehouse_location_id) for x in db.scalars(select(InventoryLot))]
+            row=db.get(InventoryLot,lot_id);row.quantity_available+=3;db.commit()
+        assert client.get(endpoint+"/scan?product="+key).json()["items"][0]["quantity"]==original+3
+        with factory() as db:
+            db.get(InventoryLot,lot_id).warehouse_location_id=ids["loc_fg1_add"];db.commit()
+        old=client.get(endpoint+"/scan?product="+key).json()
+        assert all(lot_id!=batch["id"] for item in old["items"] for batch in item["lots"])
+        _login(client,"p147d-other")
+        assert client.get(f"/api/warehouse/locations/{ids['loc_fg1_add']}/mobile-label?lot_id={lot_id}").status_code==403
+        assert client.get(endpoint+"/scan?product="+key).json()["items"]==[]
+
+
+def test_scan_and_print_are_lightweight_and_product_specific():
+    root=Path(__file__).resolve().parents[1]
+    scan=(root/"static/shelf-scan.js").read_text(encoding="utf-8")
+    assert "cache:'no-store'" in scan
+    assert "/api/auth/login" in scan
+    assert "data.location?.id" in scan
+    assert "warehouseTwin" not in scan
+    ui=(root/"factory_twin/frontend/src/WarehouseTwinApp.tsx").read_text(encoding="utf-8")
+    assert "&lot_id=${selectedItem.lot_id}" in ui
+    assert 'className="shelf-position-print"' in ui

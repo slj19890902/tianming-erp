@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.296"
-APP_VERSION_NAME = "手机盘点紧凑布局与货架标签信息"
+APP_VERSION = "v0.22.297"
+APP_VERSION_NAME = "双类货架标签与手机快速扫码"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2232,17 +2232,29 @@ _V022295_VERIFICATION_STEPS = [
     "手机关闭 WiFi，打开 https://tianmingerp0909.share.zrok.io/mobile/，使用原账号核对手机版和可见数据。",
     "按原账号权限使用；跨入口退出会沿用原有全会话退出规则，不需要新增或保存测试库存。",
 ]
-APP_CHANGES = [
+_V022296_CHANGES = [
     "手机盘点客户、产品搜索选择同排，数量日期同排，保存取消刷新同排；保留重复库存确认及原有权限。",
     "货架正视图精简打印入口与批次侧栏，按客户、编码、品名、尺寸、数量排列，批次时间显示北京时间到分钟。",
     "无数据库迁移，不修改库存、订单、地图或草稿；保留内外网双入口。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022296_VERIFICATION_STEPS = [
     "完成未保存操作后强制刷新仓库页面，查货正视图顶部点击打印货架标签，格内点击打印本格标签；标签不含数量。",
     "手机重新打开盘点页面，核对搜索与选择、数量日期、底部三按钮均同行；新增库存仍需确认未重复登记。",
     "选中批次核对右栏字段顺序，入库日期与进入货位时间小字显示，无T、Z或秒。",
 ]
+APP_CHANGES = [
+    "格数旁绿色打印货位按钮生成80×40纯位置标签；当前批次旁打印产品标签只印所选款，不含数量。",
+    "新二维码使用公网手机短地址，直接读取当前货位产品实时数量，关联订单按需加载；位置名称隐藏内部EDIT编码。",
+    "打印与扫码查询不修改库存、订单或货架绑定，原拿齐与集货职责保持不变；旧内网二维码需重新打印。",
+]
+APP_VERIFICATION_STEPS = [
+    "保存当前操作后刷新查货地图，G1二层一格打印应显示三楼 北货架G1 -02层-01格；空格也能打印纯位置标签。",
+    "混放格逐款选择产品并打印，核对客户、编码、品名、规格无数量；按80×40mm实际大小试打一张。",
+    "手机5G扫描新码，应直接打开手机库存页，未登录在本页登录；核对产品数量及展开批次关联订单，观察实际加载速度。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.296：本次更新｜{item}" for item in _V022296_CHANGES),
+    *(f"v0.22.296：如何验证｜{item}" for item in _V022296_VERIFICATION_STEPS),
     *(f"v0.22.295：本次更新｜{item}" for item in _V022295_CHANGES),
     *(f"v0.22.295：如何验证｜{item}" for item in _V022295_VERIFICATION_STEPS),
     *(f"v0.22.294：本次更新｜{item}" for item in _V022294_CHANGES),

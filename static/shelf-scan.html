@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>货位实时库存</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:#172033;font:16px/1.4 Arial,"Microsoft YaHei",sans-serif}
+header{background:white;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:8px}h1{font-size:20px;margin:0}main{max-width:640px;margin:auto;padding:10px}
+button{border:0;border-radius:7px;padding:10px 14px;background:#15803d;color:white;font:inherit;min-height:44px}button:disabled{opacity:.5}
+article,form{background:white;padding:12px;margin:10px 0;border:1px solid #dbe3ed;border-radius:10px}
+.code{font-size:21px;font-weight:800;overflow-wrap:anywhere}.quantity{font-size:25px;font-weight:800;color:#15803d;margin:8px 0}
+small{color:#64748b}details{margin-top:10px}summary{padding:8px 0;cursor:pointer}a{color:#1768ba}input{display:block;width:100%;padding:10px;margin:8px 0;font-size:16px}
+[hidden]{display:none!important}#message{padding:8px 0;color:#9a3412}
+</style></head><body>
+<header><h1 id="address">货位库存</h1><button id="refresh">刷新</button></header><main>
+<div id="message" role="status">读取实时库存…</div>
+<form id="login" hidden><b>请登录</b><input id="username" autocomplete="username" placeholder="账号" required><input id="password" type="password" autocomplete="current-password" placeholder="密码" required><button id="loginButton">登录</button></form>
+<small id="updated"></small><section id="items"></section><a href="/mobile/#warehouse">仓库地图</a>
+</main><script src="/static/shelf-scan.js"></script></body></html>

@@ -2490,3 +2490,6 @@ body.warehouse-twin-page {
 .twin-rack-product-label .shelf-current-code { font-size: 16px; font-weight: 800; overflow-wrap: anywhere; }
 .twin-rack-product-label .shelf-lot-times { font-size: 11px; color: #64748b; margin: 6px 0 10px; }
 .shelf-lot-history details { margin: 8px 0; }
+.shelf-cell-heading,.shelf-current-heading{display:flex;align-items:center;gap:5px;justify-content:space-between}
+.shelf-cell-heading .mold-rack-cell-summary{flex:1;min-width:0}
+.twin-rack-stage .shelf-position-print{font-size:11px!important;padding:4px 7px!important;background:#15803d!important;color:white!important;border:0!important;border-radius:4px;white-space:nowrap;flex-shrink:0}

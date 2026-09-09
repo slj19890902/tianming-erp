@@ -21,7 +21,7 @@ assert.ok(labelHtml(row).includes('50只/捆'));
 assert.ok(labelHtml(row).includes('预警参考100只'));
 '''
     subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True, encoding='utf-8')
-    assert 'content=shelf-information' in (ROOT / 'factory_twin/frontend/src/WarehouseTwinApp.tsx').read_text(encoding='utf-8')
+    assert '/static/shelf-label.html?' in (ROOT / 'factory_twin/frontend/src/WarehouseTwinApp.tsx').read_text(encoding='utf-8')
 
 
 def test_mixed_cell_expands_to_one_label_per_product():

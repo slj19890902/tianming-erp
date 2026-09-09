@@ -17558,6 +17558,78 @@ def get_location_label(
     return _with_shelf_label(db, row, _user, _location_label_dict(row, request, projection_context), information_only=content == "shelf-information")
 
 
+def _mobile_shelf_location(db, location_id):
+    from app.services.mobile_shelf_labels import readable_address
+    row = db.get(WarehouseLocation, location_id)
+    if row is None:
+        raise HTTPException(404, "货位不存在")
+    context = load_warehouse_location_projection_contexts(db, [row]).get(row.id, {})
+    _require_printable_location_label(row, context)
+    path = employee_location_name(row, area=context.get("area"), floor=context.get("floor"),
+                                  area_sequence=context.get("area_sequence"))
+    title, position, address = readable_address(dict(display_path=path, level_no=row.level_no, slot_no=row.slot_no))
+    return row, dict(location_id=row.id, title=title, position=position, address=address)
+
+
+@router.get("/locations/{location_id}/mobile-label")
+def mobile_shelf_label(location_id: int, response: Response, lot_id: int | None = Query(default=None, gt=0),
+                       db: Session = Depends(get_db), user: User = Depends(can_read)):
+    from app.services.mobile_shelf_labels import product_key, product_fields, mobile_url
+    row, result = _mobile_shelf_location(db, location_id)
+    key = None
+    if lot_id is not None:
+        lot = _require_lot_customer_access(db, lot_id, user)
+        if lot.warehouse_location_id != row.id or lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged <= 0:
+            raise HTTPException(409, "产品已不在本格，请刷新")
+        if lot.inventory_type != "finished" or not lot.finished_detail or not lot.finished_detail.product_id:
+            raise HTTPException(409, "请先核对成品身份")
+        fields = product_fields(db, lot)
+        customer = db.get(Customer, lot.finished_detail.owner_customer_id) if lot.finished_detail.owner_customer_id else None
+        if customer and not customer.chinese_short_name:
+            raise HTTPException(409, "请补充客户中文简称")
+        if fields["code"] == "待补充" or fields["name"] == "待补充":
+            raise HTTPException(409, "请补充存货编码和产品名称")
+        key = product_key(lot)
+        result["product"] = fields
+    url = mobile_url(load_settings().browser_url, row.id, key)
+    buffer = BytesIO()
+    qrcode.make(url).save(buffer, format="PNG")
+    result.update(lookup_url=url, qr_data_url="data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii"))
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.get("/locations/{location_id}/scan")
+def mobile_shelf_scan(location_id: int, response: Response,
+                      product: str | None = Query(default=None, pattern=r"^[a-f0-9]{24}$"),
+                      db: Session = Depends(get_db), user: User = Depends(can_read)):
+    from app.services.mobile_shelf_labels import product_key, product_fields
+    _, result = _mobile_shelf_location(db, location_id)
+    query = select(InventoryLot).options(selectinload(InventoryLot.finished_detail),
+        selectinload(InventoryLot.semi_finished_detail)).where(
+        InventoryLot.warehouse_location_id == location_id,
+        InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged > 0)
+    scope = _visible_customer_ids(user, db)
+    if scope is not None:
+        query = query.where(_visible_lot_condition(scope))
+    groups = {}
+    for lot in db.scalars(query.order_by(InventoryLot.id)):
+        key = product_key(lot)
+        if product and key != product:
+            continue
+        item = groups.setdefault(key, dict(key=key, **product_fields(db, lot), unit=lot.unit,
+            quantity=0, available=0, reserved=0, damaged=0, lots=[]))
+        item["quantity"] += lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged
+        item["available"] += lot.quantity_available
+        item["reserved"] += lot.quantity_reserved
+        item["damaged"] += lot.quantity_damaged
+        item["lots"].append(dict(id=lot.id, quantity=lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged, status=lot.status))
+    result.update(items=list(groups.values()), filtered=bool(product),
+                  refreshed_at=beijing_naive_to_api(beijing_now_naive()))
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
 @router.get("/location-candidates")
 def list_location_candidates(
     inventory_type: Literal["finished", "semi_finished"] = "finished",

@@ -46,4 +46,4 @@ def test_print_entry_and_ordered_batch_fields():
     positions = [fields.index(f"<dt>{label}</dt>") for label in labels]
     assert positions == sorted(positions)
     assert ">打印货架标签</button>" in src
-    assert "content=shelf-information&location_ids=" in src
+    assert "/static/shelf-label.html?location_ids=" in src

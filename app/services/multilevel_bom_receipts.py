@@ -195,7 +195,7 @@ def assemble_graph_receipt(db, *, context, allocation, operator_id):
     lots = list(db.scalars(select(InventoryLot).where(InventoryLot.id.in_(own_ids | reserved_ids),
         InventoryLot.status == "active", InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0)))
     targets = {pid: _receipt_auto_finished_ground_target(db, claim=True,
-        customer_id=context.compiled.graph.customer_id).location.id for pid in sorted(pids)}
+        customer_id=context.compiled.graph.customer_id, product_id=pid).location.id for pid in sorted(pids)}
     results = assemble_order_inventory(db, order_item_id=oid,
         source_lot_versions={lot.id: lot.version for lot in lots}, target_locations=targets,
         operation_key=f"bom-receipt:{allocation.id}", operator_id=operator_id,

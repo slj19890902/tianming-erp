@@ -1540,7 +1540,11 @@ def post_receipt_purpose_allocation(
     db.flush()
     if graph_context is not None:
         from app.services.multilevel_bom_receipts import assemble_graph_receipt
-        assemble_graph_receipt(db, context=graph_context, allocation=allocation, operator_id=operator_id)
+        try:
+            assemble_graph_receipt(db, context=graph_context, allocation=allocation, operator_id=operator_id)
+        except (ProductionWorkflowError, WarehouseInventoryError) as error:
+            raise ReceiptPurposeFlowError("MULTILEVEL_BOM_RECEIPT_INVALID", str(error),
+                                          error.status_code) from error
     if subkit:
         from app.services.bom_subkit_receipts import post_component_receipt, assemble_after_receipt
         from app.services.bom_subkits import SubkitError

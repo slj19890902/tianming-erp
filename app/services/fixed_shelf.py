@@ -62,6 +62,41 @@ def location_issue(db, location, projection_context=None):
     return operational_location_issue(db, location, warehouse_types={"finished", "shared"}, require_published=True, require_map_geometry=True, required_inventory_type="finished", projection_context=projection_context)
 
 
+def incoming_primary_location(db, *, product_id, customer_id, claim=False):
+    """Resolve a real product binding; never infer storage from a BOM name.
+
+    An invalid configured destination must not silently become staging stock.
+    Capacity is checked again by the inventory writer after adding the lot.
+    Customer preferred-area precedence is owned by the receipt target resolver.
+    """
+    from app.services.location_candidates import claim_active_placed_location
+    product = db.get(Product, product_id)
+    if product is None or product.customer_id != customer_id:
+        raise ShelfError("产品与收料客户不一致")
+    if claim:
+        # Same configuration row lock as save_profile; do not mutate its version.
+        db.execute(update(ShelfProfile).where(ShelfProfile.product_id == product_id)
+                   .values(version=ShelfProfile.version))
+    binding = db.scalar(select(ShelfBinding).where(
+        ShelfBinding.product_id == product_id, ShelfBinding.priority == 0)
+        .execution_options(populate_existing=True))
+    if binding is None:
+        return None
+    location = db.get(WarehouseLocation, binding.location_id, populate_existing=True)
+    issue = location_issue(db, location)
+    if issue:
+        raise ShelfError(f"固定货位不可用：{issue}")
+    layout = location.floor3_layout
+    if claim and not claim_active_placed_location(db, location.id,
+            expected_layout_version=layout.version if layout else None):
+        raise ShelfError("固定货位已变化，请刷新后重试")
+    issue = location_issue(db, location)
+    if issue:
+        raise ShelfError(f"固定货位不可用：{issue}")
+    check_contents(db, location.id, product)
+    return location
+
+
 def location_info(db, location, projection_context=None):
     return {"location_id": location.id, "name": employee_location_name(location),
             "address": location.location_code, "floor": location.warehouse_floor,

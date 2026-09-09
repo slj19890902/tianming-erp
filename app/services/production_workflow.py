@@ -1520,7 +1520,7 @@ class ReceiptAutoFinishedGroundTarget:
     area: WarehouseArea | None = None
     floor: WarehouseFloor | None = None
     target_kind: Literal[
-        "fin_ground_plan", "floor3_v11", "preferred_location"
+        "fin_ground_plan", "floor3_v11", "preferred_location", "fixed_shelf"
     ] = "fin_ground_plan"
     runtime_map_revision: str | None = None
     area_sequence: int | None = None
@@ -2013,12 +2013,28 @@ def _receipt_auto_finished_ground_target(
     claim: bool,
     excluded_location_ids: set[int] | None = None,
     customer_id: int | None = None,
+    product_id: int | None = None,
 ) -> ReceiptAutoFinishedGroundTarget:
     excluded = excluded_location_ids or set()
     has_customer_preferences = bool(
         customer_id is not None
         and ordered_preferred_area_ids(db, int(customer_id))
     )
+    if product_id is not None and not has_customer_preferences:
+        from app.services.fixed_shelf import incoming_primary_location, ShelfError
+        try:
+            fixed = incoming_primary_location(db, product_id=product_id,
+                customer_id=customer_id, claim=claim)
+        except OperationalError as exc:
+            raise ProductionWorkflowError("固定货位正在调整，请稍后重试", 409) from exc
+        except ShelfError as exc:
+            raise ProductionWorkflowError(str(exc), 409) from exc
+        if fixed is not None:
+            if fixed.id in excluded:
+                raise ProductionWorkflowError("固定货位已被本批次占用，请核对分配", 409)
+            return ReceiptAutoFinishedGroundTarget(plan=None, slot=None, location=fixed,
+                layout_version=fixed.floor3_layout.version if fixed.floor3_layout else 0,
+                capacity_warning=None, target_kind="fixed_shelf")
     targets = [
         target
         for target in _receipt_auto_finished_ground_targets(
@@ -3052,6 +3068,20 @@ def _stock_completion_lot(
     if location_id_override is not None:
         if finished_ground_target is not None:
             target_location = finished_ground_target.location
+            fixed_is_valid = False
+            if finished_ground_target.target_kind == "fixed_shelf":
+                from app.services.fixed_shelf import incoming_primary_location, ShelfError
+                try:
+                    fixed = incoming_primary_location(db,
+                        product_id=snapshot.component_product_id if snapshot is not None else item.product_id,
+                        customer_id=order.customer_id, claim=True)
+                except OperationalError as exc:
+                    raise ProductionWorkflowError("固定货位正在调整，请稍后重试", 409) from exc
+                except ShelfError as exc:
+                    raise ProductionWorkflowError(str(exc), 409) from exc
+                fixed_is_valid = (fixed is not None and fixed.id == target_location.id
+                    and not ordered_preferred_area_ids(db, int(order.customer_id)))
+                require_empty_pallet = False
             target_kind_is_valid = (
                 finished_ground_target.target_kind == "fin_ground_plan"
                 and finished_ground_target.uses_ground_plan
@@ -3074,7 +3104,7 @@ def _stock_completion_lot(
                 and finished_ground_target.area is not None
                 and int(finished_ground_target.area.id)
                 in ordered_preferred_area_ids(db, int(order.customer_id))
-            )
+            ) or fixed_is_valid
             if (
                 target_location.id != location_id_override
                 or not target_kind_is_valid
@@ -4867,6 +4897,7 @@ def post_automatic_receipt_completion(
         db,
         claim=True,
         customer_id=order.customer_id,
+        product_id=graph_snapshot.component_product_id if graph_snapshot is not None else item.product_id,
     )
     location = ground_target.location
     existing_posted = db.scalar(
@@ -4961,7 +4992,7 @@ def post_automatic_receipt_completion(
     completion.inventory_lot_id = lot.id
     if ground_target.target_kind == "floor3_v11":
         _validate_floor3_v11_direct_pallet(lot=lot, location=location)
-    else:
+    elif ground_target.target_kind != "fixed_shelf":
         _bind_direct_completion_lots_to_system_pallet(
             db,
             completion=completion,
@@ -6821,6 +6852,18 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
             if lot_location is None:
                 current_inventory_status = "unlocated"
                 current_location_issue = "当前库存批次缺少有效库位，请核对仓库"
+            elif (lot_location.storage_type == "rack"
+                  and lot_location.address_kind == "rack_slot"
+                  and lot_location.map_rack_id):
+                # A formal shelf cell is the storage container. Ground-stock
+                # pallet requirements must not make valid rack stock disappear.
+                # Legacy rack/pallet records keep their historical validation.
+                if effective_pallet is not None:
+                    current_inventory_status = "pallet_mismatch"
+                    current_location_issue = "货架库存不应同时绑定实体栈板，请核对仓库"
+                else:
+                    current_inventory_status = "located"
+                    current_location = lot_location
             elif effective_pallet is None:
                 current_inventory_status = "missing_pallet"
                 current_location_issue = "当前库存未关联实体栈板，请核对仓库"

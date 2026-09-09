@@ -225,6 +225,11 @@ def _run_migration(database: Path, revision: str, project_root: Path = PROJECT_R
             "ERP_DATABASE_PATH": str(database.resolve()),
             "ERP_BIND_HOST": "127.0.0.1",
             "ERP_PORT": "18999",
+            # Migration subprocess is local/test-only, not the HTTPS service.
+            # Do not inherit production proxy origins into test-mode validation.
+            "ERP_ALLOWED_ORIGINS": "http://127.0.0.1:18999",
+            "ERP_HEALTH_URL": "http://127.0.0.1:18999/api/health",
+            "ERP_BROWSER_URL": "http://127.0.0.1:18999",
             "ERP_WORKERS": "1",
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",

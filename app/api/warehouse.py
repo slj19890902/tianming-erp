@@ -2462,7 +2462,6 @@ def _floor3_layout_dict(row: Floor3LocationLayout | None) -> dict | None:
         "z_index": row.z_index,
         "version": row.version,
         "source_type": row.source_type,
-        "subkit_role": "component" if row.source_ref_type == "subkit_receipt" else "kit" if row.source_ref_type == "subkit_conversion" else None,
         "layout_kind": row.layout_kind,
         "updated_at": (
             beijing_naive_to_api(row.updated_at) if row.updated_at else None
@@ -2794,6 +2793,7 @@ def _lot_dict(
         "quantity_scrapped": row.quantity_scrapped,
         "unit": row.unit,
         "display_unit": lot_display_unit(row),
+        "subkit_role": "component" if row.source_ref_type == "subkit_receipt" else "kit" if row.source_ref_type in ("subkit_conversion", "bom_assembly") else None,
         "status": row.status,
         "source_type": row.source_type,
         "stock_date": row.stock_date,

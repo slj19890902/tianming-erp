@@ -1,8 +1,9 @@
 """Order-owned immutable BOM graph, with relational product identity guards."""
 
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models import Base
@@ -61,3 +62,43 @@ class ProductBomInventoryRelation(Base):
     bom_component_id: Mapped[int] = mapped_column(
         ForeignKey("product_bom_components.id", ondelete="CASCADE"), primary_key=True)
     relation: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class BomAssembly(Base):
+    """Conversion provenance only; all stock balances stay in InventoryLot."""
+    __tablename__ = "bom_assemblies"
+    __table_args__ = (
+        ForeignKeyConstraint(["order_item_id", "output_product_id"],
+            ["order_bom_graph_products.order_item_id", "order_bom_graph_products.product_id"],
+            ondelete="RESTRICT", name="fk_bom_assembly_frozen_product"),
+        CheckConstraint("quantity >= 0 AND total_cost >= 0", name="ck_bom_assembly_positive"),
+        CheckConstraint("status IN ('posted','reversed')", name="ck_bom_assembly_status"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_item_id: Mapped[int] = mapped_column(ForeignKey("order_bom_graphs.order_item_id", ondelete="RESTRICT"), index=True)
+    output_product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_lot_id: Mapped[int | None] = mapped_column(ForeignKey("inventory_lots.id", ondelete="RESTRICT"))
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_cost: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    cost_detail_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="posted")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp())
+
+
+class BomAssemblyInput(Base):
+    __tablename__ = "bom_assembly_inputs"
+    __table_args__ = (
+        UniqueConstraint("conversion_id", "lot_id", name="uq_bom_assembly_input"),
+        CheckConstraint("quantity > 0 AND total_cost >= 0", name="ck_bom_assembly_input_positive"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversion_id: Mapped[int] = mapped_column(ForeignKey("bom_assemblies.id", ondelete="RESTRICT"), index=True)
+    lot_id: Mapped[int] = mapped_column(ForeignKey("inventory_lots.id", ondelete="RESTRICT"), index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"))
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_cost: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    consume_movement_id: Mapped[int] = mapped_column(ForeignKey("inventory_movements.id", ondelete="RESTRICT"))
+    reservations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")

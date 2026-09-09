@@ -20,7 +20,7 @@ def source_cost(db, lot, take):
     # A real assembled product can be an input of the next assembly level.
     # Carry its exact frozen total and purchase lineage forward; multiplying
     # its rounded display unit cost would lose both cents and cost provenance.
-    if lot.source_ref_type == "subkit_conversion":
+    if lot.source_ref_type in ("subkit_conversion", "bom_assembly"):
         return delivery_cost(db, lot, take)
     source = db.get(SubkitReceiptOutput, lot.source_ref_id) if lot.source_ref_type == "subkit_receipt" else None
     if source:
@@ -42,7 +42,9 @@ def source_cost(db, lot, take):
 
 
 def delivery_cost(db, lot, take):
-    conversion = db.get(SubkitConversion, lot.source_ref_id) if lot.source_ref_type == "subkit_conversion" else None
+    from app.models.multilevel_bom import BomAssembly
+    model = {"subkit_conversion": SubkitConversion, "bom_assembly": BomAssembly}.get(lot.source_ref_type)
+    conversion = db.get(model, lot.source_ref_id) if model else None
     if conversion is None or conversion.status != "posted":
         raise SubkitError("内衬缺少组套成本来源")
     used = lineage_used(db, lot)

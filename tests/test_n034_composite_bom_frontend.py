@@ -13,13 +13,13 @@ INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 def test_n034_product_editor_has_compact_internal_bom_cards() -> None:
     assert "bom-editor-panel" in INDEX
     assert "bom-component-card" in INDEX
-    assert "添加内部组件" in INDEX
-    assert "同客户常用箱" in INDEX
+    assert "添加子件" in INDEX
+    assert ':options="bomEditor.componentOptions"' in INDEX
     assert "@search=\"searchBomProducts\"" in INDEX
-    assert "每套数量" in INDEX
-    assert "交付标签和成品方式" in INDEX
+    assert "每套用量" in INDEX
+    assert 'v-model="productForm.composite_fulfillment_mode"' in INDEX
     assert "必需" in INDEX
-    assert "内部编码：{{ bomComponentInternalCode(component) }}" in INDEX
+    assert "内部编码：{{ bomComponentInternalCode(component) }}" not in INDEX
     assert ".bom-component-compact-row {" in INDEX
     assert "@media (max-width: 560px)" in INDEX
 
@@ -27,8 +27,8 @@ def test_n034_product_editor_has_compact_internal_bom_cards() -> None:
     bom_end = INDEX.index("</fieldset>", bom_start) + len("</fieldset>")
     bom_block = INDEX[bom_start:bom_end]
     assert "<table" not in bom_block
-    assert "整套统一计价" in bom_block
-    assert "组件分别计价" in bom_block
+    assert "整套计价" in bom_block
+    assert "组件计价" in bom_block
     assert "父件交付" in bom_block
     assert "子件交付" in bom_block
 

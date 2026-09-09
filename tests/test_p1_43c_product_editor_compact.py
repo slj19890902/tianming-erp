@@ -52,7 +52,7 @@ def test_product_editor_uses_compact_rows_and_keeps_mold_next_to_process() -> No
     assert 'class="product-material-details"' in PRODUCT_MODAL
     assert 'class="product-secondary-disclosure"' in PRODUCT_MODAL
 
-    process = PRODUCT_MODAL.index("结合方式（三选一，模切可另选）")
+    process = PRODUCT_MODAL.index("结合 / 模切")
     mold = PRODUCT_MODAL.index("生产模具 / 货架位置（必选）")
     printing = PRODUCT_MODAL.index("印刷情况")
     price = PRODUCT_MODAL.index("默认单价")
@@ -117,8 +117,8 @@ def test_internal_bom_component_is_one_compact_business_row() -> None:
     )[1].split("</div>\n                    </div>\n                  </div>", 1)[0]
     for marker in (
         "bom-component-compact-row",
-        "同客户常用箱",
-        "每套数量",
+        ':options="bomEditor.componentOptions"',
+        "每套用量",
         "必需",
         "removeBomComponent(index)",
     ):

@@ -3013,6 +3013,7 @@
         .erp-enterprise-ui .table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }
       }
     </style>
+    <link rel="stylesheet" href="/static/product-editor-compact.css?v=multilevel-bom-1" />
   </head>
   <body>
     <div id="app" v-cloak>
@@ -6516,7 +6517,7 @@
                   </div>
                   <div v-else-if="canViewCosts && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
                 </div>
-                <div class="field wide"><label>生产备注说明</label><textarea class="input" rows="2" maxlength="2000" v-model.trim="productForm.production_notes" placeholder="默认空白；填写后会冻结到生产任务单和手机生产任务"></textarea></div>
+                <div class="field wide"><label>生产备注</label><textarea class="input" rows="2" maxlength="2000" v-model.trim="productForm.production_notes" placeholder="生产任务使用的备注"></textarea></div>
                 </div>
 
                 <div class="product-material-details">
@@ -6642,7 +6643,7 @@
               </div>
 
               <div class="product-form-row product-print-row">
-                <div v-if="productForm.supply_mode!=='external_purchase'" class="field product-process-field"><label>结合方式（三选一，模切可另选）</label>
+                <div v-if="productForm.supply_mode!=='external_purchase'" class="field product-process-field"><label>结合 / 模切</label>
                   <div class="process-options">
                     <label class="process-option"><input type="checkbox" value="粘贴" v-model="productForm._production_processes" @change="onProductProcessesChanged" />粘贴</label>
                     <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" @change="onProductProcessesChanged" />打钉</label>
@@ -6707,7 +6708,7 @@
               </div>
 
               <div class="product-form-row product-final-row">
-                <div v-if="canViewSalesAmounts" class="field sensitive-price product-inline-price"><label>{{ productForm.supply_mode==='external_purchase' ? `${commonBoxPriceLabel(productForm.customer_id)} / ${productForm.external_packaging_purchase_unit || '采购单位'}` : commonBoxPriceLabel(productForm.customer_id) }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /><div class="muted">按当前客户口径原值保存，不自动乘或除 1.13。<span v-if="productForm.supply_mode==='external_purchase'">这是给客户的销售单价，不是供应商采购成本。</span></div></div>
+                <div v-if="canViewSalesAmounts" class="field sensitive-price product-inline-price"><label>{{ productForm.supply_mode==='external_purchase' ? `${commonBoxPriceLabel(productForm.customer_id)} / ${productForm.external_packaging_purchase_unit || '采购单位'}` : commonBoxPriceLabel(productForm.customer_id) }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /></div>
                 <div class="field"><label>图纸</label>
                   <input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" />
                 </div>
@@ -6722,78 +6723,69 @@
                     </div>
                   </div>
                 </div>
-                <button type="button" class="btn primary product-inline-save" :disabled="loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : '保存' }}</button>
               </div>
               </fieldset>
               <details v-if="productForm.supply_mode!=='external_purchase'" class="product-secondary-disclosure">
-              <summary>组合产品 / 内部 BOM（不常用）</summary>
+              <summary>组合 BOM</summary>
               <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
                 <div class="bom-editor-heading">
-                  <h4>组合产品 / 内部 BOM</h4>
                   <div class="bom-editor-heading-controls">
-                    <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="!productForm.id" /> 启用组合产品</label>
-                    <button v-if="bomEditor.enabled && !productForm.is_virtual_composite_parent && productForm.composite_fulfillment_mode === 'parent_delivery' && !bomEditor.subkit" type="button" class="btn small" @click="bomEditor.subkit = {name:'内衬',kits_per_parent:1,version:0,enabled:true}">组成子套件</button>
-                    <span v-if="bomEditor.subkit" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap">
+                    <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="!productForm.id" /> 启用</label>
+                    <label class="remember-line">计价
+                      <select class="select" v-model="productForm.combination_mode" @change="productForm.is_virtual_composite_parent = productForm.combination_mode === 'parent_priced_set' ? productForm.is_virtual_composite_parent : false; productForm.composite_fulfillment_mode = productForm.combination_mode === 'component_priced' ? 'component_delivery' : productForm.composite_fulfillment_mode">
+                        <option value="parent_priced_set">整套计价</option>
+                        <option value="component_priced">组件计价</option>
+                      </select>
+                    </label>
+                    <label v-show="bomEditor.enabled && productForm.combination_mode === 'parent_priced_set'" class="remember-line" title="父件只表示整套数量和价格，不报料、不生产；尺寸用于送货规格"><input type="checkbox" v-model="productForm.is_virtual_composite_parent" /> 父件无自身材料</label>
+                    <button v-if="bomEditor.enabled && !productForm.is_virtual_composite_parent && productForm.composite_fulfillment_mode === 'parent_delivery' && !bomEditor.subkit" type="button" class="btn small bom-subkit-trigger" @click="bomEditor.subkit = {name:'内衬',kits_per_parent:1,version:0,enabled:true}">组成子套件</button>
+                    <span v-if="bomEditor.subkit" class="bom-subkit-controls" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap">
                       <label class="remember-line"><input type="checkbox" v-model="bomEditor.subkit.enabled" />收料组套</label>
                       <input class="input" aria-label="子套件名称" v-model="bomEditor.subkit.name" placeholder="内衬名称" style="width:130px" />
                       <label style="display:inline-flex;align-items:center;gap:4px">每父件<input class="input" aria-label="每父件子套件数" type="number" min="1" step="1" v-model.number="bomEditor.subkit.kits_per_parent" style="width:54px" />套</label>
                     </span>
-                    <label v-if="bomEditor.enabled" class="remember-line">交付标签和成品方式
+                    <label v-show="bomEditor.enabled" class="remember-line">交付
                       <select class="select" v-model="productForm.composite_fulfillment_mode" :disabled="productForm.combination_mode === 'component_priced'">
                         <option value="component_delivery">子件交付</option>
                         <option value="parent_delivery">父件交付</option>
                       </select>
                     </label>
+                    <button v-show="bomEditor.enabled" type="button" class="btn small" :disabled="!productForm.id || !!bomEditor.error" @click="addBomComponent">添加子件</button>
                   </div>
                 </div>
-                <div class="field" style="max-width:340px;margin:0 0 8px">
-                  <label>组合计价方式</label>
-                  <select class="select" v-model="productForm.combination_mode" @change="productForm.is_virtual_composite_parent = productForm.combination_mode === 'parent_priced_set' ? productForm.is_virtual_composite_parent : false; productForm.composite_fulfillment_mode = productForm.combination_mode === 'component_priced' ? 'component_delivery' : productForm.composite_fulfillment_mode">
-                    <option value="parent_priced_set">整套统一计价（推荐）</option>
-                    <option value="component_priced">组件分别计价</option>
-                  </select>
-                </div>
-                <label v-if="bomEditor.enabled && productForm.combination_mode === 'parent_priced_set'" class="remember-line" style="margin:0 0 10px"><input type="checkbox" v-model="productForm.is_virtual_composite_parent" /> 父件只表示整套数量和价格，不报料、不生产；可填写箱型与成品长宽高，仅用于送货规格展示</label>
                 <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存父产品，再维护内部组件 BOM。</div>
                 <div v-else-if="bomEditor.error" class="status orange" style="display:block;white-space:normal">{{ bomEditor.error }}</div>
                 <div v-else-if="bomEditor.notice" class="muted" style="margin-bottom:8px">{{ bomEditor.notice }}</div>
                 <template v-if="bomEditor.enabled && !bomEditor.error">
-                  <div class="toolbar-group" style="margin-bottom:8px">
-                    <button type="button" class="btn small" @click="addBomComponent">添加内部组件</button>
-                  </div>
                   <div v-if="!bomEditor.components.length" class="muted">尚未添加内部组件。</div>
                   <div v-else class="bom-component-list">
                     <div v-for="(component,index) in bomEditor.components" :key="component._key || component.id || index" class="bom-component-card">
                       <div class="bom-component-compact-row">
                         <div class="bom-component-product field">
-                          <label>内部组件 {{ index + 1 }} · 同客户常用箱</label>
+                          <label>子件 {{ index + 1 }}</label>
                           <search-select v-model="component.component_product_id" :options="bomEditor.componentOptions" label-key="_label" value-key="id" placeholder="搜索产品编码、名称或规格" :disabled="!productForm.customer_id" @search="searchBomProducts" @change="selectBomComponent(component,$event)"></search-select>
                         </div>
-                        <div class="field"><label>每套数量</label><input class="input" type="number" min="0.0001" step="0.0001" v-model.number="component.quantity_per_set" /></div>
+                        <div class="field"><label>每套用量</label><input class="input" type="number" min="1" step="1" v-model.number="component.quantity_per_set" /></div>
                         <label class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> 必需</label>
                         <button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button>
                       </div>
-                      <div class="bom-component-code">内部编码：{{ bomComponentInternalCode(component) }}<template v-if="component.product_name">｜{{ component.product_name }}｜{{ component.product_code || "-" }}</template></div>
                     </div>
                   </div>
                 </template>
               </fieldset>
               <fieldset v-if="canAdmin" class="bom-editor-panel" :disabled="externalComponentEditor.loading || externalComponentEditor.saving">
                 <div class="bom-editor-heading">
-                  <div>
+                  <div class="bom-editor-heading-controls">
                     <h4>外购包装组件</h4>
-                    <p class="bom-editor-note">维护外购组件与默认供应商候选。</p>
+                    <button type="button" class="btn small" :disabled="!productForm.id" @click="addExternalComponent">添加外购组件</button>
+                    <button type="button" class="btn small primary" :disabled="!productForm.id || externalComponentEditor.saving" @click="saveExternalComponents">{{ externalComponentEditor.saving ? '保存中…' : '保存外购组件' }}</button>
+                    <span class="muted">v{{ externalComponentEditor.version || 0 }}</span>
                   </div>
-                  <span class="status blue">版本 {{ externalComponentEditor.version || 0 }}</span>
                 </div>
                 <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存常用箱，再维护外购组件。</div>
                 <div v-else-if="externalComponentEditor.loading" class="muted">正在读取外购组件…</div>
                 <template v-else>
                   <div v-if="externalComponentEditor.error" class="notice danger">{{ externalComponentEditor.error }}</div>
-                  <div class="toolbar-group" style="margin:8px 0">
-                    <button type="button" class="btn small" @click="addExternalComponent">添加外购组件</button>
-                    <button type="button" class="btn small primary" :disabled="externalComponentEditor.saving" @click="saveExternalComponents">{{ externalComponentEditor.saving ? '保存中…' : '保存外购组件' }}</button>
-                  </div>
                   <div v-if="!externalComponentEditor.components.length" class="muted">当前常用箱没有外购组件。</div>
                   <div v-for="(component,index) in externalComponentEditor.components" :key="component._key || component.id || index" class="bom-component-card" style="margin-bottom:10px">
                     <div class="bom-component-card-head"><strong>外购组件 {{ index + 1 }}</strong><span v-if="component.category_code" class="status gray">{{ supplierCategoryLabel(component.category_code) }}｜{{ component.specification_summary }}</span><button type="button" class="btn small danger" @click="removeExternalComponent(index)">移除</button></div>
@@ -9103,6 +9095,9 @@
                 <button class="btn" :disabled="!pdfSampleDetail.ground_truth_json || loading" @click="rescorePdfSample">重新评分</button>
               </div>
             </div>
+          </div>
+          <div v-if="modal?.type === 'product'" class="modal-foot product-editor-actions">
+            <button type="button" class="btn primary product-inline-save" :disabled="(!!productForm.id && !canEditProducts) || loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : '保存' }}</button>
           </div>
           <div v-if="modal?.type !== 'product'" class="modal-foot">
             <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>

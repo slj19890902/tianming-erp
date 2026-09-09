@@ -5,7 +5,7 @@ through assembly edges; physical semi stock stays scoped to its own route.
 """
 from dataclasses import dataclass
 
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select
 
 from app.models.order import OrderItem
 from app.models.warehouse_inventory import InventoryReservation, InventoryLot
@@ -40,13 +40,8 @@ def read_graph_requirements(db, order_item_id):
            for pid, d in demands.items()):
         raise BomPlanError("多级BOM数量调整必须保持冻结组套关系，请先核对订单数量")
     snapshots = {s.component_product_id: s for s in compiled.snapshots}
-    from app.models.production import ProductionCompletion
-    from app.models.multilevel_bom import BomAssembly
-    own_completion_ids = select(ProductionCompletion.id).where(ProductionCompletion.order_item_id == item.id)
-    own_assembly_ids = select(BomAssembly.id).where(BomAssembly.order_item_id == item.id)
-    own_lots = list(db.scalars(select(InventoryLot).where(or_(
-        and_(InventoryLot.source_ref_type == "production_completion", InventoryLot.source_ref_id.in_(own_completion_ids)),
-        and_(InventoryLot.source_ref_type == "bom_assembly", InventoryLot.source_ref_id.in_(own_assembly_ids))))))
+    from app.services.multilevel_bom_receipts import own_output_lots
+    own_lots = own_output_lots(db, item.id)
     own_ids = {lot.id for lot in own_lots}
     own_root_used = sum(lot.quantity_consumed for lot in own_lots
                        if lot.finished_detail and lot.finished_detail.product_id == graph.root_id)

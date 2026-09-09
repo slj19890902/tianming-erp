@@ -17,6 +17,7 @@ from app.services.multilevel_bom_external_freeze import freeze_order_procurement
 from tests.test_multilevel_bom_master import save
 from test_p1_33c3_external_packaging_purchase_confirmation import purchase_app
 from test_p1_33c5_external_packaging_receiving import _login, _confirm
+from tests.test_p1_81_receipt_purpose_flow import _seed_material_and_staging, _p181_published_map_identity
 
 
 def prepare(app):
@@ -55,7 +56,8 @@ def receive(client, purchase_id, line_id, key, quantity):
         json=dict(idempotency_key=key, lines=[dict(purchase_item_id=line_id, received_quantity=str(quantity))]))
 
 
-def test_actual_receipt_route_converts_cumulatively_and_replays_frozen_facts(purchase_app):
+def test_actual_receipt_route_converts_cumulatively_and_replays_frozen_facts(purchase_app, _p181_published_map_identity):
+    _seed_material_and_staging(purchase_app.state.session_factory)
     order_id, item_id, child_id = prepare(purchase_app)
     with TestClient(purchase_app) as client:
         _login(client, 'purchase-admin')
@@ -66,6 +68,7 @@ def test_actual_receipt_route_converts_cumulatively_and_replays_frozen_facts(pur
             purchase_id, line_id = line.purchase_order_id, line.id
             child = db.get(Product, child_id)
             child.external_packaging_default_purchase_quantity_basis = 9
+            child.product_name = '后续主档名称'
             child.version += 1
             db.commit()
         first = receive(client, purchase_id, line_id, 'graph-first', 2)
@@ -82,6 +85,22 @@ def test_actual_receipt_route_converts_cumulatively_and_replays_frozen_facts(pur
         assert fact['converted_finished_quantity'] == 1
         assert Decimal(fact['loose_remainder_quantity_after']) == 0
         assert receive(client, purchase_id, line_id, 'graph-first', 1).status_code == 409
+        retry = receive(client, purchase_id, line_id, 'graph-second', 1)
+        assert retry.status_code == 200 and retry.json()['created'] is False
+        from app.services.multilevel_bom_receipts import own_output_lots
+        from app.models.warehouse_inventory import InventoryMovement
+        with purchase_app.state.session_factory() as db:
+            lots = own_output_lots(db, item_id)
+            assert len(lots) == 1
+            lot = lots[0]
+            assert lot.quantity_available == 1 and lot.unit == 'boxes'
+            assert json.loads(lot.cost_snapshot_detail_json)['stock_unit'] == '套'
+            assert lot.finished_detail.product_id == child_id
+            assert lot.finished_detail.product_name_snapshot == '真实子件'
+            assert lot.source_ref_type == 'bom_external_receipt'
+            assert lot.estimated_unit_cost_snapshot is None
+            assert db.scalar(select(func.count()).select_from(InventoryMovement).where(
+                InventoryMovement.inventory_lot_id == lot.id)) == 1
 
 
 @pytest.mark.parametrize('damage', ['missing-link', 'wrong-unit', 'wrong-candidate'])
@@ -105,3 +124,28 @@ def test_graph_receipt_identity_failure_writes_no_receipt(purchase_app, damage):
         assert response.status_code == 409, response.text
         with purchase_app.state.session_factory() as db:
             assert db.scalar(select(func.count()).select_from(ExternalPackagingReceipt)) == 0
+
+
+@pytest.mark.parametrize('after_stock', [False, True])
+def test_stock_failure_rolls_back_receipt_and_inventory(purchase_app, _p181_published_map_identity, monkeypatch, after_stock):
+    if after_stock:
+        _seed_material_and_staging(purchase_app.state.session_factory)
+        import app.services.warehouse_inventory as inventory
+        original = inventory.manual_finished_in
+        def fail(*args, **kwargs):
+            original(*args, **kwargs)
+            raise inventory.WarehouseInventoryError('isolated-post-stock-failure', 409)
+        monkeypatch.setattr(inventory, 'manual_finished_in', fail)
+    order_id, item_id, _ = prepare(purchase_app)
+    with TestClient(purchase_app) as client:
+        _login(client, 'purchase-admin')
+        _confirm(client, order_id)
+        with purchase_app.state.session_factory() as db:
+            line = db.scalar(select(ExternalPackagingPurchaseItem).where(ExternalPackagingPurchaseItem.sales_order_item_id == item_id))
+            purchase_id, line_id = line.purchase_order_id, line.id
+        response = receive(client, purchase_id, line_id, 'graph-stock-failure', 3)
+        assert response.status_code == 409, response.text
+        from app.models.warehouse_inventory import InventoryLot, InventoryMovement
+        with purchase_app.state.session_factory() as db:
+            for model in (ExternalPackagingReceipt, InventoryLot, InventoryMovement):
+                assert db.scalar(select(func.count()).select_from(model)) == 0

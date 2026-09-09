@@ -799,6 +799,15 @@ def record_external_purchase_receipt(
         )
         db.add(receipt_item)
         db.flush()
+        if item.id in graph_conversions:
+            from app.services.multilevel_bom_external_receipts import post_graph_receipt_inventory
+            from app.services.production_workflow import ProductionWorkflowError
+            from app.services.warehouse_inventory import WarehouseInventoryError
+            try:
+                post_graph_receipt_inventory(db, purchase_item=item, receipt_item=receipt_item,
+                    customer_id=source_customer_id, operator_id=user.id)
+            except (BomPlanError, ProductionWorkflowError, WarehouseInventoryError) as error:
+                raise ExternalPurchaseContractError(str(error), status_code=409) from error
         if replenishment_order is not None and stock_item is not None:
             if converted_quantity > 0:
                 planned_quantity = min(

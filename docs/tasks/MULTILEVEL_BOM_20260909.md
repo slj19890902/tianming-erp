@@ -1,5 +1,15 @@
 # MULTILEVEL-BOM-20260909
 
+## 2026-09-10 本体自动收料、汇总及反向入口候选
+
+先复现project_graph_receipts未传body_stock报错、自动完工按成品绑定栈板被拒、真实HTTP撤销body被finished类型门禁拒。现本体单独计理论capacity，不把body completion加到成品output；最终BomAssembly才加成品产量。自动完工识别冻结图自制+assembly，order_reserved=0、direct=0、stock=delta，保持真实货位/地图CAS但不创建成品栈板。assemble_graph_order_receipt包括自制组装节点，主任务汇总校验并排除body。反向库存入口按真实body明细/完工身份支持body，同时禁止body异常预占/栈板/人工调整及保留后续流水门禁。
+
+匿名已冻结图真实HTTP报料/三路实际价格事实/收料，分别本体先到与后到，均先消耗长短片产内衬，再消耗本体+内衬产10套可送成品；成本11.1060追溯三条真实采购来源。最后组装后注入故障，整个收料完工/组装记录回滚，原键重试成功。部分发4/取消成功，body不被再次出库；未发货路径逐次撤销全部收料成功。发货取消后再撤销原收料仍被旧下游历史门禁拒，完整保护不放宽，不能宣称这一更深反向链已开放。
+
+本体projection新6项+旧真实HTTP receipt_flow13项最终19通过67.08秒30warning；普通单收料价格与旧组件撤销摘要另2通过7.17秒4warning。compileall、diff check通过，head77无新增迁移。测试专门在冻结前构造匿名body图；主档writer/loader及前端仍未开放，不宣称公开常用箱新建body组装已验收。
+
+下一步：核对multilevel_bom_processing_estimate.py目前仅source==assembled要求组装人工，自制+assembly也必须有明确加工/组装费用；然后改master loader/writer及static/index.html约6776/25162的自制组装禁用条件，并实际公开编辑→新单→报料收料验证，不再用匿名冻结图代替。完整未完单转换、历史审计、UI正式浏览器及发布门禁仍待完成。正式库/地图/草稿未写，未部署。
+
 ## 2026-09-10 本体与子件共同消耗及成本身份候选
 
 stock_product_identity按finished_detail或真实body明细/完工/冻结图识别产品和客户，不从名称或成本JSON猜产品。本体成本读取支持原完工冻结金额且拒绝缺失来源或超出完工数量后的估算回退；递归材料成本读取复用阶段身份。assemble_subkit_inventory对manufactured+assembly要求同订单本体，与子件分别计量；本体不加入自引用配方，以本体和子件的最小可组套量生成finished，投入流水记录真实本体产品ID。assemble_order_inventory显式分开body_stock与finished_stock，成品可抵需求但不可代替本体，逐层及反向撤销包括自制组装节点。普通旧组套逻辑保留。

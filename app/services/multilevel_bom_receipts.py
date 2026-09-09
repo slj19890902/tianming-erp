@@ -201,7 +201,9 @@ def assemble_graph_order_receipt(db, *, compiled, order_item_id, operation_key, 
     """
     from app.services.multilevel_bom_inventory import assemble_order_inventory
     from app.services.production_workflow import _receipt_auto_finished_ground_target
-    pids = {n.product_id for n in compiled.graph.nodes if n.source == "assembled"}
+    pids = {n.product_id for n in compiled.graph.nodes if n.source == "assembled"
+            or (n.source == "manufactured" and any(e.parent_id == n.product_id and e.relation == "assembly"
+                                                   for e in compiled.graph.edges))}
     if not pids:
         return ()
     oid = order_item_id
@@ -283,6 +285,10 @@ def refresh_graph_main_task(db, item, *, create_if_missing):
         consumed[source.lot_id] += source.quantity
     quantities = defaultdict(int)
     for lot in own_lots:
+        if lot.inventory_type == "assembly_body":
+            from app.services.multilevel_bom_body_inventory import stock_product_identity
+            stock_product_identity(db, lot)
+            continue
         quantities[lot.finished_detail.product_id] += max(lot.quantity_available + lot.quantity_reserved
                                                         + lot.quantity_consumed - consumed[lot.id], 0)
     for reserve in db.scalars(select(InventoryReservation).where(InventoryReservation.order_item_id == item.id,

@@ -13,9 +13,12 @@ from app.services.multilevel_bom_requirements import read_graph_requirements
 def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
     requirements = read_graph_requirements(db, order_item_id)
     graph = requirements.compiled.graph
+    body_ids = {n.product_id for n in graph.nodes if n.source == "manufactured"
+                and any(e.parent_id == n.product_id and e.relation == "assembly" for e in graph.edges)}
     snapshots = {s.component_product_id: s for s in requirements.compiled.snapshots}
     states = {s["component_key"]: s for s in states}
     received, planned, rows = {}, {}, []
+    received_bodies, planned_bodies = {}, {}
     for node in graph.nodes:
         snapshot = snapshots[node.product_id]
         current_routes, planned_routes = [], []
@@ -41,11 +44,16 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
                 "over_received_order_sheet_qty": max(-int(state.get("planned_order_sheet_qty", 0)) + int(state.get("received_order_sheet_qty", 0)), 0),
                 "waiting_for_pairing": current < future and pending > 0})
         stock = requirements.finished_units.get(node.product_id, 0)
-        received[node.product_id] = stock + min(current_routes, default=0)
-        planned[node.product_id] = stock + min(planned_routes, default=0)
+        if node.product_id in body_ids:
+            received[node.product_id] = planned[node.product_id] = stock
+            received_bodies[node.product_id] = min(current_routes, default=0)
+            planned_bodies[node.product_id] = min(planned_routes, default=0)
+        else:
+            received[node.product_id] = stock + min(current_routes, default=0)
+            planned[node.product_id] = stock + min(planned_routes, default=0)
     # Calculate potential assembly without writing inventory or creating facts.
-    for balances in (received, planned):
-        result = plan_assembly(graph, requirements.order_quantity, eligible_stock=balances)
+    for balances, bodies in ((received, received_bodies), (planned, planned_bodies)):
+        result = plan_assembly(graph, requirements.order_quantity, eligible_stock=balances, body_stock=bodies)
         for step in result.steps:
             balances[step.product_id] += step.produced_units
     outputs = {node.product_id: 0 for node in graph.nodes}
@@ -55,6 +63,16 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
         task = db.get(ProductionTask, completion.task_id)
         sid = task.sales_order_item_bom_component_id
         pid = graph.root_id if sid is None else next(s.component_product_id for s in snapshots.values() if s.id == sid)
+        if pid in body_ids:
+            # Body completion is not finished output; only its assembly below is.
+            from app.models.warehouse_inventory import InventoryLot
+            from app.services.multilevel_bom_body_inventory import stock_product_identity
+            from app.services.bom_subkits import SubkitError
+            lot = db.get(InventoryLot, completion.inventory_lot_id)
+            if (lot is None or lot.inventory_type != "assembly_body"
+                    or stock_product_identity(db, lot) != (pid, graph.customer_id)):
+                raise SubkitError("本体完工库存身份不一致")
+            continue
         outputs[pid] += int(completion.actual_output_quantity or 0)
         if pid == graph.root_id:
             root_reserved += int(completion.order_reserved_quantity or 0)

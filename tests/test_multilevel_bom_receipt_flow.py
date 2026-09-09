@@ -202,7 +202,7 @@ def test_split_movement_keeps_receipt_cost_and_finished_coverage(
                 assert sum(a.quantity for a in active) == 10
 
 
-def seed_graph(factory, *, liner=False, a3=False, splice=False):
+def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False):
     from app.models.warehouse_inventory import WarehouseLocation
     from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
@@ -248,7 +248,21 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False):
             p = db.get(Product, 2)
             p.pieces_per_box = 2
             p.default_cutting_mode = "一开四"
-        compiled = freeze_master_order_bom(db, order_item_id=1, actor=actor)
+        if body:
+            # Freeze an explicit anonymous body recipe before any purchase.
+            # Keep the public master gate closed until the full adapter passes.
+            assert liner
+            from dataclasses import replace
+            from app.services.multilevel_bom_compile import compile_master_order_bom
+            from app.services.multilevel_bom_orders import freeze_order_graph
+            compiled = compile_master_order_bom(db, item)
+            graph = replace(compiled.graph, edges=tuple(replace(e, relation="assembly")
+                if e.parent_id == 1 else e for e in compiled.graph.edges))
+            freeze_order_graph(db, order_item_id=1, graph=graph, actor=actor)
+            db.add_all(compiled.snapshots)
+            db.flush()
+        else:
+            compiled = freeze_master_order_bom(db, order_item_id=1, actor=actor)
         db.commit()
         snapshots = [(s.id, s.component_product_id) for s in compiled.snapshots
                      if next(n.source for n in compiled.graph.nodes if n.product_id == s.component_product_id) == "manufactured"]

@@ -4458,10 +4458,20 @@ def _reverse_completion_finished_lot(
     lot = db.get(InventoryLot, lot_id)
     if lot is None:
         raise ProductionWorkflowError("生产完工成品库存批次不存在", 409)
+    is_body = lot.inventory_type == "assembly_body"
+    if is_body:
+        from app.services.multilevel_bom_body_inventory import stock_product_identity
+        from app.services.bom_subkits import SubkitError
+        try:
+            stock_product_identity(db, lot)
+        except SubkitError as error:
+            raise ProductionWorkflowError(str(error), error.status_code) from error
+        if lot.quantity_reserved or lot.pallet_item is not None:
+            raise ProductionWorkflowError("本体库存存在异常成品预占或栈板绑定，不能回退", 409)
     if (
         lot.source_ref_type != "production_completion"
         or int(lot.source_ref_id or 0) != completion.id
-        or lot.inventory_type != "finished"
+        or lot.inventory_type not in ("finished", "assembly_body")
         or lot.status != "active"
     ):
         raise ProductionWorkflowError("关联批次已不是有效的生产完工入库，不能回退", 409)
@@ -4487,6 +4497,8 @@ def _reverse_completion_finished_lot(
         .order_by(InventoryMovement.id)
     ).all()
     def safe_completion_movement(row: InventoryMovement) -> bool:
+        if is_body:
+            return row.movement_type == "manual_in"
         if row.movement_type in {"manual_in", "reserve"}:
             return True
         return bool(
@@ -4862,6 +4874,7 @@ def post_automatic_receipt_completion(
         raise ProductionWorkflowError("订单常用箱不存在或已停用，不能自动形成成品", 409)
     task = _ensure_receipt_auto_main_task(db, item=item, product=product)
     graph_snapshot = None
+    is_assembly_body = False
     required_quantity = int(item.quantity)
     from app.models.multilevel_bom import OrderBomGraph
     if bom_snapshot_id is None and db.get(OrderBomGraph, item.id) is not None:
@@ -4876,6 +4889,8 @@ def post_automatic_receipt_completion(
                 or cost_detail.get("bom_material_product_id") != graph_snapshot.component_product_id):
             raise ProductionWorkflowError("组件完工成本与真实产品身份不一致", 409)
         required_quantity = int(item.quantity) * int(graph_snapshot.quantity_per_set)
+        is_assembly_body = any(e.parent_id == graph_snapshot.component_product_id and e.relation == "assembly"
+                               for e in compiled.graph.edges)
         if graph_snapshot.component_product_id != item.product_id:
             component_product = db.get(Product, graph_snapshot.component_product_id)
             if component_product is None or not component_product.is_active:
@@ -4956,6 +4971,8 @@ def post_automatic_receipt_completion(
         delta,
         max(required_quantity - existing_order_coverage, 0),
     )
+    if is_assembly_body:
+        order_reserved = 0
     completion = ProductionCompletion(
         batch_id=batch.id,
         task_id=task.id,
@@ -4969,10 +4986,10 @@ def post_automatic_receipt_completion(
         actual_output_quantity=delta,
         defective_quantity=0,
         order_reserved_quantity=order_reserved,
-        direct_delivery_quantity=delta,
-        stock_quantity=0,
+        direct_delivery_quantity=0 if is_assembly_body else delta,
+        stock_quantity=delta if is_assembly_body else 0,
         surplus_finished_quantity=delta - order_reserved,
-        initial_disposition="direct",
+        initial_disposition="stock" if is_assembly_body else "direct",
         warehouse_location_id=location.id,
         inventory_lot_id=None,
         remarks="收料后按冻结订单用途自动形成理论成品",
@@ -4991,11 +5008,12 @@ def post_automatic_receipt_completion(
     command = CompletionCommand(
         task_id=task.id,
         expected_version=max(int(task.version or 1), 1),
-        disposition="direct",
+        disposition="stock" if is_assembly_body else "direct",
+        location_id=location.id if is_assembly_body else None,
         completion_type=completion_type,
         material_input_quantity=int(material_input_delta),
         actual_output_quantity=delta,
-        direct_delivery_quantity=delta,
+        direct_delivery_quantity=0 if is_assembly_body else delta,
         remarks="收料自动成品进入当前真实成品位置",
     )
     lot = _stock_completion_lot(
@@ -5013,7 +5031,12 @@ def post_automatic_receipt_completion(
         movement_reason="订单用途来料自动形成成品并进入当前真实成品位置",
     )
     completion.inventory_lot_id = lot.id
-    if ground_target.target_kind == "floor3_v11":
+    if is_assembly_body:
+        # The body already passed the real destination/map CAS checks. It is
+        # not dispatchable finished stock, so never create a finished pallet.
+        if lot.inventory_type != "assembly_body" or lot.finished_detail is not None:
+            raise ProductionWorkflowError("待装配本体库存阶段不一致", 409)
+    elif ground_target.target_kind == "floor3_v11":
         _validate_floor3_v11_direct_pallet(lot=lot, location=location)
     elif ground_target.target_kind != "fixed_shelf":
         _bind_direct_completion_lots_to_system_pallet(

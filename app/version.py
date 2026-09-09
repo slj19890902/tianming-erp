@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.312"
-APP_VERSION_NAME = "模具外网二维码清晰预览与旧码兼容"
+APP_VERSION = "v0.22.313"
+APP_VERSION_NAME = "内衬子套件收料自动组套"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2369,15 +2369,28 @@ _V022311_VERIFICATION_STEPS = [
     "Safari打开HTTPS的/mobile/scan，扫描旧内网/M/模具码与当前外网模具码，核对显示同一模具信息。",
     "用旧/mobile/mold-lookup?mold_id=链接核对只读查看；实体旧码网址尚需核实，微信直接打开内网码在5G下仍不可达。",
 ]
-APP_CHANGES = [
+_V022312_CHANGES = [
     "模具标签兼容当前外网网址生成的第3版二维码，不再因固定第2版限制阻止40×30标签预览。",
     "保留203dpi每模块至少3点和四模块静区的物理清晰度门禁，域名使用等价大写编码；稳定模具ID、旧码和权限保持不变。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022312_VERIFICATION_STEPS = [
     "刷新模具标签预览，确认当前公网网址可生成二维码，试打一张40×30标签扫码核对对应模具。",
     "工厂WiFi可访问旧内网模具码；手机5G请用ERP摄像头扫描旧码，自动通过当前ERP入口读取。",
 ]
+APP_CHANGES = [
+    "常用箱BOM标题行增加子套件设置；000148每个内盒配一套内衬，每套长片2片、短片6片，收料按到齐数量自动组套。",
+    "内盒与内衬独立存放、按套显示；原片扣减、成本来源、随父件送货及撤销保持事务和审计；余料保留供后续抵扣，损耗须确认。",
+    "盘点按实际数量；未完成订单的内衬保留给原订单，不能另行无单出库。新增迁移rt09v8x9z68，不改地图、草稿或既有盘点库存。",
+]
+APP_VERIFICATION_STEPS = [
+    "打开YL的000148常用箱BOM，核对000148内衬、每父件1套、长片2短片6；保存刷新后配置不回退。",
+    "新订单分批收料，内盒与内衬分别入库，内衬按到齐数量组套；余料可保留或明确报损。",
+    "查货核对内衬按套显示；送货同时扣内盒和内衬，取消恢复对应数量，不能只扣父件。",
+    "核对原盘点批次600和地图未被转换；旧未完成订单按启用回执清单核对，已送历史不改。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.312：本次更新｜{item}" for item in _V022312_CHANGES),
+    *(f"v0.22.312：如何验证｜{item}" for item in _V022312_VERIFICATION_STEPS),
     *(f"v0.22.311：本次更新｜{item}" for item in _V022311_CHANGES),
     *(f"v0.22.311：如何验证｜{item}" for item in _V022311_VERIFICATION_STEPS),
     *(f"v0.22.310：本次更新｜{item}" for item in _V022310_CHANGES),

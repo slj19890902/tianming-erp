@@ -219,3 +219,25 @@ def test_damaged_liner_can_be_replaced_without_exceeding_order(db):
     replacement = convert(db, actor, item, lots, key="replacement")
     assert replacement.quantity == 1
     assert [lot.quantity_available for lot in lots] == [18, 54]
+
+
+def test_split_move_preserves_liner_order_and_available_sets(db):
+    from app.models.warehouse_inventory import WarehouseLocation
+    from app.services.warehouse_inventory import transfer_finished_lot_between_locations
+    from app.services.bom_subkit_delivery import limit_by_subkit_stock
+    from app.services.bom_subkits import active_subkit_order
+    actor, item, _ = setup_order(db)
+    conversion = convert(db, actor, item, [raw(db, actor, 3788, 200), raw(db, actor, 3789, 600)])
+    db.commit()
+    output = db.get(InventoryLot, conversion.output_lot_id)
+    source, target = db.get(WarehouseLocation, 1890), db.get(WarehouseLocation, 1891)
+    transfer_finished_lot_between_locations(db, lot_id=output.id, expected_version=output.version,
+        quantity=40, location_id=target.id, operator_id=actor.id, idempotency_key="subkit-split-move",
+        expected_source_layout_version=source.floor3_layout.version if source.floor3_layout else None,
+        expected_target_layout_version=target.floor3_layout.version if target.floor3_layout else None)
+    db.commit()
+    moved = db.scalar(select(InventoryLot).where(InventoryLot.source_ref_type == "subkit_conversion",
+        InventoryLot.source_ref_id == conversion.id, InventoryLot.warehouse_location_id == target.id))
+    assert moved.quantity_available == 40
+    assert active_subkit_order(db, moved) == item.id
+    assert limit_by_subkit_stock(db, {item.id:100}) == {item.id:100}

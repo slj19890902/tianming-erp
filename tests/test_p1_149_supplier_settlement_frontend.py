@@ -44,18 +44,17 @@ def test_supplier_settlement_workspace_shows_supplier_cycle_revision_and_regener
     assert "idempotency_key" in INDEX
 
 
-def test_supplier_payment_uses_one_combined_credit_acceptance_and_bank_action() -> None:
+def test_supplier_payment_defaults_to_credit_then_bank_action() -> None:
     payables = _body(
         '<template v-else-if="financeView===\'payables\'">',
         '<template v-else-if="financeView===\'invoice_tasks\'">',
     )
     for text in (
         "可用贷项",
-        "承兑票据",
-        "本期承兑抵付",
+        "历史余额抵扣 → 银行补差",
+        "重新计算余额抵扣",
         "银行转账",
         "建议转账",
-        "新形成贷项",
         "一次确认付款",
     ):
         assert text in payables
@@ -64,6 +63,8 @@ def test_supplier_payment_uses_one_combined_credit_acceptance_and_bank_action() 
     assert "acceptance_note_id" in INDEX
     assert "bank_amount" in INDEX
     assert "bank_reference" in INDEX
+    assert 'v-model.number="row._acceptanceNoteId"' not in payables
+    assert "this.suggestSupplierCreditFirst(hydrated)" in INDEX
     assert "确认后正负调整" in payables
     assert "row.can_post_adjustment" in payables
     assert "差额自动形成该供应商贷项" in payables

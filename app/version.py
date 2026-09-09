@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.314"
-APP_VERSION_NAME = "客户成品规格与外购规格分离"
+APP_VERSION = "v0.22.315"
+APP_VERSION_NAME = "供应商历史余额优先抵扣与银行补差"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2397,6 +2397,8 @@ APP_VERIFICATION_STEPS = [
     "核对送货单规格与标签一致，供应商外购尺寸及两片合一件关系保持原值；已有有效规格不被主档覆盖。",
 ]
 APP_CHANGELOG = [
+    "v0.22.315：本次更新｜供应商付款默认先抵扣已登记的同供应商余额，再计算银行补差；不新增承兑选票或拒收功能。",
+    "v0.22.315：如何验证｜打开有余额的待付款月结，核对抵扣金额与银行差额；确认前不生成付款，发票及版本门禁保持不变。",
     *(f"v0.22.313：本次更新｜{item}" for item in _V022313_CHANGES),
     *(f"v0.22.313：如何验证｜{item}" for item in _V022313_VERIFICATION_STEPS),
     *(f"v0.22.312：本次更新｜{item}" for item in _V022312_CHANGES),

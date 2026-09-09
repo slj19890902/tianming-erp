@@ -5103,14 +5103,12 @@
                       <div v-if="canFinance" class="form-grid" style="padding:8px 0"><div class="field"><label>发票号码</label><input class="input" v-model.trim="row._invoiceNumber" /></div><div class="field"><label>发票日期</label><input class="input" type="date" v-model="row._invoiceDate" /></div><div class="field"><label>收到日期</label><input class="input" type="date" v-model="row._invoiceReceivedDate" /></div><div class="field"><label>发票总额</label><input class="input" type="number" step="0.01" min="0" v-model="row._invoiceTotal" /></div><div class="field"><label>分配本期</label><input class="input" type="number" step="0.01" min="0" v-model="row._invoiceAllocated" /></div><div class="field"><label>其中税额</label><input class="input" type="number" step="0.01" min="0" v-model="row._invoiceTax" /></div><div class="field"><label>&nbsp;</label><button class="btn" :disabled="supplierSettlementBusy(row)" @click="addSupplierInvoice(row)">登记发票</button></div></div>
                       <div v-for="invoice in row.invoices" :key="invoice.id" class="toolbar" style="border-top:1px solid #e5e7eb;padding:6px 0"><span>{{ invoice.invoice_number }} · {{ invoice.invoice_date }} · 本期 ¥{{ money(invoice.allocated_amount) }}（税 ¥{{ money(invoice.tax_amount) }}）</span><span class="toolbar-group"><a v-if="invoice.attachment_url" class="btn small" :href="invoice.attachment_url" target="_blank">查看原件</a><button v-if="canFinance && !invoice.attachment_url" class="btn small" :disabled="supplierSettlementState.action==='upload'" @click="chooseSupplierInvoicePdf(row,invoice)">上传 PDF 原件</button></span></div>
                       <div v-if="canFinance && row.status!=='paid'" class="panel" style="margin-top:8px;padding:10px">
-                        <div class="toolbar"><div><strong>组合付款（一次提交）</strong><div class="muted">可同时使用供应商贷项、客户承兑与银行转账；承兑超出本期可抵付额时，新形成该供应商贷项。</div></div><span class="status blue">可用贷项 ¥{{ money(row.credit_available_amount || 0) }}</span></div>
+                        <div class="toolbar"><div><strong>历史余额抵扣 → 银行补差</strong><div class="muted">默认先抵扣本供应商已登记余额，再计算银行差额；确认前不会登记付款，未登记的历史余额不会自动推算。</div></div><span class="status blue">可用贷项 ¥{{ money(row.credit_available_amount || 0) }}</span><button class="btn" :disabled="supplierSettlementBusy(row)" @click="suggestSupplierCreditFirst(row)">重新计算余额抵扣</button></div>
                         <div v-if="(row.available_credits || []).length" class="form-grid" style="margin-top:8px">
                           <div v-for="credit in row.available_credits" :key="credit.id" class="field"><label>贷项 {{ credit.source_label || ('#'+credit.id) }}（可用 ¥{{ money(credit.available_amount) }}）</label><input class="input" type="number" min="0" :max="credit.available_amount" step="0.01" v-model="credit._applyAmount" @input="applySupplierSettlementPaymentSuggestion(row)" /></div>
                         </div>
                         <div class="form-grid" style="margin-top:8px">
                           <div class="field"><label>付款日期</label><input class="input" type="date" v-model="row._paymentDate" /></div>
-                          <div class="field"><label>承兑票据</label><select class="select" v-model.number="row._acceptanceNoteId" @change="applySupplierSettlementPaymentSuggestion(row)"><option :value="null">本次不使用承兑</option><option v-for="note in supplierSettlementAcceptanceOptions(row)" :key="note.id" :value="note.id">{{ note.bill_number }} · {{ note.customer_name }} · ¥{{ money(note.amount) }}</option></select></div>
-                          <div class="field"><label>本期承兑抵付</label><input class="input" :value="money(supplierSettlementAcceptanceAppliedAmount(row))" disabled /><span v-if="supplierSettlementNewCreditAmount(row)>0" class="muted">新形成贷项 ¥{{ money(supplierSettlementNewCreditAmount(row)) }}</span><span v-else-if="supplierSettlementSelectedAcceptance(row) && Number(supplierSettlementSelectedAcceptance(row).amount)>supplierSettlementAcceptanceAppliedAmount(row)" class="danger-text">已收发票额度不足，暂不能使用整张承兑</span></div>
                           <div class="field"><label>银行转账</label><input class="input" type="number" min="0" step="0.01" v-model="row._bankAmount" /><span class="muted">建议转账 ¥{{ money(supplierSettlementSuggestedBank(row)) }}</span></div>
                           <div class="field wide"><label>银行流水 / 备注</label><input class="input" v-model.trim="row._bankReference" /></div>
                           <div class="field"><label>&nbsp;</label><button class="btn success" :disabled="supplierSettlementBusy(row)" @click="addSupplierPaymentBatch(row)">一次确认付款</button></div>
@@ -22189,7 +22187,7 @@
             const paymentCapacity = row.available_payment_amount != null
               ? Math.max(0,Math.min(remaining,Number(row.available_payment_amount || 0)))
               : Math.max(0,Math.min(remaining,Number(row.invoice_allocated_amount || 0)-Number(row.paid_amount || 0)));
-            return Object.assign({}, row, {
+            const hydrated = Object.assign({}, row, {
               available_credits:(row.available_credits || []).map(credit=>({...credit,_applyAmount:""})),
               _reviewNumber:row.supplier_statement_number || "",
               _reviewDate:row.supplier_statement_date || today(),
@@ -22201,6 +22199,23 @@
               _acceptanceNoteId:null, _bankAmount:paymentCapacity.toFixed(2), _bankReference:"",
               _historyOpen:false, _historyLoading:false, _historyItems:[],
             });
+            this.suggestSupplierCreditFirst(hydrated);
+            return hydrated;
+          },
+          suggestSupplierCreditFirst(row) {
+            // Work in cents and preserve the server's invoice/payment ceiling.
+            const cents = value => {
+              const amount = Number(value || 0);
+              return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) : 0;
+            };
+            let remaining = cents(this.supplierSettlementPaymentCapacity(row));
+            row._acceptanceNoteId = null;
+            for (const credit of [...(row.available_credits || [])].sort((a,b)=>Number(a.id)-Number(b.id))) {
+              const applied = Math.min(remaining,cents(credit.available_amount));
+              credit._applyAmount = (applied / 100).toFixed(2);
+              remaining -= applied;
+            }
+            row._bankAmount = (remaining / 100).toFixed(2);
           },
           supplierSettlementAcceptanceOptions() {
             return (this.financeAcceptances || []).filter(note=>note.status === "held");

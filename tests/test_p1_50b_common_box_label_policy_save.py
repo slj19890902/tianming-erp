@@ -453,7 +453,7 @@ def test_enabled_label_strategy_rejects_boolean_units(boolean_units: bool) -> No
         )
 
 
-def test_intentional_non_production_modes_keep_label_clear_in_fields_set() -> None:
+def test_only_virtual_component_parent_forces_label_clear_in_fields_set() -> None:
     from app.api.products import ProductPayload
 
     external = ProductPayload(
@@ -486,7 +486,9 @@ def test_intentional_non_production_modes_keep_label_clear_in_fields_set() -> No
         is_virtual_composite_parent=True,
     )
 
-    for payload in (external, virtual_parent):
+    assert "production_label_enabled" not in external.model_fields_set
+    assert "production_label_units_per_label" not in external.model_fields_set
+    for payload in (virtual_parent,):
         assert payload.production_label_enabled is False
         assert payload.production_label_units_per_label is None
         assert "production_label_enabled" in payload.model_fields_set

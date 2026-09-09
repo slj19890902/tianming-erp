@@ -6699,7 +6699,7 @@
                   </div>
                   <div v-if="productPrintingPlateError" class="status orange">{{ productPrintingPlateError }}</div>
                 </div>
-                <div v-if="productForm.supply_mode!=='external_purchase'" class="product-production-label-config">
+                <div class="product-production-label-config">
                   <label class="product-production-label-switch"><input type="checkbox" v-model="productForm.production_label_enabled" @change="onProductProductionLabelToggle" />打印标签</label>
                   <div class="field product-production-label-quantity"><label>数量</label><input class="input" type="number" min="1" max="999" step="1" inputmode="numeric" v-model="productForm.production_label_units_per_label" :disabled="!productForm.production_label_enabled" aria-label="每张标签代表只数" /><div v-if="productProductionLabelError" class="status orange" style="display:block;margin-top:4px">{{ productProductionLabelError }}</div></div>
                 </div>
@@ -11939,7 +11939,7 @@
               payload.base_report_length_mm=null; payload.base_report_width_mm=null; payload.base_crease_type=null;
               payload.base_crease_left_mm=null; payload.base_crease_middle_mm=null; payload.base_crease_right_mm=null;
               payload.production_process=""; payload.production_notes=""; payload._production_processes=[]; payload.print_content="无印刷"; payload.printing_colors=null;
-              payload.production_label_enabled=false; payload.production_label_units_per_label=null; payload.mold_tool_id=null;
+              payload.mold_tool_id=null;
             } else {
               payload.external_packaging_category_code=null;
               payload.external_packaging_specification_summary=null;

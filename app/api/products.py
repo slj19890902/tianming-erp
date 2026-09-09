@@ -1003,8 +1003,6 @@ def _clear_external_purchase_paper_fields(payload: ProductPayload) -> None:
         "machine_set_width_mm", "machine_set_height_mm",
     ):
         setattr(payload, field, None)
-    payload.production_label_enabled = False
-    payload.production_label_units_per_label = None
 
 
 def _normalize_product_external_supply(

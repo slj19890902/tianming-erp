@@ -8391,6 +8391,7 @@ def update_order_item(
                 reason="订单数量变更（系统记录）",
                 actor_id=user.id,
                 idempotency_key=adjustment_key,
+                target_order_quantity=payload.quantity,
             )
         except CompositeBomWorkflowError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error

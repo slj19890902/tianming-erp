@@ -236,6 +236,7 @@ def append_order_quantity_adjustments(
     idempotency_key: str,
     event_type: str = "order_quantity_adjusted",
     minimum_effective_sets: int = 0,
+    target_order_quantity: int | None = None,
 ) -> list[SalesOrderItemBomDemandAdjustment]:
     """Append one immutable adjustment per snapshot, never edit a snapshot."""
     delta = _as_integer(delta_sets, field="订单套数调整")
@@ -261,6 +262,14 @@ def append_order_quantity_adjustments(
             )
         )
         if existing is not None:
+            if target_order_quantity is not None:
+                snapshot = db.get(SalesOrderItemBomComponent, demand.snapshot_id)
+                delta_at_event = db.scalar(select(func.coalesce(func.sum(
+                    SalesOrderItemBomDemandAdjustment.delta_order_set_quantity), 0)).where(
+                    SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id == demand.snapshot_id,
+                    SalesOrderItemBomDemandAdjustment.id <= existing.id))
+                if int(snapshot.order_set_quantity) + int(delta_at_event or 0) != target_order_quantity:
+                    raise CompositeBomWorkflowError("订单数量调整标识已用于其他目标数量，请刷新后重新保存")
             if (
                 int(existing.delta_order_set_quantity) != delta
                 or int(existing.delta_required_piece_quantity)

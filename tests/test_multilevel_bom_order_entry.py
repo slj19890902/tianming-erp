@@ -24,6 +24,83 @@ def payload(factory, *, key="new-real-bom"):
             "quantity": 10, "unit_price": "100"}]}
 
 
+@pytest.mark.parametrize("liner", [False, True])
+def test_edit_order_sets_preserves_recipe_and_refreshes_demands(composite_requisition_app, _p181_published_map_identity, liner):
+    from app.models.multilevel_bom import OrderBomGraph
+    from app.services.multilevel_bom_requirements import read_graph_requirements
+    app, factory = composite_requisition_app
+    seed_graph(factory, liner=liner)
+    body = payload(factory, key="edit-real-bom")
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post("/api/orders", json=body)
+        assert created.status_code == 201, created.text
+        iid = created.json()["items"][0]["id"]
+        with factory() as db:
+            before_hash = db.get(OrderBomGraph, iid).content_hash
+            item = db.get(OrderItem, iid)
+            edit = dict(quantity=12, unit_price="100", product_code=item.snapshot_product_code,
+                        product_name=item.snapshot_product_name, material=item.snapshot_material,
+                        quantity_adjustment_idempotency_key="quantity-edit-once")
+        edited = client.put(f"/api/orders/items/{iid}", json=edit)
+        assert edited.status_code == 200, edited.text
+        replay = client.put(f"/api/orders/items/{iid}", json=edit)
+        assert replay.status_code == 200, replay.text
+        with factory() as db:
+            assert db.get(OrderBomGraph, iid).content_hash == before_hash
+            requirements = read_graph_requirements(db, iid)
+            assert requirements.order_quantity == 12
+            assert dict(requirements.plan.picking) == ({1: 12, 4: 12} if liner else {1: 12})
+            assert all(row.order_set_quantity == 10 for row in requirements.compiled.snapshots)
+            tasks = list(db.scalars(select(ProductionTask).where(ProductionTask.order_item_id == iid)))
+            assert len(tasks) == 1 and tasks[0].ordered_quantity_snapshot == 12
+            costs = list(db.scalars(select(SalesOrderItemEstimatedCostSnapshot).where(
+                SalesOrderItemEstimatedCostSnapshot.sales_order_item_id == iid)))
+            assert sorted(row.order_quantity_snapshot for row in costs) == [10, 12]
+        changed = client.put(f"/api/orders/items/{iid}", json={**edit, "quantity": 14})
+        assert changed.status_code == 409, changed.text
+        with factory() as db:
+            assert db.get(OrderItem, iid).quantity == 12
+            assert read_graph_requirements(db, iid).order_quantity == 12
+        next_edit = client.put(f"/api/orders/items/{iid}", json={**edit, "quantity": 14,
+            "quantity_adjustment_idempotency_key": "quantity-edit-next"})
+        assert next_edit.status_code == 200, next_edit.text
+        with factory() as db:
+            assert read_graph_requirements(db, iid).order_quantity == 14
+
+
+def test_edit_graph_quantity_cost_failure_rolls_back(composite_requisition_app, _p181_published_map_identity, monkeypatch):
+    from app.api import orders as api
+    from app.models.product_bom import SalesOrderItemBomDemandAdjustment, SalesOrderItemBomComponent
+    app, factory = composite_requisition_app
+    seed_graph(factory, liner=True)
+    body = payload(factory, key="edit-failure")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        _login(client)
+        created = client.post("/api/orders", json=body)
+        assert created.status_code == 201, created.text
+        iid = created.json()["items"][0]["id"]
+        original = api.freeze_order_item_estimated_cost
+        def fail(*args, **kwargs):
+            original(*args, **kwargs)
+            raise RuntimeError("isolated cost failure")
+        monkeypatch.setattr(api, "freeze_order_item_estimated_cost", fail)
+        with factory() as db:
+            item = db.get(OrderItem, iid)
+            edit = dict(quantity=12, unit_price="100", product_code=item.snapshot_product_code,
+                        product_name=item.snapshot_product_name, material=item.snapshot_material)
+        response = client.put(f"/api/orders/items/{iid}", json=edit)
+        assert response.status_code == 500
+    with factory() as db:
+        assert db.get(OrderItem, iid).quantity == 10
+        assert db.scalar(select(func.count()).select_from(SalesOrderItemBomDemandAdjustment).join(
+            SalesOrderItemBomComponent, SalesOrderItemBomComponent.id == SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id
+        ).where(SalesOrderItemBomComponent.sales_order_item_id == iid)) == 0
+        assert db.scalar(select(func.count()).select_from(SalesOrderItemEstimatedCostSnapshot).where(
+            SalesOrderItemEstimatedCostSnapshot.sales_order_item_id == iid)) == 1
+        assert db.scalar(select(ProductionTask).where(ProductionTask.order_item_id == iid)).ordered_quantity_snapshot == 10
+
+
 def test_new_order_root_uses_order_material_and_notes_not_child_master(composite_requisition_app, _p181_published_map_identity):
     from app.models.material import Material
     app, factory = composite_requisition_app

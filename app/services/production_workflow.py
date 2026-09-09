@@ -21,6 +21,7 @@ from app.core.time_contract import (
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.incoming_receipt import IncomingReceiptItem
+from app.models.multilevel_bom import BomAssembly
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.printing_plate import PrintingPlate
@@ -2852,7 +2853,7 @@ def _consume_completion_semi_reservations(
 def _reserve_component_completion_lot(
     db: Session,
     *,
-    completion: ProductionCompletion,
+    completion: ProductionCompletion | BomAssembly,
     order: Order,
     item: OrderItem,
     snapshot_id: int,
@@ -2860,8 +2861,9 @@ def _reserve_component_completion_lot(
     operator_id: int | None,
     idempotency_key: str,
     reserve_quantity: int | None = None,
+    reservation_number_prefix: str = "CPRS",
 ) -> InventoryReservation:
-    """Reserve a just-created component lot for its immutable BOM snapshot.
+    """Reserve a just-created completion/assembly lot for its BOM snapshot.
 
     The legacy helper checks the parent product, which is intentionally wrong
     for a component.  This narrow variant preserves the same inventory
@@ -2908,7 +2910,7 @@ def _reserve_component_completion_lot(
     if updated.rowcount != 1:
         raise ProductionWorkflowError("组件完工库存数量或版本已变化，请刷新后重试", 409)
     reservation = InventoryReservation(
-        reservation_number=_stable_key("CPRS", completion.id, snapshot_id, max_length=50),
+        reservation_number=_stable_key(reservation_number_prefix, completion.id, snapshot_id, max_length=50),
         inventory_lot_id=lot.id,
         reservation_type="finished_order",
         order_id=order.id,

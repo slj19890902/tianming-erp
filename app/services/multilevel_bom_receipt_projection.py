@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app.models.multilevel_bom import BomAssembly
 from app.models.production import ProductionCompletion, ProductionTask
+from app.models.warehouse_inventory import InventoryReservation
 from app.services.multilevel_bom_plan import plan_assembly
 from app.services.multilevel_bom_requirements import read_graph_requirements
 
@@ -60,6 +61,13 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
     for assembly in db.scalars(select(BomAssembly).where(
         BomAssembly.order_item_id == order_item_id, BomAssembly.status == "posted")):
         outputs[assembly.output_product_id] += assembly.quantity
+        if assembly.output_product_id == graph.root_id:
+            reservation = db.scalar(select(InventoryReservation).where(
+                InventoryReservation.idempotency_key == f"bom-output-reserve:{assembly.id}",
+                InventoryReservation.order_item_id == order_item_id,
+                InventoryReservation.inventory_lot_id == assembly.output_lot_id))
+            if reservation is not None:
+                root_reserved += int(reservation.reserved_stock_quantity)
     output = outputs[graph.root_id]
     capacity = max(received[graph.root_id] - requirements.finished_units.get(graph.root_id, 0), 0)
     future = max(planned[graph.root_id] - requirements.finished_units.get(graph.root_id, 0), 0)

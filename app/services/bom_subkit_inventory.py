@@ -231,7 +231,7 @@ def assemble_subkit_inventory(
         return conversion
 
 
-def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False):
+def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False, ignored_reserve_id=None):
     """Allow unwinding a deeper assembly only after each child use reversed.
 
     Equal balances alone are not proof: moves, counts or arbitrary adjustments
@@ -244,6 +244,10 @@ def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False
     if not movements or output.version != len(movements):
         return False
     later = movements[1:]
+    if ignored_reserve_id is not None:
+        later = [m for m in later if m.id != ignored_reserve_id]
+        if not later:
+            return True
     if allow_initial_reserve and later and later[0].movement_type == "reserve":
         later = later[1:]
     sources = list(db.scalars(select(BomAssemblyInput).where(BomAssemblyInput.lot_id == output.id)))
@@ -283,9 +287,31 @@ def reverse_subkit_conversion(db: Session, *, conversion_id: int, operator_id: i
             return
         if conversion.output_lot_id:
             output = db.get(InventoryLot, conversion.output_lot_id)
+            released_auto_reserve = False
+            if graph_assembly and output is not None:
+                from app.models.warehouse_inventory import InventoryMovement
+                reservation = db.scalar(select(InventoryReservation).where(
+                    InventoryReservation.idempotency_key == f"bom-output-reserve:{conversion.id}"))
+                if reservation is not None:
+                    movement = db.scalar(select(InventoryMovement).where(
+                        InventoryMovement.idempotency_key == reservation.idempotency_key))
+                    if (reservation.inventory_lot_id != output.id or reservation.order_item_id != conversion.order_item_id
+                            or reservation.consumed_stock_quantity or reservation.released_stock_quantity
+                            or movement is None or movement.movement_type != "reserve"
+                            or movement.inventory_lot_id != output.id
+                            or movement.reservation_id != reservation.id
+                            or movement.quantity != reservation.reserved_stock_quantity
+                            or not _only_reversed_graph_consumptions(db, output, ignored_reserve_id=movement.id)):
+                        raise SubkitError("组套自动预占已有后续使用，不能撤销")
+                    from app.services.warehouse_inventory import release_finished_reservation
+                    release_finished_reservation(db, reservation_id=reservation.id, operator_id=operator_id,
+                        release_reason="撤销组套自动预占", idempotency_key=f"bom-output-unreserve:{conversion.id}",
+                        allow_downstream=True, allow_production_reversal=True)
+                    db.refresh(output)
+                    released_auto_reserve = True
             if (output is None or output.quantity_available != conversion.quantity or output.quantity_reserved
                     or output.quantity_consumed or output.quantity_damaged or output.quantity_scrapped
-                    or (output.version != 1 and not (graph_assembly and _only_reversed_graph_consumptions(db, output)))):
+                    or (output.version != 1 and not released_auto_reserve and not (graph_assembly and _only_reversed_graph_consumptions(db, output)))):
                 raise SubkitError("子套件已盘点、移库、预占或送货，不能撤销组套")
             before = _balances(output)
             changed = db.execute(update(InventoryLot).where(InventoryLot.id == output.id, InventoryLot.version == output.version).values(

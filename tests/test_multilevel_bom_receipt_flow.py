@@ -91,6 +91,12 @@ def test_split_movement_keeps_receipt_cost_and_finished_coverage(
             task = refresh_graph_main_task(db, db.get(OrderItem, 1), create_if_missing=False)
             assert task.finished_coverage_snapshot == 10
             assert task.status == "completed"
+        if not move_before_assembly:
+            blocked = client.put(f"/api/incoming/receipt-items/{response.json()['receipt_item_id']}/revert", json={})
+            assert blocked.status_code == 409, blocked.text
+            with factory() as db:
+                active = list(db.scalars(select(BomAssembly).where(BomAssembly.status == "posted")))
+                assert sum(a.quantity for a in active) == 10
 
 
 def seed_graph(factory, *, liner=False, a3=False, splice=False):
@@ -198,7 +204,11 @@ def test_real_receipts_create_nodes_then_sets_not_flat_children(composite_requis
             assert sum(r.quantity for r in assemblies) == 10
             kit = db.get(InventoryLot, next(r.output_lot_id for r in assemblies if r.quantity))
             assert kit.finished_detail.product_id == (4 if liner else 1)
-            assert kit.quantity_available == 10
+            assert kit.quantity_available == 0
+            assert kit.quantity_reserved == 10
+            if not liner:
+                from app.services.composite_bom_workflow import kit_availability
+                assert kit_availability(db, 1)["available_sets"] == 10
             completed = list(db.scalars(select(ProductionCompletion)))
             products = {db.get(InventoryLot, c.inventory_lot_id).finished_detail.product_id: c.quantity for c in completed}
             assert products == ({1: 10, 2: 20, 3: 60} if liner else {2: 30, 3: 40})
@@ -217,6 +227,8 @@ def test_real_receipts_create_nodes_then_sets_not_flat_children(composite_requis
             from app.services.receipt_managed_production import receipt_purpose_summaries_by_order_item_ids
             summary = receipt_purpose_summaries_by_order_item_ids(db, [1])[1]
             assert summary["automatic_finished_output_qty"] == 10
+            assert summary["automatic_order_reserved_quantity"] == 10
+            assert summary["automatic_surplus_finished_quantity"] == 0
             assert summary["current_theoretical_finished_capacity_qty"] == 10
             assert summary["projection_inconsistent"] is False
             assert summary["product_output_quantities"] == ({1: 10, 2: 20, 3: 60, 4: 10} if liner else {1: 10, 2: 30, 3: 40})

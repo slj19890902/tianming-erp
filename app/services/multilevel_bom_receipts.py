@@ -196,10 +196,28 @@ def assemble_graph_receipt(db, *, context, allocation, operator_id):
         InventoryLot.status == "active", InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0)))
     targets = {pid: _receipt_auto_finished_ground_target(db, claim=True,
         customer_id=context.compiled.graph.customer_id).location.id for pid in sorted(pids)}
-    return assemble_order_inventory(db, order_item_id=oid,
+    results = assemble_order_inventory(db, order_item_id=oid,
         source_lot_versions={lot.id: lot.version for lot in lots}, target_locations=targets,
         operation_key=f"bom-receipt:{allocation.id}", operator_id=operator_id,
         available_lot_ids=sorted(own_ids.intersection(lot.id for lot in lots)))
+    from app.models.order import OrderItem, Order
+    from app.services.multilevel_bom_plan import plan_bom
+    from app.services.production_workflow import _reserve_component_completion_lot
+    item = db.get(OrderItem, oid)
+    order = db.get(Order, item.order_id)
+    picking = dict(plan_bom(context.compiled.graph, item.quantity).picking)
+    snapshots = {s.component_product_id: s for s in context.compiled.snapshots}
+    for result in results:
+        if result.output_product_id not in picking or not result.output_lot_id:
+            continue
+        lot = db.get(InventoryLot, result.output_lot_id)
+        # Assembly is itself the immutable output fact; no fake completion row.
+        if lot.quantity_available:
+            _reserve_component_completion_lot(db, completion=result, order=order, item=item,
+                snapshot_id=snapshots[result.output_product_id].id, lot=lot, operator_id=operator_id,
+                idempotency_key=f"bom-output-reserve:{result.id}",
+                reserve_quantity=lot.quantity_available, reservation_number_prefix="BARS")
+    return results
 
 
 def graph_material_receipts_closed(db, item):

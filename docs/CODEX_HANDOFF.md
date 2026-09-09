@@ -1,12 +1,18 @@
 # Codex 项目交接
 
+## 2026-09-09 v0.22.295 电脑内网与手机外网双入口
+
+- 业务代码 `8265ab1a5d7fd3e414766ffbde54c33a9e378681`；电脑恢复 `http://192.168.3.80:8000/`，手机保持 `https://tianmingerp0909.share.zrok.io/mobile/`。两入口共用单进程、原账号权限和正式库；老板已确认两端登录和仓库查看正常。
+- 启动保持 `https_proxy`，新增 `ERP_LAN_HTTP_ORIGIN=http://192.168.3.80:8000`，后端改为 `127.0.0.1:18000`。Caddy 8000 仅绑定厂内 IP、仅接受 `192.168.3.0/24`；外网接收口 18180 与管理口 20190 仍仅 loopback。禁止把新配置误恢复为单入口或另起第二套 ERP。
+- 61 项定向验证通过；无 migration，head `rs08v8x9z67`，正式库切换前后哈希一致；受限备份、成套回滚和真机确认见 NAS `20260909-电脑内网手机外网双入口上线.md`。代理存档和运维规则见 N031 remote-access runbook。
+
 ## 2026-09-09 v0.22.294 货架信息标签
 
 - 正式f3bc54e1ebfdbb8db75b2099e0c910f0b6e7ed96，按格内库存逐款打印80×40无数量信息标签（QR仅查位置），查货正视图单格/整架入口上线；保留最新HTTPS及手机层级。报告release_runtime_20260909_113603.json，head rs08v8x9z67、库哈希不变。NAS回执20260909-v022294-货架信息标签上线.md。00205已确认300套、5套/箱，历史库存转换未做；实体试打待现场。
 
 ## 2026-09-09 手机 5G 免费 HTTPS 入口
 
-- 工厂已切为 `https_proxy`，入口 `https://tianmingerp0909.share.zrok.io/`；手机直达 `/mobile/`，手机打开无参数首页自动转手机版。后端仅监听 `127.0.0.1:8000`，原 `192.168.3.80:8000` 直连已关闭。本任务只改运行配置，无迁移或业务数据改写；不要用旧 `lan_http` 配置覆盖当前启动参数。
+- 此段记录首次外网接入；随后已由上方 v0.22.295 双入口替代端口/内网状态。外网入口 `https://tianmingerp0909.share.zrok.io/` 和手机 `/mobile/` 保留；不要用旧 `lan_http` 配置覆盖当前启动参数。
 - Windows 开机任务 `Tianming ERP Free Tunnel`、`Tianming ERP HTTPS Proxy` 使用 `D:\tm-remote-access`；恢复 ERP 仓库本身不等于恢复外网连接，详情见 `docs/go_live_checklists/N031_REMOTE_ACCESS_RUNBOOK.md` 的工厂实例段。
 - 老板手机 5G 独立测试页往返 1369ms，已确认正式 ERP 可打开，并确认修正后的手机版显示正常；正式首页、仓库资源、健康、未登录/CSRF 拦截检查见 NAS 回执 `20260909-手机5G免费HTTPS接入正式切换.md`。时点备份与回滚配置保存在本机受限目录，凭据不入 Git 或知识库。
 

@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.304"
+APP_VERSION = "v0.22.305"
 APP_VERSION_NAME = "手机摄像头连续扫码"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -2305,6 +2305,14 @@ _V022303_VERIFICATION_STEPS = [
     "刷新移货地图并打开有货货架，确认格号旁可直接点添加货物，原整行绿色按钮消失，产品信息区扩大。",
     "窄屏核对添加按钮、打印和产品列表不重叠；新增仍进入准确正式格位，已有库存及权限保持不变。",
 ]
+_V022304_CHANGES = [
+    "货架产品卡的存货编码与批次明细入口同排，客户数量在上、品名规格在下，窄卡自动换行保证编码完整。",
+    "点击编码查看右侧产品标签；点击批次明细仅展开或收起当前产品明细，两处操作独立，库存与批次身份不变。",
+]
+_V022304_VERIFICATION_STEPS = [
+    "刷新货架正视图，确认编码左侧、批次明细入口靠右；点击编码显示对应产品标签，不自动展开批次。",
+    "点击查看明细展开当前产品全部批次，再点编码不收起明细；点击收起明细不切换产品标签。窄屏无重叠。",
+]
 APP_CHANGES = [
     "手机版仓库新增摄像头扫码入口，点击按钮请求相机权限，在本页连续识别货位并查询库存。",
     "识别组件随系统本地提供，仅扫码页允许摄像头；不上传视频，沿用登录、客户范围和盘点权限。",
@@ -2314,6 +2322,8 @@ APP_VERIFICATION_STEPS = [
     "连续扫描两个现有货位码，确认货位和库存切换；拒绝授权可重试，退出页面停止摄像头；内网 HTTP 显示 HTTPS 入口提示。",
 ]
 APP_CHANGELOG = [
+    *(f"v0.22.304：本次更新｜{item}" for item in _V022304_CHANGES),
+    *(f"v0.22.304：如何验证｜{item}" for item in _V022304_VERIFICATION_STEPS),
     *(f"v0.22.303：本次更新｜{item}" for item in _V022303_CHANGES),
     *(f"v0.22.303：如何验证｜{item}" for item in _V022303_VERIFICATION_STEPS),
     *(f"v0.22.302：本次更新｜{item}" for item in _V022302_CHANGES),

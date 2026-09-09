@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.309"
-APP_VERSION_NAME = "外购常用箱标签设置与数量保存"
+APP_VERSION = "v0.22.310"
+APP_VERSION_NAME = "标签长字段完整换行"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2345,15 +2345,25 @@ _V022308_VERIFICATION_STEPS = [
     "刷新仓库，合并栈板选择两块及主货位，核对主货位所在楼层橙色高亮和底部名称。",
     "现场确认确需合并后提交，检查底部成功或明确失败提示；失败草稿保留，库存不可重复处理。",
 ]
-APP_CHANGES = [
+_V022309_CHANGES = [
     "箱型其他的外购材料常用箱也显示打印标签和每张数量，前后端保存不再强制清空标签设置。",
     "修改每张标签数量后可保存回读，后续新标签按当前设置计算；保留采购比例、业务数量、权限和历史打印冻结。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022309_VERIFICATION_STEPS = [
     "刷新常用箱，编辑箱型其他的外购材料，勾选打印标签并填写每张数量，保存后重新打开核对。",
     "修改每张数量后保存，核对后续新标签的每张数量和张数；已有打印历史及订单、采购、库存数量不应被改写。",
 ]
+APP_CHANGES = [
+    "标签品名、存货编码等长文字自动换为最多两行并适配字号，自定义文字框不再截掉上下半行。",
+    "打印和模板预检共用长文字适配，不再因原最小字号限制阻止打印；保留纸型、权限、数量和历史冻结校验。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新生产包装标签，选择长存货编码及长品名，检查完整两行、无裁切并可进入打印。",
+    "检查自定义布局和普通标签；特别长文字会缩小字号，实体试打确认清晰度，标签数量保持不变。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.309：本次更新｜{item}" for item in _V022309_CHANGES),
+    *(f"v0.22.309：如何验证｜{item}" for item in _V022309_VERIFICATION_STEPS),
     *(f"v0.22.308：本次更新｜{item}" for item in _V022308_CHANGES),
     *(f"v0.22.308：如何验证｜{item}" for item in _V022308_VERIFICATION_STEPS),
     *(f"v0.22.307：本次更新｜{item}" for item in _V022307_CHANGES),

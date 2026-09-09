@@ -14,7 +14,7 @@ const row={area_code:'F',rack_code:'1',level_no:2,slot_no:3,qr_data_url:'QR',she
 let result=labelHtml(row);
 for(const text of ['天明','SKU','纸箱','400x300x200','QR']) assert.ok(result.includes(text));
 for(const text of ['只/捆','预警参考','每捆数量']) assert.ok(!result.includes(text));
-assert.throws(()=>labelHtml({}),/绑定/);
+assert.ok(labelHtml({}).includes('扫码看位置'));
 assert.throws(()=>labelHtml({...row,shelf_content:{restricted:true}}),/客户/);
 informationOnly=false;
 assert.ok(labelHtml(row).includes('50只/捆'));
@@ -22,3 +22,16 @@ assert.ok(labelHtml(row).includes('预警参考100只'));
 '''
     subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True, encoding='utf-8')
     assert 'content=shelf-information' in (ROOT / 'factory_twin/frontend/src/WarehouseTwinApp.tsx').read_text(encoding='utf-8')
+
+
+def test_mixed_cell_expands_to_one_label_per_product():
+    html = (ROOT / 'static/location-label.html').read_text(encoding='utf-8')
+    fn = re.search(r'    function renderLocationLabels\(.*', html)[0]
+    script = "const assert=require('node:assert/strict');let sourceRows=[];const informationOnly=true,batchMode=true;function renderRows(){}\n" + fn + r'''
+renderLocationLabels({items:[{location_id:1,shelf_contents:[{product_id:2},{product_id:3}]},{location_id:4,shelf_contents:[]}]});
+assert.equal(sourceRows.length,3);
+assert.equal(sourceRows[0].shelf_content.product_id,2);
+assert.equal(sourceRows[1].shelf_content.product_id,3);
+assert.equal(sourceRows[2].location_id,4);
+'''
+    subprocess.run(['node','-e',script],check=True,capture_output=True)

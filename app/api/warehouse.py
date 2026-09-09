@@ -17458,8 +17458,17 @@ def _shelf_label_content(db: Session, row: WarehouseLocation, user: User) -> dic
     return {**profile_info(db, product), "binding_priority": binding.priority}
 
 
-def _with_shelf_label(db, row, user, label):
+def _with_shelf_label(db, row, user, label, *, information_only=False):
     from urllib.parse import urlsplit
+    if information_only:
+        from app.services.rack_information_labels import rack_information_contents
+        contents = rack_information_contents(db, row.id, lambda customer_id: require_customer_access(customer_id, user, db))
+        origin = urlsplit(load_settings().browser_url)
+        url = f'{origin.scheme}://{origin.netloc}/warehouse.html?tab=locations&location_id={row.id}'
+        buffer = BytesIO()
+        qrcode.make(url).save(buffer, format='PNG')
+        label.update(shelf_contents=contents, lookup_url=url, qr_data_url='data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode('ascii'), information_only=True)
+        return label
     content = _shelf_label_content(db, row, user)
     label['shelf_content'] = content
     if content and not content.get('restricted'):
@@ -17476,6 +17485,7 @@ def _with_shelf_label(db, row, user, label):
 def get_location_labels(
     request: Request,
     location_ids: str = Query(min_length=1, max_length=8000),
+    content: Literal["default", "shelf-information"] = "default",
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
@@ -17515,7 +17525,7 @@ def get_location_labels(
                 request,
                 projection_contexts.get(int(row.id), {}),
                 lan_ip,
-            ))
+            ), information_only=content == "shelf-information")
             for row in ordered_rows
         ],
         "count": len(ordered_rows),
@@ -17526,6 +17536,7 @@ def get_location_labels(
 def get_location_label(
     location_id: int,
     request: Request,
+    content: Literal["default", "shelf-information"] = "default",
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
@@ -17544,7 +17555,7 @@ def get_location_label(
     projection_context = load_warehouse_location_projection_contexts(
         db, [row]
     ).get(int(row.id), {})
-    return _with_shelf_label(db, row, _user, _location_label_dict(row, request, projection_context))
+    return _with_shelf_label(db, row, _user, _location_label_dict(row, request, projection_context), information_only=content == "shelf-information")
 
 
 @router.get("/location-candidates")

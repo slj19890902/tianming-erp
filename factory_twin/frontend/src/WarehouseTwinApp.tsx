@@ -1528,7 +1528,7 @@ function WarehouseRackElevation({
   return <section className="twin-rack-focus-panel twin-rack-stage" role="region" aria-label={`${rack.rack_code} 参数化正视图`}>
       <header>
       <div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
-        <button type="button" disabled={!allCellsPrintable} title="沿用80×40固定货位信息标签，不含数量；未绑定产品会在预览中提示补齐。" onClick={() => window.open(`/static/location-label.html?content=shelf-information&location_ids=${printableLocationIds.join(',')}`, '_blank', 'noopener')}>打印整架每格信息标签（无数量）</button>
+        <button type="button" disabled={!allCellsPrintable} title="80×40无数量信息标签；按当前格内正式库存逐款打印，空格打印位置标签。" onClick={() => window.open(`/static/location-label.html?content=shelf-information&location_ids=${printableLocationIds.join(',')}`, '_blank', 'noopener')}>打印整架每格信息标签（无数量）</button>
         <button type="button" onClick={onClose}>返回孪生地图</button>
       </header>
       <div className="twin-rack-content">

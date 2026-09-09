@@ -25,8 +25,14 @@ function Write-GuardLog {
 
 function Test-LocalErpHealth {
     try {
+        $python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+        $portOutput = & $python -X utf8 -c "import sys; sys.path.insert(0, sys.argv[1]); from app.core.config import load_settings; print(load_settings().port)" $ProjectRoot
+        $port = 0
+        if ($LASTEXITCODE -ne 0 -or -not [int]::TryParse([string]$portOutput, [ref]$port) -or $port -lt 1 -or $port -gt 65535) {
+            throw "Invalid ERP runtime port for the local health probe."
+        }
         $response = Invoke-WebRequest `
-            -Uri "http://127.0.0.1:8000/api/health" `
+            -Uri "http://127.0.0.1:$port/api/health" `
             -UseBasicParsing `
             -MaximumRedirection 0 `
             -TimeoutSec 5

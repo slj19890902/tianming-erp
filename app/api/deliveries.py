@@ -3273,6 +3273,7 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
                 mapping.pop("order_specification_snapshot", None),
             ),
             length_mm=mapping.pop("product_length_mm", None),
+            customer_name_snapshots=(mapping.get("product_name"),),
             width_mm=mapping.pop("product_width_mm", None),
             height_mm=mapping.pop("product_height_mm", None),
         )
@@ -5804,11 +5805,13 @@ def _build_pick_task(
                     resolved_product_specification(
                         order_item.snapshot_spec,
                         product,
+                        customer_name_snapshots=(order_item.snapshot_product_name,),
                     )
                     if order_item
                     else resolved_product_specification(
                         line.specification_snapshot,
                         product,
+                        customer_name_snapshots=(line.product_name_snapshot,),
                     )
                 ),
             )
@@ -8041,6 +8044,7 @@ def _pending_delivery_item_payload(
     base_payload["specification"] = resolved_product_specification(
         base_payload.get("specification"),
         length_mm=base_payload.pop("product_length_mm", None),
+        customer_name_snapshots=(base_payload.get("product_name"),),
         width_mm=base_payload.pop("product_width_mm", None),
         height_mm=base_payload.pop("product_height_mm", None),
     )
@@ -10880,6 +10884,7 @@ def get_delivery_print_data(
         specification = resolved_product_specification(
             row.delivery_specification_snapshot,
             fallback_snapshots=(row.order_specification_snapshot,),
+            customer_name_snapshots=(product_name,),
             length_mm=row.product_length_mm,
             width_mm=row.product_width_mm,
             height_mm=row.product_height_mm,

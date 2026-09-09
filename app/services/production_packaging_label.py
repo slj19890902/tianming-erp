@@ -341,6 +341,7 @@ def build_delivery_packaging_label_package(
                     "specification": resolved_product_specification(
                         delivery_item.specification_snapshot,
                         direct_product,
+                        customer_name_snapshots=(delivery_item.product_name_snapshot,),
                     ),
                     "unit": delivery_item.unit_snapshot,
                     "quantity": int(delivery_item.delivered_quantity or 0),
@@ -395,6 +396,10 @@ def build_delivery_packaging_label_package(
                     delivery_item.specification_snapshot,
                     parent_product,
                     fallback_snapshots=(order_item.snapshot_spec,),
+                    customer_name_snapshots=(
+                        delivery_item.product_name_snapshot,
+                        order_item.snapshot_product_name,
+                    ),
                 )
                 or embedded_dimension_specification(
                     parent_product.product_name if parent_product else None

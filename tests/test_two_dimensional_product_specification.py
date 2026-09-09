@@ -26,6 +26,21 @@ def test_structured_dimensions_support_two_or_three_dimensions() -> None:
     assert dimension_specification(Decimal("430"), None, None) is None
 
 
+def test_customer_finished_size_never_uses_supplier_half_thickness() -> None:
+    from types import SimpleNamespace
+    product = SimpleNamespace(length_mm=None, width_mm=None, height_mm=None,
+        external_packaging_specification_summary="800×180×60mm")
+    assert resolved_product_specification(None, product,
+        customer_name_snapshots=("瓦楞垫板800*180*120",)) == "800×180×120mm"
+    assert resolved_product_specification("900×200×140mm", product,
+        customer_name_snapshots=("瓦楞垫板800*180*120",)) == "900×200×140mm"
+    assert resolved_product_specification(None, product,
+        fallback_snapshots=("订单成品规格",),
+        customer_name_snapshots=("瓦楞垫板800*180*120",)) == "订单成品规格"
+    assert resolved_product_specification(None, product,
+        customer_name_snapshots=("没有尺寸的成品",)) is None
+
+
 def test_only_missing_placeholders_fall_back_to_structured_dimensions() -> None:
     for placeholder in (None, "", "-", "—", "－", "未登记", "规格未登记"):
         assert resolved_product_specification(

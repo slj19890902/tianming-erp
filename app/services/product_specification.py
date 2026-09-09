@@ -100,6 +100,7 @@ def resolved_product_specification(
     product: Product | None = None,
     *,
     fallback_snapshots: tuple[Any, ...] = (),
+    customer_name_snapshots: tuple[Any, ...] = (),
     length_mm: Any = None,
     width_mm: Any = None,
     height_mm: Any = None,
@@ -110,6 +111,12 @@ def resolved_product_specification(
         normalized = normalized_specification_text(candidate)
         if normalized is not None:
             return normalized
+    # Customer-facing frozen names may carry the finished size when the dedicated
+    # spec field is blank. Never use supplier external-packaging dimensions here.
+    for name in customer_name_snapshots:
+        embedded = embedded_dimension_specification(name)
+        if embedded is not None:
+            return embedded
     if product is not None:
         return product_dimension_specification(product)
     return dimension_specification(length_mm, width_mm, height_mm)

@@ -673,6 +673,17 @@ def test_legacy_order_fallback_and_unordered_delivery_identity_never_follow_rena
         assert "CURRENT-UNORDERED-CODE" not in {
             plan["product_code"] for plan in package["plans"]
         }
+        unordered_item.specification_snapshot = None
+        unordered_item.product_name_snapshot = "瓦楞垫板800*180*120"
+        unordered_item.delivered_quantity = 600
+        unordered_product.production_label_units_per_label = 10
+        db.flush()
+        corrected = build_delivery_packaging_label_package(db, delivery)
+        assert corrected["review_required"] is False
+        plan = next(row for row in corrected["plans"] if row["product_id"] == unordered_product.id)
+        assert plan["specification"] == "800×180×120mm"
+        assert plan["label_count"] == 60
+        assert unordered_item.specification_snapshot is None
 
 
 @pytest.mark.parametrize("label_count", (1, 2, 30, 300))

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.303"
-APP_VERSION_NAME = "货架格头紧凑操作与货物优先"
+APP_VERSION = "v0.22.304"
+APP_VERSION_NAME = "手机摄像头连续扫码"
 APP_BUILD_DATE = "2026-09-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2297,15 +2297,25 @@ _V022302_VERIFICATION_STEPS = [
     "刷新仓库地图，移货模式打开有货货架格，确认添加货物显示为完整绿色按钮，点击文字即可进入该格添加界面。",
     "在多产品格和窄屏核对按钮不被挤压或遮挡；空格选产品、禁用状态和原产品列表保持正常。",
 ]
-APP_CHANGES = [
+_V022303_CHANGES = [
     "货架添加货物移到格号旁，采用紧凑浅色按钮，不再独占一行；打印货位弱化显示，让客户、料号和数量成为主体。",
     "保留完整文字点击范围、禁用保护与触屏点击高度，产品列表独立滚动；不修改库存、位置或业务处理。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022303_VERIFICATION_STEPS = [
     "刷新移货地图并打开有货货架，确认格号旁可直接点添加货物，原整行绿色按钮消失，产品信息区扩大。",
     "窄屏核对添加按钮、打印和产品列表不重叠；新增仍进入准确正式格位，已有库存及权限保持不变。",
 ]
+APP_CHANGES = [
+    "手机版仓库新增摄像头扫码入口，点击按钮请求相机权限，在本页连续识别货位并查询库存。",
+    "识别组件随系统本地提供，仅扫码页允许摄像头；不上传视频，沿用登录、客户范围和盘点权限。",
+]
+APP_VERIFICATION_STEPS = [
+    "iPhone Safari 打开 HTTPS 手机版仓库，点摄像头扫码查货 / 盘点，再点开启摄像头扫码并允许相机。",
+    "连续扫描两个现有货位码，确认货位和库存切换；拒绝授权可重试，退出页面停止摄像头；内网 HTTP 显示 HTTPS 入口提示。",
+]
 APP_CHANGELOG = [
+    *(f"v0.22.303：本次更新｜{item}" for item in _V022303_CHANGES),
+    *(f"v0.22.303：如何验证｜{item}" for item in _V022303_VERIFICATION_STEPS),
     *(f"v0.22.302：本次更新｜{item}" for item in _V022302_CHANGES),
     *(f"v0.22.302：如何验证｜{item}" for item in _V022302_VERIFICATION_STEPS),
     *(f"v0.22.301：本次更新｜{item}" for item in _V022301_CHANGES),

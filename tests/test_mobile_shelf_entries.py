@@ -37,3 +37,29 @@ def test_old_phone_position_qr_redirect_but_desktop_editor_stays():
         assert response.status_code==expected
         if expected==307:
             assert response.headers["location"]=="/static/shelf-scan.html?location_id=1884"
+
+
+def test_camera_shell_has_user_gesture_and_local_decoder():
+    response=function("mobile_camera_scan_entry")()
+    assert response.status_code == 200
+    shell=response.body.decode()
+    assert 'id="cameraStart"' in shell and 'getUserMedia' in shell
+    assert "'/static/vendor/jsqr/jsQR-1.4.0.js'" in shell
+    assert 'audio:false' in shell
+    assert 'camera=(self)' in (ROOT/'app/main.py').read_text(encoding='utf8')
+
+
+def test_camera_policy_is_limited_to_scan_entry():
+    import asyncio
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import Response
+    tree=ast.parse((ROOT/'app/main.py').read_text(encoding='utf8'))
+    node=next(n for n in ast.walk(tree) if isinstance(n,ast.ClassDef) and n.name=='HSTSMiddleware')
+    ns={'BaseHTTPMiddleware':BaseHTTPMiddleware,'is_lan_http_scope':lambda *a:False}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])),'<policy>','exec'),ns)
+    middleware=ns['HSTSMiddleware'](None,include_hsts=False)
+    async def response(_):return Response()
+    for path,expected in [('/mobile/scan','camera=(self)'),('/mobile/','camera=()'),('/q/1884','camera=()'),('/static/shelf-scan.html','camera=()')]:
+        request=SimpleNamespace(url=SimpleNamespace(path=path),query_params={},scope={})
+        result=asyncio.run(middleware.dispatch(request,response))
+        assert result.headers['permissions-policy']==expected+', microphone=(), geolocation=()'

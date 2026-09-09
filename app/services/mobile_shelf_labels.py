@@ -23,6 +23,16 @@ def scan_page_html():
                          '<script>' + script.replace('</script', '<\\/script') + '</script>')
 
 
+@lru_cache(maxsize=1)
+def camera_page_html():
+    root = Path(__file__).resolve().parents[2] / "static"
+    shell = scan_page_html()
+    panel = (root / "shelf-camera.html").read_text(encoding="utf-8")
+    script = (root / "shelf-camera.js").read_text(encoding="utf-8")
+    return shell.replace('<div id="message"', panel + '<div id="message"', 1).replace(
+        '</body>', '<script>' + script.replace('</script', '<\\/script') + '</script></body>')
+
+
 def product_key(lot):
     detail = lot.finished_detail or lot.semi_finished_detail
     if detail is None:

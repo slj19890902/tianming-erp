@@ -1,5 +1,17 @@
 # MULTILEVEL-BOM-20260909
 
+## 2026-09-10 旧订单执行边界78存储及选择合同候选
+
+实查旧快照表按订单/显示序号和订单/主档边唯一，但允许同产品多个快照；不能直接追加schema5后继续SELECT同订单全部行。read_compiled_order_bom、delivery_page、production_versions批量投影均校验全部行；inventory/receipt等还直接用item.quantity。00205若不记录1500历史边界，会重新按1800计划或把旧长短片与新来源双计。因此新增显式历史/当前源映射，而非删除schema4或解除已有送货门禁。
+
+候选迁移sd16v8x9z78接77：order_bom_execution_cutovers关联真实OrderBomGraph，冻结order_quantity/delivered_before及basis/request哈希、幂等键和人员；order_bom_cutover_sources以snapshot_id唯一归属history/current，通过原快照id/订单复合唯一索引及复合FK禁止跨订单。只新增索引和空表，不重建原表、不回填原事实；任一转换记录存在拒绝降级。3份迁移文档前版本自上次完整读取后git diff为空，本次只追加本候选说明；退役迁移内容未执行。
+
+multilevel_bom_execution_boundary提供current_snapshot_predicate（原订单不过滤、有边界仅显式current、缺映射无旧行回退、别名支持）及execution_window纯数量合同。1800/历史1500→执行300，之后送100只计新窗口100，剩200；跨历史边界取消、订单数量不符拒绝，允许合法超送时剩余0。此处尚未接通实际读取/写入入口，不能宣称00205已转换；历史直接snapshot ID保持可读。
+
+新11项测试通过7.64秒：真实migration约束/跨订单FK/原快照删除或移到另一订单拒绝/非空降级拒绝、显式选择、数量边界；新鲜68隔离源备份校验→升77→78→降77→再升78，订单/明细/原快照/库存/流水/预占/货位/完工/送货及触发器全行一致，integrity ok/FK空、源SHA未变。与主档转换13项、真实工厂编译1项合跑最终25通过38.23秒，不累计重复。compileall/diff check通过；5个原迁移测试唯一head断言机械更新78，唯一head实查通过。无前端资产变化，正式远端仍ac02bb00、health ok=true；未迁移或写正式库地图草稿，未部署。
+
+下一步必须完成边界basis文档/历史源摘要验证、专用同事务转换写入、当前来源映射及read_compiled_order_bom/批量投影/送货查询同步（避免新增N+1），让计划/完工/拿货按执行窗口300而非原1800。原快照ID及原消费预占不改，新快照用独立ID和不冲突显示序号；不能把新行source FK置空当作丢弃真实来源，实际图及映射必须保留来源证据。剩余900/1200原预占的切换、真实组装成本（现仅历史估算）及位置确认仍待专用事务，不得伪装完成。完整目标active，最终发布及人工扫码打印门禁保留。
+
 ## 2026-09-10 主档原子转换候选（不转换历史订单库存）
 
 新增multilevel_bom_master_transition.transition_master_boms内部服务：明确客户、子件优先配置列表、全部新旧可达产品版本及指定旧subkit版本；仅数据库当前活动admin可用，同客户/有效产品/全节点CAS锁/旧套件真实ID保留。复用save_subkit及replace_product_bom，在一个真实外层事务内停用旧旁路并写新配方、审计；调用方commit。重复旧版本拒绝且无重复写入，不宣称返回首次结果的幂等接口。无公开API/CLI、无正式执行。

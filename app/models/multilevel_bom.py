@@ -53,6 +53,43 @@ class OrderBomProductionRevision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp(), nullable=False)
 
 
+class OrderBomExecutionCutover(Base):
+    """Explicit legacy/current boundary; does not replace historical facts."""
+    __tablename__ = "order_bom_execution_cutovers"
+    __table_args__ = (
+        CheckConstraint("order_quantity > 0 AND delivered_before >= 0 AND delivered_before < order_quantity",
+            name="ck_bom_cutover_quantities"),
+        CheckConstraint("length(basis_hash) = 64 AND length(request_hash) = 64",
+            name="ck_bom_cutover_hashes"),
+        CheckConstraint("length(trim(idempotency_key)) > 0", name="ck_bom_cutover_key"),
+    )
+    order_item_id: Mapped[int] = mapped_column(
+        ForeignKey("order_bom_graphs.order_item_id", ondelete="RESTRICT"), primary_key=True)
+    order_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    delivered_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    basis_json: Mapped[str] = mapped_column(Text, nullable=False)
+    basis_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp(), nullable=False)
+
+
+class OrderBomCutoverSource(Base):
+    """Both epochs keep original snapshot IDs and same-order foreign keys."""
+    __tablename__ = "order_bom_cutover_sources"
+    __table_args__ = (
+        ForeignKeyConstraint(["snapshot_id", "order_item_id"],
+            ["sales_order_item_bom_components.id", "sales_order_item_bom_components.sales_order_item_id"],
+            ondelete="RESTRICT", name="fk_bom_cutover_source_order"),
+        CheckConstraint("role IN ('history','current')", name="ck_bom_cutover_source_role"),
+    )
+    snapshot_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_item_id: Mapped[int] = mapped_column(
+        ForeignKey("order_bom_execution_cutovers.order_item_id", ondelete="RESTRICT"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
 class OrderBomGraphProduct(Base):
     __tablename__ = "order_bom_graph_products"
     __table_args__ = (

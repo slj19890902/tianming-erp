@@ -52,7 +52,7 @@ def test_paired_copy_reversal_migration_roundtrip(monkeypatch,tmp_path):
         counts = {t:db.execute(f'SELECT count(*) FROM {t}').fetchone()[0] for t in
                   ('sales_orders','sales_order_items','inventory_lots','warehouse_locations','external_packaging_receipts')}
     config = _config(monkeypatch,target)
-    assert ScriptDirectory.from_config(config).get_heads() == ['sc15v8x9z77']
+    assert ScriptDirectory.from_config(config).get_heads() == ['sd16v8x9z78']
     command.upgrade(config,'sa13v8x9z75')
     command.downgrade(config,'rz12v8x9z74')
     command.upgrade(config,'sa13v8x9z75')

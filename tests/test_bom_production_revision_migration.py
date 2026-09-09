@@ -57,7 +57,7 @@ def test_isolated_source_revision_upgrade_downgrade_upgrade(monkeypatch, tmp_pat
         assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
         counts = {table: db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in tables}
     config = _config(monkeypatch, target)
-    assert ScriptDirectory.from_config(config).get_heads() == ["sc15v8x9z77"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["sd16v8x9z78"]
     command.upgrade(config, "sb14v8x9z76")
     command.downgrade(config, "sa13v8x9z75")
     command.upgrade(config, "sb14v8x9z76")

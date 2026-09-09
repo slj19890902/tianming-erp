@@ -4800,6 +4800,10 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
     # Ordinary deliveries need no further work.  Composite orders are rare but
     # their collapsed quantity must still include the physical component lines,
     # so calculate only those exceptional rows using the established workflow.
+    from app.models.multilevel_bom import OrderBomGraph
+    graph_marker = or_(OrderBomGraph.order_item_id.is_not(None), select(SalesOrderItemBomComponent.id).where(
+        SalesOrderItemBomComponent.sales_order_item_id == OrderItem.id,
+        SalesOrderItemBomComponent.snapshot_schema_version >= 5).exists())
     composite_rows = db.execute(
         select(
             DeliveryItem.id,
@@ -4807,6 +4811,7 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
             DeliveryItem.order_item_id,
             DeliveryItem.delivered_quantity,
             Delivery.status,
+            case((graph_marker, OrderItem.id), else_=None).label("graph_order_item_id"),
             OrderItem.delivered_quantity.label("order_delivered_quantity"),
             OrderItem.composite_fulfillment_mode_snapshot.label(
                 "composite_fulfillment_mode"
@@ -4818,12 +4823,13 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
         .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
         .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
         .outerjoin(Product, Product.id == OrderItem.product_id)
+        .outerjoin(OrderBomGraph, OrderBomGraph.order_item_id == OrderItem.id)
         .where(
             DeliveryItem.delivery_id.in_(delivery_ids),
             DeliveryItem.is_current.is_(True),
-            DeliveryItem.order_item_id.in_(
+            or_(OrderBomGraph.order_item_id.is_not(None), DeliveryItem.order_item_id.in_(
                 select(SalesOrderItemBomComponent.sales_order_item_id).distinct()
-            ),
+            )),
         )
         .order_by(DeliveryItem.delivery_id, DeliveryItem.id)
     ).all()
@@ -4886,6 +4892,14 @@ def _delivery_summary_component_quantities(
 
     if not composite_rows:
         return {}
+    from app.services.multilevel_bom_delivery_page import summary_graph_contracts
+    graph_picks, graph_roots, excluded = summary_graph_contracts(db,
+        {row.graph_order_item_id for row in composite_rows if getattr(row, "graph_order_item_id", None) is not None})
+    stock_snapshot_id = InventoryReservation.sales_order_item_bom_component_id
+    if graph_roots:
+        stock_snapshot_id = func.coalesce(stock_snapshot_id, case(
+            (InventoryReservation.reservation_type == "finished_order",
+             case(graph_roots, value=InventoryReservation.order_item_id)), else_=None))
     pending_rows = [
         row for row in composite_rows if row.status not in {"dispatched", "voided"}
     ]
@@ -4912,6 +4926,7 @@ def _delivery_summary_component_quantities(
                 BomComponentDirectDeliveryAllocation.delivery_item_id.in_(
                     historical_item_ids
                 ),
+                BomComponentDirectDeliveryAllocation.sales_order_item_bom_component_id.not_in(excluded),
                 BomComponentDirectDeliveryAllocation.status.in_(
                     ACTIVE_RESERVATION_STATUSES
                 ),
@@ -4938,7 +4953,8 @@ def _delivery_summary_component_quantities(
                 DeliveryInventoryAllocation.delivery_item_id.in_(
                     historical_item_ids
                 ),
-                InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+                stock_snapshot_id.is_not(None),
+                stock_snapshot_id.not_in(excluded),
                 DeliveryInventoryAllocation.status.in_(
                     ACTIVE_RESERVATION_STATUSES
                 ),
@@ -5034,7 +5050,7 @@ def _delivery_summary_component_quantities(
                 consumed_quantities[int(snapshot_id)] = int(quantity or 0)
             for snapshot_id, quantity in db.execute(
                 select(
-                    InventoryReservation.sales_order_item_bom_component_id,
+                    stock_snapshot_id,
                     func.coalesce(
                         func.sum(
                             DeliveryInventoryAllocation.credited_requirement_quantity
@@ -5049,16 +5065,12 @@ def _delivery_summary_component_quantities(
                     == DeliveryInventoryAllocation.reservation_id,
                 )
                 .where(
-                    InventoryReservation.sales_order_item_bom_component_id.in_(
-                        snapshot_ids
-                    ),
+                    stock_snapshot_id.in_(snapshot_ids),
                     DeliveryInventoryAllocation.status.in_(
                         ACTIVE_RESERVATION_STATUSES
                     ),
                 )
-                .group_by(
-                    InventoryReservation.sales_order_item_bom_component_id
-                )
+                .group_by(stock_snapshot_id)
             ).all():
                 normalized_id = int(snapshot_id)
                 consumed_quantities[normalized_id] = (
@@ -5074,6 +5086,8 @@ def _delivery_summary_component_quantities(
                 int(row.order_item_id), []
             ):
                 snapshot_id = int(snapshot.id)
+                if snapshot_id in excluded:
+                    continue
                 delta_sets, delta_pieces = adjustment_totals.get(
                     snapshot_id, (0, 0)
                 )
@@ -5088,10 +5102,10 @@ def _delivery_summary_component_quantities(
                     raise CompositeBomWorkflowError(
                         "组件调整后的需求件数必须大于0"
                     )
-                target_after = min(
-                    delivered_after * int(snapshot.quantity_per_set or 0),
-                    target,
-                )
+                multiplier = int(snapshot.quantity_per_set or 0)
+                if snapshot_id in graph_picks:
+                    multiplier, target = graph_picks[snapshot_id]
+                target_after = min(delivered_after * multiplier, target)
                 component_quantity += max(
                     target_after - consumed_quantities.get(snapshot_id, 0), 0
                 )

@@ -78,13 +78,14 @@ def test_new_order_root_uses_order_material_and_notes_not_child_master(composite
 
 @pytest.mark.parametrize("liner", [False, True])
 @pytest.mark.parametrize("legacy_root", [False, True])
-def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition_app, _p181_published_map_identity, liner, legacy_root):
+@pytest.mark.parametrize("fulfillment_mode", ["parent_delivery", "component_delivery"])
+def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition_app, _p181_published_map_identity, liner, legacy_root, fulfillment_mode):
     app, factory = composite_requisition_app
     from app.api.deliveries import router
     app.include_router(router, prefix="/api/deliveries")
     material_id, _ = seed_graph(factory, liner=liner)
     with factory() as db:
-        db.get(Product, 1).composite_fulfillment_mode = "parent_delivery"
+        db.get(Product, 1).composite_fulfillment_mode = fulfillment_mode
         db.commit()
     with TestClient(app) as client:
         _login(client)
@@ -140,9 +141,14 @@ def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition
                 detailed = _delivery_response(db, did)
                 for field in ("component_lines", "actual_goods_lines", "inventory_sources", "available_sets"):
                     assert listed["items"][0][field] == detailed["items"][0][field], field
+                summaries = client.get("/api/deliveries", params={"view": "summary"})
+                assert summaries.status_code == 200, summaries.text
+                summary = next(row for row in summaries.json()["items"] if row["id"] == did)
+                assert summary["total_actual_goods_quantity"] == detailed["total_actual_goods_quantity"]
         compare_page()
         dispatched = client.put(f"/api/deliveries/{did}/dispatch")
         assert dispatched.status_code == 200, dispatched.text
+        compare_page()
         with factory() as db:
             for pid in picking_products:
                 product = db.get(Product, pid)
@@ -159,9 +165,10 @@ def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition
         assert public_listed["inventory_sources"] == line["inventory_sources"]
         assert {row["component_product_id"] for row in line["component_lines"]} == picking_products
         assert all(row["unit"] == expected_units[row["component_product_id"]] for row in line["component_lines"])
-        assert len(line["actual_goods_lines"]) == 1
+        assert len(line["actual_goods_lines"]) == (1 if fulfillment_mode == "parent_delivery" else len(picking_products))
         goods = line["actual_goods_lines"][0]
-        assert goods["line_type"] == "parent" and goods["quantity"] == 4
+        assert goods["line_type"] == ("parent" if fulfillment_mode == "parent_delivery" else "component")
+        assert goods["quantity"] == 4
         assert goods["unit"] == expected_units[1]
         from app.api.deliveries import _delivery_list_page_context, _delivery_response
         with factory() as db:

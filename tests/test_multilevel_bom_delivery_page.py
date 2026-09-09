@@ -49,6 +49,16 @@ def test_graph_page_has_one_identity_query_for_one_or_multiple_orders(context):
         for item in selected:
             assert {d.component_product_id for d in payload["demands"][item.id]} == {1, 2}
             assert all(d.required_piece_quantity == item.quantity for d in payload["demands"][item.id])
+        from app.services.multilevel_bom_delivery_page import summary_graph_contracts
+        queries.clear()
+        event.listen(db.bind, "before_cursor_execute", capture)
+        try:
+            picks, summary_roots, excluded = summary_graph_contracts(db, [item.id for item in selected])
+        finally:
+            event.remove(db.bind, "before_cursor_execute", capture)
+        assert len(queries) == 3
+        assert summary_roots == roots
+        assert len(picks) == len(selected) * 2 and len(excluded) == len(selected) * 2
 
 
 @pytest.mark.parametrize("damage", ["hash", "identity", "missing_snapshot", "missing_graph"])
@@ -69,3 +79,38 @@ def test_page_rejects_corrupt_graph_instead_of_flat_fallback(context, damage):
         payload["graphs"].clear()
     with pytest.raises(BomPlanError):
         project_page_graph_demands(db, **payload)
+
+
+def test_collapsed_component_delivery_counts_only_real_pick_nodes(context):
+    from app.api.deliveries import _delivery_list_summary_context, _delivery_summary_response, _delivery_response
+    from tests.test_composite_component_delivery_quantities import _delivery
+    db, actor, item, _ = context
+    setup_liner(db, actor)
+    freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
+    item.composite_fulfillment_mode_snapshot = "component_delivery"
+    delivery, _ = _delivery(db, customer_id=136, order_item_id=item.id, number="GRAPH-SUMMARY", quantity=10)
+    db.commit()
+    detail = _delivery_response(db, delivery.id)
+    summary = _delivery_summary_response(delivery.id, context=_delivery_list_summary_context(db, [delivery.id]))
+    assert detail["total_actual_goods_quantity"] == 20
+    assert summary["total_actual_goods_quantity"] == detail["total_actual_goods_quantity"]
+
+
+@pytest.mark.parametrize("missing", ["graph", "snapshots"])
+def test_collapsed_graph_missing_facts_do_not_become_legacy(context, missing):
+    from sqlalchemy import delete
+    from app.api.deliveries import _delivery_list_summary_context
+    from tests.test_composite_component_delivery_quantities import _delivery
+    db, actor, item, _ = context
+    setup_liner(db, actor)
+    freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
+    item.composite_fulfillment_mode_snapshot = "component_delivery"
+    delivery, _ = _delivery(db, customer_id=136, order_item_id=item.id, number="BAD-GRAPH-SUMMARY", quantity=10)
+    db.commit()
+    if missing == "graph":
+        db.execute(delete(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id == item.id))
+        db.execute(delete(OrderBomGraph).where(OrderBomGraph.order_item_id == item.id))
+    else:
+        db.execute(delete(SalesOrderItemBomComponent).where(SalesOrderItemBomComponent.sales_order_item_id == item.id))
+    with pytest.raises(BomPlanError):
+        _delivery_list_summary_context(db, [delivery.id])

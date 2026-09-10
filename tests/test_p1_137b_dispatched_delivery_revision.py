@@ -333,3 +333,35 @@ def test_mixed_delivery_revision_keeps_order_and_unordered_branches_atomic(
         ).all()
         assert len([row for row in rows if row.is_current]) == 2
         assert len([row for row in rows if not row.is_current]) == 2
+
+
+def test_remove_unordered_line_from_dispatched_mixed_delivery_updates_print_and_stock(unordered_finished_delivery_app):
+    from app.models.warehouse_inventory import InventoryLot
+    from app.models.order import OrderItem
+    app, factory = unordered_finished_delivery_app
+    seed = _seed_unordered(app, factory)
+    with TestClient(app) as client:
+        _login_unordered(client)
+        _, order_item_id, _ = _mixed_delivery_fixture(client, factory, seed)
+        created = client.post("/api/deliveries", json=_mixed_payload(seed, order_item_id=order_item_id, order_quantity=10, unordered_quantity=3))
+        assert created.status_code == 201, created.text
+        delivery_id = created.json()["id"]
+        dispatched = client.put(f"/api/deliveries/{delivery_id}/dispatch")
+        assert dispatched.status_code == 200, dispatched.text
+        payload = {
+            "source_mode":"order", "expected_version":dispatched.json()["version"],
+            "idempotency_key":"remove-one-mixed-delivery-line",
+            "items":[{"order_item_id":order_item_id,"delivered_quantity":10}],
+        }
+        revised = client.put(f"/api/deliveries/{delivery_id}/revision", json=payload)
+        assert revised.status_code == 200, revised.text
+        assert len(revised.json()["items"]) == 1
+        assert revised.json()["total_quantity"] == 10
+        replay = client.put(f"/api/deliveries/{delivery_id}/revision", json=payload)
+        assert replay.json() == revised.json()
+        preview = client.get(f"/api/deliveries/{delivery_id}/print")
+        assert preview.status_code == 200, preview.text
+        assert len(preview.json()["items"]) == 1
+    with factory() as db:
+        assert db.get(InventoryLot, seed.free_first_lot_id).quantity_available == 12
+        assert db.get(OrderItem, order_item_id).delivered_quantity == 10

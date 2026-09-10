@@ -1643,3 +1643,35 @@ def test_delete_rollback_and_cancel_release_only_unconsumed_stock(
             )
         else:
             assert (lot.quantity_available, lot.quantity_reserved) == (5, 0)
+
+
+def test_external_packaging_new_order_can_reserve_finished_stock_before_purchase(b1_app):
+    from app.services.warehouse_inventory import finished_inventory_candidates, WarehouseInventoryError
+    app, factory = b1_app
+    with factory() as db:
+        product = db.get(Product, 1)
+        product.supply_mode = "external_purchase"
+        product.external_packaging_category_code = "honeycomb_board"
+        product.external_packaging_specification_json = '{"length_mm":800,"width_mm":180,"height_mm":120}'
+        product.external_packaging_specification_summary = "蜂窝板800×180×120"
+        product.external_packaging_purchase_unit = "片"
+        product.external_packaging_candidate_snapshot_json = '[{"is_default":true,"external_product_id":1,"supplier_id":1,"external_product_version":1,"supplier_name":"测试供应商","supplier_product_code":"HC-TEST","product_name":"蜂窝板","purchase_unit":"片"}]'
+        product.external_packaging_default_order_quantity_basis = 1
+        product.external_packaging_default_purchase_quantity_basis = 1
+        db.commit()
+    lot_id, version = add_finished_lot(factory, product_id=1, quantity=30, key="external-ready-stock")
+    with TestClient(app) as client:
+        login(client, "admin")
+        response = post_order(client, [order_item(1, 20, {"finished":[finished_plan(lot_id, version, 20)]})], "external-stock-order")
+        assert response.status_code == 201, response.text
+    item_id = response.json()["items"][0]["id"]
+    with factory() as db:
+        item = db.get(OrderItem, item_id)
+        assert item.requisition_status == "外购包材待确认"
+        assert db.get(InventoryLot, lot_id).quantity_reserved == 20
+        assert db.get(InventoryLot, lot_id).quantity_available == 10
+        assert finished_inventory_candidates(db, item_id)
+        item.requisition_status = "外购包材已采购"
+        db.flush()
+        with pytest.raises(WarehouseInventoryError, match="订单已进入报料"):
+            finished_inventory_candidates(db, item_id)

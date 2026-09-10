@@ -21,6 +21,7 @@ from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     _balances,
     _claim_inventory_destination,
+    _claim_inventory_restore_destination,
     _ensure_finished_projection_postcondition,
     _movement,
     _pallet_has_physical_goods,
@@ -410,7 +411,7 @@ def _restore_allocation_quantity(
     )
     if location_id is None:
         raise WarehouseInventoryError("冲回库存批次或关联库位不存在", 409)
-    _claim_inventory_destination(db, int(location_id))
+    _claim_inventory_restore_destination(db, int(location_id))
     lot = _validated_customer_lot(
         db,
         delivery=delivery,

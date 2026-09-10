@@ -1333,7 +1333,8 @@ def _summary_for_month(db: Session, month: str) -> dict:
                 "message": (
                     "实际材料成本仍有 "
                     f"{material_cost['uncovered_delivery_lines']} 条送货明细未完整冻结，"
-                    "禁止把缺失成本按零结转。"
+                    f"管理参考补充后仍无依据 {material_cost['management_uncovered_lines']} 条；"
+                    "参考补充不替代采购凭证，不按零结转。"
                 ),
                 "count": material_cost["uncovered_delivery_lines"],
             }
@@ -1434,6 +1435,23 @@ def _workbook_bytes(workbook: Workbook) -> bytes:
     stream = BytesIO()
     workbook.save(stream)
     return stream.getvalue()
+
+
+def _append_material_supplement_sheet(workbook: Workbook, coverage: dict) -> None:
+    sheet = workbook.create_sheet("补充材料成本依据")
+    sheet.append(["送货单", "产品", "来源类型", "来源ID", "有效数量", "参考单价", "本期补充金额", "采用依据", "补齐批次"])
+    _style_header(sheet)
+    kinds = {"inventory_allocation": "订单库存出库", "unordered_inventory_allocation": "无单成品出库", "bom_direct_completion": "部件直接送货", "untraced_delivery": "历史送货明细"}
+    references = {"lot_cost_snapshot": "原批次单价快照", "order_current_material_reference": "原订单尺寸与现有材料价", "external_receipt_reference": "外购冻结价与成品换算", "bom_component_material_reference": "原部件尺寸与现有材料价"}
+    for row in coverage.get("supplemental_details", []):
+        sheet.append([_safe_excel_text(row["delivery_number"]), _safe_excel_text(row["product_name"]), kinds.get(row["source_kind"], row["source_kind"]), row["source_id"], row["quantity"], row["unit_cost"], row["amount"], references.get(row["reference_kind"], row["reference_kind"]), _safe_excel_text(row["batch_id"])])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    for column, width in {"A":24,"B":28,"C":20,"D":12,"E":12,"F":16,"G":18,"H":30,"I":34}.items():
+        sheet.column_dimensions[column].width=width
+    for row in sheet.iter_rows(min_row=2):
+        row[5].number_format="0.000000"
+        row[6].number_format="#,##0.00"
 
 
 def _workbook_response(content: bytes, filename: str) -> StreamingResponse:
@@ -1646,6 +1664,8 @@ def export_cost_pool_workpaper(
     summary.append([f"{normalized_month} 成本费用汇总", "金额"])
     _style_header(summary)
     summary.append(["已确认成本费用", summary_data["confirmed_total"]])
+    summary.append(["事后补充材料成本（参考采用）", summary_data["material_cost"]["supplemental_material_cost"]])
+    summary.append(["管理材料成本合计（实际＋参考）", summary_data["material_cost"]["management_material_cost"]])
     summary.append(
         [
             "已冻结实际材料成本（人民币含税采购口径）",
@@ -1673,8 +1693,8 @@ def export_cost_pool_workpaper(
         if isinstance(cell.value, (int, float, Decimal)):
             cell.number_format = "#,##0.00"
 
-    content = _workbook_bytes(workbook)
-    return _workbook_response(content, f"{normalized_month}_成本费用底稿.xlsx")
+    _append_material_supplement_sheet(workbook, summary_data["material_cost"])
+    return _workbook_response(_workbook_bytes(workbook), f"{normalized_month}_成本费用底稿.xlsx")
 
 
 @router.get("/management-report/export")
@@ -1810,6 +1830,9 @@ def export_management_report(
         ("其中待支付", open_payable.quantize(MONEY), "仅状态为待支付的记录"),
         ("应付草稿待复核", draft_payable.quantize(MONEY), "尚未进入已确认应付"),
         ("已确认成本费用", cost_summary["confirmed_total"], "独立管理成本池"),
+        ("事后补充材料成本（参考采用）", actual_material_cost["supplemental_material_cost"], actual_material_cost["supplement_note"]),
+        ("管理材料成本合计（实际＋参考）", actual_material_cost["management_material_cost"], "同一来源不重复计算；不等于供应商应付或正式结转成本"),
+        ("管理材料成本仍无依据", actual_material_cost["management_uncovered_lines"], "送货明细条数；不会将缺口当零成本"),
         (
             "成本费用草稿待复核",
             cost_summary["status_totals"]["draft"]["amount"],
@@ -1923,8 +1946,8 @@ def export_management_report(
     for column, width in {"A": 12, "B": 12, "C": 18, "D": 18, "E": 18, "F": 32, "G": 16, "H": 28, "I": 10}.items():
         costs.column_dimensions[column].width = width
 
-    content = _workbook_bytes(workbook)
-    return _workbook_response(content, f"{normalized_month}_老板经营月报.xlsx")
+    _append_material_supplement_sheet(workbook, actual_material_cost)
+    return _workbook_response(_workbook_bytes(workbook), f"{normalized_month}_老板经营月报.xlsx")
 
 
 IMPORT_HEADERS = [

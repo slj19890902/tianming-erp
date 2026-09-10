@@ -78,6 +78,17 @@ def order_product_basis(db, order_item_id, product_id):
     compiled = read_compiled_order_bom(db, order_item_id)
     if compiled is None:
         return None
+    return compiled_product_bases(compiled)[product_id]
+
+
+def compiled_product_bases(compiled):
+    """Physical identities for an already validated frozen or proposed graph.
+
+    Also used before a rule revision exists in the database. No current master
+    lookup can change the identity of either side of a version comparison.
+    """
+    from app.services.multilevel_bom_orders import validate_compiled_order_rows
+    validate_compiled_order_rows(compiled.graph, compiled.snapshots)
     nodes, children, order = compiled.graph.validated()
     snapshots = {s.component_product_id: s for s in compiled.snapshots}
     documents = {}
@@ -85,7 +96,7 @@ def order_product_basis(db, order_item_id, product_id):
         documents[pid] = _with_assembly(snapshot_basis(snapshots[pid], nodes[pid].unit), [
             _child_basis(e.child_id, e.quantity, documents[e.child_id])
             for e in children[pid] if e.relation == "assembly"])
-    return documents[product_id]
+    return documents
 
 
 def matching_component_basis(db, snapshot, lot):

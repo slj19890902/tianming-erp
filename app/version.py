@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.322"
-APP_VERSION_NAME = "回单对账入口归并"
+APP_VERSION = "v0.22.323"
+APP_VERSION_NAME = "送货明细列顺序与尺寸单位"
 APP_BUILD_DATE = "2026-09-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2424,17 +2424,27 @@ _V022321_VERIFICATION_STEPS = [
     "无有效回单的送货单修改数量及库存批次分配后保存，核对打印内容；有有效回单时数量锁定，超量仍须权限和确认。",
     "编辑未保存时打印不可执行；取消不写入，保存错误保留输入，网络异常可核对重试。",
 ]
-APP_CHANGES = [
+_V022322_CHANGES = [
     "按顺序做仅保留订单、报料、来料、生产、送货五步，移除重复的第六步回单/对账入口。",
     "回单对账及开票保留在对账与开票模块，原回单确认、财务权限和单据关系不变；本版无数据库迁移。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022322_VERIFICATION_STEPS = [
     "刷新订单或送货页面，确认按顺序做只有1至5步，没有第六步和空白占位。",
     "点击对账与开票，确认财务工作区正常进入、回单对账相关功能和权限保持原样。",
 ]
+APP_CHANGES = [
+    "查看明细按客户单号、存货编码、产品名称、产品尺寸（mm）、送货数量、操作排列；主件和套内子件尺寸值统一省略末尾mm。",
+    "仅调整明细展示，不修改产品规格、订单关系、送货数量或历史单据；本版无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "展开送货明细，确认六列按指定顺序排列，尺寸标题含mm，800×180×120mm显示为800×180×120。",
+    "核对客户单号编辑保存、数量编辑、删除及套内子件列对齐保持正常。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.322：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.322：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.323：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.323：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.322：本次更新｜{item}" for item in _V022322_CHANGES),
+    *(f"v0.22.322：如何验证｜{item}" for item in _V022322_VERIFICATION_STEPS),
     *(f"v0.22.321：本次更新｜{item}" for item in _V022321_CHANGES),
     *(f"v0.22.321：如何验证｜{item}" for item in _V022321_VERIFICATION_STEPS),
     *(f"v0.22.320：本次更新｜{item}" for item in _V022320_CHANGES),

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import PermissionChecker, get_db, require_customer_access
 from app.models.order import Order, OrderItem
 from app.models.user import User
-from app.models.multilevel_bom import OrderBomExecutionCutover
+from app.models.multilevel_bom import OrderBomExecutionCutover, OrderBomGraph
 from app.services.bom_transactions import atomic_bom
 from app.services.multilevel_bom_cutover import convert_reserved_legacy_order, prepare_reserved_cutover
 from app.services.multilevel_bom_cutover_review import review_legacy_cutover, _row
@@ -46,6 +46,7 @@ class UnstartedExecute(UnstartedPreview):
     preview_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_lot_versions: dict[int, int] = Field(default_factory=dict, max_length=0)
     operation_key: str = Field(min_length=1, max_length=64)
+    rule_revision: int | None = Field(default=None, ge=0, strict=True)
 
 
 def _access(db, user, item_id):
@@ -151,6 +152,9 @@ def preview_unstarted(item_id: int, payload: UnstartedPreview, db: Session = Dep
     customer_id = _access(db, user, item_id)
     from app.services.multilevel_bom_unstarted_cutover import unstarted_preview
     try:
+        if db.get(OrderBomGraph, item_id) is not None:
+            from app.services.multilevel_bom_rule_cutover import rule_cutover_preview
+            return rule_cutover_preview(db, order_item_id=item_id, customer_id=customer_id)
         return unstarted_preview(db, order_item_id=item_id, customer_id=customer_id)
     except (BomPlanError, SubkitError, CompositeBOMError) as exc:
         db.rollback()
@@ -164,8 +168,14 @@ def execute_unstarted(item_id: int, payload: UnstartedExecute, db: Session = Dep
     try:
         if payload.preview_hash != payload.reviewed_hash:
             raise BomPlanError("预览摘要不一致，请重新预览")
-        result = execute_unstarted_cutover(db, order_item_id=item_id, customer_id=customer_id,
-            reviewed_hash=payload.reviewed_hash, operation_key=payload.operation_key, actor=user)
+        if payload.rule_revision is None:
+            result = execute_unstarted_cutover(db, order_item_id=item_id, customer_id=customer_id,
+                reviewed_hash=payload.reviewed_hash, operation_key=payload.operation_key, actor=user)
+        else:
+            from app.services.multilevel_bom_rule_cutover import execute_rule_cutover
+            result = execute_rule_cutover(db, order_item_id=item_id, customer_id=customer_id,
+                reviewed_hash=payload.reviewed_hash, expected_revision=payload.rule_revision,
+                operation_key=payload.operation_key, actor=user)
         db.commit()
         return result
     except (BomPlanError, SubkitError, CompositeBOMError) as exc:

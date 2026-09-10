@@ -7,6 +7,7 @@ export interface StocktakeLocationProjection {
   floor_code?: string | null;
   area_code?: string | null;
   warehouse_type?: string | null;
+  allowed_inventory_types?: string[];
   storage_type?: string | null;
   is_active?: boolean;
   position_status?: string | null;

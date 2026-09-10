@@ -54,7 +54,7 @@ export function stocktakeAddBlockReason(location, inventoryType) {
   const allowedWarehouseTypes = ["finished", "semi_finished", "raw_material"].includes(inventoryType)
     ? ["finished", "semi_finished", "shared"] : [];
   if (!allowedWarehouseTypes.includes(String(location.warehouse_type || ""))) {
-    return "所选货位类型与当前库存类型不匹配。";
+    return "该货位不是可盘点的正式库存位置。";
   }
   const storageType = String(location.storage_type || "").trim().toLowerCase();
   if (inventoryType === "finished" && !["ground", "rack", "temporary_aisle"].includes(storageType)) {

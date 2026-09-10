@@ -57,12 +57,22 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
         for step in result.steps:
             balances[step.product_id] += step.produced_units
     outputs = {node.product_id: 0 for node in graph.nodes}
+    from app.services.multilevel_bom_execution_boundary import cutover_roles_by_order, handoff_assembly_ids
+    from app.services.multilevel_bom_plan import BomPlanError
+    historical_ids = {sid for sid, role in cutover_roles_by_order(db,
+        [order_item_id] if requirements.compiled.execution_window else [])[order_item_id].items() if role == "history"}
+    handoffs = handoff_assembly_ids(db, requirements.compiled)
+    product_by_snapshot = {s.id: s.component_product_id for s in snapshots.values()}
     root_reserved = 0
     for completion in db.scalars(select(ProductionCompletion).where(
         ProductionCompletion.order_item_id == order_item_id, ProductionCompletion.status == "posted")):
         task = db.get(ProductionTask, completion.task_id)
         sid = task.sales_order_item_bom_component_id
-        pid = graph.root_id if sid is None else next(s.component_product_id for s in snapshots.values() if s.id == sid)
+        if sid in historical_ids:
+            continue
+        if sid is not None and sid not in product_by_snapshot:
+            raise BomPlanError("完工来源不属于当前BOM快照")
+        pid = graph.root_id if sid is None else product_by_snapshot[sid]
         if pid in body_ids:
             # Body completion is not finished output; only its assembly below is.
             from app.models.warehouse_inventory import InventoryLot
@@ -78,6 +88,8 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
             root_reserved += int(completion.order_reserved_quantity or 0)
     for assembly in db.scalars(select(BomAssembly).where(
         BomAssembly.order_item_id == order_item_id, BomAssembly.status == "posted")):
+        if assembly.id in handoffs:
+            continue  # Already credited stock, not a new receipt's output.
         outputs[assembly.output_product_id] += assembly.quantity
         if assembly.output_product_id == graph.root_id:
             reservation = db.scalar(select(InventoryReservation).where(

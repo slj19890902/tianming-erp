@@ -35,6 +35,20 @@ def cutover_roles_by_order(db, order_item_ids):
     return result
 
 
+def handoff_assembly_ids(db, compiled):
+    """Stock assembled from old execution inputs, not new receipt capacity."""
+    if compiled.execution_window is None:
+        return set()
+    from app.models.multilevel_bom import BomAssembly
+    from app.services.multilevel_bom_inventory import _node_keys
+    item_id = compiled.snapshots[0].sales_order_item_id
+    cutover = db.get(OrderBomExecutionCutover, item_id)
+    keys = _node_keys(cutover.idempotency_key + ":assemble",
+        [node.product_id for node in compiled.graph.nodes if node.source == "assembled"])
+    return set(db.scalars(select(BomAssembly.id).where(BomAssembly.order_item_id == item_id,
+        BomAssembly.status == "posted", BomAssembly.idempotency_key.in_(keys.values()))))
+
+
 @dataclass(frozen=True)
 class ExecutionWindow:
     commercial_quantity: int

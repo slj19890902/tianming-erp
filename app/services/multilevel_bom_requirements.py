@@ -34,14 +34,20 @@ def read_graph_requirements(db, order_item_id):
         return None
     item = db.get(OrderItem, order_item_id)
     graph = compiled.graph
-    demands = {d.component_product_id: d for d in effective_component_demands(db, order_item_id)}
+    current_ids = {row.id for row in compiled.snapshots}
+    demands = {d.component_product_id: d for d in effective_component_demands(db, order_item_id) if d.snapshot_id in current_ids}
+    quantity = compiled.execution_window.execution_quantity if compiled.execution_window else item.quantity
+    delivered = compiled.execution_window.delivered_since if compiled.execution_window else int(item.delivered_quantity or 0)
     multipliers = {d.product_id: d.required_units for d in plan_bom(graph, 1).products}
-    if any(d.effective_sets != item.quantity or d.required_piece_quantity != item.quantity * multipliers[pid]
+    if any(d.effective_sets != quantity or d.required_piece_quantity != quantity * multipliers[pid]
            for pid, d in demands.items()):
         raise BomPlanError("多级BOM数量调整必须保持冻结组套关系，请先核对订单数量")
     snapshots = {s.component_product_id: s for s in compiled.snapshots}
     from app.services.multilevel_bom_receipts import own_output_lots
     own_lots = own_output_lots(db, item.id)
+    from app.services.multilevel_bom_execution_boundary import handoff_assembly_ids
+    handoffs = handoff_assembly_ids(db, compiled)
+    own_lots = [lot for lot in own_lots if not (lot.source_ref_type == "bom_assembly" and lot.source_ref_id in handoffs)]
     own_ids = {lot.id for lot in own_lots}
     own_root_used = sum(lot.quantity_consumed for lot in own_lots
                        if lot.finished_detail and lot.finished_detail.product_id == graph.root_id)
@@ -60,7 +66,7 @@ def read_graph_requirements(db, order_item_id):
             # add only still-unconsumed root-component reservations, not their
             # historical consumed credit a second time.
             root_reservations = [r for r in reserves if r.sales_order_item_bom_component_id in (None, row.id)]
-            finished[node.product_id] = max(int(item.delivered_quantity or 0) - own_root_used, 0) + sum(
+            finished[node.product_id] = max(delivered - own_root_used, 0) + sum(
                 max(int(r.credited_requirement_quantity or 0) - int(r.consumed_requirement_quantity or 0)
                     - int(r.released_requirement_quantity or 0), 0) for r in root_reservations)
         else:
@@ -70,5 +76,5 @@ def read_graph_requirements(db, order_item_id):
         for route in node.routes:
             coverage = component_inventory_coverage(db, row.id, component_type=route.key)
             pieces[node.product_id, route.key] = coverage["semi_piece_quantity"]
-    return GraphRequirements(item.quantity, compiled, plan_bom(graph, item.quantity,
+    return GraphRequirements(quantity, compiled, plan_bom(graph, quantity,
         eligible_stock=finished, eligible_pieces=pieces), finished, pieces)

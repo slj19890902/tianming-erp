@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.324"
-APP_VERSION_NAME = "送货更多菜单重复点击收起"
+APP_VERSION = "v0.22.325"
+APP_VERSION_NAME = "仓库材料匹配与候选用途保存"
 APP_BUILD_DATE = "2026-09-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2440,17 +2440,28 @@ _V022323_VERIFICATION_STEPS = [
     "展开送货明细，确认六列按指定顺序排列，尺寸标题含mm，800×180×120mm显示为800×180×120。",
     "核对客户单号编辑保存、数量编辑、删除及套内子件列对齐保持正常。",
 ]
-APP_CHANGES = [
+_V022324_CHANGES = [
     "送货单更多菜单使用原生按钮关联，点击展开、再次点击收起，修复外部关闭与点击重开冲突。",
     "保留菜单浮层定位、点击外部及操作后关闭；本版无数据库迁移或业务数据修改。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022324_VERIFICATION_STEPS = [
     "在送货列表连续点击同一行更多，确认展开、收起交替，按钮和表格行高不移动。",
     "展开另一行更多、点击外部或按Escape，核对菜单关闭；打印和明细编辑功能保持正常。",
 ]
+APP_CHANGES = [
+    "仓库地图选中原料或半成品片料后，可展开匹配产品，按同楞型同层数及不旋转的片料面积利用率降序显示，默认5款，更多展开。",
+    "管理员可勾选匹配度超过70%的产品并保存为该批材料的候选用途；独立保留记录，不形成允许产品绑定、预占、领料或数量修改。",
+    "货物卡和客户汇总使用中文简称，跨客户及材质、压线与换算差异明确提示。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，点击一批原料或半成品，再点匹配产品，核对默认5款、更多展开及客户简称。",
+    "勾选超过70%的候选并保存，切换货位后返回重读，确认候选仍在且库存数量不变；成品不出现匹配入口。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.324：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.324：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.325：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.325：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.324：本次更新｜{item}" for item in _V022324_CHANGES),
+    *(f"v0.22.324：如何验证｜{item}" for item in _V022324_VERIFICATION_STEPS),
     *(f"v0.22.323：本次更新｜{item}" for item in _V022323_CHANGES),
     *(f"v0.22.323：如何验证｜{item}" for item in _V022323_VERIFICATION_STEPS),
     *(f"v0.22.322：本次更新｜{item}" for item in _V022322_CHANGES),

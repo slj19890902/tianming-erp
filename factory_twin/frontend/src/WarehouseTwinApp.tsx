@@ -1,7 +1,8 @@
+import { MaterialCandidates } from "./MaterialCandidates";
 import { StocktakeObservationPanel } from "./StocktakeObservationPanel";
 // Also render these exact components in the isolated visual acceptance fixture.
 export { MoldRackElevation, WarehouseRackElevation };
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { EditorCanvas, type CanvasFocusTarget } from "./EditorCanvas";
 import { filterOperationalFeatures } from "./operationalView.mjs";
 import {
@@ -1842,6 +1843,7 @@ export function WarehouseTwinApp() {
   const [mergeBatchBusy, setMergeBatchBusy] = useState(false);
   const [locationDetailOpen, setLocationDetailOpen] = useState(false);
   const [locationItemsExpanded, setLocationItemsExpanded] = useState(false);
+  const [materialMatchLotId, setMaterialMatchLotId] = useState<number|null>(null);
   const [stocktakeDrafts, setStocktakeDrafts] = useState<WarehouseStocktakeDraft[]>([]);
   const [stocktakeBatchIdempotencyKey, setStocktakeBatchIdempotencyKey] = useState(() => operationKey("warehouse-stocktake-batch"));
   const [stocktakeBatchBusy, setStocktakeBatchBusy] = useState(false);
@@ -2778,9 +2780,9 @@ export function WarehouseTwinApp() {
     if (!target) return selectedLocationLookupItems;
     return [target, ...selectedLocationLookupItems.filter((item) => item.lot_id !== traceFocusedLotId)];
   }, [selectedLocationItems, selectedLocationLookupItems, traceFocusedLotId]);
-  const selectedLocationCustomers = Array.from(new Set(
-    selectedLocationItems.map((item) => item.customer_name?.trim()).filter((name): name is string => Boolean(name))
-  ));
+  const selectedLocationCustomers = Array.from(new Map(
+    selectedLocationItems.map((item) => [item.customer_id ?? employeeCustomerName(item), employeeCustomerName(item)])
+  ).values());
   const selectedLocationCustomerLabel = selectedLocationCustomers.length === 1
     ? selectedLocationCustomers[0]
     : selectedLocationCustomers.length > 1
@@ -3229,6 +3231,7 @@ export function WarehouseTwinApp() {
   useEffect(() => {
     setLocationDetailOpen(false);
     setLocationItemsExpanded(false);
+    setMaterialMatchLotId(null);
     const nextStocktakeInventoryType: StocktakeInventoryType = (
       selectedLocation?.warehouse_type === "semi_finished"
       || (selectedLocation?.warehouse_type === "shared" && selectedLocation.storage_type === "rack")
@@ -6503,21 +6506,24 @@ export function WarehouseTwinApp() {
             const stocktakeBlockReason = mapMode === "move" && moveAction === "stocktake"
               ? selectedLocationStocktakeBlockReason || stocktakeDecreaseBlockReason(item)
               : null;
-            return <button type="button" className={`twin-location-item ${stocktakeLotId === item.lot_id ? "correction-selected" : ""} ${(traceFocusedLotId && traceFocusedLotId === item.lot_id) || (focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey) ? "warehouse-search-hit" : ""} ${stocktakeBlockReason ? "stocktake-ineligible" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`} disabled={Boolean(stocktakeBlockReason)} title={stocktakeBlockReason || ""} onClick={() => {
+            return <Fragment key={item.lot_id || `${item.inventory_code}-${itemIndex}`}><button type="button" className={`twin-location-item ${(stocktakeLotId === item.lot_id || materialMatchLotId === item.lot_id) ? "correction-selected" : ""} ${(traceFocusedLotId && traceFocusedLotId === item.lot_id) || (focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey) ? "warehouse-search-hit" : ""} ${stocktakeBlockReason ? "stocktake-ineligible" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`} disabled={Boolean(stocktakeBlockReason)} title={stocktakeBlockReason || ""} onClick={() => {
               if (mapMode === "move" && moveAction === "stocktake") {
                 setStocktakeLotId(item.lot_id || null);
                 setStocktakeDecreaseQuantity("");
               }
+              setMaterialMatchLotId(item.inventory_type === "semi_finished" ? item.lot_id : null);
               setWarehouseOperationMessage("");
             }}>
               <div className="twin-location-item-code"><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>
               <h4>{item.product_name || "产品名称待补充"}</h4>
-              <div className="twin-location-item-summary"><span>{item.customer_name || "客户待确认"}</span></div>
+              <div className="twin-location-item-summary"><span>{employeeCustomerName(item)}</span></div>
               {stocktakeBlockReason && <>
                 <small className="twin-stocktake-block-reason">不可盘点调减：{stocktakeBlockReason}</small>
                 <small className="twin-stocktake-resolution">解决方法：{stocktakeBlockResolution(stocktakeBlockReason)}</small>
               </>}
-            </button>;
+            </button>
+              {materialMatchLotId === item.lot_id && item.inventory_type === "semi_finished" && <MaterialCandidates key={item.lot_id} lotId={item.lot_id} canSave={canCorrectInventory && !traceReadOnly} onSaved={refreshDashboard} />}
+            </Fragment>;
           })}
           {mapMode === "lookup" && selectedLocationTraceItems.length > 4 && <button type="button" className="twin-detail-toggle" aria-expanded={locationItemsExpanded} onClick={() => setLocationItemsExpanded((current) => !current)}>{locationItemsExpanded ? "收起货物" : `查看全部 ${selectedLocationTraceItems.length} 条货物`}</button>}
           {displayedLocationConflictIds.has(`erp-location-${selectedLocation.location_id}`) && <p className="twin-location-column-warning">{locationEditMode ? "该货位越界，或与其他货位、柱子、设备、货架、禁放区冲突，可先保存调整，再拖到安全位置；应用前会核对冲突。" : selectedLocationPlanningWarning}</p>}

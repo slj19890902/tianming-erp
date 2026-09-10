@@ -20,7 +20,8 @@ from tests.test_multilevel_bom_external_receipts import receive
 
 
 @pytest.mark.parametrize("remove_external", [True, False])
-def test_revised_external_node_keeps_actual_receipt_cost_under_original_contract(factory_http, remove_external):
+@pytest.mark.parametrize("reverse_history", [False, True])
+def test_revised_external_node_keeps_actual_receipt_cost_under_original_contract(factory_http, remove_external, reverse_history, monkeypatch):
     client, db = factory_http
     actor = db.scalar(select(User).where(User.role == "admin", User.is_active.is_(True)))
     rows = [(r["component_product_id"], int(r["quantity_per_set"]), "accompany")
@@ -68,6 +69,37 @@ def test_revised_external_node_keeps_actual_receipt_cost_under_original_contract
     # Explicit stock/source handoff must create current demand credits first.
     assert external_graph_receipts_closed(db, item=item,
         requirements=read_graph_requirements(db, item.id)) is remove_external
+    if reverse_history:
+        from tests.test_multilevel_bom_external_reversal import reverse
+        from app.models.warehouse_inventory import InventoryLot
+        from app.models.external_packaging_purchase import ExternalPackagingReceiptReversal
+        from app.services import multilevel_bom_external_reversal as module
+        from app.services.bom_subkits import SubkitError
+        state = (item.material_status, item.requisition_status)
+        balances = {lot.id: (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed, lot.version)
+                    for lot in db.scalars(select(InventoryLot))}
+        frozen_costs = {lot.id: lot.cost_snapshot_detail_json for lot in db.scalars(select(InventoryLot))}
+        receipt_facts = {row.id: (row.received_quantity, row.converted_finished_quantity) for row in receipts}
+        rid = receipts[-1].receipt_id
+        with monkeypatch.context() as patch:
+            def fail(*args, **kwargs):
+                raise SubkitError("isolated late historical reversal audit failure")
+            patch.setattr(module, "append_audit_event", fail)
+            failed = reverse(client, rid, key=f"history-reverse-{rid}")
+            assert failed.status_code == 409, failed.text
+        db.expire_all()
+        assert db.get(ExternalPackagingReceiptReversal, rid) is None
+        assert {lot.id: (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed, lot.version)
+                for lot in db.scalars(select(InventoryLot))} == balances
+        result = reverse(client, rid, key=f"history-reverse-{rid}")
+        assert result.status_code == 200, result.text
+        assert reverse(client, rid, key=f"history-reverse-{rid}").json()["created"] is False
+        db.expire_all()
+        assert (item.material_status, item.requisition_status) == state
+        assert {lot.id: lot.cost_snapshot_detail_json for lot in db.scalars(select(InventoryLot))} == frozen_costs
+        assert {row.id: (row.received_quantity, row.converted_finished_quantity) for row in receipts} == receipt_facts
+        with pytest.raises(BomPlanError):
+            receipt_output_cost(db, receipts[-1].id)  # reversed receipts are not active cost credits
     with pytest.raises(BomPlanError, match="不属于"):
         read_order_bom_source_contract(db, item.id, 999999999)
     revision.content_hash = "0" * 64

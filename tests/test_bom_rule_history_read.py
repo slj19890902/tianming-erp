@@ -257,3 +257,49 @@ def test_manufactured_parent_old_reservation_is_not_credited_to_new_rule(factory
     assert page["component_delivered_by_snapshot"][old_root] == 1
     assert not page["reservations_by_snapshot"].get(new_root)
     assert page["reservations_by_snapshot"][old_root]
+
+
+def test_actual_assembly_reversal_uses_original_rule_after_fixture_switch(factory_http):
+    import json
+    from app.models.multilevel_bom import BomAssembly, BomAssemblyInput
+    from app.models.warehouse_inventory import InventoryLot
+    from app.models.product import Product
+    from app.services.composite_bom import replace_product_bom
+    from app.services.multilevel_bom_inventory import reverse_order_assembly
+    from tests.test_bom_other_products_acceptance import paper_receipt_flow
+    client, db = factory_http
+    actor, item, original = frozen_order(db, quantity=2, explicit_modes=True)
+    did = paper_receipt_flow(client, db, original, item.id, 3799, stop_after_first_delivery=True)
+    cancelled = client.put(f"/api/deliveries/{did}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    db.expire_all()
+    rows = list(db.scalars(select(BomAssembly).where(BomAssembly.order_item_id == item.id).order_by(BomAssembly.id.desc())))
+    assert sum(row.quantity for row in rows) == 2
+    costs = {row.id: row.cost_detail_json for row in rows}
+    input_ids = set(db.scalars(select(BomAssemblyInput.lot_id).where(
+        BomAssemblyInput.conversion_id.in_([row.id for row in rows]))))
+    replace_product_bom(db, parent_product_id=3799, expected_version=db.get(Product, 3799).version,
+        user=actor, inventory_mode="separate", material_mode="expand_children", delivery_mode="components",
+        components=[dict(component_product_id=pid, quantity_per_set=quantity, inventory_relation="accompany")
+                    for pid, quantity in [(3771, 3), (3783, 4)]])
+    db.commit()
+    store_fixture_revision(db, actor, item)
+    for row in rows:
+        reverse_order_assembly(db, order_item_id=item.id, operator_id=actor.id,
+            operation_key=json.loads(row.cost_detail_json)["graph_operation"]["key"],
+            source_snapshot_id=original.snapshots[0].id)
+    db.commit()
+    assert all(row.status == "reversed" for row in rows)
+    assert {row.id: row.cost_detail_json for row in rows} == costs
+    restored = {}
+    for lid in input_ids:
+        lot = db.get(InventoryLot, lid)
+        pid = lot.finished_detail.product_id
+        restored[pid] = restored.get(pid, 0) + lot.quantity_available + lot.quantity_reserved
+        assert lot.quantity_consumed == 0
+    # Long output is two sheets at four pieces, including two rounding extras;
+    # undoing six consumed pieces must preserve those original spare pieces.
+    assert restored == {3771: 8, 3783: 8}
+    assert all(db.get(InventoryLot, row.output_lot_id).quantity_available == 0
+               and db.get(InventoryLot, row.output_lot_id).quantity_reserved == 0
+               for row in rows if row.output_lot_id is not None)

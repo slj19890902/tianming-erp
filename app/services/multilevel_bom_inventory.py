@@ -174,10 +174,14 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
         return tuple(results)
 
 
-def reverse_order_assembly(db, *, order_item_id, operation_key, operator_id):
+def reverse_order_assembly(db, *, order_item_id, operation_key, operator_id, source_snapshot_id=None):
     """Reverse the exact recorded layers in reverse order, atomically."""
     with atomic_bom(db):
-        compiled = read_compiled_order_bom(db, order_item_id)
+        if source_snapshot_id is None:
+            compiled = read_compiled_order_bom(db, order_item_id)
+        else:
+            from app.services.multilevel_bom_orders import read_order_bom_source_contract
+            compiled = read_order_bom_source_contract(db, order_item_id, source_snapshot_id)
         if compiled is None:
             raise SubkitError("订单缺少完整多级BOM快照")
         nodes, children, topo = compiled.graph.validated()

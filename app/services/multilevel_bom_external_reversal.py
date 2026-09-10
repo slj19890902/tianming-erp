@@ -16,7 +16,7 @@ from app.services.bom_subkits import SubkitError
 from app.services.bom_subkit_inventory import _only_reversed_graph_consumptions
 from app.services.external_packaging_purchase import ExternalPurchaseContractError
 from app.services.external_receipt_state import active_receipt_item
-from app.services.multilevel_bom_external_identity import read_external_node
+from app.services.multilevel_bom_external_identity import read_external_source_contract
 from app.services.multilevel_bom_external_costs import validated_external_lot_detail
 from app.services.multilevel_bom_inventory import reverse_order_assembly
 from app.services.multilevel_bom_orders import read_compiled_order_bom
@@ -79,6 +79,7 @@ def reverse_graph_external_receipt(db, *, receipt_id, idempotency_key, reason, u
         rows = list(db.scalars(select(ExternalPackagingReceiptItem).where(ExternalPackagingReceiptItem.receipt_id == receipt.id)))
         items = {}
         graphs = {}
+        current_items = set()
         for row in rows:
             purchase = db.get(ExternalPackagingPurchaseItem, row.purchase_item_id)
             item = db.get(OrderItem, purchase.sales_order_item_id) if purchase and purchase.sales_order_item_id else None
@@ -87,10 +88,14 @@ def reverse_graph_external_receipt(db, *, receipt_id, idempotency_key, reason, u
                 raise ExternalPurchaseContractError('无权撤销该客户实收或订单来源不完整', status_code=403)
             if purchase.purchase_order_id != receipt.purchase_order_id or purchase.sales_order_id != order.id:
                 raise SubkitError('外购实收订单身份不一致')
-            link = read_external_node(db, purchase.order_component_id)
-            graph = read_compiled_order_bom(db, item.id)
+            link, graph = read_external_source_contract(db, purchase.order_component_id)
             if link is None or link.order_item_id != item.id or graph is None or graph.graph.customer_id != order.customer_id:
                 raise SubkitError('该实收不是完整真实BOM来源，不能按组套撤销')
+            if item.id in graphs and {s.id for s in graphs[item.id].snapshots} != {s.id for s in graph.snapshots}:
+                raise SubkitError('同次外购实收混用了不同BOM版本，须核实原来源')
+            current = read_compiled_order_bom(db, item.id)
+            if link.bom_snapshot_id in {s.id for s in current.snapshots}:
+                current_items.add(item.id)
             items[item.id] = item
             graphs[item.id] = graph
         if not rows:
@@ -116,7 +121,8 @@ def reverse_graph_external_receipt(db, *, receipt_id, idempotency_key, reason, u
         for oid, graph in graphs.items():
             own_rows = [r for r in rows if db.get(ExternalPackagingPurchaseItem, r.purchase_item_id).sales_order_item_id == oid]
             if any(r.converted_finished_quantity for r in own_rows) and any(n.source == 'assembled' for n in graph.graph.nodes):
-                reverse_order_assembly(db, order_item_id=oid, operation_key=f'bom-external-receipt:{receipt.id}:{oid}', operator_id=user.id)
+                reverse_order_assembly(db, order_item_id=oid, operation_key=f'bom-external-receipt:{receipt.id}:{oid}',
+                    operator_id=user.id, source_snapshot_id=graph.snapshots[0].id)
             for row in own_rows:
                 _reverse_output(db, row, order_item_id=oid, user=user)
         reversal = ExternalPackagingReceiptReversal(receipt_id=receipt.id, idempotency_key=idempotency_key,
@@ -124,6 +130,10 @@ def reverse_graph_external_receipt(db, *, receipt_id, idempotency_key, reason, u
         db.add(reversal)
         db.flush()
         for item in items.values():
+            if item.id not in current_items:
+                # Historical receipts carry no implicit credit for the new
+                # rule. Reversing them must not rewrite its task or status.
+                continue
             if not graph_material_receipts_closed(db, item):
                 item.material_status = 'pending'
                 if item.requisition_status == '已入库':

@@ -253,3 +253,41 @@ def test_000148_real_carton_and_assembled_liner_keep_separate_stock_after_rule_s
     assert pick.status_code == 201, pick.text
     lines = pick.json()["items"][0]["location_lines"]
     assert {line["location_id"] for line in lines} >= positions[3765] | positions[3822]
+
+
+def test_rule_can_introduce_first_real_external_source_and_complete_purchase_flow(factory_http):
+    from app.models.user import User
+    from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
+    from app.services.composite_bom import get_product_bom
+    from app.services.multilevel_bom_external_freeze import freeze_order_procurement
+    from tests.test_multilevel_bom_factory_compile import new_item
+    from tests.test_p1_33c5_external_packaging_receiving import _confirm
+    from tests.test_multilevel_bom_external_receipts import receive
+    client, db = factory_http
+    actor = db.scalar(select(User).where(User.role == "admin", User.is_active.is_(True)))
+    original_components = get_product_bom(db, 3479)["components"]
+    rows = [(row["component_product_id"], int(row["quantity_per_set"]), "accompany") for row in original_components]
+    assert any(db.get(Product, pid).supply_mode == "external_purchase" for pid, _, _ in rows)
+    # Isolated old order starts with only the real manufactured body. The new
+    # revision restores its existing real components, including purchased ones.
+    save(db, actor, 3479, "manufactured", [])
+    item = new_item(db, 3479, 2)
+    freeze_order_procurement(db, order_item_id=item.id, actor=actor)
+    db.commit()
+    save(db, actor, 3479, "manufactured", rows)
+    db.commit()
+    url, data, payload = preview(client, item, "first-external-rule")
+    assert data["purchase_requirements"]
+    saved = client.post(url + "/execute", json=payload)
+    assert saved.status_code == 200, saved.text
+    _confirm(client, item.order_id)
+    db.expire_all()
+    lines = list(db.scalars(select(ExternalPackagingPurchaseItem).where(
+        ExternalPackagingPurchaseItem.sales_order_item_id == item.id)))
+    assert lines
+    for line in lines:
+        received = receive(client, line.purchase_order_id, line.id,
+            f"rule-first-external-{line.id}", line.purchase_quantity)
+        assert received.status_code == 200, received.text
+    current = read_compiled_order_bom(db, item.id)
+    paper_receipt_flow(client, db, current, item.id, 3479)

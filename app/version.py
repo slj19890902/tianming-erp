@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.326"
-APP_VERSION_NAME = "货位混合存放与默认成品"
+APP_VERSION = "v0.22.327"
+APP_VERSION_NAME = "盘点侧栏紧凑布局与共享筛选"
 APP_BUILD_DATE = "2026-09-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2457,19 +2457,31 @@ _V022325_VERIFICATION_STEPS = [
     "刷新仓库地图，点击一批原料或半成品，再点匹配产品，核对默认5款、更多展开及客户简称。",
     "勾选超过70%的候选并保存，切换货位后返回重读，确认候选仍在且库存数量不变；成品不出现匹配入口。",
 ]
-APP_CHANGES = [
+_V022326_CHANGES = [
     "取消区域用途选择和普通货位的成品/半成品/原材料类别限制；每次添加货物默认成品，可切换半成品或原材料。",
     "同一货位可按独立批次添加三类货物；原材料按客户存货编码、原板类型及张数进入既有片料台账，不计入可送成品。",
     "保留操作区禁放、发布布局、容量、权限、客户范围、版本、幂等和事务校验；修复货位详情误读不存在字段的问题，无数据库迁移。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022326_VERIFICATION_STEPS = [
     "刷新地图，区域设置不再显示用途；打开添加货物默认成品，半成品和原材料可选且按张计量。",
     "在已启用正式货位依次添加成品、半成品、原材料，保存后核对批次、分类、单位和数量，重新打开默认成品。",
     "核对操作区、未发布或停用货位仍不可入库；修改期间过期版本和重复提交仍受控，原有库存记录不变。",
 ]
+APP_CHANGES = [
+    "盘点侧栏位置详情默认折叠置顶，已有货物浅蓝底、添加盘点浅绿底，移除重复操作按钮和大段提示。",
+    "客户搜索与确认、编码与未在列表、数量与日期同行；现有库存优先，暂无库存产品展开选择，产品列表每页3款。",
+    "编码查看产品标签、明细展开批次记录；保留v326成品半成品原材料混放、材料匹配及正式库存保护，本版无新迁移或业务数据修改。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新地图进入移货/盘点并点选货架格，确认位置详情折叠在最上、已有货物优先、蓝绿分区和同行搜索。",
+    "选择客户并筛选编码，核对待归位和有货结果；展开未在列表选择产品，输入数量日期加入草稿，提交前可撤销。",
+    "点编码和明细分别核对标签及记录；确认半成品原材料可选、跨楼层草稿保持且既有库存归位不增加总量。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.326：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.326：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.327：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.327：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.326：本次更新｜{item}" for item in _V022326_CHANGES),
+    *(f"v0.22.326：如何验证｜{item}" for item in _V022326_VERIFICATION_STEPS),
     *(f"v0.22.325：本次更新｜{item}" for item in _V022325_CHANGES),
     *(f"v0.22.325：如何验证｜{item}" for item in _V022325_VERIFICATION_STEPS),
     *(f"v0.22.324：本次更新｜{item}" for item in _V022324_CHANGES),

@@ -232,6 +232,10 @@ class SalesOrderItemBomComponent(Base):
             "id", "sales_order_item_id", unique=True,
         ),
         Index(
+            "uq_bom_snapshot_order_product_identity",
+            "id", "sales_order_item_id", "component_product_id", unique=True,
+        ),
+        Index(
             "ix_sales_order_item_bom_components_component_product_id",
             "component_product_id",
         ),

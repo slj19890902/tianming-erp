@@ -102,6 +102,77 @@ class OrderBomGraphProduct(Base):
     product_version: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class OrderBomRuleRevision(Base):
+    """Append-only structural rules; original graph and sources remain intact."""
+    __tablename__ = "order_bom_rule_revisions"
+    __table_args__ = (
+        UniqueConstraint("order_item_id", "revision", name="uq_bom_rule_revision"),
+        UniqueConstraint("id", "order_item_id", name="uq_bom_rule_revision_order"),
+        UniqueConstraint("id", "order_item_id", "revision", name="uq_bom_rule_revision_chain"),
+        ForeignKeyConstraint(["previous_id", "order_item_id", "previous_revision"],
+            ["order_bom_rule_revisions.id", "order_bom_rule_revisions.order_item_id", "order_bom_rule_revisions.revision"],
+            ondelete="RESTRICT", name="fk_bom_rule_previous"),
+        CheckConstraint("revision > 0 AND production_revision_before >= 0", name="ck_bom_rule_revision_number"),
+        CheckConstraint("(revision = 1 AND previous_id IS NULL AND previous_revision IS NULL) OR "
+            "(revision > 1 AND previous_id IS NOT NULL AND previous_revision IS NOT NULL AND previous_revision = revision - 1)",
+            name="ck_bom_rule_previous"),
+        CheckConstraint("order_quantity > 0 AND delivered_before >= 0 AND delivered_before < order_quantity",
+            name="ck_bom_rule_quantity"),
+        CheckConstraint("length(content_hash) = 64 AND length(request_hash) = 64 AND length(review_hash) = 64",
+            name="ck_bom_rule_hashes"),
+        CheckConstraint("length(trim(idempotency_key)) > 0", name="ck_bom_rule_key"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_item_id: Mapped[int] = mapped_column(
+        ForeignKey("order_bom_graphs.order_item_id", ondelete="RESTRICT"), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_id: Mapped[int | None] = mapped_column(Integer)
+    previous_revision: Mapped[int | None] = mapped_column(Integer)
+    production_revision_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    order_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    delivered_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    document_json: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp(), nullable=False)
+
+
+class OrderBomRuleProduct(Base):
+    __tablename__ = "order_bom_rule_products"
+    __table_args__ = (
+        UniqueConstraint("revision_id", "product_id", "order_item_id", name="uq_bom_rule_product_order"),
+        ForeignKeyConstraint(["revision_id", "order_item_id"],
+            ["order_bom_rule_revisions.id", "order_bom_rule_revisions.order_item_id"],
+            ondelete="RESTRICT", name="fk_bom_rule_product_revision"),
+        CheckConstraint("product_version > 0", name="ck_bom_rule_product_version"),
+    )
+    revision_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), primary_key=True)
+    order_item_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    product_version: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class OrderBomRuleSource(Base):
+    __tablename__ = "order_bom_rule_sources"
+    __table_args__ = (
+        UniqueConstraint("revision_id", "product_id", name="uq_bom_rule_source_product"),
+        ForeignKeyConstraint(["revision_id", "product_id", "order_item_id"],
+            ["order_bom_rule_products.revision_id", "order_bom_rule_products.product_id", "order_bom_rule_products.order_item_id"],
+            ondelete="RESTRICT", name="fk_bom_rule_source_product"),
+        ForeignKeyConstraint(["snapshot_id", "order_item_id", "product_id"],
+            ["sales_order_item_bom_components.id", "sales_order_item_bom_components.sales_order_item_id",
+             "sales_order_item_bom_components.component_product_id"],
+            ondelete="RESTRICT", name="fk_bom_rule_source_order"),
+    )
+    snapshot_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    revision_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    product_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    order_item_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+
 class OrderBomExternalComponent(Base):
     """Stable link between a procurement snapshot and its real frozen node."""
     __tablename__ = "order_bom_external_components"

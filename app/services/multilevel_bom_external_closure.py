@@ -7,7 +7,7 @@ from app.models.external_packaging_purchase import (
     ExternalPackagingPurchaseItem, ExternalPackagingPurchaseOrder,
     ExternalPackagingPurchaseCancellation, ExternalPackagingReceiptItem,
 )
-from app.services.multilevel_bom_external_identity import read_external_node
+from app.services.multilevel_bom_external_identity import read_external_node, current_external_source_predicate
 from app.services.multilevel_bom_plan import BomPlanError
 from app.services.multilevel_bom_purchase_units import cumulative_receipt_conversion
 from app.services.external_receipt_state import active_receipt_item
@@ -21,6 +21,8 @@ def external_graph_receipts_closed(db, *, item, requirements):
     purchases = list(db.scalars(select(ExternalPackagingPurchaseItem).join(ExternalPackagingPurchaseOrder,
         ExternalPackagingPurchaseOrder.id == ExternalPackagingPurchaseItem.purchase_order_id).where(
             ExternalPackagingPurchaseItem.sales_order_item_id == item.id,
+            current_external_source_predicate(ExternalPackagingPurchaseItem.order_component_id,
+                ExternalPackagingPurchaseItem.sales_order_item_id),
             ExternalPackagingPurchaseOrder.status == 'confirmed',
             ExternalPackagingPurchaseOrder.id.not_in(cancelled))))
     from app.services.external_packaging_receiving import _received_totals

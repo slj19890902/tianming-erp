@@ -19,7 +19,8 @@ from tests.test_p1_33c5_external_packaging_receiving import _confirm
 from tests.test_multilevel_bom_external_receipts import receive
 
 
-def test_removed_external_node_keeps_actual_receipt_cost_under_original_contract(factory_http):
+@pytest.mark.parametrize("remove_external", [True, False])
+def test_revised_external_node_keeps_actual_receipt_cost_under_original_contract(factory_http, remove_external):
     client, db = factory_http
     actor = db.scalar(select(User).where(User.role == "admin", User.is_active.is_(True)))
     rows = [(r["component_product_id"], int(r["quantity_per_set"]), "accompany")
@@ -44,14 +45,16 @@ def test_removed_external_node_keeps_actual_receipt_cost_under_original_contract
         ExternalPackagingReceiptItem.purchase_item_id.in_([line.id for line in purchases]))))
     before = {row.id: receipt_output_cost(db, row.id) for row in receipts}
     assert before and all(detail["actual"] for detail in before.values())
-    save(db, actor, 3479, "manufactured", [row for row in rows if row[0] not in purchased])
+    changed = [(pid, quantity + (pid in purchased), relation) for pid, quantity, relation in rows
+               if not (remove_external and pid in purchased)]
+    save(db, actor, 3479, "manufactured", changed)
     db.commit()
     # Explicit storage fixture to exercise historical evidence. The operational
     # cutover writer must still reject an order with these procurement facts.
     revision, current_ids = store_fixture_revision(db, actor, item)
     current = read_compiled_order_bom(db, item.id)
     assert {s.id for s in current.snapshots} == current_ids
-    assert not purchased & {n.product_id for n in current.graph.nodes}
+    assert bool(purchased & {n.product_id for n in current.graph.nodes}) is not remove_external
     for line in purchases:
         link, historical = read_external_source_contract(db, line.order_component_id)
         assert {s.id for s in historical.snapshots} == {s.id for s in original.snapshots}
@@ -59,6 +62,12 @@ def test_removed_external_node_keeps_actual_receipt_cost_under_original_contract
         with pytest.raises(BomPlanError):
             read_external_node(db, line.order_component_id)
     assert {row.id: receipt_output_cost(db, row.id) for row in receipts} == before
+    from app.services.multilevel_bom_requirements import read_graph_requirements
+    from app.services.multilevel_bom_external_closure import external_graph_receipts_closed
+    # Old received quantities do not automatically satisfy a changed rule.
+    # Explicit stock/source handoff must create current demand credits first.
+    assert external_graph_receipts_closed(db, item=item,
+        requirements=read_graph_requirements(db, item.id)) is remove_external
     with pytest.raises(BomPlanError, match="不属于"):
         read_order_bom_source_contract(db, item.id, 999999999)
     revision.content_hash = "0" * 64

@@ -95,3 +95,42 @@ def test_real_factory_liner_identity_and_00205_set_counts_without_inventory_chan
     assert {m.product_id: m.purchase_sheets for m in plan205.materials} == {3771: 225, 3783: 300}
     assert inventory_before == db.execute(text("SELECT id,quantity_available,quantity_reserved,quantity_consumed,version FROM inventory_lots ORDER BY id")).all()
     assert db.get(OrderItem, 10050).delivered_quantity == 1500
+
+
+def test_inactive_00204_stays_protected_and_explicit_reactivation_uses_five_sets(factory_copy):
+    """Existing 15/20-piece edges and the confirmed 3/4-piece set agree."""
+    from app.models.product_bom import ProductBomComponent
+    from app.services.multilevel_bom_master_transition import transition_master_boms
+    from app.services.composite_bom import CompositeBOMError
+    db = factory_copy
+    actor = db.scalar(select(User).where(User.role == "admin", User.is_active.is_(True)))
+    existing = {row.component_product_id: int(row.quantity_per_set) for row in db.scalars(
+        select(ProductBomComponent).where(ProductBomComponent.parent_product_id == 3494))}
+    assert existing == {3771: 15, 3783: 20, 3772: 6}
+    original_inventory = db.execute(text("SELECT * FROM inventory_lots ORDER BY id")).all()
+    ids = [3494, 3799, 3771, 3783, 3772]
+    versions = {pid: db.get(Product, pid).version for pid in ids}
+    changes = [
+            {"parent_product_id":3799, "inventory_mode":"assembled", "components":[
+                {"component_product_id":3771,"quantity_per_set":3,"inventory_relation":"assembly"},
+                {"component_product_id":3783,"quantity_per_set":4,"inventory_relation":"assembly"}]},
+            {"parent_product_id":3494, "inventory_mode":"manufactured", "components":[
+                {"component_product_id":3799,"quantity_per_set":5,"inventory_relation":"accompany"},
+                {"component_product_id":3772,"quantity_per_set":6,"inventory_relation":"accompany"}]}]
+    assert db.get(Product,3494).is_active is False
+    with pytest.raises(CompositeBOMError, match="失效产品"):
+        transition_master_boms(db, customer_id=136, expected_versions=versions, disable_subkits={}, actor=actor, changes=changes)
+    assert db.get(Product,3494).is_active is False
+    # Explicit what-if fixture ONLY: never reactivate the actual factory master.
+    db.get(Product,3494).is_active = True
+    db.commit()
+    transition_master_boms(db, customer_id=136, expected_versions=versions, disable_subkits={}, actor=actor, changes=changes)
+    item = new_item(db, 3494, 10)
+    graph = freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
+    plan = plan_bom(graph.graph, 10)
+    assert dict(plan.picking) == {3494:10, 3799:50, 3772:60}
+    amounts = {row.product_id: row.required_units for row in plan.products}
+    assert amounts[3771] == 150 and amounts[3783] == 200
+    assert {row.product_id for row in plan.materials} == {3494, 3771, 3783, 3772}
+    assert db.execute(text("SELECT * FROM inventory_lots ORDER BY id")).all() == original_inventory
+    assert db.get(OrderItem,10050).delivered_quantity == 1500

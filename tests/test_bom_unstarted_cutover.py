@@ -103,6 +103,59 @@ def test_unstarted_rejects_changed_master_and_inactive_admin(factory_copy):
         execute_unstarted_cutover(db, **payload)
 
 
+@pytest.mark.parametrize("same_key", [True, False])
+def test_two_connections_cannot_apply_the_same_preview_twice(factory_copy, same_key):
+    """Real concurrent transactions, not two requests sharing one Session."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from sqlalchemy.orm import Session
+    from app.models.multilevel_bom import OrderBomExecutionCutover
+
+    db = factory_copy
+    actor, item, history = setup(db)
+    payload = request(db, actor, item)
+    actor_id, item_id = actor.id, item.id
+    old_ids = {row.id for row in history}
+    payload.pop("actor")
+    stock_before = db.execute(text("SELECT * FROM inventory_lots ORDER BY id")).all()
+    engine = db.get_bind()
+    db.rollback()
+    barrier = Barrier(2)
+
+    def submit(index):
+        with Session(engine) as connection:
+            current_actor = connection.get(User, actor_id)
+            barrier.wait(timeout=10)
+            args = {**payload, "actor": current_actor}
+            if not same_key:
+                args["operation_key"] = f"concurrent-unstarted-{index}"
+            try:
+                result = execute_unstarted_cutover(connection, **args)
+                connection.commit()
+                return "ok", result
+            except BomPlanError as exc:
+                connection.rollback()
+                return "conflict", str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(submit, (1, 2)))
+    if same_key:
+        assert results[0] == results[1]
+        assert results[0][0] == "ok"
+    else:
+        assert sorted(row[0] for row in results) == ["conflict", "ok"]
+        assert "订单已切换" in next(row[1] for row in results if row[0] == "conflict")
+    db.expire_all()
+    assert db.get(OrderBomExecutionCutover, item_id) is not None
+    compiled = read_compiled_order_bom(db, item_id)
+    assert {row.id for row in compiled.snapshots}.isdisjoint(old_ids)
+    all_sources = set(db.scalars(select(SalesOrderItemBomComponent.id).where(
+        SalesOrderItemBomComponent.sales_order_item_id == item_id)))
+    assert all_sources == old_ids | {row.id for row in compiled.snapshots}
+    assert db.scalar(text("SELECT count(*) FROM operation_logs WHERE action_code='switch_unstarted_bom'")) == 1
+    assert db.execute(text("SELECT * FROM inventory_lots ORDER BY id")).all() == stock_before
+
+
 def test_admin_http_preview_execute_and_uncertain_result_replay(factory_http):
     client, db = factory_http
     actor, item, _ = setup(db, "separate")

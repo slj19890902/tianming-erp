@@ -6787,6 +6787,12 @@
                         <option value="purchased">外购＋配套</option>
                       </select>
                     </label>
+                    <label class="remember-line">单位
+                      <select class="select" aria-label="产品库存单位" v-model="productForm.unit">
+                        <option v-if="productForm.unit && !['只','套','片'].includes(productForm.unit)" :value="productForm.unit">{{ productForm.unit }}</option>
+                        <option v-for="unit in ['只','套','片']" :key="unit" :value="unit">{{ unit }}</option>
+                      </select>
+                    </label>
                     <label class="remember-line">计价
                       <select class="select" v-model="productForm.combination_mode" @change="productForm.is_virtual_composite_parent = productForm.combination_mode === 'parent_priced_set' ? productForm.is_virtual_composite_parent : false; productForm.composite_fulfillment_mode = productForm.combination_mode === 'component_priced' ? 'component_delivery' : productForm.composite_fulfillment_mode">
                         <option value="parent_priced_set">整套计价</option>

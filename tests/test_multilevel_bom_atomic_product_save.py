@@ -23,7 +23,7 @@ def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_
     def state():
         with factory() as db:
             root = db.get(Product, 1)
-            return (root.version, root.production_notes, db.scalar(select(func.count()).select_from(Product)),
+            return (root.version, root.production_notes, root.unit, db.scalar(select(func.count()).select_from(Product)),
                 [(row.parent_product_id, row.component_product_id, row.quantity_per_set)
                  for row in db.scalars(select(ProductBomComponent).order_by(ProductBomComponent.id))],
                 dump_graph(read_compiled_order_bom(db, 1).graph))
@@ -32,6 +32,7 @@ def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_
         root = db.get(Product, 1)
         fields = api._product_payload_snapshot(root)
         fields["production_notes"] = "本次原子保存备注"
+        fields["unit"] = "套"
         if create:
             fields.update(product_code="ATOMIC-NEW", customer_material_code="ATOMIC-NEW")
         else:
@@ -63,11 +64,13 @@ def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_
             return
         saved = response.json()["product"]
         assert saved["production_notes"] == fields["production_notes"]
+        assert saved["unit"] == "套"
         bom = response.json()["bom"]
         assert bom["version"] == saved["version"]
         assert sorted(Decimal(row["quantity_per_set"]) for row in bom["components"]) == [5, 6]
         with factory() as db:
             assert db.get(Product, saved["id"]).production_notes == fields["production_notes"]
+            assert db.get(Product, saved["id"]).unit == "套"
             assert dump_graph(read_compiled_order_bom(db, 1).graph) == before[-1]
 
 

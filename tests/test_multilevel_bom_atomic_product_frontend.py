@@ -27,7 +27,7 @@ const write=async(url,body)=>{
 global.axios={post:write,put:write};
 const ctx={productForm:{id:existing?9:null},drawingFile:null,productEditReturnContext:null,
   _productFormDirty:()=>true,_productBomDirty:()=>true,validateProductBom:()=>'',
-  buildProductWritePayload:()=>({expected_version:3,production_notes:'new'}),
+  buildProductWritePayload:()=>({expected_version:3,production_notes:'new',unit:'套'}),
   bomPayload:(version)=>({expected_version:version??3,components:[{component_product_id:2}]}),
   hydrateProductForm:x=>x,beginMasterEdit:()=>{},
   applyBomResponse(x){this.bom=x},_productFormSaveFields(){return this.productForm},
@@ -39,6 +39,7 @@ const ctx={productForm:{id:existing?9:null},drawingFile:null,productEditReturnCo
   assert.equal(calls.length,1);
   assert.equal(calls[0].url,existing?'/api/master/products/9/with-bom':'/api/master/products/with-bom');
   assert.equal(calls[0].body.product.production_notes,'new');
+  assert.equal(calls[0].body.product.unit,'套');
   assert.equal(calls[0].body.bom.expected_version,existing?3:1);
   if(failure)assert.equal(JSON.stringify(ctx.productForm),before);
   else {assert.equal(ctx.productForm.version,4);assert.equal(ctx.bom.version,4)}
@@ -47,3 +48,10 @@ const ctx={productForm:{id:existing?9:null},drawingFile:null,productEditReturnCo
     prefix = f"const existing={json.dumps(existing)},failure={json.dumps(failure)},block={json.dumps(block)};\n"
     result = subprocess.run([node], input=prefix + script, text=True, encoding="utf-8", capture_output=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_bom_unit_control_preserves_existing_nonstandard_units():
+    html = (Path(__file__).resolve().parents[1] / "static/index.html").read_text(encoding="utf-8")
+    assert 'aria-label="产品库存单位" v-model="productForm.unit"' in html
+    assert "!['只','套','片'].includes(productForm.unit)" in html
+    assert ':value="productForm.unit">{{ productForm.unit }}</option>' in html

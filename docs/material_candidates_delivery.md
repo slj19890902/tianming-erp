@@ -22,6 +22,15 @@
 - CSS warehouseTwin-ff31HaIe.css SHA256 EEE71CE22427529DF49AE6F34E7C6FD6E5A82CDB46F3E2EBEC890723A12FC8CF。
 
 ## 状态
-开发验证通过，正式 ERP 人工验收待完成。正式发布证据待补充。
+开发验证通过，正式 ERP 人工验收待完成。技术发布完成，证据如下。
 人工入口：刷新仓库地图→选中半成品片料→匹配→勾选→保存→切换货位返回核对。
 没有修改任何正式业务事实；候选保存测试仅在独立测试库。
+
+
+## 正式发布结果
+- 2026-09-10 12:52:51 技术发布完成，代码SHA 8a94f70dcb00309b6a810e5700d728a265ae3844，版本v0.22.325，唯一head rt10v8x9z67。
+- 报告 docs/migration_reports/release_runtime_20260910_125201.json，状态completed；正式与备份及副本integrity=ok、外键0，核心业务表计数前后一致。
+- 时点备份 data/backups/carton_erp_before_release_20260910_125204.sqlite3，SHA256 5604bfe03c51299530d5231217177bb466c77dfaab75d69e8cc818b223e4d73c。
+- 正式仓库入口HTML与新JS均200，HTML指向本次构建；未登录候选API返回401。版本元数据和服务健康门禁通过。
+- 正式候选历史表0行，未代用户保存候选，没有修改库存数量或产品/客户资料。
+- Chrome连接超时，实际展开、勾选与保存的现场验收仍待用户确认。

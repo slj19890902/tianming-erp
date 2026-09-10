@@ -202,7 +202,7 @@ def test_split_movement_keeps_receipt_cost_and_finished_coverage(
                 assert sum(a.quantity for a in active) == 10
 
 
-def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, separate=False):
+def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, separate=False, quantity=None, cutting_modes=None):
     from app.models.warehouse_inventory import WarehouseLocation
     from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
@@ -221,6 +221,8 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, sepa
             display_name="苏州纸板供应商", sort_order=20, is_active=True, version=1))
         actor = db.get(User, 1)
         item = db.get(OrderItem, 1)
+        if quantity is not None:
+            item.quantity = quantity
         item.composite_fulfillment_mode_snapshot = "parent_delivery"
         for pid in (1, 2, 3):
             p = db.get(Product, pid)
@@ -230,6 +232,8 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, sepa
             p.report_width_mm = 700
             p.pieces_per_box = 1
             p.default_cutting_mode = "一开一"
+            if cutting_modes and pid in cutting_modes:
+                p.default_cutting_mode = cutting_modes[pid]
         if separate:
             from app.services.composite_bom import replace_product_bom
             replace_product_bom(db, parent_product_id=1, expected_version=db.get(Product, 1).version,
@@ -263,9 +267,6 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, sepa
 
 
 def purchase_sources(client, factory, material_id, snapshots, *, a3=False, splice=False, order_item_id=1):
-    from app.models.supplier_requisition_order import PurchasePurposeSourceSnapshot
-    from app.models.product_bom import RequisitionItemBomSource
-    from app.models.requisition import RequisitionItem
     items = []
     for sid, pid in snapshots:
         for route in (["cover", "base"] if a3 and pid == 2 else ["whole"]):
@@ -275,6 +276,13 @@ def purchase_sources(client, factory, material_id, snapshots, *, a3=False, splic
     saved = client.post("/api/requisition/batches", json={"request_key": "graph-requisition",
         "supplier_name": "苏州纸板供应商", "items": items})
     assert saved.status_code == 201, saved.text
+    return read_purchase_sources(factory, material_id)
+
+
+def read_purchase_sources(factory, material_id):
+    from app.models.supplier_requisition_order import PurchasePurposeSourceSnapshot
+    from app.models.product_bom import RequisitionItemBomSource
+    from app.models.requisition import RequisitionItem
     with factory() as db:
         result = []
         for snapshot in db.scalars(select(PurchasePurposeSourceSnapshot).order_by(PurchasePurposeSourceSnapshot.id)):

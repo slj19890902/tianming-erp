@@ -2567,6 +2567,21 @@ def transfer_finished_lot_between_locations(
     )
 
 
+def _frozen_product_has_stock(db: Session, order_item_id: int, product_id: int) -> bool:
+    from app.services.multilevel_bom_orders import read_order_graph
+    from app.services.multilevel_bom_plan import BomPlanError
+    try:
+        graph = read_order_graph(db, order_item_id)
+        if graph is None:
+            return True
+        node = next((node for node in graph.nodes if node.product_id == product_id), None)
+        if node is None:
+            raise BomPlanError("库存产品不属于订单冻结BOM")
+        return node.source != "separate"
+    except BomPlanError as error:
+        raise WarehouseInventoryError(str(error), 409) from error
+
+
 def manual_finished_in(
     db: Session,
     *,
@@ -2603,6 +2618,17 @@ def manual_finished_in(
         return existing
     if quantity <= 0:
         raise WarehouseInventoryError("入库数量必须大于0")
+    from app.models.multilevel_bom import ProductBomProfile
+    profile = db.get(ProductBomProfile, product_id)
+    completion = None
+    if source_ref_type == "production_completion" and source_ref_id is not None:
+        from app.models.production import ProductionCompletion
+        completion = db.get(ProductionCompletion, source_ref_id)
+    if completion is not None:
+        if not _frozen_product_has_stock(db, completion.order_item_id, product_id):
+            raise WarehouseInventoryError("冻结规则为子件分存，不能生成父件库存", 409)
+    elif profile is not None and profile.source == "separate":
+        raise WarehouseInventoryError("组合父件只表示需求，请分别选择真实子件入库", 409)
     _claim_inventory_destination(
         db,
         location_id,
@@ -2995,6 +3021,8 @@ def finished_inventory_candidates_for_bom_component(
     order = db.get(Order, item.order_id)
     if order is None:
         raise WarehouseInventoryError("订单不存在", 404)
+    if not _frozen_product_has_stock(db, item.id, snapshot.component_product_id):
+        return []
     return db.scalars(
         select(InventoryLot)
         .join(FinishedGoodsInventoryDetail,
@@ -3047,6 +3075,8 @@ def reserve_finished_inventory_for_bom_component(
     if row is None or snapshot is None or snapshot.sales_order_item_id != order_item_id:
         raise WarehouseInventoryError("组件快照不属于当前订单明细", 409)
     item, order = row
+    if not _frozen_product_has_stock(db, item.id, snapshot.component_product_id):
+        raise WarehouseInventoryError("组合需求父件不能预占实体库存，请分别预占真实子件", 409)
     from app.services.production_workflow import has_production_completion_facts, lock_order_rows_for_production_transition, ProductionWorkflowError
     try:
         lock_order_rows_for_production_transition(db, [order.id])
@@ -3154,6 +3184,8 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
     if row is None:
         raise WarehouseInventoryError("订单明细不存在", 404)
     item, order = row
+    if not _frozen_product_has_stock(db, item.id, item.product_id):
+        return []
     from app.services.production_workflow import has_production_completion_facts
 
     if has_production_completion_facts(db, [item.id]):
@@ -3272,6 +3304,8 @@ def reserve_finished_inventory(
     if row is None:
         raise WarehouseInventoryError("订单明细不存在", 404)
     item, order = row
+    if not _frozen_product_has_stock(db, item.id, item.product_id):
+        raise WarehouseInventoryError("本单子件分存，请分别选择子件库存抵扣", 409)
     # Use the same order-row lock as production completion and order terminal
     # transitions, then re-read under that lock before creating a reservation.
     from app.services.production_workflow import (

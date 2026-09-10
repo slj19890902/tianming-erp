@@ -6,8 +6,7 @@ from sqlalchemy import select
 
 from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem, ExternalPackagingReceiptItem
 from app.models.order import Order
-from app.services.multilevel_bom_external_identity import read_external_node
-from app.services.multilevel_bom_orders import read_compiled_order_bom
+from app.services.multilevel_bom_external_identity import read_external_source_contract
 from app.services.multilevel_bom_plan import BomPlanError
 from app.services.multilevel_bom_purchase_units import cumulative_receipt_conversion
 from app.services.external_receipt_state import active_receipt_item
@@ -28,10 +27,11 @@ def receipt_output_cost(db, receipt_item_id):
     receipt = db.scalar(select(ExternalPackagingReceiptItem).where(
         ExternalPackagingReceiptItem.id == receipt_item_id, active_receipt_item()))
     purchase = db.get(ExternalPackagingPurchaseItem, receipt.purchase_item_id) if receipt else None
-    link = read_external_node(db, purchase.order_component_id) if purchase else None
-    if link is None or link.order_item_id != purchase.sales_order_item_id:
+    if purchase is None:
         raise BomPlanError('外购成本缺少真实采购节点')
-    compiled = read_compiled_order_bom(db, link.order_item_id)
+    link, compiled = read_external_source_contract(db, purchase.order_component_id)
+    if link.order_item_id != purchase.sales_order_item_id:
+        raise BomPlanError('外购成本缺少真实采购节点')
     node = next(n for n in compiled.graph.nodes if n.product_id == link.product_id)
     order = db.get(Order, purchase.sales_order_id)
     if (order is None or order.customer_id != compiled.graph.customer_id

@@ -58,7 +58,7 @@ def base_graph_with_rule_registry(header, item, order, identities, history):
 
 
 def project_order_rule_history(*, header, item, order, identities, cutover,
-                               rows_with_roles, production_rows, history):
+                               rows_with_roles, production_rows, history, source_snapshot_id=None):
     from app.services.multilevel_bom_execution_boundary import select_execution_sources
     from app.services.multilevel_bom_rule_revision import project_rule_and_production_events
     graph = base_graph_with_rule_registry(header, item, order, identities, history)
@@ -84,8 +84,8 @@ def project_order_rule_history(*, header, item, order, identities, cutover,
         rows_with_roles=((row, role) for row, role in pairs if row.id not in all_revision_ids))
     compiled = project_rule_and_production_events(base, production_rows, history.revisions,
         sources_by_revision=revision_sources, products_by_revision=dict(history.products),
-        delivered_quantity=item.delivered_quantity or 0)
-    if history.revisions:
+        delivered_quantity=item.delivered_quantity or 0, source_snapshot_id=source_snapshot_id)
+    if history.revisions and source_snapshot_id is None:
         current_ids = {row.id for row in compiled.snapshots}
         compiled = replace(compiled, rule_revision_id=history.revisions[-1].id,
             history_source_ids=frozenset(row_map.keys() - current_ids))

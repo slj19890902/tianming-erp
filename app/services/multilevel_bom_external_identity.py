@@ -34,8 +34,8 @@ def current_external_links(db, compiled):
         OrderBomExternalComponent.bom_snapshot_id.in_(source_ids))))
 
 
-def _validate(db, *, external_component_id, order_item_id, product_id):
-    compiled = read_compiled_order_bom(db, order_item_id)
+def _validate(db, *, external_component_id, order_item_id, product_id, compiled=None):
+    compiled = compiled if compiled is not None else read_compiled_order_bom(db, order_item_id)
     node = next((n for n in compiled.graph.nodes if n.product_id == product_id), None) if compiled else None
     row = db.get(SalesOrderItemExternalComponent, external_component_id)
     if node is None or node.source != 'purchased' or node.purchase_units is None:
@@ -101,6 +101,24 @@ def read_external_node(db, external_component_id):
     if snapshot.id != link.bom_snapshot_id:
         raise BomPlanError('外购BOM来源快照身份不一致')
     return link
+
+
+def read_external_source_contract(db, external_component_id):
+    """Return exact historical procurement identity and its validated recipe.
+
+    New procurement continues to use read_external_node's current-only guard.
+    This reader grants no right to receive, reserve or switch an old purchase.
+    """
+    from app.services.multilevel_bom_orders import read_order_bom_source_contract
+    link = db.get(OrderBomExternalComponent, external_component_id)
+    if link is None:
+        raise BomPlanError("外购历史来源缺少真实BOM关联")
+    compiled = read_order_bom_source_contract(db, link.order_item_id, link.bom_snapshot_id)
+    snapshot = _validate(db, external_component_id=external_component_id,
+        order_item_id=link.order_item_id, product_id=link.product_id, compiled=compiled)
+    if snapshot.id != link.bom_snapshot_id:
+        raise BomPlanError("外购历史来源快照身份不一致")
+    return link, compiled
 
 
 def frozen_purchase_quantities(db, components, order_items):

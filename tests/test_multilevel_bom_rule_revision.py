@@ -105,6 +105,24 @@ def test_production_amendments_before_and_after_structure_use_the_correct_basis(
     long = next(row for row in result.snapshots if row.component_product_id == 3771)
     assert long.snapshot_component_production_notes == "second"
     assert long.production_revision == 2
+    historical = project_rule_and_production_events(original, [first_production, second_production], [rule],
+        **args, source_snapshot_id=original.snapshots[0].id)
+    old_long = next(row for row in historical.snapshots if row.component_product_id == 3771)
+    assert old_long.snapshot_component_production_notes == "first"
+    assert old_long.production_revision == 1
+    assert historical.rule_revision_id is None
+    assert {row.id for row in historical.snapshots} == {row.id for row in original.snapshots}
+    current_source = project_rule_and_production_events(original, [first_production, second_production], [rule],
+        **args, source_snapshot_id=sources[0].id)
+    assert current_source.rule_revision_id == rule.id
+    assert next(row for row in current_source.snapshots if row.component_product_id == 3771).snapshot_component_production_notes == "second"
+    with pytest.raises(BomPlanError, match="不属于"):
+        project_rule_and_production_events(original, [first_production, second_production], [rule],
+            **args, source_snapshot_id=99999999)
+    damaged_later = SimpleNamespace(**{**vars(second_production), "content_hash": "0" * 64})
+    with pytest.raises(BomPlanError, match="校验失败"):
+        project_rule_and_production_events(original, [first_production, damaged_later], [rule],
+            **args, source_snapshot_id=original.snapshots[0].id)
     assert result.execution_window.execution_quantity == 80
     assert next(row for row in original.snapshots if row.component_product_id == 3771).snapshot_component_production_notes != "second"
     misplaced = SimpleNamespace(**{**vars(rule), "production_revision_before": 0})

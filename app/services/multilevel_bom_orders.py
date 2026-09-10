@@ -98,6 +98,24 @@ def freeze_order_graph(db, *, order_item_id, graph, actor: User):
 
 def read_compiled_order_bom(db, order_item_id):
     """Read graph AND material facts; never repair missing facts from master."""
+    return _read_compiled_order_bom(db, order_item_id)
+
+
+def read_order_bom_source_contract(db, order_item_id, snapshot_id):
+    """Read a source's frozen rule for historical evidence, not current demand.
+
+    A removed product remains readable by its exact source ID. The full event
+    chain is still verified; this cannot bypass a corrupt later revision.
+    """
+    from app.services.multilevel_bom_plan import _integer
+    _integer(snapshot_id, "历史BOM来源ID", 1)
+    compiled = _read_compiled_order_bom(db, order_item_id, source_snapshot_id=snapshot_id)
+    if compiled is None:
+        raise BomPlanError("历史BOM来源缺少订单冻结图")
+    return compiled
+
+
+def _read_compiled_order_bom(db, order_item_id, *, source_snapshot_id=None):
     from app.models.product_bom import SalesOrderItemBomComponent
 
     header = db.get(OrderBomGraph, order_item_id)
@@ -126,7 +144,8 @@ def read_compiled_order_bom(db, order_item_id):
         identities=identities, cutover=records[0][1],
         rows_with_roles=((row, role) for row, _, role, _ in records),
         production_rows=production_revisions(db, order_item_id),
-        history=rule_histories_by_order(db, {order_item_id})[order_item_id])
+        history=rule_histories_by_order(db, {order_item_id})[order_item_id],
+        source_snapshot_id=source_snapshot_id)
 
 
 def validate_compiled_order_rows(graph, rows):

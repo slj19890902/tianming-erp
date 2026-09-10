@@ -111,7 +111,8 @@ def validate_rule_revision_chain(rows, *, order_item_id, production_revision_cou
 
 
 def project_rule_and_production_events(base, production_rows, rule_rows, *,
-                                       sources_by_revision, products_by_revision, delivered_quantity):
+                                       sources_by_revision, products_by_revision, delivered_quantity,
+                                       source_snapshot_id=None):
     """Replay amendments and structural changes in their recorded order."""
     from app.services.multilevel_bom_production_revision import apply_production_revision
     item_ids = {source.sales_order_item_id for source in base.snapshots}
@@ -124,8 +125,17 @@ def project_rule_and_production_events(base, production_rows, rule_rows, *,
     revision_ids = {row.id for row in rule_rows}
     if set(sources_by_revision) != revision_ids or set(products_by_revision) != revision_ids:
         raise BomPlanError("规则版本来源或产品归属不完整")
+    if source_snapshot_id is not None:
+        _integer(source_snapshot_id, "历史BOM来源ID", 1)
     compiled, production_cursor, previous_production_id = base, 0, None
     used_source_ids = {row.id for row in base.snapshots}
+    selected, selected_production, structural_id = None, 0, None
+
+    def capture_source_contract():
+        nonlocal selected, selected_production
+        if source_snapshot_id is not None and any(s.id == source_snapshot_id for s in compiled.snapshots):
+            selected = replace(compiled, rule_revision_id=structural_id)
+            selected_production = production_cursor
 
     def apply_production_until(count):
         nonlocal compiled, production_cursor, previous_production_id
@@ -140,14 +150,23 @@ def project_rule_and_production_events(base, production_rows, rule_rows, *,
 
     for row in rule_rows:
         apply_production_until(row.production_revision_before)
+        # Retain the final production basis belonging to these exact source
+        # IDs. Continue validating every later event before returning history.
+        capture_source_contract()
         sources = tuple(sources_by_revision[row.id])
         source_ids = {source.id for source in sources}
         if used_source_ids & source_ids:
             raise BomPlanError("规则版本重复使用历史来源")
         compiled = apply_rule_revision(compiled, row, sources, products_by_revision[row.id],
             delivered_quantity=delivered_quantity)
+        structural_id = row.id
         used_source_ids.update(source_ids)
     apply_production_until(len(production_rows))
+    capture_source_contract()
+    if source_snapshot_id is not None:
+        if selected is None:
+            raise BomPlanError("历史BOM来源不属于已核验的订单规则版本")
+        compiled, production_cursor = selected, selected_production
     # Same public revision counter as the existing production editor. It is
     # projection metadata only, never written over an original snapshot row.
     if production_cursor:

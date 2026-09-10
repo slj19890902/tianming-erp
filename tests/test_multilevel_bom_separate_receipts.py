@@ -13,7 +13,8 @@ from tests.test_multilevel_bom_receipt_flow import seed_graph, purchase_sources
 
 @pytest.mark.parametrize("separate", [True, False])
 def test_loose_children_are_reserved_individually_before_sheet_conversion(
-    composite_requisition_app, _p181_published_map_identity, separate, corrupt_restore=False, short_yield=2
+    composite_requisition_app, _p181_published_map_identity, separate, corrupt_restore=False, short_yield=2,
+    other_order=False
 ):
     from app.core.time_contract import beijing_today
     from decimal import Decimal
@@ -29,11 +30,12 @@ def test_loose_children_are_reserved_individually_before_sheet_conversion(
     material_id, snapshots = seed_graph(factory, separate=separate, quantity=100,
                               cutting_modes={2: "一开四", 3: short_mode}, finished_slot_count=16)
     lots = {}
+    others = {2:10, 3:30} if other_order else {2:0, 3:0}
     with factory() as db:
         for sid, pid in snapshots:
             target = _receipt_auto_finished_ground_target(db, claim=True, customer_id=1, product_id=pid)
             lot = manual_finished_in(db, customer_id=1, product_id=pid,
-                location_id=target.location.id, quantity=20 if pid == 2 else 50,
+                location_id=target.location.id, quantity=(20 if pid == 2 else 50)+others[pid],
                 stock_date=beijing_today(), source_type="manual", remarks="隔离余料夹具",
                 operator_id=1, idempotency_key=f"loose-stock-{pid}",
                 expected_layout_version=target.layout_version)
@@ -44,11 +46,35 @@ def test_loose_children_are_reserved_individually_before_sheet_conversion(
         db.commit()
     with TestClient(app) as client:
         _login(client)
+        protected = {}
+        if other_order:
+            from tests.test_multilevel_bom_order_entry import payload as order_payload
+            from app.services.multilevel_bom_orders import read_compiled_order_bom
+            from app.services.multilevel_bom_cutover_review import _row
+            created_other = client.post("/api/orders",json=order_payload(factory,key="other-reserved-order"))
+            assert created_other.status_code == 201, created_other.text
+            other_iid = created_other.json()["items"][0]["id"]
+            with factory() as db:
+                other_sources = {row.component_product_id:row.id for row in read_compiled_order_bom(db,other_iid).snapshots}
+            for pid,(lid,version) in lots.items():
+                reserved = client.post("/api/warehouse/finished/bom-components/reservations",json=dict(
+                    order_item_id=other_iid,bom_snapshot_id=other_sources[pid],inventory_lot_id=lid,
+                    quantity=others[pid],expected_version=version,idempotency_key=f"other-order-{pid}",
+                    warning_acknowledged_codes=[]))
+                assert reserved.status_code == 200, reserved.text
+            with factory() as db:
+                protected = {row.id:_row(row) for row in db.scalars(select(InventoryReservation)
+                    .where(InventoryReservation.order_item_id==other_iid))}
+                lots = {pid:(lid,db.get(InventoryLot,lid).version) for pid,(lid,_) in lots.items()}
         for sid, pid in snapshots:
             lid, version = lots[pid]
             payload = dict(order_item_id=1, bom_snapshot_id=sid, inventory_lot_id=lid,
                 quantity=20 if pid == 2 else 50, expected_version=version,
                 idempotency_key=f"loose-reserve-{pid}", warning_acknowledged_codes=[])
+            if other_order:
+                rejected = client.post("/api/warehouse/finished/bom-components/reservations",
+                    json={**payload,"quantity":payload["quantity"]+1,"idempotency_key":f"over-available-{pid}"})
+                assert rejected.status_code == 409, rejected.text
             response = client.post("/api/warehouse/finished/bom-components/reservations", json=payload)
             assert response.status_code == 200, response.text
             replay = client.post("/api/warehouse/finished/bom-components/reservations", json=payload)
@@ -57,7 +83,7 @@ def test_loose_children_are_reserved_individually_before_sheet_conversion(
             requirements = read_graph_requirements(db, 1)
             assert {r.product_id: r.purchase_sheets for r in requirements.plan.materials} == {2: 70, 3: short_sheets}
             rows = list(db.scalars(select(InventoryReservation)))
-            assert len(rows) == 2
+            assert len(rows) == (4 if other_order else 2)
             assert {r.inventory_lot_id for r in rows} == {v[0] for v in lots.values()}
         saved = client.post("/api/requisition/batches", json={"request_key": "loose-sheet-conversion",
             "supplier_name": "苏州纸板供应商", "items": [
@@ -89,11 +115,11 @@ def test_loose_children_are_reserved_individually_before_sheet_conversion(
                 pid = lot.finished_detail.product_id
                 totals[pid] = totals.get(pid, 0) + lot.quantity_reserved + lot.quantity_available
             if separate:
-                assert totals == {2: 300, 3: 400 + extra_short}
+                assert totals == {2: 300+others[2], 3: 400 + extra_short+others[3]}
                 assert db.scalar(select(func.count()).select_from(BomAssembly)) == 0
             else:
                 import json
-                assert totals == {1: 100, 2: 0, 3: extra_short}
+                assert totals == {1: 100, 2: others[2], 3: extra_short+others[3]}
                 assemblies = list(db.scalars(select(BomAssembly)))
                 assert sum(row.quantity for row in assemblies) == 100
                 assert sum(row.total_cost for row in assemblies) == Decimal("38.9830" if short_yield == 2 else "31.7847")
@@ -120,7 +146,7 @@ def test_loose_children_are_reserved_individually_before_sheet_conversion(
             for pid, expected in ({2: 300, 3: 400} if separate else {1: 100}).items():
                 selected = [lot for lot in db.scalars(select(InventoryLot))
                     if lot.finished_detail and lot.finished_detail.product_id == pid]
-                assert sum(lot.quantity_reserved for lot in selected) == expected
+                assert sum(lot.quantity_reserved for lot in selected) == expected+others.get(pid,0)
                 assert sum(lot.quantity_consumed for lot in selected) == 0
         if corrupt_restore:
             from app.models.warehouse_inventory import InventoryLocationMovement
@@ -152,8 +178,18 @@ def test_loose_children_are_reserved_individually_before_sheet_conversion(
             assert db.scalar(select(func.count()).select_from(BomAssembly).where(BomAssembly.status == "posted")) == 0
             for pid, (lid, _) in lots.items():
                 lot = db.get(InventoryLot, lid)
-                assert lot.quantity_reserved == (20 if pid == 2 else 50)
+                assert lot.quantity_reserved == (20 if pid == 2 else 50)+others[pid]
                 assert lot.quantity_consumed == 0
+            if other_order:
+                assert {rid:_row(db.get(InventoryReservation,rid)) for rid in protected} == protected
+
+
+@pytest.mark.parametrize("separate", [True, False])
+def test_other_orders_reservations_survive_credits_receipts_delivery_and_reversal(
+    composite_requisition_app, _p181_published_map_identity, separate
+):
+    test_loose_children_are_reserved_individually_before_sheet_conversion(
+        composite_requisition_app, _p181_published_map_identity, separate, other_order=True)
 
 
 def test_receipt_reversal_rejects_a_broken_pallet_restore_proof(composite_requisition_app, _p181_published_map_identity):

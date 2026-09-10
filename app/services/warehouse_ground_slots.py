@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.warehouse_storage_usage import effective_inventory_usages
+
 from collections import defaultdict
 from dataclasses import dataclass
 from decimal import Decimal
@@ -551,7 +553,7 @@ def published_ground_plan(
             "GROUND_LAYOUT_PUBLISH_STALE", "区域地图或存放策略已变化，请管理员重新核对地堆排位。"
         )
     try:
-        allowed_inventory_types = set(policy_inventory_types(policy))
+        allowed_inventory_types = set(effective_inventory_usages(policy_inventory_types(policy), policy.storage_layout))
     except WarehouseAreaActivationError as error:
         raise WarehouseGroundSlotError(
             "GROUND_AREA_POLICY_INVALID",

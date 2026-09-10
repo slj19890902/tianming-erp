@@ -51,11 +51,8 @@ export function stocktakeLocationBlockReason(location) {
 export function stocktakeAddBlockReason(location, inventoryType) {
   const locationError = stocktakeLocationBlockReason(location);
   if (locationError) return locationError;
-  const allowedWarehouseTypes = inventoryType === "finished"
-    ? ["finished", "shared"]
-    : inventoryType === "semi_finished"
-      ? ["semi_finished", "shared"]
-      : [];
+  const allowedWarehouseTypes = ["finished", "semi_finished", "raw_material"].includes(inventoryType)
+    ? ["finished", "semi_finished", "shared"] : [];
   if (!allowedWarehouseTypes.includes(String(location.warehouse_type || ""))) {
     return "所选货位类型与当前库存类型不匹配。";
   }
@@ -63,7 +60,7 @@ export function stocktakeAddBlockReason(location, inventoryType) {
   if (inventoryType === "finished" && !["ground", "rack", "temporary_aisle"].includes(storageType)) {
     return "该成品货位的存储方式尚不支持盘点新增。";
   }
-  if (inventoryType === "semi_finished" && !["ground", "rack", "temporary_aisle"].includes(storageType)) {
+  if (["semi_finished", "raw_material"].includes(inventoryType) && !["ground", "rack", "temporary_aisle"].includes(storageType)) {
     return "该半成品货位的存储方式尚不支持盘点新增。";
   }
   return null;
@@ -119,7 +116,7 @@ export function stocktakeExistingProductLocations(
 ) {
   const customer = positiveInteger(customerId);
   const product = positiveInteger(productId);
-  if (!customer || !product || !["finished", "semi_finished"].includes(inventoryType)) return [];
+  if (!customer || !product || !["finished", "semi_finished", "raw_material"].includes(inventoryType)) return [];
   const targetArea = normalized(targetAreaCode);
   const targetFloor = normalized(targetFloorCode);
   const targetLocation = positiveInteger(targetLocationId);
@@ -134,7 +131,7 @@ export function stocktakeExistingProductLocations(
       if (
         positiveInteger(item?.customer_id) !== customer
         || !productMatches
-        || item?.inventory_type !== inventoryType
+        || (item?.inventory_usage || item?.inventory_type) !== inventoryType
         || Number(item?.available_quantity || 0) <= 0
       ) continue;
       matches.push({
@@ -168,7 +165,7 @@ export function validateStocktakeDraft(draft) {
   if (!positiveInteger(draft.quantity)) return "盘点数量必须是正整数。";
   if (draft.operation === "add") {
     if (!positiveInteger(draft.customer_id) || !positiveInteger(draft.product_id)) return "盘点新增必须选择已有客户和已有产品。";
-    if (!['finished', 'semi_finished'].includes(draft.inventory_type)) return "盘点新增库存类型无效。";
+    if (!['finished', 'semi_finished', 'raw_material'].includes(draft.inventory_type)) return "盘点新增库存类型无效。";
     if (draft.source_kind && !['existing_stocktake', 'partner_transfer'].includes(draft.source_kind)) return "请选择成品库存的实际来源。";
     const expectedUnit = draft.inventory_type === "finished" ? "boxes" : "sheets";
     if (draft.unit !== expectedUnit) return `该库存类型的固定单位必须是 ${expectedUnit}。`;
@@ -189,19 +186,6 @@ export function upsertStocktakeDraft(drafts, draft) {
   const error = validateStocktakeDraft(draft);
   if (error) return { items: drafts || [], error };
   const identity = draftIdentity(draft);
-  if (draft.operation === "add") {
-    const conflictingAdd = (drafts || []).find((item) => (
-      item.operation === "add"
-      && positiveInteger(item.location_id) === positiveInteger(draft.location_id)
-      && draftIdentity(item) !== identity
-    ));
-    if (conflictingAdd) {
-      return {
-        items: drafts || [],
-        error: "同一货位不能在一个盘点批次中新增不同客户、产品、库存类型、单位或来源。"
-      };
-    }
-  }
   const currentIndex = (drafts || []).findIndex((item) => draftIdentity(item) === identity);
   if (currentIndex < 0) return { items: [...(drafts || []), draft], error: null };
   const items = [...drafts];

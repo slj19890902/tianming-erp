@@ -338,7 +338,7 @@ def _claim_empty_active_location(
             WarehouseLocation.placement_status == "placed",
             WarehouseLocation.placement_status.is_(None),
         ),
-        WarehouseLocation.warehouse_type.in_(("finished", "shared")),
+        WarehouseLocation.warehouse_type.in_(("finished", "semi_finished", "shared")),
         ~_active_pallet_exists(location.id),
     ]
     if require_no_live_inventory:
@@ -1269,15 +1269,8 @@ def _linked_inventory_lots(db: Session, pallet_id: int) -> list[InventoryLot]:
 def _needs_relocation(location: WarehouseLocation, items: list[InventoryPalletItem]) -> bool:
     if location.is_temporary:
         return True
-    expected = location.warehouse_type
-    if expected == "shared":
-        return False
-    for item in items:
-        if expected == "finished" and item.item_type != "finished":
-            return True
-        if expected == "semi_finished" and item.item_type == "finished":
-            return True
     return False
+
 
 
 def create_pallet(

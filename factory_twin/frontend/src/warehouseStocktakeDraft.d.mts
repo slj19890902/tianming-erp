@@ -1,4 +1,4 @@
-export type StocktakeInventoryType = "finished" | "semi_finished";
+export type StocktakeInventoryType = "finished" | "semi_finished" | "raw_material";
 export type StocktakeUnit = "boxes" | "sheets";
 export type StocktakeSourceKind = "existing_stocktake" | "partner_transfer";
 

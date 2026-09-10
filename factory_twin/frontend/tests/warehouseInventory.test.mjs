@@ -1588,8 +1588,8 @@ test("stocktake drafts upsert by formal inventory identity and preserve the clie
   assert.equal(replacement.items[0].client_item_id, "stocktake-add-1");
   assert.equal(replacement.items[0].quantity, 25);
   const conflict = upsertStocktakeDraft(replacement.items, { ...add, client_item_id: "semi", inventory_type: "semi_finished", unit: "sheets" });
-  assert.match(conflict.error, /同一货位/);
-  assert.deepEqual(conflict.items, replacement.items);
+  assert.equal(conflict.error, null);
+  assert.equal(conflict.items.length, replacement.items.length + 1);
 });
 
 test("stocktake location gates reject unsupported floors and dispatch while preserving formal rack rules", () => {

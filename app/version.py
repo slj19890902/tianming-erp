@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.325"
-APP_VERSION_NAME = "仓库材料匹配与候选用途保存"
+APP_VERSION = "v0.22.326"
+APP_VERSION_NAME = "货位混合存放与默认成品"
 APP_BUILD_DATE = "2026-09-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2448,18 +2448,30 @@ _V022324_VERIFICATION_STEPS = [
     "在送货列表连续点击同一行更多，确认展开、收起交替，按钮和表格行高不移动。",
     "展开另一行更多、点击外部或按Escape，核对菜单关闭；打印和明细编辑功能保持正常。",
 ]
-APP_CHANGES = [
+_V022325_CHANGES = [
     "仓库地图选中原料或半成品片料后，可展开匹配产品，按同楞型同层数及不旋转的片料面积利用率降序显示，默认5款，更多展开。",
     "管理员可勾选匹配度超过70%的产品并保存为该批材料的候选用途；独立保留记录，不形成允许产品绑定、预占、领料或数量修改。",
     "货物卡和客户汇总使用中文简称，跨客户及材质、压线与换算差异明确提示。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022325_VERIFICATION_STEPS = [
     "刷新仓库地图，点击一批原料或半成品，再点匹配产品，核对默认5款、更多展开及客户简称。",
     "勾选超过70%的候选并保存，切换货位后返回重读，确认候选仍在且库存数量不变；成品不出现匹配入口。",
 ]
+APP_CHANGES = [
+    "取消区域用途选择和普通货位的成品/半成品/原材料类别限制；每次添加货物默认成品，可切换半成品或原材料。",
+    "同一货位可按独立批次添加三类货物；原材料按客户存货编码、原板类型及张数进入既有片料台账，不计入可送成品。",
+    "保留操作区禁放、发布布局、容量、权限、客户范围、版本、幂等和事务校验；修复货位详情误读不存在字段的问题，无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新地图，区域设置不再显示用途；打开添加货物默认成品，半成品和原材料可选且按张计量。",
+    "在已启用正式货位依次添加成品、半成品、原材料，保存后核对批次、分类、单位和数量，重新打开默认成品。",
+    "核对操作区、未发布或停用货位仍不可入库；修改期间过期版本和重复提交仍受控，原有库存记录不变。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.325：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.325：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.326：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.326：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.325：本次更新｜{item}" for item in _V022325_CHANGES),
+    *(f"v0.22.325：如何验证｜{item}" for item in _V022325_VERIFICATION_STEPS),
     *(f"v0.22.324：本次更新｜{item}" for item in _V022324_CHANGES),
     *(f"v0.22.324：如何验证｜{item}" for item in _V022324_VERIFICATION_STEPS),
     *(f"v0.22.323：本次更新｜{item}" for item in _V022323_CHANGES),

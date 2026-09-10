@@ -1139,7 +1139,7 @@ class TwinStocktakeBatchItemPayload(BaseModel):
     operation: Literal["add", "decrease"]
     location_id: int = Field(gt=0)
     expected_layout_version: int = Field(gt=0)
-    inventory_type: Literal["finished", "semi_finished"] | None = None
+    inventory_type: Literal["finished", "semi_finished", "raw_material"] | None = None
     unit: Literal["boxes", "sheets"] | None = None
     customer_id: int | None = Field(default=None, gt=0)
     product_id: int | None = Field(default=None, gt=0)
@@ -1163,6 +1163,7 @@ class TwinStocktakeBatchItemPayload(BaseModel):
             expected_unit = {
                 "finished": "boxes",
                 "semi_finished": "sheets",
+                "raw_material": "sheets",
             }.get(self.inventory_type or "")
             if (
                 expected_unit is None
@@ -2462,7 +2463,6 @@ def _floor3_layout_dict(row: Floor3LocationLayout | None) -> dict | None:
         "z_index": row.z_index,
         "version": row.version,
         "source_type": row.source_type,
-        "subkit_role": "component" if row.source_ref_type == "subkit_receipt" else "kit" if row.source_ref_type == "subkit_conversion" else None,
         "layout_kind": row.layout_kind,
         "updated_at": (
             beijing_naive_to_api(row.updated_at) if row.updated_at else None

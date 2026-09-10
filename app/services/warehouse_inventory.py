@@ -1598,10 +1598,6 @@ def _location(
     if location is None:
         raise WarehouseInventoryError("库位不存在", 404)
     if getattr(location, "source_version", None) == "V11":
-        if inventory_type != "finished":
-            raise WarehouseInventoryError(
-                "三楼货位目前只接入成品仓；半成品请使用半成品库位", 409
-            )
         if getattr(location, "warehouse_floor", None) != 3:
             raise WarehouseInventoryError(
                 "V11 货位楼层无效，不能办理成品入库", 409
@@ -1691,6 +1687,7 @@ def _location(
             )
         ),
         projection_context=projection_context,
+        capacity_source_location_id=capacity_source_location_id,
     )
     if issue:
         raise WarehouseInventoryError(f"{issue}，不能办理半成品库存业务", 409)
@@ -4451,6 +4448,7 @@ def manual_semi_finished_in(
     expected_layout_version: int | None = None,
     customer_generic_eligible: bool = False,
     internal_name: str | None = None,
+    capacity_source_location_id: int | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -4491,6 +4489,7 @@ def manual_semi_finished_in(
         db,
         location_id,
         "semi_finished",
+        capacity_source_location_id=capacity_source_location_id,
         allow_raw_material_staging=allow_raw_material_staging,
         raw_material_staging_source_type=source_type,
         raw_material_staging_source_ref_type=source_ref_type,

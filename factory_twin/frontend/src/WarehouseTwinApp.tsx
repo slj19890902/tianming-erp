@@ -124,7 +124,7 @@ type InventoryUsage = "finished" | "semi_finished" | "raw_material" | "mold" | "
 type StorageLayout = "rack" | "pallet_ground" | "mixed";
 type WarehouseSearchType = "finished" | "mold" | "printing_plate";
 type WarehouseMapMode = "lookup" | "move" | "planning";
-type StocktakeInventoryType = "finished" | "semi_finished";
+type StocktakeInventoryType = "finished" | "semi_finished" | "raw_material";
 type WarehouseOperationalFloorCode = "1F" | "3F" | "4F";
 type RackDraft = Rack & { level_clear_heights_mm: number[]; level_cell_counts: number[] };
 const P1_49C_ENABLED = true;
@@ -204,6 +204,7 @@ interface InventoryItem {
   lot_id: number;
   product_id?: number | null;
   inventory_type?: "finished" | "semi_finished";
+  inventory_usage?: "finished" | "semi_finished" | "raw_material";
   customer_id?: number | null;
   lot_number?: string;
   inventory_code?: string;
@@ -589,7 +590,7 @@ interface StocktakeBatchResultItem {
   operation: "add" | "decrease";
   lot_id: number;
   location_id: number;
-  inventory_type: "finished" | "semi_finished";
+  inventory_type: "finished" | "semi_finished" | "raw_material";
   version_after: number;
   source_kind?: "existing_stocktake" | "partner_transfer" | null;
 }
@@ -2997,7 +2998,7 @@ export function WarehouseTwinApp() {
     return () => { current = false; };
   }, [canEditLocations, locationEditMode, floorCode, selectedAreaCode, selectedAreaHasPublishedBinding]);
   const selectedAreaCreatesInventoryLocations = Boolean(
-    selectedZonePolicy?.allowed_inventory_types.some((value) => value === "finished" || value === "semi_finished")
+    selectedZonePolicy?.allowed_inventory_types.some((value) => value === "finished" || value === "semi_finished" || value === "raw_material")
   );
   const selectedAreaHasFormalLedger = Boolean(
     selectedAreaHasPublishedBinding
@@ -3232,11 +3233,7 @@ export function WarehouseTwinApp() {
     setLocationDetailOpen(false);
     setLocationItemsExpanded(false);
     setMaterialMatchLotId(null);
-    const nextStocktakeInventoryType: StocktakeInventoryType = (
-      selectedLocation?.warehouse_type === "semi_finished"
-      || (selectedLocation?.warehouse_type === "shared" && selectedLocation.storage_type === "rack")
-    ) ? "semi_finished" : "finished";
-    setStocktakeInventoryType(nextStocktakeInventoryType);
+    setStocktakeInventoryType("finished");
     setStocktakeCustomerQuery("");
     setStocktakeCustomers([]);
     setStocktakeCustomerId("");
@@ -4268,7 +4265,7 @@ export function WarehouseTwinApp() {
       setWarehouseOperationMessage("该货位已不在当前地图中，请刷新后重新选择。");
       return;
     }
-    if (target.warehouse_type === "semi_finished") setStocktakeInventoryType("semi_finished");
+    setStocktakeInventoryType("finished");
     if (target.warehouse_type === "finished") setStocktakeInventoryType("finished");
     setStocktakeSupplementConfirmed(false);
     setSelected({ kind: "pallet", id: `erp-location-${target.location_id}` });
@@ -4386,6 +4383,8 @@ export function WarehouseTwinApp() {
     setStocktakeDrafts(result.items);
     setStocktakeBatchIdempotencyKey(operationKey("warehouse-stocktake-batch"));
     setStocktakeAddQuantity("");
+    setStocktakeInventoryType("finished");
+    setStocktakeSupplementConfirmed(false);
     setWarehouseOperationMessage(`已加入盘点新增草稿：${selectedLocation.location_name} · ${selectedStocktakeProduct.product_name}；正式库存尚未改变。`);
   };
 
@@ -6487,7 +6486,7 @@ export function WarehouseTwinApp() {
         </section>}
         {selectedLocation && <section className="twin-location-card">
           {objectActionsButton}
-          {!traceReadOnly && canStocktake && !locationEditMode && <button type="button" className="twin-primary-action" disabled={loading || pendingPlacementBusy} onClick={() => { setMapMode("move"); setMoveAction("stocktake"); setSearchPanelOpen(true); }}>添加货物</button>}
+          {!traceReadOnly && canStocktake && !locationEditMode && <button type="button" className="twin-primary-action" disabled={loading || pendingPlacementBusy} onClick={() => { setMapMode("move"); setMoveAction("stocktake"); setStocktakeInventoryType("finished"); setStocktakeSupplementConfirmed(false); setSearchPanelOpen(true); }}>添加货物</button>}
           <div className="twin-location-card-title"><div><small>当前位置</small><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em></div>
           <StocktakeObservationPanel key={selectedLocation.location_id} locationId={selectedLocation.location_id}
             observations={selectedLocation.unmatched_inventory_observations || []}
@@ -6516,7 +6515,7 @@ export function WarehouseTwinApp() {
             }}>
               <div className="twin-location-item-code"><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>
               <h4>{item.product_name || "产品名称待补充"}</h4>
-              <div className="twin-location-item-summary"><span>{employeeCustomerName(item)}</span></div>
+              <div className="twin-location-item-summary"><span>{employeeCustomerName(item)}</span><span>{item.inventory_usage === "raw_material" ? "原材料" : item.inventory_type === "semi_finished" ? "半成品" : "成品"}</span></div>
               {stocktakeBlockReason && <>
                 <small className="twin-stocktake-block-reason">不可盘点调减：{stocktakeBlockReason}</small>
                 <small className="twin-stocktake-resolution">解决方法：{stocktakeBlockResolution(stocktakeBlockReason)}</small>
@@ -6609,6 +6608,7 @@ export function WarehouseTwinApp() {
             <div className="twin-map-inbound-type" role="tablist" aria-label="盘点新增库存类型">
               <button type="button" className={stocktakeInventoryType === "finished" ? "active" : ""} disabled={Boolean(selectedLocationFinishedAddBlockReason)} title={selectedLocationFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>成品 · 固定单位箱</button>
               <button type="button" className={stocktakeInventoryType === "semi_finished" ? "active" : ""} disabled={Boolean(selectedLocationSemiFinishedAddBlockReason)} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("semi_finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>半成品 · 固定单位张</button>
+              <button type="button" className={stocktakeInventoryType === "raw_material" ? "active" : ""} disabled={Boolean(selectedLocationSemiFinishedAddBlockReason)} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("raw_material"); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>原材料 · 固定单位张</button>
             </div>
             {selectedLocationAddBlockReason && <p className="twin-stocktake-block-reason">当前新增类型不可用：{selectedLocationAddBlockReason}</p>}
             <label><span>库存实际来源</span><select value={stocktakeSourceKind} onChange={(event) => setStocktakeSourceKind(event.target.value as typeof stocktakeSourceKind)}><option value="existing_stocktake">本厂现场盘点发现</option><option value="partner_transfer">合作纸箱厂搬入</option></select></label>
@@ -6692,17 +6692,16 @@ export function WarehouseTwinApp() {
               <small>加入后可拖动位置、逐层调整格数；应用前不生成正式货位。</small>
             </section>}
             {locationEditMode && canEditLocations && selectedAreaHasPublishedBinding && selectedAreaFeature.capacity_review_status === 'pending' && <div className="twin-location-readonly-note"><b>容量待复核</b><span>已启用区域可直接在下方填写最大栈板数并一次确认；需要独立台账时再进入高级维护。</span>{advancedAreaMaintenanceOpen && <a href={selectedAreaCapacityReviewUrl} target="_top">单独复核容量</a>}</div>}
-            {locationEditMode && canEditLocations && !selectedAreaFeature.formal_area_id && selectedAreaFeature.formal_binding_status !== 'draft' && <div className="twin-location-readonly-note"><b>尚未绑定正式区域</b><span>直接使用下方简化表单确认用途、形式和容量，系统会自动建立绑定并启用。</span></div>}
+            {locationEditMode && canEditLocations && !selectedAreaFeature.formal_area_id && selectedAreaFeature.formal_binding_status !== 'draft' && <div className="twin-location-readonly-note"><b>尚未绑定正式区域</b><span>直接使用下方简化表单确认形式和容量，系统会自动建立绑定并启用。</span></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature.formal_binding_status === 'draft' && selectedAreaFeature.formal_policy_status !== 'published' && <div className="twin-location-readonly-note"><b>区域设置尚未应用</b><span>请展开货位/货架设置，完成并应用本层地图；其他楼层修改不会一起应用。</span></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature.capacity_review_status === 'confirmed' && selectedAreaFeature.capacity_eligible && <div className="twin-location-readonly-note"><b>现场确认最大 {selectedAreaFeature.confirmed_pallet_capacity || 0} 个栈板</b></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature.capacity_review_status === 'confirmed' && !selectedAreaFeature.capacity_eligible && <div className="twin-location-readonly-note"><b>不计入长期容量</b></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature.capacity_review_status === 'excluded' && <div className="twin-location-readonly-note"><b>不计入长期容量</b></div>}
             {locationEditMode && canEditLocations && selectedAreaFeature && <div className="twin-zone-simple-planner">
-              <header><div><b>用途与容量</b></div>{selectedAreaHasPublishedBinding && <span>已启用，可更新</span>}</header>
+              <header><div><b>区域设置与容量</b></div>{selectedAreaHasPublishedBinding && <span>已启用，可更新</span>}</header>
               {!selectedAreaFeature.formal_area_id && formalAreaOptions.length > 0 && <label className="twin-zone-simple-existing"><span>已有区域（可选）</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">按地图编号新建</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.area_code} · {employeeAreaName(area, { floorCode: area.floor_code })}</option>)}</select></label>}
               <div className="twin-zone-primary-fields">
                 <label className="twin-zone-name-field"><span>区域名称</span><input disabled={spatialEditBusy} maxLength={100} value={formalAreaNameDraft} onChange={(event) => updateAreaSettingsDraft({ name: event.target.value })} placeholder="例如 4F 新振成品区" /></label>
-                <label><span>用途</span><select disabled={spatialEditBusy} value={simpleAreaUsage} onChange={(event) => updateAreaSettingsDraft({ usage: event.target.value as InventoryUsage })}><option value="finished">成品</option><option value="semi_finished">半成品</option><option value="raw_material">原材料</option><option value="mold">模具</option><option value="print_plate">印刷版</option><option value="temporary_turnover">临时周转</option></select></label>
                 <label><span>形式</span><select disabled={spatialEditBusy} value={simpleAreaLayout} onChange={(event) => updateAreaSettingsDraft({ layout: event.target.value as Exclude<StorageLayout, "mixed"> })}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
                 <label><span>{simpleAreaLayout === "pallet_ground" ? "栈板货位数" : "最大货架数"}</span><input disabled={spatialEditBusy} type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => updateAreaSettingsDraft({ capacity: event.target.value })} /></label>
                 {simpleAreaLayout === "pallet_ground" && <label><span>货位朝向</span><select aria-label="货位朝向" disabled={spatialEditBusy} value={simpleAreaRotation} onChange={(event) => updateAreaSettingsDraft({ rotation: Number(event.target.value) as 0 | 90 })}><option value={0}>0° · 1.2m × 1m</option><option value={90}>90° · 1m × 1.2m</option></select></label>}
@@ -6784,10 +6783,7 @@ export function WarehouseTwinApp() {
                 <label><span>区域名称</span><input maxLength={100} value={formalAreaNameDraft} onChange={(event) => setFormalAreaNameDraft(event.target.value)} placeholder="例如 右区C2 新振（主通道西侧）" /></label>
                 <label><span>存储形式</span><select value={selectedZonePolicy.storage_layout} onChange={(event) => setZonePolicyDrafts((current) => ({ ...current, [selectedAreaFeature.id]: { ...selectedZonePolicy, storage_layout: event.target.value as StorageLayout } }))}><option value="rack">货架区</option><option value="pallet_ground">栈板地堆区</option><option value="mixed">货架＋栈板混合区</option></select></label>
               </div>
-              <div><b>区域允许存放类型</b><small>可多选；只保存区域策略，不自动转换现有库存</small></div>
-              <div className="twin-zone-policy-options">{([[
-                "finished", "成品"
-              ], ["semi_finished", "半成品"], ["raw_material", "原材料"], ["mold", "模具"], ["print_plate", "印刷版"], ["temporary_turnover", "临时周转"]] as Array<[InventoryUsage, string]>).map(([value, label]) => <label key={value}><input type="checkbox" checked={selectedZonePolicy.allowed_inventory_types.includes(value)} onChange={() => toggleAreaUsage(value)} /><span>{label}</span></label>)}</div>
+              <p>货位可同时存放成品、半成品和原材料，添加时选择货物类型。</p>
               <button type="button" className="primary" disabled={spatialEditBusy || !formalAreaCodeDraft.trim() || !selectedZonePolicy.allowed_inventory_types.length} onClick={saveSelectedZonePolicy}>绑定正式区域并保存策略</button>
             </div>}
             {locationEditMode && advancedAreaMaintenanceOpen && canEditLocations && selectedAreaCode && selectedAreaCreatesInventoryLocations && selectedAreaHasFormalLedger && <div className="twin-location-create">
@@ -6817,7 +6813,7 @@ export function WarehouseTwinApp() {
               {!moldAreaLoading && moldAreaResponse && moldAreaResponse.total > moldAreaResponse.page_size && <div className="twin-area-mold-pagination"><button type="button" disabled={moldAreaResponse.page <= 1} onClick={() => setMoldAreaPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {moldAreaResponse.page} / {Math.ceil(moldAreaResponse.total / moldAreaResponse.page_size)} 页</span><button type="button" disabled={moldAreaResponse.page * moldAreaResponse.page_size >= moldAreaResponse.total} onClick={() => setMoldAreaPage((value) => value + 1)}>下一页</button></div>}
             </div> : <>
               <div className="twin-area-lot-list">
-                {!selectedInventory.length && !locationEditMode && <div className="twin-area-empty"><b>{selectedAreaHasPublishedBinding ? "区域已启用，当前没有货物" : selectedAreaActivationLabel === "待启用" ? "区域绑定仍待启用" : "区域尚未启用"}</b><span>{selectedAreaHasPublishedBinding ? `${selectedAreaCapacitySummary}；库存为 0 不代表区域未启用。` : "进入区域规划确认用途、形式和容量后即可启用；系统不会生成模拟货物。"}</span></div>}
+                {!selectedInventory.length && !locationEditMode && <div className="twin-area-empty"><b>{selectedAreaHasPublishedBinding ? "区域已启用，当前没有货物" : selectedAreaActivationLabel === "待启用" ? "区域绑定仍待启用" : "区域尚未启用"}</b><span>{selectedAreaHasPublishedBinding ? `${selectedAreaCapacitySummary}；库存为 0 不代表区域未启用。` : "进入区域规划确认形式和容量后即可启用；系统不会生成模拟货物。"}</span></div>}
                 {selectedInventory.length > 0 && !filteredSelectedInventory.length && <div className="twin-area-empty"><b>本区域没有匹配结果</b><span>请更换存货编码、产品、客户或位置关键词。</span></div>}
                 {visibleSelectedInventory.map((item) => <article className={`twin-area-lot ${focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey ? "search-hit product-search-hit" : focusedSearchItem?.lot_id === item.lot_id ? "search-hit" : ""}`} key={item.lot_id}>
                   <div><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(inventoryPhysicalQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>

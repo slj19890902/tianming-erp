@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.warehouse_storage_usage import compatible_warehouse_types, effective_inventory_usages
+
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import json
@@ -546,7 +548,7 @@ def operational_location_condition(
         _registered_enabled_space_exists(),
     ]
     if warehouse_types:
-        conditions.append(WarehouseLocation.warehouse_type.in_(tuple(warehouse_types)))
+        conditions.append(WarehouseLocation.warehouse_type.in_(tuple(compatible_warehouse_types(warehouse_types))))
     if pallet_storage_only:
         conditions.append(
             WarehouseLocation.storage_type.in_(("ground", "temporary_aisle"))
@@ -576,7 +578,7 @@ def operational_location_issue(
         return "该库位尚未完成正式平面图布局"
     if not require_published and (location.placement_status or "placed") != "placed":
         return "该库位尚未完成平面图布局"
-    if warehouse_types and location.warehouse_type not in set(warehouse_types):
+    if warehouse_types and location.warehouse_type not in compatible_warehouse_types(warehouse_types):
         return "所选库位类型与当前业务不匹配"
     if pallet_storage_only and location.storage_type not in {
         "ground",
@@ -623,6 +625,8 @@ def operational_location_issue(
             return str(projection["map_issue"] or "该库位尚未发布到当前实测地图")
         if policy is not None:
             assert isinstance(policy, WarehouseAreaStoragePolicy)
+            if required_inventory_type in {"finished", "semi_finished", "raw_material"} and policy.storage_layout not in {"pallet_ground", "rack", "mixed"}:
+                return "操作区或非存储区域不能存放货物"
             try:
                 allowed_types = json.loads(policy.allowed_inventory_types_json)
             except (TypeError, ValueError, json.JSONDecodeError):
@@ -632,9 +636,7 @@ def operational_location_issue(
                 or not all(isinstance(value, str) for value in allowed_types)
             ):
                 return "该库位所属区域的存放策略已损坏"
-            if required_inventory_type and required_inventory_type not in {
-                value.strip() for value in allowed_types
-            }:
+            if required_inventory_type and required_inventory_type not in effective_inventory_usages(allowed_types, policy.storage_layout):
                 return "该库位所属区域不允许当前库存类型"
             if (
                 pallet_storage_only
@@ -743,7 +745,7 @@ def list_operational_locations(
         )
         if warehouse_types:
             query = query.where(
-                WarehouseLocation.warehouse_type.in_(tuple(warehouse_types))
+                WarehouseLocation.warehouse_type.in_(tuple(compatible_warehouse_types(warehouse_types)))
             )
         if pallet_storage_only:
             query = query.where(

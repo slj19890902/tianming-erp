@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.warehouse_storage_usage import effective_inventory_usages
+
 from dataclasses import dataclass
 from datetime import date
 from hashlib import sha256
@@ -58,7 +60,7 @@ class WarehouseStocktakeBatchItem:
     location_id: int
     expected_layout_version: int
     quantity: int
-    inventory_type: Literal["finished", "semi_finished"] | None = None
+    inventory_type: Literal["finished", "semi_finished", "raw_material"] | None = None
     unit: Literal["boxes", "sheets"] | None = None
     customer_id: int | None = None
     product_id: int | None = None
@@ -476,11 +478,7 @@ def stocktake_decrease_issues(
             or not str(blockers.published_map_revision or "").strip()
         ):
             issues[lot_id] = "库存所在正式区域尚未发布"
-        elif blockers.warehouse_type not in (
-            {"finished", "shared"}
-            if lot.inventory_type == "finished"
-            else {"semi_finished", "shared"}
-        ):
+        elif blockers.warehouse_type not in {"finished", "semi_finished", "shared"}:
             issues[lot_id] = "库存类型与货位类型不匹配"
         elif not _published_policy_allows_inventory_type(
             blockers.allowed_inventory_types_json,
@@ -540,7 +538,7 @@ def _published_policy_allows_inventory_type(
     return bool(
         isinstance(allowed_types, list)
         and all(isinstance(value, str) for value in allowed_types)
-        and inventory_type in {value.strip() for value in allowed_types}
+        and inventory_type in effective_inventory_usages(allowed_types)
     )
 
 
@@ -593,30 +591,12 @@ def _assert_add_compatible(
     assert item.unit is not None
     assert item.customer_id is not None
     assert item.product_id is not None
+    # Co-location does not merge lots, owners, units, or product identities.
     for lot in _location_live_lots(db, item.location_id):
-        if lot.inventory_type != item.inventory_type or lot.unit != item.unit:
-            raise WarehouseStocktakeBatchError(
-                "当前货位已有不同库存类型或单位，不能盘点新增", 409
-            )
-        if item.inventory_type == "finished":
-            detail: FinishedGoodsInventoryDetail | None = lot.finished_detail
-            compatible = bool(
-                detail is not None
-                and lot.status == "active"
-                and int(lot.quantity_damaged or 0) == 0
-            )
-        else:
-            detail = lot.semi_finished_detail
-            compatible = bool(
-                detail is not None
-                and detail.owner_customer_id == item.customer_id
-                and item.product_id
-                in set(semi_finished_lot_allowed_product_ids(db, lot.id))
-            )
-        if not compatible:
-            raise WarehouseStocktakeBatchError(
-                "当前货位已有不同客户或产品，不能合并盘点新增", 409
-            )
+        detail = lot.finished_detail if lot.inventory_type == "finished" else lot.semi_finished_detail
+        expected_unit = "boxes" if lot.inventory_type == "finished" else "sheets"
+        if detail is None or lot.unit != expected_unit or lot.status != "active" or int(lot.quantity_damaged or 0) > 0:
+            raise WarehouseStocktakeBatchError("当前货位存在冻结、报损或明细不完整的库存，请先核对", 409)
 
     current_pallet = db.scalar(
         select(InventoryPallet)
@@ -628,10 +608,6 @@ def _assert_add_compatible(
     )
     if current_pallet is None:
         return
-    if item.inventory_type != "finished":
-        raise WarehouseStocktakeBatchError(
-            "半成品货位已有当前栈板，不能混放盘点新增", 409
-        )
     for pallet_item in current_pallet.items:
         if pallet_item.inventory_lot_id is None:
             raise WarehouseStocktakeBatchError(
@@ -717,6 +693,7 @@ def _preflight_add(
     expected_unit = {
         "finished": "boxes",
         "semi_finished": "sheets",
+        "raw_material": "sheets",
     }.get(item.inventory_type or "")
     if (
         item.inventory_type is None
@@ -777,7 +754,7 @@ def _preflight_add(
         customer_id=item.customer_id,
         product_id=item.product_id,
     )
-    if item.inventory_type == "semi_finished":
+    if item.inventory_type in {"semi_finished", "raw_material"}:
         _semi_product_facts(product)
     _assert_add_compatible(db, item=item)
 
@@ -831,7 +808,6 @@ def preflight_warehouse_stocktake_batch(
         raise WarehouseStocktakeBatchError("盘点批次至少包含一项", 422)
     client_ids: set[str] = set()
     decreased_lot_ids: set[int] = set()
-    planned_location_identity: dict[int, tuple[str, str, int, int]] = {}
     for item in items:
         if item.client_item_id in client_ids:
             raise WarehouseStocktakeBatchError(
@@ -844,17 +820,6 @@ def preflight_warehouse_stocktake_batch(
             assert item.unit is not None
             assert item.customer_id is not None
             assert item.product_id is not None
-            identity = (
-                item.inventory_type,
-                item.unit,
-                item.customer_id,
-                item.product_id,
-            )
-            previous = planned_location_identity.setdefault(item.location_id, identity)
-            if previous != identity:
-                raise WarehouseStocktakeBatchError(
-                    "同一货位不能在一个盘点批次中新增不同库存身份", 409
-                )
         else:
             _preflight_decrease(db, item)
             assert item.lot_id is not None
@@ -1044,6 +1009,22 @@ def _execute_add(
         product = db.get(Product, item.product_id)
         assert product is not None
         facts = _semi_product_facts(product)
+        # Raw boards and processed sheets share the existing sheet ledger;
+        # sheet_type retains their physical stage without creating finished stock.
+        sheet_type = facts["sheet_type"]
+        if item.inventory_type == "raw_material":
+            sheet_type = "raw_board"
+        elif sheet_type == "raw_board":
+            sheet_type = "net_sheet"
+        occupied_location = bool(
+            _location_live_lots(db, item.location_id)
+            or db.scalar(
+                select(InventoryPallet.id).where(
+                    InventoryPallet.location_id == item.location_id,
+                    InventoryPallet.is_current.is_(True),
+                ).limit(1)
+            )
+        )
         lot = manual_semi_finished_in(
             db,
             location_id=item.location_id,
@@ -1056,7 +1037,8 @@ def _execute_add(
             flute_type=facts["flute_type"],
             board_length_mm=facts["board_length_mm"],
             board_width_mm=facts["board_width_mm"],
-            sheet_type=facts["sheet_type"],
+            capacity_source_location_id=item.location_id if occupied_location else None,
+            sheet_type=sheet_type,
             supplier_name=None,
             customer_id=item.customer_id,
             crease_type=product.crease_type,

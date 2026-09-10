@@ -80,7 +80,7 @@ def test_face_conflict_is_bidirectional_and_cannot_be_reserved(lot_db,white):
         ensure_semi_finished_lot_eligibility(db,lot=lot,product_id=product.id,customer_id=product.customer_id,expected=expected)
 
 
-def test_unknown_material_reverse_suggestions_and_exact_first(lot_db):
+def test_material_entry_does_not_require_extra_confidence_approval(lot_db):
     db,data,lot,user=prepare(lot_db)
     lot.semi_finished_detail.sheet_type='raw_board'
     update_goods(lot.id,GoodsUpdate(facts=GoodsFacts(material_confidence='estimated',estimated_material='目测牛卡'),
@@ -90,13 +90,11 @@ def test_unknown_material_reverse_suggestions_and_exact_first(lot_db):
     assert items[0]['exact_dimension_match']
     assert not items[-1]['exact_dimension_match']
     assert all(i['requires_production_review'] for i in items)
-    assert any('材质为估计' in warning for warning in items[0]['warnings'])
+    assert not any('材质为估计' in warning for warning in items[0]['warnings'])
     product=data['products'][0]
     expected=SemiFinishedSignature(customer_id=product.customer_id,board_length_mm=800,board_width_mm=600,
         normalized_material_code='A416D',flute_type='B',component_type='whole',pieces_per_box=1,stock_yield_per_sheet=1)
-    with pytest.raises(WarehouseInventoryError,match='材质为估计'):
-        ensure_semi_finished_lot_eligibility(db,lot=lot,product_id=product.id,customer_id=product.customer_id,expected=expected)
-    with pytest.raises(ValidationError):GoodsFacts(material_confidence='estimated',usage_confirmed=True)
+    assert ensure_semi_finished_lot_eligibility(db,lot=lot,product_id=product.id,customer_id=product.customer_id,expected=expected)=='customer_generic'
 
 
 def test_reverse_matches_legacy_report_dimensions_and_material_layer(lot_db):
@@ -128,19 +126,20 @@ def test_processed_goods_require_product_approval_and_multiple_customers(lot_db)
 
 
 @pytest.mark.parametrize('layer,flute',[(3,'B'),(7,'AAA')])
-def test_sheet_entry_unknown_no_fake_product_replay_and_layout_cas(stocktake_app,layer,flute):
+def test_sheet_entry_typed_code_no_fake_product_replay_and_layout_cas(stocktake_app,layer,flute):
     app,factory,ids,_=stocktake_app
     with factory() as db:
         user=db.scalar(select(User).where(User.username=='p147d-admin'))
         loc=ids['loc_fg1_add'];version=db.get(Floor3LocationLayout,loc).version
-        payload=SheetEntry(facts=GoodsFacts(estimated_material='标签已丢失'),location_id=loc,expected_layout_version=version,
+        payload=SheetEntry(facts=GoodsFacts(material_code='A1B' if layer==3 else 'A1B1C1D'),location_id=loc,expected_layout_version=version,
             quantity=15,stock_date=date.today(),internal_name='通用纸板',board_length_mm=800,board_width_mm=600,
             layer_count=layer,flute_type=flute,idempotency_key=f'goods-entry-{layer}')
         result=create_sheet(payload,db,user)
         lot=db.get(InventoryLot,result['lot_id'])
         assert lot.quantity_available==15 and lot.unit=='sheets'
         assert lot.semi_finished_detail.material_id is None
-        assert lot.semi_finished_detail.material_code_snapshot=='未知'
+        assert lot.semi_finished_detail.material_code_snapshot==payload.facts.material_code
+        assert lot.estimated_unit_cost_snapshot is None
         assert lot.semi_finished_detail.owner_customer_id is None
         assert create_sheet(payload,db,user)==result
         count=db.scalar(select(func.count()).select_from(InventoryLot))

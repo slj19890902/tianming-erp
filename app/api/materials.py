@@ -195,6 +195,7 @@ class SupplierPaperCodePayload(BaseModel):
     code_char: str = Field(min_length=1, max_length=1)
     paper_name: str = Field(min_length=1, max_length=250)
     gram_weight: int = Field(gt=0, le=2000)
+    color: Literal["kraft", "white"] | None = None
     paper_grade: str | None = Field(default=None, max_length=100)
     paper_role: str | None = Field(default=None, max_length=50)
     remark: str | None = None
@@ -933,6 +934,7 @@ def _paper_code_dict(row: SupplierPaperCode) -> dict:
         "code_char": row.code_char,
         "paper_name": row.paper_name,
         "gram_weight": row.gram_weight,
+        "color": row.color,
         "paper_grade": row.paper_grade,
         "paper_role": row.paper_role,
         "remark": row.remark,
@@ -1024,6 +1026,7 @@ def _compose_preview(
                 "code_char": char,
                 "paper_name": paper.paper_name if paper else None,
                 "gram_weight": paper.gram_weight if paper else None,
+                "color": paper.color if paper else "kraft",
                 "paper_grade": paper.paper_grade if paper else None,
                 "configured_role": paper.paper_role if paper else None,
                 "missing": paper is None,
@@ -1125,6 +1128,8 @@ def create_supplier_paper_code(
     user: User = Depends(can_write),
 ) -> dict:
     data = payload.model_dump()
+    if data.get("color") is None:
+        data.pop("color", None)
     data["supplier_name"] = _canonical_supplier_for_write(
         db,
         payload.supplier_name,
@@ -1164,6 +1169,8 @@ def update_supplier_paper_code(
         raise HTTPException(status_code=404, detail="基础纸种代码不存在")
     before = _paper_code_dict(row)
     data = payload.model_dump()
+    if data.get("color") is None:
+        data.pop("color", None)
     data["supplier_name"] = _canonical_supplier_for_write(
         db,
         payload.supplier_name,
@@ -1279,6 +1286,7 @@ def save_material_composition(
         final_price = payload.quote_price
     material = Material(
             code=payload.material_code,
+            is_white_face=preview["layers"][0]["color"] == "white",
             paper_composition=composition,
             layer_count=preview["layer_count"],
             flute_type=None,

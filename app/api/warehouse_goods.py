@@ -18,6 +18,9 @@ from app.models.audit import OperationLog
 from app.models.warehouse_inventory import InventoryLot, InventoryMovement
 from app.models.warehouse_goods import WarehouseGoodsProfile, WarehouseGoodsMutation
 from app.services.warehouse_goods import goods_profile, lot_face
+from app.services.paper_color import material_face
+from app.services.inventory_cost_snapshot import estimate_semi_finished_cost, apply_cost_snapshot
+from app.services.material_pricing import get_effective_material_price
 from app.services.warehouse_inventory import manual_semi_finished_in, WarehouseInventoryError
 from app.services.warehouse_stocktake_batch import (
     _supported_formal_location, _location_live_lots, _is_dispatch_location,
@@ -34,6 +37,7 @@ class GoodsFacts(BaseModel):
     material_confidence: Literal["unknown", "estimated", "confirmed"] = "unknown"
     estimated_material: str = Field(default="", max_length=200)
     verified_material_id: int | None = Field(default=None, ge=1)
+    material_code: str = Field(default="", max_length=100)
     face_paper: Literal["kraft", "white", "unknown"] = "kraft"
     processing: Literal["raw", "cut", "die_cut", "creased", "printed"] = "raw"
     mold_tool_id: int | None = Field(default=None, ge=1)
@@ -49,12 +53,6 @@ class GoodsFacts(BaseModel):
             raise ValueError("指定客户时至少选择一家客户")
         if self.scope == "general" and self.customer_ids:
             raise ValueError("通用库存不能同时保留指定客户，请先清空客户选择")
-        if self.material_confidence != "confirmed" and self.verified_material_id:
-            raise ValueError("估计材质请填在估计说明中，不能登记为已确认材质")
-        if self.usage_confirmed and (self.material_confidence != "confirmed" or self.face_paper == "unknown"):
-            raise ValueError("确认生产用途前请先核实材质和面纸颜色")
-        if self.usage_confirmed and self.processing in {"die_cut", "printed", "creased"} and not self.product_ids:
-            raise ValueError("加工片料请逐款勾选已确认的可用产品")
         return self
 
 
@@ -110,10 +108,12 @@ def validate_references(db, facts):
     material = db.get(Material, facts.verified_material_id) if facts.verified_material_id else None
     if facts.verified_material_id and (not material or not material.is_active):
         raise HTTPException(422, "材质不存在或已停用")
-    if material and facts.face_paper != ("white" if material.is_white_face else "kraft"):
-        raise HTTPException(422, "面纸颜色与所选供应商材质不一致")
-    if facts.processing == "raw" and facts.allow_material_substitution:
-        raise HTTPException(422, "原材料不能开启材质替代")
+    # Retain legacy JSON fields for old clients; eligibility no longer depends on approval flags.
+    facts.material_code = material.code if material else facts.material_code.strip()
+    facts.face_paper = material_face(db, material)
+    facts.material_confidence = "confirmed"
+    facts.usage_confirmed = True
+    facts.allow_material_substitution = facts.processing != "raw"
     return material
 
 
@@ -156,12 +156,29 @@ def options(q: str = "", db: Session = Depends(get_db), user: User = Depends(can
         customers = customers.where(Customer.id.in_(scope))
         products = products.where(Product.customer_id.in_(scope))
     # The picker searches in the browser; complete authorized options avoid a silent 50-row cutoff.
-    return dict(customers=[dict(id=c.id, name=c.chinese_short_name or c.name) for c in db.scalars(customers.order_by(Customer.id))],
+    return dict(customers=[dict(id=c.id, name=c.chinese_short_name or c.name, full_name=c.name, code=c.customer_code) for c in db.scalars(customers.order_by(Customer.id))],
         products=[dict(id=p.id, customer_id=p.customer_id, name=p.product_name, code=p.product_code,
             mold_tool_id=p.mold_tool_id) for p in db.scalars(products.order_by(Product.id))],
         materials=[dict(id=m.id, code=m.code, supplier=m.supplier_name, layer_count=m.layer_count,
-            is_white_face=m.is_white_face) for m in db.scalars(select(Material).where(Material.is_active.is_(True)).order_by(Material.supplier_name, Material.code))],
+            is_white_face=material_face(db, m) == "white") for m in db.scalars(select(Material).where(Material.is_active.is_(True)).order_by(Material.supplier_name, Material.code))],
         molds=[dict(id=m.id, name=m.mold_code) for m in db.scalars(select(MoldTool).where(MoldTool.is_active.is_(True), MoldTool.archive_status == "active"))])
+
+
+@router.get("/material-price")
+def material_price(material_id: int, flute_type: str = "", length_mm: int = 0, width_mm: int = 0,
+                   quantity: int = 0, db: Session = Depends(get_db), user: User = Depends(admin_only)):
+    material = db.get(Material, material_id)
+    if material is None or not material.is_active:
+        raise HTTPException(422, "材质不存在或已停用")
+    result = get_effective_material_price(db, material=material, supplier_name=material.supplier_name,
+        layer_count=material.layer_count, flute_type=flute_type or None)
+    estimate = estimate_semi_finished_cost(db, material_id=material.id, material_code=material.code,
+        supplier_name=material.supplier_name, layer_count=material.layer_count, flute_type=flute_type,
+        board_length_mm=length_mm, board_width_mm=width_mm) if length_mm > 0 and width_mm > 0 else None
+    return dict(square_price=str(result.get("effective_price") or "0"), unit=material.price_unit,
+        currency=material.purchase_currency, tax_included=material.purchase_tax_included,
+        face_paper=material_face(db, material), unit_price=str(estimate.unit_cost) if estimate else None,
+        total_price=str(estimate.unit_cost * quantity) if estimate and quantity > 0 else None)
 
 
 @router.get("/{lot_id}")
@@ -176,9 +193,11 @@ def get_goods(lot_id: int, db: Session = Depends(get_db), user: User = Depends(c
             customer_ids=[detail.owner_customer_id] if detail.owner_customer_id else [],
             processing="raw" if detail.sheet_type == "raw_board" else "creased" if detail.sheet_type == "creased_sheet" else "cut",
             face_paper=lot_face(db, lot), estimated_material=detail.material_code_snapshot or "").model_dump()
+    profile["material_code"] = profile.get("material_code") or detail.material_code_snapshot or ""
     return dict(lot_id=lot.id, version=lot.version, facts=profile,
         physical=dict(length=detail.board_length_mm, width=detail.board_width_mm, flute=detail.flute_type,
-            material=detail.material_code_snapshot, name=detail.internal_name),
+            material=detail.material_code_snapshot, name=detail.internal_name,
+            settlement_unit_price=str(lot.estimated_unit_cost_snapshot) if lot.estimated_unit_cost_snapshot is not None else None),
         editable=lot.status == "active" and lot.quantity_reserved == 0 and lot.quantity_available > 0)
 
 
@@ -192,7 +211,7 @@ def update_goods(lot_id: int, payload: GoodsUpdate, db: Session = Depends(get_db
         return previous
     if not lot.semi_finished_detail:
         raise HTTPException(422, "成品不能改为通用片料")
-    facts = payload.facts
+    facts = payload.facts.model_copy(deep=True)
     material = validate_references(db, facts)
     raw = lot.semi_finished_detail.sheet_type == "raw_board"
     if raw != (facts.processing == "raw"):
@@ -201,8 +220,8 @@ def update_goods(lot_id: int, payload: GoodsUpdate, db: Session = Depends(get_db
         raise HTTPException(422, "压线状态应按原始入库事实维护，不能通过用途编辑新增或取消压线")
     if material and material.layer_count and material.layer_count != lot.semi_finished_detail.layer_count:
         raise HTTPException(422, "核实材质的层数与原始库存不一致，请先核对")
-    if facts.material_confidence == "confirmed" and not facts.verified_material_id:
-        raise HTTPException(422, "确认材质请选定供应商材质代码；原始入库材质仍保留")
+    if not facts.material_code:
+        facts.material_code = lot.semi_finished_detail.material_code_snapshot
     before = goods_profile(db, lot)
     try:
         changed = db.execute(update(InventoryLot).where(InventoryLot.id == lot_id,
@@ -225,15 +244,25 @@ def create_sheet(payload: SheetEntry, db: Session = Depends(get_db), user: User 
     previous = replay(db, payload.idempotency_key, digest)
     if previous is not None:
         return previous
-    facts = payload.facts
+    facts = payload.facts.model_copy(deep=True)
     movement_key = "goods:" + payload.idempotency_key
     if db.scalar(select(InventoryMovement.id).where(InventoryMovement.idempotency_key == movement_key)):
         raise HTTPException(409, "入库流水已存在但用途回执不完整，请刷新核对，不重复入库")
     material = validate_references(db, facts)
-    if facts.material_confidence == "confirmed" and material is None:
-        raise HTTPException(422, "确认材质请选定供应商材质代码")
+    if not facts.material_code:
+        raise HTTPException(422, "请输入材质代码，或选择供应商对应材质")
     if material and material.layer_count and material.layer_count != payload.layer_count:
         raise HTTPException(422, "层数与材质主数据不一致")
+    estimate = estimate_semi_finished_cost(db, material_id=material.id, material_code=material.code,
+        supplier_name=material.supplier_name, layer_count=payload.layer_count, flute_type=payload.flute_type,
+        board_length_mm=payload.board_length_mm, board_width_mm=payload.board_width_mm) if material else None
+    if material and estimate is None:
+        raise HTTPException(422, "所选供应商材质没有可用的当前平方价，请先在材质维护中保存报价")
+    if estimate:
+        estimate.detail.update(estimate_basis="manual_selected_material_settlement", material_version=material.version,
+            currency=material.purchase_currency, tax_included=material.purchase_tax_included,
+            tax_rate=str(material.purchase_tax_rate) if material.purchase_tax_rate is not None else None,
+            settlement_square_price=str(estimate.square_price), settlement_unit_price=str(estimate.unit_cost))
     try:
         occupied = bool(_location_live_lots(db, payload.location_id))
         location = _supported_formal_location(db, location_id=payload.location_id,
@@ -247,8 +276,8 @@ def create_sheet(payload: SheetEntry, db: Session = Depends(get_db), user: User 
             raise HTTPException(422, "压线片料请完整登记压线类型及三段尺寸")
         lot = manual_semi_finished_in(db, location_id=payload.location_id, quantity=payload.quantity,
             stock_date=payload.stock_date, source_type="stocktake" if payload.source_kind == "existing_stocktake" else "transfer",
-            material_code=material.code if material else "未知", material_id=material.id if material else None,
-            material_is_unknown=material is None,
+            material_code=facts.material_code, material_id=material.id if material else None,
+            capture_material_cost=material is not None,
             supplier_name=material.supplier_name if material else None, layer_count=payload.layer_count,
             flute_type=payload.flute_type, board_length_mm=payload.board_length_mm, board_width_mm=payload.board_width_mm,
             sheet_type="raw_board" if facts.processing == "raw" else "creased_sheet" if facts.processing == "creased" else "net_sheet",
@@ -261,6 +290,8 @@ def create_sheet(payload: SheetEntry, db: Session = Depends(get_db), user: User 
             crease_middle_mm=payload.crease_middle_mm, crease_right_mm=payload.crease_right_mm,
             movement_reason="人工补录原材料" if facts.processing == "raw" else "人工补录半成品",
             remarks=facts.note, cutting_note=None)
+        if estimate:
+            apply_cost_snapshot(lot, estimate)
         return record(db, user, lot, facts, payload.idempotency_key, digest, None, "CREATE")
     except (WarehouseInventoryError, WarehouseStocktakeBatchError) as error:
         db.rollback()

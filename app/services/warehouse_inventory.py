@@ -4450,6 +4450,7 @@ def manual_semi_finished_in(
     internal_name: str | None = None,
     capacity_source_location_id: int | None = None,
     material_is_unknown: bool = False,
+    capture_material_cost: bool = True,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -4540,7 +4541,7 @@ def manual_semi_finished_in(
             flute_type=flute,
             board_length_mm=board_length_mm,
             board_width_mm=board_width_mm,
-        ),
+        ) if capture_material_cost else None,
         captured_at=now,
     )
     db.add(lot)

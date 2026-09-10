@@ -1,5 +1,15 @@
 # MULTILEVEL-BOM-20260909
 
+## 2026-09-10 真实旧订单转换核对清单候选
+
+新增只读review_legacy_cutover，尚不是转换writer。拒绝非本客户/已完成/已有真实图或边界/旧schema或数量不符；拒绝未提交的Session改动，不隐式flush，清理干净identity cache后重读。以脱离Session的订单副本编译remaining=quantity-delivered，新快照使用旧display_order之后的位置，清空可选模板边FK避免旧item/source唯一约束冲突；正式产品ID/版本和真实层级图完整保留。不改旧行、不添加图、不释放预占。
+
+校验清单冻结旧订单/快照、当前编译图和新行、旧预占/批次全字段、需求调整、生产任务/完工、送货行/单据及两种实际分配；另计算剩余finished_order预占的来源成本切片，估算仍actual=false。规范化Decimal/日期并输出SHA256，后续writer须在写锁内重算与已核对hash比较。清单不等于全链路转换完毕，后续采购/外购物理源接管仍须专用核对。
+
+真实68隔离副本经原fixture备份/真实升级至78：00205订单10050保持1800/已送1500，旧快照2/3不变，生成待追加的3799×300、3771×900、3783×1200；只拿3799×300。旧预占334/335和批次365/366原样，位置656保留，成本切片仍明确估算。SQL监听全程仅SELECT；六张订单/快照/库存/预占/流水/货位表全量前后相等；重读hash一致，改批次版本/预占事实/主档版本均hash变化，错客户/脏Session拒绝。最终5通过23.05秒（此前两轮同5项不累计）。compileall/diff check通过。
+
+实查正式远端仍18baf8b1，无新迁移/UI；未写正式库地图草稿、未部署。下一项实际writer需追加graph/current/source映射和边界，再在同一事务交接剩余预占、组装并预占成套输出、保留历史消耗和成本。原reserve_finished_inventory_for_bom_component依法拒绝已送订单，不能关掉门禁；需专用受控转换，不得临时把delivered置0。原release_finished_reservation会refresh生产任务，writer必须检查该副作用，不能悄悄重写历史任务。
+
 ## 2026-09-10 撤销送货执行边界预检候选
 
 _cancel_delivery在原dispatched→pending原子抢占和对账/回单门禁之后、库存撤销之前，调用validate_cancel_execution_boundary。只对明确cutover订单校验冻结来源摘要及撤销后已送量不低于旧delivered_before；发现本送货的直接完工分配或库存分配仍引用history快照也拒绝，即使后来已送足够多、单纯数值相减未跨线也不能撤销旧来源。业务冲突转409，原事务rollback恢复送货状态、已送数和分配。不删权限/CAS/审计/回单门禁，不触发正式转换。

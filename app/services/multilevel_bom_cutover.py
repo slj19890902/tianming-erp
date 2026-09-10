@@ -148,28 +148,8 @@ def convert_reserved_legacy_order(db, *, order_item_id, customer_id, reviewed_ha
         item, graph, picking, active, lots, remaining, planned = prepare_reserved_cutover(
             db, review=review, customer_id=customer_id,
             source_lot_versions=source_lot_versions, target_locations=target_locations)
-        for node in graph.nodes:
-            changed = db.execute(update(Product).where(Product.id == node.product_id, Product.version == node.version,
-                Product.customer_id == customer_id, Product.is_active.is_(True), Product.deleted_at.is_(None), Product.purged_at.is_(None))
-                .values(version=Product.version, updated_at=Product.updated_at))
-            if changed.rowcount != 1:
-                raise BomPlanError("转换产品已变化")
-        document = dump_graph(graph)
-        db.add(OrderBomGraph(order_item_id=item.id, root_product_id=graph.root_id, customer_id=customer_id,
-            schema_version=graph_schema_version(graph), document_json=document, content_hash=graph_hash(document), created_by=actor.id))
-        db.flush()
-        db.add_all([OrderBomGraphProduct(order_item_id=item.id, product_id=n.product_id, product_version=n.version) for n in graph.nodes])
-        db.add_all(review.compiled.snapshots)
-        db.flush()
-        basis, checksum = make_cutover_basis(graph=graph, order_item_id=item.id, order_quantity=item.quantity,
-            delivered_before=item.delivered_quantity or 0, history_rows=review.history, current_rows=review.compiled.snapshots)
-        db.add(OrderBomExecutionCutover(order_item_id=item.id, order_quantity=item.quantity,
-            delivered_before=item.delivered_quantity or 0, basis_json=basis, basis_hash=checksum,
-            idempotency_key=operation_key, request_hash=request_hash, created_by=actor.id))
-        db.flush()
-        db.add_all([OrderBomCutoverSource(order_item_id=item.id, snapshot_id=s.id, role=role)
-            for role, rows in [("history", review.history), ("current", review.compiled.snapshots)] for s in rows])
-        db.flush()
+        checksum = persist_cutover_review(db, review=review, item=item, customer_id=customer_id,
+            operation_key=operation_key, request_hash=request_hash, actor=actor)
         # Dedicated remaining-only handoff: do not run the ordinary manual
         # release API, whose production-task refresh would change old facts.
         from app.services.warehouse_inventory import _balances, _movement, _finished_reservation_status
@@ -249,3 +229,31 @@ def _retain_component_reservations(db, *, item, order, lots, sources, operation_
         _movement(db, lot=lot, movement_type="reserve", quantity=quantity, before=before,
             operator_id=actor.id, reason="已核对的子件分存版本切换，原批次货位不变", idempotency_key=key,
             reservation_id=reservation.id, related_order_id=order.id, related_order_item_id=item.id)
+
+
+def persist_cutover_review(db, *, review, item, customer_id, operation_key, request_hash, actor):
+    """Persist reviewed source epochs; caller owns eligibility, lock and audit."""
+    graph = review.compiled.graph
+    for node in graph.nodes:
+        changed = db.execute(update(Product).where(Product.id == node.product_id, Product.version == node.version,
+            Product.customer_id == customer_id, Product.is_active.is_(True), Product.deleted_at.is_(None), Product.purged_at.is_(None))
+            .values(version=Product.version, updated_at=Product.updated_at))
+        if changed.rowcount != 1:
+            raise BomPlanError("转换产品已变化")
+    document = dump_graph(graph)
+    db.add(OrderBomGraph(order_item_id=item.id, root_product_id=graph.root_id, customer_id=customer_id,
+        schema_version=graph_schema_version(graph), document_json=document, content_hash=graph_hash(document), created_by=actor.id))
+    db.flush()
+    db.add_all([OrderBomGraphProduct(order_item_id=item.id, product_id=n.product_id, product_version=n.version) for n in graph.nodes])
+    db.add_all(review.compiled.snapshots)
+    db.flush()
+    basis, checksum = make_cutover_basis(graph=graph, order_item_id=item.id, order_quantity=item.quantity,
+        delivered_before=item.delivered_quantity or 0, history_rows=review.history, current_rows=review.compiled.snapshots)
+    db.add(OrderBomExecutionCutover(order_item_id=item.id, order_quantity=item.quantity,
+        delivered_before=item.delivered_quantity or 0, basis_json=basis, basis_hash=checksum,
+        idempotency_key=operation_key, request_hash=request_hash, created_by=actor.id))
+    db.flush()
+    db.add_all([OrderBomCutoverSource(order_item_id=item.id, snapshot_id=s.id, role=role)
+        for role, rows in [("history", review.history), ("current", review.compiled.snapshots)] for s in rows])
+    db.flush()
+    return checksum

@@ -8049,13 +8049,22 @@
               </template>
             </div>
             <div v-else-if="modal.type === 'bomCutover' && bomCutover">
-              <p class="muted">全预占库存切换：子件转组装父件，或保留原子件分存。含采购、本体或未完成采购交接须另行核对；已完成和已送历史保持冻结。</p>
+              <label>切换场景 <select v-model="bomCutover.mode" :disabled="bomCutover.loading || !!bomCutover.pending" @change="openReservedKitCutover({id:bomCutover.orderId},{id:bomCutover.itemId},bomCutover.mode)"><option value="reserved">全预占库存</option><option value="unstarted">尚未开始的旧BOM订单</option></select></label>
+              <p v-if="bomCutover.mode !== 'unstarted'" class="muted">全预占库存切换：子件转组装父件，或保留原子件分存。含采购、本体或未完成采购交接须另行核对；已完成和已送历史保持冻结。</p>
               <div v-if="bomCutover.loading" role="status">正在核对…</div>
               <div v-if="bomCutover.error" class="status orange" role="alert">{{ bomCutover.error }}</div>
               <template v-if="bomCutover.review">
+                <p v-if="bomCutover.mode === 'unstarted'" class="muted">须没有报料、采购、预占、生产或送货记录；旧冻结来源保留，后续使用本次明确选定的新规则。</p>
                 <p>订单 {{ bomCutover.review.quantity }} · 已送 {{ bomCutover.review.delivered_quantity }} · 本次剩余 <strong>{{ bomCutover.review.execution_quantity }} 套</strong></p>
                 <p>{{ bomCutover.review.inventory_impact }}</p>
                 <p>{{ bomCutover.review.material_impact }}</p>
+                <template v-if="bomCutover.mode === 'unstarted'">
+                  <p>交货方式：{{ bomCutover.review.old_delivery_mode === 'component_delivery' ? '子件' : '父件' }} → {{ bomCutover.review.new_modes && bomCutover.review.new_modes.delivery === 'components' ? '子件' : '父件' }}</p>
+                  <table><thead><tr><th>保留旧快照 / 产品ID</th><th>旧冻结件数</th></tr></thead><tbody><tr v-for="row in bomCutover.review.old_sources" :key="row.id"><td>{{ row.id }} / {{ row.component_product_id }} · {{ row.snapshot_component_product_name }}</td><td>{{ row.required_piece_quantity }}</td></tr></tbody></table>
+                  <table><thead><tr><th>新执行产品ID / 名称</th><th>需求</th><th>库存来源</th></tr></thead><tbody><tr v-for="row in bomCutover.review.new_sources" :key="row.component_product_id"><td>{{ row.component_product_id }} · {{ row.snapshot_component_product_name }}</td><td>{{ row.required_piece_quantity }} {{ row.unit }}</td><td>{{ {manufactured:'制造',assembled:'组装',purchased:'外购',separate:'组合需求，无父库存'}[row.source_kind] }}</td></tr></tbody></table>
+                  <table><thead><tr><th>材料产品ID / 片组</th><th>物理片需求</th><th>报料张数</th></tr></thead><tbody><tr v-for="row in bomCutover.review.new_requirements.materials" :key="row.product_id+':'+row.route_key"><td>{{ row.product_id }} / {{ row.route_key }}</td><td>{{ row.required_pieces }} 片</td><td>{{ row.purchase_sheets }} 张</td></tr></tbody></table>
+                  <table v-if="bomCutover.review.purchase_requirements.length"><thead><tr><th>外购产品</th><th>库存需求</th><th>采购数量</th></tr></thead><tbody><tr v-for="row in bomCutover.review.purchase_requirements" :key="row.product_id"><td>{{ row.product_id }} · {{ row.name }}</td><td>{{ row.stock_quantity }} {{ row.stock_unit }}</td><td>{{ row.purchase_quantity }} {{ row.purchase_unit }}</td></tr></tbody></table>
+                </template>
                 <p>{{ bomCutover.review.procurement_impact }}；{{ bomCutover.review.picking_impact }}</p>
                 <p>{{ bomCutover.review.cost_impact }}</p>
                 <table v-if="bomCutover.review.source_costs && bomCutover.review.source_costs.length"><thead><tr><th>成本批次</th><th>数量</th><th>来源金额</th><th>依据</th></tr></thead><tbody><tr v-for="row in bomCutover.review.source_costs" :key="row.lot_id"><td>{{ row.lot_id }}</td><td>{{ row.quantity }} {{ row.unit }}</td><td>{{ row.amount }} {{ row.lineage.currency || '' }}</td><td>{{ row.lineage.actual === true ? '实际来源' : '估算或混合来源，保留原依据' }}</td></tr></tbody></table>
@@ -8099,7 +8108,7 @@
               </tr></thead>
               <tbody><tr v-for="item in orderDetail.items" :key="item.id">
                 <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}<div style="margin-top:4px"><status-tag :value="itemBusinessStatusKey(item)"></status-tag></div><div v-if="item.requisition_hold?.status === 'active'" class="status orange" style="margin-top:4px">{{ item.requisition_hold.label || '等候中' }}</div><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
-                <td>{{ item.snapshot_product_code }}<div v-if="canAdmin && hasBomComponents(item) && Number(item.quantity)>Number(item.business_delivered_quantity || item.delivered_quantity || 0)"><button class="btn small" type="button" @click="openReservedKitCutover(orderDetail,item)">全预占库存切换</button></div></td>
+                <td>{{ item.snapshot_product_code }}<div v-if="canAdmin && hasBomComponents(item) && Number(item.quantity)>Number(item.business_delivered_quantity || item.delivered_quantity || 0)"><button class="btn small" type="button" @click="openReservedKitCutover(orderDetail,item)">切换未完成BOM</button></div></td>
                 <td :title="item.snapshot_product_name" style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:normal">
                   {{ item.snapshot_product_name }}
                   <div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div>
@@ -31645,16 +31654,16 @@
               return true;
             } catch(error) { this.showToast(this.errorMessage(error), true); return false; }
           },
-          async openReservedKitCutover(order,item) {
+          async openReservedKitCutover(order,item,mode="reserved") {
             const opener=this.rememberModalOpener();
-            this.bomCutover = {orderId:order.id,itemId:item.id,loading:true,error:"",review:null,locations:[],targets:{},confirmed:false,pending:null};
+            this.bomCutover = {orderId:order.id,itemId:item.id,mode,route:mode==="unstarted"?"unstarted-bom-cutover":"reserved-kit-cutover",loading:true,error:"",review:null,locations:[],targets:{},confirmed:false,pending:null};
             const state=this.bomCutover;
-            this.modal={type:"bomCutover",title:"全预占库存切换"};
+            this.modal={type:"bomCutover",title:"切换未完成BOM"};
             this.focusAccessibleModal(opener);
             try {
               const [review,locations]=await Promise.all([
-                axios.post(`/api/orders/items/${item.id}/reserved-kit-cutover/preview`,{}),
-                axios.get("/api/warehouse/locations")]);
+                axios.post(`/api/orders/items/${item.id}/${state.route}/preview`,{}),
+                mode==="unstarted"?Promise.resolve({data:{items:[]}}):axios.get("/api/warehouse/locations")]);
               if(this.bomCutover!==state)return;
               state.review=review.data;
               state.locations=(locations.data.items || []).filter(x=>x.is_active && x.placement_status==='placed' && x.position_status==='mapped' && ['finished','semi_finished','shared'].includes(x.warehouse_type));
@@ -31669,7 +31678,7 @@
             if(Object.values(state.targets).some(x=>!Number.isInteger(x)||x<=0)) {state.error="请为每个组装产品选择正式货位";return;}
             state.loading=true;
             try {
-              const {data}=await axios.post(`/api/orders/items/${state.itemId}/reserved-kit-cutover/preview`,{target_locations:state.targets});
+              const {data}=await axios.post(`/api/orders/items/${state.itemId}/${state.route || "reserved-kit-cutover"}/preview`,{target_locations:state.targets});
               if(this.bomCutover!==state)return;
               state.review=data;state.confirmed=data.ready;
             } catch(error) {if(this.bomCutover===state)state.error=this.errorMessage(error);}
@@ -31685,9 +31694,9 @@
             }
             state.loading=true;state.error="";
             try {
-              await axios.post(`/api/orders/items/${state.itemId}/reserved-kit-cutover/execute`,state.pending);
+              await axios.post(`/api/orders/items/${state.itemId}/${state.route || "reserved-kit-cutover"}/execute`,state.pending);
               state.pending=null;state.confirmed=false;
-              this.showToast("剩余部分库存切换已完成，已记录审计");
+              this.showToast("剩余部分BOM切换已完成，已记录审计");
               if(this.bomCutover===state && this.modal.type==='bomCutover')await this.openOrderDetail({id:state.orderId});
             } catch(error) {
               if(error.response && error.response.status<500) {state.pending=null;state.confirmed=false;}

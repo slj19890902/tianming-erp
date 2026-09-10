@@ -36,6 +36,18 @@ class CutoverExecute(CutoverPreview):
     operation_key: str = Field(min_length=1, max_length=64)
 
 
+class UnstartedPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target_locations: dict[int, int] = Field(default_factory=dict, max_length=0)
+
+
+class UnstartedExecute(UnstartedPreview):
+    reviewed_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    preview_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_lot_versions: dict[int, int] = Field(default_factory=dict, max_length=0)
+    operation_key: str = Field(min_length=1, max_length=64)
+
+
 def _access(db, user, item_id):
     db.refresh(user)
     if user.role != "admin" or not user.is_active:
@@ -127,6 +139,36 @@ def execute(item_id: int, payload: CutoverExecute, db: Session = Depends(get_db)
         db.commit()
         return result
     except (BomPlanError, WarehouseInventoryError, SubkitError, CompositeBOMError, OSError) as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/items/{item_id}/unstarted-bom-cutover/preview")
+def preview_unstarted(item_id: int, payload: UnstartedPreview, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    customer_id = _access(db, user, item_id)
+    from app.services.multilevel_bom_unstarted_cutover import unstarted_preview
+    try:
+        return unstarted_preview(db, order_item_id=item_id, customer_id=customer_id)
+    except (BomPlanError, SubkitError, CompositeBOMError) as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/items/{item_id}/unstarted-bom-cutover/execute")
+def execute_unstarted(item_id: int, payload: UnstartedExecute, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    customer_id = _access(db, user, item_id)
+    from app.services.multilevel_bom_unstarted_cutover import execute_unstarted_cutover
+    try:
+        if payload.preview_hash != payload.reviewed_hash:
+            raise BomPlanError("预览摘要不一致，请重新预览")
+        result = execute_unstarted_cutover(db, order_item_id=item_id, customer_id=customer_id,
+            reviewed_hash=payload.reviewed_hash, operation_key=payload.operation_key, actor=user)
+        db.commit()
+        return result
+    except (BomPlanError, SubkitError, CompositeBOMError) as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
     except Exception:

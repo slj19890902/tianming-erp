@@ -142,7 +142,7 @@ test("the selected empty cell opens its stocktake inspector without writing inve
     if (allowed) {
       assert.ok(actions.some(([name, value]) => name === "setMoveAction" && value === "stocktake"));
       assert.ok(actions.some(([name, value]) => name === "setSelected" && value.id === "erp-location-107"));
-      assert.ok(actions.some(([name, value]) => name === "setLocationDetailOpen" && value === true));
+      assert.ok(actions.some(([name, value]) => name === "setLocationDetailOpen" && value === false));
     } else assert.deepEqual(actions, []);
   }
 });

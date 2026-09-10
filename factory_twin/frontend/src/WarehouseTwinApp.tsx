@@ -1645,21 +1645,19 @@ function WarehouseRackElevation({
               const at = locations.find(location => rackLocationInventoryItems(location).some(item => item.lot_id === selectedItem.lot_id));
               if (at) window.open(`/static/shelf-label.html?location_id=${at.location_id}&lot_id=${selectedItem.lot_id}`, '_blank', 'noopener');
             }}>打印产品标签</button></div>
-            <dl className="shelf-current-fields">
-              <div><dt>客户</dt><dd>{employeeCustomerName(selectedItem)}</dd></div>
-              <div><dt>存货编码</dt><dd className="shelf-current-code">{selectedItem.inventory_code || "待补充"}</dd></div>
-              <div><dt>产品名称</dt><dd>{selectedItem.product_name || "待补充"}</dd></div>
-              <div><dt>尺寸</dt><dd>{selectedItem.specification || "待补充"}</dd></div>
-              <div><dt>数量</dt><dd>{formatNumber(inventoryLabelQuantity(selectedItem))} {inventoryUnitLabel(selectedItem.unit)}</dd></div>
-            </dl>
-            <ShelfLotHistory lotId={selectedItem.lot_id} load={requestJson} />
-            <button type="button" className="twin-rack-detail-toggle" aria-expanded={detailOpen} onClick={() => setDetailOpen((value) => !value)}>{detailOpen ? "收起详情" : "查看详情"}</button>
+            <InventoryLabelSummary item={selectedItem} onLabel={() => setDetailOpen(false)} expanded={detailOpen} onDetails={() => setDetailOpen((value) => !value)} />
+            {detailOpen && <ShelfLotHistory lotId={selectedItem.lot_id} load={requestJson} />}
             {detailOpen && <dl className="twin-rack-product-detail"><div><dt>可用数量</dt><dd>{formatNumber(selectedItem.available_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>已预占</dt><dd>{formatNumber(selectedItem.reserved_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>实际位置</dt><dd>{selectedItem.location_name || "位置名称待完善"}</dd></div><div><dt>存放方式</dt><dd>{selectedItem.pallet_code ? "已绑定实物栈板" : "地堆或散存"}</dd></div><div><dt>批次</dt><dd>{selectedItem.lot_number || "—"}</dd></div></dl>}
           </article>}
         </aside>
         <button type="button" className="twin-rack-switch next" aria-label="下一个同区域货架" onClick={onNext}>›</button>
       </div>
   </section>;
+}
+
+function InventoryLabelSummary({ item, quantity, onLabel, onDetails, expanded = false }: { item: InventoryItem; quantity?: number; onLabel: () => void; onDetails: () => void; expanded?: boolean }) {
+  return <><div className="warehouse-label-summary"><span>{employeeCustomerName(item)}</span><span>{item.product_name || "产品名称待补充"}</span><span>{item.specification || ""}</span></div>
+    <div className="warehouse-label-code-row"><button type="button" className="warehouse-label-code" title="查看产品标签" onClick={onLabel}>{item.inventory_code || item.lot_number || "存货编码待补充"}</button><strong>{formatNumber(quantity ?? inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong><button type="button" className="warehouse-label-details" aria-expanded={expanded} onClick={onDetails}>{expanded ? "收起明细" : "查看明细"}</button></div></>;
 }
 
 function StocktakeProductChoices({ items, selectedId, onSelect }: { items: ProductCandidate[]; selectedId: string; onSelect: (id: string) => void }) {
@@ -6349,7 +6347,7 @@ export function WarehouseTwinApp() {
           <small className="twin-layout-draft-note">区域、货位和当前货架保存后自动校验并只应用本对象；库存数量不变。</small>
         </section>}
         {(canExecuteWarehouse || canStocktake) && mapMode === "move" && moveAction !== "stocktake" && <section className="twin-move-control-panel">
-          <div className="twin-formal-operation-title"><b>{moveAction === "ground" ? "地图点选成品存放" : moveAction === "merge" ? "多栈合并草稿" : "移货页面草稿"}</b><span>楼层切换不丢页面草稿</span></div>
+          <div className="twin-formal-operation-title"><b>{moveAction === "ground" ? "存放货物" : moveAction === "merge" ? "合并栈板" : "移动货物"}</b></div>
           {moveAction === "ground" ? <div className="twin-ground-storage-panel">
             <div className="twin-map-inbound-type" role="tablist" aria-label="地图存放业务类型"><button type="button" className={groundOperation === "inbound" ? "active" : ""} onClick={() => { setGroundOperation("inbound"); setGroundTransferSource(null); }}>成品入库</button><button type="button" className={groundOperation === "transfer" ? "active" : ""} onClick={() => setGroundOperation("transfer")}>库存转位</button></div>
             <p className="twin-map-pick-hint">流程：选择楼层 → 点击地堆区域 → 显示四色候选 → 点击实际位置 → 核对中文位置 → 保存一次。</p>
@@ -6397,7 +6395,7 @@ export function WarehouseTwinApp() {
               <div className="twin-merge-target-list" role="radiogroup" aria-label="主货位">{mergeTargetChoices.map((item) => <button type="button" role="radio" aria-checked={mergeTarget?.pallet_id === item.pallet_id} className={mergeTarget?.pallet_id === item.pallet_id ? "selected" : ""} key={item.pallet_id} onClick={() => chooseMergeTarget(item)}><b>{item.location_code || item.location_name}</b><span>{formatNumber(item.total_quantity)} {inventoryUnitLabel(item.unit)}</span></button>)}</div>
               {!mergeTargetChoices.length && <small className="error">已选集合中没有通过位置门禁的目标栈板；请移除不可作为目标的栈板后重选。</small>}
             </div>}
-          </> : !moveSource ? <p>先点地图上的真实栈板；厂外待送区每个栈板图案都可单独选择，历史散存也可从右侧选择。</p> : <>
+          </> : !moveSource ? <p>请选择要移动的货物</p> : <>
             <div className="twin-move-source-summary"><small>已选货物 · {moveSource.operation === "pallet_move" ? "整栈板" : "库存批次"}</small><b>{moveSource.inventory_code} · {moveSource.product_name}</b><span>{moveSource.source_floor_code} / {moveSource.source_location_name || "位置名称待完善"}</span><button type="button" onClick={() => { setMoveSource(null); setMoveQuantity(""); setMoveDraftTargetLocationId(""); setWarehouseOperationMessage("已清除本次页面选择；库存、入库来源和送货单均未改变。"); }}>重新选择货物</button></div>
             <div className="twin-move-target-cascade">
               <div className="twin-formal-operation-title"><b>在地图选择目标空货位</b><span>可切换 1F / 3F / 4F；来源不会丢失</span></div>
@@ -6452,13 +6450,13 @@ export function WarehouseTwinApp() {
           {dashboard.delayed_dispatch_relocation.candidate_count > 0 && dashboard.delayed_dispatch_relocation.available_target_count === 0 && <p className="twin-dispatch-weather-note">三楼左区目前没有通过实测地图门禁的空栈板位，因此只提示、不允许形成移货草稿。</p>}
         </section>}
         {selectedDispatchPallet && dispatchStagingLocation && <section className="twin-location-card twin-dispatch-board">
-          {objectActionsButton}
           {(() => {
             const summary = dashboardPalletSummary(selectedDispatchPallet);
             return <>
               <div className="twin-location-card-title"><div><small>厂外待送货物</small><b>{summary.product}</b></div><em className="occupied">待送货</em></div>
-              <div className="twin-selection-summary"><span><small>产品</small><b>{summary.product}</b></span><span><small>客户</small><b>{summary.customer}</b></span><span><small>数量</small><b>{formatNumber(summary.quantity)} {inventoryUnitLabel(summary.unit)}</b></span></div>
-              <p className="twin-dispatch-weather-note">地图上的这一块图案对应这一块真实栈板；位置点只表示它位于实测厂外待送区，不伪造未登记的区内坐标。</p>
+              {selectedDispatchPallet.items.map((item) => <article className="twin-location-item" key={item.lot_id}><InventoryLabelSummary item={item} onLabel={() => setSidebarLabelLotId(current => current === item.lot_id ? null : item.lot_id)} expanded={Boolean(sidebarExpandedLots[item.lot_id])} onDetails={() => setSidebarExpandedLots(current => ({ ...current, [item.lot_id]: !current[item.lot_id] }))} />
+                {sidebarLabelLotId === item.lot_id && <div className="twin-sidebar-product-label"><b>产品标签</b><div>{employeeCustomerName(item)} · {item.product_name} · {item.specification}</div><strong>{item.inventory_code}</strong><span> · {formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</span></div>}
+                {sidebarExpandedLots[item.lot_id] && <ShelfLotHistory lotId={item.lot_id} load={requestJson} />}</article>)}
               {canExecuteWarehouse && <button type="button" className="twin-primary-action" onClick={async () => {
                 if (mapMode !== "move") await enterWarehouseMoveMode();
                 chooseMoveSource(palletMoveSource(dispatchStagingLocation, selectedDispatchPallet));
@@ -6499,10 +6497,9 @@ export function WarehouseTwinApp() {
           {mapMode === "move" && moveAction === "relocate" && canExecuteWarehouse && <p className="twin-dispatch-weather-note">点击上方栈板或散存标签后，可随意切换 1F / 3F / 4F 地图；来源不会丢失，再点区域和具体空货位即可移动，不会改变订单和后续送货关系。</p>}
           {warehouseOperationMessage && <div className="twin-location-message">{warehouseOperationMessage}</div>}
         </section>}
-        {selectedLocation && <section className={`twin-location-card ${mapMode === "move" && moveAction === "stocktake" ? "twin-stocktake-compact" : ""}`}>
-          {moveAction !== "stocktake" && objectActionsButton}
-          {!traceReadOnly && canStocktake && !locationEditMode && !(mapMode === "move" && moveAction === "stocktake") && <button type="button" className="twin-primary-action" disabled={loading || pendingPlacementBusy} onClick={() => { setMapMode("move"); setMoveAction("stocktake"); setSearchPanelOpen(true); }}>添加货物</button>}
-          <div className="twin-location-card-title"><div><small>当前位置</small><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em></div>
+        {selectedLocation && <section className="twin-location-card twin-stocktake-compact">
+          <div className="twin-location-card-title"><div><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em>
+          {!traceReadOnly && canStocktake && !locationEditMode && !(mapMode === "move" && moveAction === "stocktake") && <button type="button" className="warehouse-label-add" disabled={loading || pendingPlacementBusy} onClick={() => { setMapMode("move"); setMoveAction("stocktake"); setSearchPanelOpen(true); }}>＋ 添加货物</button>}</div>
           <button type="button" className="twin-detail-toggle secondary" aria-expanded={locationDetailOpen} onClick={() => setLocationDetailOpen((current) => !current)}>{locationDetailOpen ? "收起位置与栈板详情" : "位置与栈板详情"}</button>
           {locationDetailOpen && <div className="twin-location-secondary">
             <h3>{selectedLocation.location_name}</h3>
@@ -6519,7 +6516,6 @@ export function WarehouseTwinApp() {
             observations={selectedLocation.unmatched_inventory_observations || []}
             canResolve={canCorrectInventory} onResolved={refreshDashboard} />
           {selectedLocation.has_location_discrepancy && <div className="twin-unmatched-observation"><b>现场位置与系统登记不符 · 持续标红</b>{(selectedLocation.location_discrepancies || []).map((item) => <p key={item.id}><strong>{item.lot.inventory_code || item.lot.lot_number || `批次 ${item.lot.lot_id}`}</strong>{item.reported_quantity ? ` · ${formatNumber(item.reported_quantity)} ${inventoryUnitLabel(item.lot.unit)}` : ""}<span>{item.reason}</span></p>)}</div>}
-          {!(mapMode === "move" && moveAction === "stocktake") && <div className="twin-selection-summary"><span><small>货物</small><b>{selectedLocationItems.length} 条</b></span><span><small>客户</small><b>{selectedLocationCustomerLabel}</b></span><span><small>栈板</small><b>{selectedLocationPallets.length || 0} 块</b></span></div>}
           {selectedLocationItems.length === 0 ? <p className="twin-location-empty-primary">空位</p> : <h4 className="twin-location-stock-heading">本位货物 · {selectedLocationItems.length} 批</h4>}
           {mapMode === "lookup" && selectedLocationCompositeParentSummaries.map(({ item, summary }) => <article className="twin-location-item twin-composite-parent-item" key={summary.group_key}>
             <div className="twin-location-item-code"><b>{summary.inventory_code || `组合父件 ${summary.order_item_id}`}</b><strong>{summary.available_set_quantity > 0 ? `${formatNumber(summary.available_set_quantity)} 套` : "待齐套"}</strong></div>
@@ -6533,12 +6529,7 @@ export function WarehouseTwinApp() {
               ? selectedLocationStocktakeBlockReason || stocktakeDecreaseBlockReason(item)
               : null;
             return <article className={`twin-location-item ${stocktakeLotId === item.lot_id ? "correction-selected" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`}>
-              <div className="twin-location-product-summary"><span>{employeeCustomerName(item)}</span><span>{item.product_name || "产品名称待补充"}</span><span>{item.specification || ""}</span></div>
-              <div className="twin-location-item-code">
-                <button type="button" className="twin-stocktake-code" title="查看产品标签" onClick={() => setSidebarLabelLotId((current) => current === item.lot_id ? null : item.lot_id)}>{item.inventory_code || item.lot_number}</button>
-                <strong>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong>
-                <button type="button" className="twin-stocktake-details" aria-expanded={Boolean(sidebarExpandedLots[item.lot_id])} onClick={() => setSidebarExpandedLots((current) => ({ ...current, [item.lot_id]: !current[item.lot_id] }))}>{sidebarExpandedLots[item.lot_id] ? "收起" : "明细"}</button>
-              </div>
+              <InventoryLabelSummary item={item} onLabel={() => setSidebarLabelLotId((current) => current === item.lot_id ? null : item.lot_id)} expanded={Boolean(sidebarExpandedLots[item.lot_id])} onDetails={() => setSidebarExpandedLots((current) => ({ ...current, [item.lot_id]: !current[item.lot_id] }))} />
               {sidebarLabelLotId === item.lot_id && <div className="twin-sidebar-product-label"><b>产品标签</b><div>{employeeCustomerName(item)} · {item.product_name}</div><strong>{item.inventory_code}</strong><div>{item.specification} · {formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</div></div>}
               {sidebarExpandedLots[item.lot_id] && <ShelfLotHistory lotId={item.lot_id} load={requestJson} />}
               {mapMode === "move" && moveAction === "stocktake" && <button type="button" className="twin-stocktake-decrease" disabled={Boolean(stocktakeBlockReason)} title={stocktakeBlockReason || ""} onClick={() => { setStocktakeLotId(item.lot_id); setStocktakeDecreaseQuantity(""); setWarehouseOperationMessage(""); }}>调减{stocktakeBlockReason ? "（不可用）" : ""}</button>}
@@ -6828,9 +6819,10 @@ export function WarehouseTwinApp() {
                 {!selectedInventory.length && !locationEditMode && <div className="twin-area-empty"><b>{selectedAreaHasPublishedBinding ? "区域已启用，当前没有货物" : selectedAreaActivationLabel === "待启用" ? "区域绑定仍待启用" : "区域尚未启用"}</b><span>{selectedAreaHasPublishedBinding ? `${selectedAreaCapacitySummary}；库存为 0 不代表区域未启用。` : "进入区域规划确认形式和容量后即可启用；系统不会生成模拟货物。"}</span></div>}
                 {selectedInventory.length > 0 && !filteredSelectedInventory.length && <div className="twin-area-empty"><b>本区域没有匹配结果</b><span>请更换存货编码、产品、客户或位置关键词。</span></div>}
                 {visibleSelectedInventory.map((item) => <article className={`twin-area-lot ${focusedSearchProductKey && searchProductKey(item) === focusedSearchProductKey ? "search-hit product-search-hit" : focusedSearchItem?.lot_id === item.lot_id ? "search-hit" : ""}`} key={item.lot_id}>
-                  <div><b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b><strong>{formatNumber(inventoryPhysicalQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div>
-                  <strong>{item.product_name || "待补充库存名称"}</strong>
-                  <span>{item.customer_name || "客户待确认"} · {item.location_name || "位置待补充"}</span>
+                  <InventoryLabelSummary item={item} quantity={inventoryPhysicalQuantity(item)} onLabel={() => setSidebarLabelLotId((current) => current === item.lot_id ? null : item.lot_id)} expanded={Boolean(sidebarExpandedLots[item.lot_id])} onDetails={() => setSidebarExpandedLots((current) => ({ ...current, [item.lot_id]: !current[item.lot_id] }))} />
+                  <span>{item.location_name || "位置待补充"}</span>
+                  {sidebarLabelLotId === item.lot_id && <div className="twin-sidebar-product-label"><b>产品标签</b><div>{employeeCustomerName(item)} · {item.product_name}</div><strong>{item.inventory_code}</strong><span> · {formatNumber(inventoryPhysicalQuantity(item))} {inventoryUnitLabel(item.unit)}</span></div>}
+                  {sidebarExpandedLots[item.lot_id] && <ShelfLotHistory lotId={item.lot_id} load={requestJson} />}
                   {areaInventoryDetailsOpen && <div className="twin-area-lot-details"><span>{employeeAreaName(selectedAreaFeature, { floorCode })} · {item.location_name || "位置名称待完善"} · {item.pallet_code ? "实物栈板" : "地堆或散存"}</span><span>{item.lot_number || "批次待补充"} · {inventoryAgeLabel(item.age_days)}</span>{(item.reserved_quantity || 0) > 0 && <small>已预占 {formatNumber(item.reserved_quantity)} {inventoryUnitLabel(item.unit)}</small>}</div>}
                 </article>)}
               </div>

@@ -19,8 +19,8 @@ def test_shared_search_and_separate_label_details_actions():
     assert 'String(item.customer_id) === stocktakeCustomerId' in SOURCE
     assert 'stocktakeMissingOpen &&' in SOURCE
     assert 'stocktakeStockProductIds.has(item.product_id)' in SOURCE
-    assert 'title="查看产品标签" onClick={() => setSidebarLabelLotId' in SOURCE
-    assert 'aria-expanded={Boolean(sidebarExpandedLots[item.lot_id])}' in SOURCE
+    assert 'title="查看产品标签" onClick={onLabel}' in SOURCE
+    assert 'expanded={Boolean(sidebarExpandedLots[item.lot_id])}' in SOURCE
     assert 'onClick={queueStocktakeAddDraft}>加入盘点</button>' in SOURCE
 
 

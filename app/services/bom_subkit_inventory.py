@@ -260,7 +260,7 @@ def assemble_subkit_inventory(
 
 
 def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False, ignored_reserve_id=None):
-    """Allow unwinding a deeper assembly only after each child use reversed.
+    """Allow unwinding only after every assembly/delivery use is reversed.
 
     Equal balances alone are not proof: moves, counts or arbitrary adjustments
     must still block. Match every intervening movement to real reversed lineage.
@@ -278,6 +278,52 @@ def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False
             return True
     if allow_initial_reserve and later and later[0].movement_type == "reserve":
         later = later[1:]
+    # A cancelled delivery is an auditable use/reversal pair, not an untouched
+    # lot. Accept only fully reversed allocations with matching real lineage.
+    # Equal final balances (or merely status='reversed') are insufficient.
+    from app.models.warehouse_inventory import DeliveryInventoryAllocation
+    from app.models.delivery import DeliveryItem
+    by_id = {m.id: m for m in later}
+    allocations = list(db.scalars(select(DeliveryInventoryAllocation).where(
+        DeliveryInventoryAllocation.consume_movement_id.in_(list(by_id))))) if by_id else []
+    delivery_movements = set()
+    for allocation in allocations:
+        consumed = by_id[allocation.consume_movement_id]
+        reservation = db.get(InventoryReservation, allocation.reservation_id)
+        line = db.get(DeliveryItem, allocation.delivery_item_id)
+        reversals = [m for m in later if m.reversal_of_movement_id == consumed.id]
+        quantity = allocation.consumed_stock_quantity
+        if (allocation.status != "reversed" or allocation.reversed_stock_quantity != quantity
+                or allocation.reversed_requirement_quantity != allocation.credited_requirement_quantity
+                or allocation.credited_requirement_quantity != quantity
+                or reservation is None or line is None
+                or reservation.inventory_lot_id != output.id
+                or reservation.order_item_id != line.order_item_id
+                or consumed.movement_type != "consume" or consumed.quantity != quantity
+                or not reversals or sum(m.quantity for m in reversals) != quantity):
+            return False
+        for movement in [consumed, *reversals]:
+            reverse = movement is not consumed
+            sign = -1 if reverse else 1
+            if (movement.quantity <= 0
+                    or (reverse and (movement.movement_type != "reverse_consume" or movement.id <= consumed.id))
+                    or movement.reservation_id != reservation.id
+                    # Graph dispatch leaves these optional header pointers NULL;
+                    # allocation -> delivery line and reservation prove identity.
+                    or movement.related_order_id not in (None, reservation.order_id)
+                    or movement.related_order_item_id != line.order_item_id
+                    or (movement.related_delivery_id not in (None, line.delivery_id) if reverse
+                        else movement.related_delivery_id != line.delivery_id)
+                    or movement.unit != output.unit
+                    or movement.after_consumed - movement.before_consumed != sign * movement.quantity
+                    or movement.before_reserved - movement.after_reserved != sign * movement.quantity
+                    or any(getattr(movement, "before_" + field) != getattr(movement, "after_" + field)
+                           for field in ("available", "damaged", "scrapped"))):
+                return False
+            delivery_movements.add(movement.id)
+    later = [m for m in later if m.id not in delivery_movements]
+    if delivery_movements and not later:
+        return True
     sources = list(db.scalars(select(BomAssemblyInput).where(BomAssemblyInput.lot_id == output.id)))
     consumes = {r.consume_movement_id: r for r in sources}
     if not consumes or len(later) != 2 * len(consumes):

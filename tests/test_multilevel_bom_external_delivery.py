@@ -8,7 +8,7 @@ from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
 from app.models.graph_material_cost import FinanceDeliveryGraphCostFact as Fact, FinanceDeliveryGraphCostPortion as Portion
 from app.models.order import Order, OrderItem
 from app.models.delivery import Delivery
-from app.models.warehouse_inventory import InventoryLot, DeliveryInventoryAllocation
+from app.models.warehouse_inventory import InventoryLot, InventoryMovement, DeliveryInventoryAllocation
 from app.services.material_cost_lineage import material_cost_coverage_report
 from app.services.bom_subkits import SubkitError
 from test_p1_33c3_external_packaging_purchase_confirmation import purchase_app
@@ -91,3 +91,44 @@ def test_external_real_receipts_dispatch_cost_and_cancel(purchase_app, _p181_pub
             assert material_cost_coverage_report(db, month='2026-09')['actual_material_cost'] == 0
             assert [f.id for f in db.scalars(select(Fact))] == fact_ids
             assert sum(l.quantity_reserved for l in db.scalars(select(InventoryLot))) == 2
+        # Once dispatch is actually reversed, the receipt can unwind too.
+        from app.services.bom_subkit_inventory import _only_reversed_graph_consumptions
+        with factory() as db:
+            output = db.scalar(select(InventoryLot).where(InventoryLot.quantity_reserved > 0))
+            movements = list(db.scalars(select(InventoryMovement).where(InventoryMovement.inventory_lot_id == output.id)))
+            reserved = next(m for m in movements if m.movement_type == 'reserve')
+            reversed_move = next(m for m in movements if m.movement_type == 'reverse_consume')
+            allocation = db.scalar(select(DeliveryInventoryAllocation))
+            assert _only_reversed_graph_consumptions(db, output, ignored_reserve_id=reserved.id)
+            # Matching stock balances cannot legitimize broken or partial lineage.
+            for row, field, value in [(allocation, 'status', 'partial'),
+                    (allocation, 'reversed_stock_quantity', 0),
+                    (reversed_move, 'reversal_of_movement_id', reserved.id),
+                    (reversed_move, 'related_order_item_id', None),
+                    (reversed_move, 'after_reserved', 99),
+                    (reversed_move, 'movement_type', 'adjust')]:
+                original = getattr(row, field)
+                setattr(row, field, value)
+                assert not _only_reversed_graph_consumptions(db, output, ignored_reserve_id=reserved.id)
+                setattr(row, field, original)
+            db.rollback()
+        from app.services import multilevel_bom_external_reversal as reversal_service
+        from sqlalchemy import text
+        def receipt_facts():
+            with factory() as db:
+                return {table: db.execute(text(f'SELECT * FROM {table} ORDER BY 1')).all() for table in (
+                    'inventory_lots', 'inventory_movements', 'inventory_reservations',
+                    'external_packaging_receipt_reversals', 'bom_assemblies', 'production_tasks', 'operation_logs')}
+        before = receipt_facts()
+        with monkeypatch.context() as patch:
+            def late_failure(*args, **kwargs):
+                raise SubkitError('撤销最终审计失败')
+            patch.setattr(reversal_service, 'append_audit_event', late_failure)
+            assert reverse(client, last.json()['receipt']['id']).status_code == 409
+        assert receipt_facts() == before
+        undone = reverse(client, last.json()['receipt']['id'])
+        assert undone.status_code == 200, undone.text
+        assert reverse(client, last.json()['receipt']['id']).json()['created'] is False
+        with factory() as db:
+            assert sum(l.quantity_reserved + l.quantity_available for l in db.scalars(select(InventoryLot))) == 0
+            assert [f.id for f in db.scalars(select(Fact))] == fact_ids

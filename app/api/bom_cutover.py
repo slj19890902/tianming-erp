@@ -84,6 +84,13 @@ def _preview(db, item_id, customer_id, targets):
             "quantity": r["reserved_stock_quantity"] - r["consumed_stock_quantity"] - r["released_stock_quantity"]}
             for r in active],
         "material_impact": "全部剩余子件由现有预占覆盖，不新增报料；保留原报料、完工及已送历史",
+        "procurement_impact": "本操作不新增或修改采购；原采购、收料及成本补录事实保留",
+        "cost_impact": "沿用下列批次来源成本；组装只转移成本，不重复计价。估算来源不会因转换变为实际成本",
+        "source_costs": [{**row,
+            "unit": nodes[lots[row["lot_id"]].finished_detail.product_id].unit}
+            for row in manifest["remaining_finished_costs"]],
+        "picking_impact": ("继续按冻结子件和原批次货位拿货" if separate else
+            "切换后按父件剩余套数及所选组装货位拿货，原子件不再重复出库"),
         "inventory_impact": ("剩余预占切换到新冻结子件规则；原批次、货位及库存数量不变，不生成父库存，旧消耗不改" if separate else
             "释放下列剩余预占并消耗子件，形成组装库存；父件按剩余套数重新预占，旧消耗不改"),
         "retained_locations": [{"lot_id": lot.id, "location_id": lot.warehouse_location_id,

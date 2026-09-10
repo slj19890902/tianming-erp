@@ -8056,6 +8056,9 @@
                 <p>订单 {{ bomCutover.review.quantity }} · 已送 {{ bomCutover.review.delivered_quantity }} · 本次剩余 <strong>{{ bomCutover.review.execution_quantity }} 套</strong></p>
                 <p>{{ bomCutover.review.inventory_impact }}</p>
                 <p>{{ bomCutover.review.material_impact }}</p>
+                <p>{{ bomCutover.review.procurement_impact }}；{{ bomCutover.review.picking_impact }}</p>
+                <p>{{ bomCutover.review.cost_impact }}</p>
+                <table v-if="bomCutover.review.source_costs && bomCutover.review.source_costs.length"><thead><tr><th>成本批次</th><th>数量</th><th>来源金额</th><th>依据</th></tr></thead><tbody><tr v-for="row in bomCutover.review.source_costs" :key="row.lot_id"><td>{{ row.lot_id }}</td><td>{{ row.quantity }} {{ row.unit }}</td><td>{{ row.amount }} {{ row.lineage.currency || '' }}</td><td>{{ row.lineage.actual === true ? '实际来源' : '估算或混合来源，保留原依据' }}</td></tr></tbody></table>
                 <p v-for="row in bomCutover.review.retained_locations || []" :key="row.lot_id">保留批次 {{ row.lot_id }} · 原货位 ID {{ row.location_id }}</p>
                 <table><thead><tr><th>子件</th><th>释放预占 / 批次</th><th>数量</th></tr></thead><tbody><tr v-for="r in bomCutover.review.release_reservations" :key="r.id"><td>{{ r.name }}</td><td>{{ r.id }} / {{ r.lot_id }}</td><td>{{ r.quantity }} {{ r.unit }}</td></tr></tbody></table>
                 <div v-for="output in bomCutover.review.outputs" :key="output.product_id" style="margin-top:8px">

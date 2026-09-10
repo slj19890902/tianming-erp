@@ -43,7 +43,7 @@ def factory_http(factory_copy):
 
 
 @pytest.mark.parametrize("pid", PRODUCTS)
-def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_http, pid):
+def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_http, pid, occupy_released=False):
     from app.api.products import ProductBOMComponentPayload
     client, db = factory_http
     original = client.get(f"/api/products/{pid}/bom")
@@ -94,10 +94,10 @@ def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_htt
             received = receive(client, line.purchase_order_id, line.id,
                 f"other16-external-{pid}-{line.id}", line.purchase_quantity)
             assert received.status_code == 200, received.text
-    paper_receipt_flow(client, db, compiled, iid, pid)
+    paper_receipt_flow(client, db, compiled, iid, pid, occupy_released=occupy_released)
 
 
-def paper_receipt_flow(client, db, compiled, iid, pid):
+def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False):
     from collections import defaultdict
     from app.models.order import OrderItem
     from app.models.product_bom import RequisitionItemBomSource
@@ -178,9 +178,37 @@ def paper_receipt_flow(client, db, compiled, iid, pid):
     balances(2)
     from app.models.order import Order
     assert db.get(Order, db.get(OrderItem, iid).order_id).status == "delivered"
+    if occupy_released:
+        from datetime import date
+        from app.models.user import User
+        from app.models.warehouse_inventory import Floor3LocationLayout
+        from app.services.warehouse_inventory import manual_finished_in
+        from tests.test_bom_cutover_writer import facts
+        original_lot = own_output_lots(db, iid)[0]
+        location_id = original_lot.warehouse_location_id
+        layout = db.scalar(select(Floor3LocationLayout).where(Floor3LocationLayout.location_id == location_id))
+        actor = db.scalar(select(User).where(User.role == "admin", User.is_active.is_(True)))
+        blocker = manual_finished_in(db, customer_id=compiled.graph.customer_id,
+            product_id=original_lot.finished_detail.product_id, location_id=location_id,
+            quantity=1, stock_date=date(2026, 9, 10), source_type="manual",
+            remarks="隔离验收：发完后另一批占位", operator_id=actor.id,
+            idempotency_key="isolated-other16-slot-blocker", expected_layout_version=layout.version)
+        db.commit()
+        before = facts(db)
+        cancelled = client.put(f"/api/deliveries/{second_id}/cancel")
+        assert cancelled.status_code == 409, cancelled.text
+        db.expire_all()
+        assert facts(db) == before
+        assert blocker.quantity_available == 1
+        balances(2)
+        return
     cancelled = client.put(f"/api/deliveries/{second_id}/cancel")
     assert cancelled.status_code == 200, cancelled.text
     balances(1)
     cancelled = client.put(f"/api/deliveries/{did}/cancel")
     assert cancelled.status_code == 200, cancelled.text
     balances(0)
+
+
+def test_completed_bom_delivery_cannot_restore_into_another_pallet(factory_http):
+    test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_http, 2817, occupy_released=True)

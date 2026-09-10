@@ -43,6 +43,12 @@ def test_preview_execute_replay_audit(client):
     assert initial.status_code == 200, initial.text
     assert initial.json()["ready"] is False
     assert initial.json()["execution_quantity"] == 300
+    costs = initial.json()["source_costs"]
+    assert sum(row["quantity"] for row in costs) == 2100
+    assert all(row["lineage"]["actual"] is False for row in costs)
+    assert "不重复计价" in initial.json()["cost_impact"]
+    assert "不新增或修改采购" in initial.json()["procurement_impact"]
+    assert "原子件不再重复出库" in initial.json()["picking_impact"]
     body = reviewed(http)
     assert facts(db) == before
     response = http.post(URL + "/execute", json=body)

@@ -591,8 +591,12 @@ def _assert_add_compatible(
     assert item.unit is not None
     assert item.customer_id is not None
     assert item.product_id is not None
+    assert_location_add_compatible(db, item.location_id)
+
+
+def assert_location_add_compatible(db: Session, location_id: int) -> None:
     # Co-location does not merge lots, owners, units, or product identities.
-    for lot in _location_live_lots(db, item.location_id):
+    for lot in _location_live_lots(db, location_id):
         detail = lot.finished_detail if lot.inventory_type == "finished" else lot.semi_finished_detail
         expected_unit = "boxes" if lot.inventory_type == "finished" else "sheets"
         if detail is None or lot.unit != expected_unit or lot.status != "active" or int(lot.quantity_damaged or 0) > 0:
@@ -602,7 +606,7 @@ def _assert_add_compatible(
         select(InventoryPallet)
         .options(selectinload(InventoryPallet.items))
         .where(
-            InventoryPallet.location_id == item.location_id,
+            InventoryPallet.location_id == location_id,
             InventoryPallet.is_current.is_(True),
         )
     )
@@ -630,7 +634,7 @@ def _assert_add_compatible(
             or int(linked_lot.quantity_damaged or 0) > 0
             or linked_lot.inventory_type != "finished"
             or linked_lot.unit != "boxes"
-            or linked_lot.warehouse_location_id != item.location_id
+            or linked_lot.warehouse_location_id != location_id
             or linked_detail is None
             or linked_product is None
             or linked_product.deleted_at is not None

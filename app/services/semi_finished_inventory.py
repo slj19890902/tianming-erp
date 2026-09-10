@@ -8,6 +8,9 @@ from math import ceil
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import object_session
+from app.models.warehouse_goods import WarehouseGoodsProfile
+from app.services.warehouse_goods import goods_profile, qualification_issues
 
 from app.models.delivery import DeliveryItem
 from app.models.order import Order, OrderItem
@@ -470,6 +473,7 @@ def direct_semi_finished_deduction_eligible(
         customer_id=customer_id,
         expected=expected,
         allowed_lot_ids=_allowed_lot_ids_for_product(db, product_id),
+        product_id=product_id,
     )
     if scope not in {"dedicated", "customer_generic"}:
         return False
@@ -621,12 +625,23 @@ def _lot_eligibility_scope(
     customer_id: int,
     expected: SemiFinishedSignature,
     allowed_lot_ids: set[int],
+    product_id: int,
 ) -> str | None:
     detail = lot.semi_finished_detail
     if lot.inventory_type != "semi_finished" or detail is None:
         return None
     if detail.component_type != expected.component_type:
         return None
+    db = object_session(lot)
+    product = db.get(Product, product_id)
+    if product is None or qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code):
+        return None
+    profile = goods_profile(db, lot)
+    if profile:
+        if _customer_generic_blocking_differences(expected, detail):
+            return None
+        # Reuse the explicit confirmation/variance flow; do not bypass it for shared stock.
+        return "customer_generic"
     if detail.owner_customer_id is None:
         return (
             "general"
@@ -666,6 +681,13 @@ def ensure_semi_finished_lot_eligibility(
         raise WarehouseInventoryError("所选批次不是半成品库存", 409)
     if detail.component_type != expected.component_type:
         raise WarehouseInventoryError("半成品库存组件与订单需求不一致", 409)
+    issues = qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code)
+    if issues:
+        raise WarehouseInventoryError("所选库存不能抵扣：" + "、".join(issues), 409)
+    if goods_profile(db, lot):
+        if _customer_generic_blocking_differences(expected, detail):
+            raise WarehouseInventoryError("片料尺寸、楞型或换算与订单需求不一致", 409)
+        return "customer_generic"
     if detail.owner_customer_id is None:
         differences = _physical_signature_differences(expected, detail)
         if differences:
@@ -942,6 +964,7 @@ def browse_semi_finished_inventory_for_product(
             InventoryLot.quantity_available > 0,
             or_(
                 SemiFinishedInventoryDetail.owner_customer_id.is_(None),
+                InventoryLot.id.in_(select(WarehouseGoodsProfile.lot_id)),
                 SemiFinishedInventoryDetail.owner_customer_id == customer_id,
             ),
             SemiFinishedInventoryDetail.component_type == expected.component_type,
@@ -959,6 +982,7 @@ def browse_semi_finished_inventory_for_product(
             customer_id=customer_id,
             expected=expected,
             allowed_lot_ids=allowed_lot_ids,
+            product_id=product.id,
         )
         if scope is None:
             continue
@@ -968,7 +992,7 @@ def browse_semi_finished_inventory_for_product(
             codes = [MANUAL_CONFIRM_WARNING, CUSTOMER_GENERIC_SEMI_FINISHED_STOCK]
             messages = [
                 "每次半成品库存抵扣都必须人工确认。",
-                "该批次是同一客户的通用备料，不绑定具体存货编码。",
+                "该批次按已确认的客户及产品适用范围使用，请核对加工状态。",
             ]
             if "material_code" in differences:
                 codes.append(MATERIAL_VARIANCE_PRESERVED)
@@ -1005,7 +1029,7 @@ def browse_semi_finished_inventory_for_product(
                 warning_messages=warning_messages,
             )
         )
-    return candidates
+    return sorted(candidates, key=lambda c: c.lot.semi_finished_detail.sheet_type == "raw_board")
 
 
 def _semi_finished_candidates_for_signature(
@@ -1032,6 +1056,7 @@ def _semi_finished_candidates_for_signature(
             InventoryLot.quantity_available > 0,
             or_(
                 SemiFinishedInventoryDetail.owner_customer_id.is_(None),
+                InventoryLot.id.in_(select(WarehouseGoodsProfile.lot_id)),
                 SemiFinishedInventoryDetail.owner_customer_id
                 == expected.customer_id,
             ),
@@ -1050,6 +1075,7 @@ def _semi_finished_candidates_for_signature(
             customer_id=expected.customer_id,
             expected=expected,
             allowed_lot_ids=allowed_lot_ids,
+            product_id=product_id,
         )
         if scope is None:
             continue
@@ -1058,7 +1084,7 @@ def _semi_finished_candidates_for_signature(
             codes = [MANUAL_CONFIRM_WARNING, CUSTOMER_GENERIC_SEMI_FINISHED_STOCK]
             messages = [
                 "每次半成品库存抵扣都必须人工确认。",
-                "该批次是同一客户的通用备料，不绑定具体存货编码。",
+                "该批次按已确认的客户及产品适用范围使用，请核对加工状态。",
             ]
             if "material_code" in differences:
                 codes.append(MATERIAL_VARIANCE_PRESERVED)
@@ -1136,7 +1162,7 @@ def _semi_finished_candidates_for_signature(
                 warning_messages=tuple(warning_messages),
             )
         )
-    return candidates
+    return sorted(candidates, key=lambda c: c.lot.semi_finished_detail.sheet_type == "raw_board")
 
 
 def browse_semi_finished_inventory(
@@ -1158,6 +1184,7 @@ def browse_semi_finished_inventory(
             InventoryLot.quantity_available > 0,
             or_(
                 SemiFinishedInventoryDetail.owner_customer_id.is_(None),
+                InventoryLot.id.in_(select(WarehouseGoodsProfile.lot_id)),
                 SemiFinishedInventoryDetail.owner_customer_id
                 == requirement.customer_id,
             ),
@@ -1178,6 +1205,7 @@ def browse_semi_finished_inventory(
             customer_id=requirement.customer_id,
             expected=expected,
             allowed_lot_ids=allowed_lot_ids,
+            product_id=product_id,
         )
         if scope is None:
             continue
@@ -1187,7 +1215,7 @@ def browse_semi_finished_inventory(
             codes = [MANUAL_CONFIRM_WARNING, CUSTOMER_GENERIC_SEMI_FINISHED_STOCK]
             messages = [
                 "每次半成品库存抵扣都必须人工确认。",
-                "该批次是同一客户的通用备料，不绑定具体存货编码。",
+                "该批次按已确认的客户及产品适用范围使用，请核对加工状态。",
             ]
             if "material_code" in differences:
                 codes.append(MATERIAL_VARIANCE_PRESERVED)
@@ -1224,7 +1252,7 @@ def browse_semi_finished_inventory(
                 warning_messages=warning_messages,
             )
         )
-    return candidates
+    return sorted(candidates, key=lambda c: c.lot.semi_finished_detail.sheet_type == "raw_board")
 
 
 def _rule_for_signature(
@@ -2215,6 +2243,7 @@ def reserve_semi_finished_inventory(
             .where(InventoryLot.id.in_(expected_versions))
             .order_by(*inventory_fifo_order_columns())
         ).all()
+        inventory_lots.sort(key=lambda lot: bool(lot.semi_finished_detail and lot.semi_finished_detail.sheet_type == "raw_board"))
         if len(inventory_lots) != len(expected_versions):
             raise WarehouseInventoryError("所选半成品库存批次不存在", 404)
         for lot in inventory_lots:

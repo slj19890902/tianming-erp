@@ -103,6 +103,7 @@ class MaterialPayload(BaseModel):
     quote_date: date | None = None
     remarks: str | None = None
     is_active: bool = True
+    is_white_face: bool | None = None
 
     @model_validator(mode="after")
     def validate_seven_layer_code(self) -> "MaterialPayload":
@@ -382,6 +383,8 @@ def _response(material: Material, user: User) -> dict:
 
 def _material_write_data(payload: MaterialPayload) -> dict:
     data = payload.model_dump(include=set(MaterialPayload.model_fields))
+    if data.get("is_white_face") is None:
+        data.pop("is_white_face", None)
     data["code"] = clean_code(payload.code)
     data["flute_type"] = None
     data["basis_weight_description"] = normalize_basis_weight(

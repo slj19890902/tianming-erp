@@ -13,7 +13,7 @@ from tests.test_multilevel_bom_receipt_flow import seed_graph, purchase_sources
 
 @pytest.mark.parametrize("separate", [True, False])
 def test_loose_children_are_reserved_individually_before_sheet_conversion(
-    composite_requisition_app, _p181_published_map_identity, separate, corrupt_restore=False
+    composite_requisition_app, _p181_published_map_identity, separate, corrupt_restore=False, short_yield=2
 ):
     from app.core.time_contract import beijing_today
     from decimal import Decimal
@@ -23,8 +23,11 @@ def test_loose_children_are_reserved_individually_before_sheet_conversion(
     from tests.test_n039_composite_bom_requisition import _component_payload
 
     app, factory = composite_requisition_app
+    short_mode = "一开二" if short_yield == 2 else "一开三"
+    short_sheets = (350 + short_yield - 1) // short_yield
+    extra_short = short_sheets * short_yield - 350
     material_id, snapshots = seed_graph(factory, separate=separate, quantity=100,
-                              cutting_modes={2: "一开四", 3: "一开二"}, finished_slot_count=16)
+                              cutting_modes={2: "一开四", 3: short_mode}, finished_slot_count=16)
     lots = {}
     with factory() as db:
         for sid, pid in snapshots:
@@ -52,19 +55,19 @@ def test_loose_children_are_reserved_individually_before_sheet_conversion(
             assert replay.status_code == 200, replay.text
         with factory() as db:
             requirements = read_graph_requirements(db, 1)
-            assert {r.product_id: r.purchase_sheets for r in requirements.plan.materials} == {2: 70, 3: 175}
+            assert {r.product_id: r.purchase_sheets for r in requirements.plan.materials} == {2: 70, 3: short_sheets}
             rows = list(db.scalars(select(InventoryReservation)))
             assert len(rows) == 2
             assert {r.inventory_lot_id for r in rows} == {v[0] for v in lots.values()}
         saved = client.post("/api/requisition/batches", json={"request_key": "loose-sheet-conversion",
             "supplier_name": "苏州纸板供应商", "items": [
-                {**_component_payload(sid), "special_process": "一开四" if pid == 2 else "一开二"}
+                {**_component_payload(sid), "special_process": "一开四" if pid == 2 else short_mode}
                 for sid, pid in snapshots]})
         assert saved.status_code == 201, saved.text
         from app.models.supplier_requisition_order import PurchasePurposeSourceSnapshot
         with factory() as db:
             sources = list(db.scalars(select(PurchasePurposeSourceSnapshot)))
-            assert sorted(s.order_purpose_sheet_qty for s in sources) == [70, 175]
+            assert sorted(s.order_purpose_sheet_qty for s in sources) == [70, short_sheets]
             assert db.scalar(select(func.count()).select_from(BomAssembly)) == 0
         from tests.test_multilevel_bom_receipt_flow import read_purchase_sources
         receipt_ids = []
@@ -86,19 +89,19 @@ def test_loose_children_are_reserved_individually_before_sheet_conversion(
                 pid = lot.finished_detail.product_id
                 totals[pid] = totals.get(pid, 0) + lot.quantity_reserved + lot.quantity_available
             if separate:
-                assert totals == {2: 300, 3: 400}
+                assert totals == {2: 300, 3: 400 + extra_short}
                 assert db.scalar(select(func.count()).select_from(BomAssembly)) == 0
             else:
                 import json
-                assert totals == {1: 100, 2: 0, 3: 0}
+                assert totals == {1: 100, 2: 0, 3: extra_short}
                 assemblies = list(db.scalars(select(BomAssembly)))
                 assert sum(row.quantity for row in assemblies) == 100
-                assert sum(row.total_cost for row in assemblies) == Decimal("38.9830")
+                assert sum(row.total_cost for row in assemblies) == Decimal("38.9830" if short_yield == 2 else "31.7847")
                 assert any(json.loads(row.cost_detail_json)["actual"] is False for row in assemblies)
                 assert {pid: sum(lot.quantity_consumed for lot in db.scalars(select(InventoryLot))
                     if lot.finished_detail and lot.finished_detail.product_id == pid) for pid in (2, 3)} == {2: 300, 3: 400}
             requirements = read_graph_requirements(db, 1)
-            assert {r.product_id: r.purchase_sheets for r in requirements.plan.materials} == {2: 70, 3: 175}
+            assert {r.product_id: r.purchase_sheets for r in requirements.plan.materials} == {2: 70, 3: short_sheets}
         from app.api.deliveries import router
         from app.models.order import OrderItem
         app.include_router(router, prefix="/api/deliveries")
@@ -156,6 +159,12 @@ def test_loose_children_are_reserved_individually_before_sheet_conversion(
 def test_receipt_reversal_rejects_a_broken_pallet_restore_proof(composite_requisition_app, _p181_published_map_identity):
     test_loose_children_are_reserved_individually_before_sheet_conversion(
         composite_requisition_app, _p181_published_map_identity, True, corrupt_restore=True)
+
+
+@pytest.mark.parametrize("separate", [True, False])
+def test_rounding_surplus_remains_real_stock(composite_requisition_app, _p181_published_map_identity, separate):
+    test_loose_children_are_reserved_individually_before_sheet_conversion(
+        composite_requisition_app, _p181_published_map_identity, separate, short_yield=3)
 
 
 def test_public_order_entry_freezes_separate_mode_and_real_child_demands(

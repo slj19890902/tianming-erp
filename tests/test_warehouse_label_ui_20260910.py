@@ -33,3 +33,4 @@ def test_long_labels_wrap_and_touch_targets_remain_usable():
     assert 'overflow-wrap:anywhere' in css
     assert 'grid-auto-columns:minmax(240px,1fr)' in css
     assert '.warehouse-label-code-row button,.warehouse-label-add' in css
+    assert '.twin-workspace:has(.twin-stocktake-compact)' not in css

@@ -2526,7 +2526,6 @@ body.warehouse-twin-page {
 .twin-location-item .twin-stocktake-decrease { float: right; }
 .twin-location-item:has(.twin-stocktake-decrease)::after { content: ""; display: block; clear: both; }
 .twin-sidebar-product-label { border: 1px solid #bdd5e2; padding: 6px; margin: 4px 0; background: white; font-size: 13px; }
-.twin-workspace:has(.twin-stocktake-compact) { grid-template-columns: 70px minmax(420px, 1fr) 420px; }
 .twin-stocktake-compact { font-size: 13px; }
 .twin-stocktake-compact .twin-location-card-title small { display: none; }
 .twin-stocktake-compact .twin-location-card-title b { font-size: 14px; }
@@ -2561,8 +2560,7 @@ body.warehouse-twin-page {
 .twin-stocktake-compact .twin-stocktake-block-reason { font-size: 12px; clear: both; }
 .twin-stocktake-compact .twin-stocktake-existing-panel { margin: 5px 0; padding: 5px; }
 .twin-stocktake-compact .twin-location-empty-primary { margin: 3px 0; padding: 4px; }
-@media (max-width: 1100px) { .twin-workspace:has(.twin-stocktake-compact) { grid-template-columns: 50px minmax(260px,1fr) 360px; } }
-@media (max-width: 760px) { .twin-workspace:has(.twin-stocktake-compact) { grid-template-columns: minmax(0,1fr); } }
+/* Preserve the workspace's existing layer/search column topology in every mode. */
 
 /* Shared warehouse label language, independent of lookup/move/count mode. */
 .warehouse-label-summary,.shelf-product-summary { display:flex; flex-wrap:wrap; align-items:baseline; gap:3px 7px; font-size:12px; line-height:1.4; overflow-wrap:anywhere; }

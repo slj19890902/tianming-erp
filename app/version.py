@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.328"
+APP_VERSION = "v0.22.329"
 APP_VERSION_NAME = "仓库多入口标签界面统一"
 APP_BUILD_DATE = "2026-09-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -2478,7 +2478,7 @@ _V022327_VERIFICATION_STEPS = [
     "点编码和明细分别核对标签及记录；确认半成品原材料可选、跨楼层草稿保持且既有库存归位不增加总量。",
 ]
 APP_CHANGES = [
-    "查货、移货、合并及盘点共用紧凑货位侧栏，位置详情默认折叠，添加货物缩为标题旁按钮，移除重复提示。",
+    "查货、移货、合并及盘点共用紧凑货位侧栏；保留各模式查货栏和图层栏原有列宽，位置详情折叠、添加按钮缩小。",
     "区域库存、待送栈板、货架标签统一客户产品规格与编码数量两行布局，编码查看标签、明细独立展开，长字段自动换行。",
     "手机货位优先展示现有货物，新增操作蓝绿分区；不修改库存、地图、打印二维码或业务校验，无数据库迁移。",
 ]
@@ -2488,8 +2488,8 @@ APP_VERIFICATION_STEPS = [
     "手机打开有货货位，确认货物在新增操作上方、客户产品规格同排，窄屏长编码可完整换行。",
 ]
 APP_CHANGELOG = [
-    *(f"v0.22.328：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.328：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.329：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.329：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
     *(f"v0.22.327：本次更新｜{item}" for item in _V022327_CHANGES),
     *(f"v0.22.327：如何验证｜{item}" for item in _V022327_VERIFICATION_STEPS),
     *(f"v0.22.326：本次更新｜{item}" for item in _V022326_CHANGES),

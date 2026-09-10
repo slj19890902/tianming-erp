@@ -28,6 +28,7 @@ def request(db):
 def test_actual_00205_conversion_and_replay_preserve_history(factory_copy):
     db = factory_copy
     payload = request(db)
+    supplements = db.execute(text("SELECT * FROM finance_material_cost_supplements ORDER BY id")).all()
     old_sources = db.execute(text("SELECT * FROM sales_order_item_bom_components WHERE sales_order_item_id=10050 ORDER BY id")).all()
     old_tasks = db.execute(text("SELECT * FROM production_tasks WHERE order_item_id=10050 ORDER BY id")).all()
     old_completions = db.execute(text("SELECT * FROM production_completions WHERE order_item_id=10050 ORDER BY id")).all()
@@ -62,6 +63,7 @@ def test_actual_00205_conversion_and_replay_preserve_history(factory_copy):
     assert convert_reserved_legacy_order(db, **payload) == result
     db.commit()
     assert db.execute(text("SELECT * FROM inventory_movements ORDER BY id")).all() == before
+    assert db.execute(text("SELECT * FROM finance_material_cost_supplements ORDER BY id")).all() == supplements
 
 
 def test_conversion_stale_review_leaves_no_graph_or_stock_change(factory_copy):

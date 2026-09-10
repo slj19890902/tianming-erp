@@ -124,7 +124,7 @@ def test_fresh_isolated_upgrade_downgrade_upgrade_preserves_all_original_facts(m
         assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
     config = _config(monkeypatch, target)
-    assert ScriptDirectory.from_config(config).get_heads() == ["sd16v8x9z78"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["se17v8x9z79"]
     command.upgrade(config, "sc15v8x9z77")
     def facts():
         with sqlite3.connect(target) as db:

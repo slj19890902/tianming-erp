@@ -81,8 +81,8 @@ def test_v327_rule_migration_roundtrip_preserves_original_facts(factory_copy, mo
         triggers = dict(before.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))
     db.rollback()
     config = _config(monkeypatch, target)
-    assert ScriptDirectory.from_config(config).get_heads() == ["sk23v8x9z85"]
-    for destination in ("sh20v8x9z82", "sk23v8x9z85"):
+    assert ScriptDirectory.from_config(config).get_heads() == ["sl24v8x9z86"]
+    for destination in ("sh20v8x9z82", "sl24v8x9z86"):
         if destination == "sh20v8x9z82":
             command.downgrade(config, destination)
         else:
@@ -91,7 +91,7 @@ def test_v327_rule_migration_roundtrip_preserves_original_facts(factory_copy, mo
             assert after.execute("PRAGMA integrity_check").fetchone() == ("ok",)
             assert after.execute("PRAGMA foreign_key_check").fetchall() == []
             assert {row[0] for row in after.execute("SELECT version_num FROM alembic_version")} == (
-                {destination} if destination == "sk23v8x9z85" else {destination, "rv10v8x9z70"})
+                {destination} if destination == "sl24v8x9z86" else {destination, "rw10v8x9z71"})
             assert original_facts(after, columns) == facts
             actual = dict(after.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))
             assert all(actual.get(name) == sql for name, sql in triggers.items())

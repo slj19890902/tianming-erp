@@ -3387,7 +3387,9 @@ def _bom_snapshot_is_fully_requisitioned(
     snapshot: SalesOrderItemBomComponent,
 ) -> bool:
     source = _bom_snapshot_inventory_source(db, snapshot)
-    if source == "assembled":
+    if source in {"assembled", "separate"}:
+        # Neither node has its own paperboard route. Every physical descendant
+        # is checked independently by the caller, including purchased children.
         return True
     if source == "purchased":
         # A purchased node is never implicitly marked supplied by a paperboard

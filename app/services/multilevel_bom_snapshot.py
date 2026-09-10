@@ -10,11 +10,12 @@ import json
 from dataclasses import asdict
 
 from app.services.multilevel_bom_plan import (
-    BomEdge, BomPlanError, FrozenBom, MaterialRoute, ProductNode, PurchaseUnits,
+    BomEdge, BomModes, BomPlanError, FrozenBom, MaterialRoute, ProductNode, PurchaseUnits,
 )
 
 SCHEMA_VERSION = 1
 PURCHASE_SCHEMA_VERSION = 2
+MODES_SCHEMA_VERSION = 3
 MAX_NODES = 1000
 MAX_EDGES = 5000
 MAX_DOCUMENT_BYTES = 2_000_000
@@ -33,6 +34,8 @@ def _text(value, label, limit=250):
 
 
 def graph_schema_version(graph):
+    if graph.modes is not None:
+        return MODES_SCHEMA_VERSION
     return PURCHASE_SCHEMA_VERSION if any(n.purchase_units is not None for n in graph.nodes) else SCHEMA_VERSION
 
 
@@ -45,12 +48,14 @@ def dump_graph(graph: FrozenBom) -> str:
         "root_id": graph.root_id,
         "customer_id": graph.customer_id,
         "nodes": [
-            {**{k: v for k, v in asdict(node).items() if k != "purchase_units" or schema_version == PURCHASE_SCHEMA_VERSION},
+            {**{k: v for k, v in asdict(node).items() if k != "purchase_units" or schema_version >= PURCHASE_SCHEMA_VERSION},
              "routes": [asdict(r) for r in sorted(node.routes, key=lambda r: r.key)]}
             for node in sorted(graph.nodes, key=lambda n: n.product_id)
         ],
         "edges": [asdict(edge) for edge in sorted(graph.edges, key=lambda e: (e.parent_id, e.child_id))],
     }
+    if graph.modes is not None:
+        document["modes"] = asdict(graph.modes)
     result = json.dumps(document, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     # Apply the same field/size checks on both sides of the storage boundary.
     load_graph(result)
@@ -77,9 +82,19 @@ def load_graph(document: str, *, expected_hash: str | None = None) -> FrozenBom:
         data = json.loads(document, object_pairs_hook=_unique_pairs)
     except (ValueError, TypeError, RecursionError) as error:
         raise BomPlanError("BOM快照不是有效JSON") from error
-    _object(data, ("schema_version", "root_id", "customer_id", "nodes", "edges"), "BOM快照")
-    if type(data["schema_version"]) is not int or data["schema_version"] not in (SCHEMA_VERSION, PURCHASE_SCHEMA_VERSION):
+    if type(data) is not dict:
+        raise BomPlanError("BOM快照必须为对象")
+    version = data.get("schema_version")
+    _object(data, ("schema_version", "root_id", "customer_id", "nodes", "edges")
+            + (("modes",) if version == MODES_SCHEMA_VERSION else ()), "BOM快照")
+    if type(version) is not int or version not in (SCHEMA_VERSION, PURCHASE_SCHEMA_VERSION, MODES_SCHEMA_VERSION):
         raise BomPlanError("不支持的BOM快照版本")
+    modes = None
+    if version == MODES_SCHEMA_VERSION:
+        _object(data["modes"], ("material", "inventory", "delivery"), "BOM执行规则")
+        for value in data["modes"].values():
+            _text(value, "BOM执行规则", 30)
+        modes = BomModes(**data["modes"])
     if type(data["nodes"]) is not list or not 1 <= len(data["nodes"]) <= MAX_NODES:
         raise BomPlanError("BOM产品数量无效")
     if type(data["edges"]) is not list or len(data["edges"]) > MAX_EDGES:
@@ -87,7 +102,7 @@ def load_graph(document: str, *, expected_hash: str | None = None) -> FrozenBom:
     nodes = []
     for node in data["nodes"]:
         fields = ("product_id", "customer_id", "version", "name", "unit", "source", "routes")
-        _object(node, fields + (("purchase_units",) if data["schema_version"] == PURCHASE_SCHEMA_VERSION else ()), "产品")
+        _object(node, fields + (("purchase_units",) if version >= PURCHASE_SCHEMA_VERSION else ()), "产品")
         units = node.get("purchase_units")
         if units is not None:
             _object(units, ("purchase_unit", "stock_basis", "purchase_basis"), "外购单位比例")
@@ -108,7 +123,7 @@ def load_graph(document: str, *, expected_hash: str | None = None) -> FrozenBom:
         _object(edge, ("parent_id", "child_id", "quantity", "relation"), "BOM关系")
         _text(edge["relation"], "BOM关系类型", 30)
         edges.append(BomEdge(**edge))
-    graph = FrozenBom(data["root_id"], data["customer_id"], tuple(nodes), tuple(edges))
+    graph = FrozenBom(data["root_id"], data["customer_id"], tuple(nodes), tuple(edges), modes)
     graph.validated()
     if graph_schema_version(graph) != data["schema_version"]:
         raise BomPlanError("BOM采购快照版本与内容不一致")

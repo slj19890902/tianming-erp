@@ -57,7 +57,7 @@ class ProductNode:
     version: int
     name: str
     unit: str
-    source: str  # manufactured / purchased / assembled
+    source: str  # manufactured / purchased / assembled / separate (no own stock)
     routes: tuple[MaterialRoute, ...] = ()
     purchase_units: PurchaseUnits | None = None
 
@@ -104,11 +104,19 @@ class BomPlan:
 
 
 @dataclass(frozen=True)
+class BomModes:
+    material: str
+    inventory: str
+    delivery: str
+
+
+@dataclass(frozen=True)
 class FrozenBom:
     root_id: int
     customer_id: int
     nodes: tuple[ProductNode, ...]
     edges: tuple[BomEdge, ...]
+    modes: BomModes | None = None
 
     def validated(self):
         _integer(self.root_id, "父产品", 1)
@@ -122,7 +130,7 @@ class FrozenBom:
                 raise BomPlanError("重复产品或跨客户BOM")
             if not node.name.strip() or not node.unit.strip():
                 raise BomPlanError("产品名称、库存单位不能为空")
-            if node.source not in {"manufactured", "purchased", "assembled"}:
+            if node.source not in {"manufactured", "purchased", "assembled", "separate"}:
                 raise BomPlanError("未知产品来源")
             if node.purchase_units is not None:
                 if node.source != "purchased" or not isinstance(node.purchase_units, PurchaseUnits):
@@ -140,6 +148,22 @@ class FrozenBom:
             nodes[node.product_id] = node
         if self.root_id not in nodes:
             raise BomPlanError("父产品不存在")
+        if self.modes is not None:
+            if not isinstance(self.modes, BomModes) or self.modes.material != "expand_children":
+                raise BomPlanError("报料方式必须明确为按冻结子件展开")
+            if self.modes.inventory not in {"assembled", "separate", "body"}:
+                raise BomPlanError("库存方式无效")
+            if self.modes.delivery not in {"parent", "components"}:
+                raise BomPlanError("交货方式无效")
+            root_source = nodes[self.root_id].source
+            expected = {"assembled": {"assembled"}, "separate": {"separate"},
+                        "body": {"manufactured", "purchased"}}[self.modes.inventory]
+            if root_source not in expected:
+                raise BomPlanError("库存方式与父产品实体身份不一致")
+            if self.modes.inventory == "assembled" and self.modes.delivery == "components":
+                raise BomPlanError("组装后子件已被消耗，不能作为分存子件交货")
+        elif any(n.source == "separate" for n in self.nodes):
+            raise BomPlanError("子件分存必须冻结独立报料、库存及交货规则")
         children = {pid: [] for pid in nodes}
         indegree = {pid: 0 for pid in nodes}
         seen = set()
@@ -154,6 +178,8 @@ class FrozenBom:
                 raise BomPlanError("重复子件或自引用BOM")
             if edge.relation not in {"assembly", "accompany"}:
                 raise BomPlanError("必须明确组装或配套关系")
+            if edge.relation == "assembly" and nodes[edge.child_id].source == "separate":
+                raise BomPlanError("无实体库存的组合需求不能作为组装消耗子件")
             seen.add(key)
             children[edge.parent_id].append(edge)
             indegree[edge.child_id] += 1
@@ -163,6 +189,8 @@ class FrozenBom:
                 raise BomPlanError("组套产品缺少组装子件")
             if node.source == "purchased" and assembly:
                 raise BomPlanError("外购成品不可同时重复消耗组装子件")
+            if node.source == "separate" and (assembly or not children[pid]):
+                raise BomPlanError("子件分存组合必须有配套子件，不能消耗子件生成父库存")
         # Deterministic Kahn order handles shared children without recursion limits.
         ready = sorted(pid for pid, count in indegree.items() if count == 0)
         order = []
@@ -206,6 +234,8 @@ def plan_bom(
         if type(pid) is not int or pid not in nodes:
             raise BomPlanError("库存抵扣包含无关产品")
         _integer(count, "可抵扣库存")
+        if nodes[pid].source == "separate" and count:
+            raise BomPlanError("子件分存父件不存在可抵扣实体库存")
     route_keys = {(n.product_id, r.key) for n in graph.nodes for r in n.routes}
     for key, count in pieces.items():
         if key not in route_keys:
@@ -244,10 +274,12 @@ def plan_bom(
 
     # Picking follows physical stock nodes. Parts already consumed in assembly
     # do not appear again as independently pickable finished inventory.
-    pick = defaultdict(int, {graph.root_id: quantity})
+    pick = defaultdict(int)
+    if nodes[graph.root_id].source != "separate":
+        pick[graph.root_id] = quantity
     for pid in order:
         for edge in children[pid]:
-            if edge.relation == "accompany":
+            if edge.relation == "accompany" and nodes[edge.child_id].source != "separate":
                 pick[edge.child_id] += context[pid] * edge.quantity
     return BomPlan(
         tuple(products), tuple(materials), tuple(paths),

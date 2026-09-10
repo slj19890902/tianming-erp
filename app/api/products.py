@@ -694,6 +694,7 @@ class ProductResponse(ProductPayload):
 
 class ProductBOMComponentPayload(BaseModel):
     component_product_id: int = Field(gt=0)
+    unit: str | None = Field(default=None, min_length=1, max_length=30)
     inventory_relation: Literal["assembly", "accompany"] | None = None
     quantity_per_set: Decimal = Field(gt=0)
     is_die_cut: bool = False
@@ -736,7 +737,9 @@ class ProductSubkitPayload(BaseModel):
 
 class ProductBOMUpdatePayload(BaseModel):
     expected_version: int = Field(ge=1)
-    inventory_mode: Literal["manufactured", "purchased", "assembled"] | None = None
+    inventory_mode: Literal["manufactured", "purchased", "assembled", "separate"] | None = None
+    material_mode: Literal["expand_children"] | None = None
+    delivery_mode: Literal["parent", "components"] | None = None
     change_reason: str | None = Field(default=None, max_length=500)
     components: list[ProductBOMComponentPayload] = Field(max_length=99)
     subkit: ProductSubkitPayload | None = None
@@ -2198,6 +2201,8 @@ def _update_product_bom(product_id, payload, db, user, *, commit=True) -> dict:
             user=user,
             change_reason=payload.change_reason,
             inventory_mode=payload.inventory_mode,
+            material_mode=payload.material_mode,
+            delivery_mode=payload.delivery_mode,
         )
         from app.services.bom_subkits import read_subkit, save_subkit, SubkitError
         from app.services.composite_bom_execution import CompositeBOMExecutionError

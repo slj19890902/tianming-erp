@@ -108,7 +108,7 @@ def estimate_graph_processing_cost(db, item):
         source = row["source"]
         if source != "manufactured":
             profile.update(printer_mode="none", die_cut_mode="none")
-        if source == "purchased":
+        if source in {"purchased", "separate"}:
             profile["assembly_worker_days_per_1000"] = None
         detail = estimate_standard_processing_cost(db, product=SimpleNamespace(**row["product"]),
             quantity=demand[row["product_id"]], profile_override=SimpleNamespace(**profile),

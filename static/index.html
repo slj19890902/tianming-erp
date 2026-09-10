@@ -6783,7 +6783,8 @@
                       <select class="select" aria-label="BOM库存来源" v-model="bomEditor.inventory_mode" @change="onBomInventoryModeChange" :disabled="!!bomEditor.subkit?.enabled">
                         <option value="legacy" :disabled="bomEditor.persisted_inventory_mode !== 'legacy'">旧规则</option>
                         <option value="manufactured">自制＋配套</option>
-                        <option value="assembled">组套成品</option>
+                        <option value="assembled">组装成套</option>
+                        <option value="separate">子件分存（父件无库存）</option>
                         <option value="purchased">外购＋配套</option>
                       </select>
                     </label>
@@ -6826,7 +6827,7 @@
                           <label>子件 {{ index + 1 }}</label>
                           <search-select v-model="component.component_product_id" :options="bomEditor.componentOptions" label-key="_label" value-key="id" placeholder="搜索产品编码、名称或规格" :disabled="!productForm.customer_id" @search="searchBomProducts" @change="selectBomComponent(component,$event)"></search-select>
                         </div>
-                        <div class="field"><label>每套用量</label><input class="input" type="number" min="1" step="1" v-model.number="component.quantity_per_set" /></div>
+                        <div class="field"><label>每套用量（{{ component.unit || component.component?.unit || '选产品' }}）</label><input class="input" type="number" min="1" step="1" v-model.number="component.quantity_per_set" /></div>
                         <label v-if="bomEditor.inventory_mode === 'legacy'" class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> 必需</label>
                         <select v-else class="select bom-component-relation" aria-label="子件库存关系" v-model="component.inventory_relation">
                           <option value="assembly" :disabled="!['assembled', 'manufactured'].includes(bomEditor.inventory_mode)">组装消耗</option>
@@ -25106,6 +25107,7 @@
             component.component_product_id = source.component_product_id ?? source.product_id ?? source.component_id ?? null;
             component.product_code = source.product_code || summary.product_code || "";
             component.product_name = source.product_name || summary.product_name || "";
+            component.unit = source.unit || summary.unit || "";
             component.internal_code = source.internal_code || source.internal_component_code || "";
             component.quantity_per_set = Number(source.quantity_per_set ?? source.qty_per_set ?? source.quantity ?? 1);
             if (!Number.isFinite(component.quantity_per_set) || component.quantity_per_set <= 0) component.quantity_per_set = 1;
@@ -25243,6 +25245,7 @@
             component.mold_tool_id = component.is_die_cut ? (selected?.mold_tool_id || null) : null;
             component.mold_max_yield_per_sheet = null;
             component.component = selected || null;
+            component.unit = selected?.unit || "";
             if (!selected) {
             component.component_product_id = null;
             component.product_code = "";
@@ -25296,9 +25299,12 @@
             return {
               enabled: Boolean(editor.enabled), expected_version: editor.expected_version,
               inventory_mode: (editor.inventory_mode || "legacy") === "legacy" ? null : editor.inventory_mode,
+              material_mode: (editor.inventory_mode || "legacy") === "legacy" ? null : "expand_children",
+              delivery_mode: (editor.inventory_mode || "legacy") === "legacy" ? null : (this.productForm.composite_fulfillment_mode === "parent_delivery" ? "parent" : "components"),
               subkit: (editor.inventory_mode || "legacy") === "legacy" && editor.subkit ? {...editor.subkit} : null,
               components: (editor.components || []).map(component => ({
                 component_product_id: component.component_product_id || null,
+                unit: component.unit || component.component?.unit || null,
                 inventory_relation: editor.inventory_mode === "legacy" ? null : component.inventory_relation,
                 quantity_per_set: component.quantity_per_set,
                 is_die_cut: component.is_die_cut === true,
@@ -25318,6 +25324,7 @@
           },
           validateProductBom() {
             const mode = this.bomEditor.inventory_mode || "legacy";
+            if (mode === "assembled" && this.productForm.composite_fulfillment_mode !== "parent_delivery") return "组装成套后按父件交货；如需子件实发，请选择子件分存";
             if (mode === "assembled" && (!this.bomEditor.enabled || !this.bomEditor.components.some(row => row.inventory_relation === "assembly"))) return "组套成品至少需要一个组装子件";
             if (!this.bomEditor.enabled) return "";
             if (!this.bomEditor.components.length) return "启用组合产品后至少添加一个内部组件";
@@ -25347,6 +25354,8 @@
             return {
               expected_version: expectedVersion ?? fields.expected_version ?? 1,
               inventory_mode: fields.inventory_mode,
+              material_mode: fields.material_mode,
+              delivery_mode: fields.delivery_mode,
               components: fields.enabled ? fields.components : [],
               subkit: fields.subkit,
             };

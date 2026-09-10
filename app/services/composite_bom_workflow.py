@@ -738,11 +738,12 @@ def project_graph_delivery_demands(compiled, item, demands):
     current_ids = {row.id for row in compiled.snapshots}
     window = compiled.execution_window
     quantity = window.execution_quantity if window else item.quantity
+    component_display = compiled.graph.modes is not None and compiled.graph.modes.delivery == "components"
     return [replace(d, quantity_per_set=picking[d.component_product_id],
                     effective_sets=quantity, required_piece_quantity=quantity*picking[d.component_product_id],
                     delivered_before_cutover=window.delivered_before if window else 0,
                     unit=units[d.component_product_id], is_graph_root=d.component_product_id == compiled.graph.root_id,
-                    is_required=True, show_on_delivery=d.component_product_id == compiled.graph.root_id)
+                    is_required=True, show_on_delivery=component_display or d.component_product_id == compiled.graph.root_id)
             for d in demands if d.snapshot_id in current_ids and d.component_product_id in picking]
 
 

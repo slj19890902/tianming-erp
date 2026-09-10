@@ -14,7 +14,7 @@ from app.models.product_bom import ProductBomComponent, SalesOrderItemBomCompone
 from app.services.composite_bom import _bom_row_values, _snapshot_kwargs, _validate_die_cut_mold
 from app.services.incoming_receipts import _snapshot_component_types, _snapshot_physical_pieces
 from app.services.multilevel_bom_master import load_master_structure
-from app.services.multilevel_bom_plan import BomEdge, BomPlanError, FrozenBom, MaterialRoute, ProductNode, PurchaseUnits, plan_bom
+from app.services.multilevel_bom_plan import BomEdge, BomModes, BomPlanError, FrozenBom, MaterialRoute, ProductNode, PurchaseUnits, plan_bom
 from app.services.bom_physical_quantities import resolve_bom_sheet_yield
 from app.services.multilevel_bom_execution_boundary import ExecutionWindow
 
@@ -128,8 +128,12 @@ def compile_master_order_bom(db, order_item, *, root_order_snapshot=False):
         nodes.append(ProductNode(pid, product.customer_id, product.version,
                                  product.product_name, product.unit, source, routes, purchase_units))
         snapshots.append(snapshot)
+    modes = None
+    if structure["material_mode"] is not None:
+        inventory = profiles[root.id] if profiles[root.id] in {"assembled", "separate"} else "body"
+        modes = BomModes(structure["material_mode"], inventory, structure["delivery_mode"])
     graph = FrozenBom(root.id, root.customer_id, tuple(nodes), tuple(
-        BomEdge(e["parent_id"], e["child_id"], e["quantity"], e["relation"]) for e in structure["edges"]))
+        BomEdge(e["parent_id"], e["child_id"], e["quantity"], e["relation"]) for e in structure["edges"]), modes)
     gross = {d.product_id: d.required_units for d in plan_bom(graph, 1).products}
     for snapshot in snapshots:
         multiplier = gross[snapshot.component_product_id]

@@ -61,7 +61,13 @@ def read_graph_requirements(db, order_item_id):
     finished, pieces = {}, {}
     for node in graph.nodes:
         row = snapshots[node.product_id]
-        if node.product_id == graph.root_id:
+        if node.source == "separate":
+            if any(r.sales_order_item_bom_component_id == row.id
+                   or (node.product_id == graph.root_id and r.sales_order_item_bom_component_id is None)
+                   for r in reserves):
+                raise BomPlanError("组合需求父件存在实体预占，请核对库存身份后再报料")
+            finished[node.product_id] = 0
+        elif node.product_id == graph.root_id:
             # Root delivery already appears in the canonical order coverage;
             # add only still-unconsumed root-component reservations, not their
             # historical consumed credit a second time.

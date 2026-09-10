@@ -11,6 +11,7 @@ def load_master_structure(db, root_product_id):
     root = db.get(Product, root_product_id)
     if root is None:
         raise BomPlanError("父产品不存在")
+    root_profile = db.get(ProductBomProfile, root_product_id)
     products, profiles, edges = {}, {}, []
     pending = {root_product_id}
     while pending:
@@ -52,6 +53,8 @@ def load_master_structure(db, root_product_id):
     indegree = {pid: 0 for pid in products}
     children = {pid: [] for pid in products}
     for edge in edges:
+        if edge["relation"] == "assembly" and profiles.get(edge["child_id"]) == "separate":
+            raise BomPlanError("无实体库存的组合需求不能作为组装消耗子件")
         indegree[edge["child_id"]] += 1
         children[edge["parent_id"]].append(edge)
     ready = sorted(pid for pid, count in indegree.items() if not count)
@@ -61,6 +64,8 @@ def load_master_structure(db, root_product_id):
         order.append(pid)
         if profiles.get(pid) == "assembled" and not any(e["relation"] == "assembly" for e in children[pid]):
             raise BomPlanError("组套成品缺少组装子件")
+        if profiles.get(pid) == "separate" and not children[pid]:
+            raise BomPlanError("子件分存组合必须有真实配套子件")
         for edge in children[pid]:
             indegree[edge["child_id"]] -= 1
             if not indegree[edge["child_id"]]:
@@ -69,6 +74,8 @@ def load_master_structure(db, root_product_id):
     if len(order) != len(products):
         raise BomPlanError("BOM关系会形成循环引用")
     return {"root_product_id": root.id, "customer_id": root.customer_id,
+        "material_mode": root_profile.material_mode if root_profile else None,
+        "delivery_mode": root_profile.delivery_mode if root_profile else None,
         "products": products, "profiles": profiles, "edges": edges, "order": order}
 
 

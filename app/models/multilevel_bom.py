@@ -123,11 +123,18 @@ class ProductBomProfile(Base):
     """Explicit physical source; absent rows retain the legacy contract."""
     __tablename__ = "product_bom_profiles"
     __table_args__ = (
-        CheckConstraint("source IN ('manufactured','purchased','assembled')", name="ck_product_bom_profile_source"),
+        CheckConstraint("source IN ('manufactured','purchased','assembled','separate')", name="ck_product_bom_profile_source"),
+        CheckConstraint("(material_mode IS NULL AND delivery_mode IS NULL AND source <> 'separate') OR "
+                        "(material_mode = 'expand_children' AND material_mode IS NOT NULL "
+                        "AND delivery_mode IS NOT NULL AND delivery_mode IN ('parent','components') "
+                        "AND NOT (source = 'assembled' AND delivery_mode = 'components'))",
+                        name="ck_product_bom_profile_modes"),
     )
     product_id: Mapped[int] = mapped_column(
         ForeignKey("products.id", ondelete="RESTRICT"), primary_key=True)
     source: Mapped[str] = mapped_column(String(20), nullable=False)
+    material_mode: Mapped[str | None] = mapped_column(String(30))
+    delivery_mode: Mapped[str | None] = mapped_column(String(20))
 
 
 class ProductBomInventoryRelation(Base):

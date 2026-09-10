@@ -284,6 +284,9 @@ def _component_product_summary(product: Product) -> dict[str, Any]:
         "customer_id": product.customer_id,
         "product_code": product.product_code,
         "product_name": product.product_name,
+        "unit": product.unit,
+        "default_cutting_mode": product.default_cutting_mode,
+        "pieces_per_box": product.pieces_per_box,
         "specification": spec,
         "material": product.legacy_material_text,
         "box_category": product.box_category,
@@ -341,6 +344,8 @@ def get_product_bom(db: Session, parent_product_id: int) -> dict[str, Any]:
     return {
         "parent_product_id": parent.id,
         "inventory_mode": profile.source if profile else "legacy",
+        "material_mode": profile.material_mode if profile else None,
+        "delivery_mode": profile.delivery_mode if profile else None,
         "parent_product_code": parent.product_code,
         "version": parent.version,
         "is_composite": bool(getattr(parent, "is_composite", bool(components))),
@@ -447,11 +452,13 @@ def replace_product_bom(
     db: Session, *, parent_product_id: int, components: Sequence[Mapping[str, Any]],
     expected_version: int, user: User, change_reason: str | None = None,
     inventory_mode: str | None = None,
+    material_mode: str | None = None, delivery_mode: str | None = None,
 ) -> dict[str, Any]:
     with atomic_bom(db):
         return _replace_product_bom(db, parent_product_id=parent_product_id,
             components=components, expected_version=expected_version, user=user,
-            change_reason=change_reason, inventory_mode=inventory_mode)
+            change_reason=change_reason, inventory_mode=inventory_mode,
+            material_mode=material_mode, delivery_mode=delivery_mode)
 
 
 def _replace_product_bom(
@@ -463,6 +470,7 @@ def _replace_product_bom(
     user: User,
     change_reason: str | None = None,
     inventory_mode: str | None = None,
+    material_mode: str | None = None, delivery_mode: str | None = None,
 ) -> dict[str, Any]:
     """Atomically replace one parent BOM and advance the parent version."""
 
@@ -486,8 +494,17 @@ def _replace_product_bom(
         raise CompositeBOMError("已停用产品不能维护 BOM", 409)
     profile = db.get(ProductBomProfile, parent_product_id)
     mode = inventory_mode or (profile.source if profile else "legacy")
-    if mode not in {"legacy", "manufactured", "purchased", "assembled"}:
+    if mode not in {"legacy", "manufactured", "purchased", "assembled", "separate"}:
         raise CompositeBOMError("请选择产品的自制、外购或组套来源")
+    material_mode = material_mode if material_mode is not None else (profile.material_mode if profile else None)
+    delivery_mode = delivery_mode if delivery_mode is not None else (profile.delivery_mode if profile else None)
+    if material_mode is not None or delivery_mode is not None or mode == "separate":
+        if mode == "legacy" or material_mode != "expand_children" or delivery_mode not in {"parent", "components"}:
+            raise CompositeBOMError("请明确保存报料展开方式、库存方式和交货方式")
+        if mode == "assembled" and delivery_mode == "components":
+            raise CompositeBOMError("组装消耗后的子件不能作为分存子件交货")
+    if mode == "separate" and not components:
+        raise CompositeBOMError("子件分存组合至少需要一个真实子件")
     advanced = mode != "legacy"
     if advanced:
         from app.models.bom_subkit import ProductSubkit
@@ -519,6 +536,8 @@ def _replace_product_bom(
         getattr(parent, "composite_fulfillment_mode", "component_delivery")
         or "component_delivery"
     )
+    if delivery_mode is not None:
+        fulfillment_mode = "parent_delivery" if delivery_mode == "parent" else "component_delivery"
     if fulfillment_mode not in {"parent_delivery", "component_delivery"}:
         raise CompositeBOMError("组合产品交付方式无效")
     if (
@@ -655,6 +674,9 @@ def _replace_product_bom(
         component = products.get(component_id)
         if component is None:
             raise CompositeBOMError(f"第{position}个组件产品不存在")
+        supplied_unit = components[position - 1].get("unit")
+        if supplied_unit is not None and supplied_unit != component.unit:
+            raise CompositeBOMError(f"第{position}个子件单位与真实产品单位{component.unit}不一致，请重选产品或先编辑子件主档")
         if component.customer_id != parent.customer_id:
             raise CompositeBOMError(f"第{position}个组件不属于父产品客户")
         if (
@@ -740,6 +762,8 @@ def _replace_product_bom(
 
     if (
         before["inventory_mode"] == mode
+        and before["material_mode"] == material_mode
+        and before["delivery_mode"] == delivery_mode
         and bool(before["is_composite"]) == bool(normalized)
         and [comparison_value(row) for row in before["components"]]
         == [comparison_value(row) for row in normalized]
@@ -757,6 +781,11 @@ def _replace_product_bom(
         product_updates["is_composite"] = bool(normalized)
     if mode == "assembled":
         product_updates.update(unit="套", is_virtual_composite_parent=False)
+    if mode == "separate":
+        product_updates.update(is_virtual_composite_parent=True)
+    if delivery_mode is not None:
+        product_updates["composite_fulfillment_mode"] = (
+            "parent_delivery" if delivery_mode == "parent" else "component_delivery")
     apply_versioned_update(
         db,
         object_type="product",
@@ -821,6 +850,8 @@ def _replace_product_bom(
             db.add(profile)
         else:
             profile.source = mode
+        profile.material_mode = material_mode
+        profile.delivery_mode = delivery_mode
         relation_by_product = {r.component_product_id: r for r in _active_bom_rows(db, parent.id)}
         for row in normalized:
             edge = relation_by_product[row["component_product_id"]]
@@ -875,6 +906,10 @@ def _replace_product_bom(
                     "reason": (change_reason or "").strip() or None,
                     "before_inventory_mode": before["inventory_mode"],
                     "after_inventory_mode": after["inventory_mode"],
+                    "before_material_mode": before["material_mode"],
+                    "after_material_mode": after["material_mode"],
+                    "before_delivery_mode": before["delivery_mode"],
+                    "after_delivery_mode": after["delivery_mode"],
                     "before_components": before["components"],
                     "after_components": after["components"],
                 },

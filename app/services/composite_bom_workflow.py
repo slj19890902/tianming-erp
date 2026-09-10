@@ -44,7 +44,7 @@ from app.services.production_label_strategy import (
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     _balances,
-    _claim_inventory_destination,
+    _claim_inventory_restore_destination,
     _movement,
     utc_now_naive,
 )
@@ -1369,7 +1369,7 @@ def reverse_delivery_component_allocations(
         ).all()
     try:
         for location_id in sorted({int(value) for value in location_ids}):
-            _claim_inventory_destination(db, location_id)
+            _claim_inventory_restore_destination(db, location_id)
     except WarehouseInventoryError as error:
         raise CompositeBomWorkflowError(str(error)) from error
     with db.begin_nested():

@@ -44,7 +44,8 @@ def prepare_reserved_cutover(db, *, review, customer_id, source_lot_versions, ta
     nodes, children, _ = graph.validated()
     picking = dict(plan_bom(graph, item.quantity - (item.delivered_quantity or 0)).picking)
     assembled = {pid for pid, node in nodes.items() if node.source == "assembled"}
-    if (nodes[graph.root_id].source != "assembled" or set(picking) != {graph.root_id}
+    separate = nodes[graph.root_id].source == "separate" and not assembled
+    if ((not separate and (nodes[graph.root_id].source != "assembled" or set(picking) != {graph.root_id}))
             or set(target_locations) != assembled
             or any(node.source == "purchased" or (node.source == "manufactured" and children[pid]) for pid, node in nodes.items())):
         raise BomPlanError("该旧订单还需要本体、配套或采购来源交接，不能直接按全预占原片转换")
@@ -82,9 +83,25 @@ def prepare_reserved_cutover(db, *, review, customer_id, source_lot_versions, ta
         lots[lid] = lot
     remaining = item.quantity - (item.delivered_quantity or 0)
     planned = plan_assembly(graph, remaining, eligible_stock=eligible)
-    if next((s.produced_units for s in planned.steps if s.product_id == graph.root_id), 0) != remaining:
+    if separate:
+        if dict(eligible) != picking:
+            raise BomPlanError("子件分存切换须逐子件完整覆盖剩余需求，不能有缺件或多余件")
+        from app.services.finished_stock_identity import snapshot_basis
+        current = {s.component_product_id: s for s in review.compiled.snapshots}
+        history = {s.id: s for s in review.history}
+        for reservation in active:
+            lot = lots[reservation.inventory_lot_id]
+            pid = lot.finished_detail.product_id
+            old = history[reservation.sales_order_item_bom_component_id]
+            old_basis = json.loads(snapshot_basis(old, nodes[pid].unit))
+            new_basis = json.loads(snapshot_basis(current[pid], nodes[pid].unit))
+            changed_fields = [key for key in new_basis if old_basis.get(key) != new_basis[key]]
+            if (old.component_product_id != pid or old.component_product_version != nodes[pid].version
+                    or changed_fields):
+                raise BomPlanError(f"产品{pid}旧冻结身份与目标版本不一致（旧/新版本{old.component_product_version}/{nodes[pid].version}，差异{','.join(changed_fields)}），须先核实实物和执行资料")
+    elif next((s.produced_units for s in planned.steps if s.product_id == graph.root_id), 0) != remaining:
         raise BomPlanError("原片不足以覆盖全部剩余套数，不能自动完成转换")
-    if any(quantity for pid, quantity in planned.remaining_stock if pid != graph.root_id):
+    if not separate and any(quantity for pid, quantity in planned.remaining_stock if pid != graph.root_id):
         raise BomPlanError("存在多余原片，须先明确保留或损耗，不能自动处置")
     return item, graph, picking, active, lots, remaining, planned
 
@@ -179,10 +196,15 @@ def convert_reserved_legacy_order(db, *, order_item_id, customer_id, reviewed_ha
                 operator_id=actor.id, reason=reservation.release_reason, idempotency_key=f"{operation_key}:release:{reservation.id}",
                 reservation_id=reservation.id, related_order_id=order.id, related_order_item_id=item.id)
         db.flush()
-        results = assemble_order_inventory(db, order_item_id=item.id, source_lot_versions={lid: lot.version for lid, lot in lots.items()},
-            target_locations=target_locations, operation_key=operation_key+":assemble", operator_id=actor.id, available_lot_ids=sorted(lots))
         from app.services.production_workflow import _reserve_component_completion_lot
         sources = {s.component_product_id: s for s in review.compiled.snapshots}
+        separate = next(n for n in graph.nodes if n.product_id == graph.root_id).source == "separate"
+        results = () if separate else assemble_order_inventory(db, order_item_id=item.id,
+            source_lot_versions={lid: lot.version for lid, lot in lots.items()}, target_locations=target_locations,
+            operation_key=operation_key+":assemble", operator_id=actor.id, available_lot_ids=sorted(lots))
+        if separate:
+            _retain_component_reservations(db, item=item, order=order, lots=lots, sources=sources,
+                operation_key=operation_key, actor=actor)
         for result in results:
             if result.output_product_id in picking and result.output_lot_id:
                 lot = db.get(InventoryLot, result.output_lot_id)
@@ -199,3 +221,31 @@ def convert_reserved_legacy_order(db, *, order_item_id, customer_id, reviewed_ha
                      "old_reservation_ids": [r.id for r in active], "assembly_ids": [r.id for r in results]})
         db.flush()
         return _result(db, item.id, operation_key)
+
+
+def _retain_component_reservations(db, *, item, order, lots, sources, operation_key, actor):
+    """Rebind only the released remainder; no completion or stock is invented."""
+    from app.services.warehouse_inventory import _balances, _movement, _number
+    from app.core.time_contract import utc_now_naive
+    for lid, lot in sorted(lots.items()):
+        quantity = lot.quantity_available  # eligibility required zero free stock before release
+        snapshot = sources[lot.finished_detail.product_id]
+        before = _balances(lot)
+        changed = db.execute(update(InventoryLot).where(InventoryLot.id == lid,
+            InventoryLot.version == lot.version, InventoryLot.quantity_available == quantity).values(
+                quantity_available=0, quantity_reserved=InventoryLot.quantity_reserved + quantity,
+                version=InventoryLot.version + 1, last_movement_at=utc_now_naive()))
+        if changed.rowcount != 1:
+            raise BomPlanError("子件切换预占时库存发生变化")
+        key = f"{operation_key}:retain:{lid}"
+        reservation = InventoryReservation(reservation_number=_number("BCR"), inventory_lot_id=lid,
+            reservation_type="finished_order", order_id=order.id, order_item_id=item.id,
+            sales_order_item_bom_component_id=snapshot.id, reserved_stock_quantity=quantity,
+            credited_requirement_quantity=quantity, yield_factor=1, status="active", warning_codes="[]",
+            reserved_by=actor.id, reserved_at=utc_now_naive(), idempotency_key=key)
+        db.add(reservation)
+        db.flush()
+        db.refresh(lot)
+        _movement(db, lot=lot, movement_type="reserve", quantity=quantity, before=before,
+            operator_id=actor.id, reason="已核对的子件分存版本切换，原批次货位不变", idempotency_key=key,
+            reservation_id=reservation.id, related_order_id=order.id, related_order_item_id=item.id)

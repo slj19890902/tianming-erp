@@ -21,7 +21,7 @@ from app.services.warehouse_twin_layout import resolve_warehouse_twin_layout_pat
 
 router = APIRouter()
 can_edit = PermissionChecker("orders.edit")
-SCOPE = "仅支持全预占子件转组装父件；采购、本体、配套及未完成采购交接不支持"
+SCOPE = "全预占库存切换：支持子件转组装父件，或保留原子件分存；含采购、本体或未完成采购交接须另行核对"
 
 
 class CutoverPreview(BaseModel):
@@ -67,7 +67,9 @@ def _preview(db, item_id, customer_id, targets):
     basis = json.dumps({"review": review.checksum, "targets": sorted(targets.items()),
         "locations": locations, "map": map_hash}, sort_keys=True, ensure_ascii=False, default=str)
     nodes = {n.product_id: n for n in graph.nodes}
-    return {"scope": SCOPE, "ready": bool(targets), "order_item_id": item_id,
+    separate = nodes[graph.root_id].source == "separate"
+    return {"scope": SCOPE, "ready": separate or bool(targets), "order_item_id": item_id,
+        "inventory_mode": "separate" if separate else "assembled",
         "quantity": item.quantity, "delivered_quantity": item.delivered_quantity or 0,
         "execution_quantity": remaining, "reviewed_hash": review.checksum,
         "preview_hash": hashlib.sha256(basis.encode()).hexdigest(), "source_lot_versions": versions,
@@ -82,7 +84,10 @@ def _preview(db, item_id, customer_id, targets):
             "quantity": r["reserved_stock_quantity"] - r["consumed_stock_quantity"] - r["released_stock_quantity"]}
             for r in active],
         "material_impact": "全部剩余子件由现有预占覆盖，不新增报料；保留原报料、完工及已送历史",
-        "inventory_impact": "释放下列剩余预占并消耗子件，形成组装库存；父件按剩余套数重新预占，旧消耗不改",
+        "inventory_impact": ("剩余预占切换到新冻结子件规则；原批次、货位及库存数量不变，不生成父库存，旧消耗不改" if separate else
+            "释放下列剩余预占并消耗子件，形成组装库存；父件按剩余套数重新预占，旧消耗不改"),
+        "retained_locations": [{"lot_id": lot.id, "location_id": lot.warehouse_location_id,
+            "product_id": lot.finished_detail.product_id} for lot in lots.values()] if separate else [],
         "product_versions": {n.product_id: n.version for n in graph.nodes}}
 
 

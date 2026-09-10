@@ -108,6 +108,7 @@ def review_legacy_cutover(db, *, order_item_id, customer_id):
             "graph": json.loads(dump_graph(compiled.graph)), "history": [_row(row) for row in history],
             "current": [_row(row) for row in compiled.snapshots],
             "reservations": [_row(row) for row in reservations], "lots": [_row(row) for row in lots],
+            "finished_details": [_row(row.finished_detail) for row in lots if row.finished_detail is not None],
             "remaining_finished_costs": costs,
             "adjustments": facts(SalesOrderItemBomDemandAdjustment,
                 SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id.in_([row.id for row in history])),

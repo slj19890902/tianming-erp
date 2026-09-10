@@ -92,7 +92,7 @@ def test_unsupported_paths_rejected_in_preview(client, kind):
     before = facts(db)
     response = http.post(URL + "/preview", json={})
     assert response.status_code == 409
-    assert "配套" in response.json()["detail"]
+    assert ("外购资料和采购比例" if kind == "purchased" else "本体、配套或采购来源交接") in response.json()["detail"]
     assert facts(db) == before
 
 

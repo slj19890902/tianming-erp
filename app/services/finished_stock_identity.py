@@ -3,9 +3,9 @@ import json
 import hashlib
 from decimal import Decimal
 
-from app.services.product_specification import product_dimension_specification
+from app.services.product_specification import product_dimension_specification, normalized_specification_text
 
-FIELDS = ("box_style", "production_process", "production_notes", "layer_count",
+FIELDS = ("box_category", "box_style", "production_process", "production_notes", "layer_count",
           "splice_mode", "pieces_per_box", "crease_type", "crease_left_mm",
           "crease_middle_mm", "crease_right_mm", "base_crease_type",
           "base_crease_left_mm", "base_crease_middle_mm", "base_crease_right_mm", "flap_mm")
@@ -21,16 +21,19 @@ def _value(value):
 
 def _document(product_id, unit, spec, material, flute, values):
     return json.dumps(dict(schema=1, product_id=product_id, unit=unit,
-        spec=_value(spec), material=_value(material), flute=_value(flute), assembly=[],
+        spec=normalized_specification_text(spec), material=_value(material), flute=_value(flute), assembly=[],
         **{key: _value(value) for key, value in values.items()}),
         ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _product_basis(product):
+def _product_basis(product, source=None):
     material = product.material
     values = {key: getattr(product, key) for key in FIELDS}
     values["layer_count"] = material.layer_count if material else product.layer_count
-    values.update(mold_tool_id=product.mold_tool_id, die_cut_path=product.die_cut_path)
+    source = source or ("purchased" if product.supply_mode == "external_purchase" else "manufactured")
+    die_cut = source == "manufactured" and product.box_category == "die_cut"
+    values.update(mold_tool_id=product.mold_tool_id if die_cut else None,
+                  die_cut_path=product.die_cut_path if die_cut else None)
     return _document(product.id, product.unit, product_dimension_specification(product),
         material.code if material else product.legacy_material_text,
         product.flute_type or (material.flute_type if material else None), values)
@@ -57,7 +60,7 @@ def product_basis(product):
     structure = load_master_structure(db, product.id)
     documents = {}
     for pid in reversed(structure["order"]):
-        documents[pid] = _with_assembly(_product_basis(structure["products"][pid]), [
+        documents[pid] = _with_assembly(_product_basis(structure["products"][pid], structure["profiles"].get(pid)), [
             _child_basis(e["child_id"], e["quantity"], documents[e["child_id"]])
             for e in structure["edges"] if e["parent_id"] == pid and e["relation"] == "assembly"])
     return documents[product.id]

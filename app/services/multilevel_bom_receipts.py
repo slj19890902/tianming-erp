@@ -172,8 +172,13 @@ def own_output_lots(db, order_item_id):
     Location and lot IDs may change; names and product codes are not lineage.
     """
     from app.models.multilevel_bom import BomAssembly
+    from app.models.multilevel_bom import OrderBomCutoverSource
+    historical_tasks = select(ProductionTask.id).join(OrderBomCutoverSource,
+        OrderBomCutoverSource.snapshot_id == ProductionTask.sales_order_item_bom_component_id).where(
+            OrderBomCutoverSource.order_item_id == order_item_id, OrderBomCutoverSource.role == "history")
     completions = select(ProductionCompletion.id).where(
-        ProductionCompletion.order_item_id == order_item_id, ProductionCompletion.status == "posted")
+        ProductionCompletion.order_item_id == order_item_id, ProductionCompletion.status == "posted",
+        ProductionCompletion.task_id.not_in(historical_tasks))
     assemblies = select(BomAssembly.id).where(
         BomAssembly.order_item_id == order_item_id, BomAssembly.status == "posted")
     from app.models.external_packaging_purchase import ExternalPackagingReceiptItem, ExternalPackagingPurchaseItem

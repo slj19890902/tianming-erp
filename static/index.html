@@ -8049,13 +8049,14 @@
               </template>
             </div>
             <div v-else-if="modal.type === 'bomCutover' && bomCutover">
-              <p class="muted">仅支持全预占子件转组装父件。采购、本体、配套及未完成采购交接不支持；已完成和已送历史保持冻结。</p>
+              <p class="muted">全预占库存切换：子件转组装父件，或保留原子件分存。含采购、本体或未完成采购交接须另行核对；已完成和已送历史保持冻结。</p>
               <div v-if="bomCutover.loading" role="status">正在核对…</div>
               <div v-if="bomCutover.error" class="status orange" role="alert">{{ bomCutover.error }}</div>
               <template v-if="bomCutover.review">
                 <p>订单 {{ bomCutover.review.quantity }} · 已送 {{ bomCutover.review.delivered_quantity }} · 本次剩余 <strong>{{ bomCutover.review.execution_quantity }} 套</strong></p>
                 <p>{{ bomCutover.review.inventory_impact }}</p>
                 <p>{{ bomCutover.review.material_impact }}</p>
+                <p v-for="row in bomCutover.review.retained_locations || []" :key="row.lot_id">保留批次 {{ row.lot_id }} · 原货位 ID {{ row.location_id }}</p>
                 <table><thead><tr><th>子件</th><th>释放预占 / 批次</th><th>数量</th></tr></thead><tbody><tr v-for="r in bomCutover.review.release_reservations" :key="r.id"><td>{{ r.name }}</td><td>{{ r.id }} / {{ r.lot_id }}</td><td>{{ r.quantity }} {{ r.unit }}</td></tr></tbody></table>
                 <div v-for="output in bomCutover.review.outputs" :key="output.product_id" style="margin-top:8px">
                   <div class="muted">消耗：<span v-for="(part,index) in output.consumed" :key="index">{{ index ? '、' : '' }}{{ part.name }} {{ part.quantity }} {{ part.unit }}</span></div>
@@ -8067,7 +8068,7 @@
                 </div>
                 <p class="muted">必须先预览所选货位的影响；执行会记录审计。不会重新收料或重复入库。</p>
                 <div class="toolbar-group" style="margin-top:8px">
-                  <button class="btn" type="button" :disabled="bomCutover.loading || !!bomCutover.pending" @click="previewReservedKitCutover">核对所选货位</button>
+                  <button class="btn" type="button" :disabled="bomCutover.loading || !!bomCutover.pending" @click="previewReservedKitCutover">核对影响及货位</button>
                   <button class="btn primary" type="button" :disabled="bomCutover.loading || (!bomCutover.confirmed && !bomCutover.pending)" @click="executeReservedKitCutover">{{ bomCutover.pending ? '重试同一操作' : '确认转换剩余套数' }}</button>
                 </div>
               </template>
@@ -8095,7 +8096,7 @@
               </tr></thead>
               <tbody><tr v-for="item in orderDetail.items" :key="item.id">
                 <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}<div style="margin-top:4px"><status-tag :value="itemBusinessStatusKey(item)"></status-tag></div><div v-if="item.requisition_hold?.status === 'active'" class="status orange" style="margin-top:4px">{{ item.requisition_hold.label || '等候中' }}</div><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
-                <td>{{ item.snapshot_product_code }}<div v-if="canAdmin && hasBomComponents(item) && Number(item.quantity)>Number(item.business_delivered_quantity || item.delivered_quantity || 0)"><button class="btn small" type="button" @click="openReservedKitCutover(orderDetail,item)">全预占子件转组装</button></div></td>
+                <td>{{ item.snapshot_product_code }}<div v-if="canAdmin && hasBomComponents(item) && Number(item.quantity)>Number(item.business_delivered_quantity || item.delivered_quantity || 0)"><button class="btn small" type="button" @click="openReservedKitCutover(orderDetail,item)">全预占库存切换</button></div></td>
                 <td :title="item.snapshot_product_name" style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:normal">
                   {{ item.snapshot_product_name }}
                   <div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div>
@@ -31645,7 +31646,7 @@
             const opener=this.rememberModalOpener();
             this.bomCutover = {orderId:order.id,itemId:item.id,loading:true,error:"",review:null,locations:[],targets:{},confirmed:false,pending:null};
             const state=this.bomCutover;
-            this.modal={type:"bomCutover",title:"全预占子件转组装"};
+            this.modal={type:"bomCutover",title:"全预占库存切换"};
             this.focusAccessibleModal(opener);
             try {
               const [review,locations]=await Promise.all([
@@ -31683,7 +31684,7 @@
             try {
               await axios.post(`/api/orders/items/${state.itemId}/reserved-kit-cutover/execute`,state.pending);
               state.pending=null;state.confirmed=false;
-              this.showToast("剩余套数组装转换已完成，已记录审计");
+              this.showToast("剩余部分库存切换已完成，已记录审计");
               if(this.bomCutover===state && this.modal.type==='bomCutover')await this.openOrderDetail({id:state.orderId});
             } catch(error) {
               if(error.response && error.response.status<500) {state.pending=null;state.confirmed=false;}

@@ -15,10 +15,10 @@ from tests.test_multilevel_bom_factory_compile import factory_copy, new_item
 from tests.test_multilevel_bom_master import save
 
 
-def frozen_order(db):
+def frozen_order(db, quantity=100):
     actor = db.scalar(select(User).where(User.role == "admin", User.is_active.is_(True)))
     save(db, actor, 3799, "assembled", [(3771, 3, "assembly"), (3783, 4, "assembly")])
-    item = new_item(db, 3799, 100)
+    item = new_item(db, 3799, quantity)
     frozen = freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
     db.commit()
     return actor, item, frozen

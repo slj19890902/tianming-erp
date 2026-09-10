@@ -38,8 +38,8 @@ def project_complete_order_material_rows(db, rows):
     from collections import defaultdict
     from app.models.multilevel_bom import OrderBomGraph, OrderBomGraphProduct, OrderBomExecutionCutover
     from app.models.order import Order
-    from app.services.multilevel_bom_orders import validate_order_graph_rows
-    from app.services.multilevel_bom_execution_boundary import cutover_roles_by_order, select_execution_sources
+    from app.services.multilevel_bom_execution_boundary import cutover_roles_by_order
+    from app.services.multilevel_bom_rule_history import rule_histories_by_order, project_order_rule_history
     rows = list(rows)
     groups = defaultdict(list)
     for row in rows:
@@ -66,13 +66,14 @@ def project_complete_order_material_rows(db, rows):
     for row in db.scalars(select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id.in_(graph_ids))):
         identities[row.order_item_id].add((row.product_id, row.product_version))
     revisions = production_revisions_by_order_ids(db, graph_ids)
+    histories = rule_histories_by_order(db, graph_ids)
     roles = cutover_roles_by_order(db, {item.id for _, item, _, cutover in graph_rows if cutover is not None})
     projected = {}
     for graph_row, item, order, cutover in graph_rows:
-        graph = validate_order_graph_rows(graph_row, item, order, identities[item.id])
-        compiled = select_execution_sources(graph=graph, item=item, cutover=cutover,
-            rows_with_roles=((row, roles[item.id].get(row.id)) for row in groups[item.id]))
-        compiled = project_production_versions(compiled, revisions[item.id])
+        compiled = project_order_rule_history(header=graph_row, item=item, order=order,
+            identities=identities[item.id], cutover=cutover,
+            rows_with_roles=((row, roles[item.id].get(row.id)) for row in groups[item.id]),
+            production_rows=revisions[item.id], history=histories[item.id])
         projected.update((row.id, row) for row in compiled.snapshots)
     return [projected.get(row.id, row) for row in rows
             if row.sales_order_item_id not in graph_ids or row.id in projected]

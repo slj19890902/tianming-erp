@@ -25,6 +25,8 @@ class CompiledMasterBom:
     # Detached ORM rows, never added to a session by the compiler.
     snapshots: tuple[SalesOrderItemBomComponent, ...]
     execution_window: ExecutionWindow | None = None
+    rule_revision_id: int | None = None
+    history_source_ids: frozenset[int] = frozenset()
 
 
 def physical_routes(snapshot):

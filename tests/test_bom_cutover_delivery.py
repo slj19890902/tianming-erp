@@ -32,7 +32,7 @@ def test_page_and_summary_share_current_window(cutover_read_fixture):
         roots = project_page_graph_demands(db, **payload)
     finally:
         event.remove(db.bind, "before_cursor_execute", capture)
-    assert len(queries) == 3  # identity + revision + cutover role batches
+    assert len(queries) == 4  # identity + production/rule headers + cutover role batches
     demands = payload["demands"][item.id]
     assert len(demands) == 2 and all(d.required_piece_quantity == 80 for d in demands)
     assert history.id not in {d.snapshot_id for d in demands}

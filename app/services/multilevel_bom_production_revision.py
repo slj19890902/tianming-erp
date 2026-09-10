@@ -128,5 +128,5 @@ def apply_production_revision(compiled, document, *, expected_hash):
     graph = replace(compiled.graph, nodes=tuple(replace(node, routes=routes[node.product_id])
         if node.product_id in routes else node for node in compiled.graph.nodes))
     from app.services.multilevel_bom_orders import validate_compiled_order_rows
-    return replace(validate_compiled_order_rows(graph, tuple(snapshots)),
-                   execution_window=compiled.execution_window)
+    validate_compiled_order_rows(graph, tuple(snapshots))
+    return replace(compiled, graph=graph, snapshots=tuple(snapshots))

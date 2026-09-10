@@ -46,7 +46,7 @@ def test_graph_page_has_fixed_identity_and_revision_queries_for_multiple_orders(
             roots = project_page_graph_demands(db, **payload)
         finally:
             event.remove(db.bind, "before_cursor_execute", capture)
-        assert len(queries) == 2  # one identity batch and one amendment batch
+        assert len(queries) == 3  # identities, production amendments, structural revision headers
         assert set(roots) == {item.id for item in selected}
         for item in selected:
             assert {d.component_product_id for d in payload["demands"][item.id]} == {1, 2}
@@ -58,7 +58,7 @@ def test_graph_page_has_fixed_identity_and_revision_queries_for_multiple_orders(
             contracts = summary_graph_contracts(db, [item.id for item in selected])
         finally:
             event.remove(db.bind, "before_cursor_execute", capture)
-        assert len(queries) == 4  # three original batches plus all amendments
+        assert len(queries) == 5  # original batches plus production and structural revision headers
         assert contracts.roots == roots
         assert len(contracts.picks) == len(selected) * 2 and len(contracts.excluded) == len(selected) * 2
 

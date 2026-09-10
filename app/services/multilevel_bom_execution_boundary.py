@@ -9,7 +9,7 @@ import hashlib
 import json
 from types import SimpleNamespace
 
-from sqlalchemy import Numeric, exists, or_, select
+from sqlalchemy import Numeric, exists, or_, and_, select
 
 from app.models.multilevel_bom import OrderBomExecutionCutover, OrderBomCutoverSource
 from app.models.product_bom import SalesOrderItemBomComponent
@@ -17,11 +17,22 @@ from app.services.multilevel_bom_plan import BomPlanError
 
 
 def current_snapshot_predicate(snapshot=SalesOrderItemBomComponent):
+    from sqlalchemy.orm import aliased
+    from app.models.multilevel_bom import OrderBomRuleRevision, OrderBomRuleSource
     cutover = exists().where(OrderBomExecutionCutover.order_item_id == snapshot.sales_order_item_id)
     current = exists().where(OrderBomCutoverSource.snapshot_id == snapshot.id,
         OrderBomCutoverSource.order_item_id == snapshot.sales_order_item_id,
         OrderBomCutoverSource.role == "current")
-    return or_(~cutover, current)
+    rule = OrderBomRuleRevision
+    newer = aliased(OrderBomRuleRevision)
+    has_rule = exists().where(rule.order_item_id == snapshot.sales_order_item_id)
+    has_newer = exists().where(newer.order_item_id == rule.order_item_id, newer.revision > rule.revision)
+    current_rule = exists(select(1).select_from(OrderBomRuleSource).join(rule,
+        rule.id == OrderBomRuleSource.revision_id).where(
+            OrderBomRuleSource.snapshot_id == snapshot.id,
+            OrderBomRuleSource.order_item_id == snapshot.sales_order_item_id,
+            rule.order_item_id == snapshot.sales_order_item_id, ~has_newer))
+    return or_(and_(has_rule, current_rule), and_(~has_rule, or_(~cutover, current)))
 
 
 def cutover_roles_by_order(db, order_item_ids):
@@ -42,7 +53,13 @@ def handoff_assembly_ids(db, compiled):
     from app.models.multilevel_bom import BomAssembly
     from app.services.multilevel_bom_inventory import _node_keys
     item_id = compiled.snapshots[0].sales_order_item_id
-    cutover = db.get(OrderBomExecutionCutover, item_id)
+    if compiled.rule_revision_id is not None:
+        from app.models.multilevel_bom import OrderBomRuleRevision
+        cutover = db.get(OrderBomRuleRevision, compiled.rule_revision_id)
+    else:
+        cutover = db.get(OrderBomExecutionCutover, item_id)
+    if cutover is None:
+        raise BomPlanError("订单执行边界缺少原始版本事实")
     keys = _node_keys(cutover.idempotency_key + ":assemble",
         [node.product_id for node in compiled.graph.nodes if node.source == "assembled"])
     return set(db.scalars(select(BomAssembly.id).where(BomAssembly.order_item_id == item_id,

@@ -20,6 +20,7 @@ from app.services.multilevel_bom_snapshot import (
 
 
 def read_order_graph(db, order_item_id):
+    from app.services.multilevel_bom_rule_history import rule_histories_by_order, base_graph_with_rule_registry
     row = db.get(OrderBomGraph, order_item_id)
     if row is None:
         return None
@@ -27,7 +28,10 @@ def read_order_graph(db, order_item_id):
     order = db.get(Order, item.order_id) if item else None
     identities = {(r.product_id, r.product_version) for r in db.scalars(
         select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id == order_item_id))}
-    return validate_order_graph_rows(row, item, order, identities)
+    history = rule_histories_by_order(db, {order_item_id})[order_item_id]
+    if history.revisions:
+        return read_compiled_order_bom(db, order_item_id).graph
+    return base_graph_with_rule_registry(row, item, order, identities, history)
 
 
 def validate_order_graph_rows(row, item, order, identities):
@@ -47,7 +51,7 @@ def freeze_order_graph(db, *, order_item_id, graph, actor: User):
     existing = db.get(OrderBomGraph, order_item_id)
     if existing is not None:
         frozen = read_order_graph(db, order_item_id)
-        if existing.content_hash != graph_hash(document):
+        if graph_hash(dump_graph(frozen)) != graph_hash(document):
             raise BomPlanError("订单BOM已冻结，不能用新配方覆盖")
         return frozen
     with atomic_bom(db):
@@ -96,11 +100,11 @@ def read_compiled_order_bom(db, order_item_id):
     """Read graph AND material facts; never repair missing facts from master."""
     from app.models.product_bom import SalesOrderItemBomComponent
 
-    graph = read_order_graph(db, order_item_id)
-    if graph is None:
+    header = db.get(OrderBomGraph, order_item_id)
+    if header is None:
         return None
     from app.models.multilevel_bom import OrderBomExecutionCutover, OrderBomCutoverSource
-    from app.services.multilevel_bom_execution_boundary import select_execution_sources
+    from app.services.multilevel_bom_rule_history import rule_histories_by_order, project_order_rule_history
     # One source query still covers ordinary and converted orders. Historical
     # rows are read for checksum validation, never returned as current demand.
     records = db.execute(select(SalesOrderItemBomComponent, OrderBomExecutionCutover,
@@ -114,10 +118,15 @@ def read_compiled_order_bom(db, order_item_id):
         .order_by(SalesOrderItemBomComponent.display_order)).all()
     if not records:
         raise BomPlanError("订单多级BOM材料快照不完整，不能用当前主档补写")
-    compiled = select_execution_sources(graph=graph, item=records[0][3], cutover=records[0][1],
-        rows_with_roles=((row, role) for row, _, role, _ in records))
-    from app.services.multilevel_bom_production_versions import production_revisions, project_production_versions
-    return project_production_versions(compiled, production_revisions(db, order_item_id))
+    item = records[0][3]
+    identities = {(row.product_id, row.product_version) for row in db.scalars(
+        select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id == order_item_id))}
+    from app.services.multilevel_bom_production_versions import production_revisions
+    return project_order_rule_history(header=header, item=item, order=db.get(Order, item.order_id),
+        identities=identities, cutover=records[0][1],
+        rows_with_roles=((row, role) for row, _, role, _ in records),
+        production_rows=production_revisions(db, order_item_id),
+        history=rule_histories_by_order(db, {order_item_id})[order_item_id])
 
 
 def validate_compiled_order_rows(graph, rows):

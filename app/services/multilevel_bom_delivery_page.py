@@ -5,11 +5,11 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 
 from app.models.multilevel_bom import OrderBomGraphProduct
-from app.services.multilevel_bom_orders import validate_order_graph_rows
-from app.services.multilevel_bom_execution_boundary import cutover_roles_by_order, select_execution_sources
+from app.services.multilevel_bom_execution_boundary import cutover_roles_by_order
+from app.services.multilevel_bom_rule_history import rule_histories_by_order, project_order_rule_history
 from app.services.multilevel_bom_plan import BomPlanError
 from app.services.composite_bom_workflow import project_graph_delivery_demands
-from app.services.multilevel_bom_production_versions import production_revisions_by_order_ids, project_production_versions
+from app.services.multilevel_bom_production_versions import production_revisions_by_order_ids
 
 
 def project_page_graph_demands(db, *, graphs, cutovers, order_items, orders, snapshots, demands):
@@ -25,14 +25,15 @@ def project_page_graph_demands(db, *, graphs, cutovers, order_items, orders, sna
         for row in db.scalars(select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id.in_(graphs))):
             identities[row.order_item_id].add((row.product_id, row.product_version))
     revisions = production_revisions_by_order_ids(db, graphs)
+    histories = rule_histories_by_order(db, graphs)
     roles = cutover_roles_by_order(db, cutovers)
     roots = {}
     for item_id, row in graphs.items():
         item = order_items[item_id]
-        graph = validate_order_graph_rows(row, item, orders.get(item.order_id), identities[item_id])
-        compiled = select_execution_sources(graph=graph, item=item, cutover=cutovers.get(item_id),
-            rows_with_roles=((source, roles[item_id].get(source.id)) for source in grouped[item_id]))
-        compiled = project_production_versions(compiled, revisions[item_id])
+        compiled = project_order_rule_history(header=row, item=item, order=orders.get(item.order_id),
+            identities=identities[item_id], cutover=cutovers.get(item_id),
+            rows_with_roles=((source, roles[item_id].get(source.id)) for source in grouped[item_id]),
+            production_rows=revisions[item_id], history=histories[item_id])
         demands[item_id] = project_graph_delivery_demands(compiled, item, demands.get(item_id, []))
         roots[item_id] = next(d.snapshot_id for d in demands[item_id] if d.is_graph_root)
     return roots
@@ -70,17 +71,20 @@ def summary_graph_contracts(db, item_ids):
     for row in db.scalars(select(OrderBomGraphProduct).where(OrderBomGraphProduct.order_item_id.in_(item_ids))):
         identities[row.order_item_id].add((row.product_id, row.product_version))
     revisions = production_revisions_by_order_ids(db, item_ids)
+    histories = rule_histories_by_order(db, item_ids)
     roles = cutover_roles_by_order(db, {item.id for item, _, _, cutover in rows if cutover is not None})
     result = GraphSummaryContracts()
     for item, order, row, cutover in rows:
-        graph = validate_order_graph_rows(row, item, order, identities[item.id])
-        compiled = select_execution_sources(graph=graph, item=item, cutover=cutover,
-            rows_with_roles=((source, roles[item.id].get(source.id)) for source in snapshots[item.id]))
-        compiled = project_production_versions(compiled, revisions[item.id])
+        compiled = project_order_rule_history(header=row, item=item, order=order,
+            identities=identities[item.id], cutover=cutover,
+            rows_with_roles=((source, roles[item.id].get(source.id)) for source in snapshots[item.id]),
+            production_rows=revisions[item.id], history=histories[item.id])
+        graph = compiled.graph
         window = compiled.execution_window
         quantity = window.execution_quantity if window else item.quantity
         result.delivered_before[item.id] = window.delivered_before if window else 0
         result.history_ids.update(source_id for source_id, role in roles[item.id].items() if role == "history")
+        result.history_ids.update(compiled.history_source_ids)
         required = dict(plan_bom(compiled.graph, 1).picking)
         for snapshot in compiled.snapshots:
             if snapshot.component_product_id not in required:

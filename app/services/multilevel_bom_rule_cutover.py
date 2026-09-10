@@ -90,7 +90,6 @@ def _qualified_review(db, order_item_id, customer_id):
         (SalesOrderItemBomDemandAdjustment, SalesOrderItemBomDemandAdjustment.sales_order_item_bom_component_id.in_(source_ids), "需求调整"),
         (InventoryReservation, InventoryReservation.order_item_id == item.id, "预占"),
         (InventoryMovement, InventoryMovement.related_order_item_id == item.id, "库存流水"),
-        (ProductionTask, ProductionTask.order_item_id == item.id, "生产任务"),
         (ProductionCompletion, ProductionCompletion.order_item_id == item.id, "完工"),
         (BomAssembly, BomAssembly.order_item_id == item.id, "组装"),
         (DeliveryItem, DeliveryItem.order_item_id == item.id, "送货单"),
@@ -99,6 +98,15 @@ def _qualified_review(db, order_item_id, customer_id):
         identifier = db.scalar(select(model.id).where(condition).order_by(model.id).limit(1))
         if identifier is not None:
             raise BomPlanError(f"订单已有{label}#{identifier}，须保留并交接原来源；不能按无执行来源订单切换")
+    tasks = list(db.scalars(select(ProductionTask).where(ProductionTask.order_item_id == item.id)
+                           .order_by(ProductionTask.id)))
+    for task in tasks:
+        if (task.task_role != "order_main" or task.sales_order_item_bom_component_id is not None
+                or task.status != "waiting_material" or task.planned_quantity != 0
+                or task.finished_coverage_snapshot != 0 or task.material_received_quantity != 0
+                or task.material_input_quantity != 0
+                or task.ready_at is not None):
+            raise BomPlanError(f"生产任务#{task.id}已有备产或到料依据，须交接原执行来源")
     cancelled_purchases = _cancelled_procurement_facts(db, item)
     from app.services.multilevel_bom_external_identity import current_external_links, read_external_node
     sources = list(db.scalars(select(SalesOrderItemExternalComponent).where(
@@ -113,11 +121,13 @@ def _qualified_review(db, order_item_id, customer_id):
         read_external_node(db, link.external_component_id)
     external = [dict(source=_values(source), candidates=[_values(candidate) for candidate in sorted(
         source.candidates, key=lambda candidate: candidate.id)]) for source in sources]
-    document = json.dumps(dict(rule_review=review.document, external_sources=external, cancelled_purchases=cancelled_purchases),
+    document = json.dumps(dict(rule_review=review.document, external_sources=external,
+        cancelled_purchases=cancelled_purchases, untouched_tasks=[_values(task) for task in tasks]),
         sort_keys=True, ensure_ascii=False, default=str)
     return replace(review, document=document, checksum=hashlib.sha256(document.encode()).hexdigest(),
         impact={**review.impact, "retained_external_source_ids": [source.id for source in sources],
-                "retained_cancelled_purchases": cancelled_purchases})
+                "retained_cancelled_purchases": cancelled_purchases,
+                "retained_waiting_task_ids": [task.id for task in tasks]})
 
 
 def rule_cutover_preview(db, *, order_item_id, customer_id):
@@ -261,6 +271,7 @@ def execute_rule_cutover(db, *, order_item_id, customer_id, reviewed_hash, expec
                 review_hash=reviewed_hash, content_hash=checksum, request_hash=request_hash, operation_key=operation_key,
                 previous_delivery_mode=previous_delivery, delivery_mode=item.composite_fulfillment_mode_snapshot,
                 previous_source_ids=[source.id for source in review.previous.snapshots],
+                retained_waiting_task_ids=review.impact["retained_waiting_task_ids"],
                 retained_external_source_ids=review.impact["retained_external_source_ids"],
                 retained_cancelled_purchase_ids=[fact["purchase"]["id"] for fact in review.impact["retained_cancelled_purchases"]],
                 current_source_ids=[source.id for source in review.proposed.snapshots]))

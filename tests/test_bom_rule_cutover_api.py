@@ -32,6 +32,38 @@ def preview(client, item, key="new-rule-http"):
     return url, data, payload
 
 
+def test_normal_order_entry_waiting_task_can_switch_before_any_execution(factory_http):
+    from app.models.user import User
+    from app.models.order import OrderItem
+    from app.models.production import ProductionTask
+    from app.services.multilevel_bom_cutover_review import _row
+    client, db = factory_http
+    actor = db.scalar(select(User).where(User.role=="admin",User.is_active.is_(True)))
+    configure(db,actor,"assembled")
+    product = db.get(Product,3799)
+    created = client.post("/api/orders",json={"customer_id":product.customer_id,
+        "customer_po":"PUBLIC-UNSTARTED-HANDOFF","order_date":"2026-09-10","delivery_date":"2026-09-20",
+        "items":[{"client_line_id":"public-order-handoff","product_id":product.id,
+            "product_code":product.product_code,"product_name":product.product_name,"quantity":2,"unit_price":"100"}]})
+    assert created.status_code == 201, created.text
+    item = db.get(OrderItem,created.json()["items"][0]["id"])
+    tasks = list(db.scalars(select(ProductionTask).where(ProductionTask.order_item_id==item.id)))
+    assert len(tasks)==1 and tasks[0].status=="waiting_material"
+    original_task = _row(tasks[0])
+    configure(db,actor,"separate")
+    url, _, body = preview(client,item,"public-unstarted-rule")
+    tasks[0].version += 1
+    db.commit()
+    assert client.post(url+"/execute",json=body).status_code == 409
+    original_task = _row(tasks[0])
+    url, _, body = preview(client,item,"public-unstarted-rule")
+    result = client.post(url+"/execute",json=body)
+    assert result.status_code == 200, result.text
+    db.expire_all()
+    assert _row(db.get(ProductionTask,tasks[0].id)) == original_task
+    paper_receipt_flow(client,db,read_compiled_order_bom(db,item.id),item.id,3799)
+
+
 @pytest.mark.parametrize("mode", ["assembled", "separate"])
 def test_admin_changes_existing_frozen_graph_then_receives_delivers_and_reverses(factory_http, mode):
     client, db = factory_http

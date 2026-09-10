@@ -8057,7 +8057,7 @@
               <div v-if="bomCutover.loading" role="status">正在核对…</div>
               <div v-if="bomCutover.error" class="status orange" role="alert">{{ bomCutover.error }}</div>
               <template v-if="bomCutover.review">
-                <p v-if="bomCutover.mode === 'unstarted'" class="muted">须没有报料、预占、生产或送货；曾建外购采购须已明确撤销且从未收料。旧冻结与采购历史保留，后续使用本次选定的新规则。</p>
+                <p v-if="bomCutover.mode === 'unstarted'" class="muted">须没有实际报料、预占、生产或送货；下单自动生成的待到料主任务原样保留。曾建外购采购须已明确撤销且从未收料，后续使用本次选定的新规则。</p>
                 <p>订单 {{ bomCutover.review.quantity }} · 已送 {{ bomCutover.review.delivered_quantity }} · 本次剩余 <strong>{{ bomCutover.review.execution_quantity }} {{ bomCutover.review.unit || '套' }}</strong></p>
                 <p>{{ bomCutover.review.inventory_impact }}</p>
                 <p>{{ bomCutover.review.material_impact }}</p>

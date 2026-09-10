@@ -139,6 +139,26 @@ def test_loose_children_are_reserved_individually_before_sheet_conversion(
         assert dispatched.status_code == 200, dispatched.text
         with factory() as db:
             assert db.get(OrderItem, 1).delivered_quantity == 100
+            if separate:
+                from app.services.multilevel_bom_fulfillment import read_order_component_fulfillment
+                assert read_order_component_fulfillment(db,1).complete
+                # Preserve the real dispatch, inject a missing child allocation
+                # in a rollback-only transaction to exercise the close guard.
+                from app.models.warehouse_inventory import DeliveryInventoryAllocation
+                from app.api.deliveries import _refresh_order_status
+                from fastapi import HTTPException
+                allocation = db.scalar(select(DeliveryInventoryAllocation)
+                    .join(InventoryReservation,InventoryReservation.id==DeliveryInventoryAllocation.reservation_id)
+                    .where(InventoryReservation.order_item_id==1,
+                        InventoryReservation.sales_order_item_bom_component_id==dict((pid,sid) for sid,pid in snapshots)[3]))
+                assert allocation is not None
+                allocation.reversed_requirement_quantity += 1
+                db.flush()
+                fulfillment = read_order_component_fulfillment(db,1)
+                assert not fulfillment.complete and fulfillment.components[-1].remaining == 1
+                with pytest.raises(HTTPException,match="子件实发尚未完成"):
+                    _refresh_order_status(db,db.get(OrderItem,1).order_id)
+                db.rollback()
         cancelled = client.put(f"/api/deliveries/{did}/cancel")
         assert cancelled.status_code == 200, cancelled.text
         with factory() as db:

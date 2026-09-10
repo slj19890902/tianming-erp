@@ -6757,6 +6757,15 @@ def _refresh_order_status(db: Session, order_id: int) -> None:
     items = db.scalars(
         select(OrderItem).where(OrderItem.order_id == order_id)
     ).all()
+    from app.services.multilevel_bom_fulfillment import read_order_component_fulfillment
+    for item in items:
+        if item.is_force_closed or item.delivered_quantity < item.quantity:
+            continue
+        fulfillment = read_order_component_fulfillment(db, item.id)
+        if fulfillment is not None and not fulfillment.complete:
+            missing = "、".join(f"产品{row.product_id}尚欠{row.remaining}{row.unit}"
+                for row in fulfillment.components if row.remaining)
+            raise HTTPException(409, f"子件实发尚未完成，不能按父件数量关闭订单：{missing}")
     if items and all(
         item.is_force_closed or item.delivered_quantity >= item.quantity
         for item in items

@@ -63,3 +63,23 @@ def preview_component_dispatch(graph: FrozenBom, quantity: int, *,
         raise BomPlanError("本次至少一个子件实发数量必须大于0")
     return component_fulfillment(graph, quantity,
         {pid: dispatched.get(pid, 0) + requested.get(pid, 0) for pid in remaining})
+
+
+def read_order_component_fulfillment(db, order_item_id: int) -> BomFulfillment | None:
+    """Read net physical allocations of the current frozen execution window.
+
+    A commercial delivered count cannot stand in for any child allocation.
+    Legacy display preferences are not upgraded into this explicit contract.
+    """
+    from app.models.order import OrderItem
+    from app.services.multilevel_bom_orders import read_compiled_order_bom
+    from app.services.composite_bom_workflow import _delivered_component_quantity
+    compiled = read_compiled_order_bom(db, order_item_id)
+    if compiled is None or compiled.graph.modes is None or compiled.graph.modes.delivery != "components":
+        return None
+    item = db.get(OrderItem, order_item_id)
+    quantity = compiled.execution_window.execution_quantity if compiled.execution_window else item.quantity
+    picking = dict(plan_bom(compiled.graph, quantity).picking)
+    sources = {source.component_product_id:source.id for source in compiled.snapshots}
+    return component_fulfillment(compiled.graph, quantity,
+        {pid:_delivered_component_quantity(db,sources[pid]) for pid in picking})

@@ -184,3 +184,56 @@ def test_received_manufactured_and_external_stock_handoff_keeps_history(factory_
     assert cancelled.status_code == 200, cancelled.text
     db.expire_all()
     assert item.delivered_quantity == 1
+
+
+def test_stocked_carton_liner_handoff_preserves_two_physical_locations(factory_http):
+    from app.models.bom_subkit import ProductSubkit
+    from app.models.multilevel_bom import BomAssembly
+    from app.services.bom_subkits import save_subkit
+    from app.services.composite_bom import replace_product_bom
+    from app.services.multilevel_bom_cutover_review import _row
+    client, db = factory_http
+    actor = db.scalar(select(User).where(User.role=="admin",User.is_active.is_(True)))
+    old = db.get(ProductSubkit,3765)
+    save_subkit(db,parent_product_id=3765,name=db.get(Product,3822).product_name,kits_per_parent=1,
+        members=[dict(product_id=3788,pieces_per_kit=2),dict(product_id=3789,pieces_per_kit=6)],
+        expected_version=old.version,actor=actor,enabled=False)
+    save(db,actor,3822,"assembled",[(3788,2,"assembly"),(3789,6,"assembly")])
+    save(db,actor,3765,"manufactured",[(3822,1,"accompany")])
+    item = new_item(db,3765,2)
+    original = freeze_order_procurement(db,order_item_id=item.id,actor=actor)
+    db.commit()
+    paper_receipt_flow(client,db,original,item.id,3765,stop_after_first_delivery=True)
+    old_assemblies = {row.id:_row(row) for row in db.scalars(select(BomAssembly).where(BomAssembly.order_item_id==item.id))}
+    replace_product_bom(db,parent_product_id=3765,expected_version=db.get(Product,3765).version,
+        user=actor,inventory_mode="manufactured",material_mode="expand_children",delivery_mode="parent",
+        components=[dict(component_product_id=3822,quantity_per_set=1,inventory_relation="accompany")])
+    db.commit()
+    url = f"/api/orders/items/{item.id}/stocked-bom-cutover"
+    preview = client.post(url+"/preview",json={})
+    assert preview.status_code == 200, preview.text
+    review = preview.json()
+    assert review["ready"] and review["execution_quantity"] == 1 and not review["outputs"]
+    retained = [row for row in review["retained_locations"] if row["quantity"]]
+    assert len(retained) == 2 and len({row["location_id"] for row in retained}) == 2
+    payload = {key:review[key] for key in ("reviewed_hash","preview_hash","source_lot_versions","target_locations","rule_revision")}
+    result = client.post(url+"/execute",json={**payload,"operation_key":"stocked-carton-liner"})
+    assert result.status_code == 200, result.text
+    assert not result.json()["assembly_ids"]
+    db.expire_all()
+    assert {row.id:_row(row) for row in db.scalars(select(BomAssembly).where(BomAssembly.order_item_id==item.id))} == old_assemblies
+    assert item.delivered_quantity == 1
+    delivery = client.post("/api/deliveries",json={"customer_id":original.graph.customer_id,
+        "delivery_date":"2026-09-10","items":[{"order_item_id":item.id,"delivered_quantity":1}]})
+    assert delivery.status_code == 201, delivery.text
+    did = delivery.json()["id"]
+    detail = client.get(f"/api/deliveries/{did}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["items"][0]["composite_fulfillment_mode"] == "parent_delivery"
+    assert {row["location_id"] for row in detail.json()["items"][0]["inventory_sources"]} == {row["location_id"] for row in retained}
+    dispatch = client.put(f"/api/deliveries/{did}/dispatch")
+    assert dispatch.status_code == 200, dispatch.text
+    cancelled = client.put(f"/api/deliveries/{did}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    db.expire_all()
+    assert item.delivered_quantity == 1

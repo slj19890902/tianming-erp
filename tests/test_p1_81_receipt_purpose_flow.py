@@ -82,7 +82,7 @@ def _p181_published_map_identity(monkeypatch) -> None:
     _use_p181_published_map_identity(monkeypatch)
 
 
-def _seed_material_and_staging(session_factory) -> int:
+def _seed_material_and_staging(session_factory, *, finished_slot_count=8) -> int:
     from app.models.material import Material
     from app.models.order import OrderItem
     from app.models.product import Product
@@ -207,7 +207,7 @@ def _seed_material_and_staging(session_factory) -> int:
             layout_kind="logical_anchor",
         )
         fin_locations: list[WarehouseLocation] = []
-        for index in range(1, 9):
+        for index in range(1, finished_slot_count + 1):
             fin_location = WarehouseLocation(
                 location_code=f"F1-FIN-001-L{index:03d}",
                 location_name=f"成品待送堆放区 {index:03d} 号位",
@@ -220,8 +220,8 @@ def _seed_material_and_staging(session_factory) -> int:
                 source_version="TWIN_V1",
             )
             fin_location.floor3_layout = Floor3LocationLayout(
-                left_pct=Decimal(str(24 + index * 7)),
-                top_pct=Decimal("4"),
+                left_pct=Decimal(str(24 + ((index - 1) % 8 + 1) * 7)),
+                top_pct=Decimal(str(4 + (index - 1) // 8 * 20)),
                 width_pct=Decimal("6"),
                 height_pct=Decimal("12"),
                 z_index=index,
@@ -290,10 +290,10 @@ def _seed_material_and_staging(session_factory) -> int:
                     plan_id=fin_plan.id,
                     location_id=fin_location.id,
                     route_sequence=index,
-                    row_no=1,
-                    slot_no=index,
-                    x_mm=Decimal(str(1000 + (index - 1) * 1200)),
-                    y_mm=Decimal("1000"),
+                    row_no=(index - 1) // 8 + 1,
+                    slot_no=(index - 1) % 8 + 1,
+                    x_mm=Decimal(str(1000 + (index - 1) % 8 * 1200)),
+                    y_mm=Decimal(str(1000 + (index - 1) // 8 * 1200)),
                     width_mm=1200,
                     depth_mm=1000,
                 )

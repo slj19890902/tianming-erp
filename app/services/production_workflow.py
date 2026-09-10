@@ -4447,6 +4447,44 @@ def _reverse_completion_semi_consumption(
     return tuple(reversed_ids)
 
 
+def _is_reversed_delivery_pallet_restore(db, movement, lot, completion) -> bool:
+    """Only a proven cancellation restoring the exact auto-cleared slot.
+
+    Callers must independently validate all lot consumption/reversal facts.
+    A matching label or a round trip through another location is insufficient.
+    """
+    import re
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.warehouse_inventory import DeliveryInventoryAllocation
+    match = re.fullmatch(r"delivery-(\d+)-auto-release-pallet-(\d+):restore", movement.idempotency_key or "")
+    if (match is None or int(match[2]) != movement.pallet_id
+            or movement.from_location_id is not None or movement.to_location_id != lot.warehouse_location_id
+            or movement.confirmed_at is None or movement.pallet_version_before is None
+            or movement.pallet_version_after != movement.pallet_version_before + 1):
+        return False
+    clear = db.scalar(select(InventoryLocationMovement).where(
+        InventoryLocationMovement.idempotency_key == movement.idempotency_key.removesuffix(":restore")))
+    if (clear is None or clear.id >= movement.id or clear.movement_type != "clear"
+            or clear.pallet_id != movement.pallet_id or clear.from_location_id != movement.to_location_id
+            or clear.to_location_id is not None or clear.confirmed_at is None
+            or clear.pallet_version_before is None
+            or clear.pallet_version_after != clear.pallet_version_before + 1
+            or clear.pallet_version_after != movement.pallet_version_before):
+        return False
+    delivery = db.get(Delivery, int(match[1]))
+    if delivery is None or delivery.status == "dispatched":
+        return False
+    return db.scalar(select(DeliveryInventoryAllocation.id).join(
+        DeliveryItem, DeliveryItem.id == DeliveryInventoryAllocation.delivery_item_id).join(
+        InventoryReservation, InventoryReservation.id == DeliveryInventoryAllocation.reservation_id).where(
+            DeliveryItem.delivery_id == delivery.id,
+            DeliveryItem.order_item_id == completion.order_item_id,
+            InventoryReservation.inventory_lot_id == lot.id,
+            DeliveryInventoryAllocation.status == "reversed",
+            DeliveryInventoryAllocation.reversed_stock_quantity == DeliveryInventoryAllocation.consumed_stock_quantity,
+            DeliveryInventoryAllocation.reversed_requirement_quantity == DeliveryInventoryAllocation.credited_requirement_quantity).limit(1)) is not None
+
+
 def _reverse_completion_finished_lot(
     db: Session,
     *,
@@ -4533,14 +4571,14 @@ def _reverse_completion_finished_lot(
     ):
         raise ProductionWorkflowError("生产完工成品预占已发生后续变化，不能自动回退", 409)
     pallet = lot.pallet_item.pallet if lot.pallet_item is not None else None
-    if pallet is not None and db.scalar(
-        select(InventoryLocationMovement.id)
+    if pallet is not None and any(
+        not (graph_restored and _is_reversed_delivery_pallet_restore(db, movement, lot, completion))
+        for movement in db.scalars(select(InventoryLocationMovement)
         .where(
             InventoryLocationMovement.pallet_id == pallet.id,
             InventoryLocationMovement.movement_type == "move",
-        )
-        .limit(1)
-    ) is not None:
+        ))
+    ):
         raise ProductionWorkflowError("该成品入库后已经移过库位，不能自动回退", 409)
 
     if reservation is not None:

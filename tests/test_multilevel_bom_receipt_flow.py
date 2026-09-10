@@ -202,7 +202,7 @@ def test_split_movement_keeps_receipt_cost_and_finished_coverage(
                 assert sum(a.quantity for a in active) == 10
 
 
-def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, separate=False, quantity=None, cutting_modes=None):
+def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, separate=False, quantity=None, cutting_modes=None, finished_slot_count=8):
     from app.models.warehouse_inventory import WarehouseLocation
     from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
@@ -214,7 +214,7 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, sepa
     with factory() as db:
         db.get(WarehouseLocation, 1).location_code = "GRAPH-OLD-FIXTURE"
         db.commit()
-    material_id = _seed_material_and_staging(factory)
+    material_id = _seed_material_and_staging(factory, finished_slot_count=finished_slot_count)
     with factory() as db:
         db.execute(delete(SalesOrderItemBomComponent))
         db.add(Supplier(standard_name="苏州纸板供应商", normalized_name=normalize_supplier_identity("苏州纸板供应商"),

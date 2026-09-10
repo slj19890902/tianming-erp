@@ -8060,6 +8060,8 @@
                 <p>{{ bomCutover.review.material_impact }}</p>
                 <template v-if="bomCutover.mode === 'unstarted'">
                   <p>交货方式：{{ bomCutover.review.old_delivery_mode === 'component_delivery' ? '子件' : '父件' }} → {{ bomCutover.review.new_modes && bomCutover.review.new_modes.delivery === 'components' ? '子件' : '父件' }}</p>
+                  <p>{{ bomCutover.review.proposed_material_estimate.scope }} · 已知小计 {{ bomCutover.review.proposed_material_estimate.known_subtotal }} 元</p>
+                  <p v-for="reason in bomCutover.review.proposed_material_estimate.missing_items" :key="reason" class="muted">{{ reason }}</p>
                   <table><thead><tr><th>保留旧快照 / 产品ID</th><th>旧冻结件数</th></tr></thead><tbody><tr v-for="row in bomCutover.review.old_sources" :key="row.id"><td>{{ row.id }} / {{ row.component_product_id }} · {{ row.snapshot_component_product_name }}</td><td>{{ row.required_piece_quantity }}</td></tr></tbody></table>
                   <table><thead><tr><th>新执行产品ID / 名称</th><th>需求</th><th>库存来源</th></tr></thead><tbody><tr v-for="row in bomCutover.review.new_sources" :key="row.component_product_id"><td>{{ row.component_product_id }} · {{ row.snapshot_component_product_name }}</td><td>{{ row.required_piece_quantity }} {{ row.unit }}</td><td>{{ {manufactured:'制造',assembled:'组装',purchased:'外购',separate:'组合需求，无父库存'}[row.source_kind] }}</td></tr></tbody></table>
                   <table><thead><tr><th>材料产品ID / 片组</th><th>物理片需求</th><th>报料张数</th></tr></thead><tbody><tr v-for="row in bomCutover.review.new_requirements.materials" :key="row.product_id+':'+row.route_key"><td>{{ row.product_id }} / {{ row.route_key }}</td><td>{{ row.required_pieces }} 片</td><td>{{ row.purchase_sheets }} 张</td></tr></tbody></table>
@@ -8069,7 +8071,7 @@
                 <p>{{ bomCutover.review.cost_impact }}</p>
                 <table v-if="bomCutover.review.source_costs && bomCutover.review.source_costs.length"><thead><tr><th>成本批次</th><th>数量</th><th>来源金额</th><th>依据</th></tr></thead><tbody><tr v-for="row in bomCutover.review.source_costs" :key="row.lot_id"><td>{{ row.lot_id }}</td><td>{{ row.quantity }} {{ row.unit }}</td><td>{{ row.amount }} {{ row.lineage.currency || '' }}</td><td>{{ row.lineage.actual === true ? '实际来源' : '估算或混合来源，保留原依据' }}</td></tr></tbody></table>
                 <p v-for="row in bomCutover.review.retained_locations || []" :key="row.lot_id">保留批次 {{ row.lot_id }} · 原货位 ID {{ row.location_id }}</p>
-                <table><thead><tr><th>子件</th><th>释放预占 / 批次</th><th>数量</th></tr></thead><tbody><tr v-for="r in bomCutover.review.release_reservations" :key="r.id"><td>{{ r.name }}</td><td>{{ r.id }} / {{ r.lot_id }}</td><td>{{ r.quantity }} {{ r.unit }}</td></tr></tbody></table>
+                <table v-if="bomCutover.review.release_reservations.length"><thead><tr><th>子件</th><th>释放预占 / 批次</th><th>数量</th></tr></thead><tbody><tr v-for="r in bomCutover.review.release_reservations" :key="r.id"><td>{{ r.name }}</td><td>{{ r.id }} / {{ r.lot_id }}</td><td>{{ r.quantity }} {{ r.unit }}</td></tr></tbody></table>
                 <div v-for="output in bomCutover.review.outputs" :key="output.product_id" style="margin-top:8px">
                   <div class="muted">消耗：<span v-for="(part,index) in output.consumed" :key="index">{{ index ? '、' : '' }}{{ part.name }} {{ part.quantity }} {{ part.unit }}</span></div>
                   <label :for="'cutover-location-'+output.product_id">{{ output.name }} · 组装 {{ output.quantity }} 套 · 目标货位</label>
@@ -8078,10 +8080,10 @@
                     <option v-for="loc in bomCutover.locations" :key="loc.id" :value="loc.id">{{ loc.employee_location_name || loc.current_address_name || loc.location_name }} · ID {{ loc.id }}</option>
                   </select>
                 </div>
-                <p class="muted">必须先预览所选货位的影响；执行会记录审计。不会重新收料或重复入库。</p>
+                <p class="muted">{{ bomCutover.mode === 'unstarted' ? '请核对新旧来源及用量，再确认切换；本次不执行库存操作。' : '必须先预览所选货位的影响；不会重新收料或重复入库。' }}执行会记录审计。</p>
                 <div class="toolbar-group" style="margin-top:8px">
                   <button class="btn" type="button" :disabled="bomCutover.loading || !!bomCutover.pending" @click="previewReservedKitCutover">核对影响及货位</button>
-                  <button class="btn primary" type="button" :disabled="bomCutover.loading || (!bomCutover.confirmed && !bomCutover.pending)" @click="executeReservedKitCutover">{{ bomCutover.pending ? '重试同一操作' : '确认转换剩余套数' }}</button>
+                  <button class="btn primary" type="button" :disabled="bomCutover.loading || (!bomCutover.confirmed && !bomCutover.pending)" @click="executeReservedKitCutover">{{ bomCutover.pending ? '重试同一操作' : (bomCutover.mode === 'unstarted' ? '确认切换冻结规则' : '确认转换剩余套数') }}</button>
                 </div>
               </template>
             </div>

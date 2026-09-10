@@ -2,6 +2,7 @@
 from dataclasses import asdict
 import hashlib
 import json
+from decimal import Decimal
 
 from sqlalchemy import select, update
 
@@ -51,12 +52,26 @@ def unstarted_preview(db, *, order_item_id, customer_id):
     plan = plan_bom(review.compiled.graph, quantity)
     nodes = {node.product_id: node for node in review.compiled.graph.nodes}
     from app.services.multilevel_bom_purchase_units import purchase_quantity_for_stock
+    from app.services.multilevel_bom_material_estimate import compiled_material_estimate_inputs
+    from app.services.order_material_cost import _component
+    estimates, missing = [], []
+    for source in compiled_material_estimate_inputs(review.compiled, quantity)[0]:
+        component, errors = _component(db, **source, context=None)
+        if component is not None:
+            estimates.append(component)
+        missing.extend(errors)
+    if any(node.source == "purchased" for node in nodes.values()):
+        missing.append("外购报价在采购确认时按冻结候选核定，本表不合入未确认外购金额")
+    estimated_material = sum((Decimal(row["estimated_material_cost"]) for row in estimates), Decimal("0"))
     return {"scope": "未发生报料、采购、库存或生产送货事实的旧BOM订单切换",
         "ready": True, "order_item_id": order_item_id, "quantity": quantity,
         "delivered_quantity": 0, "execution_quantity": quantity,
         "reviewed_hash": review.checksum, "preview_hash": review.checksum,
         "target_locations": {}, "source_lot_versions": {}, "outputs": [],
         "release_reservations": [], "source_costs": [], "retained_locations": [],
+        "proposed_material_estimate": {"known_subtotal": str(estimated_material),
+            "components": estimates, "missing_items": list(dict.fromkeys(missing)),
+            "scope": "当前纸板材料报价估算，非实际成本；不含加工、损耗及未确认外购。不改变原预计成本快照"},
         "old_sources": manifest["history"],
         "old_delivery_mode": manifest["item"]["composite_fulfillment_mode_snapshot"],
         "new_modes": asdict(review.compiled.graph.modes) if review.compiled.graph.modes else None,

@@ -11,11 +11,16 @@ def graph_material_estimate_inputs(db, item):
     compiled = read_compiled_order_bom(db, item.id)
     if compiled is None:
         raise BomPlanError("多级BOM材料快照缺少冻结关系，不能按旧子件估算")
+    return compiled_material_estimate_inputs(compiled, item.quantity)
+
+
+def compiled_material_estimate_inputs(compiled, quantity):
+    """Read-only detached inputs for an explicit proposed recipe review."""
     graph = compiled.graph
     nodes = {node.product_id: node for node in graph.nodes}
     snapshots = {row.component_product_id: row for row in compiled.snapshots}
     sources = []
-    for demand in plan_bom(graph, item.quantity).materials:
+    for demand in plan_bom(graph, quantity).materials:
         node = nodes[demand.product_id]
         snapshot = snapshots[node.product_id]
         output = resolve_bom_sheet_yield(snapshot, strict=True)

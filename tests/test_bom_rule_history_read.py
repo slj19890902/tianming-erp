@@ -266,6 +266,56 @@ def test_manufactured_parent_old_reservation_is_not_credited_to_new_rule(factory
     assert read_graph_requirements(db, item.id).finished_units[3479] == 0
 
 
+def test_new_manufactured_window_reserves_only_its_remaining_demand(factory_http):
+    """Fixture omits stock handoff deliberately; not operational cutover UAT."""
+    from app.models.user import User
+    from app.models.production import ProductionCompletion
+    from app.models.warehouse_inventory import InventoryReservation
+    from app.services.multilevel_bom_orders import freeze_master_order_bom
+    from app.services.multilevel_bom_receipts import own_output_lots
+    from tests.test_multilevel_bom_factory_compile import new_item
+    from tests.test_bom_other_products_acceptance import paper_receipt_flow
+    client, db = factory_http
+    actor = db.scalar(select(User).where(User.role == "admin", User.is_active.is_(True)))
+    save(db, actor, 3479, "manufactured", [])
+    item = new_item(db, 3479, 2)
+    original = freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
+    db.commit()
+    paper_receipt_flow(client, db, original, item.id, 3479, stop_after_first_delivery=True)
+    old_completions = {row.id: (row.actual_output_quantity, row.order_reserved_quantity)
+        for row in db.scalars(select(ProductionCompletion).where(ProductionCompletion.order_item_id == item.id))}
+    store_fixture_revision(db, actor, item)
+    # Storage fixture also models the new version's not-yet-reported state.
+    # The future operational writer must perform and audit this handoff.
+    item.requisition_status = "未报料"
+    item.material_status = "pending"
+    item.material_received_at = item.material_received_by = None
+    db.commit()
+    current = read_compiled_order_bom(db, item.id)
+    assert current.snapshots[0].required_piece_quantity == 1
+    paper_receipt_flow(client, db, current, item.id, 3479, stop_after_receipts=True, key_suffix="-new-window")
+    outputs = own_output_lots(db, item.id)
+    assert outputs and sum(lot.quantity_reserved for lot in outputs) == 1
+    assert sum(lot.quantity_available + lot.quantity_reserved for lot in outputs) == 1
+    for identifier, facts in old_completions.items():
+        row = db.get(ProductionCompletion, identifier)
+        assert (row.actual_output_quantity, row.order_reserved_quantity) == facts
+    assert item.delivered_quantity == 1
+    delivery = client.post("/api/deliveries", json={"customer_id": current.graph.customer_id,
+        "delivery_date": "2026-09-10", "items": [{"order_item_id": item.id, "delivered_quantity": 1}]})
+    assert delivery.status_code == 201, delivery.text
+    did = delivery.json()["id"]
+    dispatch = client.put(f"/api/deliveries/{did}/dispatch")
+    assert dispatch.status_code == 200, dispatch.text
+    db.expire_all()
+    assert item.delivered_quantity == 2
+    cancelled = client.put(f"/api/deliveries/{did}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    db.expire_all()
+    assert item.delivered_quantity == 1
+    assert sum(lot.quantity_reserved for lot in own_output_lots(db, item.id)) == 1
+
+
 def test_actual_assembly_reversal_uses_original_rule_after_fixture_switch(factory_http):
     import json
     from app.models.multilevel_bom import BomAssembly, BomAssemblyInput

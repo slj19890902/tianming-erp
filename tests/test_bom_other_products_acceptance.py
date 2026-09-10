@@ -97,7 +97,8 @@ def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_htt
     paper_receipt_flow(client, db, compiled, iid, pid, occupy_released=occupy_released)
 
 
-def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False, stop_after_first_delivery=False):
+def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False,
+                       stop_after_first_delivery=False, stop_after_receipts=False, key_suffix=""):
     from collections import defaultdict
     from app.models.order import OrderItem
     from app.models.product_bom import RequisitionItemBomSource
@@ -119,7 +120,7 @@ def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False,
             "cardboard_width": row["report_width_mm"], "special_process": row["cutting_mode"],
             **({"actual_yield_per_sheet": row["actual_yield_per_sheet"]} if row["is_die_cut"] else {})})
     for index, (supplier, items) in enumerate(grouped.items()):
-        saved = client.post("/api/requisition/batches", json={"request_key": f"isolated-other16-{pid}-{index}",
+        saved = client.post("/api/requisition/batches", json={"request_key": f"isolated-other16-{pid}-{index}{key_suffix}",
             "supplier_name": supplier, "items": items})
         assert saved.status_code == 201, saved.text
     db.expire_all()
@@ -135,11 +136,14 @@ def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False,
             purpose_snapshot_version=purpose.snapshot_version, receipt_plan_fingerprint=purpose.preview_fingerprint,
             component_type=purpose.component_type, material_id=by_snapshot[bom.sales_order_item_bom_component_id]["material_id"],
             order_purpose_sheet_qty=purpose.order_purpose_sheet_qty, reserve_purpose_sheet_qty=purpose.reserve_purpose_sheet_qty)
-        fact = _freeze_receipt_fact(client, source, idempotency_key=f"other16-price-{pid}-{index}", unit_price="0.1234")
+        fact = _freeze_receipt_fact(client, source, idempotency_key=f"other16-price-{pid}-{index}{key_suffix}", unit_price="0.1234")
         assert fact.status_code == 200, fact.text
         received = _receive(client, source, fact.json(), quantity=source.order_purpose_sheet_qty,
-            idempotency_key=f"other16-receive-{pid}-{index}")
+            idempotency_key=f"other16-receive-{pid}-{index}{key_suffix}")
         assert received.status_code == 200, received.text
+    if stop_after_receipts:
+        db.expire_all()
+        return
     from app.services.multilevel_bom_plan import plan_bom
     from app.services.multilevel_bom_receipts import own_output_lots
     expected = dict(plan_bom(compiled.graph, 2).picking)

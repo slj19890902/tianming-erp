@@ -4926,7 +4926,7 @@ def post_automatic_receipt_completion(
         if (cost_detail.get("bom_snapshot_id") != graph_snapshot.id
                 or cost_detail.get("bom_material_product_id") != graph_snapshot.component_product_id):
             raise ProductionWorkflowError("组件完工成本与真实产品身份不一致", 409)
-        required_quantity = int(item.quantity) * int(graph_snapshot.quantity_per_set)
+        required_quantity = int(graph_snapshot.required_piece_quantity)
         is_assembly_body = any(e.parent_id == graph_snapshot.component_product_id and e.relation == "assembly"
                                for e in compiled.graph.edges)
         if graph_snapshot.component_product_id != item.product_id:
@@ -5000,7 +5000,18 @@ def post_automatic_receipt_completion(
     # Receipt capacity is an output fact, not the remaining order demand.
     # Existing finished-stock reservations (including quantities consumed by
     # delivery) already cover the order and must not be reserved a second time.
-    if graph_snapshot is not None and graph_snapshot.component_product_id != item.product_id:
+    if graph_snapshot is not None and graph_snapshot.component_product_id == item.product_id:
+        from app.services.composite_bom_workflow import _snapshot_reservation_condition
+        delivered = compiled.execution_window.delivered_since if compiled.execution_window else int(item.delivered_quantity or 0)
+        root_reservations = db.scalars(select(InventoryReservation).where(
+            _snapshot_reservation_condition(db, graph_snapshot.id),
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.status != "cancelled"))
+        remaining_reserved = sum(max(int(row.credited_requirement_quantity or 0)
+            - int(row.consumed_requirement_quantity or 0) - int(row.released_requirement_quantity or 0), 0)
+            for row in root_reservations)
+        existing_order_coverage = min(delivered + remaining_reserved, required_quantity)
+    elif graph_snapshot is not None:
         from app.services.warehouse_inventory import active_finished_component_reserved_qty
         existing_order_coverage = min(active_finished_component_reserved_qty(db, graph_snapshot.id), required_quantity)
     else:

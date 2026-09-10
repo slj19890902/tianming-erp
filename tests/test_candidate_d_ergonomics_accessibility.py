@@ -178,7 +178,9 @@ def test_delivery_rows_keep_one_primary_next_step_and_disclose_secondary_actions
     assert "runDeliveryPrimaryRowAction(row)" in deliveries
     assert 'class="delivery-row-more"' in deliveries
     assert 'popover="auto"' in deliveries
-    assert '@click="toggleDeliveryRowMore(row,$event)"' in deliveries
+    assert ':popovertarget="`delivery-more-${row.id}`"' in deliveries
+    assert 'popovertargetaction="toggle"' in deliveries
+    assert '@toggle="toggleDeliveryRowMore(row,$event)"' in deliveries
     for condition in (
         "canDelivery && row.status==='pending'",
     ):

@@ -4798,8 +4798,8 @@
                     <td class="delivery-list-actions"><div class="delivery-row-actions-inner">
                       <button v-if="deliveryPrimaryRowActionLabel(row)" class="btn small primary delivery-row-primary-action" :class="deliveryPrimaryRowActionClass(row)" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="runDeliveryPrimaryRowAction(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : (deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : deliveryPrimaryRowActionLabel(row))) }}</button>
                       <div v-if="deliveryHasSecondaryRowActions(row)" class="delivery-row-more">
-                        <button type="button" class="btn small delivery-row-more-toggle" :disabled="!!deliveryInlineEdit" :aria-controls="`delivery-more-${row.id}`" @click="toggleDeliveryRowMore(row,$event)">更多</button>
-                        <div popover="auto" :id="`delivery-more-${row.id}`" class="delivery-row-more-panel" @click="closeDeliveryRowMoreAfterAction($event)">
+                        <button type="button" class="btn small delivery-row-more-toggle" :disabled="!!deliveryInlineEdit" :id="`delivery-more-toggle-${row.id}`" :popovertarget="`delivery-more-${row.id}`" popovertargetaction="toggle">更多</button>
+                        <div popover="auto" :id="`delivery-more-${row.id}`" class="delivery-row-more-panel" @toggle="toggleDeliveryRowMore(row,$event)" @click="closeDeliveryRowMoreAfterAction($event)">
                           <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action" @click="createDeliveryPickTask(row)">拿货</button>
                           <button v-if="canFinance && row.status==='dispatched'" class="btn small" :class="deliveryReceiptRowActionClass(row)" :disabled="!!receiptOperationState.action" @click="openReceipt(row)">{{ row.return_receipt_status==='confirmed' ? '编辑回单' : '确认回单' }}</button>
                           <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
@@ -21031,11 +21031,11 @@
             return this.printDelivery(row);
           },
           toggleDeliveryRowMore(row, event) {
-            const panel = document.getElementById(`delivery-more-${row.id}`);
-            if (!panel) return;
-            if (panel.matches(":popover-open")) { panel.hidePopover(); return; }
-            const rect = event.currentTarget.getBoundingClientRect();
-            panel.showPopover();
+            if (event.newState !== "open") return;
+            const panel = event.currentTarget;
+            const trigger = document.getElementById(`delivery-more-toggle-${row.id}`);
+            if (!panel || !trigger) return;
+            const rect = trigger.getBoundingClientRect();
             const below = window.innerHeight - rect.bottom - 16;
             const above = rect.top - 16;
             const upward = below < Math.min(panel.scrollHeight, 240) && above > below;

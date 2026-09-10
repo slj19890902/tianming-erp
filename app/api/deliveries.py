@@ -2518,7 +2518,11 @@ def _composite_inventory_sources_for_order_item(
     read_context: dict | None = None,
 ) -> list[dict]:
     """Expose N039 component pick sources without treating pieces as parent sets."""
-    demands = delivery_component_demands(db, order_item.id)
+    if dispatched and delivery_item_id is not None:
+        from app.services.multilevel_bom_delivery_history import historical_delivery_component_demands
+        demands = historical_delivery_component_demands(db, delivery_item_id=delivery_item_id, order_item_id=order_item.id)
+    else:
+        demands = delivery_component_demands(db, order_item.id)
     demand_by_snapshot = {row.snapshot_id: row for row in demands}
     if not demand_by_snapshot:
         return []
@@ -2765,6 +2769,7 @@ def _customer_document_fulfillment_mode(
     *,
     frozen_order_mode: str | None,
     current_product_mode: str | None,
+    component_lines: list[dict] | None = None,
 ) -> str:
     """Resolve the customer-facing delivery projection without changing stock facts.
 
@@ -2778,6 +2783,7 @@ def _customer_document_fulfillment_mode(
     return resolve_customer_document_fulfillment_mode(
         frozen_order_mode=frozen_order_mode,
         current_product_mode=current_product_mode,
+        component_lines=component_lines,
     )
 
 
@@ -2867,6 +2873,7 @@ def _delivery_kit_metadata(
                 None,
             ),
             current_product_mode=current_product_fulfillment_mode,
+            component_lines=component_lines,
         ),
         "kit_availability": availability,
         "available_sets": int(availability.get("available_sets") or 0),
@@ -3751,6 +3758,7 @@ def _delivery_list_kit_metadata(
             "specification": demand.specification,
             "unit": demand.unit,
             **({"is_graph_root": True} if demand.is_graph_root else {}),
+            **({"bom_delivery_mode": demand.frozen_delivery_mode} if demand.frozen_delivery_mode else {}),
             "quantity_per_set": demand.quantity_per_set,
             "target_quantity": demand.required_piece_quantity,
             "delivered_quantity": context["component_delivered_by_snapshot"].get(
@@ -3780,6 +3788,7 @@ def _delivery_list_kit_metadata(
                 None,
             ),
             current_product_mode=current_product_fulfillment_mode,
+            component_lines=component_lines,
         ),
         "kit_availability": availability,
         "available_sets": available_sets,
@@ -4247,8 +4256,9 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         adjustments,
     )
     from app.services.multilevel_bom_delivery_page import project_page_graph_demands
+    graph_history_orders = set()
     graph_roots = project_page_graph_demands(db, graphs=graphs, cutovers=cutovers, order_items=order_items,
-        orders=orders, snapshots=snapshots, demands=component_demands_by_order_item)
+        orders=orders, snapshots=snapshots, demands=component_demands_by_order_item, history_orders=graph_history_orders)
     requirements = list(
         db.scalars(
             select(OrderItemSemiRequirement)
@@ -4350,6 +4360,18 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
     reservations_by_order_item: dict[int, list[InventoryReservation]] = {}
     reservations_by_requirement: dict[int, list[InventoryReservation]] = {}
     reservations_by_snapshot: dict[int, list[InventoryReservation]] = {}
+    from app.services.multilevel_bom_delivery_history import root_reservation_source_expression
+    stock_snapshot_id = root_reservation_source_expression(db, graph_roots)
+    unresolved_roots = [row.id for row in reservation_rows
+                        if row.sales_order_item_bom_component_id is None
+                        and row.reservation_type == "finished_order"
+                        and row.order_item_id in graph_history_orders]
+    historical_root_sources = dict(db.execute(select(InventoryReservation.id, stock_snapshot_id).where(
+        InventoryReservation.id.in_(unresolved_roots))).all()) if unresolved_roots else {}
+    def reservation_source(reservation):
+        return reservation.sales_order_item_bom_component_id or historical_root_sources.get(reservation.id) or (
+            graph_roots.get(reservation.order_item_id)
+            if reservation.reservation_type == "finished_order" else None)
     for reservation in reservation_rows:
         if reservation.order_item_id is not None:
             reservations_by_order_item.setdefault(
@@ -4367,7 +4389,7 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
                 [],
             ).append(reservation)
         elif reservation.reservation_type == "finished_order" and reservation.order_item_id in graph_roots:
-            reservations_by_snapshot.setdefault(graph_roots[reservation.order_item_id], []).append(reservation)
+            reservations_by_snapshot.setdefault(reservation_source(reservation), []).append(reservation)
     reserved_item_ids = {
         int(row.order_item_id)
         for row in reservation_rows
@@ -4519,11 +4541,6 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
                 )
             ).all()
         }
-        stock_snapshot_id = InventoryReservation.sales_order_item_bom_component_id
-        if graph_roots:
-            stock_snapshot_id = func.coalesce(stock_snapshot_id, case(
-                (InventoryReservation.reservation_type == "finished_order",
-                 case(graph_roots, value=InventoryReservation.order_item_id)), else_=None))
         component_delivered_stock = {
             int(snapshot_id): int(quantity or 0)
             for snapshot_id, quantity in db.execute(
@@ -4576,8 +4593,7 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         reservation = reservations.get(int(allocation.reservation_id))
         if reservation is None:
             continue
-        resolved_snapshot_id = reservation.sales_order_item_bom_component_id or (
-            graph_roots.get(reservation.order_item_id) if reservation.reservation_type == "finished_order" else None)
+        resolved_snapshot_id = reservation_source(reservation)
         if resolved_snapshot_id is None:
             continue
         quantities = component_quantities_by_delivery_item.setdefault(
@@ -4697,7 +4713,17 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
             continue
         delivery = deliveries.get(int(row["delivery_id"]))
         dispatched = bool(delivery and delivery.status in {"dispatched", "voided"})
-        if order_item.id in composite_item_ids:
+        if dispatched and order_item.id in graph_history_orders:
+            # The page-wide demand is current. A completed document retains
+            # the rule selected by its actual allocation sources instead.
+            kit_metadata = _delivery_kit_metadata(db, order_item,
+                planned_delivery_quantity=int(row["delivered_quantity"] or 0),
+                delivery_item_id=delivery_item_id, dispatched=True,
+                current_product_fulfillment_mode=row.get("current_product_fulfillment_mode"))
+            inventory_sources = _composite_inventory_sources_for_order_item(db, order_item=order_item,
+                planned_delivery_quantity=int(row["delivered_quantity"] or 0),
+                delivery_item_id=delivery_item_id, dispatched=True, read_context=context)
+        elif order_item.id in composite_item_ids:
             kit_metadata = _delivery_list_kit_metadata(
                 context,
                 order_item=order_item,
@@ -4923,9 +4949,8 @@ def _delivery_summary_component_quantities(
     graph_picks, graph_roots, excluded = contracts.picks, contracts.roots, contracts.excluded
     stock_snapshot_id = InventoryReservation.sales_order_item_bom_component_id
     if graph_roots:
-        stock_snapshot_id = func.coalesce(stock_snapshot_id, case(
-            (InventoryReservation.reservation_type == "finished_order",
-             case(graph_roots, value=InventoryReservation.order_item_id)), else_=None))
+        from app.services.multilevel_bom_delivery_history import root_reservation_source_expression
+        stock_snapshot_id = root_reservation_source_expression(db, graph_roots)
     pending_rows = [
         row for row in composite_rows if row.status not in {"dispatched", "voided"}
     ]

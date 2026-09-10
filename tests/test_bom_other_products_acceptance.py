@@ -97,7 +97,7 @@ def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_htt
     paper_receipt_flow(client, db, compiled, iid, pid, occupy_released=occupy_released)
 
 
-def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False):
+def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False, stop_after_first_delivery=False):
     from collections import defaultdict
     from app.models.order import OrderItem
     from app.models.product_bom import RequisitionItemBomSource
@@ -169,6 +169,8 @@ def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False)
         FinanceDeliveryGraphCostPortion.fact_id.in_([f.id for f in facts]))))
     assert portions and all((p.purchase_receipt_fact_id and p.purpose_allocation_id)
                             or p.external_receipt_item_id for p in portions)
+    if stop_after_first_delivery:
+        return did
     second = client.post("/api/deliveries", json={"customer_id": compiled.graph.customer_id,
         "delivery_date": "2026-09-10", "items": [{"order_item_id": iid, "delivered_quantity": 1}]})
     assert second.status_code == 201, second.text

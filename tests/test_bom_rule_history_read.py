@@ -165,3 +165,95 @@ def test_rule_only_history_has_the_same_cancellation_boundary_as_legacy_cutover(
     with pytest.raises(BomPlanError, match="跨越"):
         validate_cancel_execution_boundary(db, item=item, delivery_item_ids=[], quantity=6)
     assert item.delivered_quantity == 25
+
+
+def test_actual_delivery_pick_sources_remain_on_original_rule_after_fixture_switch(factory_http):
+    """Actual receipt/delivery, then storage fixture: not operational handoff UAT."""
+    from app.api.deliveries import _composite_inventory_sources_for_order_item
+    from app.models.delivery import DeliveryItem
+    from app.services.composite_bom_workflow import _delivery_graph_root_snapshot, delivery_item_component_quantities
+    from tests.test_bom_other_products_acceptance import paper_receipt_flow
+    client, db = factory_http
+    actor, item, original = frozen_order(db, quantity=2, explicit_modes=True)
+    did = paper_receipt_flow(client, db, original, item.id, 3799, stop_after_first_delivery=True)
+    line = db.scalar(select(DeliveryItem).where(DeliveryItem.delivery_id == did))
+    def pick_sources():
+        return _composite_inventory_sources_for_order_item(db, order_item=item,
+            planned_delivery_quantity=1, delivery_item_id=line.id, dispatched=True)
+    before = pick_sources()
+    assert before and sum(row["quantity_to_pick_requirement"] for row in before) == 1
+    old_root = _delivery_graph_root_snapshot(db, line.id)
+    old_quantities = delivery_item_component_quantities(db, line.id)
+    assert old_quantities == {old_root: 1}
+    from app.services.delivery_goods_projection import delivery_component_lines, customer_document_fulfillment_mode
+    def document_lines():
+        return delivery_component_lines(db, order_item=item, planned_delivery_quantity=1,
+            delivery_item_id=line.id, dispatched=True)
+    before_lines = document_lines()
+    assert before_lines and {row["bom_delivery_mode"] for row in before_lines} == {"parent_delivery"}
+    from app.api.deliveries import _delivery_list_page_context, _delivery_response
+    def list_item():
+        return _delivery_response(db, did, list_context=_delivery_list_page_context(db, [did]))["items"][0]
+    before_list = list_item()
+    from app.services.composite_bom import replace_product_bom
+    from app.models.product import Product
+    replace_product_bom(db, parent_product_id=3799, expected_version=db.get(Product, 3799).version,
+        user=actor, inventory_mode="separate", material_mode="expand_children", delivery_mode="components",
+        components=[dict(component_product_id=pid, quantity_per_set=quantity, inventory_relation="accompany")
+                    for pid, quantity in [(3771, 3), (3783, 4)]])
+    db.commit()
+    revision, new_ids = store_fixture_revision(db, actor, item)
+    assert old_root not in new_ids
+    payload = inputs(db, [item])
+    roots = project_page_graph_demands(db, **payload)
+    assert roots[item.id] in new_ids
+    assert {d.component_product_id for d in payload["demands"][item.id]} == {3771, 3783}
+    assert all(d.frozen_delivery_mode == "component_delivery" for d in payload["demands"][item.id])
+    assert pick_sources() == before
+    assert _delivery_graph_root_snapshot(db, line.id) == old_root
+    assert delivery_item_component_quantities(db, line.id) == old_quantities
+    assert document_lines() == before_lines
+    assert customer_document_fulfillment_mode(frozen_order_mode="component_delivery",
+        current_product_mode="component_delivery", component_lines=document_lines()) == "parent_delivery"
+    after_list = list_item()
+    assert after_list["component_lines"] == before_list["component_lines"]
+    assert after_list["actual_goods_lines"] == before_list["actual_goods_lines"]
+    assert after_list["inventory_sources"] == before_list["inventory_sources"]
+    revision.content_hash = "0" * 64
+    db.commit()
+    with pytest.raises(BomPlanError):
+        pick_sources()
+
+
+def test_manufactured_parent_old_reservation_is_not_credited_to_new_rule(factory_http):
+    """Real output/delivery, fixture revision; original stock stays original."""
+    from app.models.user import User
+    from app.models.warehouse_inventory import InventoryReservation
+    from app.services.multilevel_bom_orders import freeze_master_order_bom
+    from app.services.composite_bom_workflow import _delivered_component_quantity, _stock_reservations
+    from tests.test_multilevel_bom_factory_compile import new_item
+    from tests.test_bom_other_products_acceptance import paper_receipt_flow
+    client, db = factory_http
+    actor = db.scalar(select(User).where(User.role == "admin", User.is_active.is_(True)))
+    save(db, actor, 3479, "manufactured", [])
+    item = new_item(db, 3479, 2)
+    original = freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
+    db.commit()
+    old_root = original.snapshots[0].id
+    did = paper_receipt_flow(client, db, original, item.id, 3479, stop_after_first_delivery=True)
+    assert _delivered_component_quantity(db, old_root) == 1
+    reservations = list(db.scalars(select(InventoryReservation).where(
+        InventoryReservation.order_item_id == item.id,
+        InventoryReservation.reservation_type == "finished_order")))
+    assert reservations and all(row.sales_order_item_bom_component_id is None for row in reservations)
+    _, new_ids = store_fixture_revision(db, actor, item)
+    new_root, = new_ids
+    assert _delivered_component_quantity(db, old_root) == 1
+    assert _delivered_component_quantity(db, new_root) == 0
+    assert not _stock_reservations(db, new_root)
+    from app.api.deliveries import _delivery_list_page_context
+    page = _delivery_list_page_context(db, [did])
+    assert page["component_delivered_by_snapshot"].get(new_root, 0) == 0
+    assert page["component_delivered_by_snapshot"][old_root] == 1
+    assert not page["reservations_by_snapshot"].get(new_root)
+    assert page["reservations_by_snapshot"][old_root]

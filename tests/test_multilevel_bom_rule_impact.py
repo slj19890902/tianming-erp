@@ -15,9 +15,15 @@ from tests.test_multilevel_bom_factory_compile import factory_copy, new_item
 from tests.test_multilevel_bom_master import save
 
 
-def frozen_order(db, quantity=100):
+def frozen_order(db, quantity=100, explicit_modes=False):
     actor = db.scalar(select(User).where(User.role == "admin", User.is_active.is_(True)))
     save(db, actor, 3799, "assembled", [(3771, 3, "assembly"), (3783, 4, "assembly")])
+    if explicit_modes:
+        from app.services.composite_bom import replace_product_bom
+        replace_product_bom(db, parent_product_id=3799, expected_version=db.get(Product, 3799).version,
+            user=actor, inventory_mode="assembled", material_mode="expand_children", delivery_mode="parent",
+            components=[dict(component_product_id=pid, quantity_per_set=quantity, inventory_relation="assembly")
+                        for pid, quantity in [(3771, 3), (3783, 4)]])
     item = new_item(db, 3799, quantity)
     frozen = freeze_master_order_bom(db, order_item_id=item.id, actor=actor)
     db.commit()

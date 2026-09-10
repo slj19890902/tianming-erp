@@ -15,9 +15,16 @@ def customer_document_fulfillment_mode(
     *,
     frozen_order_mode: str | None,
     current_product_mode: str | None,
+    component_lines: list[dict] | None = None,
 ) -> str:
     """Resolve the one-way customer-facing composite delivery mode."""
 
+    frozen_modes = {row["bom_delivery_mode"] for row in component_lines or [] if row.get("bom_delivery_mode")}
+    if frozen_modes:
+        if len(frozen_modes) != 1 or not frozen_modes <= {"parent_delivery", "component_delivery"}:
+            from app.services.multilevel_bom_plan import BomPlanError
+            raise BomPlanError("送货明细冻结交付规则不一致")
+        return next(iter(frozen_modes))
     if "parent_delivery" in {frozen_order_mode, current_product_mode}:
         return "parent_delivery"
     return "component_delivery"
@@ -33,7 +40,11 @@ def delivery_component_lines(
 ) -> list[dict]:
     """Project the BOM component quantities used by a delivery document."""
 
-    demands = delivery_component_demands(db, order_item.id)
+    if dispatched and delivery_item_id is not None:
+        from app.services.multilevel_bom_delivery_history import historical_delivery_component_demands
+        demands = historical_delivery_component_demands(db, delivery_item_id=delivery_item_id, order_item_id=order_item.id)
+    else:
+        demands = delivery_component_demands(db, order_item.id)
     if not demands:
         return []
     cumulative = delivered_component_quantities(db, order_item.id)
@@ -56,6 +67,7 @@ def delivery_component_lines(
             "specification": demand.specification,
             "unit": demand.unit,
             **({"is_graph_root": True} if demand.is_graph_root else {}),
+            **({"bom_delivery_mode": demand.frozen_delivery_mode} if demand.frozen_delivery_mode else {}),
             "quantity_per_set": demand.quantity_per_set,
             "target_quantity": demand.required_piece_quantity,
             "delivered_quantity": cumulative.get(demand.snapshot_id, 0),

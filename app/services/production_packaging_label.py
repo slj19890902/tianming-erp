@@ -381,6 +381,7 @@ def build_delivery_packaging_label_package(
             customer_document_fulfillment_mode(
                 frozen_order_mode=order_item.composite_fulfillment_mode_snapshot,
                 current_product_mode=current_mode,
+                component_lines=component_rows,
             )
             if is_composite
             else "parent_delivery"

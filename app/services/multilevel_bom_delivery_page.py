@@ -12,7 +12,7 @@ from app.services.composite_bom_workflow import project_graph_delivery_demands
 from app.services.multilevel_bom_production_versions import production_revisions_by_order_ids
 
 
-def project_page_graph_demands(db, *, graphs, cutovers, order_items, orders, snapshots, demands):
+def project_page_graph_demands(db, *, graphs, cutovers, order_items, orders, snapshots, demands, history_orders=None):
     if set(cutovers) - set(graphs):
         raise BomPlanError("订单多级BOM冻结关系缺失，不能按旧组件显示")
     grouped = defaultdict(list)
@@ -29,13 +29,18 @@ def project_page_graph_demands(db, *, graphs, cutovers, order_items, orders, sna
     roles = cutover_roles_by_order(db, cutovers)
     roots = {}
     for item_id, row in graphs.items():
+        if history_orders is not None and (histories[item_id].revisions or item_id in cutovers):
+            history_orders.add(item_id)
         item = order_items[item_id]
         compiled = project_order_rule_history(header=row, item=item, order=orders.get(item.order_id),
             identities=identities[item_id], cutover=cutovers.get(item_id),
             rows_with_roles=((source, roles[item_id].get(source.id)) for source in grouped[item_id]),
             production_rows=revisions[item_id], history=histories[item_id])
         demands[item_id] = project_graph_delivery_demands(compiled, item, demands.get(item_id, []))
-        roots[item_id] = next(d.snapshot_id for d in demands[item_id] if d.is_graph_root)
+        # A separate-stock parent owns a frozen identity but is deliberately
+        # absent from physical picking. It still identifies this order's graph.
+        roots[item_id] = next(source.id for source in compiled.snapshots
+                              if source.component_product_id == compiled.graph.root_id)
     return roots
 
 

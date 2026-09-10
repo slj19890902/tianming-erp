@@ -77,6 +77,7 @@ class ComponentDemand:
     unit: str = "PCS"
     is_graph_root: bool = False
     delivered_before_cutover: int = 0
+    frozen_delivery_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -498,9 +499,8 @@ def _snapshot_reservation_condition(db, snapshot_id):
     snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
     graph = db.get(OrderBomGraph, snapshot.sales_order_item_id) if snapshot else None
     if graph is not None and graph.root_product_id == snapshot.component_product_id:
-        condition = or_(condition, and_(InventoryReservation.sales_order_item_bom_component_id.is_(None),
-            InventoryReservation.order_item_id == snapshot.sales_order_item_id,
-            InventoryReservation.reservation_type == "finished_order"))
+        from app.services.multilevel_bom_delivery_history import root_reservation_source_expression
+        condition = root_reservation_source_expression(db, {snapshot.sales_order_item_id: snapshot_id}) == snapshot_id
     return condition
 
 
@@ -645,9 +645,9 @@ def _delivery_graph_root_snapshot(db, delivery_item_id):
     graph = db.get(OrderBomGraph, line.order_item_id) if line else None
     if graph is None:
         return None
-    return db.scalar(select(SalesOrderItemBomComponent.id).where(
-        SalesOrderItemBomComponent.sales_order_item_id == graph.order_item_id,
-        SalesOrderItemBomComponent.component_product_id == graph.root_product_id))
+    from app.services.multilevel_bom_delivery_history import historical_delivery_component_demands
+    demands = historical_delivery_component_demands(db, delivery_item_id=line.id, order_item_id=line.order_item_id)
+    return next((d.snapshot_id for d in demands if d.is_graph_root), None)
 
 
 def _delivery_reservation_condition(db, delivery_item_id):
@@ -743,7 +743,9 @@ def project_graph_delivery_demands(compiled, item, demands):
                     effective_sets=quantity, required_piece_quantity=quantity*picking[d.component_product_id],
                     delivered_before_cutover=window.delivered_before if window else 0,
                     unit=units[d.component_product_id], is_graph_root=d.component_product_id == compiled.graph.root_id,
-                    is_required=True, show_on_delivery=component_display or d.component_product_id == compiled.graph.root_id)
+                    is_required=True, show_on_delivery=component_display or d.component_product_id == compiled.graph.root_id,
+                    frozen_delivery_mode=("component_delivery" if component_display else "parent_delivery")
+                        if compiled.graph.modes is not None else None)
             for d in demands if d.snapshot_id in current_ids and d.component_product_id in picking]
 
 

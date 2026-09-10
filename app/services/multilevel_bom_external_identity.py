@@ -14,6 +14,26 @@ from app.services.multilevel_bom_orders import read_compiled_order_bom
 from app.services.multilevel_bom_plan import BomPlanError, plan_bom
 
 
+def current_external_component_predicate(component=SalesOrderItemExternalComponent):
+    """Exclude proven historical links; retain corrupt/unlinked rows to fail validation."""
+    from app.models.product_bom import SalesOrderItemBomComponent as Source
+    from app.services.multilevel_bom_execution_boundary import current_snapshot_predicate
+    historical = select(1).select_from(OrderBomExternalComponent).join(Source,
+        (Source.id == OrderBomExternalComponent.bom_snapshot_id)
+        & (Source.sales_order_item_id == OrderBomExternalComponent.order_item_id)
+        & (Source.component_product_id == OrderBomExternalComponent.product_id)).where(
+        OrderBomExternalComponent.external_component_id == component.id,
+        OrderBomExternalComponent.order_item_id == component.sales_order_item_id,
+        ~current_snapshot_predicate(Source)).exists()
+    return ~historical
+
+
+def current_external_links(db, compiled):
+    source_ids = {source.id for source in compiled.snapshots}
+    return list(db.scalars(select(OrderBomExternalComponent).where(
+        OrderBomExternalComponent.bom_snapshot_id.in_(source_ids))))
+
+
 def _validate(db, *, external_component_id, order_item_id, product_id):
     compiled = read_compiled_order_bom(db, order_item_id)
     node = next((n for n in compiled.graph.nodes if n.product_id == product_id), None) if compiled else None
@@ -57,7 +77,7 @@ def bind_external_component(db, *, external_component_id, order_item_id, product
             return existing
         if db.scalar(select(OrderBomExternalComponent).where(
                 OrderBomExternalComponent.order_item_id == order_item_id,
-                OrderBomExternalComponent.product_id == product_id)):
+                OrderBomExternalComponent.bom_snapshot_id == snapshot.id)):
             raise BomPlanError('该BOM节点已有外购组件快照，不能重复绑定')
         link = OrderBomExternalComponent(external_component_id=external_component_id,
             order_item_id=order_item_id, product_id=product_id, bom_snapshot_id=snapshot.id)

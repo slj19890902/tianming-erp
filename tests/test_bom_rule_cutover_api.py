@@ -291,3 +291,81 @@ def test_rule_can_introduce_first_real_external_source_and_complete_purchase_flo
         assert received.status_code == 200, received.text
     current = read_compiled_order_bom(db, item.id)
     paper_receipt_flow(client, db, current, item.id, 3479)
+
+
+@pytest.mark.parametrize("remove_external", [False, True])
+def test_existing_external_snapshots_are_retained_but_only_new_revision_is_purchased(factory_http, remove_external, monkeypatch):
+    from app.models.user import User
+    from app.models.order_external_packaging import SalesOrderItemExternalComponent
+    from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
+    from app.services.composite_bom import get_product_bom
+    from app.services.multilevel_bom_external_freeze import freeze_order_procurement
+    from app.services.multilevel_bom_external_identity import current_external_links
+    from app.services.external_packaging_purchase import _order_components, list_external_purchase_routing_rows
+    from tests.test_multilevel_bom_factory_compile import new_item
+    from tests.test_p1_33c5_external_packaging_receiving import _confirm
+    from tests.test_multilevel_bom_external_receipts import receive
+    client, db = factory_http
+    actor = db.scalar(select(User).where(User.role == "admin", User.is_active.is_(True)))
+    rows = [(r["component_product_id"], int(r["quantity_per_set"]), "accompany")
+        for r in get_product_bom(db, 3479)["components"]]
+    purchased = {pid for pid, _, _ in rows if db.get(Product, pid).supply_mode == "external_purchase"}
+    assert purchased
+    save(db, actor, 3479, "manufactured", rows)
+    item = new_item(db, 3479, 2)
+    original = freeze_order_procurement(db, order_item_id=item.id, actor=actor)
+    db.commit()
+    old_ids = {link.external_component_id for link in current_external_links(db, original)}
+    before = db.execute(text("SELECT * FROM sales_order_item_external_components WHERE sales_order_item_id=:id ORDER BY id"), {"id": item.id}).all()
+    changed = [(pid, qty + (pid in purchased), relation) for pid, qty, relation in rows
+        if not (remove_external and pid in purchased)]
+    save(db, actor, 3479, "manufactured", changed)
+    db.commit()
+    url, data, payload = preview(client, item, "replace-old-external")
+    assert set(data["rule_impact"]["retained_external_source_ids"]) == old_ids
+    if not remove_external:
+        from app.services import multilevel_bom_rule_cutover as writer
+        audit = writer.append_audit_event
+        def fail(*args, **kwargs):
+            raise RuntimeError("external revision late audit failure")
+        monkeypatch.setattr(writer, "append_audit_event", fail)
+        with pytest.raises(RuntimeError, match="external revision late audit"):
+            client.post(url + "/execute", json=payload)
+        db.expire_all()
+        assert db.execute(text("SELECT * FROM sales_order_item_external_components WHERE sales_order_item_id=:id ORDER BY id"), {"id": item.id}).all() == before
+        assert db.scalar(select(OrderBomRuleRevision.id).where(OrderBomRuleRevision.order_item_id == item.id)) is None
+        assert {row.id for row in read_compiled_order_bom(db, item.id).snapshots} == {row.id for row in original.snapshots}
+        monkeypatch.setattr(writer, "append_audit_event", audit)
+    result = client.post(url + "/execute", json=payload)
+    assert result.status_code == 200, result.text
+    assert client.post(url + "/execute", json=payload).json() == result.json()
+    db.expire_all()
+    current = read_compiled_order_bom(db, item.id)
+    active_ids = {link.external_component_id for link in current_external_links(db, current)}
+    assert active_ids.isdisjoint(old_ids)
+    after = db.execute(text("SELECT * FROM sales_order_item_external_components WHERE sales_order_item_id=:id ORDER BY id"), {"id": item.id}).all()
+    assert [row for row in after if row.id in old_ids] == before
+    _, routed = _order_components(db, item.order_id)
+    assert {source.id for source in routed} == active_ids
+    detail = client.get(f"/api/orders/{item.order_id}")
+    assert detail.status_code == 200, detail.text
+    assert {source["id"] for source in detail.json()["items"][0]["external_packaging_requirements"]} == active_ids
+    routing = list_external_purchase_routing_rows(db, visible_customer_ids={item.order.customer_id})
+    if remove_external:
+        assert not active_ids
+        assert not [row for row in routing if row["order_item_id"] == item.id]
+    else:
+        assert active_ids
+        _confirm(client, item.order_id)
+        db.expire_all()
+        purchases = list(db.scalars(select(ExternalPackagingPurchaseItem).where(
+            ExternalPackagingPurchaseItem.sales_order_item_id == item.id)))
+        assert {line.order_component_id for line in purchases} == active_ids
+        for line in purchases:
+            received = receive(client, line.purchase_order_id, line.id,
+                f"revised-external-{line.id}", line.purchase_quantity)
+            assert received.status_code == 200, received.text
+    paper_receipt_flow(client, db, current, item.id, 3479)
+    from app.services.order_business_status import build_order_business_statuses
+    state = build_order_business_statuses(db, [item.order])[item.order_id]["items"][item.id]
+    assert state["business_status"] == "pending_delivery", state

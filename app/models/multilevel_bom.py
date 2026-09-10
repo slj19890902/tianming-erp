@@ -180,7 +180,13 @@ class OrderBomExternalComponent(Base):
         ForeignKeyConstraint(["order_item_id", "product_id"],
             ["order_bom_graph_products.order_item_id", "order_bom_graph_products.product_id"],
             ondelete="RESTRICT", name="fk_bom_external_frozen_product"),
-        UniqueConstraint("order_item_id", "product_id", name="uq_bom_external_product"),
+        ForeignKeyConstraint(["bom_snapshot_id", "order_item_id", "product_id"],
+            ["sales_order_item_bom_components.id", "sales_order_item_bom_components.sales_order_item_id",
+             "sales_order_item_bom_components.component_product_id"],
+            ondelete="RESTRICT", name="fk_bom_external_source_identity"),
+        ForeignKeyConstraint(["external_component_id", "order_item_id"],
+            ["sales_order_item_external_components.id", "sales_order_item_external_components.sales_order_item_id"],
+            ondelete="RESTRICT", name="fk_bom_external_procurement_owner"),
     )
     external_component_id: Mapped[int] = mapped_column(
         ForeignKey("sales_order_item_external_components.id", ondelete="RESTRICT"), primary_key=True)

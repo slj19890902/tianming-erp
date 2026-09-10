@@ -1,9 +1,9 @@
 """Explicit administrator replacement of an unstarted frozen graph.
 
-Orders with execution/procurement facts require the separate source handoff.
+Orders with execution or placed procurement require the separate source handoff.
 This writer appends immutable versions and never modifies inventory balances.
 """
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import hashlib
 import json
 from decimal import Decimal
@@ -15,7 +15,7 @@ from app.models.product import Product
 from app.models.user import User
 from app.models.multilevel_bom import (
     OrderBomGraphProduct, OrderBomRuleRevision, OrderBomRuleProduct, OrderBomRuleSource,
-    OrderBomExecutionCutover, BomAssembly,
+    OrderBomExecutionCutover, BomAssembly, OrderBomExternalComponent,
 )
 from app.models.product_bom import SalesOrderItemBomComponent, RequisitionItemBomSource, SalesOrderItemBomDemandAdjustment
 from app.models.requisition import RequisitionItem
@@ -51,13 +51,30 @@ def _qualified_review(db, order_item_id, customer_id):
         (BomAssembly, BomAssembly.order_item_id == item.id, "组装"),
         (DeliveryItem, DeliveryItem.order_item_id == item.id, "送货单"),
         (ExternalPackagingPurchaseItem, ExternalPackagingPurchaseItem.sales_order_item_id == item.id, "外购采购"),
-        (SalesOrderItemExternalComponent, SalesOrderItemExternalComponent.sales_order_item_id == item.id, "外购冻结来源"),
     )
     for model, condition, label in checks:
         identifier = db.scalar(select(model.id).where(condition).order_by(model.id).limit(1))
         if identifier is not None:
             raise BomPlanError(f"订单已有{label}#{identifier}，须保留并交接原来源；不能按无执行来源订单切换")
-    return review
+    from app.services.multilevel_bom_external_identity import current_external_links, read_external_node
+    sources = list(db.scalars(select(SalesOrderItemExternalComponent).where(
+        SalesOrderItemExternalComponent.sales_order_item_id == item.id).order_by(SalesOrderItemExternalComponent.id)))
+    links = list(db.scalars(select(OrderBomExternalComponent).where(OrderBomExternalComponent.order_item_id == item.id)))
+    if {source.id for source in sources} != {link.external_component_id for link in links}:
+        raise BomPlanError("旧外购冻结来源缺少真实BOM关联，须先核实来源身份")
+    active = current_external_links(db, review.previous)
+    if {link.product_id for link in active} != {node.product_id for node in review.previous.graph.nodes if node.source == "purchased"}:
+        raise BomPlanError("旧版本外购来源不完整，不能用主档推测补写")
+    for link in active:
+        read_external_node(db, link.external_component_id)
+    def values(row):
+        return {column.name: getattr(row, column.name) for column in row.__table__.columns}
+    external = [dict(source=values(source), candidates=[values(candidate) for candidate in sorted(
+        source.candidates, key=lambda candidate: candidate.id)]) for source in sources]
+    document = json.dumps(dict(rule_review=review.document, external_sources=external),
+        sort_keys=True, ensure_ascii=False, default=str)
+    return replace(review, document=document, checksum=hashlib.sha256(document.encode()).hexdigest(),
+        impact={**review.impact, "retained_external_source_ids": [source.id for source in sources]})
 
 
 def rule_cutover_preview(db, *, order_item_id, customer_id):
@@ -80,7 +97,7 @@ def rule_cutover_preview(db, *, order_item_id, customer_id):
     if any(node.source == "purchased" for node in nodes.values()):
         missing.append("新外购来源须经正常采购确认，本表不计未确认外购金额")
     plan = plan_bom(compiled.graph, quantity)
-    return dict(scope="未发生执行及采购来源的真实BOM订单显式切换", ready=True,
+    return dict(scope="未发生执行或采购的真实BOM订单显式切换；旧外购冻结来源保留", ready=True,
         order_item_id=order_item_id, quantity=quantity, execution_quantity=quantity, delivered_quantity=0,
         rule_revision=previous.revision if previous else 0,
         reviewed_hash=review.checksum, preview_hash=review.checksum, target_locations={}, source_lot_versions={},
@@ -100,7 +117,7 @@ def rule_cutover_preview(db, *, order_item_id, customer_id):
             components=estimates, missing_items=list(dict.fromkeys(missing)),
             scope="当前纸板材料报价估算，非实际成本；不含加工、损耗及未确认外购。不改变原预计成本快照"),
         material_impact="后续按新版本及开料换算报料；旧来源完整保留",
-        procurement_impact="没有旧采购或外购冻结来源；新外购节点另经正常采购确认",
+        procurement_impact="没有旧采购执行；保留旧外购冻结来源，新版本另建来源并经正常采购确认",
         inventory_impact="不生成、不消耗库存，不创建或释放预占",
         cost_impact="保留原预计成本快照；无实际执行成本转移，不把估算作为实际成本",
         picking_impact="后续按新版本库存和交货规则拿货",
@@ -187,6 +204,7 @@ def execute_rule_cutover(db, *, order_item_id, customer_id, reviewed_hash, expec
                 review_hash=reviewed_hash, content_hash=checksum, request_hash=request_hash, operation_key=operation_key,
                 previous_delivery_mode=previous_delivery, delivery_mode=item.composite_fulfillment_mode_snapshot,
                 previous_source_ids=[source.id for source in review.previous.snapshots],
+                retained_external_source_ids=review.impact["retained_external_source_ids"],
                 current_source_ids=[source.id for source in review.proposed.snapshots]))
         db.flush()
         return _result(row)

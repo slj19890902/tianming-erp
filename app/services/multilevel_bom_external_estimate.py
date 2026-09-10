@@ -9,13 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.models.external_packaging_price import ExternalPackagingPriceVersion
-from app.models.multilevel_bom import OrderBomExternalComponent
 from app.models.order_external_packaging import SalesOrderItemExternalComponent
 from app.models.supplier import ExternalPackagingProduct
 from app.services.external_packaging_purchase import (
     ExternalPurchaseContractError, _amounts, _candidate_preview, _resolved_purchase_pricing,
 )
-from app.services.multilevel_bom_external_identity import read_external_node
+from app.services.multilevel_bom_external_identity import read_external_node, current_external_links, current_external_component_predicate
 from app.services.multilevel_bom_orders import read_compiled_order_bom
 from app.services.multilevel_bom_plan import BomPlanError, plan_bom
 from app.services.multilevel_bom_purchase_units import purchase_quantity_for_stock
@@ -29,10 +28,10 @@ def estimate_graph_external_materials(db, item, *, as_of):
     result, missing = [], []
     if not nodes:
         return {"components": result, "missing_items": missing}
-    links = {link.product_id: link for link in db.scalars(select(OrderBomExternalComponent).where(
-        OrderBomExternalComponent.order_item_id == item.id))}
+    links = {link.product_id: link for link in current_external_links(db, compiled)}
     components = {row.id: row for row in db.scalars(select(SalesOrderItemExternalComponent).where(
-        SalesOrderItemExternalComponent.sales_order_item_id == item.id).options(
+        SalesOrderItemExternalComponent.sales_order_item_id == item.id,
+        current_external_component_predicate()).options(
         selectinload(SalesOrderItemExternalComponent.candidates)))}
     if set(links) - set(nodes) or set(components) - {link.external_component_id for link in links.values()}:
         raise BomPlanError("外购成本含未关联的BOM来源")

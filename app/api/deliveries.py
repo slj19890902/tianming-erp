@@ -50,6 +50,7 @@ from app.models.external_packaging_purchase import (
 )
 from app.models.order import Order, OrderItem
 from app.models.order_external_packaging import SalesOrderItemExternalComponent
+from app.services.multilevel_bom_external_identity import current_external_component_predicate
 from app.models.product import Product
 from app.models.product_bom import (
     BomComponentDirectDeliveryAllocation,
@@ -459,6 +460,7 @@ def _external_packaging_received(db: Session, order_item_id: int) -> bool:
                 SalesOrderItemExternalComponent.sales_order_item_id
                 == order_item_id,
                 SalesOrderItemExternalComponent.is_required.is_(True),
+                current_external_component_predicate(),
             )
         ).all()
     }
@@ -519,6 +521,7 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
                 SalesOrderItemExternalComponent.sales_order_item_id
                 == order_item.id,
                 SalesOrderItemExternalComponent.is_required.is_(True),
+                current_external_component_predicate(),
             )
             .limit(1)
         )
@@ -2207,6 +2210,7 @@ def _pending_query(
         .where(
             SalesOrderItemExternalComponent.sales_order_item_id == OrderItem.id,
             SalesOrderItemExternalComponent.is_required.is_(True),
+            current_external_component_predicate(),
         )
         .correlate(OrderItem)
         .scalar_subquery()
@@ -2233,6 +2237,7 @@ def _pending_query(
             ExternalPackagingPurchaseOrder.status == "confirmed",
             ExternalPackagingPurchaseCancellation.id.is_(None),
             SalesOrderItemExternalComponent.is_required.is_(True),
+            current_external_component_predicate(),
             ExternalPackagingPurchaseItem.purchase_quantity
             <= select(
                 func.coalesce(
@@ -6806,6 +6811,7 @@ def _collect_delivery_lines(
                     SalesOrderItemExternalComponent.sales_order_item_id
                     == order_item.id,
                     SalesOrderItemExternalComponent.is_required.is_(True),
+                    current_external_component_predicate(),
                 )
                 .limit(1)
             )
@@ -7796,6 +7802,7 @@ class _PendingDeliveryReadContext:
                         item_ids
                     ),
                     SalesOrderItemExternalComponent.is_required.is_(True),
+                    current_external_component_predicate(),
                 )
                 .distinct()
             ).all()

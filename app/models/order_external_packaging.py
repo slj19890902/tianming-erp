@@ -27,6 +27,7 @@ class SalesOrderItemExternalComponent(Base):
 
     __tablename__ = "sales_order_item_external_components"
     __table_args__ = (
+        Index("uq_external_component_order_identity", "id", "sales_order_item_id", unique=True),
         UniqueConstraint(
             "sales_order_item_id",
             "source_component_id",

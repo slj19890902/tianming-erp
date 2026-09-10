@@ -81,8 +81,8 @@ def test_v327_rule_migration_roundtrip_preserves_original_facts(factory_copy, mo
         triggers = dict(before.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))
     db.rollback()
     config = _config(monkeypatch, target)
-    assert ScriptDirectory.from_config(config).get_heads() == ["si21v8x9z83"]
-    for destination in ("sh20v8x9z82", "si21v8x9z83"):
+    assert ScriptDirectory.from_config(config).get_heads() == ["sj22v8x9z84"]
+    for destination in ("sh20v8x9z82", "sj22v8x9z84"):
         if destination == "sh20v8x9z82":
             command.downgrade(config, destination)
         else:

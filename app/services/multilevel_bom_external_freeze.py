@@ -7,7 +7,7 @@ import json
 from fractions import Fraction
 from types import SimpleNamespace
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.models.multilevel_bom import OrderBomExternalComponent
 from app.models.order import OrderItem
@@ -16,7 +16,7 @@ from app.models.order_external_packaging import SalesOrderItemExternalComponent
 from app.services.bom_transactions import atomic_bom
 from app.services.multilevel_bom_orders import freeze_master_order_bom
 from app.services.multilevel_bom_plan import BomPlanError, plan_bom
-from app.services.multilevel_bom_external_identity import bind_external_component, read_external_node, legacy_multiplier
+from app.services.multilevel_bom_external_identity import bind_external_component, read_external_node, legacy_multiplier, current_external_links
 from app.services.order_external_packaging import _freeze_direct_product_component, OrderExternalPackagingSnapshotError
 
 
@@ -25,7 +25,7 @@ def freeze_order_procurement(db, *, order_item_id, actor, root_order_snapshot=Fa
         compiled = freeze_master_order_bom(db, order_item_id=order_item_id, actor=actor,
                                          root_order_snapshot=root_order_snapshot)
         nodes = [n for n in compiled.graph.nodes if n.source == 'purchased']
-        existing = list(db.scalars(select(OrderBomExternalComponent).where(OrderBomExternalComponent.order_item_id == order_item_id)))
+        existing = current_external_links(db, compiled)
         if existing:
             if {e.product_id for e in existing} != {n.product_id for n in nodes}:
                 raise BomPlanError('订单外购节点快照不完整，禁止用当前主档补写')
@@ -34,11 +34,17 @@ def freeze_order_procurement(db, *, order_item_id, actor, root_order_snapshot=Fa
             return compiled
         if not nodes:
             return compiled
-        if db.scalar(select(SalesOrderItemExternalComponent.id).where(SalesOrderItemExternalComponent.sales_order_item_id == order_item_id).limit(1)):
+        known = select(OrderBomExternalComponent.external_component_id).where(
+            OrderBomExternalComponent.order_item_id == order_item_id)
+        if db.scalar(select(SalesOrderItemExternalComponent.id).where(
+                SalesOrderItemExternalComponent.sales_order_item_id == order_item_id,
+                ~SalesOrderItemExternalComponent.id.in_(known)).limit(1)):
             raise BomPlanError('已有未关联的外购快照，必须先审计转换')
         item = db.get(OrderItem, order_item_id)
         gross = {p.product_id:p.required_units for p in plan_bom(compiled.graph, 1).products}
-        for position, node in enumerate(sorted(nodes, key=lambda n:n.product_id), 1):
+        offset = db.scalar(select(func.max(SalesOrderItemExternalComponent.display_order)).where(
+            SalesOrderItemExternalComponent.sales_order_item_id == order_item_id)) or 0
+        for position, node in enumerate(sorted(nodes, key=lambda n:n.product_id), offset + 1):
             product = db.get(Product, node.product_id)
             units = node.purchase_units
             if (units is None or product is None or product.version != node.version

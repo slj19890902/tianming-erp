@@ -69,16 +69,16 @@ def test_factory_copy_upgrade_roundtrip_preserves_every_original_fact(factory_co
         triggers = dict(before.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))
     db.rollback()
     config = _config(monkeypatch, target)
-    assert ScriptDirectory.from_config(config).get_heads() == ["si21v8x9z83"]
-    for destination in ("sf18v8x9z80", "se17v8x9z79", "si21v8x9z83"):
-        if destination != "si21v8x9z83":
+    assert ScriptDirectory.from_config(config).get_heads() == ["sj22v8x9z84"]
+    for destination in ("sf18v8x9z80", "se17v8x9z79", "sj22v8x9z84"):
+        if destination != "sj22v8x9z84":
             command.downgrade(config, destination)
         else:
             command.upgrade(config, destination)
         with sqlite3.connect(target) as after:
             assert after.execute("PRAGMA integrity_check").fetchone() == ("ok",)
             assert after.execute("PRAGMA foreign_key_check").fetchall() == []
-            expected_heads = {destination} if destination == "si21v8x9z83" else {destination, "rt10v8x9z67"}
+            expected_heads = {destination} if destination == "sj22v8x9z84" else {destination, "rt10v8x9z67"}
             assert {r[0] for r in after.execute("SELECT version_num FROM alembic_version")} == expected_heads
             assert original_facts(after, columns) == expected
             actual = dict(after.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))

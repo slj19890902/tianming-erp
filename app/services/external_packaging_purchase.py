@@ -85,6 +85,7 @@ def _decimal_text(value: Decimal | None) -> str | None:
 def _order_components(
     db: Session, order_id: int, *, lock_order: bool = False
 ) -> tuple[Order | None, list[SalesOrderItemExternalComponent]]:
+    from app.services.multilevel_bom_external_identity import current_external_component_predicate
     order_query = select(Order).where(Order.id == order_id)
     if lock_order:
         order_query = order_query.with_for_update(of=Order)
@@ -102,7 +103,7 @@ def _order_components(
             .options(
                 selectinload(SalesOrderItemExternalComponent.candidates)
             )
-            .where(OrderItem.order_id == order.id)
+            .where(OrderItem.order_id == order.id, current_external_component_predicate())
             .order_by(
                 OrderItem.item_sequence,
                 OrderItem.id,
@@ -1110,6 +1111,7 @@ def list_external_purchase_routing_rows(
     *,
     visible_customer_ids: set[int] | None,
 ) -> list[dict[str, Any]]:
+    from app.services.multilevel_bom_external_identity import current_external_component_predicate
     if visible_customer_ids is not None and not visible_customer_ids:
         return []
     statement = (
@@ -1139,6 +1141,7 @@ def list_external_purchase_routing_rows(
         .where(
             Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
             OrderItem.is_force_closed.is_(False),
+            current_external_component_predicate(),
             OrderItem.delivered_quantity < OrderItem.quantity,
             ~select(ExternalPackagingPurchaseOrder.id)
             .join(

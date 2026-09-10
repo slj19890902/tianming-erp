@@ -32,6 +32,17 @@ def factory_copy(tmp_path, monkeypatch):
     if path.name != "order-graph-source-isolated.sqlite3" or "tm-uat" not in path.parts:
         pytest.fail("only the prepared isolated source is allowed")
     before = hashlib.sha256(path.read_bytes()).hexdigest()
+    # Real-copy stock tests must use the map paired with that export, rather
+    # than silently falling back to the older map tracked in the repository.
+    published_map = path.with_name("twin_layout_v1.json")
+    if not published_map.is_file():
+        pytest.fail("paired published twin_layout_v1.json is required beside the isolated source")
+    map_before = hashlib.sha256(published_map.read_bytes()).hexdigest()
+    map_target = tmp_path / "published-layout.json"
+    shutil.copy2(published_map, map_target)
+    from app.services import warehouse_twin_layout
+    monkeypatch.setattr(warehouse_twin_layout, "TWIN_LAYOUT_RUNTIME_PATH", map_target)
+    monkeypatch.setenv("ERP_TWIN_LAYOUT_RUNTIME_PATH", str(map_target))
     target = tmp_path / "multilevel-factory-test.sqlite3"
     with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as src, sqlite3.connect(target) as dest:
         src.backup(dest)
@@ -51,6 +62,7 @@ def factory_copy(tmp_path, monkeypatch):
         assert db.execute(text("PRAGMA foreign_key_check")).all() == []
     engine.dispose()
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+    assert hashlib.sha256(published_map.read_bytes()).hexdigest() == map_before
 
 
 def new_item(db, pid, qty):

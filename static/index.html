@@ -8037,6 +8037,30 @@
                 </template>
               </template>
             </div>
+            <div v-else-if="modal.type === 'bomCutover' && bomCutover">
+              <p class="muted">仅支持全预占子件转组装父件。采购、本体、配套及未完成采购交接不支持；已完成和已送历史保持冻结。</p>
+              <div v-if="bomCutover.loading" role="status">正在核对…</div>
+              <div v-if="bomCutover.error" class="status orange" role="alert">{{ bomCutover.error }}</div>
+              <template v-if="bomCutover.review">
+                <p>订单 {{ bomCutover.review.quantity }} · 已送 {{ bomCutover.review.delivered_quantity }} · 本次剩余 <strong>{{ bomCutover.review.execution_quantity }} 套</strong></p>
+                <p>{{ bomCutover.review.inventory_impact }}</p>
+                <p>{{ bomCutover.review.material_impact }}</p>
+                <table><thead><tr><th>子件</th><th>释放预占 / 批次</th><th>数量</th></tr></thead><tbody><tr v-for="r in bomCutover.review.release_reservations" :key="r.id"><td>{{ r.name }}</td><td>{{ r.id }} / {{ r.lot_id }}</td><td>{{ r.quantity }} {{ r.unit }}</td></tr></tbody></table>
+                <div v-for="output in bomCutover.review.outputs" :key="output.product_id" style="margin-top:8px">
+                  <div class="muted">消耗：<span v-for="(part,index) in output.consumed" :key="index">{{ index ? '、' : '' }}{{ part.name }} {{ part.quantity }} {{ part.unit }}</span></div>
+                  <label :for="'cutover-location-'+output.product_id">{{ output.name }} · 组装 {{ output.quantity }} 套 · 目标货位</label>
+                  <select :id="'cutover-location-'+output.product_id" v-model.number="bomCutover.targets[output.product_id]" :disabled="bomCutover.loading || !!bomCutover.pending" @change="bomCutover.confirmed=false" style="max-width:100%;width:100%">
+                    <option :value="0">请选择已发布正式货位</option>
+                    <option v-for="loc in bomCutover.locations" :key="loc.id" :value="loc.id">{{ loc.employee_location_name || loc.current_address_name || loc.location_name }} · ID {{ loc.id }}</option>
+                  </select>
+                </div>
+                <p class="muted">必须先预览所选货位的影响；执行会记录审计。不会重新收料或重复入库。</p>
+                <div class="toolbar-group" style="margin-top:8px">
+                  <button class="btn" type="button" :disabled="bomCutover.loading || !!bomCutover.pending" @click="previewReservedKitCutover">核对所选货位</button>
+                  <button class="btn primary" type="button" :disabled="bomCutover.loading || (!bomCutover.confirmed && !bomCutover.pending)" @click="executeReservedKitCutover">{{ bomCutover.pending ? '重试同一操作' : '确认转换剩余套数' }}</button>
+                </div>
+              </template>
+            </div>
             <div v-else-if="modal.type === 'orderDetail' && orderDetail">
               <p id="erp-order-detail-description" class="muted" style="margin:0 0 12px">只读查看订单事实；按 Esc 可关闭，Tab 只在本对话框内移动。</p>
               <div class="form-grid">
@@ -8060,7 +8084,7 @@
               </tr></thead>
               <tbody><tr v-for="item in orderDetail.items" :key="item.id">
                 <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}<div style="margin-top:4px"><status-tag :value="itemBusinessStatusKey(item)"></status-tag></div><div v-if="item.requisition_hold?.status === 'active'" class="status orange" style="margin-top:4px">{{ item.requisition_hold.label || '等候中' }}</div><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
-                <td>{{ item.snapshot_product_code }}</td>
+                <td>{{ item.snapshot_product_code }}<div v-if="canAdmin && hasBomComponents(item) && Number(item.quantity)>Number(item.business_delivered_quantity || item.delivered_quantity || 0)"><button class="btn small" type="button" @click="openReservedKitCutover(orderDetail,item)">全预占子件转组装</button></div></td>
                 <td :title="item.snapshot_product_name" style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:normal">
                   {{ item.snapshot_product_name }}
                   <div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div>
@@ -9963,6 +9987,7 @@
             costPanelTab:"gaps",
             costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
+            bomCutover:null,
             orderDetail:null, orderCustomerCharges:[], customerChargeForm:{visible:false,id:null,version:null,charge_type:"mold",display_name:"",quantity:1,unit:"项",unit_price:"",amount:"",price_tax_mode:"",tax_rate:"",tax_project_name:"",tax_classification_code:"",note:"",saving:false}, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             externalPurchase:{loading:false,saving:false,cancelSaving:false,refreshingCandidates:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,history:[],cancelReason:"采购内容或数量需要重新核对",idempotencyKey:""},
             externalPurchaseView:"pending", externalPurchaseRouting:[], externalPurchaseRoutingLoading:false, externalPurchaseRoutingError:"", externalPurchaseRoutingFilter:"", externalPurchaseRoutingLoaded:false,
@@ -31586,6 +31611,55 @@
               await this.loadOrderCustomerCharges();
               return true;
             } catch(error) { this.showToast(this.errorMessage(error), true); return false; }
+          },
+          async openReservedKitCutover(order,item) {
+            const opener=this.rememberModalOpener();
+            this.bomCutover = {orderId:order.id,itemId:item.id,loading:true,error:"",review:null,locations:[],targets:{},confirmed:false,pending:null};
+            const state=this.bomCutover;
+            this.modal={type:"bomCutover",title:"全预占子件转组装"};
+            this.focusAccessibleModal(opener);
+            try {
+              const [review,locations]=await Promise.all([
+                axios.post(`/api/orders/items/${item.id}/reserved-kit-cutover/preview`,{}),
+                axios.get("/api/warehouse/locations")]);
+              if(this.bomCutover!==state)return;
+              state.review=review.data;
+              state.locations=(locations.data.items || []).filter(x=>x.is_active && x.placement_status==='placed' && x.position_status==='mapped' && ['finished','shared'].includes(x.warehouse_type));
+              state.targets=Object.fromEntries(state.review.outputs.map(x=>[x.product_id,0]));
+            } catch(error) {if(this.bomCutover===state)state.error=this.errorMessage(error);}
+            finally {state.loading=false;}
+          },
+          async previewReservedKitCutover() {
+            const state=this.bomCutover;
+            if(!state || state.loading || state.pending)return;
+            state.confirmed=false;state.error="";
+            if(Object.values(state.targets).some(x=>!Number.isInteger(x)||x<=0)) {state.error="请为每个组装产品选择正式货位";return;}
+            state.loading=true;
+            try {
+              const {data}=await axios.post(`/api/orders/items/${state.itemId}/reserved-kit-cutover/preview`,{target_locations:state.targets});
+              if(this.bomCutover!==state)return;
+              state.review=data;state.confirmed=data.ready;
+            } catch(error) {if(this.bomCutover===state)state.error=this.errorMessage(error);}
+            finally {state.loading=false;}
+          },
+          async executeReservedKitCutover() {
+            const state=this.bomCutover;
+            if(!state || state.loading || (!state.confirmed && !state.pending))return;
+            if(!state.pending) {
+              const r=state.review;
+              state.pending=JSON.parse(JSON.stringify({target_locations:r.target_locations,reviewed_hash:r.reviewed_hash,
+                preview_hash:r.preview_hash,source_lot_versions:r.source_lot_versions,operation_key:crypto.randomUUID()}));
+            }
+            state.loading=true;state.error="";
+            try {
+              await axios.post(`/api/orders/items/${state.itemId}/reserved-kit-cutover/execute`,state.pending);
+              state.pending=null;state.confirmed=false;
+              this.showToast("剩余套数组装转换已完成，已记录审计");
+              if(this.bomCutover===state && this.modal.type==='bomCutover')await this.openOrderDetail({id:state.orderId});
+            } catch(error) {
+              if(error.response && error.response.status<500) {state.pending=null;state.confirmed=false;}
+              state.error=error.response && error.response.status<500 ? this.errorMessage(error) : "结果暂不确定，请重试同一操作；不要另建转换。";
+            } finally {state.loading=false;}
           },
           async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {
             const requestKey = "orders:read-detail-modal";

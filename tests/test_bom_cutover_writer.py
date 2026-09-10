@@ -19,9 +19,9 @@ def request(db):
     review = review_legacy_cutover(db, order_item_id=10050, customer_id=136)
     return dict(order_item_id=10050, customer_id=136, reviewed_hash=review.checksum,
         source_lot_versions={lid: db.get(InventoryLot, lid).version for lid in [365, 366]},
-        # Disposable copy only: a known valid map slot, NOT a statement of
-        # 00205's factory location. Formal conversion needs the user's target.
-        target_locations={3799: 1890}, operation_key="isolated-00205-conversion",
+        # Owner-confirmed target, verified against the published-map handoff.
+        # This request only runs against factory_copy, never formal inventory.
+        target_locations={3799: 1203}, operation_key="isolated-00205-conversion",
         actor=db.scalar(select(User).where(User.role == "admin", User.is_active.is_(True))))
 
 
@@ -39,7 +39,7 @@ def test_actual_00205_conversion_and_replay_preserve_history(factory_copy):
     output = db.get(InventoryLot, result["output_lot_ids"][0])
     assert output.finished_detail.product_id == 3799
     assert (output.quantity_available, output.quantity_reserved) == (0, 300)
-    assert output.warehouse_location_id == 1890
+    assert output.warehouse_location_id == 1203
     assembly = db.get(BomAssembly, result["assembly_ids"][0])
     assert json.loads(assembly.cost_detail_json)["actual"] is False
     assert db.execute(text("SELECT * FROM sales_order_item_bom_components WHERE id IN (2,3) ORDER BY id")).all() == old_sources
@@ -110,7 +110,7 @@ def test_conversion_late_failure_restores_all_old_facts(factory_copy, monkeypatc
         convert_reserved_legacy_order(db, **payload)
         db.rollback()
     assert facts(db) == before
-    payload["target_locations"] = {3799: 1890}
+    payload["target_locations"] = {3799: 1203}
     assert convert_reserved_legacy_order(db, **payload)["execution_quantity"] == 300
     db.commit()
 

@@ -1,6 +1,6 @@
 """Controlled conversion of fully reserved legacy component stock to real kits.
 
-No public endpoint. A reviewed release job owns the outer commit. Orders with
+The administrator endpoint owns the outer commit. Orders with
 unfinished procurement, loose/unassigned stock or ambiguous parent reservations
 need their own reviewed handoff; this adapter does not guess those facts.
 """
@@ -35,6 +35,58 @@ def _result(db, item_id, key):
         raise BomPlanError("转换组装流水不完整或已撤销")
     return {"order_item_id": item_id, "execution_quantity": compiled.execution_window.execution_quantity,
             "assembly_ids": [row.id for row in assemblies], "output_lot_ids": [row.output_lot_id for row in assemblies if row.output_lot_id]}
+
+
+def prepare_reserved_cutover(db, *, review, customer_id, source_lot_versions, target_locations):
+    """Read-only eligibility checks shared by the preview and locked writer."""
+    item = db.get(OrderItem, json.loads(review.document)["item"]["id"])
+    graph = review.compiled.graph
+    nodes, children, _ = graph.validated()
+    picking = dict(plan_bom(graph, item.quantity - (item.delivered_quantity or 0)).picking)
+    assembled = {pid for pid, node in nodes.items() if node.source == "assembled"}
+    if (nodes[graph.root_id].source != "assembled" or set(picking) != {graph.root_id}
+            or set(target_locations) != assembled
+            or any(node.source == "purchased" or (node.source == "manufactured" and children[pid]) for pid, node in nodes.items())):
+        raise BomPlanError("该旧订单还需要本体、配套或采购来源交接，不能直接按全预占原片转换")
+    manifest = json.loads(review.document)
+    if any(row["document"]["status"] not in {"dispatched", "voided"} for row in manifest["deliveries"]):
+        raise BomPlanError("旧订单仍有待送货单，须先处理后再转换")
+    history_ids = {row.id for row in review.history}
+    reservations = list(db.scalars(select(InventoryReservation).where(InventoryReservation.order_item_id == item.id)))
+    tasks = {row["id"]: row for row in manifest["tasks"]}
+    if (any(r.reservation_type == "finished_order" and r.sales_order_item_bom_component_id is None for r in reservations)
+            or any(row["status"] == "posted" and tasks[row["task_id"]]["sales_order_item_bom_component_id"] is None
+                   for row in manifest["completions"])):
+        raise BomPlanError("旧父件成品来源未绑定组件快照，须先明确历史交接归属")
+    active = [r for r in reservations if r.reserved_stock_quantity > r.consumed_stock_quantity + r.released_stock_quantity]
+    if not active or any(r.reservation_type != "finished_order" or r.sales_order_item_bom_component_id not in history_ids
+            or r.status not in {"active", "partial"} or r.yield_factor != 1
+            or r.credited_requirement_quantity != r.reserved_stock_quantity
+            or r.consumed_requirement_quantity != r.consumed_stock_quantity
+            or r.released_requirement_quantity != r.released_stock_quantity for r in active):
+        raise BomPlanError("旧预占不完整或不是一对一原片，须独立核对")
+    if {r.inventory_lot_id for r in active} != set(source_lot_versions):
+        raise BomPlanError("必须完整指定该订单所有剩余原片预占")
+    eligible = defaultdict(int)
+    lots = {}
+    for lid, version in source_lot_versions.items():
+        lot = db.get(InventoryLot, lid)
+        if (lot is None or lot.version != version or lot.status != "active" or lot.inventory_type != "finished"
+                or lot.quantity_available != 0 or lot.finished_detail is None
+                or lot.finished_detail.is_general or lot.finished_detail.owner_customer_id != customer_id):
+            raise BomPlanError("原片版本、客户或可用余额与全预占转换不一致")
+        quantity = sum(r.reserved_stock_quantity - r.consumed_stock_quantity - r.released_stock_quantity for r in active if r.inventory_lot_id == lid)
+        if quantity > lot.quantity_reserved:
+            raise BomPlanError("原片预占余额不足")
+        eligible[lot.finished_detail.product_id] += quantity
+        lots[lid] = lot
+    remaining = item.quantity - (item.delivered_quantity or 0)
+    planned = plan_assembly(graph, remaining, eligible_stock=eligible)
+    if next((s.produced_units for s in planned.steps if s.product_id == graph.root_id), 0) != remaining:
+        raise BomPlanError("原片不足以覆盖全部剩余套数，不能自动完成转换")
+    if any(quantity for pid, quantity in planned.remaining_stock if pid != graph.root_id):
+        raise BomPlanError("存在多余原片，须先明确保留或损耗，不能自动处置")
+    return item, graph, picking, active, lots, remaining, planned
 
 
 def convert_reserved_legacy_order(db, *, order_item_id, customer_id, reviewed_hash,
@@ -76,52 +128,9 @@ def convert_reserved_legacy_order(db, *, order_item_id, customer_id, reviewed_ha
             raise BomPlanError("转换核对内容已变化，请重新核对")
         item = db.get(OrderItem, order_item_id)
         order = db.get(Order, item.order_id)
-        graph = review.compiled.graph
-        nodes, children, _ = graph.validated()
-        picking = dict(plan_bom(graph, item.quantity - (item.delivered_quantity or 0)).picking)
-        assembled = {pid for pid, node in nodes.items() if node.source == "assembled"}
-        if (nodes[graph.root_id].source != "assembled" or set(picking) != {graph.root_id}
-                or set(target_locations) != assembled
-                or any(node.source == "purchased" or (node.source == "manufactured" and children[pid]) for pid, node in nodes.items())):
-            raise BomPlanError("该旧订单还需要本体、配套或采购来源交接，不能直接按全预占原片转换")
-        manifest = json.loads(review.document)
-        if any(row["document"]["status"] not in {"dispatched", "voided"} for row in manifest["deliveries"]):
-            raise BomPlanError("旧订单仍有待送货单，须先处理后再转换")
-        history_ids = {row.id for row in review.history}
-        reservations = list(db.scalars(select(InventoryReservation).where(InventoryReservation.order_item_id == item.id)))
-        tasks = {row["id"]: row for row in manifest["tasks"]}
-        if (any(r.reservation_type == "finished_order" and r.sales_order_item_bom_component_id is None for r in reservations)
-                or any(row["status"] == "posted" and tasks[row["task_id"]]["sales_order_item_bom_component_id"] is None
-                       for row in manifest["completions"])):
-            raise BomPlanError("旧父件成品来源未绑定组件快照，须先明确历史交接归属")
-        active = [r for r in reservations if r.reserved_stock_quantity > r.consumed_stock_quantity + r.released_stock_quantity]
-        if not active or any(r.reservation_type != "finished_order" or r.sales_order_item_bom_component_id not in history_ids
-                or r.status not in {"active", "partial"} or r.yield_factor != 1
-                or r.credited_requirement_quantity != r.reserved_stock_quantity
-                or r.consumed_requirement_quantity != r.consumed_stock_quantity
-                or r.released_requirement_quantity != r.released_stock_quantity for r in active):
-            raise BomPlanError("旧预占不完整或不是一对一原片，须独立核对")
-        if {r.inventory_lot_id for r in active} != set(source_lot_versions):
-            raise BomPlanError("必须完整指定该订单所有剩余原片预占")
-        eligible = defaultdict(int)
-        lots = {}
-        for lid, version in source_lot_versions.items():
-            lot = db.get(InventoryLot, lid)
-            if (lot is None or lot.version != version or lot.status != "active" or lot.inventory_type != "finished"
-                    or lot.quantity_available != 0 or lot.finished_detail is None
-                    or lot.finished_detail.is_general or lot.finished_detail.owner_customer_id != customer_id):
-                raise BomPlanError("原片版本、客户或可用余额与全预占转换不一致")
-            quantity = sum(r.reserved_stock_quantity - r.consumed_stock_quantity - r.released_stock_quantity for r in active if r.inventory_lot_id == lid)
-            if quantity > lot.quantity_reserved:
-                raise BomPlanError("原片预占余额不足")
-            eligible[lot.finished_detail.product_id] += quantity
-            lots[lid] = lot
-        remaining = item.quantity - (item.delivered_quantity or 0)
-        planned = plan_assembly(graph, remaining, eligible_stock=eligible)
-        if next((s.produced_units for s in planned.steps if s.product_id == graph.root_id), 0) != remaining:
-            raise BomPlanError("原片不足以覆盖全部剩余套数，不能自动完成转换")
-        if any(quantity for pid, quantity in planned.remaining_stock if pid != graph.root_id):
-            raise BomPlanError("存在多余原片，须先明确保留或损耗，不能自动处置")
+        item, graph, picking, active, lots, remaining, planned = prepare_reserved_cutover(
+            db, review=review, customer_id=customer_id,
+            source_lot_versions=source_lot_versions, target_locations=target_locations)
         for node in graph.nodes:
             changed = db.execute(update(Product).where(Product.id == node.product_id, Product.version == node.version,
                 Product.customer_id == customer_id, Product.is_active.is_(True), Product.deleted_at.is_(None), Product.purged_at.is_(None))
@@ -184,6 +193,9 @@ def convert_reserved_legacy_order(db, *, order_item_id, customer_id, reviewed_ha
             action_code="convert_legacy_bom_execution", resource="order_bom_execution_cutover", actor=actor,
             entity_type="order_item", entity_id=item.id, customer_id=customer_id,
             details={"review_hash": reviewed_hash, "request_hash": request_hash, "basis_hash": checksum,
+                     "operation_key": operation_key, "target_locations": target_locations,
+                     "source_lot_versions": source_lot_versions, "execution_quantity": remaining,
+                     "delivered_before": item.delivered_quantity or 0,
                      "old_reservation_ids": [r.id for r in active], "assembly_ids": [r.id for r in results]})
         db.flush()
         return _result(db, item.id, operation_key)

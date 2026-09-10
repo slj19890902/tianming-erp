@@ -1,0 +1,122 @@
+"""Explicit, narrow administrator handoff of fully reserved legacy parts."""
+import hashlib
+import json
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
+
+from app.api.deps import PermissionChecker, get_db, require_customer_access
+from app.models.order import Order, OrderItem
+from app.models.user import User
+from app.models.multilevel_bom import OrderBomExecutionCutover
+from app.services.bom_transactions import atomic_bom
+from app.services.multilevel_bom_cutover import convert_reserved_legacy_order, prepare_reserved_cutover
+from app.services.multilevel_bom_cutover_review import review_legacy_cutover, _row
+from app.services.multilevel_bom_plan import BomPlanError
+from app.services.warehouse_inventory import _location, WarehouseInventoryError
+from app.services.bom_subkits import SubkitError
+from app.services.composite_bom import CompositeBOMError
+from app.services.warehouse_twin_layout import resolve_warehouse_twin_layout_path
+
+router = APIRouter()
+can_edit = PermissionChecker("orders.edit")
+SCOPE = "仅支持全预占子件转组装父件；采购、本体、配套及未完成采购交接不支持"
+
+
+class CutoverPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target_locations: dict[int, int] = Field(default_factory=dict, max_length=99)
+
+
+class CutoverExecute(CutoverPreview):
+    reviewed_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    preview_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_lot_versions: dict[int, int] = Field(min_length=1, max_length=999)
+    operation_key: str = Field(min_length=1, max_length=64)
+
+
+def _access(db, user, item_id):
+    db.refresh(user)
+    if user.role != "admin" or not user.is_active:
+        raise HTTPException(403, "仅活动管理员可执行此操作")
+    item = db.get(OrderItem, item_id)
+    order = db.get(Order, item.order_id) if item else None
+    if order is None:
+        raise HTTPException(404, "订单明细不存在")
+    require_customer_access(order.customer_id, user, db)
+    return order.customer_id
+
+
+def _preview(db, item_id, customer_id, targets):
+    review = review_legacy_cutover(db, order_item_id=item_id, customer_id=customer_id)
+    manifest = json.loads(review.document)
+    active = [r for r in manifest["reservations"] if
+        r["reserved_stock_quantity"] > r["consumed_stock_quantity"] + r["released_stock_quantity"]]
+    active_ids = {r["inventory_lot_id"] for r in active}
+    versions = {r["id"]: r["version"] for r in manifest["lots"] if r["id"] in active_ids}
+    assembled = {n.product_id for n in review.compiled.graph.nodes if n.source == "assembled"}
+    # Check the same support/quantity rules before offering any execution UI.
+    item, graph, _, _, lots, remaining, plan = prepare_reserved_cutover(db,
+        review=review, customer_id=customer_id, source_lot_versions=versions,
+        target_locations=targets or dict.fromkeys(assembled, None))
+    if any(type(k) is not int or k <= 0 or type(v) is not int or v <= 0 for k, v in targets.items()):
+        raise BomPlanError("请选择有效正式货位")
+    locations = [_row(_location(db, lid, "finished")) for _, lid in sorted(targets.items())]
+    map_hash = hashlib.sha256(resolve_warehouse_twin_layout_path().read_bytes()).hexdigest()
+    basis = json.dumps({"review": review.checksum, "targets": sorted(targets.items()),
+        "locations": locations, "map": map_hash}, sort_keys=True, ensure_ascii=False, default=str)
+    nodes = {n.product_id: n for n in graph.nodes}
+    return {"scope": SCOPE, "ready": bool(targets), "order_item_id": item_id,
+        "quantity": item.quantity, "delivered_quantity": item.delivered_quantity or 0,
+        "execution_quantity": remaining, "reviewed_hash": review.checksum,
+        "preview_hash": hashlib.sha256(basis.encode()).hexdigest(), "source_lot_versions": versions,
+        "target_locations": targets,
+        "outputs": [{"product_id": s.product_id, "name": nodes[s.product_id].name,
+            "unit": nodes[s.product_id].unit, "quantity": s.produced_units,
+            "consumed": [{"name": nodes[pid].name, "quantity": qty, "unit": nodes[pid].unit}
+                for pid, qty in s.consumed]} for s in plan.steps],
+        "release_reservations": [{"id": r["id"], "lot_id": r["inventory_lot_id"],
+            "name": nodes[lots[r["inventory_lot_id"]].finished_detail.product_id].name,
+            "unit": nodes[lots[r["inventory_lot_id"]].finished_detail.product_id].unit,
+            "quantity": r["reserved_stock_quantity"] - r["consumed_stock_quantity"] - r["released_stock_quantity"]}
+            for r in active],
+        "material_impact": "全部剩余子件由现有预占覆盖，不新增报料；保留原报料、完工及已送历史",
+        "inventory_impact": "释放下列剩余预占并消耗子件，形成组装库存；父件按剩余套数重新预占，旧消耗不改",
+        "product_versions": {n.product_id: n.version for n in graph.nodes}}
+
+
+@router.post("/items/{item_id}/reserved-kit-cutover/preview")
+def preview(item_id: int, payload: CutoverPreview, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    customer_id = _access(db, user, item_id)
+    try:
+        return _preview(db, item_id, customer_id, payload.target_locations)
+    except (BomPlanError, WarehouseInventoryError, SubkitError, CompositeBOMError, OSError) as exc:
+        db.rollback()
+        raise HTTPException(409, f"{SCOPE}。{exc}") from exc
+
+
+@router.post("/items/{item_id}/reserved-kit-cutover/execute")
+def execute(item_id: int, payload: CutoverExecute, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    customer_id = _access(db, user, item_id)
+    try:
+        with atomic_bom(db):
+            # SQLite's write lock covers both the refreshed preview and writer.
+            # Replays go through the writer's original full-payload/actor check.
+            if db.get(OrderBomExecutionCutover, item_id) is None:
+                current = _preview(db, item_id, customer_id, payload.target_locations)
+                if (not current["ready"] or current["preview_hash"] != payload.preview_hash
+                        or current["reviewed_hash"] != payload.reviewed_hash
+                        or current["source_lot_versions"] != payload.source_lot_versions):
+                    raise BomPlanError("预览或货位/地图版本已变化，请重新预览")
+            result = convert_reserved_legacy_order(db, order_item_id=item_id, customer_id=customer_id,
+                reviewed_hash=payload.reviewed_hash, source_lot_versions=payload.source_lot_versions,
+                target_locations=payload.target_locations, operation_key=payload.operation_key, actor=user)
+        db.commit()
+        return result
+    except (BomPlanError, WarehouseInventoryError, SubkitError, CompositeBOMError, OSError) as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise

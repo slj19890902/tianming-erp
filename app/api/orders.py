@@ -8793,3 +8793,7 @@ def delete_order_item(
     )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+# Explicit reserved-parts handoff, separate from ordinary order edits.
+from app.api.bom_cutover import router as bom_cutover_router
+router.include_router(bom_cutover_router)

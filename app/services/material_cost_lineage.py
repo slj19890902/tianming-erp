@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.material_cost import FinanceDeliveryMaterialCostFact
+from app.models.order import OrderItem
 from app.models.product_bom import BomComponentDirectDeliveryAllocation
 from app.models.production import ProductionCompletion
 from app.models.purchase_receipt import (
@@ -517,7 +518,7 @@ def _latest_facts_by_source(
     return result
 
 
-def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
+def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=None, _apply_supplements=True) -> dict[str, Any]:
     """Return a small, actionable month-close quality report.
 
     Delivery date is the physical material-cost period.  Revenue remains on
@@ -546,6 +547,16 @@ def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
         ).all()
     )
     delivery_item_ids = [int(row[0].id) for row in delivery_rows]
+    items_by_id = {int(row[0].id): row[0] for row in delivery_rows}
+    gap_records = []
+
+    def collect_gap(item_id, source, reason):
+        order_item = db.get(OrderItem, items_by_id[item_id].order_item_id) if items_by_id[item_id].order_item_id else None
+        gap_records.append({"item": items_by_id[item_id], "source": source, "reason": reason,
+                            "order_product_id": order_item.product_id if order_item else None,
+                            "product_name": items_by_id[item_id].product_name_snapshot or (order_item.snapshot_product_name if order_item else ""),
+                            "month": month, "delivery_number": row_meta[item_id]["delivery_number"],
+                            "quantity": int(source["active_quantity"]) if source else int(items_by_id[item_id].delivered_quantity or 0)})
     row_meta = {
         int(item.id): {
             "delivery_item_id": int(item.id),
@@ -662,6 +673,7 @@ def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
                         "id": int(allocation.id),
                         "active_quantity": active_quantity,
                         "completion": completion,
+                        "component": allocation.sales_order_item_bom_component,
                     }
                 )
 
@@ -695,12 +707,14 @@ def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
         line_cost = Decimal("0")
         if not sources:
             line_reasons.add("no_delivery_cost_source")
+            collect_gap(item_id, None, "no_delivery_cost_source")
         for source in sources:
             if source["kind"] == "subkit":
                 detail = source["cost_detail"]
                 if not detail.get("actual"):
                     estimate_only_sources += 1
                     line_reasons.add("estimate_only")
+                    collect_gap(item_id, source, "estimate_only")
                     continue
                 frozen_sources += 1
                 currency = str(detail.get("currency") or "").strip().upper()
@@ -711,6 +725,7 @@ def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
                 else:
                     foreign_currency_sources += 1
                     line_reasons.add("foreign_currency_rate_missing")
+                    collect_gap(item_id, source, "foreign_currency_rate_missing")
                 continue
             key = (str(source["kind"]), int(source["id"]))
             graph_evidence = graph_facts.get(key)
@@ -743,6 +758,7 @@ def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
                 else:
                     foreign_currency_sources += 1
                     line_reasons.add("foreign_currency_rate_missing")
+                    collect_gap(item_id, source, "foreign_currency_rate_missing")
                 continue
             resolved = None
             lot = source.get("lot")
@@ -755,15 +771,18 @@ def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
             if resolved is not None:
                 eligible_unfrozen_sources += 1
                 line_reasons.add("actual_cost_not_frozen")
+                collect_gap(item_id, source, "actual_cost_not_frozen")
             elif lot is not None and (
                 lot.estimated_unit_cost_snapshot is not None
                 or lot.cost_snapshot_source is not None
             ):
                 estimate_only_sources += 1
                 line_reasons.add("estimate_only")
+                collect_gap(item_id, source, "estimate_only")
             else:
                 missing_sources += 1
                 line_reasons.add("missing_purchase_lineage")
+                collect_gap(item_id, source, "missing_purchase_lineage")
 
         if sources and line_frozen == len(sources):
             covered_lines += 1
@@ -796,6 +815,15 @@ def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
         if total_lines
         else Decimal("1")
     )
+    if _gap_collector is not None:
+        _gap_collector.extend(gap_records)
+    supplemental = {}
+    if _apply_supplements:
+        from app.services.material_cost_supplement import summarize
+        supplemental = summarize(db, gap_records, total_lines)
+        supplemental["management_material_cost"] = (
+            actual_material_cost + supplemental["supplemental_material_cost"]
+        ).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
     return {
         "month": month,
         "accounting_basis": "按送货日期统计物理出库；人民币金额按收料时冻结的含税采购成本",
@@ -830,4 +858,5 @@ def material_cost_coverage_report(db: Session, *, month: str) -> dict[str, Any]:
         ],
         "lineage_ready": uncovered_lines == 0,
         "missing_details": missing_details,
+        **supplemental,
     }

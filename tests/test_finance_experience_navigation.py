@@ -14,6 +14,8 @@ def test_finance_task_navigation_and_month_readiness():
 assert.equal(vm.financeReadinessLabel({blockers:[{code:'month_close_workflow_pending'}]}),'资料已齐');
 assert.equal(vm.financeReadinessLabel({blockers:[{code:'actual_material_cost_lineage_incomplete'}]}),'有资料待补');
 assert.equal(vm.financeReadinessLabel(null),'尚未读取');
+assert.equal(vm.financeReadinessLabel({blockers:[{code:'actual_material_cost_lineage_incomplete'},{code:'month_close_workflow_pending'}],material_cost:{management_cost_ready:true,supplemental_source_count:5}}),'参考成本已补齐');
+assert.equal(vm.financeReadinessLabel({blockers:[{code:'manufacturing_cost_unallocated'}],material_cost:{management_cost_ready:true,supplemental_source_count:5}}),'有资料待补');
 assert.equal(vm.financeReadinessHint({blockers:[{code:'month_close_workflow_pending'}]}),'可以查看管理月报；正式锁月功能尚未启用。');
 vm.financeOverviewMonth='2026-08';vm.financeFilters={};vm.financeCostFilters={};vm.pages={};vm.setFinanceView=v=>v;
 assert.equal(vm.openFinanceMonthlyAction('cost_drafts'),'expenses');

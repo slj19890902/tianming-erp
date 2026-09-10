@@ -5225,12 +5225,19 @@
                     <div class="finance-report-card"><span class="muted">已确认</span><strong class="cost-sensitive">¥ {{ money(financeCostStatusAmount('confirmed')) }}</strong></div>
                     <div class="finance-report-card"><span class="muted">待复核草稿</span><strong class="cost-sensitive">¥ {{ money(financeCostStatusAmount('draft')) }}</strong></div>
                     <div class="finance-report-card"><span class="muted">已冻结实际材料（含税）</span><strong class="cost-sensitive">¥ {{ money(financeCostSummary.material_cost?.actual_material_cost || 0) }}</strong><span class="muted">送货明细 {{ financeCostSummary.material_cost?.covered_delivery_lines || 0 }}/{{ financeCostSummary.material_cost?.total_delivery_lines || 0 }}</span></div>
+                    <div class="finance-report-card"><span class="muted">事后补充材料（参考）</span><strong class="cost-sensitive">¥ {{ money(financeCostSummary.material_cost?.supplemental_material_cost || 0) }}</strong><span class="muted">实际＋参考 ¥ {{ money(financeCostSummary.material_cost?.management_material_cost || 0) }}；不改供应商应付</span></div>
                     <div class="finance-report-card"><span class="muted">月报资料检查</span><strong>{{ financeReadinessLabel(financeCostSummary) }}</strong><span class="muted">{{ financeReadinessHint(financeCostSummary) }}</span></div>
                   </div>
                   <div v-if="financeCostState.error" class="notice danger" style="margin-top:10px">成本费用读取失败：{{ financeCostState.error }}</div>
                   <div v-else-if="financeCostPrimaryBlocker" class="notice warning" style="margin-top:10px">{{ financeCostPrimaryBlocker }}</div>
+                  <details v-if="financeCostSummary.material_cost?.supplemental_source_count" style="margin-top:8px">
+                    <summary style="cursor:pointer">已补充 {{ financeCostSummary.material_cost.supplemental_source_count }} 条材料来源 · 展开查看</summary>
+                    <p class="muted">按原批次或原订单材料依据事后补齐，不改供应商应付；完整来源见导出月报的“补充材料成本依据”。</p>
+                    <div class="table-wrap"><table><thead><tr><th>送货单 / 产品</th><th>数量</th><th>参考单价</th><th>补充金额</th></tr></thead><tbody><tr v-for="row in (financeCostSummary.material_cost.supplemental_details || []).slice(0,20)" :key="row.id"><td>{{ row.delivery_number }} · {{ row.product_name }}</td><td>{{ row.quantity }}</td><td>{{ row.unit_cost }}</td><td>¥ {{ money(row.amount) }}</td></tr></tbody></table></div>
+                    <p class="muted">页面先显示20条，完整明细可导出。</p>
+                  </details>
                   <details v-if="financeCostSummary.material_cost?.missing_details?.length" style="margin-top:8px">
-                    <summary class="muted" style="cursor:pointer">查看材料成本缺口（先显示 {{ financeCostSummary.material_cost.missing_details.length }} 条）</summary>
+                    <summary class="muted" style="cursor:pointer">采购来源追溯（参考补充不覆盖原记录；先显示 {{ financeCostSummary.material_cost.missing_details.length }} 条）</summary>
                     <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>送货日期</th><th>送货单</th><th>客户</th><th>数量</th><th>缺口</th></tr></thead><tbody><tr v-for="row in financeCostSummary.material_cost.missing_details" :key="row.delivery_item_id"><td>{{ row.delivery_date }}</td><td>{{ row.delivery_number }}</td><td>{{ row.customer_name }}</td><td>{{ row.delivered_quantity }}</td><td>{{ row.reason }}</td></tr></tbody></table></div>
                   </details>
                   <div v-if="financeCostMeta.warning" class="muted" style="margin-top:8px">{{ financeCostMeta.warning }}</div>
@@ -21512,9 +21519,11 @@
           },
           financeReadinessLabel(summary) {
             if (!summary || !Array.isArray(summary.blockers)) return "尚未读取";
+            if (summary.material_cost?.management_cost_ready && summary.material_cost?.supplemental_source_count > 0 && !summary.blockers.some(item=>!["actual_material_cost_lineage_incomplete","month_close_workflow_pending"].includes(item.code))) return "参考成本已补齐";
             return summary.blockers.some(item=>item.code!=="month_close_workflow_pending") ? "有资料待补" : "资料已齐";
           },
           financeReadinessHint(summary) {
+            if (summary?.material_cost?.management_cost_ready && summary?.material_cost?.supplemental_source_count > 0) return "管理月报已计补充成本；原采购凭证与正式锁月另行核对。";
             const gap = summary?.blockers?.find(item=>item.code!=="month_close_workflow_pending");
             if (gap) return gap.message;
             return "可以查看管理月报；正式锁月功能尚未启用。";

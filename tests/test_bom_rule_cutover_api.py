@@ -294,7 +294,7 @@ def test_rule_can_introduce_first_real_external_source_and_complete_purchase_flo
 
 
 @pytest.mark.parametrize("remove_external", [False, True])
-def test_existing_external_snapshots_are_retained_but_only_new_revision_is_purchased(factory_http, remove_external, monkeypatch):
+def test_existing_external_snapshots_are_retained_but_only_new_revision_is_purchased(factory_http, remove_external, monkeypatch, cancelled_purchase=False):
     from app.models.user import User
     from app.models.order_external_packaging import SalesOrderItemExternalComponent
     from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
@@ -315,14 +315,26 @@ def test_existing_external_snapshots_are_retained_but_only_new_revision_is_purch
     item = new_item(db, 3479, 2)
     original = freeze_order_procurement(db, order_item_id=item.id, actor=actor)
     db.commit()
+    confirmation = _confirm(client, item.order_id) if cancelled_purchase else None
+    old_purchase_rows = db.execute(text("SELECT * FROM external_packaging_purchase_items WHERE sales_order_item_id=:id ORDER BY id"), {"id": item.id}).all()
     old_ids = {link.external_component_id for link in current_external_links(db, original)}
     before = db.execute(text("SELECT * FROM sales_order_item_external_components WHERE sales_order_item_id=:id ORDER BY id"), {"id": item.id}).all()
     changed = [(pid, qty + (pid in purchased), relation) for pid, qty, relation in rows
         if not (remove_external and pid in purchased)]
     save(db, actor, 3479, "manufactured", changed)
     db.commit()
+    if cancelled_purchase:
+        blocked = client.post(f"/api/orders/items/{item.id}/unstarted-bom-cutover/preview", json={})
+        assert blocked.status_code in (400, 409) and "仍有效" in blocked.text, blocked.text
+        cancelled = client.post(f"/api/orders/{item.order_id}/external-packaging-purchase/cancel",
+            json={"expected_batch_id": confirmation["batch_id"], "confirmed": True,
+                  "reason": "隔离验收：未收采购撤销后显式切换BOM"})
+        assert cancelled.status_code == 200, cancelled.text
     url, data, payload = preview(client, item, "replace-old-external")
     assert set(data["rule_impact"]["retained_external_source_ids"]) == old_ids
+    assert bool(data["cancelled_purchase_history"]) is cancelled_purchase
+    if cancelled_purchase:
+        assert {line["id"] for fact in data["cancelled_purchase_history"] for line in fact["items"]} == {r.id for r in old_purchase_rows}
     if not remove_external:
         from app.services import multilevel_bom_rule_cutover as writer
         audit = writer.append_audit_event
@@ -345,6 +357,8 @@ def test_existing_external_snapshots_are_retained_but_only_new_revision_is_purch
     assert active_ids.isdisjoint(old_ids)
     after = db.execute(text("SELECT * FROM sales_order_item_external_components WHERE sales_order_item_id=:id ORDER BY id"), {"id": item.id}).all()
     assert [row for row in after if row.id in old_ids] == before
+    current_purchase_rows = db.execute(text("SELECT * FROM external_packaging_purchase_items WHERE sales_order_item_id=:id ORDER BY id"), {"id": item.id}).all()
+    assert current_purchase_rows == old_purchase_rows
     _, routed = _order_components(db, item.order_id)
     assert {source.id for source in routed} == active_ids
     detail = client.get(f"/api/orders/{item.order_id}")
@@ -356,12 +370,22 @@ def test_existing_external_snapshots_are_retained_but_only_new_revision_is_purch
         assert not [row for row in routing if row["order_item_id"] == item.id]
     else:
         assert active_ids
-        _confirm(client, item.order_id)
+        if cancelled_purchase:
+            from tests.test_p1_33c3_external_packaging_purchase_confirmation import _confirmation_payload
+            purchase_preview = client.get(f"/api/orders/{item.order_id}/external-packaging-purchase")
+            assert purchase_preview.status_code == 200, purchase_preview.text
+            confirmed = client.post(f"/api/orders/{item.order_id}/external-packaging-purchase/confirm",
+                json=_confirmation_payload(purchase_preview.json(), "new-rule-purchase-after-cancel"))
+            assert confirmed.status_code == 200, confirmed.text
+        else:
+            _confirm(client, item.order_id)
         db.expire_all()
         purchases = list(db.scalars(select(ExternalPackagingPurchaseItem).where(
             ExternalPackagingPurchaseItem.sales_order_item_id == item.id)))
-        assert {line.order_component_id for line in purchases} == active_ids
+        assert {line.order_component_id for line in purchases} == (active_ids | old_ids if cancelled_purchase else active_ids)
         for line in purchases:
+            if line.order_component_id not in active_ids:
+                continue
             received = receive(client, line.purchase_order_id, line.id,
                 f"revised-external-{line.id}", line.purchase_quantity)
             assert received.status_code == 200, received.text
@@ -369,3 +393,9 @@ def test_existing_external_snapshots_are_retained_but_only_new_revision_is_purch
     from app.services.order_business_status import build_order_business_statuses
     state = build_order_business_statuses(db, [item.order])[item.order_id]["items"][item.id]
     assert state["business_status"] == "pending_delivery", state
+
+
+@pytest.mark.parametrize("remove_external", [False, True])
+def test_explicitly_cancelled_unreceived_purchase_allows_rule_switch_and_new_execution(factory_http, remove_external, monkeypatch):
+    test_existing_external_snapshots_are_retained_but_only_new_revision_is_purchased(
+        factory_http, remove_external, monkeypatch, cancelled_purchase=True)

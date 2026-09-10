@@ -8070,6 +8070,10 @@
                   <table v-if="bomCutover.review.purchase_requirements.length"><thead><tr><th>外购产品</th><th>库存需求</th><th>采购数量</th></tr></thead><tbody><tr v-for="row in bomCutover.review.purchase_requirements" :key="row.product_id"><td>{{ row.product_id }} · {{ row.name }}</td><td>{{ row.stock_quantity }} {{ row.stock_unit }}</td><td>{{ row.purchase_quantity }} {{ row.purchase_unit }}</td></tr></tbody></table>
                 </template>
                 <p>{{ bomCutover.review.procurement_impact }}；{{ bomCutover.review.picking_impact }}</p>
+                <table v-if="(bomCutover.review.cancelled_purchase_history || []).length">
+                  <thead><tr><th>保留已撤销采购</th><th>原采购数量</th><th>原合同金额（非实收成本）</th><th>撤销原因</th></tr></thead>
+                  <tbody v-for="fact in bomCutover.review.cancelled_purchase_history" :key="fact.purchase.id"><tr v-for="line in fact.items" :key="line.id"><td>{{ fact.purchase.purchase_number }} / 行{{ line.id }}</td><td>{{ line.purchase_quantity }} {{ line.purchase_unit }}</td><td>{{ line.line_amount }} {{ line.currency }}</td><td>{{ fact.cancellation.reason }}</td></tr></tbody>
+                </table>
                 <p>{{ bomCutover.review.cost_impact }}</p>
                 <table v-if="bomCutover.review.source_costs && bomCutover.review.source_costs.length"><thead><tr><th>成本批次</th><th>数量</th><th>来源金额</th><th>依据</th></tr></thead><tbody><tr v-for="row in bomCutover.review.source_costs" :key="row.lot_id"><td>{{ row.lot_id }}</td><td>{{ row.quantity }} {{ row.unit }}</td><td>{{ row.amount }} {{ row.lineage.currency || '' }}</td><td>{{ row.lineage.actual === true ? '实际来源' : '估算或混合来源，保留原依据' }}</td></tr></tbody></table>
                 <p v-for="row in bomCutover.review.retained_locations || []" :key="row.lot_id">保留批次 {{ row.lot_id }} · 原货位 ID {{ row.location_id }}</p>

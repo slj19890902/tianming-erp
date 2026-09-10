@@ -16,20 +16,22 @@ def _block(start_marker: str, end_marker: str) -> str:
     return INDEX[start : INDEX.index(end_marker, start)]
 
 
-def test_compact_business_flow_uses_six_plain_language_steps_without_false_completion() -> None:
+def test_compact_business_flow_uses_five_plain_language_steps_without_false_completion() -> None:
     shell = _block(
         '<section v-if="businessFlowCurrentStep"',
         '<section v-if="orderNextStepGuide.visible',
     )
     computed = _block("businessFlowSteps() {", "currentReleaseDetails() {")
 
-    labels = ["订单", "报料", "来料", "生产", "送货", "回单/对账"]
+    labels = ["订单", "报料", "来料", "生产", "送货"]
     positions = [computed.index(f'label:"{label}"') for label in labels]
     assert positions == sorted(positions)
-    assert len(positions) == 6
+    assert len(positions) == 5
+    assert 'label:"回单/对账"' not in computed
+    assert '{ key: "finance", label: "对账与开票" }' in INDEX
     assert 'aria-current="businessFlowCurrentStep.key===step.key ? \'step\' : null"' in shell
     assert "completed" not in shell.lower()
-    assert ".business-flow-steps { display:grid; grid-template-columns:repeat(6,minmax(0,1fr))" in INDEX
+    assert ".business-flow-steps { display:grid; grid-template-columns:repeat(5,minmax(0,1fr))" in INDEX
 
 
 def test_order_success_guide_is_permission_scoped_and_keeps_copy_short() -> None:

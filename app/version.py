@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.321"
-APP_VERSION_NAME = "送货明细行内编辑与打印优先"
+APP_VERSION = "v0.22.322"
+APP_VERSION_NAME = "回单对账入口归并"
 APP_BUILD_DATE = "2026-09-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2412,21 +2412,31 @@ _V022320_VERIFICATION_STEPS = [
     "展开送货明细删除一行，确认预览同步且剩余行数量不变；已发货单须重新打印，有回单或对账的单据不得绕过门禁。",
     "导入常用箱直接输入数量后确认自动勾选，点击空白弹窗保留，只能关闭或导入订单退出。",
 ]
-APP_CHANGES = [
+_V022321_CHANGES = [
     "送货列表固定打印和更多入口，更多菜单使用浮层，展开不再挤动按钮或撑高表格；拿货、产品标签和回单操作移入更多。",
     "展开明细可逐行编辑客户单号和送货数量，保存后同步打印；只改客户单号沿用独立快照，不回写原订单或报料生产历史。",
     "无订单库存可查看和调整原批次分配；数量修改沿用版本、库存、回单、对账及已发货修订门禁，保留取消与删行入口。",
     "未保存时阻止打印和列表刷新；保存失败保留输入，网络结果不明时保持原请求核对重试。本版无数据库迁移。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022321_VERIFICATION_STEPS = [
     "强制刷新送货页面，确认待处理主按钮为发货打印、已发货为打印；展开更多时按钮和行高稳定，拿货及标签在菜单内。",
     "查看明细，点编辑修改客户单号后保存，核对送货打印与后续对账引用更新，原ERP订单号及上游记录不变。",
     "无有效回单的送货单修改数量及库存批次分配后保存，核对打印内容；有有效回单时数量锁定，超量仍须权限和确认。",
     "编辑未保存时打印不可执行；取消不写入，保存错误保留输入，网络异常可核对重试。",
 ]
+APP_CHANGES = [
+    "按顺序做仅保留订单、报料、来料、生产、送货五步，移除重复的第六步回单/对账入口。",
+    "回单对账及开票保留在对账与开票模块，原回单确认、财务权限和单据关系不变；本版无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新订单或送货页面，确认按顺序做只有1至5步，没有第六步和空白占位。",
+    "点击对账与开票，确认财务工作区正常进入、回单对账相关功能和权限保持原样。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.321：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.321：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.322：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.322：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.321：本次更新｜{item}" for item in _V022321_CHANGES),
+    *(f"v0.22.321：如何验证｜{item}" for item in _V022321_VERIFICATION_STEPS),
     *(f"v0.22.320：本次更新｜{item}" for item in _V022320_CHANGES),
     *(f"v0.22.320：如何验证｜{item}" for item in _V022320_VERIFICATION_STEPS),
     *(f"v0.22.319：本次更新｜{item}" for item in _V022319_CHANGES),

@@ -2369,7 +2369,7 @@
         background:#f7fbff;
       }
       .business-flow-guide-label { color:var(--text-secondary); font-size:12px; font-weight:700; white-space:nowrap; }
-      .business-flow-steps { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:6px; min-width:0; }
+      .business-flow-steps { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:6px; min-width:0; }
       .business-flow-step {
         position:relative; min-width:0; min-height:34px; padding:5px 8px; border:1px solid var(--line-strong);
         border-radius:9px; background:#fff; color:var(--text-secondary); font-size:12px; font-weight:700;
@@ -3101,7 +3101,7 @@
           >
             <div v-if="loading" class="loading-bar"></div>
 
-            <section v-if="businessFlowCurrentStep" class="business-flow-guide" aria-label="订单到对账操作顺序">
+            <section v-if="businessFlowCurrentStep" class="business-flow-guide" aria-label="订单到送货操作顺序">
               <span class="business-flow-guide-label">按顺序做</span>
               <div class="business-flow-steps">
                 <button
@@ -10124,7 +10124,6 @@
               {key:"incoming",label:"来料",page:"incoming",hint:"供应商到料后确认收货"},
               {key:"production",label:"生产",page:"production",hint:"确认合格数量和完工去向"},
               {key:"deliveries",label:"送货",page:"deliveries",hint:"拿货、发货并确认回单"},
-              {key:"finance",label:"回单/对账",page:"finance",hint:"按回单实收数量对账并开票"},
             ];
           },
           businessFlowCurrentStep() {

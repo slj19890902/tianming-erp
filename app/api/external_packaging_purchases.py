@@ -104,6 +104,15 @@ class ExternalReceiptReversePayload(BaseModel):
     confirmed: Literal[True]
 
 
+@router.get('/external-packaging-receipts')
+def get_bom_receipt_history(page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100),
+        q: str | None = Query(None, max_length=100), db: Session = Depends(get_db),
+        user: User = Depends(can_incoming_read)):
+    from app.services.multilevel_bom_receipt_history import list_bom_receipts
+    return list_bom_receipts(db, visible_customer_ids=_visible_customer_ids(user, db),
+        page=page, page_size=page_size, keyword=q)
+
+
 @router.post('/external-packaging-receipts/{receipt_id}/reverse')
 def reverse_external_bom_receipt(receipt_id: int, payload: ExternalReceiptReversePayload,
         db: Session = Depends(get_db), user: User = Depends(admin_only),

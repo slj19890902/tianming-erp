@@ -19,6 +19,21 @@ def reverse(client, rid, key='reverse', reason='现场纠正本次误收'):
         json={'idempotency_key':key, 'reason':reason, 'confirmed':True})
 
 
+def test_bom_history_excludes_ordinary_receipts_and_requires_login(purchase_app):
+    with TestClient(purchase_app) as client:
+        assert client.get('/api/external-packaging-receipts').status_code == 401
+        _login(client,'purchase-admin')
+        _confirm(client,purchase_app.state.fixture['order_id'])
+        with purchase_app.state.session_factory() as db:
+            line = db.scalar(select(ExternalPackagingPurchaseItem))
+            purchase_id, line_id = line.purchase_order_id, line.id
+        response = receive(client,purchase_id,line_id,'ordinary-history',1)
+        assert response.status_code == 200, response.text
+        result = client.get('/api/external-packaging-receipts')
+        assert result.status_code == 200 and result.json()['total'] == 0
+        assert client.get('/api/external-packaging-receipts',params={'page_size':101}).status_code == 422
+
+
 @pytest.mark.parametrize('direct', [False,True])
 @pytest.mark.parametrize('fault', [False,True])
 def test_real_reversal_restores_receipt_capacity_and_preserves_facts(purchase_app, _p181_published_map_identity, direct, fault, monkeypatch):
@@ -42,6 +57,12 @@ def test_real_reversal_restores_receipt_capacity_and_preserves_facts(purchase_ap
         last = receive(client,pid,lid,'last',qty-2)
         assert last.status_code == 200, last.text
         last_id = last.json()['receipt']['id']
+        history = client.get('/api/external-packaging-receipts',params={'page_size':1})
+        assert history.status_code == 200, history.text
+        assert history.json()['total'] == 2
+        row = history.json()['items'][0]
+        assert row['id'] == last_id and row['supports_reversal'] and not row['reversed']
+        assert 'unit_price' not in str(row) and 'cost' not in str(row)
         with factory() as db:
             facts_before = [(r.id,r.received_quantity,r.converted_finished_quantity) for r in db.scalars(select(ExternalPackagingReceiptItem))]
             assert _external_packaging_received(db,iid) is True
@@ -63,6 +84,8 @@ def test_real_reversal_restores_receipt_capacity_and_preserves_facts(purchase_ap
         result = reverse(client,last_id)
         assert result.status_code == 200, result.text
         assert reverse(client,last_id).json()['created'] is False
+        history = client.get('/api/external-packaging-receipts',params={'q':row['receipt_number']}).json()
+        assert history['total'] == 1 and history['items'][0]['reversed'] is True
         assert reverse(client,last_id,reason='不同撤销内容').status_code == 409
         assert receive(client,pid,lid,'last',qty-2).status_code == 409
         with factory() as db:
@@ -108,6 +131,8 @@ def test_reversal_scope_permissions_and_loose_only(purchase_app, _p181_published
         with monkeypatch.context() as patch:
             patch.setattr(api,'_visible_customer_ids',lambda *args:set())
             assert reverse(client,rid).status_code == 403
+            history = client.get('/api/external-packaging-receipts')
+            assert history.status_code == 200 and history.json()['total'] == 0
         assert reverse(client,rid).status_code == 200
         with factory() as db:
             assert db.scalar(select(func.count()).select_from(InventoryLot)) == 0

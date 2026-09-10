@@ -4503,16 +4503,30 @@
 
             <template v-else-if="activePage === 'incoming'">
               <template v-if="incomingWorkspace==='external-packaging'">
-                <page-head title="包材收料" desc="外购包装待收按采购原单位处理；护角、EPE、外购彩盒等这里只记实收，不增加纸板或成品库存。"></page-head>
+                <page-head title="包材收料" desc="外购包装待收按采购单位实收；BOM 产品按组套规则入库。"></page-head>
                 <div class="toolbar">
                   <div class="toolbar-group">
                     <input class="input" v-model.trim="externalIncomingFilter" @input="pages.externalIncoming=1" placeholder="搜索供应商、采购单、客户、订单或包材" />
                   </div>
                   <div class="toolbar-group">
                     <button class="btn" type="button" :disabled="externalIncomingLoading" @click="loadExternalIncoming">{{ externalIncomingLoading ? '读取中…' : '刷新包材待收' }}</button>
+                    <button class="btn" type="button" @click="externalReceiptHistoryOpen=!externalReceiptHistoryOpen; externalReceiptHistoryOpen && loadExternalReceiptHistory(1)">BOM 实收记录</button>
                     <button class="btn" type="button" @click="returnToBoardIncoming">返回纸板收料</button>
                   </div>
                 </div>
+                <section v-if="externalReceiptHistoryOpen" class="external-incoming-panel">
+                  <div class="toolbar"><input class="input" v-model.trim="externalReceiptHistoryQuery" placeholder="客户、订单或实收单号" @keyup.enter="loadExternalReceiptHistory(1)" /><button class="btn small" :disabled="externalReceiptHistoryLoading" @click="loadExternalReceiptHistory(1)">查询</button></div>
+                  <div v-if="externalReceiptHistoryError" class="status orange">{{ externalReceiptHistoryError }}</div>
+                  <div v-if="externalReceiptHistoryLoading" class="muted">读取中…</div>
+                  <div v-else-if="!externalReceiptHistoryError && !externalReceiptHistory.length" class="muted">暂无 BOM 实收记录</div>
+                  <article v-for="receipt in externalReceiptHistory" :key="receipt.id" class="external-incoming-order">
+                    <div class="external-incoming-order-head"><div><strong>{{ receipt.customer_name }}</strong> · {{ receipt.order_number }}<div class="muted">{{ receipt.receipt_number }} · {{ formatDateTime(receipt.received_at) }}</div></div>
+                      <span v-if="receipt.reversed" class="muted">已撤销</span><button v-else-if="receipt.supports_reversal && user?.role==='admin' && hasPermission('incoming.execute')" class="btn small danger" :disabled="!!externalReceiptReverseBusy" @click="reverseExternalReceipt(receipt)">{{ externalReceiptReverseBusy===receipt.id ? '处理中…' : '撤销实收' }}</button>
+                    </div>
+                    <div v-for="(line,index) in receipt.items" :key="index">{{ line.product_name }} · {{ line.quantity }} {{ line.unit }}</div>
+                  </article>
+                  <pager :page="externalReceiptHistoryPage" :total="externalReceiptHistoryTotal" :page-size="25" :always="true" :compact="true" @change="loadExternalReceiptHistory($event)"></pager>
+                </section>
                 <div v-if="externalIncomingLoading" class="status blue" style="display:block;margin:8px 0">正在读取包材待收；已显示的上次结果不会被清空。</div>
                 <div v-if="externalIncomingError" class="status orange" style="display:block;margin:8px 0">{{ externalIncomingError }} <button class="btn small" :disabled="externalIncomingLoading" @click="loadExternalIncoming">重试</button></div>
                 <div v-if="externalIncomingLoaded && !externalIncomingLoading && !filteredExternalIncoming.length" class="empty">当前条件下没有待收的外购包材。</div>
@@ -9918,6 +9932,7 @@
             productionPrintBatchAttempt: null, productionPrintRecoveryUrl: "", productionPrintBatchError: "", productionPrintInvalidItems: [],
             incomingWorkspace: "board", incomingTab: "pending", incomingPending: [], incomingPendingTotal: 0, incomingPendingLoading: false, incomingPendingError: "", incomingPendingAppliedPage: 1, incomingPendingRetryPage: 1, incomingReceived: [], incomingReceivedTotal: 0, incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingProductionCardOpening: false, incomingProductionCardBatchBusy: false, incomingProductionCardSelections: {}, incomingProductionCardAttemptId: "", incomingProductionCardRecoveryUrl: "", incomingProductionCardRecoveryMessage: "", incomingProductLabelMessages: [], incomingProductLabelRecoveryUrls: [], incomingHistoryFilterVisible: false,
             externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingFilter: "", externalIncomingLoaded: false, externalIncomingDrafts: {}, externalIncomingSavingId: null, externalIncomingSavingAttemptId: "",
+            externalReceiptHistoryOpen:false, externalReceiptHistory:[], externalReceiptHistoryPage:1, externalReceiptHistoryTotal:0, externalReceiptHistoryQuery:"", externalReceiptHistoryLoading:false, externalReceiptHistoryError:"", externalReceiptReverseBusy:null, externalReceiptReverseAttempts:{},
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
             productionTab: "history", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionHistoryFilterVisible: false, productionPlacement: [], productionPlacementTotal: 0, productionPlacementLoading: false, productionPlacementError: "", productionPlacementFilterVisible: false, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
@@ -14772,6 +14787,14 @@
             this.externalIncomingLoaded = false;
             this.externalIncomingSavingId = null;
             this.externalIncomingSavingAttemptId = "";
+            this.externalReceiptHistoryOpen = false;
+            this.externalReceiptHistory = [];
+            this.externalReceiptHistoryTotal = 0;
+            this.externalReceiptHistoryQuery = "";
+            this.externalReceiptHistoryLoading = false;
+            this.externalReceiptHistoryError = "";
+            this.externalReceiptReverseBusy = null;
+            this.externalReceiptReverseAttempts = {};
             this.pages.externalIncoming = 1;
             this.externalPurchaseRouting = [];
             this.externalPurchaseRoutingLoading = false;
@@ -20043,7 +20066,7 @@
               this.markPageCache("incoming:external-packaging");
               this.showToast(response.data.created ? "外购包装实收已保存" : "该次实收已经保存，无需重复操作");
               try {
-                await Promise.all([this.loadKpi(), this.loadOrders()]);
+                await Promise.all([this.loadKpi(), this.loadOrders(), ...(this.externalReceiptHistoryOpen ? [this.loadExternalReceiptHistory(1)] : [])]);
               } catch (refreshError) {
                 if (requestIsCurrent()) {
                   this.showToast("包材收料已经保存，但关联页面刷新失败；请核对当前列表，勿重复提交", true);
@@ -20064,6 +20087,70 @@
                 this.externalIncomingSavingId = null;
                 this.externalIncomingSavingAttemptId = "";
               }
+            }
+          },
+          async loadExternalReceiptHistory(page=1) {
+            const controller = this.beginLatestRequest("incoming:bom-receipts");
+            const generation = this.authGeneration, userId = this.user?.id;
+            const current = () => latestRequestControllers.get("incoming:bom-receipts")===controller
+              && !controller.signal.aborted && generation===this.authGeneration && userId===this.user?.id
+              && this.activePage==="incoming" && this.incomingWorkspace==="external-packaging";
+            this.externalReceiptHistoryLoading = true;
+            this.externalReceiptHistoryError = "";
+            try {
+              const response = await axios.get("/api/external-packaging-receipts", {params:{page,page_size:25,q:this.externalReceiptHistoryQuery},signal:controller.signal});
+              if (!current()) return false;
+              this.externalReceiptHistory = response.data.items || [];
+              this.externalReceiptHistoryTotal = response.data.total || 0;
+              this.externalReceiptHistoryPage = page;
+              return true;
+            } catch(error) {
+              if (current() && !this.isCancelledRequest(error)) {
+                this.externalReceiptHistory = [];
+                this.externalReceiptHistoryTotal = 0;
+                this.externalReceiptHistoryError = "实收记录读取失败：" + this.errorMessage(error);
+              }
+              return false;
+            } finally {
+              if (current()) this.externalReceiptHistoryLoading = false;
+              this.finishLatestRequest("incoming:bom-receipts",controller);
+            }
+          },
+          async reverseExternalReceipt(receipt) {
+            if (this.externalReceiptReverseBusy || receipt.reversed || !receipt.supports_reversal
+                || this.user?.role !== "admin" || !this.hasPermission("incoming.execute")) return false;
+            let attempt = this.externalReceiptReverseAttempts[receipt.id];
+            if (!attempt) {
+              const reason = prompt(`撤销 ${receipt.receipt_number} 的全部实收？请输入原因，取消则不执行。`);
+              if (reason === null) return false;
+              if (!reason.trim() || reason.trim().length>500) { this.showToast("请填写500字以内的撤销原因",true); return false; }
+              attempt = {idempotency_key:createIdempotencyKey(),reason:reason.trim(),confirmed:true};
+              this.externalReceiptReverseAttempts[receipt.id] = attempt;
+            }
+            const generation = this.authGeneration, userId = this.user?.id;
+            const session = () => generation===this.authGeneration && userId===this.user?.id;
+            const current = () => session() && this.activePage==="incoming" && this.incomingWorkspace==="external-packaging";
+            this.externalReceiptReverseBusy = receipt.id;
+            try {
+              await axios.post(`/api/external-packaging-receipts/${receipt.id}/reverse`,attempt);
+              if (!session()) return false;
+              delete this.externalReceiptReverseAttempts[receipt.id];
+              this.invalidatePageCache("incoming:external-packaging");
+              this.invalidatePageCache("orders");
+              if (current()) {
+                receipt.reversed = true;
+                this.showToast("实收已撤销");
+                const refreshed = await Promise.all([this.loadExternalReceiptHistory(this.externalReceiptHistoryPage),this.loadExternalIncoming()]);
+                if (current() && refreshed.some(result=>result===false)) this.showToast("已撤销，列表刷新失败，请刷新查看",true);
+              }
+              return true;
+            } catch(error) {
+              // A timeout may have committed: keep the exact key/payload for retry.
+              if (session() && error?.response?.status && error.response.status<500) delete this.externalReceiptReverseAttempts[receipt.id];
+              if (current()) this.showToast("撤销结果：" + this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (session() && this.externalReceiptReverseBusy===receipt.id) this.externalReceiptReverseBusy=null;
             }
           },
           async loadIncomingReceived({force=false}={}) {

@@ -161,7 +161,8 @@ def options(q: str = "", db: Session = Depends(get_db), user: User = Depends(can
             mold_tool_id=p.mold_tool_id) for p in db.scalars(products.order_by(Product.id))],
         materials=[dict(id=m.id, code=m.code, supplier=m.supplier_name, layer_count=m.layer_count,
             is_white_face=material_face(db, m) == "white") for m in db.scalars(select(Material).where(Material.is_active.is_(True)).order_by(Material.supplier_name, Material.code))],
-        molds=[dict(id=m.id, name=m.mold_code) for m in db.scalars(select(MoldTool).where(MoldTool.is_active.is_(True), MoldTool.archive_status == "active"))])
+        molds=[dict(id=m.id, name=" · ".join(dict.fromkeys(filter(None, [m.mold_code, m.mold_name]))),
+            search_text=" ".join(filter(None, [m.mold_code, m.mold_name, m.label_name, m.chinese_short_name]))) for m in db.scalars(select(MoldTool).where(MoldTool.is_active.is_(True), MoldTool.archive_status == "active"))])
 
 
 @router.get("/material-price")

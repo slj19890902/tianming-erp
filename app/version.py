@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.331"
-APP_VERSION_NAME = "片料入库简化与纸种颜色维护"
+APP_VERSION = "v0.22.332"
+APP_VERSION_NAME = "仓库模具输入筛选"
 APP_BUILD_DATE = "2026-09-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2498,20 +2498,24 @@ _V022330_VERIFICATION_STEPS = [
     "批次匹配产品中搜索客户或存货编码，核对完全一致和需裁切排序；展开人工维护可追加第二家客户及可用产品。",
     "供应商材质编辑勾选白面纸，核对不同颜色不能互用；订单人工确认库存抵扣时核对半成品优先和原始批次记录。",
 ]
-APP_CHANGES = [
+_V022331_CHANGES = [
     "客户勾选与名称紧凑同排，支持中文、拼音和首字母搜索。",
     "片料直接填写材质代码或选择供应商材质；选中后读取当前价格，按尺寸折算并冻结本批入库结算单价。",
     "供应商基础纸种代码在克重和等级之间维护颜色，已有代码默认瓦楞色，可选白色；组合材质按首位面纸代码识别颜色。",
     "取消材质掌握情况及额外确认勾选，半成品自动允许同颜色同规格材质替代，白色与瓦楞色禁止混用。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022331_VERIFICATION_STEPS = [
     "仓库添加半成品，输入客户拼音或首字母，核对勾选框与客户名称同排。",
     "输入材质代码并选择供应商条目，核对平方价、单张价及合计；入库后调整供应商价格不改变该批快照。",
     "主数据→供应商→纸板材质维护，在基础纸种代码编辑颜色并保存；核对白色与瓦楞色不可互用、不同白色代码同规格可用。",
 ]
+APP_CHANGES = ["仓库半成品模具选择支持输入编号、名称、拼音或首字母筛选，搜索保留已选模具。"]
+APP_VERIFICATION_STEPS = ["仓库添加半成品，在使用模具上方输入编号或名称筛选，选中后确认仍按该模具筛选适用产品。"]
 APP_CHANGELOG = [
-    *(f"v0.22.331：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.331：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.332：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.332：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.331：本次更新｜{item}" for item in _V022331_CHANGES),
+    *(f"v0.22.331：如何验证｜{item}" for item in _V022331_VERIFICATION_STEPS),
     *(f"v0.22.330：本次更新｜{item}" for item in _V022330_CHANGES),
     *(f"v0.22.330：如何验证｜{item}" for item in _V022330_VERIFICATION_STEPS),
     *(f"v0.22.329：本次更新｜{item}" for item in _V022329_CHANGES),

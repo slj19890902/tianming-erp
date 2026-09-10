@@ -6,7 +6,7 @@ type Facts = {scope:"general"|"customers"; customer_ids:number[]; product_ids:nu
   material_code:string; verified_material_id:number|null;
   processing:"raw"|"cut"|"die_cut"|"creased"|"printed"; mold_tool_id:number|null; note:string};
 type Options = {customers:{id:number;name:string;full_name:string;code:string}[]; products:{id:number;customer_id:number;name:string;code:string;mold_tool_id:number|null}[];
-  materials:{id:number;code:string;supplier:string;layer_count:number;is_white_face:boolean}[]; molds:{id:number;name:string}[]};
+  materials:{id:number;code:string;supplier:string;layer_count:number;is_white_face:boolean}[]; molds:{id:number;name:string;search_text?:string}[]};
 const initialFacts=(raw:boolean):Facts=>({scope:"general",customer_ids:[],product_ids:[],material_code:"",verified_material_id:null,
   processing:raw?"raw":"cut",mold_tool_id:null,note:""});
 async function api(path:string,init?:RequestInit) {
@@ -16,7 +16,7 @@ async function api(path:string,init?:RequestInit) {
   return data;
 }
 function FactsEditor({facts,setFacts,options,raw,flute,canPrice,length,width,quantity}:{facts:Facts;setFacts:(f:Facts)=>void;options:Options;raw:boolean;flute:string;canPrice:boolean;length:string;width:string;quantity:string}) {
-  const [customerSearch,setCustomerSearch]=useState(""),[productSearch,setProductSearch]=useState("");
+  const [customerSearch,setCustomerSearch]=useState(""),[productSearch,setProductSearch]=useState(""),[moldSearch,setMoldSearch]=useState("");
   const [runtime,setRuntime]=useState<GoodsPinyin|null>(null),[materialOpen,setMaterialOpen]=useState(false),[quote,setQuote]=useState("");
   useEffect(()=>{let alive=true;void loadGoodsPinyin().then(r=>{if(alive)setRuntime(r);});return()=>{alive=false};},[]);
   useEffect(()=>{let alive=true;setQuote("");if(!facts.verified_material_id||!canPrice)return;
@@ -31,7 +31,7 @@ function FactsEditor({facts,setFacts,options,raw,flute,canPrice,length,width,qua
     <label>适用范围<select value={facts.scope} onChange={e=>update({scope:e.target.value as Facts["scope"],customer_ids:[],product_ids:[]})}><option value="general">通用（所有客户）</option><option value="customers">指定一家或多家客户</option></select></label>
     {facts.scope==="customers"&&<div><input placeholder="客户名称、拼音或首字母" value={customerSearch} onChange={e=>setCustomerSearch(e.target.value)}/><div className="goods-checks">{options.customers.filter(c=>search(`${c.name} ${c.full_name} ${c.code}`,customerSearch)).map(c=><label key={c.id}><input type="checkbox" checked={facts.customer_ids.includes(c.id)} onChange={()=>{const ids=toggle(facts.customer_ids,c.id);update({customer_ids:ids,product_ids:facts.product_ids.filter(id=>ids.includes(options.products.find(p=>p.id===id)?.customer_id||0))});}}/><span>{c.name}</span></label>)}</div></div>}
     {!raw&&<label>已经完成的加工<select value={facts.processing} onChange={e=>update({processing:e.target.value as Facts["processing"]})}><option value="cut">裁切 / 衬板净片</option><option value="die_cut">模切，待印刷或后加工</option><option value="creased">已压线</option><option value="printed">已印刷，待后加工</option></select></label>}
-    {!raw&&<label>使用模具（可选）<select value={facts.mold_tool_id||""} onChange={e=>update({mold_tool_id:Number(e.target.value)||null,product_ids:[]})}><option value="">未指定模具，按逐款用途确认</option>{options.molds.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>}
+    {!raw&&<label>使用模具（可选）<input aria-label="筛选模具" placeholder="输入模具编号、名称或拼音筛选" value={moldSearch} onChange={e=>setMoldSearch(e.target.value)}/><select value={facts.mold_tool_id||""} onChange={e=>update({mold_tool_id:Number(e.target.value)||null,product_ids:[]})}><option value="">未指定模具，按逐款用途确认</option>{options.molds.filter(m=>m.id===facts.mold_tool_id||search(m.search_text||m.name,moldSearch)).map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>}
     <div className="goods-material-picker"><label>材质代码<input value={facts.material_code} maxLength={100} placeholder="输入代码，选择供应商对应材质" onFocus={()=>setMaterialOpen(true)} onChange={e=>{update({material_code:e.target.value,verified_material_id:null});setMaterialOpen(true);}}/></label>
       {materialOpen&&<div className="goods-material-results">{options.materials.filter(m=>search(`${m.code} ${m.supplier}`,facts.material_code)).slice(0,30).map(m=><button type="button" key={m.id} onClick={()=>{update({verified_material_id:m.id,material_code:m.code});setMaterialOpen(false);}}><b>{m.code}</b><span>{m.supplier}{m.is_white_face?" · 白色":""}</span></button>)}<button type="button" className="goods-picker-close" onClick={()=>setMaterialOpen(false)}>收起</button></div>}
       {facts.verified_material_id&&<small>{options.materials.find(m=>m.id===facts.verified_material_id)?.supplier} {canPrice&&<>· {quote||"正在读取报价…"}</>}</small>}

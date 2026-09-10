@@ -36,6 +36,10 @@ class CutoverExecute(CutoverPreview):
     operation_key: str = Field(min_length=1, max_length=64)
 
 
+class StockedExecute(CutoverExecute):
+    rule_revision: int = Field(ge=0, strict=True)
+
+
 class UnstartedPreview(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target_locations: dict[int, int] = Field(default_factory=dict, max_length=0)
@@ -140,6 +144,39 @@ def execute(item_id: int, payload: CutoverExecute, db: Session = Depends(get_db)
         db.commit()
         return result
     except (BomPlanError, WarehouseInventoryError, SubkitError, CompositeBOMError, OSError) as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/items/{item_id}/stocked-bom-cutover/preview")
+def preview_stocked(item_id: int, payload: CutoverPreview, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    customer_id = _access(db, user, item_id)
+    from app.services.multilevel_bom_stocked_handoff import review_stocked_handoff
+    try:
+        return review_stocked_handoff(db, order_item_id=item_id,
+            customer_id=customer_id, target_locations=payload.target_locations).preview
+    except (BomPlanError, SubkitError, CompositeBOMError, WarehouseInventoryError, OSError) as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/items/{item_id}/stocked-bom-cutover/execute")
+def execute_stocked(item_id: int, payload: StockedExecute, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    customer_id = _access(db, user, item_id)
+    from app.services.multilevel_bom_stocked_handoff import execute_stocked_handoff
+    try:
+        if payload.preview_hash != payload.reviewed_hash:
+            raise BomPlanError("预览摘要不一致，请重新预览")
+        result = execute_stocked_handoff(db, order_item_id=item_id, customer_id=customer_id,
+            reviewed_hash=payload.reviewed_hash, expected_revision=payload.rule_revision,
+            target_locations=payload.target_locations, source_lot_versions=payload.source_lot_versions,
+            operation_key=payload.operation_key, actor=user)
+        db.commit()
+        return result
+    except (BomPlanError, SubkitError, CompositeBOMError, WarehouseInventoryError, OSError) as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
     except Exception:

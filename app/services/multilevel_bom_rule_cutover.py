@@ -175,6 +175,42 @@ def _result(row):
         rule_revision=row.revision, rule_revision_id=row.id, assembly_ids=[], output_lot_ids=[])
 
 
+def persist_reviewed_rule(db, *, review, item, previous, expected_revision, reviewed_hash,
+                          request_hash, operation_key, actor):
+    """Append one reviewed rule inside the caller's order lock and transaction."""
+    for node in review.proposed.graph.nodes:
+        changed = db.execute(update(Product).where(Product.id == node.product_id, Product.version == node.version,
+            Product.customer_id == review.proposed.graph.customer_id, Product.is_active.is_(True),
+            Product.deleted_at.is_(None), Product.purged_at.is_(None))
+            .values(version=Product.version, updated_at=Product.updated_at))
+        if changed.rowcount != 1:
+            raise BomPlanError("BOM产品已变化，请重新预览")
+    db.add_all(review.proposed.snapshots)
+    db.flush()
+    document, checksum = prepare_rule_revision(review.previous, review.proposed,
+        order_quantity=item.quantity, delivered_before=item.delivered_quantity or 0)
+    from app.services.multilevel_bom_production_versions import production_revisions
+    row = OrderBomRuleRevision(order_item_id=item.id, revision=expected_revision + 1,
+        previous_id=previous.id if previous else None, previous_revision=previous.revision if previous else None,
+        production_revision_before=len(production_revisions(db, item.id)), order_quantity=item.quantity,
+        delivered_before=item.delivered_quantity or 0, document_json=document, content_hash=checksum,
+        review_hash=reviewed_hash, request_hash=request_hash, idempotency_key=operation_key, created_by=actor.id)
+    db.add(row)
+    db.flush()
+    for node in review.proposed.graph.nodes:
+        db.add(OrderBomRuleProduct(revision_id=row.id, order_item_id=item.id,
+            product_id=node.product_id, product_version=node.version))
+        if db.get(OrderBomGraphProduct, (item.id, node.product_id)) is None:
+            db.add(OrderBomGraphProduct(order_item_id=item.id, product_id=node.product_id, product_version=node.version))
+    db.flush()
+    db.add_all([OrderBomRuleSource(snapshot_id=s.id, revision_id=row.id, order_item_id=item.id,
+        product_id=s.component_product_id) for s in review.proposed.snapshots])
+    db.flush()
+    from app.services.multilevel_bom_external_freeze import freeze_order_procurement
+    freeze_order_procurement(db, order_item_id=item.id, actor=actor)
+    return row
+
+
 def execute_rule_cutover(db, *, order_item_id, customer_id, reviewed_hash, expected_revision, operation_key, actor):
     if (type(expected_revision) is not int or expected_revision < 0
             or type(operation_key) is not str or not operation_key.strip() or len(operation_key) > 64
@@ -210,35 +246,10 @@ def execute_rule_cutover(db, *, order_item_id, customer_id, reviewed_hash, expec
             .order_by(OrderBomRuleRevision.revision.desc()))
         if (previous.revision if previous else 0) != expected_revision or review.checksum != reviewed_hash:
             raise BomPlanError("订单或规则版本已变化，请重新预览")
-        for node in review.proposed.graph.nodes:
-            changed = db.execute(update(Product).where(Product.id == node.product_id, Product.version == node.version,
-                Product.customer_id == customer_id, Product.is_active.is_(True), Product.deleted_at.is_(None), Product.purged_at.is_(None))
-                .values(version=Product.version, updated_at=Product.updated_at))
-            if changed.rowcount != 1:
-                raise BomPlanError("BOM产品已变化，请重新预览")
-        db.add_all(review.proposed.snapshots)
-        db.flush()
-        document, checksum = prepare_rule_revision(review.previous, review.proposed,
-            order_quantity=item.quantity, delivered_before=0)
-        from app.services.multilevel_bom_production_versions import production_revisions
-        row = OrderBomRuleRevision(order_item_id=item.id, revision=expected_revision + 1,
-            previous_id=previous.id if previous else None, previous_revision=previous.revision if previous else None,
-            production_revision_before=len(production_revisions(db, item.id)), order_quantity=item.quantity,
-            delivered_before=0, document_json=document, content_hash=checksum, review_hash=reviewed_hash,
-            request_hash=request_hash, idempotency_key=operation_key, created_by=actor.id)
-        db.add(row)
-        db.flush()
-        for node in review.proposed.graph.nodes:
-            db.add(OrderBomRuleProduct(revision_id=row.id, order_item_id=item.id,
-                product_id=node.product_id, product_version=node.version))
-            if db.get(OrderBomGraphProduct, (item.id, node.product_id)) is None:
-                db.add(OrderBomGraphProduct(order_item_id=item.id, product_id=node.product_id, product_version=node.version))
-        db.flush()
-        db.add_all([OrderBomRuleSource(snapshot_id=s.id, revision_id=row.id, order_item_id=item.id,
-            product_id=s.component_product_id) for s in review.proposed.snapshots])
-        db.flush()
-        from app.services.multilevel_bom_external_freeze import freeze_order_procurement
-        freeze_order_procurement(db, order_item_id=item.id, actor=actor)
+        row = persist_reviewed_rule(db, review=review, item=item, previous=previous,
+            expected_revision=expected_revision, reviewed_hash=reviewed_hash, request_hash=request_hash,
+            operation_key=operation_key, actor=actor)
+        checksum = row.content_hash
         previous_delivery = item.composite_fulfillment_mode_snapshot
         if review.proposed.graph.modes is not None:
             item.composite_fulfillment_mode_snapshot = (

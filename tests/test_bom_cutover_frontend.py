@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("rule_revision", [None, 0, 2])
-def test_cutover_preview_and_uncertain_retry_use_same_payload(rule_revision):
+@pytest.mark.parametrize("rule_revision,route", [(None,"reserved-kit-cutover"), (0,"unstarted-bom-cutover"),
+    (2,"unstarted-bom-cutover"), (0,"stocked-bom-cutover"), (2,"stocked-bom-cutover")])
+def test_cutover_preview_and_uncertain_retry_use_same_payload(rule_revision,route):
     html = Path("static/index.html").read_text(encoding="utf-8")
     methods = html.split("          async openReservedKitCutover(", 1)[1].split("          async openOrderDetail(", 1)[0]
     methods = "async openReservedKitCutover(" + methods
@@ -20,7 +21,7 @@ global.axios={post:async(url,payload)=>{urls.push(url);attempts.push(JSON.parse(
  if(url.endsWith('/execute')&&attempts.length===1)throw Error('network lost');return {data:review};}};
 ctx.errorMessage=e=>e.message;ctx.showToast=()=>{};ctx.openOrderDetail=async()=>{};
 ctx.modal={type:'bomCutover'};
-ctx.bomCutover={itemId:1,orderId:2,route:__RULE__===null?'reserved-kit-cutover':'unstarted-bom-cutover',review,confirmed:true,loading:false,pending:null};
+ctx.bomCutover={itemId:1,orderId:2,route:__ROUTE__,review,confirmed:true,loading:false,pending:null};
 (async()=>{
  await ctx.executeReservedKitCutover();
  assert.ok(ctx.bomCutover.pending);assert.equal(ctx.bomCutover.loading,false);
@@ -37,6 +38,6 @@ ctx.bomCutover={itemId:1,orderId:2,route:__RULE__===null?'reserved-kit-cutover':
  global.axios.post=async()=>{const e=Error('stale');e.response={status:409};throw e;};
  await ctx.executeReservedKitCutover();assert.equal(ctx.bomCutover.pending,null);assert.equal(ctx.bomCutover.confirmed,false);
 })().catch(e=>{console.error(e);process.exit(1)});
-'''.replace("METHODS", methods).replace("__RULE__", json.dumps(rule_revision))
+'''.replace("METHODS", methods).replace("__RULE__", json.dumps(rule_revision)).replace("__ROUTE__",json.dumps(route))
     result = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0, result.stdout + result.stderr

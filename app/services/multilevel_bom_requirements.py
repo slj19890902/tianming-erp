@@ -51,8 +51,10 @@ def read_graph_requirements(db, order_item_id):
     own_ids = {lot.id for lot in own_lots}
     own_root_used = sum(lot.quantity_consumed for lot in own_lots
                        if lot.finished_detail and lot.finished_detail.product_id == graph.root_id)
+    from app.services.multilevel_bom_output_history import current_finished_reservation_condition
     reserves = list(db.scalars(select(InventoryReservation).where(
         InventoryReservation.order_item_id == item.id, InventoryReservation.reservation_type == "finished_order",
+        current_finished_reservation_condition(db, compiled),
         InventoryReservation.status != "cancelled")))
     # This order's newly manufactured outputs are already represented by its
     # purchased material. Crediting them AND subtracting existing purchases

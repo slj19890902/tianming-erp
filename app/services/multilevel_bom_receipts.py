@@ -49,6 +49,15 @@ def node_purpose_snapshots(db, context, snapshots):
 
 def node_completed_quantity(db, context):
     root = context.node.product_id == context.compiled.graph.root_id
+    if root and context.compiled.rule_revision_id is not None:
+        from app.services.multilevel_bom_output_history import completion_source_id
+        completions = db.scalars(select(ProductionCompletion).join(ProductionTask,
+            ProductionTask.id == ProductionCompletion.task_id).where(
+                ProductionCompletion.order_item_id == context.snapshot.sales_order_item_id,
+                ProductionCompletion.status == "posted",
+                ProductionTask.sales_order_item_bom_component_id.is_(None)))
+        return sum(row.actual_output_quantity for row in completions
+                   if completion_source_id(db, row) == context.snapshot.id)
     condition = ProductionTask.sales_order_item_bom_component_id.is_(None) if root else (
         ProductionTask.sales_order_item_bom_component_id == context.snapshot.id)
     return int(db.scalar(select(func.coalesce(func.sum(ProductionCompletion.actual_output_quantity), 0))
@@ -186,10 +195,12 @@ def own_output_lots(db, order_item_id):
     external = select(ExternalPackagingReceiptItem.id).join(ExternalPackagingPurchaseItem,
         ExternalPackagingPurchaseItem.id == ExternalPackagingReceiptItem.purchase_item_id).where(
             ExternalPackagingPurchaseItem.sales_order_item_id == order_item_id, active_receipt_item())
-    return list(db.scalars(select(InventoryLot).where(or_(
+    lots = list(db.scalars(select(InventoryLot).where(or_(
         and_(InventoryLot.source_ref_type == "production_completion", InventoryLot.source_ref_id.in_(completions)),
         and_(InventoryLot.source_ref_type == "bom_external_receipt", InventoryLot.source_ref_id.in_(external)),
         and_(InventoryLot.source_ref_type == "bom_assembly", InventoryLot.source_ref_id.in_(assemblies))))))
+    from app.services.multilevel_bom_output_history import current_output_lots
+    return current_output_lots(db, read_compiled_order_bom(db, order_item_id), lots)
 
 
 def assemble_graph_receipt(db, *, context, allocation, operator_id):
@@ -213,8 +224,10 @@ def assemble_graph_order_receipt(db, *, compiled, order_item_id, operation_key, 
         return ()
     oid = order_item_id
     own_ids = {lot.id for lot in own_output_lots(db, oid)}
+    from app.services.multilevel_bom_output_history import current_finished_reservation_condition
     reserved_ids = set(db.scalars(select(InventoryReservation.inventory_lot_id).where(
         InventoryReservation.order_item_id == oid, InventoryReservation.reservation_type == "finished_order",
+        current_finished_reservation_condition(db, compiled),
         InventoryReservation.status.in_(("active", "partial")))))
     lots = list(db.scalars(select(InventoryLot).where(InventoryLot.id.in_(own_ids | reserved_ids),
         InventoryLot.status == "active", InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0)))
@@ -259,7 +272,9 @@ def graph_material_receipts_closed(db, item):
     for source, row, purpose in db.execute(select(RequisitionItemBomSource, RequisitionItem, PurchasePurposeSourceSnapshot)
         .join(RequisitionItem, RequisitionItem.id == RequisitionItemBomSource.requisition_item_id)
         .join(PurchasePurposeSourceSnapshot, PurchasePurposeSourceSnapshot.material_requisition_item_id == RequisitionItem.id)
-        .where(RequisitionItem.order_item_id == item.id)):
+        .where(RequisitionItem.order_item_id == item.id,
+               RequisitionItemBomSource.sales_order_item_bom_component_id.in_(
+                   [row.id for row in requirements.compiled.snapshots]))):
         if row.status in ("有效", "supplier_requisition_created"):
             return False
         if row.status == "已入库":
@@ -296,7 +311,9 @@ def refresh_graph_main_task(db, item, *, create_if_missing):
             continue
         quantities[lot.finished_detail.product_id] += max(lot.quantity_available + lot.quantity_reserved
                                                         + lot.quantity_consumed - consumed[lot.id], 0)
+    from app.services.multilevel_bom_output_history import current_finished_reservation_condition
     for reserve in db.scalars(select(InventoryReservation).where(InventoryReservation.order_item_id == item.id,
+        current_finished_reservation_condition(db, compiled),
         InventoryReservation.reservation_type == "finished_order", InventoryReservation.status != "cancelled")):
         if reserve.inventory_lot_id in own_ids:
             continue
@@ -304,16 +321,30 @@ def refresh_graph_main_task(db, item, *, create_if_missing):
         if lot and lot.finished_detail:
             quantities[lot.finished_detail.product_id] += max(int(reserve.credited_requirement_quantity or 0)
                                                             - reserve.released_requirement_quantity, 0)
-    picking = plan_bom(compiled.graph, item.quantity).picking
-    covered = min(item.quantity, *(quantities[pid] * item.quantity // qty for pid, qty in picking))
-    status = COMPLETED if covered >= item.quantity else PENDING if own_ids else WAITING_MATERIAL
+    execution_quantity = compiled.execution_window.execution_quantity if compiled.execution_window else item.quantity
+    picking = plan_bom(compiled.graph, execution_quantity).picking
+    covered = min(execution_quantity, *(quantities[pid] * execution_quantity // qty for pid, qty in picking))
+    status = COMPLETED if covered >= execution_quantity else PENDING if own_ids else WAITING_MATERIAL
     from app.services.receipt_purpose_distribution import _active_order_item_allocations
-    material_received = sum(a.receipt_order_purpose_sheet_qty for a in _active_order_item_allocations(db, item.id))
-    semi_consumed = int(db.scalar(select(func.coalesce(func.sum(InventoryReservation.consumed_stock_quantity), 0))
-        .where(InventoryReservation.order_item_id == item.id, InventoryReservation.reservation_type == "semi_order",
-               InventoryReservation.status != "cancelled")) or 0)
-    values = {"status": status, "planned_quantity": item.quantity if status != WAITING_MATERIAL else 0,
-              "finished_coverage_snapshot": covered, "ordered_quantity_snapshot": item.quantity,
+    allocations = _active_order_item_allocations(db, item.id)
+    semi_query = select(func.coalesce(func.sum(InventoryReservation.consumed_stock_quantity), 0)).where(
+        InventoryReservation.order_item_id == item.id, InventoryReservation.reservation_type == "semi_order",
+        InventoryReservation.status != "cancelled")
+    if compiled.rule_revision_id is not None:
+        from app.models.supplier_requisition_order import PurchasePurposeSourceSnapshot
+        source_ids = [row.id for row in compiled.snapshots]
+        purposes = set(db.scalars(select(PurchasePurposeSourceSnapshot.id).join(RequisitionItemBomSource,
+            RequisitionItemBomSource.id == PurchasePurposeSourceSnapshot.source_bom_requisition_source_id).where(
+                RequisitionItemBomSource.sales_order_item_bom_component_id.in_(source_ids))))
+        allocations = [row for row in allocations if row.purchase_purpose_source_snapshot_id in purposes]
+        semi_query = semi_query.outerjoin(OrderItemSemiRequirement,
+            OrderItemSemiRequirement.id == InventoryReservation.semi_requirement_id).where(or_(
+                InventoryReservation.sales_order_item_bom_component_id.in_(source_ids),
+                OrderItemSemiRequirement.sales_order_item_bom_component_id.in_(source_ids)))
+    material_received = sum(row.receipt_order_purpose_sheet_qty for row in allocations)
+    semi_consumed = int(db.scalar(semi_query) or 0)
+    values = {"status": status, "planned_quantity": execution_quantity if status != WAITING_MATERIAL else 0,
+              "finished_coverage_snapshot": covered, "ordered_quantity_snapshot": execution_quantity,
               "material_received_quantity": material_received,
               "material_input_quantity": material_received + semi_consumed,
               "readiness_basis": "automatic_receipt" if material_received or own_ids else None}

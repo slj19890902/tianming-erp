@@ -257,6 +257,13 @@ def test_manufactured_parent_old_reservation_is_not_credited_to_new_rule(factory
     assert page["component_delivered_by_snapshot"][old_root] == 1
     assert not page["reservations_by_snapshot"].get(new_root)
     assert page["reservations_by_snapshot"][old_root]
+    from app.services.multilevel_bom_receipts import NodeReceiptContext, node_completed_quantity, own_output_lots
+    current = read_compiled_order_bom(db, item.id)
+    context = NodeReceiptContext(current, current.graph.nodes[0], current.snapshots[0])
+    assert node_completed_quantity(db, context) == 0
+    assert not own_output_lots(db, item.id)
+    from app.services.multilevel_bom_requirements import read_graph_requirements
+    assert read_graph_requirements(db, item.id).finished_units[3479] == 0
 
 
 def test_actual_assembly_reversal_uses_original_rule_after_fixture_switch(factory_http):
@@ -284,6 +291,8 @@ def test_actual_assembly_reversal_uses_original_rule_after_fixture_switch(factor
                     for pid, quantity in [(3771, 3), (3783, 4)]])
     db.commit()
     store_fixture_revision(db, actor, item)
+    from app.services.multilevel_bom_receipts import own_output_lots
+    assert not own_output_lots(db, item.id)
     for row in rows:
         reverse_order_assembly(db, order_item_id=item.id, operator_id=actor.id,
             operation_key=json.loads(row.cost_detail_json)["graph_operation"]["key"],

@@ -64,14 +64,17 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
         manifest = _hash({"schema": 1, "order_item_id": order_item_id,
             "lots": sorted(source_lot_versions.items()), "targets": sorted(target_locations.items()),
             "available_lot_ids": sorted(free_ids), "operator_id": operator_id})
+        legacy_operation = {"key": operation_key, "request_hash": manifest, "product_ids": product_ids}
+        operation = {**legacy_operation, "source_ids": sorted(row.id for row in compiled.snapshots)}
         existing = list(db.scalars(select(BomAssembly).where(BomAssembly.idempotency_key.in_(keys.values()))))
         if existing:
             by_key = {r.idempotency_key: r for r in existing}
             if len(by_key) != len(keys) or any(
                 r.status != "posted" or r.order_item_id != order_item_id
                 or keys.get(r.output_product_id) != r.idempotency_key
-                or json.loads(r.cost_detail_json).get("graph_operation") != {
-                    "key": operation_key, "request_hash": manifest, "product_ids": product_ids}
+                or (json.loads(r.cost_detail_json).get("graph_operation") != operation
+                    and not (compiled.rule_revision_id is None
+                             and json.loads(r.cost_detail_json).get("graph_operation") == legacy_operation))
                 for r in existing
             ):
                 raise SubkitError("逐层组装标识已使用、载荷不一致或已撤销")
@@ -161,8 +164,7 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
             if result.quantity != expected:
                 raise SubkitError("逐层组装计划与实际扣减不一致，请重试")
             detail = json.loads(result.cost_detail_json)
-            detail["graph_operation"] = {"key": operation_key, "request_hash": manifest,
-                                         "product_ids": product_ids}
+            detail["graph_operation"] = operation
             result.cost_detail_json = json.dumps(detail)
             results.append(result)
             if result.output_lot_id:
@@ -194,7 +196,10 @@ def reverse_order_assembly(db, *, order_item_id, operation_key, operator_id, sou
             raise SubkitError("逐层组装流水不完整，不能撤销")
         for pid in reversed(pids):
             row = rows[pid]
-            if json.loads(row.cost_detail_json).get("graph_operation", {}).get("key") != operation_key:
+            operation = json.loads(row.cost_detail_json).get("graph_operation", {})
+            if (operation.get("key") != operation_key or operation.get("product_ids") != pids
+                    or ("source_ids" in operation
+                        and operation["source_ids"] != sorted(source.id for source in compiled.snapshots))):
                 raise SubkitError("逐层组装流水来源不匹配")
             reverse_subkit_conversion(db, conversion_id=row.id, operator_id=operator_id, graph_assembly=True)
         return tuple(rows[pid] for pid in pids)

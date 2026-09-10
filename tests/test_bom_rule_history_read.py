@@ -149,3 +149,19 @@ def test_revised_source_ids_continue_through_real_receipt_delivery_and_cancel(fa
     assert {row.id for row in after.snapshots} == current_ids
     assert after.history_source_ids == old_ids
     assert next(row for row in original.snapshots if row.component_product_id == 3771).required_piece_quantity == 6
+
+
+def test_rule_only_history_has_the_same_cancellation_boundary_as_legacy_cutover(factory_copy):
+    """Boundary storage fixture, not evidence of an operational partial handoff."""
+    from app.services.multilevel_bom_delivery_boundary import validate_cancel_execution_boundary
+    db = factory_copy
+    actor, item, _ = frozen_order(db)
+    item.delivered_quantity = 20
+    db.commit()
+    store_fixture_revision(db, actor, item)
+    item.delivered_quantity = 25
+    db.commit()
+    validate_cancel_execution_boundary(db, item=item, delivery_item_ids=[], quantity=5)
+    with pytest.raises(BomPlanError, match="跨越"):
+        validate_cancel_execution_boundary(db, item=item, delivery_item_ids=[], quantity=6)
+    assert item.delivered_quantity == 25

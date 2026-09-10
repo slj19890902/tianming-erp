@@ -3683,6 +3683,7 @@
                     <div class="field"><label>代码字符（可用 + 等符号）</label><input class="input" maxlength="1" v-model.trim="paperCodeForm.code_char" @input="paperCodeForm.code_char=paperCodeForm.code_char.toUpperCase()" /></div>
                     <div class="field"><label>纸种名称</label><input class="input" v-model.trim="paperCodeForm.paper_name" /></div>
                     <div class="field"><label>克重(g)</label><input class="input" type="number" min="1" step="1" v-model.number="paperCodeForm.gram_weight" /></div>
+                    <div class="field"><label>颜色</label><select class="select" v-model="paperCodeForm.color"><option value="kraft">瓦楞色</option><option value="white">白色</option></select></div>
                     <div class="field"><label>等级/说明</label><input class="input" v-model.trim="paperCodeForm.paper_grade" /></div>
                     <div class="field"><label>纸张用途</label><select class="select" v-model="paperCodeForm.paper_role"><option value="">通用</option><option>面纸</option><option>芯纸</option><option>中纸</option><option>里纸</option></select></div>
                     <div class="field wide"><label>备注</label><input class="input" v-model.trim="paperCodeForm.remark" /></div>
@@ -3690,8 +3691,8 @@
                   </div>
                   <div v-if="paperCodeError" class="notice danger" style="margin:8px 0">{{ paperCodeError }} <button class="btn small" :disabled="paperCodesLoading || paperCodeActionBusy()" @click="loadPaperCodes">重新加载</button></div>
                   <div v-if="paperCodesLoading" class="muted" style="padding:12px;text-align:center">基础纸种代码正在加载…</div>
-                  <div class="table-wrap"><table><thead><tr><th>供应商</th><th>代码</th><th>纸种</th><th>克重</th><th>等级</th><th>用途</th><th>状态</th><th>操作</th></tr></thead><tbody>
-                    <tr v-for="row in paperCodes" :key="row.id"><td>{{ supplierDisplayName(row.supplier_name) }}</td><td><strong>{{ row.code_char }}</strong></td><td>{{ row.paper_name }}</td><td>{{ row.gram_weight }}g</td><td>{{ row.paper_grade || '-' }}</td><td>{{ row.paper_role || '通用' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td class="toolbar-group"><button class="btn small" :disabled="paperCodeActionBusy()" @click="editPaperCode(row)">编辑</button><button :class="['btn','small',row.is_active?'danger':'success']" :disabled="paperCodeActionBusy()" @click="togglePaperCodeStatus(row)">{{ paperCodeActionPending('status',row.id) ? '处理中…' : (row.is_active ? '停用' : '启用') }}</button></td></tr>
+                  <div class="table-wrap"><table><thead><tr><th>供应商</th><th>代码</th><th>纸种</th><th>克重</th><th>颜色</th><th>等级</th><th>用途</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                    <tr v-for="row in paperCodes" :key="row.id"><td>{{ supplierDisplayName(row.supplier_name) }}</td><td><strong>{{ row.code_char }}</strong></td><td>{{ row.paper_name }}</td><td>{{ row.gram_weight }}g</td><td>{{ row.color === "white" ? "白色" : "瓦楞色" }}</td><td>{{ row.paper_grade || '-' }}</td><td>{{ row.paper_role || '通用' }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td><td class="toolbar-group"><button class="btn small" :disabled="paperCodeActionBusy()" @click="editPaperCode(row)">编辑</button><button :class="['btn','small',row.is_active?'danger':'success']" :disabled="paperCodeActionBusy()" @click="togglePaperCodeStatus(row)">{{ paperCodeActionPending('status',row.id) ? '处理中…' : (row.is_active ? '停用' : '启用') }}</button></td></tr>
                   </tbody></table><div v-if="!paperCodes.length" class="empty">当前没有基础纸种代码</div></div>
                 </div>
                 <div v-if="showMaterialComposer" class="panel" style="margin:10px 0;border-color:#60a5fa">
@@ -6942,7 +6943,7 @@
             </div>
             <div v-else-if="modal.type === 'material'" class="form-grid">
               <div class="field"><label>材质代码</label><input class="input" v-model.trim="materialForm.code" @change="weightFromMaterialCode" /></div>
-              <div class="field"><label><input type="checkbox" v-model="materialForm.is_white_face" /> 白面纸</label><small>仅白面纸材质勾选；不同面纸颜色不能互用。</small></div>
+              <div class="field"><label>面纸颜色</label><small>按该供应商基础纸种代码第一位的颜色识别，在基础代码维护中设置。</small></div>
               <div class="field"><label>层数</label><select class="select" v-model.number="materialForm.layer_count" @change="onMaterialLayerChange"><option :value="3">三层（单瓦楞）</option><option :value="5">五层（双瓦楞）</option><option :value="7">七层</option></select></div>
               <div class="field wide"><label>克重组合</label><input class="input" placeholder="170g/130g/80g/170g/150g" v-model.trim="materialForm.basis_weight_description" @change="recommendMaterialCode" /></div>
               <div class="field"><label>配纸</label><input class="input" v-model.trim="materialForm.paper_composition" /></div>
@@ -9684,7 +9685,7 @@
       });
       const blankPaperCode = () => ({
         id:null, supplier_name:"", code_char:"", paper_name:"",
-        gram_weight:null, paper_grade:"", paper_role:"", remark:"", is_active:true
+        gram_weight:null, color:"kraft", paper_grade:"", paper_role:"", remark:"", is_active:true
       });
       const blankMaterialComposer = () => ({
         supplier_name:"", layer_count:5, material_code:"", usage_flute_type:"",
@@ -27220,6 +27221,7 @@
               code_char:String(row.code_char || "").trim().toUpperCase(),
               paper_name:String(row.paper_name || "").trim(),
               gram_weight:Number(row.gram_weight || 0),
+              color:row.color || "kraft",
               paper_grade:String(row.paper_grade || "").trim() || null,
               paper_role:String(row.paper_role || "").trim() || null,
               remark:String(row.remark || "").trim() || null,

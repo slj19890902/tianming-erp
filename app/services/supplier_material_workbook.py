@@ -147,6 +147,7 @@ def _paper_snapshot(row: SupplierPaperCode) -> dict[str, Any]:
         "code_char": row.code_char,
         "paper_name": row.paper_name,
         "gram_weight": row.gram_weight,
+        "color": row.color,
         "paper_grade": row.paper_grade,
         "paper_role": row.paper_role,
         "remark": row.remark,

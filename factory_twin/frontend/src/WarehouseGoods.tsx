@@ -1,40 +1,42 @@
 import {useEffect, useRef, useState} from "react";
 import "./warehouseGoods.css";
+import {goodsSearchText,matchesGoodsSearch,loadGoodsPinyin,type GoodsPinyin} from "./goodsSearch.mjs";
 
 type Facts = {scope:"general"|"customers"; customer_ids:number[]; product_ids:number[];
-  material_confidence:"unknown"|"estimated"|"confirmed"; estimated_material:string;
-  verified_material_id:number|null; face_paper:"kraft"|"white"|"unknown";
-  processing:"raw"|"cut"|"die_cut"|"creased"|"printed"; mold_tool_id:number|null;
-  allow_material_substitution:boolean; usage_confirmed:boolean; note:string};
-type Options = {customers:{id:number;name:string}[]; products:{id:number;customer_id:number;name:string;code:string;mold_tool_id:number|null}[];
+  material_code:string; verified_material_id:number|null;
+  processing:"raw"|"cut"|"die_cut"|"creased"|"printed"; mold_tool_id:number|null; note:string};
+type Options = {customers:{id:number;name:string;full_name:string;code:string}[]; products:{id:number;customer_id:number;name:string;code:string;mold_tool_id:number|null}[];
   materials:{id:number;code:string;supplier:string;layer_count:number;is_white_face:boolean}[]; molds:{id:number;name:string}[]};
-const initialFacts=(raw:boolean):Facts=>({scope:"general",customer_ids:[],product_ids:[],material_confidence:"unknown",
-  estimated_material:"",verified_material_id:null,face_paper:"kraft",processing:raw?"raw":"cut",mold_tool_id:null,
-  allow_material_substitution:false,usage_confirmed:false,note:""});
+const initialFacts=(raw:boolean):Facts=>({scope:"general",customer_ids:[],product_ids:[],material_code:"",verified_material_id:null,
+  processing:raw?"raw":"cut",mold_tool_id:null,note:""});
 async function api(path:string,init?:RequestInit) {
   const response=await fetch(`/api/warehouse/goods${path}`,{credentials:"same-origin",cache:"no-store",...init});
   const data=await response.json();
   if(!response.ok)throw new Error(typeof data.detail==="string"?data.detail:Array.isArray(data.detail)?data.detail.map((e:{msg:string})=>e.msg).join("；"):"操作失败，请刷新核对");
   return data;
 }
-function FactsEditor({facts,setFacts,options,raw}:{facts:Facts;setFacts:(f:Facts)=>void;options:Options;raw:boolean}) {
-  const [customerSearch,setCustomerSearch]=useState(""),[productSearch,setProductSearch]=useState(""),[materialSearch,setMaterialSearch]=useState("");
-  const update=(p:Partial<Facts>)=>setFacts({...facts,...p,usage_confirmed:p.usage_confirmed ?? false});
+function FactsEditor({facts,setFacts,options,raw,flute,canPrice,length,width,quantity}:{facts:Facts;setFacts:(f:Facts)=>void;options:Options;raw:boolean;flute:string;canPrice:boolean;length:string;width:string;quantity:string}) {
+  const [customerSearch,setCustomerSearch]=useState(""),[productSearch,setProductSearch]=useState("");
+  const [runtime,setRuntime]=useState<GoodsPinyin|null>(null),[materialOpen,setMaterialOpen]=useState(false),[quote,setQuote]=useState("");
+  useEffect(()=>{let alive=true;void loadGoodsPinyin().then(r=>{if(alive)setRuntime(r);});return()=>{alive=false};},[]);
+  useEffect(()=>{let alive=true;setQuote("");if(!facts.verified_material_id||!canPrice)return;
+    const timer=setTimeout(()=>void api(`/material-price?material_id=${facts.verified_material_id}&flute_type=${encodeURIComponent(flute)}&length_mm=${Number(length)||0}&width_mm=${Number(width)||0}&quantity=${Number(quantity)||0}`).then(d=>{if(alive)setQuote(`当前报价 ${d.square_price} ${d.unit||"元/㎡"} · ${d.tax_included?"含税":"未税"}${d.unit_price ? ` · ${d.unit_price}元/张` : ""}${d.total_price ? ` · 合计${d.total_price}元` : ""}`);}).catch(e=>{if(alive)setQuote(e.message);}),200);return()=>{alive=false;clearTimeout(timer)};
+  },[facts.verified_material_id,flute,canPrice,length,width,quantity]);
+  const search=(text:string,query:string)=>matchesGoodsSearch(goodsSearchText(text,runtime),query);
+  const update=(p:Partial<Facts>)=>setFacts({...facts,...p});
   const toggle=(ids:number[],id:number)=>ids.includes(id)?ids.filter(v=>v!==id):[...ids,id];
   const products=options.products.filter(p=>(facts.scope==="general"||facts.customer_ids.includes(p.customer_id))&&
     (!facts.mold_tool_id||p.mold_tool_id===facts.mold_tool_id)&&`${p.code} ${p.name} ${options.customers.find(c=>c.id===p.customer_id)?.name}`.toLowerCase().includes(productSearch.toLowerCase()));
   return <div className="goods-fields">
     <label>适用范围<select value={facts.scope} onChange={e=>update({scope:e.target.value as Facts["scope"],customer_ids:[],product_ids:[]})}><option value="general">通用（所有客户）</option><option value="customers">指定一家或多家客户</option></select></label>
-    {facts.scope==="customers"&&<div><input placeholder="查找客户，可连续勾选多家" value={customerSearch} onChange={e=>setCustomerSearch(e.target.value)}/><div className="goods-checks">{options.customers.filter(c=>c.name.includes(customerSearch)||facts.customer_ids.includes(c.id)).map(c=><label key={c.id}><input type="checkbox" checked={facts.customer_ids.includes(c.id)} onChange={()=>{const ids=toggle(facts.customer_ids,c.id);update({customer_ids:ids,product_ids:facts.product_ids.filter(id=>ids.includes(options.products.find(p=>p.id===id)?.customer_id||0))});}}/>{c.name}</label>)}</div></div>}
+    {facts.scope==="customers"&&<div><input placeholder="客户名称、拼音或首字母" value={customerSearch} onChange={e=>setCustomerSearch(e.target.value)}/><div className="goods-checks">{options.customers.filter(c=>search(`${c.name} ${c.full_name} ${c.code}`,customerSearch)).map(c=><label key={c.id}><input type="checkbox" checked={facts.customer_ids.includes(c.id)} onChange={()=>{const ids=toggle(facts.customer_ids,c.id);update({customer_ids:ids,product_ids:facts.product_ids.filter(id=>ids.includes(options.products.find(p=>p.id===id)?.customer_id||0))});}}/><span>{c.name}</span></label>)}</div></div>}
     {!raw&&<label>已经完成的加工<select value={facts.processing} onChange={e=>update({processing:e.target.value as Facts["processing"]})}><option value="cut">裁切 / 衬板净片</option><option value="die_cut">模切，待印刷或后加工</option><option value="creased">已压线</option><option value="printed">已印刷，待后加工</option></select></label>}
     {!raw&&<label>使用模具（可选）<select value={facts.mold_tool_id||""} onChange={e=>update({mold_tool_id:Number(e.target.value)||null,product_ids:[]})}><option value="">未指定模具，按逐款用途确认</option>{options.molds.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>}
-    <label>材质掌握情况<select value={facts.material_confidence} onChange={e=>update({material_confidence:e.target.value as Facts["material_confidence"],verified_material_id:null})}><option value="unknown">标签丢失 / 材质未知</option><option value="estimated">目测估计</option><option value="confirmed">已经核实材质</option></select></label>
-    {facts.material_confidence!=="confirmed"?<label>估计材质或辨认线索<input maxLength={200} value={facts.estimated_material} placeholder="例如大致克重、来源；不会作为准确材质" onChange={e=>update({estimated_material:e.target.value})}/></label>:<div><input value={materialSearch} onChange={e=>setMaterialSearch(e.target.value)} placeholder="查找供应商、材质代码"/><label>确认供应商材质<select value={facts.verified_material_id||""} onChange={e=>{const m=options.materials.find(m=>m.id===Number(e.target.value));update({verified_material_id:m?.id||null,face_paper:m?.is_white_face?"white":"kraft"});}}><option value="">请选择准确材质</option>{options.materials.filter(m=>m.id===facts.verified_material_id||`${m.supplier} ${m.code}`.toLowerCase().includes(materialSearch.toLowerCase())).map(m=><option key={m.id} value={m.id}>{m.supplier} · {m.code}{m.is_white_face?" · 白面纸":""}</option>)}</select></label></div>}
-    <label>面纸颜色<select value={facts.face_paper} disabled={Boolean(facts.verified_material_id)} onChange={e=>update({face_paper:e.target.value as Facts["face_paper"]})}><option value="kraft">瓦楞色</option><option value="white">白面纸</option><option value="unknown">尚未确认</option></select></label>
-    {!raw&&<label className="goods-check"><input type="checkbox" checked={facts.allow_material_substitution} onChange={e=>update({allow_material_substitution:e.target.checked})}/>允许此半成品采用与常用箱不同的材质（颜色、楞型和尺寸仍须一致）</label>}
+    <div className="goods-material-picker"><label>材质代码<input value={facts.material_code} maxLength={100} placeholder="输入代码，选择供应商对应材质" onFocus={()=>setMaterialOpen(true)} onChange={e=>{update({material_code:e.target.value,verified_material_id:null});setMaterialOpen(true);}}/></label>
+      {materialOpen&&<div className="goods-material-results">{options.materials.filter(m=>search(`${m.code} ${m.supplier}`,facts.material_code)).slice(0,30).map(m=><button type="button" key={m.id} onClick={()=>{update({verified_material_id:m.id,material_code:m.code});setMaterialOpen(false);}}><b>{m.code}</b><span>{m.supplier}{m.is_white_face?" · 白色":""}</span></button>)}<button type="button" className="goods-picker-close" onClick={()=>setMaterialOpen(false)}>收起</button></div>}
+      {facts.verified_material_id&&<small>{options.materials.find(m=>m.id===facts.verified_material_id)?.supplier} {canPrice&&<>· {quote||"正在读取报价…"}</>}</small>}
+    </div>
     <details><summary>确认可用产品（已选 {facts.product_ids.length} 款）</summary><p>模切、压线、已印刷片料必须逐款确认；未选产品的通用净片仍须符合物理规格。</p><input placeholder="客户、存货编码、产品名称" value={productSearch} onChange={e=>setProductSearch(e.target.value)}/><div className="goods-checks">{products.slice(0,80).map(p=><label key={p.id}><input type="checkbox" checked={facts.product_ids.includes(p.id)} onChange={()=>update({product_ids:toggle(facts.product_ids,p.id)})}/><span>{options.customers.find(c=>c.id===p.customer_id)?.name} · {p.code}<small>{p.name}</small></span></label>)}</div><small>符合 {products.length} 款，显示前80款；输入客户或编码可缩小范围。</small>{facts.product_ids.length>0&&<div className="goods-checks">{facts.product_ids.map(id=><label key={id}><input type="checkbox" checked onChange={()=>update({product_ids:facts.product_ids.filter(v=>v!==id)})}/>{options.products.find(p=>p.id===id)?.code||id} · 已选</label>)}</div>}</details>
-    <label className="goods-check"><input type="checkbox" checked={facts.usage_confirmed} disabled={facts.material_confidence!=="confirmed"||!facts.verified_material_id||facts.face_paper==="unknown"} onChange={e=>update({usage_confirmed:e.target.checked})}/>已人工核对材质、加工状态及适用产品，可进入订单抵扣候选</label>
-    <small>未知或估计材质可以入库和反向查找产品；核实前不参与库存抵扣。订单抵扣仍需人工确认。</small>
     <label>说明<textarea maxLength={1000} value={facts.note} onChange={e=>update({note:e.target.value})}/></label>
   </div>;
 }
@@ -47,7 +49,7 @@ export function WarehouseGoods({lotId,locationId,layoutVersion,raw=false,canSave
   const [pieces,setPieces]=useState("1"),[yieldPerSheet,setYield]=useState("1"),[component,setComponent]=useState("whole"),[source,setSource]=useState("existing_stocktake");
   const [creaseType,setCreaseType]=useState(""),[creaseLeft,setCreaseLeft]=useState(""),[creaseMiddle,setCreaseMiddle]=useState(""),[creaseRight,setCreaseRight]=useState("");
   const pending=useRef<{signature:string;key:string}|null>(null),saving=useRef(false);
-  useEffect(()=>{let alive=true;void Promise.all([api("/options"),lotId?api(`/${lotId}`):Promise.resolve(null)]).then(([o,d])=>{if(!alive)return;setOptions(o);if(d){setFacts(d.facts);setVersion(d.version);setEditable(d.editable);setPhysical(`${d.physical.name||"片料"} · ${d.physical.length}×${d.physical.width} · ${d.physical.flute}楞 · 原入库材质 ${d.physical.material}`);}}).catch(e=>{if(alive)setMessage(e.message);});return()=>{alive=false};},[lotId]);
+  useEffect(()=>{let alive=true;void Promise.all([api("/options"),lotId?api(`/${lotId}`):Promise.resolve(null)]).then(([o,d])=>{if(!alive)return;setOptions(o);if(d){setFacts(d.facts);setFlute(d.physical.flute);setVersion(d.version);setEditable(d.editable);setPhysical(`${d.physical.name||"片料"} · ${d.physical.length}×${d.physical.width} · ${d.physical.flute}楞 · 原入库材质 ${d.physical.material}${d.physical.settlement_unit_price ? ` · 入库结算单价 ${d.physical.settlement_unit_price}元/张` : ""}`);}}).catch(e=>{if(alive)setMessage(e.message);});return()=>{alive=false};},[lotId]);
   const save=async()=>{
     if(saving.current||!canSave||!options)return;
     const payload=lotId?{facts,expected_version:version}:{facts,location_id:locationId,expected_layout_version:layoutVersion,
@@ -72,7 +74,7 @@ export function WarehouseGoods({lotId,locationId,layoutVersion,raw=false,canSave
         <div className="goods-pair"><label>实际数量（张）<input type="number" min={1} value={quantity} onChange={e=>setQuantity(e.target.value)}/></label><label>库存日期<input type="date" value={stockDate} onChange={e=>setStockDate(e.target.value)}/></label></div>
         <details><summary>片数换算与来源</summary><label>组件<select value={component} onChange={e=>setComponent(e.target.value)}><option value="whole">整片</option><option value="cover">盖片</option><option value="base">底片</option></select></label><label>每箱所需片数<input type="number" min={1} value={pieces} onChange={e=>setPieces(e.target.value)}/></label><label>每库存张产出片数<input type="number" min={1} value={yieldPerSheet} onChange={e=>setYield(e.target.value)}/></label><label>来源<select value={source} onChange={e=>setSource(e.target.value)}><option value="existing_stocktake">本厂现场盘点发现</option><option value="partner_transfer">合作纸箱厂搬入</option></select></label></details>
       </div>}
-      <FactsEditor facts={facts} setFacts={setFacts} options={options} raw={lotId?facts.processing==="raw":raw}/>
+      <FactsEditor facts={facts} setFacts={setFacts} options={options} raw={lotId?facts.processing==="raw":raw} flute={flute} canPrice={canSave&&!lotId} length={length} width={width} quantity={quantity}/>
       {!lotId&&facts.processing==="creased"&&<div className="goods-fields"><label>压线类型<input value={creaseType} onChange={e=>setCreaseType(e.target.value)} placeholder="按实际压线类型填写"/></label>{[["左段",creaseLeft,setCreaseLeft],["中段",creaseMiddle,setCreaseMiddle],["右段",creaseRight,setCreaseRight]].map(([label,value,setter])=><label key={String(label)}>{String(label)}（mm）<input type="number" min={0} value={String(value)} onChange={e=>(setter as (s:string)=>void)(e.target.value)}/></label>)}</div>}
       {canSave&&<button type="button" className="twin-primary-action" onClick={()=>void save()}>{busy?"保存中…":lotId?"保存适用资料":"确认增加库存"}</button>}
     </fieldset>}

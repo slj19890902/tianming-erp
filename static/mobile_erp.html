@@ -230,6 +230,18 @@
     .warehouse-goods-identity,.warehouse-goods-description { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; min-width:0; overflow-wrap:anywhere; }
     .warehouse-goods-identity strong { font-size:18px; font-weight:900; }
     .warehouse-goods-description { font-size:14px; color:#475569; }
+    .warehouse-label-card { background:#f0f8ff; border:1px solid #d8e8f1; padding:10px; }
+    .warehouse-label-summary { display:flex; flex-wrap:wrap; gap:4px 8px; font-size:13px; overflow-wrap:anywhere; }
+    .warehouse-label-summary > span:first-child { color:#176497; }
+    .warehouse-label-code-row { display:flex; flex-wrap:wrap; gap:6px; align-items:baseline; }
+    .warehouse-label-code { flex:1 1 100px; min-width:0; background:transparent; border:0; padding:5px 0; text-align:left; overflow-wrap:anywhere; }
+    .warehouse-label-code,.warehouse-label-quantity { font-size:18px; font-weight:800; color:#172f45; }
+    .warehouse-label-code-row button { min-height:36px; }
+    .warehouse-label-card .warehouse-map-item-actions { margin-top:4px; }
+    .warehouse-label-card .warehouse-lot-history > summary { display:none; }
+    .warehouse-label-preview { padding:8px; border:1px solid #bdd5e2; background:white; overflow-wrap:anywhere; }
+    .warehouse-label-operation { background:#edf9f5; padding:10px; border:1px solid #cce9df; border-radius:8px; }
+    .warehouse-label-operation .warehouse-empty-search { margin:6px 0 0; background:transparent; }
   </style>
 </head>
 <body>
@@ -1698,6 +1710,7 @@
           card.append(move, returned);
           container.append(card);
         });
+        const addPanel = node("section", "warehouse-label-operation");
         {
           const stocktake = node("button", "search-btn", "盘点 / 添加货物");
           stocktake.type = "button";
@@ -1705,18 +1718,27 @@
             const params = new URLSearchParams({ location_id: location.location_id, return_floor: state.warehouseMapFloor, return_area: state.warehouseMapArea });
             window.location.assign(`/mobile/stocktake.html?${params}`);
           });
-          container.append(stocktake);
-          container.append(node("p", "muted", "已登记的实物可搜索后移入当前货位；未登记的实物请使用盘点 / 添加货物。搬运时可填写部分数量，剩余数量保留在原货位。"));
-          renderEmptyWarehouseLocationSearch(location, container);
+          addPanel.append(stocktake);
+          renderEmptyWarehouseLocationSearch(location, addPanel);
         }
         goods.forEach(good => {
-          const card = node("section", "candidate");
-          card.append(
-            warehouseGoodsIdentity(good),
-            warehouseGoodsDescription(good),
-            node("strong", "warehouse-stocktake-quantity", `实际数量 ${good.quantity_total ?? "待核对"}${good.unit || ""}`),
-            node("small", "muted", readableLocation(location))
-          );
+          const card = node("section", "candidate warehouse-label-card");
+          const summary = node("div", "warehouse-label-summary");
+          summary.append(node("span", "", good.customer_short_name || good.customer_name || "客户待补充"), node("span", "", good.product_name || "名称待补充"), node("span", "", good.specification || "规格待补充"));
+          const codeRow = node("div", "warehouse-label-code-row");
+          const code = node("button", "warehouse-label-code", good.product_code || "存货编码待补充");
+          code.type = "button";
+          code.title = "查看产品标签";
+          const label = node("div", "warehouse-label-preview");
+          label.hidden = true;
+          label.append(node("b", "", "产品标签"), warehouseGoodsIdentity(good), warehouseGoodsDescription(good), node("strong", "", `${good.quantity_total ?? "待核对"}${good.unit || ""}`));
+          code.addEventListener("click", () => { label.hidden = !label.hidden; code.setAttribute("aria-expanded", String(!label.hidden)); });
+          code.setAttribute("aria-expanded", "false");
+          const detailsToggle = node("button", "small-btn", "查看明细");
+          detailsToggle.type = "button";
+          detailsToggle.setAttribute("aria-expanded", "false");
+          codeRow.append(code, node("strong", "warehouse-label-quantity", `${good.quantity_total ?? "待核对"}${good.unit || ""}`), detailsToggle);
+          card.append(summary, codeRow, label);
           const actions = node("div", "warehouse-map-item-actions");
           const move = node("button", "small-btn", "搬运 / 拆分数量");
           move.type = "button";
@@ -1732,11 +1754,14 @@
           card.append(actions);
           const history = node("details", "warehouse-lot-history");
           history.append(node("summary", "", "入库时间、订单与同款位置"));
+          detailsToggle.addEventListener("click", () => { history.open = !history.open; });
           const historyBody = node("div");
           history.append(historyBody);
           let historyLoading = false;
           let historyLoaded = false;
           history.addEventListener("toggle", async () => {
+            detailsToggle.textContent = history.open ? "收起明细" : "查看明细";
+            detailsToggle.setAttribute("aria-expanded", String(history.open));
             if (!history.open || historyLoading || historyLoaded) return;
             historyLoading = true;
             historyBody.replaceChildren(node("p", "muted", "正在核对批次记录…"));
@@ -1768,6 +1793,7 @@
           container.append(card);
           if (Number(good.lot_id) === Number(preferredLotId) && good.can_move) selectWarehouseMapSource(good, location);
         });
+        container.append(addPanel);
         container.hidden = false;
         container.parentElement.scrollTop = 0;
       }

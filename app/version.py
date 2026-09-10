@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.327"
-APP_VERSION_NAME = "盘点侧栏紧凑布局与共享筛选"
+APP_VERSION = "v0.22.328"
+APP_VERSION_NAME = "仓库多入口标签界面统一"
 APP_BUILD_DATE = "2026-09-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2467,19 +2467,31 @@ _V022326_VERIFICATION_STEPS = [
     "在已启用正式货位依次添加成品、半成品、原材料，保存后核对批次、分类、单位和数量，重新打开默认成品。",
     "核对操作区、未发布或停用货位仍不可入库；修改期间过期版本和重复提交仍受控，原有库存记录不变。",
 ]
-APP_CHANGES = [
+_V022327_CHANGES = [
     "盘点侧栏位置详情默认折叠置顶，已有货物浅蓝底、添加盘点浅绿底，移除重复操作按钮和大段提示。",
     "客户搜索与确认、编码与未在列表、数量与日期同行；现有库存优先，暂无库存产品展开选择，产品列表每页3款。",
     "编码查看产品标签、明细展开批次记录；保留v326成品半成品原材料混放、材料匹配及正式库存保护，本版无新迁移或业务数据修改。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022327_VERIFICATION_STEPS = [
     "刷新地图进入移货/盘点并点选货架格，确认位置详情折叠在最上、已有货物优先、蓝绿分区和同行搜索。",
     "选择客户并筛选编码，核对待归位和有货结果；展开未在列表选择产品，输入数量日期加入草稿，提交前可撤销。",
     "点编码和明细分别核对标签及记录；确认半成品原材料可选、跨楼层草稿保持且既有库存归位不增加总量。",
 ]
+APP_CHANGES = [
+    "查货、移货、合并及盘点共用紧凑货位侧栏，位置详情默认折叠，添加货物缩为标题旁按钮，移除重复提示。",
+    "区域库存、待送栈板、货架标签统一客户产品规格与编码数量两行布局，编码查看标签、明细独立展开，长字段自动换行。",
+    "手机货位优先展示现有货物，新增操作蓝绿分区；不修改库存、地图、打印二维码或业务校验，无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "在查货及移货/盘点分别点选货位，核对紧凑布局相同、位置详情默认折叠、添加按钮在位置标题旁。",
+    "打开货架和区域库存，点击编码查看标签、点击明细展开批次，核对数量与编码字号一致且操作互不串联。",
+    "手机打开有货货位，确认货物在新增操作上方、客户产品规格同排，窄屏长编码可完整换行。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.327：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.327：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.328：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.328：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.327：本次更新｜{item}" for item in _V022327_CHANGES),
+    *(f"v0.22.327：如何验证｜{item}" for item in _V022327_VERIFICATION_STEPS),
     *(f"v0.22.326：本次更新｜{item}" for item in _V022326_CHANGES),
     *(f"v0.22.326：如何验证｜{item}" for item in _V022326_VERIFICATION_STEPS),
     *(f"v0.22.325：本次更新｜{item}" for item in _V022325_CHANGES),

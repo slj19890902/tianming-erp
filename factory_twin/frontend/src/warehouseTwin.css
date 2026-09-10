@@ -2517,3 +2517,49 @@ body.warehouse-twin-page {
 .twin-rack-stage .shelf-position-print{font-size:11px!important;padding:4px 7px!important;background:#15803d!important;color:white!important;border:0!important;border-radius:4px;white-space:nowrap;flex-shrink:0}
 .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-cell-heading .shelf-position-print { background: transparent !important; color: #64748b !important; padding: 4px !important; }
 @media (pointer: coarse) { .twin-rack-stage .shelf-cell-add-product { min-height: 36px; } }
+
+/* Stocktake sidebar: one scrolling surface, inventory first, compact input rows. */
+.twin-location-product-summary { display: flex; gap: 5px; flex-wrap: wrap; align-items: baseline; font-size: 12px; }
+.twin-location-item .twin-location-item-code { display: flex; gap: 6px; align-items: center; }
+.twin-location-item .twin-stocktake-code { flex: 1; min-width: 0; padding: 3px 0; border: 0; background: transparent; text-align: left; color: #172f45; font-size: 16px; font-weight: 800; overflow-wrap: anywhere; }
+.twin-location-item .twin-stocktake-details,.twin-location-item .twin-stocktake-decrease { width: auto; min-height: 28px; padding: 3px 5px; border: 0; background: transparent; color: #176497; font-size: 12px; }
+.twin-location-item .twin-stocktake-decrease { float: right; }
+.twin-location-item:has(.twin-stocktake-decrease)::after { content: ""; display: block; clear: both; }
+.twin-sidebar-product-label { border: 1px solid #bdd5e2; padding: 6px; margin: 4px 0; background: white; font-size: 13px; }
+.twin-workspace:has(.twin-stocktake-compact) { grid-template-columns: 70px minmax(420px, 1fr) 420px; }
+.twin-stocktake-compact { font-size: 13px; }
+.twin-stocktake-compact .twin-location-card-title small { display: none; }
+.twin-stocktake-compact .twin-location-card-title b { font-size: 14px; }
+.twin-stocktake-compact .twin-detail-toggle { margin: 6px 0; min-height: 32px; font-size: 13px; text-align: left; }
+.twin-stocktake-compact .twin-location-stock-heading { margin: 6px 0 0; padding: 6px 8px; background: #eaf5ff; color: #176497; font-size: 13px; }
+.twin-stocktake-compact > .twin-location-item { margin: 0; padding: 7px 8px; border: 0; border-bottom: 1px solid #d8e8f1; background: #f0f8ff; }
+.twin-stocktake-compact .twin-location-item-code { font-size: 16px; }
+.twin-stocktake-compact .twin-location-item-code b,.twin-stocktake-compact .twin-location-item-code strong { font-size: 16px; }
+.twin-stocktake-compact .twin-stocktake-operation { margin-top: 8px; padding: 9px; background: #edf9f5; border: 1px solid #cce9df; }
+.twin-stocktake-compact .twin-stocktake-operation > h4 { float: left; margin: 5px 0; font-size: 15px; }
+.twin-stocktake-compact .twin-map-inbound-type { display: flex; justify-content: flex-end; margin: 0 0 6px; }
+.twin-stocktake-compact .twin-map-inbound-type button { min-height: 32px; padding: 4px 10px; font-size: 13px; }
+.twin-stocktake-search-row { clear: both; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); align-items: end; gap: 6px; margin: 6px 0; }
+.twin-stocktake-compact .twin-stocktake-search-row label { margin: 0; min-width: 0; }
+.twin-stocktake-compact label > span { font-size: 12px; }
+.twin-stocktake-compact input,.twin-stocktake-compact select,.twin-stocktake-search-row > button { box-sizing: border-box; width: 100%; min-width: 0; min-height: 34px; padding: 5px 7px; font-size: 13px; }
+.twin-stocktake-compact .twin-pending-placement { margin: 6px 0; padding: 5px; }
+.twin-stocktake-compact .twin-search-result-list { max-height: none; overflow: visible; }
+.twin-stocktake-compact .twin-search-result-list button { padding: 5px; font-size: 12px; }
+.twin-stocktake-compact .twin-search-result-list button small { display: none; }
+.twin-stocktake-candidates { display: grid; gap: 4px; font-size: 12px; }
+.twin-stocktake-product-choices { display: grid; gap: 4px; }
+.twin-stocktake-pages { display: flex; align-items: center; justify-content: space-between; gap: 5px; }
+.twin-stocktake-pages button { width: auto !important; min-height: 28px; }
+.twin-stocktake-candidates button { display: block; width: 100%; padding: 7px; text-align: left; background: white; border: 1px solid #cadfd7; border-radius: 4px; font-size: 13px; overflow-wrap: anywhere; }
+.twin-stocktake-candidates button[aria-pressed="true"] { background: #d8f3e9; border-color: #0f766e; }
+.twin-stocktake-missing { display: grid; gap: 4px; padding-top: 5px; border-top: 1px solid #cadfd7; }
+.twin-stocktake-compact .twin-formal-operation-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 6px; margin-top: 7px; }
+.twin-stocktake-compact .twin-primary-action { min-height: 36px; padding: 7px; font-size: 14px; }
+.twin-stocktake-source { font-size: 12px; margin: 5px 0; color: #526d64; }
+.twin-stocktake-compact .twin-formal-selected { display: none; }
+.twin-stocktake-compact .twin-stocktake-block-reason { font-size: 12px; clear: both; }
+.twin-stocktake-compact .twin-stocktake-existing-panel { margin: 5px 0; padding: 5px; }
+.twin-stocktake-compact .twin-location-empty-primary { margin: 3px 0; padding: 4px; }
+@media (max-width: 1100px) { .twin-workspace:has(.twin-stocktake-compact) { grid-template-columns: 50px minmax(260px,1fr) 360px; } }
+@media (max-width: 760px) { .twin-workspace:has(.twin-stocktake-compact) { grid-template-columns: minmax(0,1fr); } }

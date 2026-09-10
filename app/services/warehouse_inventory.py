@@ -104,6 +104,24 @@ def _claim_inventory_destination(
         )
 
 
+def _claim_inventory_restore_destination(db: Session, location_id: int) -> None:
+    """Claim the current placement when undoing an audited stock outflow.
+
+    Dispatch may empty and release the original pallet. Such a slot no longer
+    has live inventory to satisfy the ordinary no-token destination claim.
+    Read its placement version and claim it atomically; callers still verify
+    the original allocation, pallet identity and occupancy before restoring.
+    """
+    layout_version = db.scalar(
+        select(Floor3LocationLayout.version).where(
+            Floor3LocationLayout.location_id == location_id
+        )
+    )
+    _claim_inventory_destination(
+        db, location_id, expected_layout_version=layout_version
+    )
+
+
 def _claim_inventory_transfer_locations(
     db: Session,
     *,
@@ -813,7 +831,7 @@ def restore_auto_released_pallets_after_delivery_cancel(
         target_location_id = clear_movement.from_location_id
         if target_location_id is None:
             raise WarehouseInventoryError("空栈板缺少原库位，无法安全取消发货", 409)
-        _claim_inventory_destination(db, int(target_location_id))
+        _claim_inventory_restore_destination(db, int(target_location_id))
         target_location = db.get(WarehouseLocation, target_location_id)
         if target_location is None or not target_location.is_active:
             raise WarehouseInventoryError("空栈板原库位已停用，无法安全取消发货", 409)
@@ -1580,10 +1598,6 @@ def _location(
     if location is None:
         raise WarehouseInventoryError("库位不存在", 404)
     if getattr(location, "source_version", None) == "V11":
-        if inventory_type != "finished":
-            raise WarehouseInventoryError(
-                "三楼货位目前只接入成品仓；半成品请使用半成品库位", 409
-            )
         if getattr(location, "warehouse_floor", None) != 3:
             raise WarehouseInventoryError(
                 "V11 货位楼层无效，不能办理成品入库", 409
@@ -1673,6 +1687,7 @@ def _location(
             )
         ),
         projection_context=projection_context,
+        capacity_source_location_id=capacity_source_location_id,
     )
     if issue:
         raise WarehouseInventoryError(f"{issue}，不能办理半成品库存业务", 409)
@@ -3122,6 +3137,13 @@ def reserve_finished_inventory_for_bom_component(
     return reservation
 
 
+def _finished_reservation_pre_requisition(item: OrderItem) -> bool:
+    return item.requisition_status == "未报料" or (
+        item.supply_mode_snapshot == "external_purchase"
+        and item.requisition_status == "外购包材待确认"
+    )
+
+
 def finished_inventory_candidates(db: Session, order_item_id: int) -> list[InventoryLot]:
     from app.services.fixed_shelf_staging import held_for_staging_expression
     row = db.execute(
@@ -3138,7 +3160,7 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
         raise WarehouseInventoryError(
             "订单明细已完成生产，不能再新增成品库存抵扣", 409
         )
-    if item.requisition_status != "未报料":
+    if not _finished_reservation_pre_requisition(item):
         raise WarehouseInventoryError("订单已进入报料，请先取消报料后再抵扣成品库存", 409)
     return db.scalars(
         select(InventoryLot)
@@ -3275,7 +3297,7 @@ def reserve_finished_inventory(
         raise WarehouseInventoryError(
             "订单明细已完成生产，不能再新增成品库存抵扣", 409
         )
-    if item.requisition_status != "未报料":
+    if not _finished_reservation_pre_requisition(item):
         raise WarehouseInventoryError("订单已进入报料，请先取消报料后再抵扣成品库存", 409)
     if item.material_status == "received" or item.delivered_quantity > 0:
         raise WarehouseInventoryError("订单明细已进入后续流程，不能新增成品库存抵扣", 409)
@@ -4206,7 +4228,7 @@ def release_finished_reservation(
     reason = (release_reason or "").strip() or "取消成品库存抵扣（系统记录）"
     item = db.get(OrderItem, reservation.order_item_id) if reservation.order_item_id else None
     if item is not None and not allow_downstream:
-        if item.requisition_status != "未报料":
+        if not _finished_reservation_pre_requisition(item):
             raise WarehouseInventoryError("请先取消报料，再取消成品库存抵扣", 409)
         if db.scalar(
             select(DeliveryItem.id)
@@ -4426,6 +4448,7 @@ def manual_semi_finished_in(
     expected_layout_version: int | None = None,
     customer_generic_eligible: bool = False,
     internal_name: str | None = None,
+    capacity_source_location_id: int | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -4466,6 +4489,7 @@ def manual_semi_finished_in(
         db,
         location_id,
         "semi_finished",
+        capacity_source_location_id=capacity_source_location_id,
         allow_raw_material_staging=allow_raw_material_staging,
         raw_material_staging_source_type=source_type,
         raw_material_staging_source_ref_type=source_ref_type,

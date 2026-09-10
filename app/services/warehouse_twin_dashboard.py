@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.warehouse_storage_usage import effective_inventory_usages
+
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -350,6 +352,7 @@ def _lot_payload(
         "lot_id": row.id,
         "lot_number": row.lot_number,
         "inventory_type": row.inventory_type,
+        "inventory_usage": ("raw_material" if row.semi_finished_detail is not None and row.semi_finished_detail.sheet_type == "raw_board" else row.inventory_type),
         **business,
         "quantity": _physical_quantity(row),
         "available_quantity": int(row.quantity_available),
@@ -1260,9 +1263,9 @@ def build_warehouse_twin_dashboard(
         except (TypeError, ValueError, json.JSONDecodeError):
             values = []
         if isinstance(values, list):
-            policy_types_by_area[key] = [
+            policy_types_by_area[key] = effective_inventory_usages([
                 str(value) for value in values if isinstance(value, str) and value
-            ]
+            ])
     projection_contexts = load_warehouse_location_projection_contexts(db, locations)
     unmatched_by_location: dict[
         int, list[WarehouseUnmatchedInventoryObservation]

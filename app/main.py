@@ -894,6 +894,8 @@ def create_app() -> FastAPI:
         from app.api.shelf_pick_scan import router as shelf_pick_scan_router
         application.include_router(shelf_pick_scan_router, prefix='/api/shelf-pick-scan', tags=['fixed-shelf'])
     if not any(route.path == "/api/warehouse/locations" for route in application.routes):
+        from app.api.material_candidates import router as material_candidates_router
+        application.include_router(material_candidates_router, prefix="/api/warehouse/lots", tags=["warehouse"])
         application.include_router(
             warehouse_router,
             prefix="/api/warehouse",

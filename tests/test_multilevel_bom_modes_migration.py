@@ -24,9 +24,11 @@ def test_new_configuration_blocks_downgrade_without_losing_data(factory_copy, mo
                     dict(component_product_id=3783, quantity_per_set=4, inventory_relation="accompany")])
     db.commit()
     target = Path(db.get_bind().url.database)
+    config = _config(monkeypatch, target)
+    command.downgrade(config, "sf18v8x9z80")
     before = hashlib.sha256(target.read_bytes()).hexdigest()
     with pytest.raises(RuntimeError, match="已有独立BOM配置"):
-        command.downgrade(_config(monkeypatch, target), "se17v8x9z79")
+        command.downgrade(config, "se17v8x9z79")
     assert hashlib.sha256(target.read_bytes()).hexdigest() == before
 
 
@@ -51,16 +53,17 @@ def test_factory_copy_upgrade_roundtrip_preserves_every_original_fact(factory_co
         triggers = dict(before.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))
     db.rollback()
     config = _config(monkeypatch, target)
-    assert ScriptDirectory.from_config(config).get_heads() == ["sf18v8x9z80"]
-    for destination in ("se17v8x9z79", "sf18v8x9z80"):
-        if destination == "se17v8x9z79":
+    assert ScriptDirectory.from_config(config).get_heads() == ["sg19v8x9z81"]
+    for destination in ("sf18v8x9z80", "se17v8x9z79", "sg19v8x9z81"):
+        if destination != "sg19v8x9z81":
             command.downgrade(config, destination)
         else:
             command.upgrade(config, destination)
         with sqlite3.connect(target) as after:
             assert after.execute("PRAGMA integrity_check").fetchone() == ("ok",)
             assert after.execute("PRAGMA foreign_key_check").fetchall() == []
-            assert after.execute("SELECT version_num FROM alembic_version").fetchall() == [(destination,)]
+            expected_heads = {destination} if destination == "sg19v8x9z81" else {destination, "rt10v8x9z67"}
+            assert {r[0] for r in after.execute("SELECT version_num FROM alembic_version")} == expected_heads
             assert original_facts(after, columns) == expected
             actual = dict(after.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))
             assert all(actual.get(name) == sql for name, sql in triggers.items())

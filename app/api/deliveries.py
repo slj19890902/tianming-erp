@@ -4111,13 +4111,23 @@ def _delivery_list_standard_inventory_sources(
     return items
 
 
-def _unordered_finished_allocation_payload(row: UnorderedFinishedDeliveryAllocation) -> dict:
+def _unordered_finished_allocation_payload(
+    row: UnorderedFinishedDeliveryAllocation,
+    *,
+    locations: dict | None = None,
+    projection_contexts: dict | None = None,
+) -> dict:
+    location = (locations or {}).get(row.warehouse_location_id_snapshot)
+    context = (projection_contexts or {}).get(row.warehouse_location_id_snapshot, {})
     return {
         "id": row.id,
         "inventory_lot_id": row.inventory_lot_id,
         "lot_number": row.lot_number_snapshot,
         "location_id": row.warehouse_location_id_snapshot,
         "location_code": row.warehouse_location_code_snapshot,
+        "location_name": employee_location_name(
+            location, area=context.get("area"), floor=context.get("floor")
+        ) if location is not None else None,
         "pallet_code": row.pallet_code_snapshot,
         "quantity": int(row.planned_quantity or 0),
         "planned_quantity": int(row.planned_quantity or 0),
@@ -4371,6 +4381,11 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         ).all()
     } if lot_ids else {}
     location_ids = {int(row.warehouse_location_id) for row in lots.values()}
+    location_ids.update(
+        int(row.warehouse_location_id_snapshot)
+        for row in unordered_allocations
+        if row.warehouse_location_id_snapshot is not None
+    )
     locations = {
         int(row.id): row
         for row in db.scalars(
@@ -4651,7 +4666,10 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         delivery_item_id = int(row["id"])
         if row.get("source_type") == "unordered_finished":
             unordered_payloads = [
-                _unordered_finished_allocation_payload(allocation)
+                _unordered_finished_allocation_payload(
+                    allocation, locations=locations,
+                    projection_contexts=location_projection_contexts,
+                )
                 for allocation in unordered_allocations_by_delivery_item.get(
                     delivery_item_id,
                     [],
@@ -5218,21 +5236,17 @@ def _unordered_finished_allocation_response(
         )
         .order_by(UnorderedFinishedDeliveryAllocation.id)
     ).all()
+    location_ids = {row.warehouse_location_id_snapshot for row in rows}
+    locations = {
+        location.id: location for location in db.scalars(
+            select(WarehouseLocation).where(WarehouseLocation.id.in_(location_ids))
+        )
+    } if location_ids else {}
+    contexts = load_warehouse_location_projection_contexts(db, locations.values())
     return [
-        {
-            "id": row.id,
-            "inventory_lot_id": row.inventory_lot_id,
-            "lot_number": row.lot_number_snapshot,
-            "location_id": row.warehouse_location_id_snapshot,
-            "location_code": row.warehouse_location_code_snapshot,
-            "pallet_code": row.pallet_code_snapshot,
-            "quantity": int(row.planned_quantity or 0),
-            "planned_quantity": int(row.planned_quantity or 0),
-            "consumed_quantity": int(row.consumed_quantity or 0),
-            "restored_quantity": int(row.restored_quantity or 0),
-            "status": row.status,
-        }
-        for row in rows
+        _unordered_finished_allocation_payload(
+            row, locations=locations, projection_contexts=contexts
+        ) for row in rows
     ]
 
 

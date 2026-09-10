@@ -1139,7 +1139,7 @@ class TwinStocktakeBatchItemPayload(BaseModel):
     operation: Literal["add", "decrease"]
     location_id: int = Field(gt=0)
     expected_layout_version: int = Field(gt=0)
-    inventory_type: Literal["finished", "semi_finished"] | None = None
+    inventory_type: Literal["finished", "semi_finished", "raw_material"] | None = None
     unit: Literal["boxes", "sheets"] | None = None
     customer_id: int | None = Field(default=None, gt=0)
     product_id: int | None = Field(default=None, gt=0)
@@ -1163,6 +1163,7 @@ class TwinStocktakeBatchItemPayload(BaseModel):
             expected_unit = {
                 "finished": "boxes",
                 "semi_finished": "sheets",
+                "raw_material": "sheets",
             }.get(self.inventory_type or "")
             if (
                 expected_unit is None

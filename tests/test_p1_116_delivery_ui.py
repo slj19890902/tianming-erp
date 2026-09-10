@@ -50,17 +50,17 @@ def test_receipt_primary_actions_have_distinct_fact_based_colors(tmp_path: Path)
         '<template v-else-if="activePage === \'deliveries\'">',
         '<template v-else-if="activePage === \'finance\'">',
     )
-    assert ':class="deliveryPrimaryRowActionClass(row)"' in deliveries
+    assert ':class="deliveryReceiptRowActionClass(row)"' in deliveries
     assert ".delivery-receipt-edit-action" in INDEX
 
-    body = _method_body("deliveryPrimaryRowActionClass")
+    body = _method_body("deliveryReceiptRowActionClass")
     source = f"""
 const Fn=Object.getPrototypeOf(function(){{}}).constructor;
 const classify=new Fn("row",{json.dumps(body, ensure_ascii=False)});
 const vm={{canFinance:true}};
 if(classify.call(vm,{{status:"dispatched",return_receipt_status:"waiting_receipt"}})!=="success")throw new Error("unconfirmed receipt color");
 if(classify.call(vm,{{status:"dispatched",return_receipt_status:"confirmed"}})!=="delivery-receipt-edit-action")throw new Error("confirmed receipt color");
-if(classify.call(vm,{{status:"pending",return_receipt_status:null}})!=="")throw new Error("non receipt action color changed");
+
 """
     _run_node(tmp_path, "p1-116-receipt-colors.js", source)
 

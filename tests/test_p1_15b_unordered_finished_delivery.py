@@ -930,10 +930,12 @@ def test_dispatch_consumes_exact_selected_lots_and_never_mutates_order(
         ) == 0
 
 
+@pytest.mark.parametrize("mapped", [False, True])
 def test_unordered_full_dispatch_releases_and_cancel_restores_pallet(
-    unordered_finished_delivery_app,
+    unordered_finished_delivery_app, mapped,
 ) -> None:
     from app.models.warehouse_inventory import (
+        Floor3LocationLayout,
         InventoryLocationMovement,
         InventoryPallet,
         InventoryPalletItem,
@@ -959,6 +961,12 @@ def test_unordered_full_dispatch_releases_and_cancel_restores_pallet(
         )
         db.add_all([location, pallet])
         db.flush()
+        if mapped:
+            location.placement_status = "placed"
+            db.add(Floor3LocationLayout(
+                location_id=location.id, left_pct=10, top_pct=10,
+                width_pct=10, height_pct=10, version=3,
+            ))
         for lot_id in (seed.free_first_lot_id, seed.free_second_lot_id):
             lot = db.get(InventoryLot, lot_id)
             assert lot is not None and lot.finished_detail is not None
@@ -1007,6 +1015,20 @@ def test_unordered_full_dispatch_releases_and_cancel_restores_pallet(
             assert pallet is not None
             assert pallet.is_current is False
             assert pallet.location_id is None
+        detail = client.get(f"/api/deliveries/{delivery['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["items"][0]["inventory_sources"][0]["location_name"] == "P1-15B 实体栈板位"
+        if mapped:
+            with factory() as db:
+                db.get(WarehouseLocation, location_id).is_active = False
+                db.commit()
+            blocked = client.put(f"/api/deliveries/{delivery['id']}/cancel")
+            assert blocked.status_code == 409
+            with factory() as db:
+                assert db.get(InventoryLot, seed.free_first_lot_id).quantity_available == 0
+                assert db.get(Delivery, delivery['id']).status == "dispatched"
+                db.get(WarehouseLocation, location_id).is_active = True
+                db.commit()
         cancelled = client.put(f"/api/deliveries/{delivery['id']}/cancel")
         assert cancelled.status_code == 200, cancelled.text
 

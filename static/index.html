@@ -508,10 +508,12 @@
       .delivery-list-detail table { margin: 0; table-layout: fixed; background: #fff; }
       .delivery-list-detail th,
       .delivery-list-detail td { padding: 8px 10px; white-space: normal; overflow-wrap: anywhere; vertical-align: middle; }
-      .delivery-list-detail .delivery-detail-code { width: 22%; }
-      .delivery-list-detail .delivery-detail-name { width: 38%; }
-      .delivery-list-detail .delivery-detail-spec { width: 25%; }
-      .delivery-list-detail .delivery-detail-quantity { width: 15%; text-align: right; }
+      .delivery-list-detail .delivery-detail-code { width: 17%; }
+      .delivery-list-detail .delivery-detail-name { width: 28%; }
+      .delivery-list-detail .delivery-detail-spec { width: 16%; }
+      .delivery-list-detail .delivery-detail-quantity { width: 10%; text-align: left; }
+      .delivery-list-detail .delivery-detail-action { width: 12%; }
+      .delivery-list-detail .delivery-detail-po { width: 17%; }
       .delivery-list-panel .table-wrap {
         max-height: none;
         overflow-x: auto;
@@ -1102,14 +1104,21 @@
       }
       .modal:focus { outline: none; }
       .modal:focus-visible { outline: 3px solid rgba(0,113,227,.45); outline-offset: 3px; }
-      .delivery-row-more { position: relative; }
+      .delivery-list-actions { display: table-cell !important; white-space: nowrap; }
+      .delivery-row-actions-inner { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+      .delivery-row-more { display: inline-flex; flex: 0 0 auto; }
       .delivery-row-more > summary { list-style: none; }
       .delivery-row-more > summary::-webkit-details-marker { display: none; }
       .delivery-row-more-panel {
-        display: flex; flex-wrap: wrap; gap: 7px; min-width: 220px; max-width: 320px;
-        margin-top: 6px; padding: 9px; border: 1px solid var(--line-strong);
-        border-radius: 10px; background: #fafafa;
+        display: none; position: fixed; inset: auto; margin: 0; width: 300px;
+        max-width: calc(100vw - 24px); padding: 10px; gap: 8px; flex-wrap: wrap;
+        overflow-y: auto; border: 1px solid var(--line-strong); border-radius: 10px;
+        background: #fff; box-shadow: 0 8px 28px #142c4a30;
       }
+      .delivery-row-more-panel:popover-open { display: flex; }
+      .delivery-detail-edit-note { margin: 7px 0; color: var(--muted); font-size: 12px; }
+      .delivery-list-detail .input { width: 100%; min-width: 0; }
+      .delivery-detail-row-actions { display: flex; flex-wrap: wrap; gap: 5px; }
       .finance-row-more { position: relative; }
       .finance-row-more > summary { list-style: none; }
       .finance-row-more > summary::-webkit-details-marker { display: none; }
@@ -2360,7 +2369,7 @@
         background:#f7fbff;
       }
       .business-flow-guide-label { color:var(--text-secondary); font-size:12px; font-weight:700; white-space:nowrap; }
-      .business-flow-steps { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:6px; min-width:0; }
+      .business-flow-steps { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:6px; min-width:0; }
       .business-flow-step {
         position:relative; min-width:0; min-height:34px; padding:5px 8px; border:1px solid var(--line-strong);
         border-radius:9px; background:#fff; color:var(--text-secondary); font-size:12px; font-weight:700;
@@ -3093,7 +3102,7 @@
           >
             <div v-if="loading" class="loading-bar"></div>
 
-            <section v-if="businessFlowCurrentStep" class="business-flow-guide" aria-label="订单到对账操作顺序">
+            <section v-if="businessFlowCurrentStep" class="business-flow-guide" aria-label="订单到送货操作顺序">
               <span class="business-flow-guide-label">按顺序做</span>
               <div class="business-flow-steps">
                 <button
@@ -4801,28 +4810,29 @@
                     <td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
                     <td><button class="btn small delivery-list-detail-toggle" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${row.item_count ?? (row.items || []).length}）` }}</button></td>
-                    <td class="toolbar-group delivery-list-actions">
-                      <button v-if="deliveryPrimaryRowActionLabel(row)" class="btn small primary delivery-row-primary-action" :class="deliveryPrimaryRowActionClass(row)" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="runDeliveryPrimaryRowAction(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : (deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : deliveryPrimaryRowActionLabel(row))) }}</button>
-                      <details v-if="deliveryHasSecondaryRowActions(row)" class="delivery-row-more">
-                        <summary class="btn small delivery-row-more-toggle">更多</summary>
-                        <div class="delivery-row-more-panel">
-                          <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
+                    <td class="delivery-list-actions"><div class="delivery-row-actions-inner">
+                      <button v-if="deliveryPrimaryRowActionLabel(row)" class="btn small primary delivery-row-primary-action" :class="deliveryPrimaryRowActionClass(row)" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="runDeliveryPrimaryRowAction(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : (deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : (receiptOperationState.action==='open' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '加载中…' : deliveryPrimaryRowActionLabel(row))) }}</button>
+                      <div v-if="deliveryHasSecondaryRowActions(row)" class="delivery-row-more">
+                        <button type="button" class="btn small delivery-row-more-toggle" :disabled="!!deliveryInlineEdit" :id="`delivery-more-toggle-${row.id}`" :popovertarget="`delivery-more-${row.id}`" popovertargetaction="toggle">更多</button>
+                        <div popover="auto" :id="`delivery-more-${row.id}`" class="delivery-row-more-panel" @toggle="toggleDeliveryRowMore(row,$event)" @click="closeDeliveryRowMoreAfterAction($event)">
+                          <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action" @click="createDeliveryPickTask(row)">拿货</button>
+                          <button v-if="canFinance && row.status==='dispatched'" class="btn small" :class="deliveryReceiptRowActionClass(row)" :disabled="!!receiptOperationState.action" @click="openReceipt(row)">{{ row.return_receipt_status==='confirmed' ? '编辑回单' : '确认回单' }}</button>
+                          <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
                             <option value="">未分配</option>
                             <option v-for="picker in deliveryPickers" :key="picker.id" :value="picker.id">{{ picker.name }}</option>
                           </select>
                           <span v-if="deliveryOperationState.action==='assign' && Number(deliveryOperationState.deliveryId)===Number(row.id) && Number(deliveryOperationState.taskId)===Number(row.pick_task?.id)" class="muted">分配中…</span>
-                          <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
-                          <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="openDeliveryPickPrint(row)">打印仓库找货单</button>
+                          <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="openDeliveryPickTask(row)">{{ row.pick_task.assignment_required ? '管理员查看' : '打开手机拿货' }}</button>
+                          <button v-if="row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="openDeliveryPickPrint(row)">打印仓库找货单</button>
                           <button v-if="hasPermission('orders.view')" class="btn small" data-action="print-product-labels" :disabled="deliveryLabelOpenState.busy" @click="openDeliveryProductLabels(row)">{{ deliveryLabelOpenState.busy && Number(deliveryLabelOpenState.deliveryId)===Number(row.id) ? '核验标签中…' : (row.status==='voided' ? '补打产品标签' : '打印产品标签') }}</button>
                           <a v-if="deliveryLabelRecoveryUrl && Number(deliveryLabelOpenState.deliveryId)===Number(row.id)" class="btn small" :href="deliveryLabelRecoveryUrl" target="_blank" rel="noopener">重新打开标签页</a>
-                          <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small success" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="dispatchDelivery(row)">{{ deliveryOperationState.action==='dispatch' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '发货中…' : '直接发货打印' }}</button>
-                          <button v-if="canDelivery && (row.status==='pending' || (row.status==='dispatched' && (!row.return_receipt_status || row.return_receipt_status==='cancelled')))" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="editDelivery(row)">{{ row.status==='dispatched' ? '编辑待回单送货单' : '编辑' }}</button>
-                          <button v-if="canDelivery && row.status==='pending'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
-                          <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="cancelReceipt(row)">{{ receiptOperationState.action==='cancel' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消回单' }}</button>
-                          <button v-if="row.status==='dispatched'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="printDelivery(row)">{{ deliveryOperationState.action==='reprint' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '打开中…' : '补打' }}</button>
-                          <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="cancelDelivery(row)">{{ deliveryOperationState.action==='cancel' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消发货' }}</button>
+                          <button v-if="canDelivery && (row.status==='pending' || (row.status==='dispatched' && (!row.return_receipt_status || row.return_receipt_status==='cancelled')))" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="editDelivery(row)">{{ row.status==='dispatched' ? '编辑待回单送货单' : '编辑' }}</button>
+                          <button v-if="canDelivery && row.status==='pending'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="deleteDelivery(row)">{{ deliveryOperationState.action==='delete' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '删除中…' : '删除' }}</button>
+                          <button v-if="canFinance && row.status==='dispatched' && row.return_receipt_status === 'confirmed'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="cancelReceipt(row)">{{ receiptOperationState.action==='cancel' && Number(receiptOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消回单' }}</button>
+                          <button v-if="canDelivery && row.status==='dispatched' && row.return_receipt_status !== 'confirmed'" class="btn small danger high-risk-action" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="cancelDelivery(row)">{{ deliveryOperationState.action==='cancel' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '取消中…' : '取消发货' }}</button>
                         </div>
-                      </details>
+                      </div>
+                      </div>
                     </td>
                   </tr>
                   <tr v-if="expandedDeliveryRows[row.id]" class="delivery-list-detail-row">
@@ -4831,23 +4841,23 @@
                       <div v-else-if="deliveryDetailState[row.id]?.error" class="notice warning">明细读取失败：{{ deliveryDetailState[row.id].error }} <button class="btn small" @click="loadDeliveryListDetail(row,{force:true})">重试</button></div>
                       <div v-else class="delivery-list-detail">
                         <table>
-                          <thead><tr><th class="delivery-detail-code">存货编码</th><th class="delivery-detail-name">产品名称</th><th class="delivery-detail-spec">产品尺寸</th><th class="delivery-detail-quantity">数量</th></tr></thead>
+                          <thead><tr><th class="delivery-detail-po">客户单号</th><th class="delivery-detail-code">存货编码</th><th class="delivery-detail-name">产品名称</th><th class="delivery-detail-spec">产品尺寸（mm）</th><th class="delivery-detail-quantity">送货数量</th><th class="delivery-detail-action">操作</th></tr></thead>
                           <tbody>
                             <template v-for="item in row.items || []" :key="item.id">
                               <tr>
-                                <td><span :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_code')}"><strong>{{ item.product_code || "未登记" }}</strong><span v-if="deliverySearchItemFieldMatched(row,item,'product_code')" class="delivery-search-hit-label">命中存货编码</span></span></td>
-                                <td><span :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_name')}">{{ item.product_name || "未登记" }}<span v-if="deliverySearchItemFieldMatched(row,item,'product_name')" class="delivery-search-hit-label">命中产品名称</span></span><div v-if="item.customer_po && item.customer_po !== '无订单库存'" :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'customer_po')}" style="margin-top:4px">客户订单号：{{ item.customer_po }}<span v-if="deliverySearchItemFieldMatched(row,item,'customer_po')" class="delivery-search-hit-label">命中客户订单号</span></div><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td>
-                                <td>{{ item.specification || "未登记" }}</td>
-                                <td class="delivery-detail-quantity"><strong>{{ item.display_quantity ?? item.delivered_quantity }}</strong><div v-if="item.quantity_source === 'actual_received'" class="muted" style="font-size:11px">实际签收 {{ item.display_quantity }}｜原送货 {{ item.original_delivered_quantity }}｜差异 {{ signedQuantity(item.quantity_difference) }}</div></td>
+                                <td><input v-if="deliveryInlineFor(row,item)" class="input" v-model.trim="deliveryInlineEdit.customer_po" :disabled="deliveryInlineEdit.saving || deliveryInlineEdit.uncertain" maxlength="200" aria-label="客户单号" /><span v-else :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'customer_po')}">{{ item.customer_po || '-' }}</span><span v-if="deliverySearchItemFieldMatched(row,item,'customer_po')" class="delivery-search-hit-label">命中客户订单号</span><div v-if="item.order_number" class="muted" style="font-size:11px">ERP订单：{{ item.order_number }}</div></td>
+                                <td><strong :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_code')}">{{ item.product_code || '未登记' }}</strong><span v-if="deliverySearchItemFieldMatched(row,item,'product_code')" class="delivery-search-hit-label">命中存货编码</span></td>
+                                <td><span :class="{'delivery-search-hit':deliverySearchItemFieldMatched(row,item,'product_name')}">{{ item.product_name || '未登记' }}</span><span v-if="deliverySearchItemFieldMatched(row,item,'product_name')" class="delivery-search-hit-label">命中产品名称</span><div v-if="inventorySourcesText(item.inventory_sources)" class="muted" style="font-size:11px">库存：{{ inventorySourcesText(item.inventory_sources) }}</div></td>
+                                <td>{{ orderSpecificationText(item.specification) }}</td>
+                                <td class="delivery-detail-quantity"><input v-if="deliveryInlineFor(row,item)" class="input" type="number" min="1" step="1" v-model="deliveryInlineEdit.delivered_quantity" :disabled="!deliveryInlineEdit.quantityEditable || deliveryInlineEdit.saving || deliveryInlineEdit.uncertain" @input="rebalanceInlineDeliveryAllocations" aria-label="送货数量" /><strong v-else>{{ item.delivered_quantity }}</strong><div v-if="item.quantity_source === 'actual_received'" class="muted" style="font-size:11px">实际签收 {{ item.display_quantity }}｜原送货 {{ item.original_delivered_quantity }}｜差异 {{ signedQuantity(item.quantity_difference) }}</div></td>
+                                <td><div class="delivery-detail-row-actions"><template v-if="deliveryInlineFor(row,item)"><button class="btn small primary" :disabled="deliveryInlineEdit.saving" @click="saveInlineDeliveryLine(row,item)">{{ deliveryInlineEdit.saving ? '保存中…' : (deliveryInlineEdit.uncertain ? '核对重试' : '保存') }}</button><button class="btn small" :disabled="deliveryInlineEdit.saving" @click="cancelInlineDeliveryLine">取消</button></template><template v-else><button v-if="canDelivery && ['pending','dispatched'].includes(row.status)" class="btn small" :disabled="!!deliveryInlineEdit || !!deliveryOperationState.action || !!receiptOperationState.action" @click="startInlineDeliveryLine(row,item)">编辑</button><button v-if="canEditDeliveryLineQuantity(row)" class="btn small danger" :disabled="!!deliveryInlineEdit || !!deliveryOperationState.action || !!receiptOperationState.action" @click="deleteDeliveryDetailLine(row,item)">删除</button></template></div></td>
                               </tr>
+                              <tr v-if="deliveryInlineFor(row,item)"><td colspan="6"><div class="delivery-detail-edit-note">客户单号只修改本送货单及后续对账引用。{{ deliveryInlineEdit.quantityEditable ? '修改数量后保存，打印单同步更新。' : '已有回单，送货数量已锁定；如需调整请先处理回单。' }}</div><div v-if="deliveryInlineEdit.allocations.length" class="delivery-detail-edit-note">库存批次分配（可逐批调整；合计为本行送货数量）：<div v-for="allocation in deliveryInlineEdit.allocations" :key="allocation.inventory_lot_id">{{ allocation.lot_number }} · {{ allocation.location_name || '位置待确认' }} <input class="input" style="width:100px;display:inline-block" type="number" min="0" step="1" v-model="allocation.quantity" :disabled="!deliveryInlineEdit.quantityEditable || deliveryInlineEdit.saving || deliveryInlineEdit.uncertain" @input="sumInlineDeliveryAllocations" aria-label="批次数量" /></div></div><div v-if="deliveryInlineEdit.error" class="notice danger">{{ deliveryInlineEdit.error }}</div></td></tr>
                               <tr v-for="component in deliverySavedComponentLines(item)" :key="component.component_snapshot_id || component.snapshot_id || component.id || component.component_code || component.product_code">
-                                <td>{{ component.component_code || component.product_code || "-" }}</td>
-                                <td><span class="status blue">套内子件</span> {{ component.component_name || component.product_name || "未命名组件" }}</td>
-                                <td>{{ component.specification || "-" }}</td>
-                                <td class="delivery-detail-quantity">{{ component.quantity ?? component.planned_delivery_quantity ?? component.delivered_quantity ?? 0 }}</td>
+                                <td></td><td>{{ component.component_code || component.product_code || '-' }}</td><td><span class="status blue">套内子件</span> {{ component.component_name || component.product_name || '未命名组件' }}</td><td>{{ orderSpecificationText(component.specification) }}</td><td>{{ component.quantity ?? component.planned_delivery_quantity ?? component.delivered_quantity ?? 0 }}</td><td></td>
                               </tr>
                             </template>
-                            <tr v-if="!(row.items || []).length"><td colspan="4" class="empty">暂无送货明细</td></tr>
+                            <tr v-if="!(row.items || []).length"><td colspan="6" class="empty">暂无送货明细</td></tr>
                           </tbody>
                         </table>
                       </div>
@@ -9238,7 +9248,7 @@
         <iframe ref="pdfWarehouseLocatorFrame" src="about:blank" title="库存位置只读查看"></iframe>
       </div>
 
-      <div v-if="orderCommonBoxPicker.visible" class="modal-backdrop order-common-box-backdrop" @click.self="closeOrderCommonBoxPicker">
+      <div v-if="orderCommonBoxPicker.visible" class="modal-backdrop order-common-box-backdrop">
         <div class="modal order-common-box-modal">
           <div class="modal-header">
             <h3>导入常用箱</h3>
@@ -9273,7 +9283,7 @@
                     <td>{{ orderCommonBoxMaterialText(row) }}</td>
                     <td class="sensitive-price">{{ money(row.sale_unit_price) }}</td>
                     <td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']">{{ commonBoxReadiness(row).ready ? "已完善" : "待完善" }}</span></td>
-                    <td><input class="input" type="number" min="1" :disabled="!isOrderCommonBoxSelected(row.id)" :value="orderCommonBoxSelectedQuantity(row.id)" @input="setOrderCommonBoxQuantity(row,$event.target.value)" placeholder="可稍后填" /></td>
+                    <td><input class="input" type="number" min="1" :value="orderCommonBoxSelectedQuantity(row.id)" @input="setOrderCommonBoxQuantity(row,$event.target.value)" placeholder="可稍后填" /></td>
                   </tr>
                   <tr v-if="!orderCommonBoxPicker.loading && !orderCommonBoxPicker.items.length"><td colspan="8" class="empty">当前筛选没有可用常用箱</td></tr>
                   <tr v-if="orderCommonBoxPicker.loading"><td colspan="8" class="empty">正在读取常用箱…</td></tr>
@@ -9869,7 +9879,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "", fluteRuleAction:{action:"",ruleId:null},
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryCustomerSources:{orders:true,inventory:false}, deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryDetailedSearchVisible:false, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliveryLabelOpenState:{busy:false,deliveryId:null}, deliveryLabelRecoveryUrl:"", deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, deliveryReminderState:{loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryCustomerSources:{orders:true,inventory:false}, deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryInlineEdit:null, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryDetailedSearchVisible:false, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliveryLabelOpenState:{busy:false,deliveryId:null}, deliveryLabelRecoveryUrl:"", deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, deliveryReminderState:{loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null,expected_ledger_version:null},
             invoiceTaskOperationState:{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false},
@@ -10175,7 +10185,6 @@
               {key:"incoming",label:"来料",page:"incoming",hint:"供应商到料后确认收货"},
               {key:"production",label:"生产",page:"production",hint:"确认合格数量和完工去向"},
               {key:"deliveries",label:"送货",page:"deliveries",hint:"拿货、发货并确认回单"},
-              {key:"finance",label:"回单/对账",page:"finance",hint:"按回单实收数量对账并开票"},
             ];
           },
           businessFlowCurrentStep() {
@@ -13795,7 +13804,7 @@
                 const quantity = source.quantity_to_pick_component ?? source.quantity_to_pick_piece ?? source.quantity_to_pick_requirement ?? source.quantity_to_pick_stock ?? source.quantity ?? 0;
                 return `组件 ${component} ${location} 取货${quantity}片`;
               }
-              return `${source.source_type === "semi_finished" ? "半成品" : "成品"}${this.componentLabel(source.component_type)} ${source.lot_number || "-"} ${this.inventoryLocation(source)} ×${source.quantity_to_pick_requirement ?? source.quantity_to_pick_stock ?? 0}`;
+              return `${source.source_type === "semi_finished" ? "半成品" : "成品"}${this.componentLabel(source.component_type)} ${source.lot_number || "-"} ${this.inventoryLocation(source)} ×${source.quantity_to_pick_requirement ?? source.quantity_to_pick_stock ?? source.quantity ?? 0}`;
             }).join("；");
           },
           deliveryKitInfo(item) {
@@ -14693,6 +14702,7 @@
             this.orderItemForm = {};
             this.deliveryDetailRequestSequence += 1;
             this.deliveryDetailState = {};
+            this.deliveryInlineEdit = null;
             this.expandedDeliveryRows = {};
             this.deliveryLabelOpenState = {busy:false,deliveryId:null};
             this.deliveryLabelRecoveryUrl = "";
@@ -21139,30 +21149,35 @@
             if (task) return "blue";
             return "muted";
           },
-          deliveryPrimaryRowActionClass(row) {
-            if (!this.canFinance || row?.status !== "dispatched") return "";
+          deliveryPrimaryRowActionClass(row) { return ""; },
+          deliveryReceiptRowActionClass(row) {
             return row.return_receipt_status === "confirmed" ? "delivery-receipt-edit-action" : "success";
           },
           deliveryPrimaryRowActionLabel(row) {
-            if (this.canDelivery && row?.status === "pending") {
-              if (!row.pick_task) {
-                if (this.deliveryOperationState.action === "pick" && Number(this.deliveryOperationState.deliveryId) === Number(row.id)) return "推送中…";
-                return "拿货";
-              }
-              if (this.deliveryOperationState.action === "dispatch" && Number(this.deliveryOperationState.deliveryId) === Number(row.id)) return "发货中…";
-              return "发货打印";
-            }
-            if (this.canFinance && row?.status === "dispatched") {
-              if (this.receiptOperationState.action === "open" && Number(this.receiptOperationState.deliveryId) === Number(row.id)) return "加载中…";
-              return row.return_receipt_status === "confirmed" ? "编辑回单" : "确认回单";
-            }
-            return "";
+            if (row?.status === "voided") return "";
+            if (this.canDelivery && row?.status === "pending") return "发货打印";
+            return "打印";
           },
           runDeliveryPrimaryRowAction(row) {
-            // 委托给原有 single-flight 业务动作；列表主按钮不复制发货或回单逻辑。
-            if (this.canDelivery && row?.status === "pending") return row.pick_task ? this.dispatchDelivery(row) : this.createDeliveryPickTask(row);
-            if (this.canFinance && row?.status === "dispatched") return this.openReceipt(row);
-            return false;
+            if (this.deliveryInlineEdit) { this.showToast("请先保存或取消明细编辑，再打印。", true); return false; }
+            if (this.canDelivery && row?.status === "pending") return this.dispatchDelivery(row);
+            return this.printDelivery(row);
+          },
+          toggleDeliveryRowMore(row, event) {
+            if (event.newState !== "open") return;
+            const panel = event.currentTarget;
+            const trigger = document.getElementById(`delivery-more-toggle-${row.id}`);
+            if (!panel || !trigger) return;
+            const rect = trigger.getBoundingClientRect();
+            const below = window.innerHeight - rect.bottom - 16;
+            const above = rect.top - 16;
+            const upward = below < Math.min(panel.scrollHeight, 240) && above > below;
+            panel.style.maxHeight = `${Math.max(100, upward ? above : below)}px`;
+            panel.style.left = `${Math.max(12, Math.min(rect.right - panel.offsetWidth, window.innerWidth - panel.offsetWidth - 12))}px`;
+            panel.style.top = `${upward ? Math.max(12,rect.top - panel.offsetHeight - 6) : rect.bottom + 6}px`;
+          },
+          closeDeliveryRowMoreAfterAction(event) {
+            if (event.target.closest("button,a")) event.currentTarget.hidePopover();
           },
           deliveryHasSecondaryRowActions(row) {
             if (row?.pick_task || row?.status === "dispatched" || this.hasPermission("orders.view")) return true;
@@ -21344,6 +21359,7 @@
             this.invalidateDeliveryListDetail(row);
           },
           async loadDeliveries() {
+            if (this.deliveryInlineEdit) { this.showToast("请先保存或取消当前明细编辑，再刷新列表。", true); return false; }
             const requestToken = Number(this.deliveryListState.request_token || 0) + 1;
             this.deliveryListState.request_token = requestToken;
             const params = { page: Number(this.pages.deliveries || 1), page_size: Number(this.deliveryListPageSize()), view:"summary" };
@@ -29223,6 +29239,7 @@
             return true;
           },
           async toggleDeliveryListDetail(row) {
+            if (this.deliveryInlineEdit?.deliveryId === Number(row.id)) { this.showToast("请先保存或取消当前明细编辑。", true); return false; }
             const deliveryId = Number(row?.id || 0);
             if (!deliveryId) return false;
             if (this.expandedDeliveryRows[deliveryId]) {
@@ -29805,7 +29822,10 @@
 	          },
 	          setOrderCommonBoxQuantity(product, value) {
 	            const key = String(product.id);
-	            if (!this.orderCommonBoxPicker.selected[key]) return;
+	            if (!this.orderCommonBoxPicker.selected[key]) {
+	              if (!String(value).trim()) return;
+	              this.toggleOrderCommonBoxSelection(product, true);
+	            }
 	            this.orderCommonBoxPicker.selected[key].product = product;
 	            this.orderCommonBoxPicker.selected[key].quantity = value;
 	          },
@@ -31633,7 +31653,7 @@
                 axios.get("/api/warehouse/locations")]);
               if(this.bomCutover!==state)return;
               state.review=review.data;
-              state.locations=(locations.data.items || []).filter(x=>x.is_active && x.placement_status==='placed' && x.position_status==='mapped' && ['finished','shared'].includes(x.warehouse_type));
+              state.locations=(locations.data.items || []).filter(x=>x.is_active && x.placement_status==='placed' && x.position_status==='mapped' && ['finished','semi_finished','shared'].includes(x.warehouse_type));
               state.targets=Object.fromEntries(state.review.outputs.map(x=>[x.product_id,0]));
             } catch(error) {if(this.bomCutover===state)state.error=this.errorMessage(error);}
             finally {state.loading=false;}
@@ -36319,6 +36339,7 @@
             }
           },
           async dispatchDelivery(row, options = {}) {
+            if (this.deliveryInlineEdit) { this.showToast("请先保存或取消明细编辑，再打印。", true); return false; }
             if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
             const deliveryId = Number(row?.id || 0);
             const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
@@ -36376,6 +36397,7 @@
             }
           },
           async printDelivery(row) {
+            if (this.deliveryInlineEdit) { this.showToast("请先保存或取消明细编辑，再打印。", true); return false; }
             if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
             const deliveryId = Number(row?.id || 0);
             const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
@@ -36505,6 +36527,166 @@
             this.resetDeliveryReminderState();
             await this.loadDeliveryRemindersForCustomer(row.customer_id);
             return true;
+          },
+          deliveryInlineFor(row, item) {
+            const edit = this.deliveryInlineEdit;
+            return edit && edit.deliveryId === Number(row.id) && edit.itemId === Number(item.id) ? edit : null;
+          },
+          canEditDeliveryLineQuantity(row) {
+            return this.canDelivery && (row.status === "pending" || (row.status === "dispatched" && (!row.return_receipt_status || row.return_receipt_status === "cancelled")));
+          },
+          startInlineDeliveryLine(row, item) {
+            if (!this.canDelivery || this.deliveryInlineEdit || this.deliveryOperationState.action || this.receiptOperationState.action) return false;
+            if (!["pending","dispatched"].includes(row.status)) return false;
+            this.deliveryInlineEdit = {
+              deliveryId:Number(row.id), itemId:Number(item.id), version:Number(row.version), authGeneration:this.authGeneration,
+              customer_po:String(item.customer_po || ""), delivered_quantity:Number(item.delivered_quantity),
+              quantityEditable:this.canEditDeliveryLineQuantity(row), saving:false, uncertain:false, error:"", attempt:null,
+              allocations:item.source_type === "unordered_finished" ? (item.allocations || item.inventory_sources || []).map(source => ({
+                inventory_lot_id:Number(source.inventory_lot_id), lot_number:source.lot_number,
+                location_name:source.location_name, quantity:Number(source.planned_quantity ?? source.quantity),
+                original_quantity:Number(source.planned_quantity ?? source.quantity),
+              })) : [],
+            };
+            return true;
+          },
+          rebalanceInlineDeliveryAllocations() {
+            const edit = this.deliveryInlineEdit;
+            if (!edit || !edit.allocations.length) return;
+            let remaining = Number(edit.delivered_quantity);
+            if (!Number.isInteger(remaining) || remaining < 0) return;
+            edit.allocations.forEach((allocation,index) => {
+              allocation.quantity = index === edit.allocations.length - 1 ? remaining : Math.min(remaining, allocation.original_quantity);
+              remaining -= allocation.quantity;
+            });
+          },
+          sumInlineDeliveryAllocations() {
+            const edit = this.deliveryInlineEdit;
+            if (edit) edit.delivered_quantity = edit.allocations.reduce((sum,allocation) => sum + Number(allocation.quantity || 0),0);
+          },
+          cancelInlineDeliveryLine() {
+            if (this.deliveryInlineEdit?.saving) return false;
+            const uncertain = this.deliveryInlineEdit?.uncertain;
+            this.deliveryInlineEdit = null;
+            if (uncertain) this.loadDeliveries();
+            return true;
+          },
+          async saveInlineDeliveryLine(row, item) {
+            const edit = this.deliveryInlineFor(row,item);
+            if (!edit || edit.saving || this.deliveryOperationState.action || this.receiptOperationState.action) return false;
+            edit.error = "";
+            try {
+              if (!edit.attempt) {
+                const quantity = Number(edit.delivered_quantity);
+                if (!Number.isSafeInteger(quantity) || quantity < 1) throw new Error("送货数量必须是大于零的整数；删除整行请使用删除按钮。");
+                const quantityChanged = quantity !== Number(item.delivered_quantity) || edit.allocations.some(source => Number(source.quantity) !== source.original_quantity);
+                const poChanged = edit.customer_po.trim() !== String(item.customer_po || "").trim();
+                if (!quantityChanged && !poChanged) { this.deliveryInlineEdit = null; return true; }
+                if (quantityChanged && !edit.quantityEditable) throw new Error("已有有效回单，不能直接修改送货数量。");
+                const key = createIdempotencyKey();
+                if (!quantityChanged) {
+                  edit.attempt = {url:`/api/deliveries/${row.id}/customer-po`, payload:{
+                    expected_version:edit.version, idempotency_key:key,
+                    items:[{delivery_item_id:Number(item.id),customer_po:edit.customer_po.trim()}],
+                  }};
+                } else {
+                  const items = row.items.map(line => ({
+                    source_type:line.source_type || "order", order_item_id:line.order_item_id || null,
+                    product_id:line.product_id || null, delivered_quantity:Number(line.delivered_quantity),
+                    unit_price:line.unit_price ?? null, remarks:line.remarks || null,
+                    over_delivery_confirmed:Number(line.over_delivery_quantity || 0) > 0,
+                    over_delivery_reason:line.over_delivery_reason || null,
+                    allocations:line.source_type === "unordered_finished" ? (line.allocations || line.inventory_sources || []).map(source => ({inventory_lot_id:Number(source.inventory_lot_id),quantity:Number(source.planned_quantity ?? source.quantity)})) : [],
+                  }));
+                  const line = items[row.items.findIndex(source => Number(source.id) === edit.itemId)];
+                  line.delivered_quantity = quantity;
+                  if (poChanged) line.customer_po = edit.customer_po.trim();
+                  if (line.source_type === "unordered_finished") {
+                    if (!edit.allocations.length || edit.allocations.some(source => !Number.isSafeInteger(Number(source.quantity)) || Number(source.quantity) < 0)) throw new Error("请填写有效的批次数量。");
+                    line.allocations = edit.allocations.filter(source => Number(source.quantity) > 0).map(source => ({inventory_lot_id:source.inventory_lot_id,quantity:Number(source.quantity)}));
+                    if (line.allocations.reduce((sum,source) => sum + source.quantity,0) !== quantity) throw new Error("批次数量合计必须等于本次送货数量。");
+                  } else {
+                    const remaining = Number(item.order_remaining_snapshot ?? item.ordered_quantity_snapshot);
+                    if (quantity > remaining) {
+                      if (!this.hasPermission("deliveries.over_delivery")) throw new Error("超过订单待送数量，需要超量送货权限。");
+                      if (!confirm(`本次送货 ${quantity}，超过订单待送 ${remaining}，确认超送 ${quantity-remaining} 吗？`)) return false;
+                      line.over_delivery_confirmed = true;
+                      line.over_delivery_reason = "管理员在送货明细确认超量送货";
+                    }
+                  }
+                  edit.attempt = {url:row.status === "dispatched" ? `/api/deliveries/${row.id}/revision` : `/api/deliveries/${row.id}`, payload:{
+                    expected_version:edit.version,idempotency_key:key,source_mode:this.deliverySourceModeFromLines(items),
+                    delivery_date:row.delivery_date,vehicle_number:row.vehicle_number || "",items,
+                  }};
+                }
+              }
+              edit.saving = true;
+              const {data} = await axios.put(edit.attempt.url, edit.attempt.payload);
+              if (this.deliveryInlineEdit !== edit || this.authGeneration !== edit.authGeneration) return false;
+              Object.assign(row,data,{detail_loaded:true});
+              this.deliveryInlineEdit = null;
+              this.expandedDeliveryRows[row.id] = true;
+              this.showToast("明细已保存，送货单打印内容已同步；已打印的纸单请重印。");
+              return true;
+            } catch (error) {
+              if (edit.saving && !error?.response) {
+                edit.uncertain = true;
+                edit.error = "网络中断，保存结果尚未确认。可核对重试，或取消编辑后刷新查看；请勿修改后重复提交。";
+              } else {
+                edit.error = error?.response ? this.errorMessage(error) : error.message;
+                if (!edit.uncertain) edit.attempt = null;
+              }
+              return false;
+            } finally { edit.saving = false; }
+          },
+          async deleteDeliveryDetailLine(row, item) {
+            if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
+            const remaining = (row.items || []).filter(line => Number(line.id) !== Number(item.id));
+            if (!remaining.length) {
+              this.showToast("送货单至少保留一条明细；整单移除请使用送货单操作。", true);
+              return false;
+            }
+            if (!confirm(`确认删除送货单 ${row.delivery_number} 中的这一行？\n${item.product_code || ""} ${item.product_name || ""}，数量 ${item.delivered_quantity}\n保存后送货单预览同步更新；已发货明细将按原库存批次冲回，并保留修订记录。`)) return false;
+            const payload = {
+              expected_version:Number(row.version), idempotency_key:createIdempotencyKey(),
+              delivery_date:row.delivery_date, vehicle_number:row.vehicle_number || "",
+              source_mode:this.deliverySourceModeFromLines(remaining),
+              items:remaining.map(line => ({
+                source_type:line.source_type || "order",
+                order_item_id:line.order_item_id || null,
+                product_id:line.product_id || null,
+                delivered_quantity:Number(line.delivered_quantity),
+                unit_price:line.unit_price ?? null,
+                remarks:line.remarks || null,
+                over_delivery_confirmed:Number(line.over_delivery_quantity || 0) > 0,
+                over_delivery_reason:line.over_delivery_reason || null,
+                allocations:(line.allocations || line.inventory_sources || []).filter(source => line.source_type === "unordered_finished").map(source => ({
+                  inventory_lot_id:Number(source.inventory_lot_id),
+                  quantity:Number(source.planned_quantity ?? source.quantity),
+                })),
+              })),
+            };
+            this.deliveryOperationState = {action:"remove-line",deliveryId:Number(row.id)};
+            let saved = false;
+            try {
+              const endpoint = row.status === "dispatched" ? `/api/deliveries/${row.id}/revision` : `/api/deliveries/${row.id}`;
+              const {data} = await axios.put(endpoint, payload);
+              saved = true;
+              Object.assign(row, data, {detail_loaded:true});
+              const refreshed = await this.loadDeliveries();
+              const current = this.deliveries.find(delivery => Number(delivery.id) === Number(row.id));
+              if (current) {
+                Object.assign(current, data, {detail_loaded:true});
+                this.expandedDeliveryRows[row.id] = true;
+              }
+              this.showToast(refreshed === false ? "明细已删除，但列表刷新失败，请刷新页面。" : "明细已删除，送货单预览已更新；已打印的送货单请重新打印。", refreshed === false);
+              return true;
+            } catch (error) {
+              this.showToast(saved ? "明细已删除，但列表刷新失败，请刷新页面。" : (!error?.response ? "请求结果尚未确认，请刷新送货单核对后再操作。" : this.errorMessage(error)), true);
+              return false;
+            } finally {
+              this.deliveryOperationState = {action:null,deliveryId:null};
+            }
           },
           async deleteDelivery(row) {
             if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;

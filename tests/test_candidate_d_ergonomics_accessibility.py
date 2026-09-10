@@ -177,19 +177,21 @@ def test_delivery_rows_keep_one_primary_next_step_and_disclose_secondary_actions
     assert "deliveryPrimaryRowActionLabel(row)" in deliveries
     assert "runDeliveryPrimaryRowAction(row)" in deliveries
     assert 'class="delivery-row-more"' in deliveries
-    assert '<summary class="btn small delivery-row-more-toggle">更多</summary>' in deliveries
+    assert 'popover="auto"' in deliveries
+    assert ':popovertarget="`delivery-more-${row.id}`"' in deliveries
+    assert 'popovertargetaction="toggle"' in deliveries
+    assert '@toggle="toggleDeliveryRowMore(row,$event)"' in deliveries
     for condition in (
         "canDelivery && row.status==='pending'",
     ):
         assert condition in deliveries
     primary_logic = _between(INDEX, "deliveryPrimaryRowActionLabel(row) {", "runDeliveryPrimaryRowAction(row) {")
-    assert 'if (!row.pick_task)' in primary_logic
-    assert 'return "拿货"' in primary_logic
+    assert 'return "拿货"' not in primary_logic
     assert 'return "发货打印"' in primary_logic
-    assert 'row.return_receipt_status === "confirmed" ? "编辑回单" : "确认回单"' in primary_logic
-    delegate_logic = _between(INDEX, "runDeliveryPrimaryRowAction(row) {", "deliveryHasSecondaryRowActions(row) {")
-    assert "row.pick_task ? this.dispatchDelivery(row) : this.createDeliveryPickTask(row)" in delegate_logic
-    for action in ("deleteDelivery(row)", "cancelDelivery(row)", "cancelReceipt(row)", "printDelivery(row)"):
+    assert 'return "打印"' in primary_logic
+    delegate_logic = _between(INDEX, "runDeliveryPrimaryRowAction(row) {", "toggleDeliveryRowMore(row, event) {")
+    assert "return this.dispatchDelivery(row)" in delegate_logic
+    for action in ("deleteDelivery(row)", "cancelDelivery(row)", "cancelReceipt(row)"):
         assert action in deliveries
 
 
@@ -197,7 +199,7 @@ def test_delivery_primary_action_matrix_preserves_existing_business_methods(tmp_
     node = shutil.which("node")
     assert node
     labels = _between(INDEX, "deliveryPrimaryRowActionLabel(row) {", "runDeliveryPrimaryRowAction(row) {").split("{", 1)[1].rsplit("}", 1)[0]
-    delegate = _between(INDEX, "runDeliveryPrimaryRowAction(row) {", "deliveryHasSecondaryRowActions(row) {").split("{", 1)[1].rsplit("}", 1)[0]
+    delegate = _between(INDEX, "runDeliveryPrimaryRowAction(row) {", "toggleDeliveryRowMore(row, event) {").split("{", 1)[1].rsplit("}", 1)[0]
     target = tmp_path / "candidate-d-delivery-primary.js"
     target.write_text(
         f'''const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
@@ -205,16 +207,16 @@ const label=new AsyncFunction("row",{labels!r});
 const run=new AsyncFunction("row",{delegate!r});
 const calls=[];
 const vm={{canDelivery:true,canFinance:false,deliveryOperationState:{{action:"",deliveryId:null}},receiptOperationState:{{action:"",deliveryId:null}},
-createDeliveryPickTask(row){{calls.push(["pick",row.id]);return "pick";}},dispatchDelivery(row){{calls.push(["dispatch",row.id]);return "dispatch";}},openReceipt(row){{calls.push(["receipt",row.id]);return "receipt";}}}};
+createDeliveryPickTask(row){{calls.push(["pick",row.id]);return "pick";}},dispatchDelivery(row){{calls.push(["dispatch",row.id]);return "dispatch";}},printDelivery(row){{calls.push(["print",row.id]);return "print";}}}};
 (async()=>{{
-if(await label.call(vm,{{id:1,status:"pending",pick_task:null}})!=="拿货")throw new Error("no-task primary");
-if(await run.call(vm,{{id:1,status:"pending",pick_task:null}})!=="pick")throw new Error("no-task delegate");
+if(await label.call(vm,{{id:1,status:"pending",pick_task:null}})!=="发货打印")throw new Error("no-task primary");
+if(await run.call(vm,{{id:1,status:"pending",pick_task:null}})!=="dispatch")throw new Error("no-task delegate");
 if(await label.call(vm,{{id:2,status:"pending",pick_task:{{id:9}}}})!=="发货打印")throw new Error("ready primary");
 if(await run.call(vm,{{id:2,status:"pending",pick_task:{{id:9}}}})!=="dispatch")throw new Error("ready delegate");
 vm.canDelivery=false;vm.canFinance=true;
-if(await label.call(vm,{{id:3,status:"dispatched",return_receipt_status:"waiting_receipt"}})!=="确认回单")throw new Error("receipt primary");
-if(await run.call(vm,{{id:3,status:"dispatched"}})!=="receipt")throw new Error("receipt delegate");
-if(calls.map(row=>row[0]).join(",")!=="pick,dispatch,receipt")throw new Error("unexpected business method");
+if(await label.call(vm,{{id:3,status:"dispatched",return_receipt_status:"waiting_receipt"}})!=="打印")throw new Error("receipt primary");
+if(await run.call(vm,{{id:3,status:"dispatched"}})!=="print")throw new Error("receipt delegate");
+if(calls.map(row=>row[0]).join(",")!=="dispatch,dispatch,print")throw new Error("unexpected business method");
 }})().catch(error=>{{console.error(error);process.exit(1);}});''',
         encoding="utf-8",
     )

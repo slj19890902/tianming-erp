@@ -42,7 +42,7 @@ def save_candidates(lot_id: int, payload: CandidatePayload, db: Session = Depend
     items = candidate_items(db, lot, scope)
     eligible = {item["product_id"]: item for item in items if item["selectable"]}
     if any(product_id not in eligible for product_id in ids):
-        raise HTTPException(422, "仅可保存当前匹配度超过70%的有效产品，请刷新匹配结果")
+        raise HTTPException(422, "仅可保存当前匹配度超过70%且面纸颜色不冲突的产品，请刷新匹配结果")
     # Preserve any inaccessible saved uses when a scoped administrator edits visible uses.
     latest = db.scalar(select(MaterialCandidateSelection).where(MaterialCandidateSelection.lot_id == lot_id)
         .order_by(MaterialCandidateSelection.id.desc()).limit(1))

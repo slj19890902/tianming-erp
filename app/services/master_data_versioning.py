@@ -161,6 +161,7 @@ _MATERIAL_FIELDS = (
     "quote_date",
     "remarks",
     "is_active",
+    "is_white_face",
 )
 
 _OBJECT_SPECS: dict[MasterDataObjectType, _ObjectSpec] = {

@@ -896,6 +896,8 @@ def create_app() -> FastAPI:
     if not any(route.path == "/api/warehouse/locations" for route in application.routes):
         from app.api.material_candidates import router as material_candidates_router
         application.include_router(material_candidates_router, prefix="/api/warehouse/lots", tags=["warehouse"])
+        from app.api.warehouse_goods import router as warehouse_goods_router
+        application.include_router(warehouse_goods_router, prefix="/api/warehouse/goods", tags=["warehouse"])
         application.include_router(
             warehouse_router,
             prefix="/api/warehouse",

@@ -4449,6 +4449,7 @@ def manual_semi_finished_in(
     customer_generic_eligible: bool = False,
     internal_name: str | None = None,
     capacity_source_location_id: int | None = None,
+    material_is_unknown: bool = False,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -4472,7 +4473,9 @@ def manual_semi_finished_in(
         material_code = material.code
         if material.layer_count is not None:
             layer_count = material.layer_count
-    code_error = seven_layer_code_error(material_code, layer_count)
+    if material_is_unknown and (material_id is not None or material_code != "未知"):
+        raise WarehouseInventoryError("未知材质不得冒用供应商材质代码")
+    code_error = None if material_is_unknown else seven_layer_code_error(material_code, layer_count)
     if code_error:
         raise WarehouseInventoryError(code_error)
     flute = flute_type.strip().upper()

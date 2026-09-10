@@ -6913,6 +6913,7 @@
             </div>
             <div v-else-if="modal.type === 'material'" class="form-grid">
               <div class="field"><label>材质代码</label><input class="input" v-model.trim="materialForm.code" @change="weightFromMaterialCode" /></div>
+              <div class="field"><label><input type="checkbox" v-model="materialForm.is_white_face" /> 白面纸</label><small>仅白面纸材质勾选；不同面纸颜色不能互用。</small></div>
               <div class="field"><label>层数</label><select class="select" v-model.number="materialForm.layer_count" @change="onMaterialLayerChange"><option :value="3">三层（单瓦楞）</option><option :value="5">五层（双瓦楞）</option><option :value="7">七层</option></select></div>
               <div class="field wide"><label>克重组合</label><input class="input" placeholder="170g/130g/80g/170g/150g" v-model.trim="materialForm.basis_weight_description" @change="recommendMaterialCode" /></div>
               <div class="field"><label>配纸</label><input class="input" v-model.trim="materialForm.paper_composition" /></div>
@@ -9601,7 +9602,7 @@
         id:null, version:null, code:"", paper_composition:"", layer_count:5,
         basis_weight_description:"", quote_price:"0", price_unit:"元/㎡",
         purchase_currency:"CNY", purchase_tax_included:true, purchase_tax_rate:"0.13",
-        supplier_name:"", quote_date:null, remarks:"", is_active:true
+        supplier_name:"", quote_date:null, remarks:"", is_active:true, is_white_face:false
       });
       const blankMaterialCandidate = () => ({
         id:null, customer_id:null, original_material_code:"", material_id:null,

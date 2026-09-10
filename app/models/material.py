@@ -66,6 +66,7 @@ class Material(Base):
     quote_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_white_face: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
     version: Mapped[int] = mapped_column(
         Integer,
         default=1,

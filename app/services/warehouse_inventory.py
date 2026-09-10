@@ -2282,6 +2282,7 @@ def _transfer_finished_lot_location(
             product_id=detail.product_id,
             inventory_code_snapshot=detail.inventory_code_snapshot,
             product_name_snapshot=detail.product_name_snapshot,
+            physical_basis_json=detail.physical_basis_json,
             box_type_snapshot=detail.box_type_snapshot,
             length_mm=detail.length_mm,
             width_mm=detail.width_mm,
@@ -2606,6 +2607,7 @@ def manual_finished_in(
     expected_layout_version: int | None = None,
     ground_secondary_location_id: int | None = None,
     ground_capacity_quantity: int | None = None,
+    physical_basis_json: str | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -2696,6 +2698,9 @@ def manual_finished_in(
     )
     db.add(lot)
     db.flush()
+    from app.services.finished_stock_identity import product_basis, order_product_basis
+    if physical_basis_json is None and completion is not None:
+        physical_basis_json = order_product_basis(db, completion.order_item_id, product_id)
     lot.finished_detail = FinishedGoodsInventoryDetail(
         owner_customer_id=customer.id if customer is not None and not is_general else None,
         owner_customer_name_snapshot=(
@@ -2711,6 +2716,7 @@ def manual_finished_in(
         height_mm=round(product.height_mm) if product.height_mm is not None else None,
         material_code_snapshot=material_code,
         flute_type_snapshot=product.flute_type,
+        physical_basis_json=physical_basis_json or product_basis(product),
     )
     _movement(
         db,
@@ -3023,7 +3029,7 @@ def finished_inventory_candidates_for_bom_component(
         raise WarehouseInventoryError("订单不存在", 404)
     if not _frozen_product_has_stock(db, item.id, snapshot.component_product_id):
         return []
-    return db.scalars(
+    rows = db.scalars(
         select(InventoryLot)
         .join(FinishedGoodsInventoryDetail,
               FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id)
@@ -3040,6 +3046,9 @@ def finished_inventory_candidates_for_bom_component(
         )
         .order_by(FinishedGoodsInventoryDetail.is_general, InventoryLot.stock_date, InventoryLot.id)
     ).all()
+    from app.services.finished_stock_identity import order_product_basis
+    expected = order_product_basis(db, item.id, snapshot.component_product_id)
+    return [lot for lot in rows if expected is None or lot.finished_detail.physical_basis_json == expected]
 
 
 def reserve_finished_inventory_for_bom_component(
@@ -3100,6 +3109,9 @@ def reserve_finished_inventory_for_bom_component(
     detail = lot.finished_detail
     if detail.product_id != snapshot.component_product_id:
         raise WarehouseInventoryError("库存产品与组件不一致", 409)
+    from app.services.finished_stock_identity import matching_component_basis
+    if not matching_component_basis(db, snapshot, lot):
+        raise WarehouseInventoryError("库存缺少匹配的冻结规格、单位或工艺依据，请先核实该批次身份", 409)
     warnings: list[str] = []
     if detail.is_general:
         warnings.append("GENERAL_FINISHED_STOCK")
@@ -3194,7 +3206,7 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
         )
     if not _finished_reservation_pre_requisition(item):
         raise WarehouseInventoryError("订单已进入报料，请先取消报料后再抵扣成品库存", 409)
-    return db.scalars(
+    rows = db.scalars(
         select(InventoryLot)
         .join(
             FinishedGoodsInventoryDetail,
@@ -3216,6 +3228,9 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
             *inventory_fifo_order_columns(),
         )
     ).all()
+    from app.services.finished_stock_identity import order_product_basis
+    expected = order_product_basis(db, item.id, item.product_id)
+    return [lot for lot in rows if expected is None or lot.finished_detail.physical_basis_json == expected]
 
 
 def finished_inventory_candidates_for_product(
@@ -3368,6 +3383,10 @@ def reserve_finished_inventory(
         raise WarehouseInventoryError('该批次已集货待送，不能再抵扣其他订单', 409)
     if detail.product_id != item.product_id:
         raise WarehouseInventoryError("库存产品与订单产品不一致")
+    from app.services.finished_stock_identity import order_product_basis
+    expected_basis = order_product_basis(db, item.id, item.product_id)
+    if expected_basis is not None and detail.physical_basis_json != expected_basis:
+        raise WarehouseInventoryError("库存缺少匹配的冻结规格、单位或工艺依据，请先核实该批次身份", 409)
     if not detail.is_general and detail.owner_customer_id != order.customer_id:
         raise WarehouseInventoryError("客户专用库存不能用于其他客户订单")
     warning_codes: list[str] = []
@@ -5076,6 +5095,17 @@ def edit_finished_lot(
         "material_code_snapshot": material_code,
         "flute_type_snapshot": product.flute_type,
     }
+    physical_changed = any(getattr(detail, field) != target_snapshots[field] for field in (
+        "box_type_snapshot", "length_mm", "width_mm", "height_mm",
+        "material_code_snapshot", "flute_type_snapshot"))
+    if physical_changed and (lot.quantity_reserved > 0 or lot.quantity_consumed > 0):
+        # Editing quantity/location must not silently replace physical facts
+        # from a subsequently changed product master.
+        for field in ("box_type_snapshot", "length_mm", "width_mm", "height_mm",
+                      "material_code_snapshot", "flute_type_snapshot"):
+            target_snapshots[field] = getattr(detail, field)
+    elif physical_changed or identity_changed:
+        target_snapshots["physical_basis_json"] = None
 
     changes: dict[str, dict[str, object]] = {}
     _edit_change(changes, "is_general", detail.is_general, is_general)

@@ -231,6 +231,7 @@ def assemble_subkit_inventory(
         if any(to_consume.values()):
             raise SubkitError("组套原片扣减不完整")
         if plan.kit_quantity:
+            from app.services.finished_stock_identity import order_product_basis
             destination = db.get(WarehouseLocation, target_location_id)
             if destination is None:
                 raise SubkitError("组套目标库位不存在")
@@ -238,6 +239,8 @@ def assemble_subkit_inventory(
                 product_id=snapshot.kit_product_id, location_id=target_location_id,
                 quantity=plan.kit_quantity, stock_date=beijing_today(), source_type="transfer",
                 source_ref_type=source_ref, source_ref_id=conversion.id,
+                physical_basis_json=(order_product_basis(db, order_item_id, graph_product_id)
+                    if graph_product_id is not None else None),
                 expected_layout_version=destination.floor3_layout.version if destination.floor3_layout else None,
                 remarks="收料自动组套", operator_id=operator_id,
                 idempotency_key=f"{operation_key}:out", movement_reason="原片自动组套入库")

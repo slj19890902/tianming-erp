@@ -41,6 +41,20 @@ def original_facts(connection, columns):
     return result
 
 
+def test_stock_identity_facts_block_destructive_downgrade(factory_copy, monkeypatch):
+    db = factory_copy
+    target = Path(db.get_bind().url.database)
+    db.rollback()
+    with sqlite3.connect(target) as connection:
+        changed = connection.execute("UPDATE finished_goods_inventory_details SET physical_basis_json='{}' "
+            "WHERE inventory_lot_id=(SELECT MIN(inventory_lot_id) FROM finished_goods_inventory_details)")
+        assert changed.rowcount == 1
+    before = hashlib.sha256(target.read_bytes()).hexdigest()
+    with pytest.raises(RuntimeError, match="已有库存规格工艺身份依据"):
+        command.downgrade(_config(monkeypatch, target), "sg19v8x9z81")
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == before
+
+
 def test_factory_copy_upgrade_roundtrip_preserves_every_original_fact(factory_copy, monkeypatch):
     db = factory_copy
     target = Path(db.get_bind().url.database)
@@ -53,16 +67,16 @@ def test_factory_copy_upgrade_roundtrip_preserves_every_original_fact(factory_co
         triggers = dict(before.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))
     db.rollback()
     config = _config(monkeypatch, target)
-    assert ScriptDirectory.from_config(config).get_heads() == ["sg19v8x9z81"]
-    for destination in ("sf18v8x9z80", "se17v8x9z79", "sg19v8x9z81"):
-        if destination != "sg19v8x9z81":
+    assert ScriptDirectory.from_config(config).get_heads() == ["sh20v8x9z82"]
+    for destination in ("sf18v8x9z80", "se17v8x9z79", "sh20v8x9z82"):
+        if destination != "sh20v8x9z82":
             command.downgrade(config, destination)
         else:
             command.upgrade(config, destination)
         with sqlite3.connect(target) as after:
             assert after.execute("PRAGMA integrity_check").fetchone() == ("ok",)
             assert after.execute("PRAGMA foreign_key_check").fetchall() == []
-            expected_heads = {destination} if destination == "sg19v8x9z81" else {destination, "rt10v8x9z67"}
+            expected_heads = {destination} if destination == "sh20v8x9z82" else {destination, "rt10v8x9z67"}
             assert {r[0] for r in after.execute("SELECT version_num FROM alembic_version")} == expected_heads
             assert original_facts(after, columns) == expected
             actual = dict(after.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))

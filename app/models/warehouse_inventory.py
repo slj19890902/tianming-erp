@@ -1306,6 +1306,7 @@ class FinishedGoodsInventoryDetail(Base):
     height_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     material_code_snapshot: Mapped[str | None] = mapped_column(String(100), nullable=True)
     flute_type_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    physical_basis_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     lot: Mapped["InventoryLot"] = relationship(back_populates="finished_detail")
     customer: Mapped["Customer | None"] = relationship()

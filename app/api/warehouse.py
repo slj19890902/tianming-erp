@@ -24171,6 +24171,40 @@ def edit_finished_inventory_lot(
         _handle_integrity(error)
 
 
+class FinishedIdentityConfirmation(BaseModel):
+    preview_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operation_key: str = Field(min_length=1, max_length=64)
+    physical_match_confirmed: Literal[True]
+
+
+@router.get("/lots/{lot_id}/physical-identity/preview")
+def preview_finished_identity(lot_id: int, db: Session = Depends(get_db), user: User = Depends(admin_only)):
+    _require_lot_customer_access(db, lot_id, user)
+    from app.services.finished_stock_identity import identity_preview
+    try:
+        return identity_preview(db, lot_id)
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.post("/lots/{lot_id}/physical-identity/confirm")
+def confirm_finished_identity(lot_id: int, payload: FinishedIdentityConfirmation,
+                              db: Session = Depends(get_db), user: User = Depends(admin_only)):
+    _require_lot_customer_access(db, lot_id, user)
+    from app.services.finished_stock_identity import confirm_identity
+    try:
+        result = confirm_identity(db, lot_id=lot_id, preview_hash=payload.preview_hash,
+            operation_key=payload.operation_key, actor=user)
+        db.commit()
+        return result
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except Exception:
+        db.rollback()
+        raise
+
+
 def _lot_location_transfer_dict(
     db: Session,
     row: InventoryLotTransfer,

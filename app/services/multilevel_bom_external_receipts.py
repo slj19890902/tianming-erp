@@ -69,10 +69,12 @@ def post_graph_receipt_inventory(db, *, purchase_item, receipt_item, customer_id
     node = next(n for n in compiled.graph.nodes if n.product_id == link.product_id)
     target = _receipt_auto_finished_ground_target(db, claim=True,
         customer_id=customer_id, product_id=node.product_id)
+    from app.services.finished_stock_identity import order_product_basis
     lot = manual_finished_in(db, customer_id=customer_id, product_id=node.product_id,
         location_id=target.location.id, quantity=quantity, stock_date=beijing_today(),
         source_type='purchase_reserve', source_ref_type='bom_external_receipt',
         source_ref_id=receipt_item.id, remarks='外购子件收料入库', operator_id=operator_id,
+        physical_basis_json=order_product_basis(db, link.order_item_id, node.product_id),
         idempotency_key=f'bom-external-receipt:{receipt_item.id}',
         expected_layout_version=target.layout_version, require_empty_pallet=False,
         movement_reason='外购子件收料入库')

@@ -1,5 +1,9 @@
 # Codex 项目交接
 
+## 2026-09-11 v0.22.337 盘点全部客户规格搜索
+
+- 正式f3a28f79，release_runtime_20260911_125832.json completed；head rw10v8x9z71不变，正式库SHA前后一致。8项后端及2项手机脚本定向测试、构建、正式健康/资源门禁通过。详情docs/stocktake_all_customers_delivery.md及NAS回执20260911-v022337-盘点全部客户规格搜索.md。Chrome超时，现场人工验收待完成。
+
 ## 2026-09-10 v0.22.325 仓库材料候选用途
 
 - 正式代码8a94f70d，release_runtime_20260910_125201.json completed；唯一head rt10v8x9z67，新建独立候选历史表0行。13项定向测试、构建、隔离升降升及正式健康门禁通过，不改库存数量或硬性产品绑定。

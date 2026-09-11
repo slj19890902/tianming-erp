@@ -16,6 +16,7 @@ function resetInitialInbound() {
   $("sheetGoods").replaceChildren();
   $("sheetGoods").classList.add("hidden");
   $("finishedGoods").classList.remove("hidden");
+  $("lotList").classList.remove("hidden");
   document.querySelectorAll("[data-goods-type]").forEach(b=>b.classList.toggle("primary",b.dataset.goodsType==="finished"));
   inbound.generation += 1;
   inbound.context = null;
@@ -266,6 +267,7 @@ window.mobileGoodsSaved=async()=>{setInboundBusy(false);await openLocation(pick(
 document.querySelectorAll("[data-goods-type]").forEach(button=>button.onclick=()=>{
   if(inbound.busy||inbound.attempt)return;
   inbound.type=button.dataset.goodsType;
+  $("lotList").classList.toggle("hidden",inbound.type!=="finished");
   document.querySelectorAll("[data-goods-type]").forEach(b=>b.classList.toggle("primary",b===button));
   $("finishedGoods").classList.toggle("hidden",inbound.type!=="finished");
   $("sheetGoods").classList.toggle("hidden",inbound.type==="finished");

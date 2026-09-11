@@ -3575,7 +3575,7 @@ def search_mobile_warehouse_physical_inventory(
                 Product.product_code.ilike(pattern),
                 Product.customer_material_code.ilike(pattern),
                 Product.product_name.ilike(pattern),
-                (cast(FinishedGoodsInventoryDetail.length_mm, String) + "×" + cast(FinishedGoodsInventoryDetail.width_mm, String) + "×" + cast(FinishedGoodsInventoryDetail.height_mm, String)).ilike("%" + inventory_text.replace("*", "×").replace("x", "×").replace("X", "×") + "%"),
+                (cast(FinishedGoodsInventoryDetail.length_mm, String) + "×" + cast(FinishedGoodsInventoryDetail.width_mm, String) + "×" + func.coalesce(cast(FinishedGoodsInventoryDetail.height_mm, String), "")).ilike("%" + "".join(inventory_text.split()).replace("*", "×").replace("x", "×").replace("X", "×") + "%"),
             )
         )
 

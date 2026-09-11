@@ -7909,7 +7909,7 @@ def floor3_product_candidates(
                 Product.product_code.like(pattern),
                 Product.customer_material_code.like(pattern),
                 Product.product_name.like(pattern),
-                (cast(Product.length_mm, String) + "×" + cast(Product.width_mm, String) + "×" + cast(Product.height_mm, String)).like("%" + keyword.replace("*", "×").replace("x", "×").replace("X", "×") + "%"),
+                (cast(Product.length_mm, String) + "×" + cast(Product.width_mm, String) + "×" + func.coalesce(cast(Product.height_mm, String), "")).like("%" + "".join(keyword.split()).replace("*", "×").replace("x", "×").replace("X", "×") + "%"),
                 Customer.name.like(pattern),
                 Product.id.in_(order_product_ids) if order_product_ids else False,
             ),

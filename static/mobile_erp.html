@@ -84,10 +84,12 @@
       display: block; width: 100%; height: 100%; min-height: 0;
     }
     .searchbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; }
-    .searchbar input { width: 100%; min-height: 46px; padding: 9px 11px; border: 1px solid #aabbb2; border-radius: 10px; background: #fff; }
+    .searchbar input, #dimensionCustomer { width: 100%; min-height: 46px; padding: 9px 11px; border: 1px solid #aabbb2; border-radius: 10px; background: #fff; }
     .search-btn { min-height: 46px; padding: 8px 14px; border: 0; border-radius: 10px; background: var(--green); color: #fff; font-weight: 900; }
     .lookup-filter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; }
     .lookup-filter select { width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid #aabbb2; border-radius: 10px; background: #fff; color: var(--ink); }
+    #dimensionCustomer { margin-bottom: 8px; }
+    #lookupPage > .lookup-filter { grid-template-columns: minmax(0, 1fr) auto auto; }
     .lookup-group { margin: 12px 0 16px; }
     .lookup-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 2px 7px; }
     .lookup-group-head strong { font-size: 16px; }
@@ -283,13 +285,22 @@
           <button id="clearLookup" class="small-btn" type="button">清空</button>
         </div>
         <div id="orderLookupFilters" class="card" hidden>
-          <label><input id="lookupUnfulfilled" type="checkbox" checked> 只看未送齐订单</label>
+          <div class="lookup-filter">
+            <select id="lookupDimensionMode" aria-label="订单查找方式"><option value="text">客户 / 关键词</option><option value="board">纸板尺寸</option><option value="box">纸箱尺寸</option></select>
+          </div>
+          <div id="dimensionControls" hidden>
+            <input id="dimensionCustomer" maxlength="100" placeholder="客户名称 / 简称（可选）" aria-label="尺寸查询客户">
+            <div class="lookup-filter"><select id="dimensionAxis" aria-label="纸板单边方向"><option value="any">单边：任一边</option><option value="length">单边：报料长</option><option value="width">单边：报料宽</option></select>
+              <select id="dimensionTolerance" aria-label="匹配范围"><option value="5">接近 ±5mm</option><option value="0">仅精确</option><option value="10">扩大范围 ±10mm</option></select></div>
+            <p class="muted">在上方输入尺寸，如 800×600，默认 mm；仅查未送齐订单，纸板长宽不交换。</p>
+          </div>
+          <div id="textOrderFilters"><label><input id="lookupUnfulfilled" type="checkbox" checked> 只看未送齐订单</label>
           <div class="lookup-filter">
             <select id="lookupDateField" aria-label="订单时间类型"><option value="order_date">下单日期</option><option value="delivery_date">交货日期</option></select>
             <input id="lookupDateFrom" type="date" aria-label="开始日期">
             <input id="lookupDateTo" type="date" aria-label="结束日期">
           </div>
-          <p class="muted">日期留空查看所有时间；输入客户名称可缩小范围。</p>
+          <p class="muted">日期留空查看所有时间；输入客户名称可缩小范围。</p></div>
         </div>
         <div id="lookupState" class="card status empty">输入关键词查询，或点击未送齐订单查看全部。</div>
         <div id="lookupResults" hidden></div>
@@ -549,6 +560,8 @@
             active_page: state.activePage,
             lookup_query: state.lookupQuery,
             lookup_category: state.lookupCategory,
+            dimension_mode: byId("lookupDimensionMode").value, dimension_customer: byId("dimensionCustomer").value,
+            dimension_axis: byId("dimensionAxis").value, dimension_tolerance: byId("dimensionTolerance").value,
             lookup_page: state.lookupPage,
             scroll_by_page: Object.fromEntries(state.scrollByPage),
           }));
@@ -565,6 +578,12 @@
         }
         state.lookupQuery = String(saved.lookup_query || "").slice(0, 100);
         state.lookupCategory = String(saved.lookup_category || "all");
+        byId("lookupDimensionMode").value = saved.dimension_mode || "text";
+        byId("dimensionCustomer").value = saved.dimension_customer || "";
+        byId("dimensionAxis").value = saved.dimension_axis || "any";
+        byId("dimensionTolerance").value = saved.dimension_tolerance || "5";
+        byId("dimensionControls").hidden = byId("lookupDimensionMode").value === "text";
+        byId("textOrderFilters").hidden = byId("lookupDimensionMode").value !== "text";
         state.lookupPage = Math.max(1, Number(saved.lookup_page) || 1);
         const savedScroll = saved.scroll_by_page && typeof saved.scroll_by_page === "object" ? saved.scroll_by_page : {};
         Object.entries(savedScroll).forEach(([page, value]) => {
@@ -927,7 +946,7 @@
             title: item.order_number || item.item_order_number || "订单",
             lines: [
               `${item.customer_name || "客户未填写"}｜${item.product_code || "无存货编码"}｜${item.product_name || "产品未填写"}`,
-              `${item.specification || "规格未填写"}｜订单 ${Number(item.quantity || 0)} 只｜已送 ${Number(item.delivered_quantity || 0)} 只｜未送 ${Number(item.remaining_quantity || 0)} 只`,
+              `${item.specification || "规格未填写"}｜订单 ${Number(item.quantity || 0)} ${item.unit || "只"}｜已送 ${Number(item.delivered_quantity || 0)} ${item.unit || "只"}｜未送 ${Number(item.remaining_quantity || 0)} ${item.unit || "只"}`,
               `下单 ${item.order_date || "未填写"}｜交货 ${item.delivery_date || "未填写"}`,
               `${item.customer_po ? `客户单号 ${item.customer_po}｜` : ""}${item.delivery_date || "交期未填写"}`,
             ],
@@ -979,6 +998,42 @@
       }
 
       function appendLookupAction(card, groupId, item) {
+        if (groupId === "orders") {
+          if (item.dimension_match) {
+            const match = item.dimension_match;
+            card.append(node("strong", "", `${match.level}｜${match.source} ${match.dimensions_mm.filter(v => v !== null).join("×")}mm`));
+            card.append(node("span", "muted", match.differences.map(v => `${v.dimension} ${v.mm > 0 ? "+" : ""}${v.mm}mm`).join("、")));
+            if (match.distance > 0) card.append(node("span", "muted", "请核对产品名称、楞型及图纸"));
+          }
+          if (item.progress) {
+            const progress = node("strong", "", `● ${item.progress.label}`);
+            progress.style.color = item.progress.color;
+            card.append(progress, node("span", "muted", `来料 ${item.progress.received_sheets}张｜完工 ${item.progress.completed_quantity}${item.unit || "只"}｜可送 ${item.progress.delivery_ready_quantity}${item.unit || "只"}｜库存覆盖 ${item.progress.finished_coverage}${item.unit || "只"}`));
+          }
+          const details = node("details", "");
+          details.append(node("summary", "small-btn", "查看同单未送产品"));
+          const body = node("div", ""); details.append(body);
+          details.addEventListener("toggle", async () => {
+            if (!details.open || details.dataset.loaded) return;
+            details.dataset.loaded = "loading";
+            body.textContent = "正在读取…";
+            try {
+              const data = await apiGet(`/api/mobile/erp/orders/${item.order_id}/unfulfilled`);
+              if (!details.isConnected) return;
+              body.replaceChildren(node("strong", "", `本订单未送 ${data.items.length} 款`));
+              data.items.forEach(line => {
+                const row = node("div", "card");
+                if (line.order_item_id === item.order_item_id) row.style.borderColor = "#0f766e";
+                lookupItemFacts("orders", line).lines.filter(Boolean).forEach(value => row.append(node("span", "", value)));
+                if (line.progress) { const label = node("strong", "", `● ${line.progress.label}`); label.style.color = line.progress.color; row.append(label); }
+                body.append(row);
+              });
+              details.dataset.loaded = "yes";
+            } catch (error) { delete details.dataset.loaded; body.textContent = `${error.message}；收起后重新展开可重试`; }
+          });
+          card.append(details);
+        }
+
         if (groupId === "inventory") {
           const button = node("button", "small-btn", "到仓库页查看位置");
           button.type = "button";
@@ -1085,7 +1140,13 @@
         }
         showStatus("lookupState", "正在按当前账号权限查询…", "");
         try {
-          const endpoint = "/api/mobile/erp/search";
+          let endpoint = "/api/mobile/erp/search";
+          if (orderSearch && byId("lookupDimensionMode").value !== "text") {
+            endpoint = "/api/mobile/erp/orders/by-dimensions";
+            params.set("dimensions", query); params.set("domain", byId("lookupDimensionMode").value);
+            params.set("customer", byId("dimensionCustomer").value.trim());
+            params.set("axis", byId("dimensionAxis").value); params.set("tolerance", byId("dimensionTolerance").value);
+          }
           const data = await apiGet(`${endpoint}?${params.toString()}`, { signal: controller.signal });
           if (generation !== state.lookupGeneration || state.activePage !== "lookup") return false;
           renderLookupResults(data);
@@ -2668,6 +2729,23 @@
         }
       });
       byId("lookupButton").addEventListener("click", () => runUnifiedSearch(1));
+      byId("lookupDimensionMode").addEventListener("change", () => {
+        const mode = byId("lookupDimensionMode").value;
+        byId("dimensionControls").hidden = mode === "text";
+        byId("textOrderFilters").hidden = mode !== "text";
+        byId("dimensionAxis").hidden = mode !== "board";
+        byId("lookupInput").placeholder = mode === "text" ? "输入客户或关键词" : mode === "board" ? "纸板长×宽，例如 800×600" : "纸箱长×宽×高，例如 400×300×200";
+        byId("lookupUnfulfilled").checked = true;
+        clearLookup();
+      });
+      ["dimensionAxis", "dimensionTolerance"].forEach(id => byId(id).addEventListener("change", () => { if (byId("lookupInput").value.trim()) runUnifiedSearch(1); }));
+      let dimensionTimer;
+      byId("lookupInput").addEventListener("input", () => {
+        state.lookupController?.abort(); state.lookupGeneration += 1;
+        clearTimeout(dimensionTimer);
+        if (byId("lookupCategory").value === "orders" && byId("lookupDimensionMode").value !== "text" && byId("lookupInput").value.trim()) dimensionTimer = setTimeout(() => runUnifiedSearch(1), 400);
+      });
+      byId("dimensionCustomer").addEventListener("input", () => { clearTimeout(dimensionTimer); dimensionTimer = setTimeout(() => { if (byId("lookupInput").value.trim()) runUnifiedSearch(1); }, 350); });
       byId("lookupCategory").addEventListener("change", () => {
         state.lookupCategory = byId("lookupCategory").value || "all";
         byId("orderLookupFilters").hidden = state.lookupCategory !== "orders";

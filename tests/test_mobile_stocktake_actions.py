@@ -32,6 +32,7 @@ inbound.type='finished';updateSubmitState();assert.equal($('submitArea').classLi
 state.lots=[];updateSubmitState();assert.equal($('submitButton').textContent,'确认现场为空');
 inbound.attempt={};updateSubmitState();assert.equal($('submitButton').disabled,true);assert.equal($('submitArea').classList.hidden,true);
 inbound.attempt=null;state.user.role='worker';state.lots=[{id:5}];updateSubmitState();assert.equal($('submitButton').textContent,'提交盘点');
+inbound.type='semi_finished';updateSubmitState();assert.equal($('submitArea').classList.hidden,true);inbound.type='finished';
 state.locked=true;updateSubmitState();assert.equal($('submitButton').disabled,true);assert.equal($('submitArea').classList.hidden,true);
 '''.replace('SOURCE', source)
     result = subprocess.run(['node', '-e', script], capture_output=True, text=True, encoding='utf-8')

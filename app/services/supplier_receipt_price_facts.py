@@ -181,7 +181,7 @@ def _candidate_material_codes(value: str) -> tuple[str, ...]:
     return tuple(candidates)
 
 
-def _receipt_source_context(db: Session, item: IncomingReceiptItem) -> ReceiptSourceContext:
+def _receipt_source_context(db: Session, item: IncomingReceiptItem, *, allow_historical_dimensions: bool = False) -> ReceiptSourceContext:
     receipt = db.get(IncomingReceipt, item.receipt_id)
     if receipt is None or receipt.status != "posted" or item.status != "posted":
         raise SupplierReceiptPriceFactError(
@@ -201,6 +201,17 @@ def _receipt_source_context(db: Session, item: IncomingReceiptItem) -> ReceiptSo
                 "PAPERBOARD_PURCHASE_SOURCE_MISSING",
                 "纸板实收缺少供应商采购来源",
             )
+        report_length, report_width = source.report_length_mm, source.report_width_mm
+        if allow_historical_dimensions and (report_length is None or report_width is None):
+            # Historical adoption only: use the stable linked order's frozen
+            # dimensions, never current product data or a multi-line header.
+            order_item = db.get(OrderItem, source.order_item_id) if source.order_item_id else None
+            if order_item is not None:
+                frozen = (order_item.snapshot_report_length_mm, order_item.snapshot_report_width_mm)
+                current = (order_item.cardboard_len, order_item.cardboard_width)
+                if all(v is not None and v > 0 for v in frozen) and all(v is None or Decimal(v) == Decimal(f) for pair in (current, (report_length, report_width)) for v, f in zip(pair, frozen)):
+                    report_length = report_length if report_length is not None else frozen[0]
+                    report_width = report_width if report_width is not None else frozen[1]
         return ReceiptSourceContext(
             receipt_item_id=int(item.id),
             receipt_number=str(receipt.receipt_number),
@@ -213,8 +224,8 @@ def _receipt_source_context(db: Session, item: IncomingReceiptItem) -> ReceiptSo
             ).strip(),
             material_id=(int(source.material_id) if source.material_id is not None else None),
             material_code=str(source.material_code_snapshot or "").strip(),
-            report_length_mm=_positive_dimension(source.report_length_mm, "报料长"),
-            report_width_mm=_positive_dimension(source.report_width_mm, "报料宽"),
+            report_length_mm=_positive_dimension(report_length, "报料长"),
+            report_width_mm=_positive_dimension(report_width, "报料宽"),
         )
     if item.requisition_item_id is not None:
         source = db.get(RequisitionItem, item.requisition_item_id)
@@ -387,7 +398,7 @@ def _price_plan(
     allow_supplier_code_fallback: bool,
     purchase_receipt_fact: PurchaseReceiptFact | None = None,
 ) -> ReceiptPriceAdoptionPlan:
-    context = _receipt_source_context(db, item)
+    context = _receipt_source_context(db, item, allow_historical_dimensions=allow_supplier_code_fallback)
     try:
         supplier = resolve_supplier(
             db,

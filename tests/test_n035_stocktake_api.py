@@ -348,7 +348,7 @@ def test_submit_rejects_open_snapshot_drift_before_creating_order(
         assert db.scalar(select(func.count(InventoryMovement.id))) == 0
 
 
-def test_countable_lots_include_only_finished_and_keep_real_specification_snapshot(
+def test_countable_lots_include_finished_and_sheets_and_keep_real_specification_snapshot(
     stocktake_api,
 ) -> None:
     application, factory, ids = stocktake_api
@@ -359,8 +359,8 @@ def test_countable_lots_include_only_finished_and_keep_real_specification_snapsh
         location = next(
             row for row in locations.json()["items"] if row["id"] == ids["location"]
         )
-        assert location["lot_count"] == 2
-        assert location["current_on_hand"] == 16
+        assert location["lot_count"] == 3
+        assert location["current_on_hand"] == 116
 
         detail = client.get(
             f"/api/warehouse/stocktake/locations/{ids['location']}"
@@ -370,18 +370,20 @@ def test_countable_lots_include_only_finished_and_keep_real_specification_snapsh
         assert {row["inventory_lot_id"] for row in lots} == {
             ids["lot1"],
             ids["lot2"],
+            ids["semi_lot"],
         }
-        assert all(row["inventory_type"] == "finished" for row in lots)
-        assert all(row["specification"] == "500×300×200mm" for row in lots)
+        assert {row["inventory_type"] for row in lots} == {"finished", "semi_finished"}
+        assert all(row["specification"] == "500×300×200mm" for row in lots if row["inventory_type"] == "finished")
 
         order = _submit(client, ids, key="n035-finished-only-submit")
         assert {item["inventory_lot_id"] for item in order["items"]} == {
             ids["lot1"],
             ids["lot2"],
+            ids["semi_lot"],
         }
         assert all(
             item["specification"] == "500×300×200mm"
-            for item in order["items"]
+            for item in order["items"] if item["inventory_lot_id"] != ids["semi_lot"]
         )
 
     with factory() as db:
@@ -390,10 +392,11 @@ def test_countable_lots_include_only_finished_and_keep_real_specification_snapsh
         assert {item.inventory_lot_id for item in row.items} == {
             ids["lot1"],
             ids["lot2"],
+            ids["semi_lot"],
         }
         assert all(
             item.specification_snapshot == "500×300×200mm"
-            for item in row.items
+            for item in row.items if item.inventory_lot_id != ids["semi_lot"]
         )
 
 

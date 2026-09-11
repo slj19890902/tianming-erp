@@ -2558,6 +2558,80 @@ def search_mobile_portal(
     }
 
 
+def _dimension_order_progress(db, user, items):
+    """Use the shared production projection, never a guessed order status."""
+    if not items or not has_permission(user, "incoming.view") or not (has_permission(user, "production.printing.view") or has_permission(user, "production.die_cut.view")):
+        return
+    ids = [row["order_item_id"] for row in items]
+    task_ids = list(db.scalars(select(ProductionTask.id).where(ProductionTask.order_item_id.in_(ids), ProductionTask.sales_order_item_bom_component_id.is_(None))))
+    tasks = list_production_tasks(db, allowed_customer_ids=_visible_customer_ids(user, db), task_ids=task_ids)
+    by_item = {row["order_item_id"]: row for row in tasks}
+    reservations = dict(db.execute(select(InventoryReservation.order_item_id, func.sum(InventoryReservation.credited_requirement_quantity - InventoryReservation.consumed_requirement_quantity - InventoryReservation.released_requirement_quantity)).join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id).where(InventoryReservation.order_item_id.in_(ids), InventoryReservation.status.in_(("active", "partial")), InventoryReservation.sales_order_item_bom_component_id.is_(None), InventoryLot.inventory_type == "finished").group_by(InventoryReservation.order_item_id)).all())
+    for row in items:
+        task = by_item.get(row["order_item_id"], {})
+        received = int(task.get("material_received_quantity") or 0)
+        ready = int(task.get("delivery_ready_quantity") or 0)
+        covered = max(0, int(reservations.get(row["order_item_id"]) or 0))
+        completed = int(task.get("actual_output_quantity") or 0)
+        if row["delivered_quantity"] > 0:
+            label, color = "部分已送", "#7e22ce"
+        elif ready > 0 or completed > row["delivered_quantity"]:
+            label, color = "已完工待送", "#15803d"
+        elif covered > 0:
+            label, color = "库存已预占", "#1d4ed8"
+        elif received > 0:
+            label, color = ("已到料", "#15803d") if task.get("material_status") == "received" else ("部分到料", "#b45309")
+        else:
+            label, color = "未到料", "#64748b"
+        row["progress"] = {"label": label, "color": color, "received_sheets": received, "completed_quantity": completed, "delivery_ready_quantity": ready, "finished_coverage": covered}
+
+
+@router.get("/orders/by-dimensions")
+def mobile_orders_by_dimensions(
+    response: Response,
+    dimensions: str = Query(min_length=1, max_length=100),
+    domain: Literal["board", "box"] = Query(default="board"),
+    customer: str = Query(default="", max_length=100),
+    tolerance: int = Query(default=5, ge=0, le=10),
+    axis: Literal["any", "length", "width"] = Query(default="any"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=20),
+    db: Session = Depends(get_db), user: User = Depends(can_read_orders),
+) -> dict:
+    from app.services.mobile_order_dimensions import find_order_dimensions
+    _no_store(response)
+    response.headers["X-ERP-Session-Identity"] = f"{user.id}:{user.auth_version}"
+    if domain == "board" and not has_permission(user, "incoming.view"):
+        raise HTTPException(403, "当前账号没有纸板资料查看权限")
+    try:
+        if tolerance not in (0, 5, 10):
+            raise ValueError("请选择精确、5mm或10mm范围")
+        group = find_order_dimensions(db, visible_ids=_visible_customer_ids(user, db), domain=domain, text=dimensions, customer=customer.strip(), tolerance=tolerance, axis=axis, page=page, page_size=page_size)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _dimension_order_progress(db, user, group["items"])
+    return {"category": "orders", "groups": [group], "read_only": True, "tolerance_mm": tolerance}
+
+
+@router.get("/orders/{order_id}/unfulfilled")
+def mobile_order_unfulfilled(
+    order_id: int, response: Response,
+    db: Session = Depends(get_db), user: User = Depends(can_read_orders),
+) -> dict:
+    from app.services.mobile_order_dimensions import outstanding_query, line_payload
+    _no_store(response)
+    scope = _visible_customer_ids(user, db)
+    order = db.get(Order, order_id)
+    if order is None or (scope is not None and order.customer_id not in scope):
+        raise HTTPException(404, "订单不存在或不在当前客户范围")
+    items = [line_payload(*row) for row in db.execute(outstanding_query(scope).where(Order.id == order_id).order_by(OrderItem.id))]
+    _dimension_order_progress(db, user, items)
+    totals = {}
+    for row in items:
+        totals[row["unit"]] = totals.get(row["unit"], 0) + row["remaining_quantity"]
+    return {"order_id": order_id, "items": items, "remaining_by_unit": totals, "read_only": True}
+
+
 @router.get("/products")
 def search_products(
     response: Response,
@@ -3575,7 +3649,7 @@ def search_mobile_warehouse_physical_inventory(
                 Product.product_code.ilike(pattern),
                 Product.customer_material_code.ilike(pattern),
                 Product.product_name.ilike(pattern),
-                (cast(FinishedGoodsInventoryDetail.length_mm, String) + "×" + cast(FinishedGoodsInventoryDetail.width_mm, String) + "×" + cast(FinishedGoodsInventoryDetail.height_mm, String)).ilike("%" + inventory_text.replace("*", "×").replace("x", "×").replace("X", "×") + "%"),
+                (cast(FinishedGoodsInventoryDetail.length_mm, String) + "×" + cast(FinishedGoodsInventoryDetail.width_mm, String) + "×" + func.coalesce(cast(FinishedGoodsInventoryDetail.height_mm, String), "")).ilike("%" + "".join(inventory_text.split()).replace("*", "×").replace("x", "×").replace("X", "×") + "%"),
             )
         )
 

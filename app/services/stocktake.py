@@ -86,6 +86,7 @@ def _lot_options():
         .selectinload(WarehouseLocation.address_area)
         .selectinload(WarehouseArea.floor),
         selectinload(InventoryLot.finished_detail),
+        selectinload(InventoryLot.semi_finished_detail),
     )
 
 
@@ -106,7 +107,7 @@ def _countable_lots_statement(location_id: int):
         select(InventoryLot)
         .where(
             InventoryLot.warehouse_location_id == location_id,
-            InventoryLot.inventory_type == "finished",
+            InventoryLot.inventory_type.in_(("finished", "semi_finished")),
             InventoryLot.status.in_(COUNTABLE_LOT_STATUSES),
         )
         .options(*_lot_options())
@@ -143,7 +144,7 @@ def _get_countable_location(db: Session, location_id: int) -> WarehouseLocation:
             else "STOCKTAKE_LOCATION_NOT_OPERATIONAL"
         )
         raise StocktakeError(
-            f"{issue}，不能发起成品盘点",
+            f"{issue}，不能发起库存盘点",
             409,
             error_code,
         )
@@ -223,7 +224,7 @@ def list_locations(db: Session) -> list[dict[str, object]]:
             InventoryLot,
             and_(
                 InventoryLot.warehouse_location_id == WarehouseLocation.id,
-                InventoryLot.inventory_type == "finished",
+                InventoryLot.inventory_type.in_(("finished", "semi_finished")),
             ),
         )
         .where(
@@ -331,6 +332,14 @@ def _lot_identity(lot: InventoryLot) -> dict[str, object]:
             detail.width_mm,
             detail.height_mm,
         )
+
+    elif lot.semi_finished_detail is not None:
+        detail = lot.semi_finished_detail
+        customer_id = detail.owner_customer_id
+        customer_name = detail.owner_customer_name_snapshot or "通用库存"
+        product_name = detail.internal_name or ("原材料纸板" if detail.sheet_type == "raw_board" else "半成品片料")
+        inventory_code = material_code = detail.material_code_snapshot
+        specification = dimension_specification(detail.board_length_mm, detail.board_width_mm, None)
 
     return {
         "customer_id": customer_id,
@@ -857,6 +866,34 @@ def _release_count_shortfall(db: Session, *, lot: InventoryLot, counted: int,
     ).order_by(InventoryReservation.reserved_at.desc().nulls_last(),
                InventoryReservation.id.desc()).with_for_update()))
     remaining = lambda row: int(row.reserved_stock_quantity) - int(row.consumed_stock_quantity) - int(row.released_stock_quantity)
+    if lot.inventory_type == "semi_finished":
+        if sum(remaining(row) for row in rows) != int(lot.quantity_reserved) or any(
+            row.reservation_type != "semi_order" or int(row.yield_factor or 0) < 1
+            or not 0 <= int(row.credited_requirement_quantity or 0)
+            - int(row.consumed_requirement_quantity or 0) - int(row.released_requirement_quantity or 0)
+            <= remaining(row) * int(row.yield_factor or 1) for row in rows
+        ):
+            raise StocktakeError("预占明细与库存余额不一致，请核对预占台账后重新盘点", 409, "RESERVATION_LEDGER_MISMATCH")
+        from app.services.semi_finished_inventory import release_semi_finished_reservation
+        from app.services.warehouse_inventory import WarehouseInventoryError
+        releases = []
+        for row in rows:
+            if shortage <= 0:
+                break
+            quantity = min(shortage, remaining(row))
+            try:
+                release_semi_finished_reservation(
+                    db, reservation_id=row.id, expected_version=lot.version,
+                    operator_id=reviewer.id, stock_quantity=quantity,
+                    release_reason=f"盘点单 {order_number} 实盘不足，先预占先保留",
+                    idempotency_key=_movement_idempotency_key(f"{key}:shortfall:{row.id}", lot.id),
+                )
+            except WarehouseInventoryError as error:
+                raise StocktakeError(str(error), 409, "RESERVATION_RELEASE_BLOCKED") from error
+            releases.append({"reservation_id": row.id, "order_id": row.order_id,
+                             "order_item_id": row.order_item_id, "shortage_quantity": quantity})
+            shortage -= quantity
+        return releases
     if sum(remaining(row) for row in rows) != int(lot.quantity_reserved) or any(
         row.reservation_type not in {"finished_order", "finished_surplus_delivery"}
         or int(row.yield_factor or 1) != 1

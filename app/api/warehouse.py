@@ -7859,7 +7859,9 @@ def floor3_product_candidates(
     db: Session = Depends(get_db),
     user: User = Depends(_can_locate_twin),
 ) -> dict:
+    from app.services.stocktake_spec_search import parse_dimensions, dimension_score
     keyword = q.strip()
+    dimensions = parse_dimensions(keyword)
     if not keyword and customer_id is None:
         raise HTTPException(status_code=400, detail="请先选择客户，或输入存货编码、订单号或产品名称")
     if customer_id is not None:
@@ -7903,7 +7905,7 @@ def floor3_product_candidates(
                 Product.product_code.like(pattern),
                 Product.customer_material_code.like(pattern),
                 Product.product_name.like(pattern),
-                (cast(Product.length_mm, String) + "×" + cast(Product.width_mm, String) + "×" + cast(Product.height_mm, String)).like("%" + keyword.replace("*", "×").replace("x", "×").replace("X", "×") + "%"),
+                (cast(Product.length_mm, String) + "×" + cast(Product.width_mm, String) + "×" + func.coalesce(cast(Product.height_mm, String), "")).like("%" + "".join(keyword.split()).replace("*", "×").replace("x", "×").replace("X", "×") + "%"),
                 Customer.name.like(pattern),
                 Product.id.in_(order_product_ids) if order_product_ids else False,
             ),
@@ -7913,7 +7915,20 @@ def floor3_product_candidates(
         product_query = product_query.where(Product.customer_id == customer_id)
     elif visible_customer_ids is not None:
         product_query = product_query.where(Product.customer_id.in_(visible_customer_ids))
-    products = db.execute(product_query.limit(limit * 3)).all()
+    if dimensions:
+        # Rank the entire visible product scope before limiting; a late exact match must win.
+        product_query = select(Product, Customer).join(Customer, Customer.id == Product.customer_id).where(
+            Product.is_active.is_(True), Product.deleted_at.is_(None),
+            Product.length_mm > 0, Product.width_mm > 0)
+        if len(dimensions) == 3:
+            product_query = product_query.where(Product.height_mm > 0)
+        if customer_id is not None:
+            product_query = product_query.where(Product.customer_id == customer_id)
+        elif visible_customer_ids is not None:
+            product_query = product_query.where(Product.customer_id.in_(visible_customer_ids))
+        products = db.execute(product_query).all()
+    else:
+        products = db.execute(product_query.limit(limit * 3)).all()
 
     orders_by_product: dict[int, list[str]] = {}
     exact_order_product_ids: set[int] = set()
@@ -7943,11 +7958,14 @@ def floor3_product_candidates(
             priority, match_type = 2, "customer_product_name_exact"
         else:
             priority, match_type = 3, "fuzzy_candidate"
+        score = dimension_score(dimensions, product) if dimensions else None
         candidates.append(
             {
-                "priority": priority,
-                "match_type": match_type,
-                "is_exact": priority < 3,
+                "priority": (0 if score == 100 else 3) if dimensions else priority,
+                "match_score": score,
+                "customer_short_name": customer.chinese_short_name,
+                "match_type": ("specification_exact" if score == 100 else "specification_similar") if dimensions else match_type,
+                "is_exact": score == 100 if dimensions else priority < 3,
                 "product_id": product.id,
                 "customer_id": customer.id,
                 "customer_name": customer.name,
@@ -7963,7 +7981,7 @@ def floor3_product_candidates(
         )
     candidates.sort(
         key=lambda row: (
-            row["priority"],
+            -(row["match_score"] or 0) if dimensions else row["priority"],
             row["customer_name"],
             row["product_code"] or "",
             row["product_id"],

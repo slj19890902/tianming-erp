@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.334"
-APP_VERSION_NAME = "手机盘点旧页面自动更新"
+APP_VERSION = "v0.22.338"
+APP_VERSION_NAME = "历史缺价收料与库存参考成本补录"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2522,11 +2522,43 @@ _V022333_VERIFICATION_STEPS = [
     "点击空货位，选择客户并搜索库存；先显示未归位批次，归位或移货保持全仓总数不增加。",
     "点击未在列表检查ERP前10个匹配产品；切换半成品和原材料，检查材质、规格、数量及保存按钮可见。",
 ]
-APP_CHANGES = ["修复手机缓存旧盘点页面却加载新版脚本导致空货位读取失败；旧页面自动换新，盘点HTML禁止缓存。"]
-APP_VERIFICATION_STEPS = ["手机重新点击空货位，旧页面应自动更新并直接显示添加货物，不再出现inboundCandidates空对象错误。"]
+_V022334_CHANGES = ["修复手机缓存旧盘点页面却加载新版脚本导致空货位读取失败；旧页面自动换新，盘点HTML禁止缓存。"]
+_V022334_VERIFICATION_STEPS = ["手机重新点击空货位，旧页面应自动更新并直接显示添加货物，不再出现inboundCandidates空对象错误。"]
+_V022335_CHANGES = [
+    "手机盘点纳入同货位的半成品和原材料；添加成功后立即显示，张与只分别汇总。",
+    "片料实盘不足按原预占换算受控释放，保留数量、幂等、完工和事务保护。",
+    "尺寸查询支持无高度的纸板衬板，以及空格、x、*输入，库存和ERP候选入口一致。",
+    "复核此前送货、订单导入、混合库存、材质价格与颜色、异常处理和手机流程。",
+]
+_V022335_VERIFICATION_STEPS = [
+    "手机添加原材料后核对批次和张数；输入实盘数量确认后刷新，数量只更新一次。",
+    "按仅长宽尺寸搜索纸板，再点未在列表核对ERP产品候选。",
+    "切换半成品和原材料时已有盘点行暂时收起，返回成品后恢复原行。",
+]
+_V022336_CHANGES = ["手机查询新增纸板和纸箱近似尺寸反查未送齐订单；默认每维5mm，明确选择后可扩大至10mm，显示匹配来源及逐维差值。", "按稳定订单展开同单未送产品，按单位展示数量及来料、完工和库存覆盖状态；客户范围与只读边界保持。"]
+_V022336_VERIFICATION_STEPS = ["手机查询选择订单、纸板尺寸，输入800×600，核对匹配来源和长宽差值；交换长宽不能命中原方向。", "切换纸箱尺寸并展开同单未送产品；选择扩大范围检查10mm候选。"]
+_V022337_CHANGES = [
+    "盘点确认已有客户新增全部客户，保留已输入规格，搜索账号可见的ERP产品并按尺寸接近度排序，显示客户简称和实际规格。",
+    "支持两维及三维规格、乘号星号和x；完全一致优先，先全范围排序再截取。手机同步全部客户查询，选择结果使用产品真实客户。",
+    "保留原库存归位、移货及重复入库核对；不自动创建或改写任何产品、客户或库存数量，本版无数据库迁移。",
+]
+_V022337_VERIFICATION_STEPS = [
+    "盘点输入规格后选择全部客户，确认规格仍在，列表显示各客户产品、实际尺寸和接近度，完全一致在最前。",
+    "选中另一客户的产品，确认待入库客户随产品正确变化，已有库存仍提示先核对或移货。",
+]
+APP_CHANGES = ["历史缺价采用可读取稳定关联订单中一致的报料快照，不套用多行采购单抬头尺寸；新收料仍严格要求逐行有效价格与尺寸。", "提供老板授权的71批库存参考成本与20条收料当前价补录清单、事务校验和审计；不改产品主档、数量或已有历史价格。"]
+APP_VERIFICATION_STEPS = ["核对历史缺价收料的当前价采用记录与逐行报料尺寸；已有冻结价格保持。", "查看批次参考成本来源；仍缺关键资料的4款保持待补，不使用1×1占位尺寸或虚构价格。"]
 APP_CHANGELOG = [
-    *(f"v0.22.334：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.334：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.338：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.338：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.337：本次更新｜{item}" for item in _V022337_CHANGES),
+    *(f"v0.22.337：如何验证｜{item}" for item in _V022337_VERIFICATION_STEPS),
+    *(f"v0.22.336：本次更新｜{item}" for item in _V022336_CHANGES),
+    *(f"v0.22.336：如何验证｜{item}" for item in _V022336_VERIFICATION_STEPS),
+    *(f"v0.22.335：本次更新｜{item}" for item in _V022335_CHANGES),
+    *(f"v0.22.335：如何验证｜{item}" for item in _V022335_VERIFICATION_STEPS),
+    *(f"v0.22.334：本次更新｜{item}" for item in _V022334_CHANGES),
+    *(f"v0.22.334：如何验证｜{item}" for item in _V022334_VERIFICATION_STEPS),
     *(f"v0.22.333：本次更新｜{item}" for item in _V022333_CHANGES),
     *(f"v0.22.333：如何验证｜{item}" for item in _V022333_VERIFICATION_STEPS),
     *(f"v0.22.332：本次更新｜{item}" for item in _V022332_CHANGES),

@@ -16,6 +16,7 @@ function resetInitialInbound() {
   $("sheetGoods").replaceChildren();
   $("sheetGoods").classList.add("hidden");
   $("finishedGoods").classList.remove("hidden");
+  $("lotList").classList.remove("hidden");
   document.querySelectorAll("[data-goods-type]").forEach(b=>b.classList.toggle("primary",b.dataset.goodsType==="finished"));
   inbound.generation += 1;
   inbound.context = null;
@@ -81,7 +82,7 @@ function invalidateInboundSelection() {
 
 async function findInboundCustomers() {
   invalidateInboundSelection();
-  $("inboundCustomer").innerHTML = '<option value="">请选择客户</option>';
+  $("inboundCustomer").innerHTML = '<option value="">请选择客户</option><option value="all">全部客户（权限范围内）</option>';
   $("inboundProduct").innerHTML = '<option value="">请先选客户</option>';
   const generation = inbound.generation;
   try {
@@ -100,10 +101,12 @@ async function findErpProducts() {
   if (!customer) { showMessage("请先选择客户"); return; }
   const generation = inbound.generation;
   try {
-    const params = new URLSearchParams({q: $("inboundProductQuery").value.trim(), customer_id: customer, limit: "10"});
+    const params = new URLSearchParams({q: $("inboundProductQuery").value.trim(), limit: "10"});
+    if (customer !== "all") params.set("customer_id", customer);
+    else if (!params.get("q")) { showMessage("全部客户请输入规格、编码或名称"); return; }
     const data = await api(`/api/warehouse/floor3/product-candidates?${params}`);
     if (generation !== inbound.generation || customer !== $("inboundCustomer").value) return;
-    $("inboundProduct").innerHTML += (data.items || []).map(row => `<option value="${Number(row.product_id)}">${h(row.product_code || row.customer_material_code)} · ${h(row.product_name)} · ${h(row.specification||"")}</option>`).join("");
+    $("inboundProduct").innerHTML += (data.items || []).map(row => `<option data-customer-id="${Number(row.customer_id)}" data-customer-name="${h(row.customer_short_name || row.customer_name)}" value="${Number(row.product_id)}">${h(row.customer_short_name || row.customer_name)} · ${row.match_score != null ? `接近度${row.match_score}% · ` : ""}${h(row.product_code || row.customer_material_code)} · ${h(row.product_name)} · ${h(row.specification||"")}</option>`).join("");
     $("inboundCandidates").replaceChildren();
     $("inboundContext").textContent = data.items?.length ? "请选择ERP产品（前10条）" : "未找到匹配的ERP产品，请调整关键词";
   } catch (error) { if (generation === inbound.generation) showMessage(error.message); }
@@ -222,7 +225,16 @@ $("inboundDate").value = new Intl.DateTimeFormat("en-CA", {timeZone: "Asia/Shang
 $("inboundFindCustomer").onclick = findInboundCustomers;
 $("inboundFindProduct").onclick = findInboundProducts;
 $("inboundCustomer").onchange = () => { invalidateInboundSelection(); $("inboundProduct").innerHTML = '<option value="">请选择产品</option>'; findInboundProducts(); };
-$("inboundProduct").onchange = refreshInboundContext;
+$("inboundProduct").onchange = () => {
+  const option = $("inboundProduct").selectedOptions[0];
+  if (option?.dataset.customerId && $("inboundCustomer").value !== option.dataset.customerId) {
+    const customer = document.createElement("option");
+    customer.value = option.dataset.customerId;
+    customer.textContent = option.dataset.customerName;
+    $("inboundCustomer").append(customer);$("inboundCustomer").value = customer.value;
+  }
+  refreshInboundContext();
+};
 $("inboundRefresh").onclick = refreshInboundContext;
 $("inboundCreateProduct").onclick = createInboundProduct;
 $("inboundSave").onclick = saveInitialInbound;
@@ -244,19 +256,22 @@ async function findInboundProducts(){
   const generation=inbound.generation;
   $("inboundContext").textContent="正在查找库存…";
   try{
-    const params=new URLSearchParams({customer_id:customer,inventory_keyword:$("inboundProductQuery").value.trim(),limit:"30"});
+    const params=new URLSearchParams({inventory_keyword:$("inboundProductQuery").value.trim(),limit:"30"});
+    if(customer!=="all")params.set("customer_id",customer);
+    else if(!params.get("inventory_keyword")){showMessage("全部客户请输入规格、编码或名称");return;}
     const data=await api(`/api/mobile/erp/warehouse/physical-inventory/search?${params}`);
     if(generation!==inbound.generation)return;
     $("inboundCandidates").replaceChildren();
     for(const lot of data.items||[]){
       const b=document.createElement("button");b.type="button";b.className="btn";
       const loc=lot.registered_location;
-      b.innerHTML=`${h(lot.product_code)} · ${h(lot.product_name)}<small>${h(lot.specification)} · ${h(lot.quantity_total)}只 · ${h(loc.is_pending_relocation?"未归位":loc.employee_location_name)}</small>`;
+      b.innerHTML=`${h(lot.product_code)} · ${h(lot.product_name)}<small>${h(lot.customer_short_name || lot.customer_name || "")} · ${h(lot.specification)} · ${h(lot.quantity_total)}只 · ${h(loc.is_pending_relocation?"未归位":loc.employee_location_name)}</small>`;
       b.disabled=!lot.can_move;
       b.onclick=()=>{if(inbound.busy||inbound.attempt||generation!==inbound.generation)return;inbound.stockLot=lot;inbound.context={can_add:true};$("inboundQuantity").value=lot.quantity_movable;$("inboundSave").disabled=false;$("inboundSave").textContent=loc.is_pending_relocation?"确认归位":"确认移到此位";$("inboundContext").textContent=`已选 ${lot.product_code} · ${lot.quantity_movable}只，登记到当前货位`;$("inboundExistingLabel").classList.add("hidden");updateSubmitState();};
       $("inboundCandidates").append(b);
     }
     $("inboundContext").textContent=data.items?.length?"先列未归位库存，再列已有货位库存":"无匹配库存，点击未在列表查找产品";
+    if(customer==="all"&&!data.items?.length)await findErpProducts();
   }catch(e){if(generation===inbound.generation)$("inboundContext").textContent=e.message;}
 }
 $("inboundNotListed").onclick=()=>{if(inbound.busy||inbound.attempt)return;inbound.stockLot=null;$("inboundSave").textContent="保存入库";findErpProducts();};
@@ -266,6 +281,7 @@ window.mobileGoodsSaved=async()=>{setInboundBusy(false);await openLocation(pick(
 document.querySelectorAll("[data-goods-type]").forEach(button=>button.onclick=()=>{
   if(inbound.busy||inbound.attempt)return;
   inbound.type=button.dataset.goodsType;
+  $("lotList").classList.toggle("hidden",inbound.type!=="finished");
   document.querySelectorAll("[data-goods-type]").forEach(b=>b.classList.toggle("primary",b===button));
   $("finishedGoods").classList.toggle("hidden",inbound.type!=="finished");
   $("sheetGoods").classList.toggle("hidden",inbound.type==="finished");

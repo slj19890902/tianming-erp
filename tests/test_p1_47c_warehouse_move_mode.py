@@ -1365,7 +1365,6 @@ def test_snapshot_mixed_and_non_finished_pallets_are_rejected_without_writes(
         "unplaced_target",
         "wrong_type_target",
         "draft_target",
-        "occupied_target",
     ],
 )
 def test_invalid_second_target_rolls_back_the_entire_batch(
@@ -1447,6 +1446,133 @@ def test_rack_target_accepts_lot_transfer_but_rejects_whole_pallet(
         assert (pallet.location_id, pallet.version) == (ids["floor1_source"], 1)
         assert target_lot.warehouse_location_id == ids["rack_target"]
         assert target_lot.pallet_item is None
+
+
+def _publish_mixed_target_plan(db, ids):
+    area = db.scalar(select(WarehouseArea).join(WarehouseFloor).where(WarehouseFloor.floor_number == 3, WarehouseArea.area_code == "A1"))
+    plan = WarehouseGroundLayoutPlan(area_id=area.id, status="published", target_slot_count=2,
+        numbering_origin="south", row_direction="from_aisle_inward", slot_direction="left_to_right",
+        row_start_no=1, slot_start_no=1, draft_map_revision=area.storage_policy.published_map_revision,
+        published_map_revision=area.storage_policy.published_map_revision, preview_fingerprint="c"*64,
+        version=1, publish_idempotency_key="mixed-target-plan", publish_request_hash="d"*64,
+        updated_by=db.scalar(select(User.id).where(User.username == "p147c-admin")),
+        published_by=db.scalar(select(User.id).where(User.username == "p147c-admin")),
+        published_at=datetime.now(timezone.utc).replace(tzinfo=None))
+    db.add(plan)
+    db.flush()
+    for index, name in enumerate(("occupied_target", "floor3_target"), 1):
+        db.add(WarehouseGroundLayoutSlot(plan_id=plan.id, location_id=ids[name], route_sequence=index,
+            row_no=1, slot_no=index, x_mm=Decimal(1000+index*1400), y_mm=Decimal(1000), width_mm=1200, depth_mm=1000))
+    db.flush()
+
+
+def test_single_product_joins_occupied_pallet_then_all_products_move_once(move_batch_app):
+    app, factory, ids, _ = move_batch_app
+    with factory() as db:
+        source = db.get(InventoryLot, ids["normal_lot"])
+        _publish_mixed_target_plan(db, ids)
+        product = Product(customer_id=source.finished_detail.owner_customer_id, customer_material_code="MIX-NEW",
+                          product_code="MIX-NEW", product_name="另一款产品", box_category="normal",
+                          box_style="A1", length_mm=500, width_mm=300, height_mm=200,
+                          default_material_code="K=A", flute_type="B")
+        db.add(product)
+        db.flush()
+        source.finished_detail.product_id = product.id
+        source.finished_detail.inventory_code_snapshot = product.product_code
+        source.pallet_item.product_id = product.id
+        source.estimated_unit_cost_snapshot = Decimal("3.2100")
+        source.cost_snapshot_source = "material_quote_area"
+        source.cost_snapshot_detail_json = '{"basis":"test frozen cost"}'
+        totals = _inventory_totals(db)
+        db.commit()
+    first = _batch("single-into-occupied", _lot_transfer(
+        client_item_id="one", lot_id=ids["normal_lot"], version=1,
+        quantity=20, target=ids["occupied_target"]))
+    with TestClient(app) as client:
+        _login(client, "p147c-admin")
+        response = client.post(MOVE_BATCH_URL, json=first)
+        assert response.status_code == 200, response.text
+        moved_lot_id = response.json()["items"][0]["target_lot_id"]
+        assert client.post(MOVE_BATCH_URL, json=first).json()["items"] == response.json()["items"]
+        with factory() as db:
+            target = db.scalar(select(InventoryPallet).where(
+                InventoryPallet.location_id == ids["occupied_target"], InventoryPallet.is_current.is_(True)))
+            lot_ids = [item.inventory_lot_id for item in target.items]
+            assert len(lot_ids) == 2
+            assert len({item.product_id for item in target.items}) == 2
+            assert _inventory_totals(db) == totals
+            pallet_id, version = target.id, target.version
+        moved = client.post(MOVE_BATCH_URL, json=_batch("mixed-whole-to-empty", _pallet_move(
+            client_item_id="whole", pallet_id=pallet_id, version=version, target=ids["floor3_target"])))
+        assert moved.status_code == 200, moved.text
+    with factory() as db:
+        assert db.get(InventoryPallet, pallet_id).location_id == ids["floor3_target"]
+        assert all(db.get(InventoryLot, lot_id).warehouse_location_id == ids["floor3_target"] for lot_id in lot_ids)
+        assert _inventory_totals(db) == totals
+        moved_lot = db.get(InventoryLot, moved_lot_id)
+        assert moved_lot.estimated_unit_cost_snapshot == Decimal("3.2100")
+        assert moved_lot.cost_snapshot_detail_json == '{"basis":"test frozen cost"}'
+
+
+def test_whole_pallet_still_rejects_occupied_target(move_batch_app):
+    app, factory, ids, _ = move_batch_app
+    with TestClient(app) as client:
+        _login(client, "p147c-admin")
+        response = client.post(MOVE_BATCH_URL, json=_batch("whole-occupied", _pallet_move(
+            client_item_id="whole", pallet_id=ids["normal_pallet"], version=1, target=ids["occupied_target"])))
+        assert response.status_code == 409, response.text
+    with factory() as db:
+        assert db.get(InventoryPallet, ids["normal_pallet"]).location_id == ids["floor1_source"]
+        assert db.scalar(select(func.count(InventoryLocationMovement.id))) == 0
+
+
+def test_multiple_single_products_can_share_target_in_one_batch(move_batch_app):
+    app, factory, ids, _ = move_batch_app
+    with factory() as db:
+        _publish_mixed_target_plan(db, ids)
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "p147c-admin")
+        response = client.post(MOVE_BATCH_URL, json=_batch("two-into-one",
+            _lot_transfer(client_item_id="first", lot_id=ids["normal_lot"], version=1, quantity=10, target=ids["occupied_target"]),
+            _lot_transfer(client_item_id="second", lot_id=ids["loose_lot"], version=1, quantity=10, target=ids["occupied_target"])))
+        assert response.status_code == 200, response.text
+    with factory() as db:
+        for item in response.json()["items"]:
+            assert db.get(InventoryLot, item["target_lot_id"]).warehouse_location_id == ids["occupied_target"]
+
+
+def test_warehouse_main_map_exposes_role_scoped_cost_entry():
+    source = FRONTEND.read_text(encoding="utf-8")
+    assert 'setCanViewInventoryCost(["admin", "boss"].includes(value.user.role))' in source
+    assert '{canViewInventoryCost && <a' in source
+    assert 'href="/factory-twin-assets/warehouse-costs.html"' in source
+    assert '>库存成本</a>' in source
+
+
+@pytest.mark.parametrize("target_frozen", [False, True])
+def test_occupied_target_failure_preserves_permissions_quality_and_atomicity(move_batch_app, target_frozen):
+    app, factory, ids, _ = move_batch_app
+    with factory() as db:
+        target_lot = db.scalar(select(InventoryLot).where(InventoryLot.warehouse_location_id == ids["occupied_target"]))
+        if target_frozen:
+            target_lot.status = "frozen"
+        else:
+            # Non-admin may co-locate the same SKU, but the existing different-product
+            # mixing permission remains enforced by the transfer service.
+            target_lot.finished_detail.inventory_code_snapshot = "DIFFERENT-SKU"
+        before = _inventory_totals(db)
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "p147c-admin" if target_frozen else "p147c-operator")
+        response = client.post(MOVE_BATCH_URL, json=_batch("occupied-failure",
+            _lot_transfer(client_item_id="valid-first", lot_id=ids["normal_lot"], version=1, quantity=10, target=ids["floor1_target"]),
+            _lot_transfer(client_item_id="blocked-second", lot_id=ids["loose_lot"], version=1, quantity=10, target=ids["occupied_target"])))
+        assert response.status_code == 409, response.text
+    with factory() as db:
+        assert _inventory_totals(db) == before
+        assert db.get(InventoryLot, ids["normal_lot"]).version == 1
+        assert db.scalar(select(func.count(InventoryLotTransfer.id))) == 0
 
 
 def test_stale_same_target_and_duplicate_source_are_rejected_without_writes(

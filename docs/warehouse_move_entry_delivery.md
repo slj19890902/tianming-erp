@@ -1,0 +1,25 @@
+# 仓库成本入口与单品、整板移货
+
+任务WAREHOUSE_MOVE_ENTRY_20260911；单代理，分支codex/warehouse-move-entry-20260911。基于df838038/v346开发，合并正式v347邮箱收单更新，拟发布v348，沿用已正式部署的唯一head ry10v8x9z73，无新迁移。
+
+原因：正式/warehouse.html是React地图，不是static/warehouse.html旧台账；主地图此前没有全仓库存成本入口。移货候选请求、地图过滤、后台预检、实际批次移动四处均误用空位限制。已有底层管理员异品混放与正式栈板自动绑定能力无需重写。
+
+修改：主地图顶部与旧台账增加管理员/老板成本入口，默认隐藏未授权角色；新页打开避免丢地图草稿。单品允许有货位，多条单品可共用目标；整板目标仍独占空地面货位。右侧每个成品标签旁提供移动此产品，移除重复单品选择列表；整栈移动保留。盘点搜索既有货物的先移入这里不再要求空位。目标列表及切层提示按操作类型区分。拖动地图栈板始终按整板空位规则，不随此前选择单品放宽。
+
+保护：管理员异品混放、员工同品共位的既有权限不变；冻结/损坏/停用/未发布/无布局/容量与正式固定货架绑定限制保留。保留客户范围、版本、幂等、事务、数量守恒、预占和冻结成本。没有手工移动正式库存、改数量、重算成本或改地图。
+
+验证：建立失败用例后修复；目标定向前端5项通过、TypeScript通过、Vite生产构建通过。后端45项通过（test_p1_47c_warehouse_move_mode.py、test_inventory_valuation.py；隔离测试库），覆盖单品混放后整板移动、同批多产品目标、整板拒绝占用、不同产品权限、冻结目标导致整批回滚以及原移货/成本相邻保护。正式仓库entry引用warehouseTwin-CKaGqCEq.js及warehouseTwin-Bf_OPkgQ.css；旧资源保留给已打开页面，不清空assets。
+
+构建文件SHA256：JS 7245FA9FF2A64258554E9D5F44FF60F67749DA82B617DCB8932028E745CE1601；CSS 1A8A12D039DADA754A074C4B63C778610AF733248169887B1D43DF0D46C3AC45。构建中的既有独立成本脚本外链及大chunk提示不影响产物生成；没有把这些警告当做测试通过证明。
+
+Chrome连接超时，未使用IAB，未声称实际点击或视觉验收完成。无全量回归，无正式账号密码改动。回退只回退本任务代码/入口资源，保持当前数据库迁移头与正式事实，不允许降级删除成本或邮箱事实。
+
+## 正式发布
+
+2f8cd1952ce8dd822e2e0630a52bfdb1b378622c/v0.22.348已推送整合；正式报告docs/migration_reports/release_runtime_20260911_151510.json为completed，15:15:49启动完成；head ry10v8x9z73未变，无新迁移。
+
+时点备份data/backups/carton_erp_before_release_20260911_151513.sqlite3与隔离副本data/release_rehearsals/carton_erp_release_rehearsal_20260911_151513.sqlite3，SHA256均为74b1979e19ee64348a845109e242de7769cb42ab29fd2ace87e12152cda58c0b，完整性ok、FK0。正式库发布前后SHA256均为dab795c1298c01ada43936f096ef110e92989606db25e70a541d481d5cb29624，核心计数一致；没有正式业务数据写入。
+
+发布后GET /warehouse.html为200且Cache-Control:no-store，实际引用本次JS/CSS；两项资源和成本页均200且内容与磁盘逐字一致，GET /api/health为200，未登录/api/warehouse/costs为401。Chrome真实点击及工厂人工验收未完成，页面资源到达不等于人工操作通过。
+
+NAS独立回执：04_开发记录/任务回执/20260911_1515_仓库成本入口与单品整板移货_v348.md。

@@ -152,6 +152,9 @@ def build_inventory_insights(
     *,
     as_of: date | None = None,
     customer_ids: set[int] | None = None,
+    frozen_cost_only: bool = False,
+    action_limit: int | None = 200,
+    include_all_available: bool = False,
 ) -> dict:
     """Build a read-only inventory view; it never reserves or mutates stock."""
 
@@ -390,22 +393,27 @@ def build_inventory_insights(
                 )
                 priority = min(priority, 3)
 
-        cost_estimate = estimate_from_snapshot(lot)
-        if cost_estimate is not None:
-            estimated_unit_cost = cost_estimate.unit_cost
-            estimated_cost_status = "estimated_snapshot"
+        if frozen_cost_only:
+            from app.services.inventory_valuation import frozen_cost
+            estimated_unit_cost, _ = frozen_cost(lot, db)
+            estimated_cost_status = "estimated_snapshot" if estimated_unit_cost else "pending"
         else:
-            cost_estimate = estimate_inventory_lot_cost(db, lot)
+            cost_estimate = estimate_from_snapshot(lot)
             if cost_estimate is not None:
                 estimated_unit_cost = cost_estimate.unit_cost
-                estimated_cost_status = "estimated_current_material_quote"
-            elif lot.finished_detail is not None:
-                product = products.get(lot.finished_detail.product_id)
-                if product is not None and product.cost_unit_price is not None:
-                    candidate = Decimal(product.cost_unit_price)
-                    if candidate > 0:
-                        estimated_unit_cost = candidate
-                        estimated_cost_status = "estimated_product_cost"
+                estimated_cost_status = "estimated_snapshot"
+            else:
+                cost_estimate = estimate_inventory_lot_cost(db, lot)
+                if cost_estimate is not None:
+                    estimated_unit_cost = cost_estimate.unit_cost
+                    estimated_cost_status = "estimated_current_material_quote"
+                elif lot.finished_detail is not None:
+                    product = products.get(lot.finished_detail.product_id)
+                    if product is not None and product.cost_unit_price is not None:
+                        candidate = Decimal(product.cost_unit_price)
+                        if candidate > 0:
+                            estimated_unit_cost = candidate
+                            estimated_cost_status = "estimated_product_cost"
 
         if days is None:
             reasons.append(
@@ -445,7 +453,7 @@ def build_inventory_insights(
             estimate_source_lots[estimated_cost_status] += 1
             estimated_value += estimated_unit_cost * lot.quantity_available
 
-        if reasons:
+        if reasons or include_all_available:
             actions.append(
                 {
                     "priority": priority,
@@ -566,5 +574,5 @@ def build_inventory_insights(
         "age_buckets": list(bucket_map.values()),
         "action_item_count": action_item_count,
         "high_priority_action_item_count": high_priority_action_item_count,
-        "action_items": actions[:200],
+        "action_items": actions if action_limit is None else actions[:action_limit],
     }

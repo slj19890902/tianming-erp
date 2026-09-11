@@ -23,6 +23,7 @@ class WarehouseCosts extends HTMLElement {
       const panel=el("details");panel.open=this.hasAttribute("expanded");
       panel.append(el("summary",`${location?"本货位":"仓库"}已定价金额 ¥${data.inventory_value}${data.missing_lots?` · ${data.missing_lots} 批待核价`:""}`));
       if(location){const link=el("a","查看全部库存成本");link.href="/factory-twin-assets/warehouse-costs.html";link.target="_blank";link.rel="noopener";panel.append(link);}
+      const assistantLink=el("a","库存助手：查看现货用途与积压");assistantLink.href="/inventory-assistant.html";assistantLink.target="_blank";assistantLink.rel="noopener";panel.append(assistantLink);
       const basis=el("div",data.basis);basis.className="muted";panel.append(basis);
       const search=el("input");search.placeholder="客户 / 存货编码 / 名称 / 位置";search.setAttribute("aria-label","筛选库存成本");
       if(!location)panel.append(search);
@@ -34,6 +35,8 @@ class WarehouseCosts extends HTMLElement {
           row.append(el("span",`${r.quantity}${r.unit==="sheets"?"张":"只"} · 单价 ${r.unit_cost==null?"待补价":`¥${r.unit_cost}`}`),el("strong",r.inventory_value==null?"成本待补":`¥${r.inventory_value}`));
           const info=el("div",`${r.stock_date} · ${r.lot_number}${location?"":` · ${r.location_name}`} · ${r.label}`);info.className="muted";
           article.append(row,info);list.append(article);
+          if(r.cost_basis){const basis=el("div",r.cost_basis);basis.className="muted";article.append(basis);}
+          if(auth.user.role==="admin"&&r.product_id&&!location){const edit=el("button","成本依据");edit.type="button";edit.addEventListener("click",async()=>{const {editCostRule}=await import("./warehouse-cost-rule-editor.js?v=20260911-1");await editCostRule(root,r,()=>this.load());});article.append(edit);}
           if(r.validation_issue){const warning=el("div",r.validation_issue);warning.className="warning";article.append(warning);}
         }
         if(!list.childElementCount)list.append(el("div","没有符合条件的库存"));

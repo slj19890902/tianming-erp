@@ -10,7 +10,7 @@ from typing import Literal
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import Body, APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, and_, case, cast, exists, func, or_, select, update
@@ -2586,13 +2586,31 @@ def _dimension_order_progress(db, user, items):
         row["progress"] = {"label": label, "color": color, "received_sheets": received, "completed_quantity": completed, "delivery_ready_quantity": ready, "finished_coverage": covered}
 
 
+@router.get("/dimension-settings")
+def mobile_dimension_settings_get(response: Response, user: User = Depends(can_read_orders)):
+    from app.services.mobile_dimension_settings import read, public
+    _no_store(response)
+    return {**public(read()), "can_edit": user.role == "admin"}
+
+
+@router.put("/dimension-settings")
+def mobile_dimension_settings_put(response: Response, payload: dict = Body(...), user: User = Depends(can_read_orders)):
+    from app.services.mobile_dimension_settings import save
+    _no_store(response)
+    if user.role != "admin": raise HTTPException(403, "仅管理员可修改查询范围")
+    try:
+        return save(near_mm=payload.get("near_mm"), expanded_mm=payload.get("expanded_mm"), expected_version=payload.get("expected_version"), operation_key=payload.get("operation_key"), user_id=user.id)
+    except LookupError as exc: raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc: raise HTTPException(422, str(exc)) from exc
+
+
 @router.get("/orders/by-dimensions")
 def mobile_orders_by_dimensions(
     response: Response,
     dimensions: str = Query(min_length=1, max_length=100),
     domain: Literal["board", "box"] = Query(default="board"),
     customer: str = Query(default="", max_length=100),
-    tolerance: int = Query(default=5, ge=0, le=10),
+    tolerance: int | None = Query(default=None, ge=0, le=50),
     axis: Literal["any", "length", "width"] = Query(default="any"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=20),
@@ -2604,9 +2622,12 @@ def mobile_orders_by_dimensions(
     if domain == "board" and not has_permission(user, "incoming.view"):
         raise HTTPException(403, "当前账号没有纸板资料查看权限")
     try:
-        if tolerance not in (0, 5, 10):
-            raise ValueError("请选择精确、5mm或10mm范围")
-        group = find_order_dimensions(db, visible_ids=_visible_customer_ids(user, db), domain=domain, text=dimensions, customer=customer.strip(), tolerance=tolerance, axis=axis, page=page, page_size=page_size)
+        from app.services.mobile_dimension_settings import read
+        settings = read()
+        tolerance = settings["near_mm"] if tolerance is None else tolerance
+        if tolerance not in (0, settings["near_mm"], settings["expanded_mm"]):
+            raise ValueError("查询范围已变化，请刷新范围设置后重试")
+        group = find_order_dimensions(db, visible_ids=_visible_customer_ids(user, db), domain=domain, text=dimensions, customer=customer.strip(), tolerance=tolerance, axis=axis, page=page, page_size=page_size, near_tolerance=settings["near_mm"])
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     _dimension_order_progress(db, user, group["items"])

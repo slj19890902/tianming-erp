@@ -14,12 +14,13 @@ const locations = Array.from({length: 9}, (_, index) => ({
   slot_no: index % 3 + 1, location_name: `F9第${Math.floor(index / 3) + 1}层第${index % 3 + 1}格`, items: [],
 }));
 const sandbox = {
+  window: {addEventListener() {}, removeEventListener() {}},
   ShelfLotHistory: () => null,
   requestJson: () => { throw new Error('interaction fixture must not request business data'); },
   groupShelfProducts,
   shelfStockDates,
   React: {createElement: (type, props, ...children) => ({type, props: props || {}, children: children.flat(Infinity)})},
-  useState: value => [value, () => {}], useMemo: fn => fn(), useEffect() {},
+  useState: value => [value, () => {}], useMemo: fn => fn(), useEffect() {}, useRef: () => ({current:null}),
   rackLevelCellCounts: value => value.level_cell_counts,
   rackCellIdentityKey: (id, level, slot) => `${id}/${level}/${slot}`,
   rackLocationInventoryItems: location => location.items,
@@ -31,13 +32,114 @@ vm.createContext(sandbox);
 vm.runInContext(js, sandbox);
 function render(overrides = {}) {
   const selected = [];
+  const inspected = [];
   const tree = sandbox.WarehouseRackElevation({rack, locations, canChooseProducts: true,
     rackIndex: 0, rackCount: 1, unboundLocationCount: 0,
-    onPrevious() {}, onNext() {}, onClose() {}, onChooseEmptyLocation: id => selected.push(id), ...overrides});
+    onPrevious() {}, onNext() {}, onClose() {}, onSelectLocation: id => inspected.push(id), onChooseEmptyLocation: id => selected.push(id), ...overrides});
   function nodes(node) { return node && typeof node === "object" ? [node, ...node.children.flatMap(nodes)] : []; }
   const emptyControls = nodes(tree).filter(node => node.props.className?.includes("mold-rack-empty-spine"));
-  return {selected, emptyControls, nodes: nodes(tree)};
+  return {selected, inspected, emptyControls, nodes: nodes(tree)};
 }
+
+test('search highlights only matching products and exact cells, and replaces old highlights for another product', () => {
+  const stocked = locations.map((row,index) => ({...row, items:[{lot_id:index+1,product_id:index+1,inventory_code:`CODE-${index+1}`,unit:'pcs'}]}));
+  stocked[0].items.push({lot_id:50,product_id:50,inventory_code:'OTHER',unit:'pcs'});
+  for (const [ids, targetLocation] of [[[1,4],101], [[9],109], [[],null]]) {
+    const {nodes} = render({locations:stocked,highlightedLotIds:ids,searchLocationId:targetLocation,searchLotId:ids[0]});
+    const hits = nodes.filter(n => n.type==='section' && n.props.className?.includes('rack-search-hit'));
+    assert.equal(hits.length, ids.length);
+    assert.equal(nodes.filter(n => n.props['data-search-current']===true).length, ids.length ? 1 : 0);
+    assert.equal(nodes.filter(n => n.props.className?.includes('search-product-hit')).length,ids.length);
+    if (ids.length) {
+      const current = hits.find(n=>n.props['data-search-current']);
+      assert.ok(current.props.title.includes(targetLocation===101?'第1层第1格':'第3层第3格'));
+    }
+  }
+  const {nodes} = render({locations:stocked.flatMap(row=>[row,{...row,location_id:row.location_id+1000}]),highlightedLotIds:[1]});
+  assert.equal(nodes.filter(n=>n.props.className?.includes('rack-search-hit')).length,0,'ambiguous formal cells must never be marked as an exact location');
+});
+
+test('switching a search hit on the same rack updates the product label and clears previous batch expansion', () => {
+  const originalState = sandbox.useState, originalEffect = sandbox.useEffect;
+  const states = []; let index = 0;
+  sandbox.useState = initial => {
+    const slot=index++;
+    if (!(slot in states)) states[slot]=initial;
+    return [states[slot],value=>{states[slot]=typeof value==='function'?value(states[slot]):value;}];
+  };
+  sandbox.useEffect = (fn,deps) => { if (deps.length===3) fn(); };
+  const items=[{lot_id:71,product_id:7},{lot_id:72,product_id:8}];
+  try {
+    for (const item of items) {
+      index=0; states[1]=true; states[2]={oldProduct:true};
+      render({locations:[{...locations[0],items}],searchLotId:item.lot_id,searchLocationId:101,highlightedLotIds:[item.lot_id]});
+      assert.equal(states[0],item);
+      assert.equal(states[1],false);
+      assert.equal(Object.keys(states[2]).length,0);
+    }
+  } finally { sandbox.useState=originalState; sandbox.useEffect=originalEffect; }
+});
+
+test("cell headings and non-action content select the formal location even for read-only users", () => {
+  for (const occupied of [false, true]) {
+    const {nodes, inspected, selected} = render({canChooseProducts: false,
+      locations: locations.map(row => ({...row, items: occupied ? [{lot_id: row.location_id}] : []}))});
+    for (const button of nodes.filter(n => n.props.className === 'mold-rack-cell-summary')) {
+      assert.equal(Boolean(button.props.disabled), false);
+      button.props.onClick();
+    }
+    assert.deepEqual(inspected, [107, 108, 109, 104, 105, 106, 101, 102, 103]);
+    const cell = nodes.find(n => n.type === 'section' && n.props.className?.startsWith('mold-rack-cell '));
+    cell.props.onClick({target: {closest: () => null}});
+    assert.equal(inspected.at(-1), 107);
+    assert.equal(inspected.length, 10);
+    // Bubbling from label/details/print/add controls must not select or close the cell again.
+    for (const tag of ['button', 'a', 'input', 'select', 'textarea', 'summary', 'details']) {
+      cell.props.onClick({target: {closest: selector => selector.split(',').map(s => s.trim()).includes(tag) ? {} : null}});
+    }
+    assert.equal(inspected.length, 10);
+    assert.deepEqual(selected, [], 'read-only navigation must not open the add-stock action');
+  }
+});
+
+test("cell navigation rejects missing or conflicting identities even when occupied", () => {
+  for (const occupied of [false, true]) {
+    const rows = locations.map(row => ({...row, items: occupied ? [{lot_id: row.location_id}] : []}));
+    for (const broken of [[], rows.flatMap(row => [row, {...row, location_id: row.location_id + 1000}])]) {
+      const {nodes, inspected} = render({locations: broken});
+      for (const button of nodes.filter(n => n.props.className === 'mold-rack-cell-summary')) {
+        assert.equal(button.props.disabled, true);
+        button.props.onClick();
+      }
+      for (const cell of nodes.filter(n => n.type === 'section' && n.props.className?.startsWith('mold-rack-cell '))) {
+        cell.props.onClick({target: {closest: () => null}});
+      }
+      assert.deepEqual(inspected, []);
+    }
+  }
+});
+
+test("cell selection collapses the elevation and focuses the existing inspector without changing mode or drafts", () => {
+  assert.match(source, /onSelectLocation=\{selectRackLocation\}/);
+  const callback = source.slice(source.indexOf('  const selectRackLocation ='), source.indexOf('  const chooseRackEmptyLocation ='));
+  const code = ts.transpileModule(callback, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText;
+  for (const mapMode of ['browse', 'move']) for (const moveAction of ['relocate', 'stocktake', 'merge']) {
+    for (const blocked of ['none', 'busy', 'missing']) {
+      const actions = [];
+      const context = {mapMode, moveAction, spatialEditBusy: blocked === 'busy', focusedRackLocations: locations,
+        selectOperationalEntity: value => actions.push(['select', value.id]),
+        inspectorRef: {current: {focus: () => actions.push(['focus']), scrollIntoView: () => actions.push(['scroll'])}},
+        requestAnimationFrame: fn => fn(),
+        setRackFocusId: value => actions.push(['rack', value]),
+        setLocationDetailOpen: value => actions.push(['detail', value]),
+      };
+      vm.runInNewContext(code + `\nselectRackLocation(${blocked === 'missing' ? 999 : 107});`, context);
+      assert.deepEqual(actions, blocked === 'none'
+        ? [['select', 'erp-location-107'], ['rack', null], ['detail', false], ['focus'], ['scroll']]
+        : []);
+    }
+  }
+});
 
 test("clicking the visible plus and empty body selects each exact rack cell once", () => {
   const {selected, emptyControls} = render();
@@ -52,20 +154,22 @@ test("clicking the visible plus and empty body selects each exact rack cell once
   assert.deepEqual(selected, [107, 108, 109, 104, 105, 106, 101, 102, 103]);
 });
 
-test("missing permission, missing formal identity, duplicate identity and blocked location cannot select", () => {
+test("missing permission or blocked policy permits read-only inspection but never adds; invalid identities cannot select", () => {
   for (const overrides of [
     {canChooseProducts: false}, {locations: []},
     {locations: locations.flatMap(row => [row, {...row, location_id: row.location_id + 1000}])},
     {locations: locations.map(row => ({...row, blockReason: "规划尚未发布"}))},
   ]) {
-    const {selected, emptyControls} = render(overrides);
+    const {selected, inspected, emptyControls} = render(overrides);
+    const canInspect = overrides.canChooseProducts === false || overrides.locations?.[0]?.blockReason;
     assert.equal(emptyControls.length, 9);
     for (const button of emptyControls) {
       assert.equal(button.type, "button");
-      assert.equal(button.props.disabled, true);
+      assert.equal(button.props.disabled, !canInspect);
       button.props.onClick(); // The callback itself also fails closed.
     }
     assert.deepEqual(selected, []);
+    assert.deepEqual(inspected, canInspect ? [107, 108, 109, 104, 105, 106, 101, 102, 103] : []);
   }
 });
 

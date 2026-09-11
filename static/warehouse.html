@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
   <title>仓库库存管理 - 天明ERP</title>
-  <script defer src="/factory-twin-assets/warehouse-costs.js?v=20260911-1"></script>
+  <script defer src="/factory-twin-assets/warehouse-costs.js?v=20260911-3"></script>
   <style>
     :root{--blue:#2563eb;--line:#dbe3ef;--bg:#f3f6fb;--text:#182235;--muted:#64748b;--red:#b91c1c}
     *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Arial,"Microsoft YaHei",sans-serif}
@@ -151,6 +151,7 @@
   <main class="wrap">
     <div class="tabs">
       <button class="btn active inventory-ledger-tab" data-tab="finished">库存台账</button>
+      <a id="warehouseCostLink" class="btn hidden" href="/factory-twin-assets/warehouse-costs.html" target="_blank" rel="noopener">库存成本</a>
       <button class="btn" data-tab="movements">库存流水</button>
       <button class="btn" data-tab="molds">模具位置</button>
       <a id="mapStocktakeLink" class="btn hidden" href="/warehouse.html?mode=move&amp;action=stocktake&amp;view=2d" target="_top">盘点上架</a>
@@ -933,6 +934,7 @@
       try{
         const authResponse=await api("/api/auth/me");
         state.user=authResponse.user;
+        $("warehouseCostLink").classList.toggle("hidden",!["admin","boss"].includes(state.user?.role));
         state.permissions=authResponse.permissions||[];
         state.lotPageSize=state.user?.ui_mode==="large"?15:25;
       }catch(error){

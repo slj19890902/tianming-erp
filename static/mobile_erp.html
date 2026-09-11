@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>天明 ERP 手机版</title>
-  <script defer src="/factory-twin-assets/warehouse-costs.js?v=20260911-1"></script>
+  <script defer src="/factory-twin-assets/warehouse-costs.js?v=20260911-3"></script>
   <style>
     :root {
       color-scheme: light;
@@ -293,7 +293,7 @@
             <input id="dimensionCustomer" maxlength="100" placeholder="客户名称 / 简称（可选）" aria-label="尺寸查询客户">
             <div class="lookup-filter"><select id="dimensionAxis" aria-label="纸板单边方向"><option value="any">单边：任一边</option><option value="length">单边：报料长</option><option value="width">单边：报料宽</option></select>
               <select id="dimensionTolerance" aria-label="匹配范围"><option value="5">接近 ±5mm</option><option value="0">仅精确</option><option value="10">扩大范围 ±10mm</option></select></div>
-            <p class="muted">在上方输入尺寸，如 800×600，默认 mm；仅查未送齐订单，纸板长宽不交换。</p>
+            <details id="dimensionSettings" hidden><summary>查询范围设置</summary><div class="lookup-filter"><label>接近 ±mm<input id="dimensionNear" type="number" min="1" max="49"></label><label>扩大 ±mm<input id="dimensionExpanded" type="number" min="2" max="50"></label></div><button id="saveDimensionSettings" class="small-btn" type="button">保存范围</button><p id="dimensionSettingsMessage" class="muted"></p></details><p class="muted">在上方输入尺寸，如 800×600，默认 mm；仅查未送齐订单，纸板长宽不交换。</p>
           </div>
           <div id="textOrderFilters"><label><input id="lookupUnfulfilled" type="checkbox" checked> 只看未送齐订单</label>
           <div class="lookup-filter">
@@ -487,6 +487,7 @@
         lookupController: null,
         lookupGeneration: 0,
         lookupUserId: null,
+        expandedOrderItems: new Set(), dimensionSettings: null,
         drawingScale: 1,
         drawingRotation: 0,
         productionItems: [],
@@ -553,6 +554,14 @@
         return element;
       }
 
+      async function loadDimensionSettings() {
+        const settings = await apiGet("/api/mobile/erp/dimension-settings");
+        state.dimensionSettings = settings;
+        byId("dimensionTolerance").replaceChildren(...[[settings.near_mm, `接近 ±${settings.near_mm}mm`], [0, "仅精确"], [settings.expanded_mm, `扩大范围 ±${settings.expanded_mm}mm`]].map(([value, label]) => { const option = node("option", "", label); option.value = value; return option; }));
+        byId("dimensionSettings").hidden = !settings.can_edit;
+        byId("dimensionNear").value = settings.near_mm; byId("dimensionExpanded").value = settings.expanded_mm;
+      }
+
       function persistMobilePortalState() {
         if (!state.lookupUserId) return;
         try {
@@ -564,6 +573,7 @@
             dimension_mode: byId("lookupDimensionMode").value, dimension_customer: byId("dimensionCustomer").value,
             dimension_axis: byId("dimensionAxis").value, dimension_tolerance: byId("dimensionTolerance").value,
             lookup_page: state.lookupPage,
+            expanded_order_items: [...state.expandedOrderItems].slice(-50), dimension_settings_version: state.dimensionSettings?.version,
             scroll_by_page: Object.fromEntries(state.scrollByPage),
           }));
         } catch (_error) { /* Storage is a convenience, never a business fact. */ }
@@ -582,7 +592,9 @@
         byId("lookupDimensionMode").value = saved.dimension_mode || "text";
         byId("dimensionCustomer").value = saved.dimension_customer || "";
         byId("dimensionAxis").value = saved.dimension_axis || "any";
-        byId("dimensionTolerance").value = saved.dimension_tolerance || "5";
+        const rememberedTolerance = String(saved.dimension_tolerance ?? state.dimensionSettings?.near_mm ?? 5);
+        byId("dimensionTolerance").value = Array.from(byId("dimensionTolerance").options).some(o => o.value === rememberedTolerance) && (saved.dimension_settings_version == null || saved.dimension_settings_version === state.dimensionSettings?.version) ? rememberedTolerance : "0";
+        state.expandedOrderItems = new Set((Array.isArray(saved.expanded_order_items) ? saved.expanded_order_items : []).filter(id => Number.isSafeInteger(id) && id > 0).slice(-50));
         byId("dimensionControls").hidden = byId("lookupDimensionMode").value === "text";
         byId("textOrderFilters").hidden = byId("lookupDimensionMode").value !== "text";
         state.lookupPage = Math.max(1, Number(saved.lookup_page) || 1);
@@ -598,6 +610,7 @@
         state.lookupGeneration += 1;
         state.lookupQuery = "";
         state.lookupGroups = [];
+        state.expandedOrderItems.clear();
         state.lookupPage = 1;
         state.lookupCategory = "all";
         state.scrollByPage.clear();
@@ -712,7 +725,7 @@
         let response;
         try {
           response = await fetch(url, {
-            method: "POST",
+            method: options.method || "POST",
             credentials: "same-origin",
             headers: { Accept: "application/json", "Content-Type": "application/json" },
             body: JSON.stringify(body),
@@ -1015,6 +1028,8 @@
           details.append(node("summary", "small-btn", "查看同单未送产品"));
           const body = node("div", ""); details.append(body);
           details.addEventListener("toggle", async () => {
+            if (details.open) state.expandedOrderItems.add(item.order_item_id); else state.expandedOrderItems.delete(item.order_item_id);
+            persistMobilePortalState();
             if (!details.open || details.dataset.loaded) return;
             details.dataset.loaded = "loading";
             body.textContent = "正在读取…";
@@ -1033,6 +1048,7 @@
             } catch (error) { delete details.dataset.loaded; body.textContent = `${error.message}；收起后重新展开可重试`; }
           });
           card.append(details);
+          if (state.expandedOrderItems.has(item.order_item_id)) details.open = true;
         }
 
         if (groupId === "inventory") {
@@ -2650,6 +2666,7 @@
           state.shell = await apiGet("/api/mobile/erp/shell");
           if (state.incomingPerformanceActive) markIncomingPerformance("shell-ready");
           const user = state.shell.user || {};
+          if ((state.shell.search_categories || []).includes("orders")) await loadDimensionSettings();
           const restoredPage = restoreMobilePortalState(user.id);
           const entries = Array.isArray(state.shell.entries) ? state.shell.entries : [];
           const productionEntry = entries.find(entry => entry.id === "production");
@@ -2733,6 +2750,16 @@
         }
       });
       byId("lookupButton").addEventListener("click", () => runUnifiedSearch(1));
+      byId("saveDimensionSettings").addEventListener("click", async () => {
+        const button = byId("saveDimensionSettings"); button.disabled = true;
+        try {
+          await apiPost("/api/mobile/erp/dimension-settings", { near_mm: Number(byId("dimensionNear").value), expanded_mm: Number(byId("dimensionExpanded").value), expected_version: state.dimensionSettings.version, operation_key: `dimension-${Date.now()}-${Math.random().toString(36).slice(2)}` }, { method: "PUT" });
+          await loadDimensionSettings(); byId("dimensionTolerance").value = "0";
+          byId("dimensionSettingsMessage").textContent = "已保存，当前恢复为精确查找；需要时选择接近或扩大范围。";
+          persistMobilePortalState();
+        } catch (error) { byId("dimensionSettingsMessage").textContent = error.message; }
+        finally { button.disabled = false; }
+      });
       byId("lookupDimensionMode").addEventListener("change", () => {
         const mode = byId("lookupDimensionMode").value;
         byId("dimensionControls").hidden = mode === "text";

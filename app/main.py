@@ -425,6 +425,13 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/email-intake.html" for route in application.routes):
+        email_path = Path(__file__).resolve().parents[1] / "static" / "email-intake.html"
+        application.add_api_route("/email-intake.html", lambda: FileResponse(email_path, headers={"Cache-Control": "no-store"}), methods=["GET"], include_in_schema=False)
+
+    if not any(route.path == "/inventory-assistant.html" for route in application.routes):
+        assistant_path = Path(__file__).resolve().parents[1] / "static" / "inventory-assistant.html"
+        application.add_api_route("/inventory-assistant.html", lambda: FileResponse(assistant_path, headers={"Cache-Control": "no-store"}), methods=["GET"], include_in_schema=False)
     if not any(route.path == "/customer-statement-check.html" for route in application.routes):
         customer_check_path = Path(__file__).resolve().parents[1] / "static" / "customer-statement-check.html"
         application.add_api_route("/customer-statement-check.html", lambda: FileResponse(customer_check_path, headers={"Cache-Control": "no-store"}), methods=["GET"], include_in_schema=False)
@@ -903,6 +910,13 @@ def create_app() -> FastAPI:
         application.include_router(fixed_shelf_router, prefix="/api/warehouse/fixed-shelf", tags=["fixed-shelf"])
         from app.api.shelf_pick_scan import router as shelf_pick_scan_router
         application.include_router(shelf_pick_scan_router, prefix='/api/shelf-pick-scan', tags=['fixed-shelf'])
+    if not any(route.path == "/api/email-intake" for route in application.routes):
+        from app.api.email_intake import router as email_intake_router
+        application.include_router(email_intake_router, prefix="/api/email-intake", tags=["orders"])
+
+    if not any(route.path == "/api/inventory-assistant" for route in application.routes):
+        from app.api.inventory_assistant import router as inventory_assistant_router
+        application.include_router(inventory_assistant_router, prefix="/api/inventory-assistant", tags=["warehouse"])
     if not any(route.path == "/api/warehouse/locations" for route in application.routes):
         from app.api.material_candidates import router as material_candidates_router
         application.include_router(material_candidates_router, prefix="/api/warehouse/lots", tags=["warehouse"])

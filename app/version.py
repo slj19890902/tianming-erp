@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.341"
-APP_VERSION_NAME = "盘点默认全部客户"
+APP_VERSION = "v0.22.353"
+APP_VERSION_NAME = "查货直达货架正视图与层格高亮"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2568,9 +2568,97 @@ APP_VERIFICATION_STEPS = [
     "刷新盘点页面，不选择客户直接输入规格，确认返回全部可见客户的产品。",
     "输入客户名称并选择客户，再清空客户输入，核对范围恢复全部且规格保留。",
 ]
+_V022341_CHANGES = APP_CHANGES
+_V022341_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["手机尺寸找订单支持管理员保存接近与扩大范围，员工明确选择后应用；设置变化后恢复精确查找。", "刷新后恢复当前账号查询条件和已展开同单未送产品；保持权限与订单事实不变。"]
+APP_VERIFICATION_STEPS = ["管理员进入手机查询→纸板或纸箱尺寸→查询范围设置，保存范围；普通员工不可修改。", "展开同单未送产品后刷新，检查条件与展开恢复；范围改变后查询保持精确，按需选择扩大。"]
+_V022342_CHANGES = APP_CHANGES
+_V022342_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["修复货架层数、格数及区域名称保存被其他区域旧成品半成品用途校验阻止；保留操作区与布局保护。", "相关区域库存阻塞提示显示实际名称，不再只显示内部区域编号。"]
+APP_VERIFICATION_STEPS = ["刷新地图，修改北货架G2层数、格数及区域名称，确认不再出现南F货架1旧用途限制；不得删除有货货位。"]
+_V022343_CHANGES = APP_CHANGES
+_V022343_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["修复货架区域改名时将整座货架数量与层格货位数量比较，导致保存失败的问题；实测货架沿用真实层格数量。"]
+APP_VERIFICATION_STEPS = ["刷新地图，修改货架区域名称并保存；确认原层数、格数、货位及库存保留。"]
+_V022344_CHANGES = APP_CHANGES
+_V022344_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "盘点成本支持独立维护材质、毫米报料尺寸、每张出数和外购含税单价；缺材料资料时采用有效售价参考，入库后按批次固定。",
+    "合作厂清单按老板确认的开票含税单价计价，套装与独立部件保留分摊依据；管理员可预览并确认指定在库批次改价。",
+    "成本仅管理员、老板可见；保留当前地图、数量、采购来源和已冻结出库成本，历史生产尺寸不因临时成本参数改变。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员打开仓库→库存成本，检查8111、22000124、EPE及合作厂在库成本；员工页面和接口不应出现价格。",
+    "点击成本依据，核对毫米尺寸、每张出数或外购含税价；保存仅影响后续盘点，本批次必须预览后另行确认。",
+    "同一批次重复确认不得重复改价；数量、位置及已冻结出库成本不变。正式唯一数据库head为rx10v8x9z72。",
+]
+_V022345_CHANGES = APP_CHANGES
+_V022345_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["库存成本区新增库存助手，按现货与订单、片料用途、长期库存、待核价筛选并展开真实依据。", "金额只采用冻结批次成本并显示实际成本依据；同款未送订单按产品匹配，片料候选排除面纸颜色不兼容项，不修改业务事实。"]
+APP_VERIFICATION_STEPS = ["老板或管理员打开库存成本区→库存助手，核对金额、待核价批次及筛选分页。", "查看同款未送订单和片料用途候选；普通账号不可打开。当前为本地规则分析，尚未调用云模型。"]
+_V022346_CHANGES = APP_CHANGES
+_V022346_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["订单页面增加邮箱收单入口，固定接入已确认的126收件箱，支持手动分批读取、重复附件提示、忽略恢复和PDF预览。", "客户端授权码由Windows加密保存且不回显，收信不改变已读状态、不移动删除邮件；本版仅待核对收件箱，不自动生成订单。"]
+APP_VERIFICATION_STEPS = ["管理员从订单→邮箱收单，用HTTPS地址保存126客户端授权码；手动读取并核对附件与重复提示。真实邮箱连通需完成授权码配置后验证。", "普通账号不可读取收件箱；在隔离副本验证重复读取、忽略恢复和PDF预览。Excel草稿与正式订单关联仍待后续完成。"]
+_V022347_CHANGES = APP_CHANGES
+_V022347_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "仓库主地图顶部新增库存成本入口，仅管理员、老板可见；台账也提供直接入口。",
+    "单个产品可移入已有货物的货位，多条单品草稿可共用目标；整栈板只选空位，一次移动板内全部正式产品。",
+    "保留混放权限、异常货物、容量、版本、幂等、事务、库存数量与入库成本保护；本版不修改地图或既有业务数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员或老板进入仓库，在顶部打开库存成本；普通员工不应看到入口或价格。",
+    "移货/盘点→移动位置，选择产品旁移动此产品，选择已有货物目标并提交；再选择整栈移动，只能移到空地面货位，全部产品一起过去。",
+    "核对单品数量及各自原成本保留；重复提交不重复移动。Chrome自动验收连接超时，现场真实操作待确认。",
+]
+_V022348_CHANGES = APP_CHANGES
+_V022348_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["邮箱PDF增加编辑并导入订单，进入现有客户、常用箱、数量、单价及库存核对草稿。", "正常订单保存与邮件来源关联同事务提交；同附件内容、客户和客户单号重复保存回放原订单，内容变化提示改单；邮箱页显示已关联订单。"]
+APP_VERIFICATION_STEPS = ["管理员从邮箱PDF点击编辑并导入订单，核对识别明细并人工保存；回到邮件刷新后查看订单号。", "隔离副本重复提交不得新建订单；改数量重试提示改单，来源记录故障须同时回滚订单与生产任务。Excel映射与真实126收信验收仍待继续。"]
+_V022349_CHANGES = APP_CHANGES
+_V022349_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["货架正视图点击格数或格内非操作内容后，自动收起正视图并显示该正式货位的信息。", "保留移货和盘点模式及页面草稿；产品标签、批次明细、打印和添加货物仍按各自按钮执行。"]
+APP_VERIFICATION_STEPS = ["打开货架正视图，点击有货格的格数或空白处，确认无需点返回即可显示对应货位；空格点击格数同样可查看。", "分别核对存货编码查看标签、查看明细展开批次，以及添加货物仍进入正确货位；点击货位不自动提交库存。"]
+_V022350_CHANGES = APP_CHANGES
+_V022350_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["邮箱列表显示真实关联订单数量，支持已有关联与尚无关联筛选；重复附件按内容归并，保留未导入明细核对入口。", "邮件订单号可直接打开订单详情，订单详情可返回原邮件；PDF收单继续沿用人工核对与保存流程。"]
+APP_VERIFICATION_STEPS = ["管理员打开邮箱收单，筛选关联状态并点击订单号；从订单详情查看原邮件，刷新后仍打开同一邮件。", "相同附件副本显示同一关联订单；原订单删除后不再计为有效关联。Excel收单不属于当前开发范围，真实126收信待授权码配置后验收。"]
+_V022351_CHANGES = APP_CHANGES
+_V022351_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["邮箱PDF核对页增加暂存核对进度，关闭或刷新后可从原邮件继续客户单号、日期和明细修改；暂存不创建订单。", "恢复重新识别原PDF并匹配当前常用箱，已停用产品提示重选；库存和成本重新读取，正式订单仍需确认。"]
+APP_VERIFICATION_STEPS = ["从邮箱打开PDF，修改客户单号或数量，暂存后刷新，确认修改恢复；回邮箱可见继续上次核对。", "同一窗口重试不重复保存；另一窗口不同内容冲突不覆盖。草稿仅当前管理员可见，销售不可读取；真实126收件仍待授权码配置。"]
+_V022352_CHANGES = APP_CHANGES
+_V022352_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["查货点击货架产品后直接打开对应货架正视图，黄色标出所在层格和产品，深色边框标记当前具体位置。", "搜索列表保持可用；切换产品、楼层或具体位置时同步切换货架，地面栈板继续地图定位；点货位自动收起仍保留。"]
+APP_VERIFICATION_STEPS = ["搜索货架产品并点击，核对正视图、层数格数和黄色产品；同格其他产品不得误高亮。", "连续切换不同产品、跨楼层位置和地面货位，确认旧货架收起且新位置准确；点击货位应返回其信息，编码标签和批次按钮功能保留。"]
 APP_CHANGELOG = [
-    *(f"v0.22.341：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.341：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.353：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.353：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.352：本次更新｜{item}" for item in _V022352_CHANGES),
+    *(f"v0.22.352：如何验证｜{item}" for item in _V022352_STEPS),
+    *(f"v0.22.351：本次更新｜{item}" for item in _V022351_CHANGES),
+    *(f"v0.22.351：如何验证｜{item}" for item in _V022351_STEPS),
+    *(f"v0.22.350：本次更新｜{item}" for item in _V022350_CHANGES),
+    *(f"v0.22.350：如何验证｜{item}" for item in _V022350_STEPS),
+    *(f"v0.22.349：本次更新｜{item}" for item in _V022349_CHANGES),
+    *(f"v0.22.349：如何验证｜{item}" for item in _V022349_STEPS),
+    *(f"v0.22.348：本次更新｜{item}" for item in _V022348_CHANGES),
+    *(f"v0.22.348：如何验证｜{item}" for item in _V022348_STEPS),
+    *(f"v0.22.347：本次更新｜{item}" for item in _V022347_CHANGES),
+    *(f"v0.22.347：如何验证｜{item}" for item in _V022347_STEPS),
+    *(f"v0.22.346：本次更新｜{item}" for item in _V022346_CHANGES),
+    *(f"v0.22.346：如何验证｜{item}" for item in _V022346_STEPS),
+    *(f"v0.22.345：本次更新｜{item}" for item in _V022345_CHANGES),
+    *(f"v0.22.345：如何验证｜{item}" for item in _V022345_STEPS),
+    *(f"v0.22.344：本次更新｜{item}" for item in _V022344_CHANGES),
+    *(f"v0.22.344：如何验证｜{item}" for item in _V022344_STEPS),
+    *(f"v0.22.343：本次更新｜{item}" for item in _V022343_CHANGES),
+    *(f"v0.22.343：如何验证｜{item}" for item in _V022343_STEPS),
+    *(f"v0.22.342：本次更新｜{item}" for item in _V022342_CHANGES),
+    *(f"v0.22.342：如何验证｜{item}" for item in _V022342_STEPS),
+    *(f"v0.22.341：本次更新｜{item}" for item in _V022341_CHANGES),
+    *(f"v0.22.341：如何验证｜{item}" for item in _V022341_STEPS),
     *(f"v0.22.340：本次更新｜{item}" for item in _V022340_CHANGES),
     *(f"v0.22.340：如何验证｜{item}" for item in _V022340_VERIFICATION_STEPS),
     *(f"v0.22.339：本次更新｜{item}" for item in _V022339_CHANGES),

@@ -127,6 +127,13 @@ def test_dispatch_cost_uses_frozen_entry_and_return_quantity_no_repricing(requis
         snapshot=freeze_inventory_entry_cost(db,**args)
         assert snapshot.unit_cost==Decimal("1.6300")
         assert freeze_inventory_entry_cost(db,**args).id==snapshot.id
+        from app.services.inventory_cost_rules import save_rule,preview_revalue,revalue
+        save_rule(db,row,dict(mode="fixed",unit_cost="13",basis="后来确认的在库参考价"),user=user,
+            expected_version=0,expected_product_version=row.version)
+        plan=preview_revalue(db,row,[lot.id])
+        revalue(db,row,[lot.id],user=user,expected=plan["fingerprint"],batch_id="after-dispatch-revalue")
+        db.flush();db.refresh(snapshot)
+        assert snapshot.unit_cost==Decimal("1.6300") and lot.estimated_unit_cost_snapshot==13
         gap=dict(item=item,month="2026-09",quantity=4,reason="estimate_only",order_product_id=None,
             source=dict(kind="unordered_inventory_allocation",id=allocation.id,lot=lot))
         assert applicable_amount(snapshot,gap)==Decimal("6.52")

@@ -153,6 +153,22 @@ def _authorized_product_recipe(db, product):
 
 
 def resolve_product_cost(db: Session, product: Product, visited=None, *, main_only=False) -> CostResolution:
+    from app.services.inventory_cost_rules import resolve_rule, estimate_rule
+    explicit = resolve_rule(db, product)
+    if explicit is not None:
+        return explicit
+    result = _resolve_product_cost(db, product, visited, main_only=main_only)
+    # A kit sale price cannot be copied to a separately stored physical component.
+    # Kits need an explicit allocation rule; a zero/unknown sale is never a price.
+    if not result.estimate and not product.is_composite and positive(product.sale_unit_price):
+        fallback = estimate_rule(db, product, dict(mode="sale", temporary=True,
+            basis="老板确认：材料/采购成本资料不足时，以本产品有效售价暂作成本",
+            evidence={"missing_material_inputs": result.missing}))
+        return fallback
+    return result
+
+
+def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_only=False) -> CostResolution:
     visited = set(visited or ())
     if product.id in visited:
         return CostResolution(None, ["组合产品存在循环关系"])
@@ -241,7 +257,7 @@ def resolve_product_cost(db: Session, product: Product, visited=None, *, main_on
 def resolve_lot_cost(db, lot) -> CostResolution:
     if lot.finished_detail:
         product = db.get(Product, lot.finished_detail.product_id)
-        return resolve_product_cost(db, product) if product else CostResolution(None, ["产品不存在"])
+        return resolve_product_cost(db, product, main_only=True) if product else CostResolution(None, ["产品不存在"])
     detail = lot.semi_finished_detail
     if detail is None:
         return CostResolution(None, ["批次缺少产品或片料资料"])
@@ -315,13 +331,14 @@ def cost_payload(lot, db=None):
         "quantity": quantity, "unit": lot.unit, "currency": "CNY",
         "source": lot.cost_snapshot_source, "captured_at": str(lot.cost_snapshot_at) if lot.cost_snapshot_at else None,
         "validation_issue": detail.get("validation_issue"),
-        "label": "采购入库成本" if lot.cost_snapshot_source == "purchase_receipt_actual" else (
+        "label": detail.get("cost_label") or ("采购入库成本" if lot.cost_snapshot_source == "purchase_receipt_actual" else (
             "老板确认参考成本" if lot.cost_snapshot_source in OWNER_SOURCES else (
-                "参考配方材料成本" if detail.get("reference_recipe_lot_id") else "批次材料成本"))}
+                "参考配方材料成本" if detail.get("reference_recipe_lot_id") else "批次材料成本"))),
+        "cost_basis": (detail.get("cost_rule") or {}).get("basis"), "temporary": bool(detail.get("temporary"))}
 
 
 def freeze_entry_cost(db, lot, product=None):
-    result = resolve_product_cost(db, product) if product else resolve_lot_cost(db, lot)
+    result = resolve_product_cost(db, product, main_only=True) if product else resolve_lot_cost(db, lot)
     if not result.estimate:
         from app.services.warehouse_inventory import WarehouseInventoryError
         raise WarehouseInventoryError("未能确定入库成本：" + "；".join(result.missing), 422)

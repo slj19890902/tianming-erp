@@ -138,6 +138,8 @@ body.warehouse-twin-page {
   text-decoration: none;
 }
 .twin-ledger-link:hover { border-color: var(--twin-cyan); color: var(--twin-cyan); }
+.twin-command-links { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.twin-command-links .twin-cost-link { display: inline-flex; white-space: nowrap; }
 
 .twin-toolbar {
   position: relative;
@@ -2593,3 +2595,23 @@ body.warehouse-twin-page {
 .twin-rack-product-label.mold-label dd { color:#172f45; }
 @media (pointer:coarse) { .warehouse-label-code-row button,.warehouse-label-add,.shelf-product-code-row button { min-height:36px; } }
 @media (max-width:700px) { .twin-rack-stage:not(.twin-mold-rack-stage) .twin-elevation-level > div { grid-auto-columns:minmax(240px,1fr); } }
+
+/* Keep search available while a product's exact shelf position is in view. */
+.twin-workspace.rack-focused.context-open { grid-template-columns: minmax(230px, 286px) minmax(0, 1fr) !important; }
+.twin-workspace.rack-focused.context-open > .twin-context-rail { display: block; }
+.twin-workspace.rack-focused.context-open .twin-global-search { overflow-y: auto; }
+.twin-workspace.rack-focused.context-open .twin-search-result-list { flex: 0 0 auto; max-height: 36vh; }
+.twin-workspace.rack-focused.context-open .twin-stage { grid-template-columns: minmax(180px, .65fr) minmax(0, 2fr); }
+.twin-rack-stage .mold-rack-cell.rack-search-hit { background: #fff4c2; border-color: #d18c00; box-shadow: inset 0 0 0 2px #edbd4c; }
+.twin-rack-stage .mold-rack-cell.rack-search-current { border-color: #9a4800; box-shadow: inset 0 0 0 3px #c66a05; }
+.twin-rack-stage .shelf-product-card.search-product-hit { background: #fff3bf; border-color: #d18c00; }
+.twin-rack-stage .twin-elevation-level:has(.rack-search-hit) > span { background: #ffe8a0; color: #754000; font-weight: 800; }
+.twin-rack-stage .shelf-search-hit-marker { padding: 1px 4px; border-radius: 3px; background: #9a4800; color: white; font-size: 11px; white-space: nowrap; }
+.twin-rack-focus-panel.twin-rack-stage header p.twin-rack-search-marker { color: #754000; background: #fff3bf; padding: 4px 6px; font-size: 12px; }
+@media (max-width:880px) {
+  .twin-workspace.rack-focused.context-open { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(140px, 32vh) minmax(0, 1fr); }
+  .twin-workspace.rack-focused.context-open > .twin-context-rail { min-height: 0; }
+  .twin-workspace.rack-focused.context-open .twin-stage { display: flex; }
+  .twin-workspace.rack-focused.context-open .twin-map-pane { display: none; }
+  .twin-workspace.rack-focused.context-open .twin-rack-stage { flex: 1; }
+}

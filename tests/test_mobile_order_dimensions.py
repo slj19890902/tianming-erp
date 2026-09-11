@@ -53,3 +53,26 @@ def test_dimension_api_scope_siblings_validation_and_readonly(mobile_portal_app)
     with TestClient(app) as client:
         _login(client, "mobile-admin")
         assert client.get(url, params={"dimensions":"800×600"}).json()["groups"][0]["total"] == 0
+
+
+def test_dimension_settings_admin_version_idempotency_and_query(mobile_portal_app, monkeypatch, tmp_path):
+    from app.services.mobile_dimension_settings import read
+    monkeypatch.setenv("ERP_MOBILE_DIMENSION_SETTINGS_PATH",str(tmp_path/"dimension.json"))
+    app,ids,factory=mobile_portal_app
+    with TestClient(app) as client:
+        endpoint="/api/mobile/erp/dimension-settings"
+        assert client.get(endpoint).status_code==401
+        _login(client,"mobile-admin")
+        assert client.get(endpoint).json()["near_mm"]==5
+        body=dict(near_mm=7,expanded_mm=12,expected_version=0,operation_key="settings-save-001")
+        assert client.put(endpoint,json=body).status_code==200
+        assert client.put(endpoint,json=body).json()["version"]==1
+        assert len(read()["history"])==1
+        assert client.put(endpoint,json={**body,"operation_key":"settings-save-002"}).status_code==409
+        assert client.put(endpoint,json={**body,"near_mm":8}).status_code==422
+        assert client.put(endpoint,json={**body,"near_mm":True}).status_code==422
+        assert client.get("/api/mobile/erp/orders/by-dimensions",params={"dimensions":"800","tolerance":12}).status_code==200
+        assert client.get("/api/mobile/erp/orders/by-dimensions",params={"dimensions":"800","tolerance":10}).status_code==422
+        _login(client,"mobile-scoped")
+        assert client.put(endpoint,json={**body,"expected_version":1,"operation_key":"settings-save-003"}).status_code==403
+        assert len(read()["history"])==1

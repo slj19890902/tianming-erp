@@ -1,16 +1,59 @@
 """Build on the development PC. Runtime includes installed dependencies; no business data."""
 import argparse
+import ast
+import io
 import json
 import re
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import zipfile
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from desktop_assistant.storage import pack_tree, sha, write_json
+
+
+def source_snapshot(root, version, revision):
+    """Bind metadata and every source byte to one committed Git tree."""
+    if subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=all'], cwd=root):
+        raise ValueError('构建前请提交源码改动，工作区必须干净')
+    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    raw = subprocess.check_output(['git', '-c', 'core.autocrlf=false', '-c', 'core.eol=lf',
+                                   'archive', '--format=zip', commit], cwd=root)
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        contents = {}
+        for entry in archive.infolist():
+            if entry.is_dir():
+                continue
+            if (entry.external_attr >> 16) & 0o170000 == 0o120000:
+                raise ValueError('发布源码不得含链接')
+            contents[entry.filename] = archive.read(entry)
+
+    def literal(source, name):
+        for node in ast.parse(source).body:
+            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                return ast.literal_eval(node.value)
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
+                return ast.literal_eval(node.value)
+        raise ValueError('发布源码缺少版本字段: ' + name)
+
+    if literal(contents['app/version.py'], 'APP_VERSION') != version:
+        raise ValueError('安装包版本必须与程序 APP_VERSION 一致')
+    chain = {}
+    for name, source in contents.items():
+        if name.startswith('alembic/versions/') and name.endswith('.py') and not name.endswith('/__init__.py'):
+            current = literal(source, 'revision')
+            if current in chain:
+                raise ValueError('迁移 revision 重复')
+            parent = literal(source, 'down_revision')
+            chain[current] = () if parent is None else ((parent,) if isinstance(parent, str) else tuple(parent))
+    parents = {parent for values in chain.values() for parent in values}
+    if parents - chain.keys() or set(chain) - parents != {revision}:
+        raise ValueError('安装包 revision 必须与源码唯一迁移 head 一致')
+    return commit, contents
 
 
 def main():
@@ -34,6 +77,7 @@ def main():
         migration = {'policy': 'preserve_existing_facts_v1', 'from_revision': args.upgrade_from_revision,
                      'rollback_package_sha256': args.rollback_package_sha256}
     root, output = args.repo.resolve(), args.output.resolve()
+    code_sha, sources = source_snapshot(root, args.version, args.revision)
     if output.exists():
         raise ValueError('构建输出必须是新目录')
     if root == output or root in output.parents:
@@ -46,10 +90,9 @@ def main():
     public.write_bytes(key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
     tree = output / 'payload'
     tree.mkdir()
-    tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root).decode('utf-8').split('\0')
     allowed = {'app', 'alembic', 'static', 'templates', 'desktop_assistant'}
     singles = {'main.py', 'alembic.ini', 'requirements.txt'}
-    for relative in tracked:
+    for relative, content in sources.items():
         if not relative:
             continue
         path = Path(relative)
@@ -57,19 +100,15 @@ def main():
             continue
         if relative.startswith('static/uploads/') or relative.endswith('.pyc') or '__pycache__' in path.parts:
             continue
-        source = root / path
-        if source.is_symlink() or source.is_junction():
-            raise ValueError('发布源码不得含链接')
         destination = tree / path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
+        destination.write_bytes(content)
     runtime = tree / 'runtime'
     shutil.copytree(args.runtime_base, runtime, ignore=shutil.ignore_patterns('site-packages', '__pycache__', 'Scripts'))
     shutil.copytree(args.site_packages, runtime / 'Lib/site-packages',
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     # Force a relocatable Python search path, independent of machine registry and PYTHONHOME.
     (runtime / 'python312._pth').write_text('python312.zip\n.\nLib\nDLLs\nLib/site-packages\n..\nimport site\n', encoding='ascii')
-    code_sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
     package = output / 'release.zip'
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration}, key)
@@ -78,13 +117,13 @@ def main():
                    'release_sha256': sha(package), 'installer_built': False})
         return
     common = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onefile', '--windowed',
-              '--paths', str(root), '--specpath', str(output), '--workpath', str(output / 'pyi-work'),
+              '--paths', str(tree), '--specpath', str(output), '--workpath', str(output / 'pyi-work'),
               '--distpath', str(output)]
     subprocess.run([*common, '--name', 'TianmingERP-Assistant', '--add-data', str(public) + ';.',
-                    str(root / 'desktop_assistant/gui.py')], check=True, cwd=root)
+                    str(tree / 'desktop_assistant/gui.py')], check=True, cwd=tree)
     subprocess.run([*common, '--name', 'TianmingERP-Setup',
                     '--add-data', str(output / 'TianmingERP-Assistant.exe') + ';.',
-                    '--add-data', str(package) + ';.', str(root / 'desktop_assistant/installer.py')], check=True, cwd=root)
+                    '--add-data', str(package) + ';.', str(tree / 'desktop_assistant/installer.py')], check=True, cwd=tree)
     write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,
                'release_sha256': sha(package), 'installer_sha256': sha(output / 'TianmingERP-Setup.exe')})
 

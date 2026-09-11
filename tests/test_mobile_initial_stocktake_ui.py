@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_initial_ui_keeps_retry_payload_and_rejects_stale_search():
-    source = (ROOT / "static/mobile_initial_stocktake.js").read_text(encoding="utf-8")
+    source = (ROOT / "static/mobile_initial_stocktake_runtime.js").read_text(encoding="utf-8")
     harness = r'''
 const assert = require('node:assert/strict');
 const vm = require('node:vm');

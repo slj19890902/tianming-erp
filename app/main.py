@@ -505,9 +505,16 @@ def create_app() -> FastAPI:
         )
         application.add_api_route(
             "/mobile/stocktake.html",
-            lambda: FileResponse(mobile_stocktake_path),
+            lambda: FileResponse(mobile_stocktake_path, headers={"Cache-Control": "private, no-store, max-age=0", "Pragma": "no-cache", "Expires": "0"}),
             methods=["GET"],
             include_in_schema=False,
+        )
+    if not any(route.path == "/mobile/initial-stocktake-runtime.js" for route in application.routes):
+        application.add_api_route(
+            "/mobile/initial-stocktake-runtime.js",
+            lambda: FileResponse(Path(__file__).resolve().parents[1] / "static" / "mobile_initial_stocktake_runtime.js",
+                                 media_type="text/javascript", headers={"Cache-Control": "no-store"}),
+            methods=["GET"], include_in_schema=False,
         )
     if not any(route.path == "/mobile/initial-stocktake.js" for route in application.routes):
         application.add_api_route(

@@ -383,7 +383,7 @@ def test_empty_floor_three_area_can_switch_to_semi_finished_without_new_ids(
         engine.dispose()
 
 
-def test_floor_three_usage_change_is_blocked_when_inventory_is_incompatible(
+def test_floor_three_legacy_usage_does_not_block_mixed_inventory(
     tmp_path: Path,
 ) -> None:
     engine, factory = _factory(tmp_path)
@@ -425,27 +425,40 @@ def test_floor_three_usage_change_is_blocked_when_inventory_is_incompatible(
             )
             db.flush()
 
-            with pytest.raises(
-                WarehouseAreaActivationError,
-                match="与新用途不一致",
-            ):
-                publish_floor_area_policies(
-                    db,
-                    floor_code=floor.floor_code,
-                    published_revision="revision-3f-semi",
-                    operator_id=1,
-                    published_features=[
-                        {
-                            "id": policy.map_feature_id,
-                            "feature_kind": "zone",
-                            "erp_area_code": area.area_code,
-                            "allowed_inventory_types": ["semi_finished"],
-                            "storage_layout": "pallet_ground",
-                        }
-                    ],
-                )
-            assert row.warehouse_type == "finished"
-            assert policy.status == "draft"
+            from app.services.warehouse_area_activation import (
+                policy_location_transition_blockers,
+                unbound_area_location_transition_blockers,
+            )
+            for check in (policy_location_transition_blockers, unbound_area_location_transition_blockers):
+                kwargs = dict(db=db, floor=floor, area=area)
+                if check is policy_location_transition_blockers:
+                    kwargs["policy"] = policy
+                for types in (["finished"], ["semi_finished"], ["raw_material"]):
+                    assert check(**kwargs, requested_inventory_types=types,
+                                 requested_storage_layout="pallet_ground") == []
+                for types, layout in (([], "functional"), (["finished"], "functional"),
+                                      (["mold"], "rack"), (["finished"], "rack")):
+                    assert check(**kwargs, requested_inventory_types=types,
+                                 requested_storage_layout=layout)
+
+            publish_floor_area_policies(
+                db,
+                floor_code=floor.floor_code,
+                published_revision="revision-3f-semi",
+                operator_id=1,
+                published_features=[
+                    {
+                        "id": policy.map_feature_id,
+                        "feature_kind": "zone",
+                        "erp_area_code": area.area_code,
+                        "allowed_inventory_types": ["semi_finished"],
+                        "storage_layout": "pallet_ground",
+                    }
+                ],
+            )
+            assert row.id is not None
+            assert policy.status == "published"
+            assert db.query(InventoryLot).filter_by(warehouse_location_id=row.id).one().quantity_available == 10
     finally:
         engine.dispose()
 

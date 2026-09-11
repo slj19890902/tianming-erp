@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.341"
-APP_VERSION_NAME = "盘点默认全部客户"
+APP_VERSION = "v0.22.343"
+APP_VERSION_NAME = "地图保存兼容混合库存"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2568,9 +2568,21 @@ APP_VERIFICATION_STEPS = [
     "刷新盘点页面，不选择客户直接输入规格，确认返回全部可见客户的产品。",
     "输入客户名称并选择客户，再清空客户输入，核对范围恢复全部且规格保留。",
 ]
+_V022341_CHANGES = APP_CHANGES
+_V022341_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["手机尺寸找订单支持管理员保存接近与扩大范围，员工明确选择后应用；设置变化后恢复精确查找。", "刷新后恢复当前账号查询条件和已展开同单未送产品；保持权限与订单事实不变。"]
+APP_VERIFICATION_STEPS = ["管理员进入手机查询→纸板或纸箱尺寸→查询范围设置，保存范围；普通员工不可修改。", "展开同单未送产品后刷新，检查条件与展开恢复；范围改变后查询保持精确，按需选择扩大。"]
+_V022342_CHANGES = APP_CHANGES
+_V022342_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["修复货架层数、格数及区域名称保存被其他区域旧成品半成品用途校验阻止；保留操作区与布局保护。", "相关区域库存阻塞提示显示实际名称，不再只显示内部区域编号。"]
+APP_VERIFICATION_STEPS = ["刷新地图，修改北货架G2层数、格数及区域名称，确认不再出现南F货架1旧用途限制；不得删除有货货位。"]
 APP_CHANGELOG = [
-    *(f"v0.22.341：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.341：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.343：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.343：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.342：本次更新｜{item}" for item in _V022342_CHANGES),
+    *(f"v0.22.342：如何验证｜{item}" for item in _V022342_STEPS),
+    *(f"v0.22.341：本次更新｜{item}" for item in _V022341_CHANGES),
+    *(f"v0.22.341：如何验证｜{item}" for item in _V022341_STEPS),
     *(f"v0.22.340：本次更新｜{item}" for item in _V022340_CHANGES),
     *(f"v0.22.340：如何验证｜{item}" for item in _V022340_VERIFICATION_STEPS),
     *(f"v0.22.339：本次更新｜{item}" for item in _V022339_CHANGES),

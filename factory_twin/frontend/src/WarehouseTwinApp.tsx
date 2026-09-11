@@ -559,6 +559,8 @@ interface MoldAreaResponse {
 }
 
 interface ProductCandidate {
+  customer_short_name?: string | null;
+  match_score?: number | null;
   product_id: number;
   customer_id: number;
   customer_name: string;
@@ -1665,7 +1667,7 @@ function StocktakeProductChoices({ items, selectedId, onSelect }: { items: Produ
   const [page, setPage] = useState(0);
   const activePage = Math.min(page, Math.max(0, Math.ceil(items.length / 3) - 1));
   return <div className="twin-stocktake-product-choices">
-    {items.slice(activePage * 3, activePage * 3 + 3).map((item) => <button type="button" key={item.product_id} aria-pressed={selectedId === String(item.product_id)} onClick={() => onSelect(String(item.product_id))}><b>{item.product_code || item.customer_material_code} · {item.product_name}</b></button>)}
+    {items.slice(activePage * 3, activePage * 3 + 3).map((item) => <button type="button" key={item.product_id} aria-pressed={selectedId === String(item.product_id)} onClick={() => onSelect(String(item.product_id))}><b>{item.product_code || item.customer_material_code} · {item.product_name}</b><small>{item.customer_short_name || item.customer_name} · {item.specification || "规格未填写"}{item.match_score != null ? ` · 接近度 ${item.match_score}%` : ""}</small></button>)}
     {items.length > 3 && <div className="twin-stocktake-pages"><button type="button" disabled={activePage === 0} onClick={() => setPage(activePage - 1)}>上一页</button><span>{activePage + 1}/{Math.ceil(items.length / 3)}</span><button type="button" disabled={(activePage + 1) * 3 >= items.length} onClick={() => setPage(activePage + 1)}>下一页</button></div>}
   </div>;
 }
@@ -2571,9 +2573,9 @@ export function WarehouseTwinApp() {
   const pendingRelocationItems = (dashboard?.unlocated_inventory || []).filter((item) => item.pending_relocation && inventoryHasPhysicalQuantity(item));
   const matchingPendingItems = pendingRelocationItems.filter((item) =>
     !pendingQuery.trim() || [item.inventory_code, item.product_name, item.customer_name, item.lot_number].some((text) => String(text || "").toLowerCase().includes(pendingQuery.trim().toLowerCase())));
-  const stocktakePendingMatches = pendingRelocationItems.filter((item) => stocktakeInventoryType === item.inventory_type && String(item.customer_id) === stocktakeCustomerId && (!stocktakeProductQuery.trim() || [item.inventory_code, item.product_name].some((value) => String(value || "").toLowerCase().includes(stocktakeProductQuery.trim().toLowerCase()))));
+  const stocktakePendingMatches = pendingRelocationItems.filter((item) => stocktakeInventoryType === item.inventory_type && (stocktakeCustomerId === "all" || String(item.customer_id) === stocktakeCustomerId) && (!stocktakeProductQuery.trim() || [item.inventory_code, item.product_name].some((value) => String(value || "").toLowerCase().includes(stocktakeProductQuery.trim().toLowerCase()))));
   const selectedPendingItem = (mapMode === "move" && moveAction === "stocktake" ? stocktakePendingMatches : pendingRelocationItems).find((item) => item.lot_id === recountLotId);
-  const pendingProductExists = pendingRelocationItems.some((item) => String(item.customer_id) === stocktakeCustomerId && String(item.product_id) === stocktakeProductId);
+  const pendingProductExists = pendingRelocationItems.some((item) => (stocktakeCustomerId === "all" || String(item.customer_id) === stocktakeCustomerId) && String(item.product_id) === stocktakeProductId);
   const unlocatedFinishedItems = (dashboard?.unlocated_inventory || []).filter((item) => !item.pending_relocation && inventoryHasPhysicalQuantity(item));
   const unlocatedFinishedCount = unlocatedFinishedItems.length;
   const focusedSearchProduct = useMemo(
@@ -2834,9 +2836,9 @@ export function WarehouseTwinApp() {
   const selectedStocktakeProduct = stocktakeProductCandidates.find(
     (item) => String(item.product_id) === stocktakeProductId
   );
-  const selectedStocktakeCustomer = stocktakeCustomers.find(
-    (item) => String(item.id) === stocktakeCustomerId
-  );
+  const selectedStocktakeCustomer = stocktakeCustomerId === "all"
+    ? (selectedStocktakeProduct ? { id: selectedStocktakeProduct.customer_id, name: selectedStocktakeProduct.customer_name } : undefined)
+    : stocktakeCustomers.find((item) => String(item.id) === stocktakeCustomerId);
   const selectedGroundCustomer = groundCustomers.find(
     (item) => String(item.id) === groundCustomerId
   );
@@ -2927,7 +2929,7 @@ export function WarehouseTwinApp() {
       selectedAreaCode
     ]
   );
-  const stocktakeStockProductIds = new Set([...visualLocations.flatMap((location) => inventoryLocationItems(location) as InventoryItem[]), ...(dashboard?.unlocated_inventory || [])].filter((item) => String(item.customer_id) === stocktakeCustomerId && (stocktakeInventoryType === "raw_material" ? item.inventory_usage === "raw_material" : item.inventory_type === stocktakeInventoryType && item.inventory_usage !== "raw_material") && inventoryHasPhysicalQuantity(item)).map((item) => Number(item.product_id)));
+  const stocktakeStockProductIds = new Set([...visualLocations.flatMap((location) => inventoryLocationItems(location) as InventoryItem[]), ...(dashboard?.unlocated_inventory || [])].filter((item) => (stocktakeCustomerId === "all" || String(item.customer_id) === stocktakeCustomerId) && (stocktakeInventoryType === "raw_material" ? item.inventory_usage === "raw_material" : item.inventory_type === stocktakeInventoryType && item.inventory_usage !== "raw_material") && inventoryHasPhysicalQuantity(item)).map((item) => Number(item.product_id)));
   const stocktakeVisibleProducts = stocktakeProductCandidates.filter((item) => stocktakeStockProductIds.has(item.product_id));
   const stocktakeMissingProducts = stocktakeProductCandidates.filter((item) => !stocktakeStockProductIds.has(item.product_id));
   const stocktakeOutsideAreaLocations = stocktakeExistingLocations.filter(
@@ -3394,14 +3396,15 @@ export function WarehouseTwinApp() {
 
   useEffect(() => {
     const keyword = stocktakeProductQuery.trim();
-    if (!canStocktake || mapMode !== "move" || moveAction !== "stocktake" || viewMode !== "2d" || !selectedLocationBaseReceivable || !stocktakeCustomerId) {
+    if (!canStocktake || mapMode !== "move" || moveAction !== "stocktake" || viewMode !== "2d" || !selectedLocationBaseReceivable || !stocktakeCustomerId || (stocktakeCustomerId === "all" && !keyword)) {
       setStocktakeProductCandidates([]);
       setStocktakeProductId("");
       return;
     }
     let active = true;
     const timer = window.setTimeout(() => {
-      const params = new URLSearchParams({ q: keyword, customer_id: stocktakeCustomerId, limit: "50" });
+      const params = new URLSearchParams({ q: keyword, limit: "50" });
+      if (stocktakeCustomerId !== "all") params.set("customer_id", stocktakeCustomerId);
       requestJson<ProductCandidatesResponse>(`/api/warehouse/floor3/product-candidates?${params.toString()}`)
         .then((value) => {
           if (!active) return;
@@ -6600,8 +6603,8 @@ export function WarehouseTwinApp() {
             {stocktakeInventoryType !== "finished" && <WarehouseGoods key={`${selectedLocation.location_id}-${stocktakeInventoryType}`} locationId={selectedLocation.location_id} layoutVersion={Number(selectedLocation.map_position?.version)} raw={stocktakeInventoryType === "raw_material"} canSave={canEditLocations && canCorrectInventory && !traceReadOnly} onSaved={async () => { await refreshDashboard(); setStocktakeInventoryType("finished"); }} />}
             {["finished"].includes(stocktakeInventoryType) && <>
             <div className="twin-stocktake-search-row"><label><span>查找客户</span><input value={stocktakeCustomerQuery} onChange={(event) => { setStocktakeCustomerQuery(event.target.value); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }} placeholder="客户全称、中文简称、缩写或客户编码" /></label>
-            <label><span>确认已有客户</span><select value={stocktakeCustomerId} onChange={(event) => { setStocktakeCustomerId(event.target.value); setStocktakeProductQuery(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}><option value="">请选择客户</option>{stocktakeCustomers.map((item) => <option key={item.id} value={item.id}>{item.chinese_short_name ? `${item.chinese_short_name} · ` : ""}{item.customer_code ? `${item.customer_code} · ` : ""}{item.name}</option>)}</select></label>
-            </div><div className="twin-stocktake-search-row"><label><span>编码 / 名称</span><input value={stocktakeProductQuery} disabled={!stocktakeCustomerId} onChange={(event) => { setStocktakeProductQuery(event.target.value); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }} placeholder={stocktakeCustomerId ? "存货编码、客户料号或产品名称；留空显示候选" : "请先确认客户"} /></label>
+            <label><span>确认已有客户</span><select value={stocktakeCustomerId} onChange={(event) => { setStocktakeCustomerId(event.target.value); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}><option value="">请选择客户</option><option value="all">全部客户（权限范围内）</option>{stocktakeCustomers.map((item) => <option key={item.id} value={item.id}>{item.chinese_short_name ? `${item.chinese_short_name} · ` : ""}{item.customer_code ? `${item.customer_code} · ` : ""}{item.name}</option>)}</select></label>
+            </div><div className="twin-stocktake-search-row"><label><span>编码 / 名称 / 规格</span><input value={stocktakeProductQuery} disabled={!stocktakeCustomerId} onChange={(event) => { setStocktakeProductQuery(event.target.value); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }} placeholder={stocktakeCustomerId ? "编码、名称或规格，如800×600×200" : "请先确认客户"} /></label>
             <button type="button" aria-expanded={stocktakeMissingOpen} onClick={() => setStocktakeMissingOpen((value) => !value)}>{stocktakeMissingOpen ? "收起未在列表" : "未在列表"}</button></div>
 
             {canEditLocations && <fieldset className="twin-pending-placement" disabled={pendingPlacementBusy}>
@@ -6617,10 +6620,11 @@ export function WarehouseTwinApp() {
                 <button type="button" onClick={() => { setRecountLotId(null); setPendingQuantity(""); }}>取消选择</button></div>}
               {pendingRefreshRequired && <button type="button" onClick={() => void refreshDashboard().then(() => setPendingRefreshRequired(false)).catch((error) => setWarehouseOperationMessage(`刷新仍未完成：${error.message}`))}>刷新核对归位结果</button>}
             </fieldset>}
-            <div className="twin-stocktake-candidates" aria-label="产品列表"><b>仓库有货</b>
-              <StocktakeProductChoices key={`有货-${stocktakeCustomerId}-${stocktakeProductQuery}-${stocktakeInventoryType}`} items={stocktakeVisibleProducts} selectedId={stocktakeProductId} onSelect={(id) => { setStocktakeProductId(id); setStocktakeSupplementConfirmed(false); setRecountLotId(null); }} />
-              {!stocktakeVisibleProducts.length && <small>{stocktakeCustomerId ? "无匹配库存，点“未在列表”选择产品" : "请先确认客户"}</small>}
-              {stocktakeMissingOpen && <div className="twin-stocktake-missing"><b>仓库暂无库存</b><StocktakeProductChoices key={`无库存-${stocktakeCustomerId}-${stocktakeProductQuery}-${stocktakeInventoryType}`} items={stocktakeMissingProducts} selectedId={stocktakeProductId} onSelect={(id) => { setStocktakeProductId(id); setStocktakeSupplementConfirmed(false); setRecountLotId(null); }} />{!stocktakeMissingProducts.length && <small>无匹配产品，请调整筛选</small>}</div>}
+            <div className="twin-stocktake-candidates" aria-label="产品列表"><b>{stocktakeCustomerId === "all" ? "全部客户ERP产品" : "仓库有货"}</b>
+              <StocktakeProductChoices key={`有货-${stocktakeCustomerId}-${stocktakeProductQuery}-${stocktakeInventoryType}`} items={stocktakeCustomerId === "all" ? stocktakeProductCandidates : stocktakeVisibleProducts} selectedId={stocktakeProductId} onSelect={(id) => { setStocktakeProductId(id); setStocktakeSupplementConfirmed(false); setRecountLotId(null); }} />
+              {stocktakeCustomerId === "all" && <small>全部客户按规格接近度排序，最多显示50款；请核对实际客户和尺寸后选择。</small>}
+              {stocktakeCustomerId !== "all" && !stocktakeVisibleProducts.length && <small>{stocktakeCustomerId ? "无匹配库存，点“未在列表”选择产品" : "请先确认客户"}</small>}
+              {stocktakeCustomerId !== "all" && stocktakeMissingOpen && <div className="twin-stocktake-missing"><b>仓库暂无库存</b><StocktakeProductChoices key={`无库存-${stocktakeCustomerId}-${stocktakeProductQuery}-${stocktakeInventoryType}`} items={stocktakeMissingProducts} selectedId={stocktakeProductId} onSelect={(id) => { setStocktakeProductId(id); setStocktakeSupplementConfirmed(false); setRecountLotId(null); }} />{!stocktakeMissingProducts.length && <small>无匹配产品，请调整筛选</small>}</div>}
             </div>
             {selectedStocktakeProduct && <small className="twin-formal-selected">{selectedStocktakeProduct.customer_name} / {selectedStocktakeProduct.product_code || selectedStocktakeProduct.customer_material_code || "编码待补充"} / {selectedStocktakeProduct.product_name}</small>}
             {selectedStocktakeProduct && <div className="twin-stocktake-existing-panel">

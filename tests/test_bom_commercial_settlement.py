@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+import pytest
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -258,7 +259,7 @@ def _dispatch(client: TestClient, customer_id: int, quantities: list[tuple[int, 
     return dispatched.json()
 
 
-def _confirm_receipt(client: TestClient, delivery: dict) -> None:
+def _confirm_receipt(client: TestClient, delivery: dict, *, short_received: int = 0, return_location_id=None) -> None:
     response = client.post(
         "/api/finance/return_receipts",
         json={
@@ -267,7 +268,11 @@ def _confirm_receipt(client: TestClient, delivery: dict) -> None:
             "items": [
                 {
                     "delivery_item_id": line["id"],
-                    "actual_received_quantity": line["delivered_quantity"],
+                    "actual_received_quantity": line["delivered_quantity"] - short_received,
+                    **({"resolution_action": "continue_delivery", "difference_reason": "隔离验收：客户短收，继续待送",
+                        "return_location_id": (return_location_id[line["order_item_id"]]
+                            if isinstance(return_location_id, dict) else return_location_id)}
+                       if short_received else {}),
                 }
                 for line in delivery["items"]
             ],
@@ -276,8 +281,9 @@ def _confirm_receipt(client: TestClient, delivery: dict) -> None:
     assert response.status_code == 201, response.text
 
 
+@pytest.mark.parametrize("short_received", [0, 20])
 def test_component_priced_delivery_settles_real_child_quantities_not_pairable_sets(
-    n029_delivery_app,
+    n029_delivery_app, short_received,
 ) -> None:
     from app.models.delivery import DeliveryItem
     from app.models.finance import ReturnReceiptItem, Statement, StatementItem
@@ -287,6 +293,15 @@ def test_component_priced_delivery_settles_real_child_quantities_not_pairable_se
     with TestClient(app) as client:
         _login(client)
         order_id, long_item_id, short_item_id = _create_component_priced_order(factory, ids, client)
+        return_locations = None
+        if short_received:
+            from app.models.warehouse_inventory import WarehouseLocation
+            with factory() as db:
+                location = WarehouseLocation(location_code="SETTLE-SHORT-RETURN",
+                    location_name="隔离短片退回区", warehouse_type="finished", is_active=True)
+                db.add(location)
+                db.commit()
+                return_locations = {long_item_id: ids["return_location"], short_item_id: location.id}
         first = _dispatch(
             client,
             ids["customer"],
@@ -314,7 +329,7 @@ def test_component_priced_delivery_settles_real_child_quantities_not_pairable_se
             ids["customer"],
             [(long_item_id, 180), (short_item_id, 300)],
         )
-        _confirm_receipt(client, first)
+        _confirm_receipt(client, first, short_received=short_received, return_location_id=return_locations)
         _confirm_receipt(client, replacement)
         statement = client.post(
             "/api/finance/statements",
@@ -328,7 +343,7 @@ def test_component_priced_delivery_settles_real_child_quantities_not_pairable_se
 
     with factory() as db:
         stored_statement = db.get(Statement, statement.json()["id"])
-        assert stored_statement.total_receivable == Decimal("695.00")
+        assert stored_statement.total_receivable == Decimal("695.00") - short_received * Decimal("2.05")
         rows = db.execute(
             select(
                 DeliveryItem.order_item_id,
@@ -345,16 +360,19 @@ def test_component_priced_delivery_settles_real_child_quantities_not_pairable_se
             .order_by(DeliveryItem.order_item_id, StatementItem.id)
         ).all()
         assert rows == [
-            (long_item_id, 120, Decimal("1.2500"), Decimal("150.00")),
+            (long_item_id, 120-short_received, Decimal("1.2500"), Decimal("150.00")-short_received*Decimal("1.25")),
             (long_item_id, 180, Decimal("1.2500"), Decimal("225.00")),
-            (short_item_id, 100, Decimal("0.8000"), Decimal("80.00")),
+            (short_item_id, 100-short_received, Decimal("0.8000"), Decimal("80.00")-short_received*Decimal("0.80")),
             (short_item_id, 300, Decimal("0.8000"), Decimal("240.00")),
         ]
-        assert db.get(Order, order_id).status == "delivered"
+        assert (db.get(Order, order_id).status == "delivered") is (short_received == 0)
+        assert db.get(OrderItem, long_item_id).delivered_quantity == 300-short_received
+        assert db.get(OrderItem, short_item_id).delivered_quantity == 400-short_received
 
 
+@pytest.mark.parametrize("short_received", [0, 5])
 def test_parent_priced_assembled_order_settles_actual_received_sets(
-    n029_delivery_app,
+    n029_delivery_app, short_received,
 ) -> None:
     from app.models.finance import Statement, StatementItem
 
@@ -363,7 +381,7 @@ def test_parent_priced_assembled_order_settles_actual_received_sets(
     with TestClient(app) as client:
         _login(client)
         delivery = _dispatch(client, ids["customer"], [(item_id, 25)])
-        _confirm_receipt(client, delivery)
+        _confirm_receipt(client, delivery, short_received=short_received, return_location_id=ids["return_location"])
         statement = client.post(
             "/api/finance/statements",
             json={
@@ -376,10 +394,10 @@ def test_parent_priced_assembled_order_settles_actual_received_sets(
 
     with factory() as db:
         stored = db.get(Statement, statement.json()["id"])
-        assert stored.total_receivable == Decimal("212.50")
+        assert stored.total_receivable == Decimal("212.50") - short_received * Decimal("8.50")
         line = db.scalar(
             select(StatementItem).where(StatementItem.statement_id == stored.id)
         )
-        assert line.actual_received_quantity == 25
+        assert line.actual_received_quantity == 25-short_received
         assert line.unit_price_snapshot == Decimal("8.5000")
-        assert line.receivable_amount == Decimal("212.50")
+        assert line.receivable_amount == Decimal("212.50") - short_received * Decimal("8.50")

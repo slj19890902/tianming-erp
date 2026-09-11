@@ -41,7 +41,7 @@ function FactsEditor({facts,setFacts,options,raw,flute,canPrice,length,width,qua
   </div>;
 }
 
-export function WarehouseGoods({lotId,locationId,layoutVersion,raw=false,canSave,onSaved}:{lotId?:number;locationId?:number;layoutVersion?:number;raw?:boolean;canSave:boolean;onSaved:()=>Promise<unknown>}) {
+export function WarehouseGoods({lotId,locationId,layoutVersion,raw=false,canSave,onSaved,onBusyChange}:{lotId?:number;locationId?:number;layoutVersion?:number;raw?:boolean;canSave:boolean;onSaved:()=>Promise<unknown>;onBusyChange?:(busy:boolean)=>void}) {
   const [facts,setFacts]=useState<Facts>(initialFacts(raw)),[options,setOptions]=useState<Options|null>(null),[version,setVersion]=useState(0),[editable,setEditable]=useState(true);
   const [message,setMessage]=useState(""),[busy,setBusy]=useState(false),[physical,setPhysical]=useState("");
   const [name,setName]=useState(""),[length,setLength]=useState(""),[width,setWidth]=useState(""),[quantity,setQuantity]=useState("");
@@ -58,12 +58,12 @@ export function WarehouseGoods({lotId,locationId,layoutVersion,raw=false,canSave
       crease_type:creaseType||null,crease_left_mm:creaseLeft?Number(creaseLeft):null,crease_middle_mm:creaseMiddle?Number(creaseMiddle):null,crease_right_mm:creaseRight?Number(creaseRight):null};
     const signature=JSON.stringify(payload);
     if(pending.current?.signature!==signature)pending.current={signature,key:`goods-${Date.now()}-${Math.random().toString(36).slice(2)}`};
-    saving.current=true;setBusy(true);setMessage("");
+    saving.current=true;setBusy(true);onBusyChange?.(true);setMessage("");
     try{const result=await api(lotId?`/${lotId}`:"/sheet-entry",{method:lotId?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...payload,idempotency_key:pending.current.key})});
       setVersion(result.version);setFacts(result.facts);setMessage(lotId?"适用资料已保存，库存数量未改变":"货物已入库");pending.current=null;
       if(!lotId){setQuantity("");setName("");}
       try{await onSaved();}catch{setMessage("已保存；地图刷新失败，请刷新核对后再操作");setEditable(false);}
-    }catch(e){setMessage(e instanceof Error?e.message:"保存失败");}finally{saving.current=false;setBusy(false);}
+    }catch(e){setMessage(e instanceof Error?e.message:"保存失败");}finally{saving.current=false;setBusy(false);onBusyChange?.(false);}
   };
   return <section className="warehouse-goods"><h4>{lotId?"适用客户与加工资料":raw?"新增原材料（张）":"新增半成品（张）"}</h4>
     {physical&&<p>{physical}</p>}

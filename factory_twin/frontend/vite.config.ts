@@ -14,7 +14,8 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: {
           editor: "index.html",
-          warehouseTwin: "warehouse-twin.html"
+          warehouseTwin: "warehouse-twin.html",
+          mobileGoods: "mobile-goods.html"
         }
       }
     },

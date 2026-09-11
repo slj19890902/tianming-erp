@@ -1,5 +1,5 @@
 /* Uses the existing mobile stocktake session, formal product master and ledger. */
-const inbound = { generation: 0, context: null, attempt: null, busy: false };
+const inbound = { generation: 0, context: null, attempt: null, busy: false, type: "finished", stockLot: null };
 function inboundAttemptStorageKey() { return `erp-initial-inbound:${state.user?.id}`; }
 function persistInboundAttempt() {
   try {
@@ -9,8 +9,16 @@ function persistInboundAttempt() {
 }
 
 function resetInitialInbound() {
+  inbound.type = "finished";
+  $("inboundCandidates").replaceChildren();
+  $("inboundSave").textContent = "保存入库";
+  $("sheetGoods").replaceChildren();
+  $("sheetGoods").classList.add("hidden");
+  $("finishedGoods").classList.remove("hidden");
+  document.querySelectorAll("[data-goods-type]").forEach(b=>b.classList.toggle("primary",b.dataset.goodsType==="finished"));
   inbound.generation += 1;
   inbound.context = null;
+  inbound.stockLot = null;
   inbound.attempt = null;
   $("initialInbound").classList.add("hidden");
   $("inboundQuantity").value = "";
@@ -50,6 +58,7 @@ function setInboundBusy(value) {
   inbound.busy = value;
   state.submitting = value;
   $("inboundFields").disabled = value || Boolean(inbound.attempt);
+  document.querySelectorAll("[data-goods-type],#inboundNotListed").forEach(b=>b.disabled=value||Boolean(inbound.attempt));
   $("inboundSave").disabled = value || (!inbound.context && !inbound.attempt);
   $("inboundRefresh").disabled = value || Boolean(inbound.attempt);
   $("inboundCancel").disabled = value || Boolean(inbound.attempt);
@@ -61,6 +70,8 @@ function setInboundBusy(value) {
 function invalidateInboundSelection() {
   inbound.generation += 1;
   inbound.context = null;
+  inbound.stockLot = null;
+  $("inboundCandidates").replaceChildren();
   $("inboundSave").disabled = true;
   $("inboundExistingAcknowledged").checked = false;
   $("inboundExistingLabel").classList.add("hidden");
@@ -81,22 +92,24 @@ async function findInboundCustomers() {
   } catch (error) { if (generation === inbound.generation) showMessage(error.message); }
 }
 
-async function findInboundProducts() {
+async function findErpProducts() {
   invalidateInboundSelection();
   $("inboundProduct").innerHTML = '<option value="">请选择产品</option>';
   const customer = $("inboundCustomer").value;
   if (!customer) { showMessage("请先选择客户"); return; }
   const generation = inbound.generation;
   try {
-    const params = new URLSearchParams({q: $("inboundProductQuery").value.trim(), customer_id: customer, limit: "50"});
+    const params = new URLSearchParams({q: $("inboundProductQuery").value.trim(), customer_id: customer, limit: "10"});
     const data = await api(`/api/warehouse/floor3/product-candidates?${params}`);
     if (generation !== inbound.generation || customer !== $("inboundCustomer").value) return;
-    $("inboundProduct").innerHTML += (data.items || []).map(row => `<option value="${Number(row.product_id)}">${h(row.product_code || row.customer_material_code)} · ${h(row.product_name)}</option>`).join("");
-    $("inboundContext").textContent = data.items?.length ? "请选择产品（最多50条）" : "未找到，可新增产品";
+    $("inboundProduct").innerHTML += (data.items || []).map(row => `<option value="${Number(row.product_id)}">${h(row.product_code || row.customer_material_code)} · ${h(row.product_name)} · ${h(row.specification||"")}</option>`).join("");
+    $("inboundCandidates").replaceChildren();
+    $("inboundContext").textContent = data.items?.length ? "请选择ERP产品（前10条）" : "未找到匹配的ERP产品，请调整关键词";
   } catch (error) { if (generation === inbound.generation) showMessage(error.message); }
 }
 
 async function refreshInboundContext() {
+  if(inbound.stockLot && !inbound.busy && !inbound.attempt){await findInboundProducts();return;}
   if (inbound.busy || inbound.attempt) return;
   invalidateInboundSelection();
   const product = $("inboundProduct").value;
@@ -145,6 +158,26 @@ async function createInboundProduct() {
 
 async function saveInitialInbound() {
   if (inbound.busy || state.locked) return;
+  if (!inbound.attempt && inbound.stockLot) {
+    const lot=inbound.stockLot, source=lot.registered_location, target=state.selectedLocation;
+    const quantity=Number($("inboundQuantity").value);
+    if(!Number.isSafeInteger(quantity)||quantity<=0||quantity>lot.quantity_movable){showMessage("请输入不超过该批可搬数量的正整数");return;}
+    const targetId=Number(pick(target,["id","location_id"]));
+    if(source.location_id===targetId){showMessage("该批已经在当前货位，请在上方核对实盘数量");return;}
+    const key=idempotencyKey();
+    const payload=source.is_pending_relocation ? {
+      location_id:targetId,expected_layout_version:target.layout_version,expected_address_version:target.address_version,
+      expected_map_revision:target.published_map_revision,expected_version:lot.lot_version,quantity,idempotency_key:key,confirmed:true
+    } : {
+      expected_version:lot.lot_version,quantity,expected_source_location_id:source.location_id,
+      expected_source_address_version:source.address_version,expected_source_layout_version:source.layout_version,
+      expected_source_map_revision:source.published_map_revision,target_location_id:targetId,
+      expected_target_layout_version:target.layout_version,expected_target_address_version:target.address_version,
+      expected_target_map_revision:target.published_map_revision,idempotency_key:key,physical_move_confirmed:true
+    };
+    inbound.attempt={items:[{location_id:targetId}],move_path:source.is_pending_relocation?`/api/warehouse/twin-operations/pending-lots/${lot.lot_id}/place`:`/api/mobile/erp/warehouse/lots/${lot.lot_id}/moves`,move_payload:payload};
+    persistInboundAttempt();
+  }
   if (!inbound.attempt) {
     const quantity = Number($("inboundQuantity").value);
     if (!inbound.context?.can_add || !Number.isSafeInteger(quantity) || quantity <= 0 || !$("inboundDate").value) {
@@ -167,7 +200,7 @@ async function saveInitialInbound() {
   const locationId = inbound.attempt.items[0].location_id;
   setInboundBusy(true);
   try {
-    await api("/api/warehouse/twin-operations/stocktake-batches", {method: "POST", body: JSON.stringify(inbound.attempt)});
+    await api(inbound.attempt.move_path || "/api/warehouse/twin-operations/stocktake-batches", {method: "POST", body: JSON.stringify(inbound.attempt.move_payload || inbound.attempt)});
     inbound.attempt = null;
     persistInboundAttempt();
     setInboundBusy(false);
@@ -200,3 +233,44 @@ $("inboundCancel").onclick = () => {
   updateSubmitState();
 };
 renderInitialInbound();
+
+async function findInboundProducts(){
+  if(inbound.busy||inbound.attempt)return;
+  invalidateInboundSelection();inbound.stockLot=null;
+  $("inboundProduct").innerHTML='<option value="">从下方选择库存；未找到可查ERP产品</option>';
+  $("inboundSave").textContent="保存入库";
+  const customer=$("inboundCustomer").value;if(!customer){showMessage("请先选择客户");return;}
+  const generation=inbound.generation;
+  $("inboundContext").textContent="正在查找库存…";
+  try{
+    const params=new URLSearchParams({customer_id:customer,inventory_keyword:$("inboundProductQuery").value.trim(),limit:"30"});
+    const data=await api(`/api/mobile/erp/warehouse/physical-inventory/search?${params}`);
+    if(generation!==inbound.generation)return;
+    $("inboundCandidates").replaceChildren();
+    for(const lot of data.items||[]){
+      const b=document.createElement("button");b.type="button";b.className="btn";
+      const loc=lot.registered_location;
+      b.innerHTML=`${h(lot.product_code)} · ${h(lot.product_name)}<small>${h(lot.specification)} · ${h(lot.quantity_total)}只 · ${h(loc.is_pending_relocation?"未归位":loc.employee_location_name)}</small>`;
+      b.disabled=!lot.can_move;
+      b.onclick=()=>{if(inbound.busy||inbound.attempt||generation!==inbound.generation)return;inbound.stockLot=lot;inbound.context={can_add:true};$("inboundQuantity").value=lot.quantity_movable;$("inboundSave").disabled=false;$("inboundSave").textContent=loc.is_pending_relocation?"确认归位":"确认移到此位";$("inboundContext").textContent=`已选 ${lot.product_code} · ${lot.quantity_movable}只，登记到当前货位`;$("inboundExistingLabel").classList.add("hidden");updateSubmitState();};
+      $("inboundCandidates").append(b);
+    }
+    $("inboundContext").textContent=data.items?.length?"先列未归位库存，再列已有货位库存":"无匹配库存，点击未在列表查找产品";
+  }catch(e){if(generation===inbound.generation)$("inboundContext").textContent=e.message;}
+}
+$("inboundNotListed").onclick=()=>{if(inbound.busy||inbound.attempt)return;inbound.stockLot=null;$("inboundSave").textContent="保存入库";findErpProducts();};
+window.mobileGoodsConfig=()=>({locationId:Number(pick(state.selectedLocation,["id","location_id"])),layoutVersion:state.selectedLocation.layout_version,raw:inbound.type==="raw",canSave:state.user?.role==="admin"&&!state.locked});
+window.mobileGoodsBusy=value=>{setInboundBusy(value)};
+window.mobileGoodsSaved=async()=>{setInboundBusy(false);await openLocation(pick(state.selectedLocation,["id","location_id"]));showMessage("货物已入库","success");};
+document.querySelectorAll("[data-goods-type]").forEach(button=>button.onclick=()=>{
+  if(inbound.busy||inbound.attempt)return;
+  inbound.type=button.dataset.goodsType;
+  document.querySelectorAll("[data-goods-type]").forEach(b=>b.classList.toggle("primary",b===button));
+  $("finishedGoods").classList.toggle("hidden",inbound.type!=="finished");
+  $("sheetGoods").classList.toggle("hidden",inbound.type==="finished");
+  $("sheetGoods").replaceChildren();
+  if(inbound.type!=="finished"){
+    const frame=document.createElement("iframe");frame.title=inbound.type==="raw"?"原材料入库":"半成品入库";frame.src="/static/factory-twin-assets/mobile-goods.html";$("sheetGoods").append(frame);
+  }
+  updateSubmitState();
+});

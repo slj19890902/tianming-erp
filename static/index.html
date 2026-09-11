@@ -3977,6 +3977,7 @@
                       <template v-if="orderWorkspace === 'queue'">
                         <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
                         <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
+                        <a v-if="canCreateOrders && ['admin','boss'].includes(user.role)" class="btn" href="/email-intake.html" target="_blank" rel="noopener">邮箱收单</a>
                       </template>
                     </div>
                     <div class="toolbar-group">

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.346"
-APP_VERSION_NAME = "库存助手现货与片料工作台"
+APP_VERSION = "v0.22.347"
+APP_VERSION_NAME = "126邮箱收单待核对工作台"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2596,9 +2596,15 @@ _V022345_CHANGES = APP_CHANGES
 _V022345_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["库存成本区新增库存助手，按现货与订单、片料用途、长期库存、待核价筛选并展开真实依据。", "金额只采用冻结批次成本并显示实际成本依据；同款未送订单按产品匹配，片料候选排除面纸颜色不兼容项，不修改业务事实。"]
 APP_VERIFICATION_STEPS = ["老板或管理员打开库存成本区→库存助手，核对金额、待核价批次及筛选分页。", "查看同款未送订单和片料用途候选；普通账号不可打开。当前为本地规则分析，尚未调用云模型。"]
+_V022346_CHANGES = APP_CHANGES
+_V022346_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["订单页面增加邮箱收单入口，固定接入已确认的126收件箱，支持手动分批读取、重复附件提示、忽略恢复和PDF预览。", "客户端授权码由Windows加密保存且不回显，收信不改变已读状态、不移动删除邮件；本版仅待核对收件箱，不自动生成订单。"]
+APP_VERIFICATION_STEPS = ["管理员从订单→邮箱收单，用HTTPS地址保存126客户端授权码；手动读取并核对附件与重复提示。真实邮箱连通需完成授权码配置后验证。", "普通账号不可读取收件箱；在隔离副本验证重复读取、忽略恢复和PDF预览。Excel草稿与正式订单关联仍待后续完成。"]
 APP_CHANGELOG = [
-    *(f"v0.22.346：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.346：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.347：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.347：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.346：本次更新｜{item}" for item in _V022346_CHANGES),
+    *(f"v0.22.346：如何验证｜{item}" for item in _V022346_STEPS),
     *(f"v0.22.345：本次更新｜{item}" for item in _V022345_CHANGES),
     *(f"v0.22.345：如何验证｜{item}" for item in _V022345_STEPS),
     *(f"v0.22.344：本次更新｜{item}" for item in _V022344_CHANGES),

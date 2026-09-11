@@ -5366,3 +5366,5 @@ legacy_ruida_* 原始层
 - 2026-09-11 v0.22.340 客户Excel只读对账核对已技术发布，代码e38a613d；保留v339成本项目，head rw10v8x9z71。见NAS 20260911_1335_客户Excel对账差异核对_v0.22.340.md。
 
 - 2026-09-11 v0.22.341：盘点默认全部客户，正式7ef4de35，release_runtime_20260911_133719.json completed，库SHA及head不变。详见docs/stocktake_default_all_delivery.md及NAS 20260911-v022341-盘点默认全部客户.md；人工界面验收待完成。
+
+- 2026-09-11 v0.22.342 手机查询容差配置/展开恢复已技术发布，代码e56a1f56、head rw10v8x9z71。见NAS 20260911_1410_手机查询范围与展开记忆_v0.22.342.md。

@@ -40,7 +40,16 @@ def test_merge_keeps_original_rows_indexes_triggers_and_roundtrips(factory_copy,
         objects = dict(db.execute("SELECT name,sql FROM sqlite_master WHERE type IN ('index','trigger') AND sql IS NOT NULL"))
     factory_copy.rollback()
     config = _config(monkeypatch, target)
-    for destination in ("sn26v8x9z88", "head"):
+    with sqlite3.connect(target) as check:
+        protected = any(check.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone() for table in (
+            'inventory_cost_rules', 'inventory_cost_mutations', 'email_intake_messages',
+            'email_intake_settings', 'email_pdf_working_drafts', 'order_bom_rule_revisions'))
+    if protected:
+        before = hashlib.sha256(target.read_bytes()).digest()
+        with pytest.raises(RuntimeError, match='已有BOM、库存成本或邮件事实'):
+            command.downgrade(config, 'sn26v8x9z88')
+        assert hashlib.sha256(target.read_bytes()).digest() == before
+    for destination in (("head",) if protected else ("sn26v8x9z88", "head")):
         (command.downgrade if destination != "head" else command.upgrade)(config, destination)
         with sqlite3.connect(target) as db:
             assert original_facts(db, columns) == expected

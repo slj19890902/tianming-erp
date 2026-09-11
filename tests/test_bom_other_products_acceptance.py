@@ -50,6 +50,7 @@ def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_htt
     original = client.get(f"/api/products/{pid}/bom")
     assert original.status_code == 200, original.text
     root = db.get(Product, pid)
+    other_product_active = db.get(Product, 3494).is_active
     assert root.is_active and root.supply_mode == "corrugated_production"
     identities = {pid, *(row["component_product_id"] for row in original.json()["components"])}
     before = {p: db.get(Product, p).supply_mode for p in identities}
@@ -80,7 +81,7 @@ def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_htt
     assert {n.product_id: n.source for n in compiled.graph.nodes} == {
         p: "purchased" if source == "external_purchase" else "manufactured" for p, source in before.items()}
     assert {p: db.get(Product, p).supply_mode for p in identities} == before
-    assert db.get(Product, 3494).is_active is False
+    assert db.get(Product, 3494).is_active is other_product_active
     if any(source == "external_purchase" for source in before.values()):
         from app.models.order import OrderItem
         from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem

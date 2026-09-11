@@ -14,12 +14,13 @@ const locations = Array.from({length: 9}, (_, index) => ({
   slot_no: index % 3 + 1, location_name: `F9第${Math.floor(index / 3) + 1}层第${index % 3 + 1}格`, items: [],
 }));
 const sandbox = {
+  window: {addEventListener() {}, removeEventListener() {}},
   ShelfLotHistory: () => null,
   requestJson: () => { throw new Error('interaction fixture must not request business data'); },
   groupShelfProducts,
   shelfStockDates,
   React: {createElement: (type, props, ...children) => ({type, props: props || {}, children: children.flat(Infinity)})},
-  useState: value => [value, () => {}], useMemo: fn => fn(), useEffect() {},
+  useState: value => [value, () => {}], useMemo: fn => fn(), useEffect() {}, useRef: () => ({current:null}),
   rackLevelCellCounts: value => value.level_cell_counts,
   rackCellIdentityKey: (id, level, slot) => `${id}/${level}/${slot}`,
   rackLocationInventoryItems: location => location.items,
@@ -39,6 +40,45 @@ function render(overrides = {}) {
   const emptyControls = nodes(tree).filter(node => node.props.className?.includes("mold-rack-empty-spine"));
   return {selected, inspected, emptyControls, nodes: nodes(tree)};
 }
+
+test('search highlights only matching products and exact cells, and replaces old highlights for another product', () => {
+  const stocked = locations.map((row,index) => ({...row, items:[{lot_id:index+1,product_id:index+1,inventory_code:`CODE-${index+1}`,unit:'pcs'}]}));
+  stocked[0].items.push({lot_id:50,product_id:50,inventory_code:'OTHER',unit:'pcs'});
+  for (const [ids, targetLocation] of [[[1,4],101], [[9],109], [[],null]]) {
+    const {nodes} = render({locations:stocked,highlightedLotIds:ids,searchLocationId:targetLocation,searchLotId:ids[0]});
+    const hits = nodes.filter(n => n.type==='section' && n.props.className?.includes('rack-search-hit'));
+    assert.equal(hits.length, ids.length);
+    assert.equal(nodes.filter(n => n.props['data-search-current']===true).length, ids.length ? 1 : 0);
+    assert.equal(nodes.filter(n => n.props.className?.includes('search-product-hit')).length,ids.length);
+    if (ids.length) {
+      const current = hits.find(n=>n.props['data-search-current']);
+      assert.ok(current.props.title.includes(targetLocation===101?'第1层第1格':'第3层第3格'));
+    }
+  }
+  const {nodes} = render({locations:stocked.flatMap(row=>[row,{...row,location_id:row.location_id+1000}]),highlightedLotIds:[1]});
+  assert.equal(nodes.filter(n=>n.props.className?.includes('rack-search-hit')).length,0,'ambiguous formal cells must never be marked as an exact location');
+});
+
+test('switching a search hit on the same rack updates the product label and clears previous batch expansion', () => {
+  const originalState = sandbox.useState, originalEffect = sandbox.useEffect;
+  const states = []; let index = 0;
+  sandbox.useState = initial => {
+    const slot=index++;
+    if (!(slot in states)) states[slot]=initial;
+    return [states[slot],value=>{states[slot]=typeof value==='function'?value(states[slot]):value;}];
+  };
+  sandbox.useEffect = (fn,deps) => { if (deps.length===3) fn(); };
+  const items=[{lot_id:71,product_id:7},{lot_id:72,product_id:8}];
+  try {
+    for (const item of items) {
+      index=0; states[1]=true; states[2]={oldProduct:true};
+      render({locations:[{...locations[0],items}],searchLotId:item.lot_id,searchLocationId:101,highlightedLotIds:[item.lot_id]});
+      assert.equal(states[0],item);
+      assert.equal(states[1],false);
+      assert.equal(Object.keys(states[2]).length,0);
+    }
+  } finally { sandbox.useState=originalState; sandbox.useEffect=originalEffect; }
+});
 
 test("cell headings and non-action content select the formal location even for read-only users", () => {
   for (const occupied of [false, true]) {

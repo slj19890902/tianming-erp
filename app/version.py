@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.352"
-APP_VERSION_NAME = "PDF邮箱核对进度暂存恢复"
+APP_VERSION = "v0.22.353"
+APP_VERSION_NAME = "查货直达货架正视图与层格高亮"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2628,9 +2628,15 @@ _V022351_CHANGES = APP_CHANGES
 _V022351_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["邮箱PDF核对页增加暂存核对进度，关闭或刷新后可从原邮件继续客户单号、日期和明细修改；暂存不创建订单。", "恢复重新识别原PDF并匹配当前常用箱，已停用产品提示重选；库存和成本重新读取，正式订单仍需确认。"]
 APP_VERIFICATION_STEPS = ["从邮箱打开PDF，修改客户单号或数量，暂存后刷新，确认修改恢复；回邮箱可见继续上次核对。", "同一窗口重试不重复保存；另一窗口不同内容冲突不覆盖。草稿仅当前管理员可见，销售不可读取；真实126收件仍待授权码配置。"]
+_V022352_CHANGES = APP_CHANGES
+_V022352_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["查货点击货架产品后直接打开对应货架正视图，黄色标出所在层格和产品，深色边框标记当前具体位置。", "搜索列表保持可用；切换产品、楼层或具体位置时同步切换货架，地面栈板继续地图定位；点货位自动收起仍保留。"]
+APP_VERIFICATION_STEPS = ["搜索货架产品并点击，核对正视图、层数格数和黄色产品；同格其他产品不得误高亮。", "连续切换不同产品、跨楼层位置和地面货位，确认旧货架收起且新位置准确；点击货位应返回其信息，编码标签和批次按钮功能保留。"]
 APP_CHANGELOG = [
-    *(f"v0.22.352：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.352：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.353：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.353：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.352：本次更新｜{item}" for item in _V022352_CHANGES),
+    *(f"v0.22.352：如何验证｜{item}" for item in _V022352_STEPS),
     *(f"v0.22.351：本次更新｜{item}" for item in _V022351_CHANGES),
     *(f"v0.22.351：如何验证｜{item}" for item in _V022351_STEPS),
     *(f"v0.22.350：本次更新｜{item}" for item in _V022350_CHANGES),

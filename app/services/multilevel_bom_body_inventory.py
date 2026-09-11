@@ -8,7 +8,7 @@ import json
 
 from sqlalchemy import select
 
-from app.models.multilevel_bom import BomBodyInventoryDetail
+from app.models.multilevel_bom import BomBodyInventoryDetail, OrderBomRuleRevision
 from app.models.order import Order, OrderItem
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.production import ProductionCompletion, ProductionTask
@@ -24,7 +24,21 @@ def body_completion_identity(db, completion):
         raise SubkitError("本体入库需要有效的自动收料完工来源")
     task = db.get(ProductionTask, completion.task_id)
     item = db.get(OrderItem, completion.order_item_id)
-    graph = read_order_graph(db, completion.order_item_id)
+    if completion.inventory_lot_id is not None and db.scalar(select(OrderBomRuleRevision.id).where(
+            OrderBomRuleRevision.order_item_id == completion.order_item_id).limit(1)) is not None:
+        # Existing bodies retain the recipe that produced them. A later rule
+        # may change the product's inventory role without changing this stock.
+        from app.services.multilevel_bom_output_history import completion_source_id
+        from app.services.multilevel_bom_orders import read_order_bom_source_contract
+        from app.services.multilevel_bom_plan import BomPlanError
+        try:
+            source_id = completion_source_id(db, completion)
+            original = read_order_bom_source_contract(db, completion.order_item_id, source_id)
+        except BomPlanError as error:
+            raise SubkitError(str(error)) from error
+        graph = original.graph
+    else:
+        graph = read_order_graph(db, completion.order_item_id)
     if task is None or item is None or task.order_item_id != item.id or graph is None:
         raise SubkitError("本体完工任务或订单身份不完整")
     pid = graph.root_id

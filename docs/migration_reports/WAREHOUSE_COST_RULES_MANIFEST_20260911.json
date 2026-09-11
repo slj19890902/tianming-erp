@@ -3760,6 +3760,38 @@
         653
       ],
       "excluded_lots": []
+    },
+    {
+      "product_id": 3583,
+      "customer_id": 137,
+      "product_code": "82021318",
+      "product_name": "TRD-2Q8192P64-7334",
+      "product_version": 2,
+      "config": {
+        "mode": "sale",
+        "basis": "老板2026-09-11更正YY为研光YG，合作厂盘点货物以当前售价作采购参考",
+        "purchase_channel": "合作纸箱厂",
+        "temporary": true,
+        "evidence": {"confirmed_customer_code": "YG", "current_sale_unit_price": "0.723"}
+      },
+      "lot_ids": [654],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3383,
+      "customer_id": 137,
+      "product_code": "80012138",
+      "product_name": "D4/U-08B",
+      "product_version": 4,
+      "config": {
+        "mode": "sale",
+        "basis": "老板2026-09-11更正YY为研光YG，合作厂盘点货物以当前售价作采购参考",
+        "purchase_channel": "合作纸箱厂",
+        "temporary": true,
+        "evidence": {"confirmed_customer_code": "YG", "current_sale_unit_price": "8.27"}
+      },
+      "lot_ids": [655],
+      "excluded_lots": []
     }
   ]
 }

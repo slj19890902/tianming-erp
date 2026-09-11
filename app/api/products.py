@@ -569,18 +569,13 @@ class ProductPayload(BaseModel):
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
         """拒绝非法楞型/层数组合；七层写入必须明确 AAA/ABC。"""
+        if self.combination_mode == "component_priced" and self.composite_fulfillment_mode != "component_delivery":
+            raise ValueError("组件分别计价时必须按子件交付、打印标签和存放")
         if self.is_virtual_composite_parent:
             if self.supply_mode != "corrugated_production":
                 raise ValueError("虚拟组合套装父件不能设置为外购包材或混合供货")
-            if self.combination_mode != "parent_priced_set":
-                raise ValueError("虚拟组合套装父件必须采用父件按套计价")
             _clear_virtual_composite_parent_fields(self)
             return self
-        if (
-            self.combination_mode == "component_priced"
-            and self.composite_fulfillment_mode != "component_delivery"
-        ):
-            raise ValueError("组件分别计价时必须按子件交付、打印标签和存放")
         if self.supply_mode == "external_purchase":
             _clear_external_purchase_paper_fields(self)
         self.flute_type = normalize_flute_type(self.flute_type)
@@ -924,7 +919,8 @@ def _clear_virtual_composite_parent_fields(payload: ProductPayload) -> None:
     payload.cost_unit_price = None
     payload.board_price = None
     payload.suggested_price = None
-    payload.combination_mode = "parent_priced_set"
+    # No parent material or stock does not dictate how the customer is billed.
+    # Keep the explicitly selected parent or component pricing mode.
 
 
 def _external_candidate_is_available(row: ExternalPackagingProduct) -> bool:

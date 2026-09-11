@@ -3074,6 +3074,15 @@ def _bom_snapshot_requirements(
         coverage["total_piece_quantity"], required_piece_quantity
     )
     remaining = max(required_piece_quantity - inventory_covered, 0)
+    carried_material_credit = 0
+    if graph_requirements is not None:
+        from app.services.multilevel_bom_carried_material import carried_material_pieces
+        try:
+            carried_material_credit = min(remaining, carried_material_pieces(db,
+                graph_requirements.compiled).get((snapshot.component_product_id, component), 0))
+        except BomPlanError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        remaining -= carried_material_credit
     net_sheets = (remaining + yield_per_sheet - 1) // yield_per_sheet
     spare_sheets = int(snapshot.spare_sheet_quantity or 0) if graph_requirements is None or remaining > 0 else 0
     requisition_qty = net_sheets + spare_sheets
@@ -3141,6 +3150,7 @@ def _bom_snapshot_requirements(
         "finished_component_reserved_piece_qty": finished_reserved,
         "semi_finished_reserved_piece_qty": semi_reserved,
         "inventory_covered_piece_qty": inventory_covered,
+        "carried_material_piece_qty": carried_material_credit,
         "remaining_required_piece_qty": remaining,
         "actual_yield_per_sheet": actual_yield_per_sheet,
         "yield_per_sheet": yield_per_sheet,

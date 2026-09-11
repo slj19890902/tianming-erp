@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--signing-key', type=Path, required=True)
     parser.add_argument('--revision', required=True)
     parser.add_argument('--version', required=True)
+    parser.add_argument('--package-only', action='store_true', help='仅构建签名更新包，不重复生成安装器')
     args = parser.parse_args()
     root, output = args.repo.resolve(), args.output.resolve()
     if output.exists():
@@ -62,6 +63,10 @@ def main():
     package = output / 'release.zip'
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha}, key)
+    if args.package_only:
+        write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,
+                   'release_sha256': sha(package), 'installer_built': False})
+        return
     common = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onefile', '--windowed',
               '--paths', str(root), '--specpath', str(output), '--workpath', str(output / 'pyi-work'),
               '--distpath', str(output)]

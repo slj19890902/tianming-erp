@@ -289,7 +289,7 @@ class Manager:
                 raise
             new = self.state
             if migrate:
-                from desktop_assistant.migration import rehearse, run_migration, facts, files
+                from desktop_assistant.migration import rehearse, run_migration, facts, files, schema
                 # The checked NAS backup exists before both rehearsal and real migration.
                 try:
                     report = rehearse(self, package)
@@ -301,7 +301,9 @@ class Manager:
                 before_files = files(shared)
                 release = self.root / 'releases' / candidate['id']
                 new.update(operation='migration_running', update_backup=str(backup),
-                           migration_report=report['report_path'], migration_target=candidate['id'])
+                           migration_report=report['report_path'], migration_target=candidate['id'],
+                           migration_files=before_files, migration_report_sha256=sha(Path(report['report_path'])),
+                           migration_backup_sha256=sha(backup))
                 write_json(self.root / 'state.json', new)
                 try:
                     run_migration(release, shared, candidate['revision'],
@@ -309,6 +311,7 @@ class Manager:
                         environment=self._environment(release))
                     actual = database_info(dbpath)
                     if (actual['revision'] != candidate['revision']
+                            or schema(dbpath) != report['result_schema']
                             or facts(dbpath, report['source_facts']['columns']) != report['source_facts']
                             or files(shared) != before_files
                             or actual['counts'] != report['result']['counts']):
@@ -340,6 +343,60 @@ class Manager:
         if not previous:
             raise ValueError('没有可回退的上一个版本')
         return self.update(self.root / 'packages' / (previous + '.zip'), password, nas, rollback=True)
+
+    def recover_interrupted_update(self):
+        """Finish activation only when the complete migration result is proven intact."""
+        from desktop_assistant.migration import facts, files, schema
+        with self.lock():
+            state = self.state
+            if state.get('operation') not in ('migration_running', 'migration_failed'):
+                raise ValueError('没有待恢复的中断升级')
+            if self._process():
+                raise ValueError('ERP仍在运行，不能处理中断升级')
+            target = state.get('migration_target', '')
+            package = self.root / 'packages' / (target + '.zip')
+            if not package.is_file() or sha(package) != target:
+                raise ValueError('原升级包缺失或校验失败，保留现场')
+            manifest = signed_release_manifest(package, self.public_key)
+            contract = manifest.get('migration') or {}
+            if (contract.get('policy') != 'preserve_existing_facts_v1'
+                    or contract.get('rollback_package_sha256') != state['current']):
+                raise ValueError('升级兼容证明不匹配，保留现场')
+            python = (self.root / 'releases' / target / 'runtime/python.exe').resolve()
+            for proc in psutil.process_iter(['exe']):
+                try:
+                    if proc.info['exe'] and Path(proc.info['exe']).resolve() == python:
+                        raise ValueError('升级运行环境仍有进程，请等待结束后重试')
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            report_path = Path(state.get('migration_report', ''))
+            backup = Path(state.get('update_backup', ''))
+            if (not report_path.is_file() or sha(report_path) != state.get('migration_report_sha256')
+                    or not backup.is_file() or sha(backup) != state.get('migration_backup_sha256')):
+                raise ValueError('缺少完整演练或备份校验证据，保留现场，请专项恢复')
+            report = read_json(report_path)
+            shared = self.root / 'shared'
+            database = shared / 'data/carton_erp.sqlite3'
+            actual = database_info(database)
+            if (report.get('status') != 'passed' or report.get('target_revision') != manifest['revision']
+                    or actual != report['result']
+                    or schema(database) != report.get('result_schema')
+                    or facts(database, report['source_facts']['columns']) != report['source_facts']
+                    or files(shared) != state.get('migration_files')):
+                raise ValueError('现场未达到完整升级结果，保持停服；未覆盖数据，请专项恢复')
+            previous = state['current']
+            state.update(current=target, previous=previous, schema_authority=target,
+                         operation='migration_recovered', updated_at=datetime.now(CN).isoformat())
+            write_json(self.root / 'state.json', state)
+            try:
+                self.start()
+            except Exception:
+                self.stop()
+                state.update(current=previous, previous=target, operation='recovery_start_failed')
+                write_json(self.root / 'state.json', state)
+                self.start()
+                raise ValueError('升级数据完整，但新程序启动失败；已恢复兼容旧程序，数据未回退') from None
+            return '已核对完整升级结果并恢复运行，业务数据未回退'
 
     def restore(self, backup: Path, password: str):
         """Restore into an EMPTY managed installation. Never replaces running data."""

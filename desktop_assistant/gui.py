@@ -53,6 +53,7 @@ class App:
         ttk.Label(box, textvariable=self.status, wraplength=690).pack(anchor='w', pady=8)
         self.buttons = []
         for text, action in [('打开ERP', self.open_erp), ('检查并更新', self.update),
+                             ('检查并恢复中断升级', self.recover_update),
                              ('回退到上一个版本', self.rollback), ('立即完整备份到NAS', self.backup),
                              ('从NAS恢复到本机空安装', self.restore), ('首次接入原ERP（只读复制）', self.import_old),
                              ('设置本机局域网访问地址', self.network),
@@ -72,7 +73,9 @@ class App:
         state = self.manager.state
         version = self.manager.manifest()['version'] if state['current'] else '尚未恢复数据'
         self.status.set(f"当前版本：{version}\n最近成功备份：{state.get('last_backup_at', '尚无成功备份')}\n"
-                        f"备份状态：{state.get('backup_error') or '无已记录错误'}")
+                        f"备份状态：{state.get('backup_error') or '无已记录错误'}"
+                        + ('\n升级中断：请点击“检查并恢复中断升级”。' if state.get('operation') in
+                           ('migration_running', 'migration_failed') else ''))
 
     def run(self, description, action):
         self.busy = True
@@ -202,6 +205,9 @@ class App:
         password = simpledialog.askstring('恢复口令', '输入备份时设置的恢复口令：', show='*')
         if password:
             self.run('校验并恢复到空安装', lambda: self.manager.restore(Path(path), password))
+
+    def recover_update(self):
+        self.run('核对升级现场、备份和程序并恢复运行', self.manager.recover_interrupted_update)
 
     def import_old(self):
         from desktop_assistant.import_existing import import_existing

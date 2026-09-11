@@ -90,6 +90,59 @@ class CrossRevisionTests(unittest.TestCase):
         self.assertEqual(self.manager.state['operation'],'migration_failed')
         self.assertTrue(list(self.fixture.nas.glob('*.tmbackup')))
         with self.assertRaisesRegex(ValueError,'不能直接启动'):Manager.start(self.manager)
+        before=sha(self.database)
+        self.manager.recover_interrupted_update()
+        self.assertEqual(self.manager.state['operation'],'migration_recovered')
+        self.assertEqual(sha(self.database),before)
+
+    def interrupted(self):
+        count=0
+        def stop_after(release,shared,revision,log,environment=None):
+            nonlocal count
+            count+=1
+            self.migrate(release,shared,revision,log,environment)
+            if count==2:raise RuntimeError('interrupted after commit')
+        with patch('desktop_assistant.migration.run_migration',side_effect=stop_after):
+            with self.assertRaises(ValueError):
+                self.manager.update(self.package(),recovery.PASSWORD,self.fixture.nas)
+
+    def test_recovery_rejects_changed_business_facts(self):
+        self.interrupted()
+        with closing(sqlite3.connect(self.database)) as db:
+            db.execute("UPDATE sales_orders SET note='changed'");db.commit()
+        before=sha(self.database)
+        with self.assertRaisesRegex(ValueError,'完整升级结果'):
+            self.manager.recover_interrupted_update()
+        self.assertEqual(sha(self.database),before)
+        self.assertEqual(self.manager.state['operation'],'migration_failed')
+
+    def test_recovery_rejects_changed_report(self):
+        self.interrupted()
+        from pathlib import Path
+        Path(self.manager.state['migration_report']).write_text('{}')
+        with self.assertRaisesRegex(ValueError,'校验证据'):
+            self.manager.recover_interrupted_update()
+
+    def test_recovery_rejects_incomplete_schema_with_same_rows_and_head(self):
+        self.interrupted()
+        with closing(sqlite3.connect(self.database)) as db:
+            db.execute('ALTER TABLE new_feature ADD COLUMN unexpected TEXT');db.commit()
+        with self.assertRaisesRegex(ValueError,'完整升级结果'):
+            self.manager.recover_interrupted_update()
+
+    def test_recovery_rejects_changed_attachment(self):
+        self.interrupted()
+        (self.manager.root/'shared/unexpected.txt').write_text('changed')
+        with self.assertRaisesRegex(ValueError,'完整升级结果'):
+            self.manager.recover_interrupted_update()
+
+    def test_recovery_rejects_live_migration_runtime(self):
+        self.interrupted()
+        from types import SimpleNamespace
+        exe=self.manager.root/'releases'/self.manager.state['migration_target']/'runtime/python.exe'
+        with patch('psutil.process_iter',return_value=[SimpleNamespace(info={'exe':str(exe)})]):
+            with self.assertRaisesRegex(ValueError,'仍有进程'):
+                self.manager.recover_interrupted_update()
 
 
 if __name__=='__main__':unittest.main()

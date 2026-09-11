@@ -20,6 +20,12 @@ def quote(name):
     return '"' + name.replace('"', '""') + '"'
 
 
+def schema(database):
+    with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro', uri=True)) as db:
+        rows = db.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').fetchall()
+    return hashlib.sha256(json.dumps(rows,ensure_ascii=False).encode('utf-8')).hexdigest()
+
+
 def facts(database, columns=None):
     result = {}
     with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro', uri=True)) as db:
@@ -108,6 +114,7 @@ def rehearse(manager, package):
         if facts(database)!=before or files(source)!=before_files:
             raise ValueError('原系统数据已变化，本次演练结果不能用于更新')
         report.update(status='passed',target_revision=after_info['revision'],result=after_info,
+            result_schema=schema(shared/'data/carton_erp.sqlite3'),
             attachments_verified=len(before_files),source_unchanged=True)
     except Exception as error:
         report.update(status='failed',error=str(error));write_json(report_path,report);raise

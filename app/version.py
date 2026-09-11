@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.344"
-APP_VERSION_NAME = "货架区域名称保存修复"
+APP_VERSION = "v0.22.345"
+APP_VERSION_NAME = "仓库成本依据与合作厂含税计价"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2580,9 +2580,23 @@ _V022343_CHANGES = APP_CHANGES
 _V022343_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["修复货架区域改名时将整座货架数量与层格货位数量比较，导致保存失败的问题；实测货架沿用真实层格数量。"]
 APP_VERIFICATION_STEPS = ["刷新地图，修改货架区域名称并保存；确认原层数、格数、货位及库存保留。"]
+_V022344_CHANGES = APP_CHANGES
+_V022344_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "盘点成本支持独立维护材质、毫米报料尺寸、每张出数和外购含税单价；缺材料资料时采用有效售价参考，入库后按批次固定。",
+    "合作厂清单按老板确认的开票含税单价计价，套装与独立部件保留分摊依据；管理员可预览并确认指定在库批次改价。",
+    "成本仅管理员、老板可见；保留当前地图、数量、采购来源和已冻结出库成本，历史生产尺寸不因临时成本参数改变。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员打开仓库→库存成本，检查8111、22000124、EPE及合作厂在库成本；员工页面和接口不应出现价格。",
+    "点击成本依据，核对毫米尺寸、每张出数或外购含税价；保存仅影响后续盘点，本批次必须预览后另行确认。",
+    "同一批次重复确认不得重复改价；数量、位置及已冻结出库成本不变。正式唯一数据库head为rx10v8x9z72。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.344：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.344：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.345：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.345：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.344：本次更新｜{item}" for item in _V022344_CHANGES),
+    *(f"v0.22.344：如何验证｜{item}" for item in _V022344_STEPS),
     *(f"v0.22.343：本次更新｜{item}" for item in _V022343_CHANGES),
     *(f"v0.22.343：如何验证｜{item}" for item in _V022343_STEPS),
     *(f"v0.22.342：本次更新｜{item}" for item in _V022342_CHANGES),

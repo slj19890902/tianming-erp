@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.345"
-APP_VERSION_NAME = "仓库成本依据与合作厂含税计价"
+APP_VERSION = "v0.22.346"
+APP_VERSION_NAME = "库存助手现货与片料工作台"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2592,9 +2592,15 @@ APP_VERIFICATION_STEPS = [
     "点击成本依据，核对毫米尺寸、每张出数或外购含税价；保存仅影响后续盘点，本批次必须预览后另行确认。",
     "同一批次重复确认不得重复改价；数量、位置及已冻结出库成本不变。正式唯一数据库head为rx10v8x9z72。",
 ]
+_V022345_CHANGES = APP_CHANGES
+_V022345_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["库存成本区新增库存助手，按现货与订单、片料用途、长期库存、待核价筛选并展开真实依据。", "金额只采用冻结批次成本并显示实际成本依据；同款未送订单按产品匹配，片料候选排除面纸颜色不兼容项，不修改业务事实。"]
+APP_VERIFICATION_STEPS = ["老板或管理员打开库存成本区→库存助手，核对金额、待核价批次及筛选分页。", "查看同款未送订单和片料用途候选；普通账号不可打开。当前为本地规则分析，尚未调用云模型。"]
 APP_CHANGELOG = [
-    *(f"v0.22.345：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.345：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.346：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.346：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.345：本次更新｜{item}" for item in _V022345_CHANGES),
+    *(f"v0.22.345：如何验证｜{item}" for item in _V022345_STEPS),
     *(f"v0.22.344：本次更新｜{item}" for item in _V022344_CHANGES),
     *(f"v0.22.344：如何验证｜{item}" for item in _V022344_STEPS),
     *(f"v0.22.343：本次更新｜{item}" for item in _V022343_CHANGES),

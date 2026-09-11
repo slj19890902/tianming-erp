@@ -61,6 +61,7 @@ def main():
     parser.add_argument('--repo', type=Path, required=True)
     parser.add_argument('--runtime-base', type=Path, required=True)
     parser.add_argument('--site-packages', type=Path, required=True)
+    parser.add_argument('--ocr-models', type=Path, required=True, help='已下载的 EasyOCR model 目录')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--signing-key', type=Path, required=True)
     parser.add_argument('--revision', required=True)
@@ -107,11 +108,14 @@ def main():
     shutil.copytree(args.runtime_base, runtime, ignore=shutil.ignore_patterns('site-packages', '__pycache__', 'Scripts'))
     shutil.copytree(args.site_packages, runtime / 'Lib/site-packages',
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    from desktop_assistant.ocr_models import copy_models
+    models = copy_models(args.ocr_models, args.site_packages, runtime / 'ocr/model')
     # Force a relocatable Python search path, independent of machine registry and PYTHONHOME.
     (runtime / 'python312._pth').write_text('python312.zip\n.\nLib\nDLLs\nLib/site-packages\n..\nimport site\n', encoding='ascii')
     package = output / 'release.zip'
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
-                            'revision': args.revision, 'git_sha': code_sha, 'migration': migration}, key)
+                            'revision': args.revision, 'git_sha': code_sha, 'migration': migration,
+                            'offline_ocr_models': models}, key)
     if args.package_only:
         write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,
                    'release_sha256': sha(package), 'installer_built': False})

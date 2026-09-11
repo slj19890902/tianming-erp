@@ -127,6 +127,9 @@ class Manager:
         env['PYTHONPATH'] = str(release)
         env['ERP_DATABASE_PATH'] = str(shared / 'data/carton_erp.sqlite3')
         env['ERP_WORKERS'] = '1'
+        models = release / 'runtime/ocr/model'
+        if models.is_dir():
+            env['EASYOCR_MODULE_PATH'] = str(models.parent)
         return env
 
     def _link_data(self, release: Path):

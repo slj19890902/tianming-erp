@@ -232,6 +232,11 @@ class Manager:
                 if running:
                     self.start()
 
+    def preview_update(self, package: Path):
+        from desktop_assistant.migration import rehearse
+        with self.lock():
+            return rehearse(self, package)
+
     def update(self, package: Path, password: str, nas: Path, *, rollback=False):
         with self.lock():
             candidate = self.stage_release(package)

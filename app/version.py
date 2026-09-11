@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.350"
+APP_VERSION = "v0.22.351"
 APP_VERSION_NAME = "PDF收单状态与原邮件追溯"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -2618,11 +2618,17 @@ APP_CHANGES = ["邮箱PDF增加编辑并导入订单，进入现有客户、常�
 APP_VERIFICATION_STEPS = ["管理员从邮箱PDF点击编辑并导入订单，核对识别明细并人工保存；回到邮件刷新后查看订单号。", "隔离副本重复提交不得新建订单；改数量重试提示改单，来源记录故障须同时回滚订单与生产任务。Excel映射与真实126收信验收仍待继续。"]
 _V022349_CHANGES = APP_CHANGES
 _V022349_STEPS = APP_VERIFICATION_STEPS
-APP_CHANGES = ["邮箱列表显示真实关联订单数量，支持已有关联与尚无关联筛选；重复附件按内容归并，保留未导入明细入口。", "邮件订单号可直接打开订单详情，订单详情可返回原邮件；PDF收单继续沿用人工核对与保存流程。"]
+APP_CHANGES = ["货架正视图点击格数或格内非操作内容后，自动收起正视图并显示该正式货位的信息。", "保留移货和盘点模式及页面草稿；产品标签、批次明细、打印和添加货物仍按各自按钮执行。"]
+APP_VERIFICATION_STEPS = ["打开货架正视图，点击有货格的格数或空白处，确认无需点返回即可显示对应货位；空格点击格数同样可查看。", "分别核对存货编码查看标签、查看明细展开批次，以及添加货物仍进入正确货位；点击货位不自动提交库存。"]
+_V022350_CHANGES = APP_CHANGES
+_V022350_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["邮箱列表显示真实关联订单数量，支持已有关联与尚无关联筛选；重复附件按内容归并，保留未导入明细核对入口。", "邮件订单号可直接打开订单详情，订单详情可返回原邮件；PDF收单继续沿用人工核对与保存流程。"]
 APP_VERIFICATION_STEPS = ["管理员打开邮箱收单，筛选关联状态并点击订单号；从订单详情查看原邮件，刷新后仍打开同一邮件。", "相同附件副本显示同一关联订单；原订单删除后不再计为有效关联。Excel收单不属于当前开发范围，真实126收信待授权码配置后验收。"]
 APP_CHANGELOG = [
-    *(f"v0.22.350：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.350：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.351：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.351：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.350：本次更新｜{item}" for item in _V022350_CHANGES),
+    *(f"v0.22.350：如何验证｜{item}" for item in _V022350_STEPS),
     *(f"v0.22.349：本次更新｜{item}" for item in _V022349_CHANGES),
     *(f"v0.22.349：如何验证｜{item}" for item in _V022349_STEPS),
     *(f"v0.22.348：本次更新｜{item}" for item in _V022348_CHANGES),

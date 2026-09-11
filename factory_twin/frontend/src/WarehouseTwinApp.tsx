@@ -1481,6 +1481,7 @@ function WarehouseRackElevation({
   rackCount,
   onPrevious,
   onNext,
+  onSelectLocation,
   onChooseEmptyLocation,
   onClose
 }: {
@@ -1493,6 +1494,7 @@ function WarehouseRackElevation({
   rackCount: number;
   onPrevious: () => void;
   onNext: () => void;
+  onSelectLocation: (locationId: number) => void;
   onChooseEmptyLocation: (locationId: number) => void;
   onClose: () => void;
 }) {
@@ -1579,18 +1581,19 @@ function WarehouseRackElevation({
                 const cellTitle = identityConflict
                   ? `该层格关联 ${cellLocations.length} 个正式货位，请管理员处理身份冲突。`
                   : location?.location_name || "暂无已建空货位";
-                return <section className={`mold-rack-cell ${cellItems.length ? "occupied" : "empty"} ${cellItems.length && canChooseProducts ? "can-add-product" : ""} ${cellSelected ? "selected" : ""}`} key={cellKey || `${rack.id}-${level}-${bay + 1}`} title={cellTitle}>
+                return <section className={`mold-rack-cell ${cellItems.length ? "occupied" : "empty"} ${cellItems.length && canChooseProducts ? "can-add-product" : ""} ${cellSelected ? "selected" : ""}`} key={cellKey || `${rack.id}-${level}-${bay + 1}`} title={cellTitle}
+                  onClick={(event) => {
+                    // Labels, batch details, printing and adding products keep their own actions.
+                    if ((event.target as HTMLElement).closest("button, a, input, select, textarea, summary, details")) return;
+                    if (location && !identityConflict) onSelectLocation(location.location_id);
+                  }}>
                   <div className="shelf-cell-heading"><button
                     type="button"
                     className="mold-rack-cell-summary"
-                    disabled={!cellItems.length && (identityConflict || !location || Boolean(blockReason))}
+                    aria-label={`${cellTitle}：查看货位`}
+                    disabled={identityConflict || !location}
                     onClick={() => {
-                      if (cellItems.length) {
-                        setSelectedItem(cellItems[0]);
-                        setDetailOpen(false);
-                      } else if (location && !blockReason) {
-                        onChooseEmptyLocation(location.location_id);
-                      }
+                      if (location && !identityConflict) onSelectLocation(location.location_id);
                     }}
                   ><b>{bay + 1}格</b></button>
                   {cellItems.length > 0 && <small className="shelf-cell-kind">{groupShelfProducts(cellItems).length === 1 ? "单品存放" : `混放 · ${groupShelfProducts(cellItems).length} 款`}</small>}
@@ -1627,14 +1630,18 @@ function WarehouseRackElevation({
                   </div> : <button
                     type="button"
                     className="mold-rack-empty-spine"
-                    aria-label={`${cellTitle}：为此货位选产品`}
-                    disabled={identityConflict || !location || Boolean(blockReason)}
+                    aria-label={`${cellTitle}：${canChooseProducts && !blockReason ? "为此货位选产品" : "查看货位"}`}
+                    title={blockReason || undefined}
+                    disabled={identityConflict || !location}
                     onClick={() => {
-                      if (canChooseProducts && location && !identityConflict && !blockReason) {
+                      if (!location || identityConflict) return;
+                      if (canChooseProducts && !blockReason) {
                         onChooseEmptyLocation(location.location_id);
+                      } else {
+                        onSelectLocation(location.location_id);
                       }
                     }}
-                  >{identityConflict ? "请管理员确认唯一正式货位" : location ? blockReason || "＋ 为此货位选产品" : "暂无已建空货位"}</button>}
+                  >{identityConflict ? "请管理员确认唯一正式货位" : !location ? "暂无已建空货位" : canChooseProducts && !blockReason ? "＋ 为此货位选产品" : "查看货位"}</button>}
                 </section>;
               })}</div>
             </div>})}
@@ -5890,6 +5897,16 @@ export function WarehouseTwinApp() {
     setRackFocusId(focusedAreaRacks[nextIndex].id);
     setSelected({ kind: "rack", id: focusedAreaRacks[nextIndex].id });
   };
+  const selectRackLocation = (locationId: number) => {
+    if (spatialEditBusy || !focusedRackLocations.some((location) => location.location_id === locationId)) return;
+    selectOperationalEntity({ kind: "pallet", id: `erp-location-${locationId}` });
+    setRackFocusId(null);
+    setLocationDetailOpen(false);
+    requestAnimationFrame(() => {
+      inspectorRef.current?.focus({ preventScroll: true });
+      inspectorRef.current?.scrollIntoView({ block: "nearest" });
+    });
+  };
   const chooseRackEmptyLocation = (locationId: number) => {
     if (!canStocktake || mapMode !== "move" || moveSource || spatialEditBusy) return;
     setRackFocusId(null);
@@ -6283,6 +6300,7 @@ export function WarehouseTwinApp() {
           rackCount={focusedAreaRacks.length || 1}
           onPrevious={() => switchFocusedRack(-1)}
           onNext={() => switchFocusedRack(1)}
+          onSelectLocation={selectRackLocation}
           onChooseEmptyLocation={chooseRackEmptyLocation}
           onClose={() => setRackFocusId(null)}
         />}

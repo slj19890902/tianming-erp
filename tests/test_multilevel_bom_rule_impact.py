@@ -48,6 +48,7 @@ def test_change_to_separate_keeps_child_identity_and_changes_pick_units(factory_
     assert rows[3799]["after"]["pick_quantity"] == 0
     assert not rows[3799]["physical_identity_compatible"]
     assert rows[3771]["physical_identity_compatible"]
+    assert rows[3771]["material_conversion_compatible"]
     assert rows[3771]["after"]["pick_quantity"] == 120
     assert rows[3783]["after"]["pick_quantity"] == 160
     assert rows[3771]["after"]["materials"][0]["purchase_sheets"] == 30
@@ -109,6 +110,20 @@ def test_rule_comparison_rejects_cross_order_customer_and_invalid_quantity(facto
         rule_quantity_impact(frozen, frozen, remaining_quantity=True)
     with pytest.raises(BomPlanError, match="超过"):
         rule_quantity_impact(frozen, frozen, remaining_quantity=101)
+
+
+def test_finished_match_does_not_authorize_changed_cutting_conversion(factory_copy):
+    db = factory_copy
+    _, item, frozen = frozen_order(db)
+    child = db.get(Product, 3771)
+    child.default_cutting_mode = "一开二"
+    child.version += 1
+    db.commit()
+    proposed = compile_master_order_bom(db, item)
+    rows = {row["product_id"]: row for row in rule_quantity_impact(
+        frozen, proposed, remaining_quantity=10)["products"]}
+    assert not rows[3771]["material_conversion_compatible"]
+    assert rows[3783]["material_conversion_compatible"]
 
 
 def test_current_rule_review_is_detached_and_binds_changed_master(factory_copy):

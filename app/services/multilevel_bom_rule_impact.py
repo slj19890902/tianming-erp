@@ -54,6 +54,11 @@ def rule_quantity_impact(previous, proposed, *, remaining_quantity):
         return result
 
     old, new = side(previous, old_plan), side(proposed, new_plan)
+    old_nodes = {node.product_id: node for node in previous.graph.nodes}
+    new_nodes = {node.product_id: node for node in proposed.graph.nodes}
+    old_sources = {row.component_product_id: row for row in previous.snapshots}
+    new_sources = {row.component_product_id: row for row in proposed.snapshots}
+    from app.services.multilevel_bom_production_revision import FIELDS, PREFIX
     rows = []
     for pid in sorted(old.keys() | new.keys()):
         before, after = old.get(pid), new.get(pid)
@@ -62,8 +67,15 @@ def rule_quantity_impact(previous, proposed, *, remaining_quantity):
         # happens to have the same dimensions as a former physical product.
         compatible = bool(same_unit and before["source"] != "separate"
             and after["source"] != "separate" and old_bases[pid] == new_bases[pid])
+        # Finished identity alone cannot authorize carrying pending material:
+        # a cutting/yield or supplier change may leave the finished item alike.
+        material_compatible = bool(compatible and before["source"] == after["source"] == "manufactured"
+            and old_nodes[pid].routes == new_nodes[pid].routes
+            and all(getattr(old_sources[pid], PREFIX + field) == getattr(new_sources[pid], PREFIX + field)
+                    for field in FIELDS))
         rows.append(dict(product_id=pid, before=before, after=after,
             physical_identity_compatible=compatible,
+            material_conversion_compatible=material_compatible,
             required_delta=(after["required_quantity"] - before["required_quantity"] if same_unit else None),
             pick_delta=(after["pick_quantity"] - before["pick_quantity"] if same_unit else None),
             change="added" if before is None else "removed" if after is None else "retained"))

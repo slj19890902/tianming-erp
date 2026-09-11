@@ -187,6 +187,8 @@ def test_component_order_loose_stock_to_receipts_delivery_and_statement(
                             for name in names if name != "sqlite_sequence"}
 
             before_failure = database_facts()
+            original_purchase_costs = before_failure["purchase_receipt_facts"]
+            assert original_purchase_costs, "Receipt reversal must preserve real frozen purchase cost evidence"
             real_audit = incoming_receipts.append_audit_event
 
             def fail_after_audit(*args, **kwargs):
@@ -206,6 +208,10 @@ def test_component_order_loose_stock_to_receipts_delivery_and_statement(
                 assert undone.status_code == 200, undone.text
                 replay = client.put(f"/api/incoming/receipt-items/{rid}/revert", json=body)
                 assert replay.status_code == 200 and replay.json() == undone.json(), replay.text
+            after_reversal = database_facts()
+            assert after_reversal["purchase_receipt_facts"] == original_purchase_costs
+            for name in ("finance_delivery_graph_cost_facts", "finance_delivery_graph_cost_portions"):
+                assert after_reversal[name] == before_failure[name]
             with factory() as db:
                 for pid, (lid, _, qty) in lots.items():
                     lot = db.get(InventoryLot, lid)

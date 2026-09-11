@@ -3,9 +3,17 @@ from pathlib import Path
 import tempfile
 import unittest
 from desktop_assistant.ocr_models import copy_models
+from desktop_assistant.build import runtime_copy_ignore
 
 
 class OcrModelTests(unittest.TestCase):
+    def test_runtime_copy_excludes_packaged_ocr_before_rebuilding_models(self):
+        names = ['DLLs', 'Lib', 'Scripts', 'site-packages', '__pycache__', 'ocr']
+        self.assertEqual(
+            runtime_copy_ignore('unused', names),
+            {'Scripts', 'site-packages', '__pycache__', 'ocr'},
+        )
+
     def test_verified_models_and_corrupt_model(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); source=root/'source'; source.mkdir()

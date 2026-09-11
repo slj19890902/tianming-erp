@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.343"
-APP_VERSION_NAME = "地图保存兼容混合库存"
+APP_VERSION = "v0.22.344"
+APP_VERSION_NAME = "货架区域名称保存修复"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2576,9 +2576,15 @@ _V022342_CHANGES = APP_CHANGES
 _V022342_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["修复货架层数、格数及区域名称保存被其他区域旧成品半成品用途校验阻止；保留操作区与布局保护。", "相关区域库存阻塞提示显示实际名称，不再只显示内部区域编号。"]
 APP_VERIFICATION_STEPS = ["刷新地图，修改北货架G2层数、格数及区域名称，确认不再出现南F货架1旧用途限制；不得删除有货货位。"]
+_V022343_CHANGES = APP_CHANGES
+_V022343_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["修复货架区域改名时将整座货架数量与层格货位数量比较，导致保存失败的问题；实测货架沿用真实层格数量。"]
+APP_VERIFICATION_STEPS = ["刷新地图，修改货架区域名称并保存；确认原层数、格数、货位及库存保留。"]
 APP_CHANGELOG = [
-    *(f"v0.22.343：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.343：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.344：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.344：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.343：本次更新｜{item}" for item in _V022343_CHANGES),
+    *(f"v0.22.343：如何验证｜{item}" for item in _V022343_STEPS),
     *(f"v0.22.342：本次更新｜{item}" for item in _V022342_CHANGES),
     *(f"v0.22.342：如何验证｜{item}" for item in _V022342_STEPS),
     *(f"v0.22.341：本次更新｜{item}" for item in _V022341_CHANGES),

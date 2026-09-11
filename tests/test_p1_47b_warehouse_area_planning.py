@@ -6408,3 +6408,61 @@ def test_p1_47b_frontend_exposes_admin_planning_without_leaking_drafts_to_lookup
     assert "容量待复核" in TWIN_SOURCE
     assert "confirmed_pallet_capacity" in TWIN_SOURCE
     assert 'floorCode === "3F"\n          ? `/api/warehouse/floor3/layout/areas/' not in TWIN_SOURCE
+
+
+def test_precise_rack_area_save_counts_cells_not_racks(tmp_path):
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            area, rack, rows = _seed_precise_rack_area_with_legacy_anchors(db, admin=admin)
+            for row in rows[:2]:
+                row.is_active = False
+            db.flush()
+            original_ids = [row.id for row in rows[2:]]
+            args = dict(db=db, floor_layout={'racks': [rack]}, feature_id='zone-f1',
+                        area=area, inventory_type='finished', storage_layout='rack',
+                        target_count=1, operator_id=admin.id)
+            created, count, _ = warehouse_api._ensure_one_step_pallet_locations(**args)
+            assert created == [] and count == 9
+            assert [row.id for row in rows[2:]] == original_ids
+            assert all(row.is_active for row in rows[2:])
+            rows[-1].is_active = False
+            with pytest.raises(warehouse_api.WarehouseAreaActivationError, match='尚未同步'):
+                warehouse_api._ensure_one_step_pallet_locations(**args)
+    finally:
+        engine.dispose()
+
+
+def test_precise_rack_area_rename_full_confirm(tmp_path, monkeypatch):
+    published, _ = _isolate_layout_paths(tmp_path, monkeypatch)
+    runtime = Path(editor.TWIN_LAYOUT_PATH)
+    monkeypatch.setattr(warehouse_api, 'load_warehouse_twin_floor',
+        lambda code: json.loads((runtime if runtime.exists() else published).read_text(encoding='utf-8'))['floors'][code])
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            area, rack, rows = _seed_precise_rack_area_with_legacy_anchors(db, admin=admin)
+            for row in rows[:2]:
+                row.is_active = False
+            document = json.loads(published.read_text(encoding='utf-8'))
+            floor = document['floors']['3F']
+            feature = floor['features'][0]
+            feature.update(storage_layout='rack', allowed_inventory_types=['finished'],
+                formal_area_id=area.id, formal_floor_id=area.floor_id,
+                formal_area_name=area.area_name, max_rack_count=1)
+            floor['racks'] = [rack]
+            floor['revision'] = _floor_revision(floor)
+            published.write_text(json.dumps(document, ensure_ascii=False), encoding='utf-8')
+            db.commit()
+            ids = [row.id for row in rows[2:]]
+            result = warehouse_api.confirm_twin_zone_area('3F', 'zone-f1',
+                _confirm_area_payload(revision=floor['revision'], operation_key='rack-rename',
+                    storage_layout='rack', capacity=1, area_name='新货架区域名称'),
+                _request(), db, admin)
+            assert result['available_location_count'] == 9
+            assert area.area_name == '新货架区域名称'
+            assert all(db.get(WarehouseLocation, i).is_active for i in ids)
+    finally:
+        engine.dispose()

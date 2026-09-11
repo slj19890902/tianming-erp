@@ -23,6 +23,7 @@ class WarehouseCosts extends HTMLElement {
       const panel=el("details");panel.open=this.hasAttribute("expanded");
       panel.append(el("summary",`${location?"本货位":"仓库"}已定价金额 ¥${data.inventory_value}${data.missing_lots?` · ${data.missing_lots} 批待核价`:""}`));
       if(location){const link=el("a","查看全部库存成本");link.href="/factory-twin-assets/warehouse-costs.html";link.target="_blank";link.rel="noopener";panel.append(link);}
+      const assistantLink=el("a","库存助手：查看现货用途与积压");assistantLink.href="/inventory-assistant.html";assistantLink.target="_blank";assistantLink.rel="noopener";panel.append(assistantLink);
       const basis=el("div",data.basis);basis.className="muted";panel.append(basis);
       const search=el("input");search.placeholder="客户 / 存货编码 / 名称 / 位置";search.setAttribute("aria-label","筛选库存成本");
       if(!location)panel.append(search);

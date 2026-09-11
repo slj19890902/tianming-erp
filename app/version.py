@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.342"
-APP_VERSION_NAME = "手机查询范围与展开记忆"
+APP_VERSION = "v0.22.343"
+APP_VERSION_NAME = "库存助手现货与片料工作台"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2572,9 +2572,15 @@ _V022341_CHANGES = APP_CHANGES
 _V022341_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["手机尺寸找订单支持管理员保存接近与扩大范围，员工明确选择后应用；设置变化后恢复精确查找。", "刷新后恢复当前账号查询条件和已展开同单未送产品；保持权限与订单事实不变。"]
 APP_VERIFICATION_STEPS = ["管理员进入手机查询→纸板或纸箱尺寸→查询范围设置，保存范围；普通员工不可修改。", "展开同单未送产品后刷新，检查条件与展开恢复；范围改变后查询保持精确，按需选择扩大。"]
+_V022342_CHANGES = APP_CHANGES
+_V022342_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["库存成本区新增库存助手，按现货与订单、片料用途、长期库存、待核价筛选并展开真实依据。", "助手金额只采用冻结批次成本，与库存成本页一致；订单需求按真实产品匹配，不把多个批次重复需求相加，不修改业务事实。"]
+APP_VERIFICATION_STEPS = ["老板或管理员打开库存成本区→库存助手，核对金额、待核价批次及筛选分页。", "查看同款未送订单和片料适用产品；普通账号不可打开。当前为本地规则分析，AI云解读仍待接入。"]
 APP_CHANGELOG = [
-    *(f"v0.22.342：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.342：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.343：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.343：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.342：本次更新｜{item}" for item in _V022342_CHANGES),
+    *(f"v0.22.342：如何验证｜{item}" for item in _V022342_STEPS),
     *(f"v0.22.341：本次更新｜{item}" for item in _V022341_CHANGES),
     *(f"v0.22.341：如何验证｜{item}" for item in _V022341_STEPS),
     *(f"v0.22.340：本次更新｜{item}" for item in _V022340_CHANGES),

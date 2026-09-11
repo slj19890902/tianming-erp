@@ -32,10 +32,16 @@ def review_procurement_impact(db, *, order_item_id, customer_id):
             if snapshot is None or snapshot.sales_order_item_id != order_item_id:
                 raise BomPlanError(f"报料行#{line.id}的冻结来源跨订单或缺失")
             impact = products.get(snapshot.component_product_id)
+            from app.services.multilevel_bom_orders import read_order_bom_source_contract
+            from app.services.multilevel_bom_rule_impact import rule_quantity_impact
+            original = read_order_bom_source_contract(db, order_item_id, snapshot.id)
+            original_impact = next((row for row in rule_quantity_impact(original, rule.proposed,
+                remaining_quantity=1)["products"] if row["product_id"] == snapshot.component_product_id), None)
             mappings.append(dict(source=_row(source), product_id=snapshot.component_product_id,
                 current_source=snapshot.id in current,
-                material_conversion_compatible=bool(snapshot.id in current and impact
-                    and impact["material_conversion_compatible"]),
+                handed_to_current_source=snapshot.id in handed_sources,
+                material_conversion_compatible=bool((snapshot.id in current or snapshot.id in handed_sources)
+                    and original_impact and original_impact["material_conversion_compatible"]),
                 proposed_gross_materials=impact["after"]["materials"] if impact and impact["after"] else []))
         receipts = list(db.scalars(select(IncomingReceiptItem).where(
             IncomingReceiptItem.requisition_item_id == line.id).order_by(IncomingReceiptItem.id)))

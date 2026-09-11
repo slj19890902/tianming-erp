@@ -331,19 +331,28 @@ def graph_material_receipts_closed(db, item):
     if not external_graph_receipts_closed(db, item=item, requirements=requirements):
         return False
     received = defaultdict(int)
+    from app.services.multilevel_bom_source_handoffs import current_source_handoffs
+    from app.services.multilevel_bom_carried_material import carried_material_pieces
+    current_ids = {row.id for row in requirements.compiled.snapshots}
+    inherited_ids = {row.source_snapshot_id for row in current_source_handoffs(db, requirements.compiled)
+        if row.source_kind == "manufactured"}
     for source, row, purpose in db.execute(select(RequisitionItemBomSource, RequisitionItem, PurchasePurposeSourceSnapshot)
         .join(RequisitionItem, RequisitionItem.id == RequisitionItemBomSource.requisition_item_id)
         .join(PurchasePurposeSourceSnapshot, PurchasePurposeSourceSnapshot.material_requisition_item_id == RequisitionItem.id)
         .where(RequisitionItem.order_item_id == item.id,
                RequisitionItemBomSource.sales_order_item_bom_component_id.in_(
-                   [row.id for row in requirements.compiled.snapshots]))):
+                   current_ids | inherited_ids))):
         if row.status in ("有效", "supplier_requisition_created"):
             return False
-        if row.status == "已入库":
+        if row.status == "已入库" and source.sales_order_item_bom_component_id in current_ids:
             received[source.sales_order_item_bom_component_id, source.component_type] += purpose.order_purpose_sheet_qty
     snapshots = {s.component_product_id: s for s in requirements.compiled.snapshots}
-    return all(received[snapshots[m.product_id].id, m.route_key] >= m.purchase_sheets + (
-        int(snapshots[m.product_id].spare_sheet_quantity or 0) if m.purchase_sheets else 0)
+    inherited = carried_material_pieces(db, requirements.compiled)
+    yields = {(node.product_id, route.key): route.pieces_per_sheet
+        for node in requirements.compiled.graph.nodes for route in node.routes}
+    return all(received[snapshots[m.product_id].id, m.route_key] * yields[m.product_id, m.route_key]
+        + inherited.get((m.product_id, m.route_key), 0) >= (m.purchase_sheets + (
+        int(snapshots[m.product_id].spare_sheet_quantity or 0) if m.purchase_sheets else 0)) * yields[m.product_id, m.route_key]
         for m in requirements.plan.materials)
 
 

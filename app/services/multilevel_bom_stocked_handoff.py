@@ -35,6 +35,7 @@ class StockedHandoffReview:
     document: str
     preview: dict
     purchase_sources: tuple = ()
+    material_sources: tuple = ()
 
 
 def _closed_procurement(db, item):
@@ -72,22 +73,30 @@ def _closed_procurement(db, item):
     return dict(paper=[_row(row) for row in paper], external=external)
 
 
-def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, carry_purchases=False):
+def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, carry_purchases=False, carry_materials=False):
+    carry_purchases = carry_purchases or carry_materials
     rule = review_current_rule_requirements(db, order_item_id=order_item_id, customer_id=customer_id)
     item = db.get(OrderItem, order_item_id)
     order = db.get(Order, item.order_id)
     purchase_sources = ()
+    material_sources = ()
     if carry_purchases:
         from app.services.multilevel_bom_procurement_impact import review_procurement_impact
         procurement = review_procurement_impact(db, order_item_id=item.id, customer_id=customer_id)
         for line in procurement["paper"]:
-            if line["line"]["status"] != "已入库":
+            if not carry_materials and line["line"]["status"] != "已入库":
                 raise BomPlanError(f"纸板报料行#{line['line']['id']}尚未收齐，须交接材料及在制生产来源后切换")
+            if carry_materials and (not line["mappings"] or any(
+                    not mapping["material_conversion_compatible"] for mapping in line["mappings"])):
+                raise BomPlanError(f"纸板报料行#{line['line']['id']}缺少兼容的原材料来源，请核对规格、工艺和开料换算")
+        if carry_materials:
+            material_sources = tuple(sorted({mapping["source"]["sales_order_item_bom_component_id"]
+                for line in procurement["paper"] for mapping in line["mappings"]}))
         for line in procurement["external"]:
             if not line["mapping"]["purchase_conversion_compatible"]:
                 raise BomPlanError(f"外购采购行#{line['line']['id']}原来源未交接或新规则实物/采购换算不同，请先核对原合同处理")
         purchase_sources = tuple(sorted({line["mapping"]["source_snapshot_id"] for line in procurement["external"]}))
-        if not purchase_sources:
+        if not purchase_sources and not material_sources:
             raise BomPlanError("没有需要保留交接的原外购采购，请使用库存交接或未开始订单入口")
     else:
         procurement = _closed_procurement(db, item)
@@ -140,6 +149,8 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
         for lot in own_output_lots(db, item.id):
             if lot.quantity_available <= 0:
                 continue
+            if lot.finished_detail is None:
+                raise BomPlanError(f"原订单批次{lot.lot_number}为{lot.inventory_type}，须明确待装配本体的库存交接，不能按成品预占处理")
             pid = lot.finished_detail.product_id
             if (lot.status != "active" or lot.finished_detail.owner_customer_id != customer_id
                     or lot.finished_detail.is_general or pid not in old_bases
@@ -154,7 +165,8 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
     remaining = item.quantity - (item.delivered_quantity or 0)
     plan = plan_bom(rule.proposed.graph, remaining, eligible_stock=eligible)
     shortage = [row for row in plan.products if row.make_units and new_nodes[row.product_id].source in {"manufactured", "purchased"}]
-    blocking_shortage = [row for row in shortage if not carry_purchases or new_nodes[row.product_id].source != "purchased"]
+    blocking_shortage = [row for row in shortage if not carry_materials
+        and (not carry_purchases or new_nodes[row.product_id].source != "purchased")]
     if blocking_shortage:
         row = blocking_shortage[0]
         raise BomPlanError(f"新规则尚缺{new_nodes[row.product_id].name} {row.make_units}{new_nodes[row.product_id].unit}的匹配成品；须继续生产/采购或明确原组装拆解方案")
@@ -203,7 +215,8 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
     steps = {step.product_id: step for step in assembly.steps}
     revision = db.scalar(select(OrderBomRuleRevision.revision).where(OrderBomRuleRevision.order_item_id == item.id)
         .order_by(OrderBomRuleRevision.revision.desc()).limit(1)) or 0
-    preview = dict(scope=("保留原外购合同及余量，交接匹配库存；缺少子件待实收后组装" if carry_purchases
+    preview = dict(scope=("保留原纸板及外购来源，交接匹配库存；按原材料换算继续收料生产" if carry_materials else
+        "保留原外购合同及余量，交接匹配库存；缺少子件待实收后组装" if carry_purchases
         else "剩余需求已由当前版本真实成品预占完整覆盖的在制交接"), ready=set(target_locations)==assembled,
         order_item_id=item.id, quantity=item.quantity, execution_quantity=remaining,
         unit=new_nodes[rule.proposed.graph.root_id].unit,
@@ -223,16 +236,18 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
             previous_available=lot.quantity_available,
             available_after_handoff=lot.quantity_available+reserved_quantities.get(lid, 0)-retain[lid],
             quantity=retain[lid], released_to_available=quantities[lid]-retain[lid]) for lid, lot in lots.items()],
-        material_impact="剩余需求由已核验库存覆盖，不新增报料；原报料和完工事实保留",
+        material_impact=("原报料、实收、完工及成本原样保留；后续报料扣除已交接材料后只报差额" if carry_materials
+            else "剩余需求由已核验库存覆盖，不新增报料；原报料和完工事实保留"),
         procurement_impact=("原采购合同、价格和实收原样保留，未收余量交接新执行版本；不足部分在采购入口另行确认" if carry_purchases
             else "只接收已收齐或明确撤销的原采购，保留全部原合同和实收，不追加采购"),
         carried_purchases=procurement["external"] if carry_purchases else [],
+        carried_materials=procurement["paper"] if carry_materials else [],
         inventory_impact="释放本订单剩余旧预占；所需数量绑定新来源，多余量留原批次可用；需组装时只消耗本次重新绑定的子件",
         cost_impact="沿用原批次成本来源，估算不升级实际；新组装只转移成本，旧已送成本不变",
         picking_impact="按新冻结交付规则与明确批次拿货；切换前已送不变",
         product_versions={node.product_id:node.version for node in rule.proposed.graph.nodes},
         new_modes=asdict(rule.proposed.graph.modes) if rule.proposed.graph.modes else None)
-    return StockedHandoffReview(rule, active, lots, retain, assembly, document, preview, purchase_sources)
+    return StockedHandoffReview(rule, active, lots, retain, assembly, document, preview, purchase_sources, material_sources)
 
 
 def _result(db, row):
@@ -248,7 +263,7 @@ def _result(db, row):
 
 
 def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, expected_revision,
-                             target_locations, source_lot_versions, operation_key, actor, carry_purchases=False):
+                             target_locations, source_lot_versions, operation_key, actor, carry_purchases=False, carry_materials=False):
     if (type(expected_revision) is not int or expected_revision < 0
             or type(operation_key) is not str or not 1 <= len(operation_key.strip()) <= 64
             or type(reviewed_hash) is not str or len(reviewed_hash) != 64
@@ -256,7 +271,8 @@ def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, ex
         raise BomPlanError("在制交接版本、操作标识或预览摘要无效")
     if db.new or db.dirty or db.deleted:
         raise BomPlanError("请先保存或撤销未提交修改")
-    request_hash = hashlib.sha256(json.dumps(dict(mode="purchase_graph" if carry_purchases else "stocked_graph", item=order_item_id,
+    request_hash = hashlib.sha256(json.dumps(dict(mode="material_graph" if carry_materials else
+        "purchase_graph" if carry_purchases else "stocked_graph", item=order_item_id,
         customer=customer_id, review=reviewed_hash, revision=expected_revision, targets=target_locations,
         lot_versions=source_lot_versions, key=operation_key, actor=getattr(actor,"id",None)),
         sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -282,7 +298,7 @@ def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, ex
         db.execute(update(Order).where(Order.id == item.order_id).values(status=Order.status, updated_at=Order.updated_at))
         db.execute(update(OrderItem).where(OrderItem.id == item.id).values(quantity=OrderItem.quantity))
         review = review_stocked_handoff(db, order_item_id=order_item_id,
-            customer_id=customer_id, target_locations=target_locations, carry_purchases=carry_purchases)
+            customer_id=customer_id, target_locations=target_locations, carry_purchases=carry_purchases, carry_materials=carry_materials)
         if (not review.preview["ready"] or review.preview["reviewed_hash"] != reviewed_hash
                 or review.preview["rule_revision"] != expected_revision
                 or review.preview["source_lot_versions"] != source_lot_versions):
@@ -293,21 +309,25 @@ def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, ex
         row = persist_reviewed_rule(db, review=review.rule, item=item, previous=previous,
             expected_revision=expected_revision, reviewed_hash=reviewed_hash, request_hash=request_hash,
             operation_key=operation_key, actor=actor)
-        if review.purchase_sources:
+        if review.purchase_sources or review.material_sources:
             from app.models.multilevel_bom import OrderBomSourceHandoff
             from app.services.multilevel_bom_execution_boundary import _source_identity
             targets = {source.component_product_id: source for source in review.rule.proposed.snapshots}
-            for source_id in review.purchase_sources:
+            for source_id in review.purchase_sources + review.material_sources:
                 source = db.get(SalesOrderItemBomComponent, source_id)
                 target = targets[source.component_product_id]
                 db.add(OrderBomSourceHandoff(revision_id=row.id, source_snapshot_id=source.id,
                     target_snapshot_id=target.id, order_item_id=item.id, product_id=source.component_product_id,
-                    source_kind="purchased", source_basis_hash=_source_identity(source)["hash"],
+                    source_kind="manufactured" if source_id in review.material_sources else "purchased",
+                    source_basis_hash=_source_identity(source)["hash"],
                     target_basis_hash=_source_identity(target)["hash"]))
             db.flush()
             from app.services.multilevel_bom_orders import read_compiled_order_bom
             from app.services.multilevel_bom_source_handoffs import current_source_handoffs
             current_source_handoffs(db, read_compiled_order_bom(db, item.id))
+            if review.material_sources:
+                from app.services.multilevel_bom_carried_material import carried_material_pieces
+                carried_material_pieces(db, read_compiled_order_bom(db, item.id))
         order = db.get(Order, item.order_id)
         for reservation in review.active:
             lot = review.lots[reservation.inventory_lot_id]
@@ -379,7 +399,8 @@ def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, ex
         # Fully covered stock does not create new material receipts or rewrite
         # completed production tasks. Dispatch reads the new inventory bindings.
         append_audit_event(db, event_category="business", result="success", source="web", module_code="orders",
-            action_code="switch_purchase_graph_rule" if carry_purchases else "switch_stocked_graph_rule", resource="order_bom_rule_revision", actor=actor,
+            action_code="switch_material_graph_rule" if carry_materials else
+                "switch_purchase_graph_rule" if carry_purchases else "switch_stocked_graph_rule", resource="order_bom_rule_revision", actor=actor,
             entity_type="order_item", entity_id=item.id, customer_id=customer_id,
             details=dict(rule_revision_id=row.id, review_hash=reviewed_hash, request_hash=request_hash,
                 operation_key=operation_key, preview=review.preview, original_execution=json.loads(review.document),

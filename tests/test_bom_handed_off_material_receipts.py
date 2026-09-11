@@ -144,3 +144,80 @@ def test_partial_material_receipt_preserves_original_consumption(composite_requi
                 RequisitionItemBomSource.id == PurchasePurposeSourceSnapshot.source_bom_requisition_source_id).where(
                     RequisitionItemBomSource.sales_order_item_bom_component_id == target_id)))
             assert len(purposes) == 1 and purposes[0].order_purpose_sheet_qty == half
+
+
+def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_requisition_app, _p181_published_map_identity, monkeypatch):
+    from app.api.bom_cutover import router
+    from app.models.order import OrderItem
+    from app.models.multilevel_bom import OrderBomSourceHandoff, BomAssembly
+    from app.models.warehouse_inventory import InventoryLot
+    from app.services.multilevel_bom_receipts import graph_material_receipts_closed
+    from app.api.requisition import _bom_pending_component_requirements
+    app, factory = composite_requisition_app
+    app.include_router(router, prefix="/api/orders")
+    material_id, snapshots = seed_graph(factory)
+    with TestClient(app) as client:
+        _login(client)
+        sources = purchase_sources(client, factory, material_id, snapshots)
+        facts = [_freeze_receipt_fact(client, source, idempotency_key=f"public-paper-price-{index}",
+            unit_price="0.1234").json() for index, source in enumerate(sources)]
+        half = sources[0].order_purpose_sheet_qty // 2
+        first = _receive(client, sources[0], facts[0], quantity=half, idempotency_key="public-paper-first")
+        assert first.status_code == 200, first.text
+        url = "/api/orders/items/1/material-bom-cutover"
+        preview = client.post(url + "/preview", json={})
+        assert preview.status_code == 200, preview.text
+        review = preview.json()
+        assert review["ready"] and review["carried_materials"]
+        payload = {key: review[key] for key in ("reviewed_hash", "preview_hash", "rule_revision",
+            "source_lot_versions", "target_locations")}
+        payload["operation_key"] = "public-material-switch"
+        from pathlib import Path
+        import sqlite3
+        from tests.test_multilevel_bom_modes_migration import original_facts
+        with factory() as db:
+            path = Path(db.get_bind().url.database)
+        def all_facts():
+            with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as check:
+                columns = {table: [row[1] for row in check.execute(f'PRAGMA table_info("{table}")')]
+                    for table, in check.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                return original_facts(check, columns)
+        from app.services import audit_log
+        from app.services.multilevel_bom_plan import BomPlanError
+        before = all_facts()
+        stale = {**payload, "reviewed_hash": "0" * 64, "preview_hash": "0" * 64}
+        assert client.post(url + "/execute", json=stale).status_code == 409
+        assert all_facts() == before
+        def fail_audit(*args, **kwargs):
+            raise BomPlanError("isolated material handoff audit failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(audit_log, "append_audit_event", fail_audit)
+            failed = client.post(url + "/execute", json=payload)
+            assert failed.status_code == 409 and "audit failure" in failed.text
+        assert all_facts() == before
+        switched = client.post(url + "/execute", json=payload)
+        assert switched.status_code == 200, switched.text
+        assert client.post(url + "/execute", json=payload).json() == switched.json()
+        with factory() as db:
+            assert len(list(db.scalars(select(OrderBomSourceHandoff)))) == 2
+            assert graph_material_receipts_closed(db, db.get(OrderItem, 1)) is False
+            assert all(row["requisition_qty"] == 0 for row in _bom_pending_component_requirements(db, db.get(OrderItem, 1)))
+        for index, source in enumerate(sources):
+            result = _receive(client, source, facts[index], quantity=source.order_purpose_sheet_qty-(half if index == 0 else 0),
+                idempotency_key=f"public-material-after-{index}")
+            assert result.status_code == 200, result.text
+        with factory() as db:
+            assert graph_material_receipts_closed(db, db.get(OrderItem, 1)) is True
+            outputs = list(db.scalars(select(BomAssembly).where(BomAssembly.order_item_id == 1,
+                BomAssembly.output_product_id == 1, BomAssembly.output_lot_id.is_not(None))))
+            assert sum(db.get(InventoryLot, row.output_lot_id).quantity_reserved for row in outputs) == 10
+            from app.services.receipt_managed_production import receipt_purpose_summaries_by_order_item_ids
+            summary = receipt_purpose_summaries_by_order_item_ids(db, [1])[1]
+            assert summary["current_theoretical_finished_capacity_qty"] == 10
+            assert summary["automatic_finished_output_qty"] == 10
+            assert summary["remaining_order_purpose_sheet_qty"] == 0
+            assert summary["projection_inconsistent"] is False
+        reverted = client.put(f"/api/incoming/receipt-items/{result.json()['receipt_item_id']}/revert", json={})
+        assert reverted.status_code == 200, reverted.text
+        with factory() as db:
+            assert graph_material_receipts_closed(db, db.get(OrderItem, 1)) is False

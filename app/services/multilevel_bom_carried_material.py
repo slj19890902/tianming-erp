@@ -14,7 +14,7 @@ from app.services.multilevel_bom_plan import BomPlanError
 from app.services.multilevel_bom_source_handoffs import current_source_handoffs
 
 
-def carried_material_pieces(db, compiled):
+def carried_material_pieces(db, compiled, *, include_pending=True):
     """Credit old paid/pending material minus its historical output inputs.
 
     Current-version outputs stay represented by their original material, just
@@ -47,7 +47,7 @@ def carried_material_pieces(db, compiled):
             IncomingReceiptPurposeAllocation.status == "posted")))
         received = sum(row.receipt_order_purpose_sheet_qty for row in allocations)
         if line.status in {"有效", "supplier_requisition_created"}:
-            capacity = max(received, purpose.order_purpose_sheet_qty)
+            capacity = max(received, purpose.order_purpose_sheet_qty) if include_pending else received
         elif line.status in {"已入库", "已取消", "已作废", "已撤回"}:
             capacity = received
         else:

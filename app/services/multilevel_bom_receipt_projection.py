@@ -16,6 +16,9 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
     body_ids = {n.product_id for n in graph.nodes if n.source == "manufactured"
                 and any(e.parent_id == n.product_id and e.relation == "assembly" for e in graph.edges)}
     snapshots = {s.component_product_id: s for s in requirements.compiled.snapshots}
+    from app.services.multilevel_bom_carried_material import carried_material_pieces
+    inherited_received = carried_material_pieces(db, requirements.compiled, include_pending=False)
+    inherited_planned = carried_material_pieces(db, requirements.compiled)
     states = {s["component_key"]: s for s in states}
     received, planned, rows = {}, {}, []
     received_bodies, planned_bodies = {}, {}
@@ -29,17 +32,21 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
             # Recover physical pieces before applying this real node's ratio.
             divisor = int(state.get("pieces_per_finished", 1))
             credit = semi_credits.get((order_item_id, key), 0)
-            current = int((state.get("received_capacity", Decimal(0)) * divisor + credit) // route.pieces_per_unit)
-            future = int((state.get("planned_capacity", Decimal(0)) * divisor + credit) // route.pieces_per_unit)
+            carried_received = inherited_received.get((node.product_id, route.key), 0)
+            carried_planned = inherited_planned.get((node.product_id, route.key), 0)
+            current = int((state.get("received_capacity", Decimal(0)) * divisor + credit + carried_received) // route.pieces_per_unit)
+            future = int((state.get("planned_capacity", Decimal(0)) * divisor + credit + carried_planned) // route.pieces_per_unit)
             current_routes.append(current)
             planned_routes.append(future)
             pending = max(int(state.get("planned_order_sheet_qty", 0)) - int(state.get("received_order_sheet_qty", 0)), 0)
+            pending += max(carried_planned-carried_received, 0) // route.pieces_per_sheet
             rows.append({"component_key": key, "component_label": state.get("component_label", snapshot.snapshot_component_product_name),
                 "component_type": route.key, "product_id": node.product_id,
                 "planned_order_sheet_qty": int(state.get("planned_order_sheet_qty", 0)),
                 "received_order_sheet_qty": int(state.get("received_order_sheet_qty", 0)),
                 "reserve_received_sheet_qty": int(state.get("reserve_received_sheet_qty", 0)),
                 "semi_reserved_piece_qty": credit, "current_finished_capacity_qty": current,
+                "carried_received_piece_qty": carried_received, "carried_planned_piece_qty": carried_planned,
                 "planned_finished_capacity_qty": future, "remaining_order_sheet_qty": pending,
                 "over_received_order_sheet_qty": max(-int(state.get("planned_order_sheet_qty", 0)) + int(state.get("received_order_sheet_qty", 0)), 0),
                 "waiting_for_pairing": current < future and pending > 0})

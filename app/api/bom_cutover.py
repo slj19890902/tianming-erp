@@ -201,7 +201,24 @@ def execute_purchase(item_id: int, payload: PurchaseExecute, db: Session = Depen
     return _execute_stocked(item_id, payload, db, user, carry_purchases=True)
 
 
-def _execute_stocked(item_id, payload, db, user, *, carry_purchases):
+@router.post("/items/{item_id}/material-bom-cutover/preview")
+def preview_material(item_id: int, payload: CutoverPreview, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    customer_id = _access(db, user, item_id)
+    from app.services.multilevel_bom_stocked_handoff import review_stocked_handoff
+    try:
+        return review_stocked_handoff(db, order_item_id=item_id, customer_id=customer_id,
+            target_locations=payload.target_locations, carry_materials=True).preview
+    except (BomPlanError, SubkitError, CompositeBOMError, WarehouseInventoryError, OSError) as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/items/{item_id}/material-bom-cutover/execute")
+def execute_material(item_id: int, payload: PurchaseExecute, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    return _execute_stocked(item_id, payload, db, user, carry_purchases=True, carry_materials=True)
+
+
+def _execute_stocked(item_id, payload, db, user, *, carry_purchases, carry_materials=False):
     customer_id = _access(db, user, item_id)
     from app.services.multilevel_bom_stocked_handoff import execute_stocked_handoff
     try:
@@ -210,7 +227,7 @@ def _execute_stocked(item_id, payload, db, user, *, carry_purchases):
         result = execute_stocked_handoff(db, order_item_id=item_id, customer_id=customer_id,
             reviewed_hash=payload.reviewed_hash, expected_revision=payload.rule_revision,
             target_locations=payload.target_locations, source_lot_versions=payload.source_lot_versions,
-            operation_key=payload.operation_key, actor=user, carry_purchases=carry_purchases)
+            operation_key=payload.operation_key, actor=user, carry_purchases=carry_purchases, carry_materials=carry_materials)
         db.commit()
         return result
     except (BomPlanError, SubkitError, CompositeBOMError, WarehouseInventoryError, OSError) as exc:

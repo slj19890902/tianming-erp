@@ -40,7 +40,8 @@ def consume_delivery_subkits(db: Session, *, delivery_item_id: int, operator_id:
         if sum(r.quantity for r in existing) != needed or any(r.operation_key != operation_key for r in existing):
             raise SubkitError("该送货的子套件扣减记录已存在，请刷新")
         return
-    with db.begin_nested():
+    from app.services.bom_transactions import atomic_bom
+    with atomic_bom(db):
         lots = sorted(_lots(db, line.order_item_id), key=inventory_fifo_sort_key)
         if sum(lot.quantity_available for lot in lots) < needed:
             raise SubkitError("内衬套件数量不足，不能只送内盒")
@@ -78,7 +79,8 @@ def consume_delivery_subkits(db: Session, *, delivery_item_id: int, operator_id:
 
 
 def reverse_delivery_subkits(db: Session, *, delivery_item_id: int, operator_id: int, operation_key: str):
-    with db.begin_nested():
+    from app.services.bom_transactions import atomic_bom
+    with atomic_bom(db):
         for allocation in db.scalars(select(SubkitDeliveryAllocation).where(
             SubkitDeliveryAllocation.delivery_item_id == delivery_item_id,
             SubkitDeliveryAllocation.reversed.is_(False))):

@@ -375,7 +375,7 @@
             <div id="lotEditConfirmDateWrap" class="field hidden" style="grid-column:span 2"><label><input id="lotEditConfirmStockDateExact" type="checkbox" onchange="markLotEditDateConfirmation()"> 确认当前日期为真实入库日期</label></div>
           </div>
           <div class="notice info" style="margin-top:12px">若选择客户专用库存，必须从该客户候选中点击存货编码；不能只改客户而保留其他客户的产品。</div>
-          <div class="lot-edit-actions"><button id="lotEditGeneralize" class="btn warn hidden" type="button">转为通用库存</button><button id="lotEditCancel" class="btn" type="button">取消</button><button id="lotEditSave" class="btn primary" type="submit">保存批次修改</button></div>
+          <div class="lot-edit-actions"><button class="btn" type="button" onclick="confirmLotPhysicalIdentity()">核实批次规格工艺</button><button id="lotEditGeneralize" class="btn warn hidden" type="button">转为通用库存</button><button id="lotEditCancel" class="btn" type="button">取消</button><button id="lotEditSave" class="btn primary" type="submit">保存批次修改</button></div>
         </form>
       </div>
       <div id="stagingTransferMask" class="lot-edit-mask hidden">
@@ -1661,6 +1661,31 @@
       if(!confirm("确认将该成品批次转为通用库存？系统会保留专用的‘转通用’库存流水；后续跨客户使用仍需人工确认。"))return;
       state.lotEdit.saving=true;$("lotEditGeneralize").disabled=true;$("lotEditSave").disabled=true;
       try{await api(`/api/warehouse/lots/${lotId}/transfer-to-general`,{method:"POST",body:JSON.stringify({expected_version:state.lotEdit.version,idempotency_key:createIdempotencyKey()})});closeLotEditor();if(await loadLots()===false)throw new Error("库存列表刷新失败");toast("已转为通用库存，并保留专用库存流水")}catch(error){toast(error.message,true)}finally{$("lotEditGeneralize").disabled=false;if(!$('lotEditMask').classList.contains('hidden')){$("lotEditSave").disabled=false;state.lotEdit.saving=false}}
+    }
+    const physicalIdentityPending = new Map();
+    async function confirmLotPhysicalIdentity(){
+      if(state.lotEdit.saving)return;
+      const lotId=state.lotEdit.lotId;
+      state.lotEdit.saving=true;
+      try{
+        let payload=physicalIdentityPending.get(lotId);
+        if(!payload){
+          const preview=await api(`/api/warehouse/lots/${lotId}/physical-identity/preview`);
+          const labels={product_id:"真实产品ID",unit:"单位",spec:"规格",material:"材质",flute:"楞型",box_style:"箱型",production_process:"工艺",production_notes:"生产说明",layer_count:"层数",splice_mode:"拼接",pieces_per_box:"每件片数",crease_type:"压线方式",crease_left_mm:"左压线",crease_middle_mm:"中压线",crease_right_mm:"右压线",base_crease_type:"底压线方式",base_crease_left_mm:"底左压线",base_crease_middle_mm:"底中压线",base_crease_right_mm:"底右压线",flap_mm:"摇盖"};
+          Object.assign(labels,{mold_tool_id:"刀模ID",die_cut_path:"模切资料",assembly:"组装子件"});
+          const lines=Object.entries(preview.physical_basis).filter(([key])=>key!=="schema").map(([key,value])=>`${labels[key]||key}：${key==="assembly"?(value.length?value.map(child=>`产品 ${child.product_id} × ${child.quantity}`).join("，"):"无"):value??"未登记"}`);
+          if(!confirm(`请核对批次 ${preview.lot_number} 的实物与以下产品依据一致。未登记项目不能视为已核实的额外工艺。\n${lines.join("\n")}\n确认后记录审计，库存数量保持 ${preview.quantity_available}。当前编辑框的未保存修改不参与本次确认。`))return;
+          payload={preview_hash:preview.preview_hash,operation_key:createIdempotencyKey(),physical_match_confirmed:true};
+          physicalIdentityPending.set(lotId,payload);
+        }
+        await api(`/api/warehouse/lots/${lotId}/physical-identity/confirm`,{method:"POST",body:JSON.stringify(payload)});
+        physicalIdentityPending.delete(lotId);
+        state.lotEdit.saving=false;closeLotEditor();await loadLots();toast("已记录批次规格工艺依据，库存数量未改变");
+      }catch(error){
+        if(error.status>=400&&error.status<500){physicalIdentityPending.delete(lotId);toast(`${error.message}；请重新预览核对`,true)}
+        else toast(`${error.message}；结果不确定时再次点击将沿用原操作标识重试`,true)
+      }
+      finally{state.lotEdit.saving=false}
     }
     async function saveLotEditor(event){
       event.preventDefault();if(state.lotEdit.saving)return;

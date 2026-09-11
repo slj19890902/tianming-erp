@@ -1920,6 +1920,10 @@ def _composite_parent_requisition_is_suppressed(
     board again when the operator saves the reviewed draft.
     """
 
+    # Schema5 includes the root's own manufactured route as a real snapshot.
+    # The separate legacy parent source would purchase that same board twice.
+    if any(s.snapshot_schema_version == 5 and s.component_product_id == item.product_id for s in snapshots):
+        return True
     return bool(
         getattr(item, "is_virtual_composite_parent_snapshot", False)
     ) or _is_set_only_a3_surround_bom(snapshots)
@@ -2075,6 +2079,8 @@ class _PendingRequisitionReadContext:
                 SalesOrderItemBomComponent.id,
             )
         ).all()
+        from app.services.multilevel_bom_production_versions import project_complete_order_material_rows
+        bom_snapshots = project_complete_order_material_rows(db, bom_snapshots)
         for snapshot in bom_snapshots:
             self._bom_snapshots_by_item_id.setdefault(
                 int(snapshot.sales_order_item_id), []
@@ -2583,7 +2589,7 @@ class _PendingRequisitionReadContext:
         *,
         snapshots: list[SalesOrderItemBomComponent],
     ) -> list[dict]:
-        if item.id not in self._bom_batch_supported_item_ids:
+        if item.id not in self._bom_batch_supported_item_ids or any(s.snapshot_schema_version == 5 for s in snapshots):
             return _bom_pending_component_requirements(
                 db, item, snapshots=snapshots
             )
@@ -2940,7 +2946,7 @@ def _bom_snapshots_for_order_item(
     db: Session,
     order_item_id: int,
 ) -> list[SalesOrderItemBomComponent]:
-    return db.scalars(
+    rows = db.scalars(
         select(SalesOrderItemBomComponent)
         .where(SalesOrderItemBomComponent.sales_order_item_id == order_item_id)
         .order_by(
@@ -2948,6 +2954,25 @@ def _bom_snapshots_for_order_item(
             SalesOrderItemBomComponent.id,
         )
     ).all()
+    from app.services.multilevel_bom_production_versions import project_complete_order_material_rows
+    return project_complete_order_material_rows(db, rows)
+
+
+def _bom_snapshot_inventory_source(db: Session, snapshot: SalesOrderItemBomComponent) -> str:
+    if snapshot.snapshot_schema_version != 5:
+        return "manufactured"
+    from app.services.multilevel_bom_orders import read_order_graph
+    from app.services.multilevel_bom_plan import BomPlanError
+    try:
+        graph = read_order_graph(db, snapshot.sales_order_item_id)
+        if graph is None:
+            raise BomPlanError("多级BOM缺少冻结产品图")
+        node = next((n for n in graph.nodes if n.product_id == snapshot.component_product_id), None)
+        if node is None:
+            raise BomPlanError("组件不属于冻结BOM产品图")
+        return node.source
+    except BomPlanError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 def _bom_snapshot_requirements(
@@ -2962,6 +2987,18 @@ def _bom_snapshot_requirements(
     inventory_coverage_override: dict[str, int] | None = None,
 ) -> dict:
     """Return one immutable BOM snapshot physical source requirement."""
+    graph_requirements = None
+    if snapshot.snapshot_schema_version == 5:
+        from app.services.multilevel_bom_requirements import read_graph_requirements
+        from app.services.multilevel_bom_plan import BomPlanError
+        try:
+            graph_requirements = read_graph_requirements(db, snapshot.sales_order_item_id)
+            if graph_requirements is None:
+                raise BomPlanError("多级BOM缺少冻结产品图")
+            if graph_requirements.source(snapshot.component_product_id) != "manufactured":
+                raise BomPlanError("组套成品或外购产品不能作为纸板材料报料")
+        except BomPlanError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
     component = _bom_snapshot_component_type(snapshot, component_type)
     demand = None
     if (
@@ -2987,54 +3024,19 @@ def _bom_snapshot_requirements(
         else demand.effective_sets
     )
     try:
-        if actual_yield_per_sheet is not None:
-            actual_yield_per_sheet = require_positive_integer(
-                actual_yield_per_sheet,
-                label="实际模切出数",
-            )
-            if not snapshot.is_die_cut:
-                raise CompositeBOMExecutionError("非模切组件不能填写实际模切出数")
-            if snapshot.mold_max_yield_per_sheet is None:
-                raise CompositeBOMExecutionError("模切组件缺少最大模切出数")
-            if actual_yield_per_sheet > int(snapshot.mold_max_yield_per_sheet):
-                raise CompositeBOMExecutionError("实际模切出数不能超过模具最大出数")
+        from app.services.bom_physical_quantities import resolve_bom_sheet_yield
+        physical_yield = resolve_bom_sheet_yield(snapshot, cutting_mode=cutting_mode,
+                                               actual_yield_per_sheet=actual_yield_per_sheet)
         quantity_per_set = require_positive_integer(
             snapshot.quantity_per_set,
             label="组件每套用量",
         )
     except CompositeBOMExecutionError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    allowed_cutting_mode = (
-        (snapshot.snapshot_component_box_style or "").strip()
-        in CUTTING_MODE_BOX_STYLES
-    )
-    frozen_cutting_mode = (
-        snapshot.snapshot_component_default_cutting_mode or DEFAULT_CUTTING_MODE
-    )
-    resolved_cutting_mode = (
-        (cutting_mode or frozen_cutting_mode)
-        if allowed_cutting_mode
-        else DEFAULT_CUTTING_MODE
-    )
-    resolved_cutting_mode = normalize_cutting_mode(resolved_cutting_mode)
-    cutting_factor = _cutting_factor(resolved_cutting_mode)
-    if actual_yield_per_sheet is not None:
-        yield_per_sheet = actual_yield_per_sheet
-    elif cutting_factor > 1:
-        if (
-            snapshot.is_die_cut
-            and snapshot.mold_max_yield_per_sheet is not None
-            and cutting_factor > int(snapshot.mold_max_yield_per_sheet)
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="默认开料每张产出不能超过模具最大出数",
-            )
-        yield_per_sheet = cutting_factor
-    elif snapshot.is_die_cut and snapshot.mold_max_yield_per_sheet is not None:
-        yield_per_sheet = int(snapshot.mold_max_yield_per_sheet)
-    else:
-        yield_per_sheet = 1
+    resolved_cutting_mode = physical_yield.cutting_mode
+    cutting_factor = physical_yield.cutting_factor
+    yield_per_sheet = physical_yield.yield_per_sheet
+    actual_yield_per_sheet = physical_yield.actual_yield_per_sheet
     coverage = (
         inventory_coverage_override
         if inventory_coverage_override is not None
@@ -3044,6 +3046,17 @@ def _bom_snapshot_requirements(
             component_type=component,
         )
     )
+    if graph_requirements is not None:
+        effective_sets = graph_requirements.order_quantity
+        physical_multiplier = _bom_snapshot_physical_pieces_per_component(snapshot, component)
+        finished_credit = graph_requirements.finished_units[snapshot.component_product_id] * physical_multiplier
+        semi_credit = graph_requirements.physical_credits[snapshot.component_product_id, component]
+        coverage = {"finished_piece_quantity": finished_credit, "semi_piece_quantity": semi_credit,
+                    "total_piece_quantity": finished_credit + semi_credit}
+        # Ancestor finished stock reduces assembly-child demand BEFORE the
+        # node's own finished and physical-stock credits are applied once.
+        required_piece_quantity_override = next(p.required_units for p in graph_requirements.plan.products
+                                               if p.product_id == snapshot.component_product_id)
     finished_reserved = coverage["finished_piece_quantity"]
     semi_reserved = coverage["semi_piece_quantity"]
     component_unit_quantity = int(
@@ -3061,8 +3074,18 @@ def _bom_snapshot_requirements(
         coverage["total_piece_quantity"], required_piece_quantity
     )
     remaining = max(required_piece_quantity - inventory_covered, 0)
+    carried_material_credit = 0
+    if graph_requirements is not None:
+        from app.services.multilevel_bom_carried_material import carried_material_pieces
+        try:
+            carried_material_credit = min(remaining, carried_material_pieces(db,
+                graph_requirements.compiled).get((snapshot.component_product_id, component), 0))
+        except BomPlanError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        remaining -= carried_material_credit
     net_sheets = (remaining + yield_per_sheet - 1) // yield_per_sheet
-    requisition_qty = net_sheets + int(snapshot.spare_sheet_quantity or 0)
+    spare_sheets = int(snapshot.spare_sheet_quantity or 0) if graph_requirements is None or remaining > 0 else 0
+    requisition_qty = net_sheets + spare_sheets
     is_base = component == "base"
     component_suffix = "底" if is_base else "盖" if component == "cover" else ""
     product_name = snapshot.snapshot_component_product_name
@@ -3127,11 +3150,12 @@ def _bom_snapshot_requirements(
         "finished_component_reserved_piece_qty": finished_reserved,
         "semi_finished_reserved_piece_qty": semi_reserved,
         "inventory_covered_piece_qty": inventory_covered,
+        "carried_material_piece_qty": carried_material_credit,
         "remaining_required_piece_qty": remaining,
         "actual_yield_per_sheet": actual_yield_per_sheet,
         "yield_per_sheet": yield_per_sheet,
         "requisition_qty": requisition_qty,
-        "spare_sheet_quantity": int(snapshot.spare_sheet_quantity or 0),
+        "spare_sheet_quantity": spare_sheets,
         "cutting_mode": resolved_cutting_mode,
         "cutting_factor": cutting_factor,
         "is_die_cut": bool(snapshot.is_die_cut),
@@ -3372,6 +3396,15 @@ def _bom_snapshot_is_fully_requisitioned(
     db: Session,
     snapshot: SalesOrderItemBomComponent,
 ) -> bool:
+    source = _bom_snapshot_inventory_source(db, snapshot)
+    if source in {"assembled", "separate"}:
+        # Neither node has its own paperboard route. Every physical descendant
+        # is checked independently by the caller, including purchased children.
+        return True
+    if source == "purchased":
+        # A purchased node is never implicitly marked supplied by a paperboard
+        # requisition. Its external-purchase adapter must prove fulfillment.
+        return False
     for component in _bom_snapshot_component_types(snapshot):
         requirements = _bom_snapshot_requirements(
             db,
@@ -3448,6 +3481,8 @@ def _bom_pending_component_requirements(
         else _bom_snapshots_for_order_item(db, item.id)
     )
     for snapshot in resolved_snapshots:
+        if _bom_snapshot_inventory_source(db, snapshot) != "manufactured":
+            continue
         for component_type in _bom_snapshot_component_types(snapshot):
             requirements = _bom_snapshot_requirements(
                 db,
@@ -12669,6 +12704,7 @@ def _create_batch_locked(
                 pending_source_keys = {
                     (snapshot.id, component_type)
                     for snapshot in bom_snapshots
+                    if _bom_snapshot_inventory_source(db, snapshot) == "manufactured"
                     for component_type in _bom_snapshot_component_types(snapshot)
                     if int(
                         _bom_snapshot_requirements(
@@ -12809,10 +12845,7 @@ def _create_batch_locked(
                         item.cardboard_len = line.cardboard_len
                         item.cardboard_width = line.cardboard_width
                         continue
-                    snapshot = db.get(
-                        SalesOrderItemBomComponent,
-                        line.bom_snapshot_id,
-                    )
+                    snapshot = selected_snapshot_by_id.get(line.bom_snapshot_id)
                     if (
                         snapshot is None
                         or snapshot.sales_order_item_id != item.id

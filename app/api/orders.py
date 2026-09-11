@@ -613,6 +613,7 @@ class PdfImportConfirmation(BaseModel):
 
 
 class OrderItemUpdate(BaseModel):
+    bom_production_expected_revision: int | None = Field(default=None, ge=0)
     mold_repair_confirmation_token: str | None = Field(default=None, max_length=4000)
     quantity: int
     unit_price: Decimal
@@ -1905,8 +1906,18 @@ def _validated_combination_provenance(
         item_payload.combination_quantity_per_set_snapshot,
     )
     product_mode = _product_combination_mode(product)
+    # A physical subassembly can be priced as a child of another combination.
+    # Its upstream provenance is validated below; its own graph is frozen by
+    # the normal graph-order writer. Legacy composites lack that graph contract.
+    nested_physical_child = False
+    if item_payload.combination_role == "priced_component" and product_mode == "parent_priced_set":
+        from app.models.multilevel_bom import ProductBomProfile
+        profile = db.get(ProductBomProfile, product.id)
+        nested_physical_child = profile is not None and profile.source in {
+            "assembled", "manufactured", "purchased",
+        }
 
-    if product_mode == "parent_priced_set":
+    if product_mode == "parent_priced_set" and not nested_physical_child:
         if any(value is not None for value in requested_fields):
             raise HTTPException(
                 status_code=400,
@@ -2480,6 +2491,7 @@ def _order_response(
                 "combination_set_quantity_snapshot": item.combination_set_quantity_snapshot,
                 "combination_quantity_per_set_snapshot": item.combination_quantity_per_set_snapshot,
                 "bom_components": item_bom_components,
+                "bom_production_revision": max((row.get("production_revision", 0) for row in item_bom_components), default=0),
                 "external_packaging_requirements": external_components_by_item_id.get(
                     item.id, []
                 ),
@@ -6442,6 +6454,7 @@ def _apply_new_order_component_demands(
         return
     preview = get_order_item_bom_preview(db, item.id)
     components = preview["components"]
+    graph_components = any((row.get("snapshot_schema_version") or 0) >= 5 for row in components)
     by_relation_id = {
         int(component["product_bom_component_id"]): component
         for component in components
@@ -6462,6 +6475,8 @@ def _apply_new_order_component_demands(
         desired = target.required_piece_quantity
         if desired == current:
             continue
+        if graph_components:
+            raise HTTPException(status_code=409, detail="真实BOM组件数量须符合组套关系，请在常用箱维护配方或备料量")
         key = target.idempotency_key.strip()
         _adjustment, created = append_component_demand_adjustment(
             db,
@@ -6483,7 +6498,8 @@ def _apply_new_order_component_demands(
                 after_quantity=desired,
                 idempotency_key=key,
             )
-    ensure_component_production_tasks(db, item.id)
+    if not graph_components:
+        ensure_component_production_tasks(db, item.id)
 
 
 def _validate_existing_component_demands(
@@ -6724,6 +6740,9 @@ def _create_order_impl(
     observability: dict[str, object] | None = None,
     request: Request | None = None,
 ):
+    from app.models.multilevel_bom import ProductBomProfile
+    from app.services.multilevel_bom_external_freeze import freeze_order_procurement
+    from app.services.multilevel_bom_plan import BomPlanError
     pending_drawing_consumptions: list[PendingTemporaryConsumption] = []
     _set_order_save_stage(observability, "customer_scope")
     if payload.customer_id is not None:
@@ -6811,6 +6830,7 @@ def _create_order_impl(
 
         new_product_cache: dict[str, Product] = {}
         resolved_products: dict[int, Product] = {}
+        graph_modes: dict[int, str | None] = {}
         validated_quantities: dict[int, int] = {}
         validated_layer_flutes: dict[
             int,
@@ -6949,7 +6969,9 @@ def _create_order_impl(
                     index=index,
                 )
             )
-            if bool(getattr(product, "is_virtual_composite_parent", False)):
+            profile = db.get(ProductBomProfile, product.id) if product.id is not None else None
+            graph_modes[index] = profile.source if profile else None
+            if graph_modes[index] == "assembled" or bool(getattr(product, "is_virtual_composite_parent", False)):
                 validated_layer_flutes[index] = (None, None, None, None)
                 resolved_products[index] = product
                 combination_provenances[index] = _validated_combination_provenance(
@@ -7180,6 +7202,10 @@ def _create_order_impl(
             ).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
             total += subtotal
             item_sequence = reserve_next_item_sequence(db, order.id)
+            # This is a second loop: do not reuse the last validated line's
+            # PDF flag (assembled/virtual lines may skip that assignment).
+            is_pdf_matched_product = bool(payload.pdf_import_confirmation is not None
+                and item_payload.product_id is not None and not item_payload.is_new_product)
             initial_material_code = (
                 (
                     selected_material.code
@@ -7219,7 +7245,7 @@ def _create_order_impl(
                         "flap_mm": None,
                         "default_cutting_mode": DEFAULT_CUTTING_MODE,
                     }
-                    if bool(
+                    if graph_modes[index] == "assembled" or bool(
                         getattr(product, "is_virtual_composite_parent", False)
                     )
                     else _order_snapshot_box_configuration(product)
@@ -7446,6 +7472,16 @@ def _create_order_impl(
         db.flush()  # 获取 item.id 以便处理图纸
         for index, created_item in enumerate(created_items, start=1):
             product = resolved_products[index]
+            if graph_modes[index] is not None:
+                # Freeze graph and external-node identities together BEFORE the
+                # legacy external writer can create unrelated parent-only rows.
+                freeze_order_procurement(db, order_item_id=created_item.id, actor=user,
+                                         root_order_snapshot=True)
+                _apply_new_order_component_demands(db, item=created_item,
+                    targets=payload.items[index - 1].bom_component_demands,
+                    user=user, order=order, request=request)
+                create_or_refresh_production_task(db, created_item.id)
+                continue
             try:
                 freeze_order_item_external_components(db, order_item=created_item)
             except OrderExternalPackagingSnapshotError as error:
@@ -7552,7 +7588,7 @@ def _create_order_impl(
             observability=observability,
         )
         raise raise_composite_bom_http(error) from error
-    except CompositeBomWorkflowError as error:
+    except (CompositeBomWorkflowError, BomPlanError) as error:
         db.rollback()
         _rollback_order_drawing_consumptions(
             pending_drawing_consumptions,
@@ -7887,6 +7923,9 @@ def update_order_item(
     item = db.get(OrderItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="订单明细不存在")
+    from app.services.multilevel_bom_production_versions import order_production_values
+    original_production_values = order_production_values(item)
+    current_bom_production_revision = 0
     order_for_scope = db.get(Order, item.order_id)
     if order_for_scope is None:
         raise HTTPException(status_code=404, detail="订单不存在")
@@ -8376,6 +8415,7 @@ def update_order_item(
                 reason="订单数量变更（系统记录）",
                 actor_id=user.id,
                 idempotency_key=adjustment_key,
+                target_order_quantity=payload.quantity,
             )
         except CompositeBomWorkflowError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
@@ -8574,6 +8614,25 @@ def update_order_item(
             ),
             confirmation_token=payload.product_confirmation_token,
         )
+    from app.models.multilevel_bom import OrderBomGraph
+    if db.get(OrderBomGraph, item.id) is not None:
+        from app.services.multilevel_bom_orders import read_compiled_order_bom
+        from app.services.multilevel_bom_production_versions import append_order_production_revision
+        from app.services.multilevel_bom_plan import BomPlanError
+        try:
+            compiled = read_compiled_order_bom(db, item.id)
+            current_bom_production_revision = max((getattr(row, "production_revision", 0) for row in compiled.snapshots), default=0)
+            root = next(node for node in compiled.graph.nodes if node.product_id == item.product_id)
+            changes = {field: value for field, value in order_production_values(item).items()
+                       if value != original_production_values[field]}
+            if changes and root.source == "manufactured":
+                revision = append_order_production_revision(db, order_item_id=item.id,
+                    changes={str(item.product_id): changes},
+                    expected_revision=payload.bom_production_expected_revision, actor=user)
+                current_bom_production_revision = revision.revision
+        except BomPlanError as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=str(error)) from error
     db.flush()
     try:
         if is_composite_order_item(db, item.id):
@@ -8630,6 +8689,7 @@ def update_order_item(
     db.refresh(item)
     return {
         "id": item.id,
+        "bom_production_revision": current_bom_production_revision,
         "product_id": item.product_id,
         "item_order_number": item.item_order_number,
         "item_sequence": item.item_sequence,
@@ -8752,3 +8812,7 @@ def delete_order_item(
     )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+# Explicit reserved-parts handoff, separate from ordinary order edits.
+from app.api.bom_cutover import router as bom_cutover_router
+router.include_router(bom_cutover_router)

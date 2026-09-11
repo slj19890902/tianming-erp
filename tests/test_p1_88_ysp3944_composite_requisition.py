@@ -232,11 +232,11 @@ def test_common_box_composite_controls_and_production_note_layout() -> None:
         "<div v-else-if=\"modal.type === 'product'\">", 1
     )[1].split("<div v-else-if=\"modal.type === 'material'\">", 1)[0]
     material_index = product_editor.index("材质（代码｜供应商｜克重｜报价）")
-    note_index = product_editor.index("生产备注说明")
-    bom_index = product_editor.index("启用组合产品")
-    fulfillment_index = product_editor.index("交付标签和成品方式")
+    note_index = product_editor.index("生产备注")
+    bom_index = product_editor.index('v-model="bomEditor.enabled"')
+    fulfillment_index = product_editor.index('v-model="productForm.composite_fulfillment_mode"')
     assert material_index < note_index < bom_index
-    assert abs(fulfillment_index - bom_index) < 1200
+    assert 'class="bom-editor-heading-controls"' in product_editor[bom_index - 180:fulfillment_index]
     assert "父件按套下单，组件用于内部生产。" not in product_editor
     assert "订单会冻结本次选择" not in product_editor
     assert 'v-model.trim="productForm.production_notes"' in product_editor

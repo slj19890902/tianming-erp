@@ -107,11 +107,12 @@ def test_layout_matches_selected_compact_information_architecture() -> None:
     )[0]
     assert final_row.index('v-model="productForm.sale_unit_price"') < final_row.index("图纸")
     assert final_row.index("图纸") < final_row.index("图纸记录")
-    assert final_row.index("图纸记录") < final_row.index("product-inline-save")
+    assert "product-inline-save" not in final_row
+    assert 'class="modal-foot product-editor-actions"' in INDEX
 
     assert "productMaterialActiveTab==='candidates'" in PRODUCT_MODAL
     assert "productMaterialActiveTab==='history'" in PRODUCT_MODAL
-    assert "组合产品 / 内部 BOM（不常用）" in PRODUCT_MODAL
+    assert "<summary>组合 BOM</summary>" in PRODUCT_MODAL
     assert 'class="product-secondary-disclosure"' in PRODUCT_MODAL
 
 

@@ -3037,8 +3037,9 @@
       @media(max-width:1000px) { .finance-task-nav { grid-template-columns:repeat(3,minmax(0,1fr)); } }
       @media(max-width:600px) { .finance-task-nav { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; } .finance-step-guide { flex-direction:column; gap:4px; } }
     </style>
-  <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260911-1">
-</head>
+    <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260911-1">
+    <link rel="stylesheet" href="/static/product-editor-compact.css?v=e210145a0c7d" />
+  </head>
   <body>
     <div id="app" v-cloak>
       <div v-if="!user" class="login-shell">
@@ -4516,16 +4517,30 @@
 
             <template v-else-if="activePage === 'incoming'">
               <template v-if="incomingWorkspace==='external-packaging'">
-                <page-head title="包材收料" desc="外购包装待收按采购原单位处理；护角、EPE、外购彩盒等这里只记实收，不增加纸板或成品库存。"></page-head>
+                <page-head title="包材收料" desc="外购包装待收按采购单位实收；BOM 产品按组套规则入库。"></page-head>
                 <div class="toolbar">
                   <div class="toolbar-group">
                     <input class="input" v-model.trim="externalIncomingFilter" @input="pages.externalIncoming=1" placeholder="搜索供应商、采购单、客户、订单或包材" />
                   </div>
                   <div class="toolbar-group">
                     <button class="btn" type="button" :disabled="externalIncomingLoading" @click="loadExternalIncoming">{{ externalIncomingLoading ? '读取中…' : '刷新包材待收' }}</button>
+                    <button class="btn" type="button" @click="externalReceiptHistoryOpen=!externalReceiptHistoryOpen; externalReceiptHistoryOpen && loadExternalReceiptHistory(1)">BOM 实收记录</button>
                     <button class="btn" type="button" @click="returnToBoardIncoming">返回纸板收料</button>
                   </div>
                 </div>
+                <section v-if="externalReceiptHistoryOpen" class="external-incoming-panel">
+                  <div class="toolbar"><input class="input" v-model.trim="externalReceiptHistoryQuery" placeholder="客户、订单或实收单号" @keyup.enter="loadExternalReceiptHistory(1)" /><button class="btn small" :disabled="externalReceiptHistoryLoading" @click="loadExternalReceiptHistory(1)">查询</button></div>
+                  <div v-if="externalReceiptHistoryError" class="status orange">{{ externalReceiptHistoryError }}</div>
+                  <div v-if="externalReceiptHistoryLoading" class="muted">读取中…</div>
+                  <div v-else-if="!externalReceiptHistoryError && !externalReceiptHistory.length" class="muted">暂无 BOM 实收记录</div>
+                  <article v-for="receipt in externalReceiptHistory" :key="receipt.id" class="external-incoming-order">
+                    <div class="external-incoming-order-head"><div><strong>{{ receipt.customer_name }}</strong> · {{ receipt.order_number }}<div class="muted">{{ receipt.receipt_number }} · {{ formatDateTime(receipt.received_at) }}</div></div>
+                      <span v-if="receipt.reversed" class="muted">已撤销</span><button v-else-if="receipt.supports_reversal && user?.role==='admin' && hasPermission('incoming.execute')" class="btn small danger" :disabled="!!externalReceiptReverseBusy" @click="reverseExternalReceipt(receipt)">{{ externalReceiptReverseBusy===receipt.id ? '处理中…' : '撤销实收' }}</button>
+                    </div>
+                    <div v-for="(line,index) in receipt.items" :key="index">{{ line.product_name }} · {{ line.quantity }} {{ line.unit }}</div>
+                  </article>
+                  <pager :page="externalReceiptHistoryPage" :total="externalReceiptHistoryTotal" :page-size="25" :always="true" :compact="true" @change="loadExternalReceiptHistory($event)"></pager>
+                </section>
                 <div v-if="externalIncomingLoading" class="status blue" style="display:block;margin:8px 0">正在读取包材待收；已显示的上次结果不会被清空。</div>
                 <div v-if="externalIncomingError" class="status orange" style="display:block;margin:8px 0">{{ externalIncomingError }} <button class="btn small" :disabled="externalIncomingLoading" @click="loadExternalIncoming">重试</button></div>
                 <div v-if="externalIncomingLoaded && !externalIncomingLoading && !filteredExternalIncoming.length" class="empty">当前条件下没有待收的外购包材。</div>
@@ -6565,7 +6580,7 @@
                   </div>
                   <div v-else-if="canViewCosts && productBoardCostText" class="muted" style="font-size:12px;color:#0369a1">纸板成本参考：{{ productBoardCostText }}</div>
                 </div>
-                <div class="field wide"><label>生产备注说明</label><textarea class="input" rows="2" maxlength="2000" v-model.trim="productForm.production_notes" placeholder="默认空白；填写后会冻结到生产任务单和手机生产任务"></textarea></div>
+                <div class="field wide"><label>生产备注</label><textarea class="input" rows="2" maxlength="2000" v-model.trim="productForm.production_notes" placeholder="生产任务使用的备注"></textarea></div>
                 </div>
 
                 <div class="product-material-details">
@@ -6691,7 +6706,7 @@
               </div>
 
               <div class="product-form-row product-print-row">
-                <div v-if="productForm.supply_mode!=='external_purchase'" class="field product-process-field"><label>结合方式（三选一，模切可另选）</label>
+                <div v-if="productForm.supply_mode!=='external_purchase'" class="field product-process-field"><label>结合 / 模切</label>
                   <div class="process-options">
                     <label class="process-option"><input type="checkbox" value="粘贴" v-model="productForm._production_processes" @change="onProductProcessesChanged" />粘贴</label>
                     <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" @change="onProductProcessesChanged" />打钉</label>
@@ -6756,7 +6771,7 @@
               </div>
 
               <div class="product-form-row product-final-row">
-                <div v-if="canViewSalesAmounts" class="field sensitive-price product-inline-price"><label>{{ productForm.supply_mode==='external_purchase' ? `${commonBoxPriceLabel(productForm.customer_id)} / ${productForm.external_packaging_purchase_unit || '采购单位'}` : commonBoxPriceLabel(productForm.customer_id) }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /><div class="muted">按当前客户口径原值保存，不自动乘或除 1.13。<span v-if="productForm.supply_mode==='external_purchase'">这是给客户的销售单价，不是供应商采购成本。</span></div></div>
+                <div v-if="canViewSalesAmounts" class="field sensitive-price product-inline-price"><label>{{ productForm.supply_mode==='external_purchase' ? `${commonBoxPriceLabel(productForm.customer_id)} / ${productForm.external_packaging_purchase_unit || '采购单位'}` : commonBoxPriceLabel(productForm.customer_id) }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /></div>
                 <div class="field"><label>图纸</label>
                   <input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" />
                 </div>
@@ -6771,78 +6786,92 @@
                     </div>
                   </div>
                 </div>
-                <button type="button" class="btn primary product-inline-save" :disabled="loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : '保存' }}</button>
               </div>
               </fieldset>
-              <details v-if="productForm.supply_mode!=='external_purchase'" class="product-secondary-disclosure">
-              <summary>组合产品 / 内部 BOM（不常用）</summary>
+              <details class="product-secondary-disclosure">
+              <summary>组合 BOM</summary>
               <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
                 <div class="bom-editor-heading">
-                  <h4>组合产品 / 内部 BOM</h4>
                   <div class="bom-editor-heading-controls">
-                    <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="!productForm.id" /> 启用组合产品</label>
-                    <button v-if="bomEditor.enabled && !productForm.is_virtual_composite_parent && productForm.composite_fulfillment_mode === 'parent_delivery' && !bomEditor.subkit" type="button" class="btn small" @click="bomEditor.subkit = {name:'内衬',kits_per_parent:1,version:0,enabled:true}">组成子套件</button>
-                    <span v-if="bomEditor.subkit" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap">
+                    <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="!productForm.id" /> 启用</label>
+                    <label class="remember-line">库存
+                      <select class="select" aria-label="BOM库存来源" v-model="bomEditor.inventory_mode" @change="onBomInventoryModeChange" :disabled="!!bomEditor.subkit?.enabled">
+                        <option value="legacy" :disabled="bomEditor.persisted_inventory_mode !== 'legacy'">旧规则</option>
+                        <option value="manufactured">自制＋配套</option>
+                        <option value="assembled">组装成套</option>
+                        <option value="separate">子件分存（父件无库存）</option>
+                        <option value="purchased">外购＋配套</option>
+                      </select>
+                    </label>
+                    <label class="remember-line">单位
+                      <select class="select" aria-label="产品库存单位" v-model="productForm.unit">
+                        <option v-if="productForm.unit && !['只','套','片'].includes(productForm.unit)" :value="productForm.unit">{{ productForm.unit }}</option>
+                        <option v-for="unit in ['只','套','片']" :key="unit" :value="unit">{{ unit }}</option>
+                      </select>
+                    </label>
+                    <label class="remember-line">计价
+                      <select class="select" v-model="productForm.combination_mode" @change="productForm.is_virtual_composite_parent = productForm.combination_mode === 'parent_priced_set' ? productForm.is_virtual_composite_parent : false; productForm.composite_fulfillment_mode = productForm.combination_mode === 'component_priced' ? 'component_delivery' : productForm.composite_fulfillment_mode">
+                        <option value="parent_priced_set">整套计价</option>
+                        <option value="component_priced">组件计价</option>
+                      </select>
+                    </label>
+                    <label v-show="bomEditor.inventory_mode === 'legacy' && bomEditor.enabled && productForm.combination_mode === 'parent_priced_set'" class="remember-line" title="父件只表示整套数量和价格，不报料、不生产；尺寸用于送货规格"><input type="checkbox" v-model="productForm.is_virtual_composite_parent" /> 父件无自身材料</label>
+                    <span v-if="bomEditor.inventory_mode === 'legacy' && bomEditor.subkit" class="bom-subkit-controls" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap">
                       <label class="remember-line"><input type="checkbox" v-model="bomEditor.subkit.enabled" />收料组套</label>
                       <input class="input" aria-label="子套件名称" v-model="bomEditor.subkit.name" placeholder="内衬名称" style="width:130px" />
                       <label style="display:inline-flex;align-items:center;gap:4px">每父件<input class="input" aria-label="每父件子套件数" type="number" min="1" step="1" v-model.number="bomEditor.subkit.kits_per_parent" style="width:54px" />套</label>
                     </span>
-                    <label v-if="bomEditor.enabled" class="remember-line">交付标签和成品方式
+                    <label v-show="bomEditor.enabled" class="remember-line">交付
                       <select class="select" v-model="productForm.composite_fulfillment_mode" :disabled="productForm.combination_mode === 'component_priced'">
                         <option value="component_delivery">子件交付</option>
                         <option value="parent_delivery">父件交付</option>
                       </select>
                     </label>
+                    <button v-show="bomEditor.enabled" type="button" class="btn small" :disabled="!productForm.id || !!bomEditor.error" @click="addBomComponent">添加子件</button>
                   </div>
                 </div>
-                <div class="field" style="max-width:340px;margin:0 0 8px">
-                  <label>组合计价方式</label>
-                  <select class="select" v-model="productForm.combination_mode" @change="productForm.is_virtual_composite_parent = productForm.combination_mode === 'parent_priced_set' ? productForm.is_virtual_composite_parent : false; productForm.composite_fulfillment_mode = productForm.combination_mode === 'component_priced' ? 'component_delivery' : productForm.composite_fulfillment_mode">
-                    <option value="parent_priced_set">整套统一计价（推荐）</option>
-                    <option value="component_priced">组件分别计价</option>
-                  </select>
-                </div>
-                <label v-if="bomEditor.enabled && productForm.combination_mode === 'parent_priced_set'" class="remember-line" style="margin:0 0 10px"><input type="checkbox" v-model="productForm.is_virtual_composite_parent" /> 父件只表示整套数量和价格，不报料、不生产；可填写箱型与成品长宽高，仅用于送货规格展示</label>
                 <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存父产品，再维护内部组件 BOM。</div>
                 <div v-else-if="bomEditor.error" class="status orange" style="display:block;white-space:normal">{{ bomEditor.error }}</div>
                 <div v-else-if="bomEditor.notice" class="muted" style="margin-bottom:8px">{{ bomEditor.notice }}</div>
                 <template v-if="bomEditor.enabled && !bomEditor.error">
-                  <div class="toolbar-group" style="margin-bottom:8px">
-                    <button type="button" class="btn small" @click="addBomComponent">添加内部组件</button>
-                  </div>
                   <div v-if="!bomEditor.components.length" class="muted">尚未添加内部组件。</div>
                   <div v-else class="bom-component-list">
                     <div v-for="(component,index) in bomEditor.components" :key="component._key || component.id || index" class="bom-component-card">
                       <div class="bom-component-compact-row">
                         <div class="bom-component-product field">
-                          <label>内部组件 {{ index + 1 }} · 同客户常用箱</label>
+                          <label>子件 {{ index + 1 }}</label>
                           <search-select v-model="component.component_product_id" :options="bomEditor.componentOptions" label-key="_label" value-key="id" placeholder="搜索产品编码、名称或规格" :disabled="!productForm.customer_id" @search="searchBomProducts" @change="selectBomComponent(component,$event)"></search-select>
                         </div>
-                        <div class="field"><label>每套数量</label><input class="input" type="number" min="0.0001" step="0.0001" v-model.number="component.quantity_per_set" /></div>
-                        <label class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> 必需</label>
-                        <button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button>
+                        <div class="field"><label>每套用量（{{ component.unit || component.component?.unit || '选产品' }}）</label><input class="input" type="number" min="1" step="1" v-model.number="component.quantity_per_set" /></div>
+                        <label v-if="bomEditor.inventory_mode === 'legacy'" class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> 必需</label>
+                        <select v-else class="select bom-component-relation" aria-label="子件库存关系" v-model="component.inventory_relation">
+                          <option value="assembly" :disabled="!['assembled', 'manufactured'].includes(bomEditor.inventory_mode)">组装消耗</option>
+                          <option value="accompany">独立配套</option>
+                        </select>
+                        <span class="bom-component-actions"><button type="button" class="btn small" :aria-expanded="!!component._planningOpen" @click="component._planningOpen = !component._planningOpen">备料</button><button type="button" class="btn small" :disabled="!component.component_product_id || bomEditor.loading || masterSavePending || !canEditProducts" @click="openBomChildEditor(component)">编辑</button><button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button></span>
                       </div>
-                      <div class="bom-component-code">内部编码：{{ bomComponentInternalCode(component) }}<template v-if="component.product_name">｜{{ component.product_name }}｜{{ component.product_code || "-" }}</template></div>
+                      <div v-show="component._planningOpen" class="bom-component-planning">
+                        <label>备用纸张<input class="input" aria-label="子件备用纸张" type="number" min="0" step="1" v-model.number="component.spare_sheet_quantity" />张</label>
+                        <label>最大模切出数<input class="input" aria-label="子件最大模切出数" type="number" min="1" step="1" placeholder="留空" v-model.number="component.mold_max_yield_per_sheet" @change="bindBomYieldToCurrentProduct(component)" /></label>
+                        <span v-if="component._yieldLoading" class="muted">核对模具…</span><span v-else-if="component._yieldError" class="status orange">{{ component._yieldError }}</span>
+                      </div>
                     </div>
                   </div>
                 </template>
               </fieldset>
               <fieldset v-if="canAdmin" class="bom-editor-panel" :disabled="externalComponentEditor.loading || externalComponentEditor.saving">
                 <div class="bom-editor-heading">
-                  <div>
+                  <div class="bom-editor-heading-controls">
                     <h4>外购包装组件</h4>
-                    <p class="bom-editor-note">维护外购组件与默认供应商候选。</p>
+                    <button type="button" class="btn small" :disabled="!productForm.id" @click="addExternalComponent">添加外购组件</button>
+                    <button type="button" class="btn small primary" :disabled="!productForm.id || externalComponentEditor.saving" @click="saveExternalComponents">{{ externalComponentEditor.saving ? '保存中…' : '保存外购组件' }}</button>
+                    <span class="muted">v{{ externalComponentEditor.version || 0 }}</span>
                   </div>
-                  <span class="status blue">版本 {{ externalComponentEditor.version || 0 }}</span>
                 </div>
                 <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存常用箱，再维护外购组件。</div>
                 <div v-else-if="externalComponentEditor.loading" class="muted">正在读取外购组件…</div>
                 <template v-else>
                   <div v-if="externalComponentEditor.error" class="notice danger">{{ externalComponentEditor.error }}</div>
-                  <div class="toolbar-group" style="margin:8px 0">
-                    <button type="button" class="btn small" @click="addExternalComponent">添加外购组件</button>
-                    <button type="button" class="btn small primary" :disabled="externalComponentEditor.saving" @click="saveExternalComponents">{{ externalComponentEditor.saving ? '保存中…' : '保存外购组件' }}</button>
-                  </div>
                   <div v-if="!externalComponentEditor.components.length" class="muted">当前常用箱没有外购组件。</div>
                   <div v-for="(component,index) in externalComponentEditor.components" :key="component._key || component.id || index" class="bom-component-card" style="margin-bottom:10px">
                     <div class="bom-component-card-head"><strong>外购组件 {{ index + 1 }}</strong><span v-if="component.category_code" class="status gray">{{ supplierCategoryLabel(component.category_code) }}｜{{ component.specification_summary }}</span><button type="button" class="btn small danger" @click="removeExternalComponent(index)">移除</button></div>
@@ -8026,6 +8055,83 @@
                 </template>
               </template>
             </div>
+            <div v-else-if="modal.type === 'bomCutover' && bomCutover">
+              <label>切换场景 <select v-model="bomCutover.mode" :disabled="bomCutover.loading || !!bomCutover.pending" @change="openReservedKitCutover({id:bomCutover.orderId},{id:bomCutover.itemId},bomCutover.mode)"><option value="reserved">旧单全预占子件</option><option value="stocked">已收齐库存交接</option><option value="purchase">保留未收外购交接</option><option value="material">保留纸板在制交接</option><option value="unstarted">尚未开始的订单</option></select></label>
+              <p v-if="bomCutover.mode === 'reserved'" class="muted">旧单全预占库存切换：子件转组装父件，或保留原子件分存。含采购、本体或未完成采购交接须另行核对；已完成和已送历史保持冻结。</p>
+              <p v-if="bomCutover.mode === 'material'" class="muted">保留原纸板与外购采购，按原规格和开料换算继续收料；匹配产出、预占和待装配本体交接新版本，后续只报差额。本体须保持兼容的装配阶段。半成品原预占随待收报料继续使用；原报料已结束时，按预览将剩余量转给新版本，多余量释放到原批次。</p>
+              <p v-if="bomCutover.mode === 'purchase'" class="muted">原外购合同与未收数量保留，按原换算收料；匹配库存绑定新版本，欠缺子件待实际收齐后组装。纸板及自产部分仍须已完成，不能把未收采购当成库存。</p>
+              <p v-if="bomCutover.mode === 'stocked'" class="muted">剩余需求须由本订单真实成品预占覆盖，原采购须已收齐或明确撤销。按新规则保留所需批次、释放多余数量，必要时组装；不隐含拆解成套库存或处理未收采购。</p>
+              <div v-if="bomCutover.loading" role="status">正在核对…</div>
+              <div v-if="bomCutover.error" class="status orange" role="alert">{{ bomCutover.error }}</div>
+              <button v-if="bomCutover.mode !== 'reserved'" class="btn" type="button" :disabled="bomCutover.loading || !!bomCutover.pending" @click="previewBomProcurement">核对原采购与实收</button>
+              <details v-if="bomCutover.procurement" open>
+                <summary>原采购与实收核对</summary>
+                <p class="muted">这里只核对原记录，不取消或转移采购；不能代替切换确认。材料按张、外购按原采购单位显示。</p>
+                <table v-if="bomCutover.procurement.paper.length"><thead><tr><th>报料行</th><th>原报料</th><th>实收</th><th>欠收</th></tr></thead><tbody>
+                  <tr v-for="row in bomCutover.procurement.paper" :key="row.line.id"><td>{{ row.line.product_name_snapshot }} · {{ row.line.id }}</td><td>{{ row.line.requisition_qty }} 张</td><td>{{ row.receipt_summary ? row.receipt_summary.cumulative_received_quantity + ' 张' : '待核对' }}</td><td>{{ row.receipt_summary ? row.receipt_summary.remaining_quantity + ' 张' : row.receipt_summary_error }}</td></tr>
+                </tbody></table>
+                <table v-if="bomCutover.procurement.external.length"><thead><tr><th>采购单 / 产品</th><th>原采购</th><th>实收</th><th>欠收 / 撤销</th></tr></thead><tbody>
+                  <tr v-for="row in bomCutover.procurement.external" :key="row.line.id">
+                    <td>{{ row.header.purchase_number }} / {{ row.product_id }}<div v-if="row.mapping" class="muted">{{ !row.mapping.current_source ? '历史来源，未交接' : row.mapping.purchase_conversion_compatible ? '新旧单位换算一致，尚未分配' : '新旧实物或采购换算不同，须核对' }}</div></td>
+                    <td>{{ row.line.purchase_quantity }} {{ row.unit }}<div v-if="row.mapping" class="muted">{{ row.mapping.purchase_basis }} {{ row.unit }} → {{ row.mapping.stock_basis }} {{ row.mapping.stock_unit }}</div></td>
+                    <td>{{ row.received_quantity }} {{ row.unit }}<div v-if="row.mapping" class="muted">累计折算 {{ row.mapping.received_stock_capacity }} {{ row.mapping.stock_unit }}，零散 {{ row.mapping.received_purchase_remainder }} {{ row.unit }}</div></td>
+                    <td>{{ row.cancellation ? row.cancellation.reason : row.remaining_quantity + ' ' + row.unit }}<div v-if="row.mapping && !row.cancellation" class="muted">补收后可再折算 {{ row.mapping.pending_stock_capacity }} {{ row.mapping.stock_unit }}，余 {{ row.mapping.final_purchase_remainder }} {{ row.unit }}</div></td>
+                  </tr>
+                </tbody></table>
+                <p v-if="!bomCutover.procurement.paper.length && !bomCutover.procurement.external.length" class="muted">当前订单没有采购记录。</p>
+              </details>
+              <template v-if="bomCutover.review">
+                <p v-if="bomCutover.mode === 'unstarted'" class="muted">须没有实际报料、预占、生产或送货；下单自动生成的待到料主任务原样保留。曾建外购采购须已明确撤销且从未收料，后续使用本次选定的新规则。</p>
+                <p>订单 {{ bomCutover.review.quantity }} · 已送 {{ bomCutover.review.delivered_quantity }} · 本次剩余 <strong>{{ bomCutover.review.execution_quantity }} {{ bomCutover.review.unit || '套' }}</strong></p>
+                <p>{{ bomCutover.review.inventory_impact }}</p>
+                <p>{{ bomCutover.review.material_impact }}</p>
+                <template v-if="bomCutover.mode === 'unstarted'">
+                  <p>交货方式：{{ bomCutover.review.old_delivery_mode === 'component_delivery' ? '子件' : '父件' }} → {{ bomCutover.review.new_modes && bomCutover.review.new_modes.delivery === 'components' ? '子件' : '父件' }}</p>
+                  <p>{{ bomCutover.review.proposed_material_estimate.scope }} · 已知小计 {{ bomCutover.review.proposed_material_estimate.known_subtotal }} 元</p>
+                  <p v-for="reason in bomCutover.review.proposed_material_estimate.missing_items" :key="reason" class="muted">{{ reason }}</p>
+                  <table><thead><tr><th>保留旧快照 / 产品ID</th><th>旧冻结数量</th></tr></thead><tbody><tr v-for="row in bomCutover.review.old_sources" :key="row.id"><td>{{ row.id }} / {{ row.component_product_id }} · {{ row.snapshot_component_product_name }}</td><td>{{ row.required_piece_quantity }} {{ row.unit || '' }}</td></tr></tbody></table>
+                  <table><thead><tr><th>新执行产品ID / 名称</th><th>需求</th><th>库存来源</th></tr></thead><tbody><tr v-for="row in bomCutover.review.new_sources" :key="row.component_product_id"><td>{{ row.component_product_id }} · {{ row.snapshot_component_product_name }}</td><td>{{ row.required_piece_quantity }} {{ row.unit }}</td><td>{{ {manufactured:'制造',assembled:'组装',purchased:'外购',separate:'组合需求，无父库存'}[row.source_kind] }}</td></tr></tbody></table>
+                  <table><thead><tr><th>材料产品ID / 片组</th><th>物理片需求</th><th>报料张数</th></tr></thead><tbody><tr v-for="row in bomCutover.review.new_requirements.materials" :key="row.product_id+':'+row.route_key"><td>{{ row.product_id }} / {{ row.route_key }}</td><td>{{ row.required_pieces }} 片</td><td>{{ row.purchase_sheets }} 张</td></tr></tbody></table>
+                  <table v-if="bomCutover.review.purchase_requirements.length"><thead><tr><th>外购产品</th><th>库存需求</th><th>采购数量</th></tr></thead><tbody><tr v-for="row in bomCutover.review.purchase_requirements" :key="row.product_id"><td>{{ row.product_id }} · {{ row.name }}</td><td>{{ row.stock_quantity }} {{ row.stock_unit }}</td><td>{{ row.purchase_quantity }} {{ row.purchase_unit }}</td></tr></tbody></table>
+                </template>
+                <p>{{ bomCutover.review.procurement_impact }}；{{ bomCutover.review.picking_impact }}</p>
+                <table v-if="(bomCutover.review.cancelled_purchase_history || []).length">
+                  <thead><tr><th>保留已撤销采购</th><th>原采购数量</th><th>原合同金额（非实收成本）</th><th>撤销原因</th></tr></thead>
+                  <tbody v-for="fact in bomCutover.review.cancelled_purchase_history" :key="fact.purchase.id"><tr v-for="line in fact.items" :key="line.id"><td>{{ fact.purchase.purchase_number }} / 行{{ line.id }}</td><td>{{ line.purchase_quantity }} {{ line.purchase_unit }}</td><td>{{ line.line_amount }} {{ line.currency }}</td><td>{{ fact.cancellation.reason }}</td></tr></tbody>
+                </table>
+                <p>{{ bomCutover.review.cost_impact }}</p>
+                <table v-if="bomCutover.review.source_costs && bomCutover.review.source_costs.length"><thead><tr><th>成本批次</th><th>数量</th><th>来源金额</th><th>依据</th></tr></thead><tbody><tr v-for="row in bomCutover.review.source_costs" :key="row.lot_id"><td>{{ row.lot_id }}</td><td>{{ row.quantity }} {{ row.unit }}</td><td>{{ row.amount }} {{ row.lineage.currency || '' }}</td><td>{{ row.lineage.actual === true ? '实际来源' : '估算或混合来源，保留原依据' }}</td></tr></tbody></table>
+                <p v-for="row in bomCutover.review.retained_semi || []" :key="'semi-'+row.reservation_id">半成品原预占 #{{ row.reservation_id }} · 货位 {{ row.location_id }} · 原预占 {{ row.reserved_sheets }} 张 · 已消耗 {{ row.consumed_sheets }} 张 · 剩余 {{ row.remaining_sheets }} 张，抵扣 {{ row.remaining_pieces }} 片 · 每张 {{ row.yield_per_sheet }} 片（原记录保留）</p>
+                <p v-for="row in (bomCutover.review.retained_semi || []).filter(row => row.transfer)" :key="'semi-transfer-'+row.reservation_id">预占 #{{ row.reservation_id }}：新版本保留 {{ row.transfer.reserve_sheets }} 张，抵扣 {{ row.transfer.credited_pieces }} 片；{{ row.transfer.released_to_available_sheets }} 张释放为原批次可用量。</p>
+                <p v-for="row in bomCutover.review.retained_bodies || []" :key="'body-'+row.lot_id">{{ row.name }} · 待装配本体 {{ row.quantity }} {{ row.unit }} · 批次 #{{ row.lot_id }} · 货位 {{ row.location_id }}（保留原成本，配齐子件后组装）</p>
+                <p v-for="row in bomCutover.review.carried_materials || []" :key="'material-'+row.line.id">原报料 #{{ row.line.id }} · {{ row.line.status }} · {{ row.line.requisition_qty }} 张 · 原价格及实收保留</p>
+                <p v-for="row in bomCutover.review.carried_purchases || []" :key="'purchase-'+row.line.id">原采购 {{ row.header.purchase_number }} · 已收 {{ row.received_quantity }} {{ row.unit }} · 继续收料 {{ row.remaining_quantity }} {{ row.unit }} · 原合同价格不变</p>
+                <p v-for="row in bomCutover.review.retained_locations || []" :key="row.lot_id">{{ row.name || '' }} · 批次 {{ row.lot_id }} · 原货位 ID {{ row.location_id }}<span v-if="['stocked','purchase','material'].includes(bomCutover.mode)"> · 新预占 {{ row.quantity }} {{ row.unit }} · 交接后可用 {{ row.available_after_handoff }} {{ row.unit }}</span></p>
+                <table v-if="bomCutover.review.release_reservations.length"><thead><tr><th>子件</th><th>释放预占 / 批次</th><th>数量</th></tr></thead><tbody><tr v-for="r in bomCutover.review.release_reservations" :key="r.id"><td>{{ r.name }}</td><td>{{ r.id }} / {{ r.lot_id }}</td><td>{{ r.quantity }} {{ r.unit }}</td></tr></tbody></table>
+                <div v-for="output in bomCutover.review.outputs" :key="output.product_id" style="margin-top:8px">
+                  <div class="muted">消耗：<span v-for="(part,index) in output.consumed" :key="index">{{ index ? '、' : '' }}{{ part.name }} {{ part.quantity }} {{ part.unit }}</span></div>
+                  <label :for="'cutover-location-'+output.product_id">{{ output.name }} · 组装 {{ output.quantity }} {{ output.unit || '套' }} · 目标货位</label>
+                  <select :id="'cutover-location-'+output.product_id" v-model.number="bomCutover.targets[output.product_id]" :disabled="bomCutover.loading || !!bomCutover.pending" @change="bomCutover.confirmed=false" style="max-width:100%;width:100%">
+                    <option :value="0">请选择已发布正式货位</option>
+                    <option v-for="loc in bomCutover.locations" :key="loc.id" :value="loc.id">{{ loc.employee_location_name || loc.current_address_name || loc.location_name }} · ID {{ loc.id }}</option>
+                  </select>
+                </div>
+                <p class="muted">{{ bomCutover.mode === 'unstarted' ? '请核对新旧来源及用量，再确认切换；本次不执行库存操作。' : '必须先预览所选货位的影响；不会重新收料或重复入库。' }}执行会记录审计。</p>
+                <div class="toolbar-group" style="margin-top:8px">
+                  <button class="btn" type="button" :disabled="bomCutover.loading || !!bomCutover.pending" @click="previewReservedKitCutover">{{ bomCutover.mode === 'unstarted' ? '核对影响' : '核对影响及货位' }}</button>
+                  <button class="btn primary" type="button" :disabled="bomCutover.loading || (!bomCutover.confirmed && !bomCutover.pending)" @click="executeReservedKitCutover">{{ bomCutover.pending ? '重试同一操作' : (bomCutover.mode === 'unstarted' ? '确认切换冻结规则' : '确认交接剩余部分') }}</button>
+                </div>
+              </template>
+            </div>
+            <div v-else-if="modal.type === 'semiProduction' && semiProduction">
+              <label>生产产品 <select v-model.number="semiProduction.productId" :disabled="semiProduction.loading || !!semiProduction.pending" @change="semiProduction.review=null"><option :value="0">请选择</option><option v-for="product in semiProduction.products" :key="product.id" :value="product.id">{{ product.name }} · #{{ product.id }} · {{ product.unit }}</option></select></label>
+              <p class="muted">用于半成品预占已完整覆盖的自制产品。实际加工完成后确认；本体保持待装配阶段，不新增来料或采购数量。</p>
+              <p v-if="semiProduction.error" role="alert" class="status orange">{{ semiProduction.error }}</p>
+              <p v-if="semiProduction.review">本次 {{ semiProduction.review.quantity }} {{ semiProduction.review.unit }} · 材料估算成本 {{ semiProduction.review.estimated_cost }} · 来源货位 {{ Object.values(semiProduction.review.source_locations).join('、') }}</p>
+              <p v-if="semiProduction.review" class="muted">生产位置：{{ semiProduction.review.production_location.name }}（ID {{ semiProduction.review.production_location.id }}）<span v-if="Object.keys(semiProduction.review.target_locations).length">；组装位置：{{ Object.entries(semiProduction.review.target_locations).map(([pid,lid])=>`${semiProduction.review.target_names[pid]}（ID ${lid}）`).join('、') }}</span></p>
+              <div class="toolbar-group"><button class="btn" :disabled="semiProduction.loading || !!semiProduction.pending || !semiProduction.productId" @click="previewSemiProduction">核对预占</button><button class="btn primary" :disabled="semiProduction.loading || (!semiProduction.pending && !semiProduction.review?.ready)" @click="confirmSemiProduction">{{ semiProduction.pending ? '重试同一确认' : '确认加工完成' }}</button></div>
+              <p v-for="row in semiProduction.completions" :key="row.id">完工 #{{ row.id }} · 产品 {{ row.product_id }} · 数量 {{ row.quantity }} · {{ row.status === 'reversed' ? '已撤销' : '已确认' }} <button v-if="row.status === 'posted'" class="btn small" :disabled="semiProduction.loading || !!semiProduction.pending" @click="reverseSemiProduction(row.id)">撤销本次生产</button></p>
+            </div>
             <div v-else-if="modal.type === 'orderDetail' && orderDetail">
               <p id="erp-order-detail-description" class="muted" style="margin:0 0 12px">只读查看订单事实；按 Esc 可关闭，Tab 只在本对话框内移动。</p>
               <div class="form-grid">
@@ -8050,7 +8156,7 @@
               </tr></thead>
               <tbody><tr v-for="item in orderDetail.items" :key="item.id">
                 <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}<div style="margin-top:4px"><status-tag :value="itemBusinessStatusKey(item)"></status-tag></div><div v-if="item.requisition_hold?.status === 'active'" class="status orange" style="margin-top:4px">{{ item.requisition_hold.label || '等候中' }}</div><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
-                <td>{{ item.snapshot_product_code }}</td>
+                <td>{{ item.snapshot_product_code }}<div v-if="canAdmin && hasBomComponents(item) && Number(item.quantity)>Number(item.business_delivered_quantity || item.delivered_quantity || 0)"><button class="btn small" type="button" @click="openReservedKitCutover(orderDetail,item)">切换未完成BOM</button><button class="btn small" type="button" @click="openSemiProduction(item)">半成品生产</button></div></td>
                 <td :title="item.snapshot_product_name" style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:normal">
                   {{ item.snapshot_product_name }}
                   <div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div>
@@ -8145,6 +8251,7 @@
             <div v-else-if="modal.type === 'externalPurchase'">
               <div v-if="externalPurchase.loading" class="empty">正在读取冻结候选和有效价格…</div>
               <div v-else-if="externalPurchase.error" class="notice danger">{{ externalPurchase.error }}</div>
+              <div v-else-if="externalPurchase.status === 'stock_covered'" class="notice success">已由预占库存或已交接采购覆盖，无需追加采购。库存或采购变化后重新打开核对。</div>
               <template v-else-if="externalPurchase.status === 'confirmed' && externalPurchase.confirmation">
                 <div class="notice success">已确认采购；这里只查看冻结结果，不会自动收货或增加库存。</div>
                 <div v-for="purchase in externalPurchase.confirmation.purchase_orders" :key="purchase.id" class="external-purchase-confirmed">
@@ -8159,7 +8266,7 @@
                 <div class="notice danger">原外购包装采购已随订单流程撤回作废；不能再次确认或打印。如需重新采购，请新建正确订单。</div>
               </template>
               <template v-else>
-                <div class="notice">一次核对全部外购组件；同一供应商自动合并为一张采购单。附加费按价格版本保留为条款，本阶段不自动收货入库。</div>
+                <div class="notice"><template v-if="externalPurchase.additional">本次按新版本未覆盖差额追加采购，原采购继续保留；以下不包含已经确认采购的当前来源。</template><template v-else>一次核对全部外购组件；同一供应商自动合并为一张采购单。</template>附加费按价格版本保留为条款，本阶段不自动收货入库。</div>
                 <div class="table-wrap"><table class="external-purchase-table"><thead><tr><th>订单明细</th><th>外购组件</th><th>采购数量</th><th>供应商候选</th><th>供应商采购成本（正式报价）</th></tr></thead><tbody>
                   <tr v-for="row in externalPurchase.items" :key="row.order_component_id">
                     <td>序号 {{ row.item_sequence || '-' }}<br>{{ row.product_code || '-' }}<br><span class="muted">{{ row.product_name || '-' }}</span></td>
@@ -8518,7 +8625,7 @@
                     <td class="requisition-product-cell"><strong>{{ shortCustomerName(line.customer_name) }}｜{{ line.product_code }}</strong><div class="requisition-product-name" :title="line.product_name">{{ line.product_name }}</div><span class="muted">{{ line.specification || "-" }}</span><div v-if="line.is_composite_parent" class="status blue">父件</div><div v-else-if="line.is_composite_component_group" class="status green">已合并 {{ line._merged_component_lines.length }} 个同规格子件</div><div v-else-if="line.is_composite_component" class="status green">组件{{ line.component_type === 'cover' ? '·盖' : line.component_type === 'base' ? '·底' : '' }}</div></td>
                     <td>{{ line.snapshot_supplier_name || '未设供应商' }}<br><span class="muted">{{ line.material_display || '-' }}</span></td>
                     <td><strong>{{ line.required_piece_qty || line.quantity || 0 }}</strong><div class="muted">剩余 {{ line.remaining_required_piece_qty ?? line.required_piece_qty ?? line.quantity ?? 0 }}</div></td>
-                    <td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><button v-if="line.is_composite_component && !line.is_composite_component_group && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="line._auto_cover_loading" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><div v-if="line._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ line._auto_cover_error }}</div></td>
+                    <td><div>成品：{{ line.finished_inventory_reserved_qty || 0 }}</div><div>半成品：{{ line.semi_finished_reserved_piece_qty || 0 }}</div><div v-if="line.carried_material_piece_qty">原报料抵扣：{{ line.carried_material_piece_qty }} 片（含待收）</div><button v-if="line.is_composite_component && !line.is_composite_component_group && Number(line.remaining_required_piece_qty || 0)>0" class="btn small success" type="button" :disabled="line._auto_cover_loading" @click="autoCoverCompositeDraftLine(line)">{{ line._auto_cover_loading ? '正在匹配…' : '自动使用匹配库存' }}</button><div v-if="line._auto_cover_error" class="status orange" style="margin-top:4px;white-space:normal">{{ line._auto_cover_error }}</div></td>
                     <td class="purchase-qty-cell"><input class="input purchase-qty-input" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @input="onPurchasePurposeTotalChanged(line)" /><div class="muted">系统最低 {{ line._minimum_requisition_qty ?? line.purchase_total_sheet_qty }} 张</div></td>
                     <td><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.order_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div class="muted">本行订单上限 {{ purchasePurposeAuthoritativeOrderQty(line) }} 张</div></td>
                     <td><input class="input purchase-qty-input" type="number" min="0" step="1" v-model.number="line.stock_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div v-if="purchasePurposeValidationError(line)" class="status red" style="white-space:normal;margin-top:4px">{{ purchasePurposeValidationError(line) }}</div><div v-else-if="Number(line.stock_purpose_sheet_qty || 0)>0" class="status blue" style="white-space:normal;margin-top:4px">多订 {{ line.stock_purpose_sheet_qty }} 张，进入该客户通用片料备库</div></td>
@@ -9156,6 +9263,9 @@
               </div>
             </div>
           </div>
+          <div v-if="modal?.type === 'product'" class="modal-foot product-editor-actions">
+            <button type="button" class="btn primary product-inline-save" :disabled="(!!productForm.id && !canEditProducts) || loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : '保存' }}</button>
+          </div>
           <div v-if="modal?.type !== 'product'" class="modal-foot">
             <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
@@ -9590,6 +9700,7 @@
         _key: ++bomComponentKeyCounter, id: null, component_product_id: null,
         product_code: "", product_name: "", internal_code: "",
         quantity_per_set: 1, is_die_cut: false, mold_tool_id: null,
+        inventory_relation: null,
         mold_max_yield_per_sheet: null, spare_sheet_quantity: 0,
         display_mode: "internal_only", show_on_delivery: true, is_required: true, remark: "",
       });
@@ -9602,6 +9713,7 @@
       });
       const blankBomEditor = () => ({
         enabled: false, expected_version: null, components: [], componentOptions: [],
+        inventory_mode: "legacy", persisted_inventory_mode: "legacy",
         subkit: null,
         loading: false, saving: false, error: "", notice: "",
       });
@@ -9922,6 +10034,7 @@
             productionPrintBatchAttempt: null, productionPrintRecoveryUrl: "", productionPrintBatchError: "", productionPrintInvalidItems: [],
             incomingWorkspace: "board", incomingTab: "pending", incomingPending: [], incomingPendingTotal: 0, incomingPendingLoading: false, incomingPendingError: "", incomingPendingAppliedPage: 1, incomingPendingRetryPage: 1, incomingReceived: [], incomingReceivedTotal: 0, incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingProductionCardOpening: false, incomingProductionCardBatchBusy: false, incomingProductionCardSelections: {}, incomingProductionCardAttemptId: "", incomingProductionCardRecoveryUrl: "", incomingProductionCardRecoveryMessage: "", incomingProductLabelMessages: [], incomingProductLabelRecoveryUrls: [], incomingHistoryFilterVisible: false,
             externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingFilter: "", externalIncomingLoaded: false, externalIncomingDrafts: {}, externalIncomingSavingId: null, externalIncomingSavingAttemptId: "",
+            externalReceiptHistoryOpen:false, externalReceiptHistory:[], externalReceiptHistoryPage:1, externalReceiptHistoryTotal:0, externalReceiptHistoryQuery:"", externalReceiptHistoryLoading:false, externalReceiptHistoryError:"", externalReceiptReverseBusy:null, externalReceiptReverseAttempts:{},
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
             productionTab: "history", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionHistoryFilterVisible: false, productionPlacement: [], productionPlacementTotal: 0, productionPlacementLoading: false, productionPlacementError: "", productionPlacementFilterVisible: false, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
@@ -9946,6 +10059,8 @@
             costPanelTab:"gaps",
             costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
+            bomCutover:null,
+            semiProduction:null,
             orderDetail:null, orderCustomerCharges:[], customerChargeForm:{visible:false,id:null,version:null,charge_type:"mold",display_name:"",quantity:1,unit:"项",unit_price:"",amount:"",price_tax_mode:"",tax_rate:"",tax_project_name:"",tax_classification_code:"",note:"",saving:false}, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             externalPurchase:{loading:false,saving:false,cancelSaving:false,refreshingCandidates:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,history:[],cancelReason:"采购内容或数量需要重新核对",idempotencyKey:""},
             externalPurchaseView:"pending", externalPurchaseRouting:[], externalPurchaseRoutingLoading:false, externalPurchaseRoutingError:"", externalPurchaseRoutingFilter:"", externalPurchaseRoutingLoaded:false,
@@ -14778,6 +14893,14 @@
             this.externalIncomingLoaded = false;
             this.externalIncomingSavingId = null;
             this.externalIncomingSavingAttemptId = "";
+            this.externalReceiptHistoryOpen = false;
+            this.externalReceiptHistory = [];
+            this.externalReceiptHistoryTotal = 0;
+            this.externalReceiptHistoryQuery = "";
+            this.externalReceiptHistoryLoading = false;
+            this.externalReceiptHistoryError = "";
+            this.externalReceiptReverseBusy = null;
+            this.externalReceiptReverseAttempts = {};
             this.pages.externalIncoming = 1;
             this.externalPurchaseRouting = [];
             this.externalPurchaseRoutingLoading = false;
@@ -20049,7 +20172,7 @@
               this.markPageCache("incoming:external-packaging");
               this.showToast(response.data.created ? "外购包装实收已保存" : "该次实收已经保存，无需重复操作");
               try {
-                await Promise.all([this.loadKpi(), this.loadOrders()]);
+                await Promise.all([this.loadKpi(), this.loadOrders(), ...(this.externalReceiptHistoryOpen ? [this.loadExternalReceiptHistory(1)] : [])]);
               } catch (refreshError) {
                 if (requestIsCurrent()) {
                   this.showToast("包材收料已经保存，但关联页面刷新失败；请核对当前列表，勿重复提交", true);
@@ -20070,6 +20193,70 @@
                 this.externalIncomingSavingId = null;
                 this.externalIncomingSavingAttemptId = "";
               }
+            }
+          },
+          async loadExternalReceiptHistory(page=1) {
+            const controller = this.beginLatestRequest("incoming:bom-receipts");
+            const generation = this.authGeneration, userId = this.user?.id;
+            const current = () => latestRequestControllers.get("incoming:bom-receipts")===controller
+              && !controller.signal.aborted && generation===this.authGeneration && userId===this.user?.id
+              && this.activePage==="incoming" && this.incomingWorkspace==="external-packaging";
+            this.externalReceiptHistoryLoading = true;
+            this.externalReceiptHistoryError = "";
+            try {
+              const response = await axios.get("/api/external-packaging-receipts", {params:{page,page_size:25,q:this.externalReceiptHistoryQuery},signal:controller.signal});
+              if (!current()) return false;
+              this.externalReceiptHistory = response.data.items || [];
+              this.externalReceiptHistoryTotal = response.data.total || 0;
+              this.externalReceiptHistoryPage = page;
+              return true;
+            } catch(error) {
+              if (current() && !this.isCancelledRequest(error)) {
+                this.externalReceiptHistory = [];
+                this.externalReceiptHistoryTotal = 0;
+                this.externalReceiptHistoryError = "实收记录读取失败：" + this.errorMessage(error);
+              }
+              return false;
+            } finally {
+              if (current()) this.externalReceiptHistoryLoading = false;
+              this.finishLatestRequest("incoming:bom-receipts",controller);
+            }
+          },
+          async reverseExternalReceipt(receipt) {
+            if (this.externalReceiptReverseBusy || receipt.reversed || !receipt.supports_reversal
+                || this.user?.role !== "admin" || !this.hasPermission("incoming.execute")) return false;
+            let attempt = this.externalReceiptReverseAttempts[receipt.id];
+            if (!attempt) {
+              const reason = prompt(`撤销 ${receipt.receipt_number} 的全部实收？请输入原因，取消则不执行。`);
+              if (reason === null) return false;
+              if (!reason.trim() || reason.trim().length>500) { this.showToast("请填写500字以内的撤销原因",true); return false; }
+              attempt = {idempotency_key:createIdempotencyKey(),reason:reason.trim(),confirmed:true};
+              this.externalReceiptReverseAttempts[receipt.id] = attempt;
+            }
+            const generation = this.authGeneration, userId = this.user?.id;
+            const session = () => generation===this.authGeneration && userId===this.user?.id;
+            const current = () => session() && this.activePage==="incoming" && this.incomingWorkspace==="external-packaging";
+            this.externalReceiptReverseBusy = receipt.id;
+            try {
+              await axios.post(`/api/external-packaging-receipts/${receipt.id}/reverse`,attempt);
+              if (!session()) return false;
+              delete this.externalReceiptReverseAttempts[receipt.id];
+              this.invalidatePageCache("incoming:external-packaging");
+              this.invalidatePageCache("orders");
+              if (current()) {
+                receipt.reversed = true;
+                this.showToast("实收已撤销");
+                const refreshed = await Promise.all([this.loadExternalReceiptHistory(this.externalReceiptHistoryPage),this.loadExternalIncoming()]);
+                if (current() && refreshed.some(result=>result===false)) this.showToast("已撤销，列表刷新失败，请刷新查看",true);
+              }
+              return true;
+            } catch(error) {
+              // A timeout may have committed: keep the exact key/payload for retry.
+              if (session() && error?.response?.status && error.response.status<500) delete this.externalReceiptReverseAttempts[receipt.id];
+              if (current()) this.showToast("撤销结果：" + this.errorMessage(error),true);
+              return false;
+            } finally {
+              if (session() && this.externalReceiptReverseBusy===receipt.id) this.externalReceiptReverseBusy=null;
             }
           },
           async loadIncomingReceived({force=false}={}) {
@@ -25000,6 +25187,7 @@
             component.component_product_id = source.component_product_id ?? source.product_id ?? source.component_id ?? null;
             component.product_code = source.product_code || summary.product_code || "";
             component.product_name = source.product_name || summary.product_name || "";
+            component.unit = source.unit || summary.unit || "";
             component.internal_code = source.internal_code || source.internal_component_code || "";
             component.quantity_per_set = Number(source.quantity_per_set ?? source.qty_per_set ?? source.quantity ?? 1);
             if (!Number.isFinite(component.quantity_per_set) || component.quantity_per_set <= 0) component.quantity_per_set = 1;
@@ -25029,6 +25217,8 @@
             if (response.composite_fulfillment_mode) this.productForm.composite_fulfillment_mode = response.composite_fulfillment_mode;
             this.bomEditor.expected_version = response.expected_version ?? response.version ?? null;
             this.bomEditor.components = components;
+            this.bomEditor.inventory_mode = response.inventory_mode || "legacy";
+            this.bomEditor.persisted_inventory_mode = this.bomEditor.inventory_mode;
             this.bomEditor.subkit = response.subkit ? {name:response.subkit.name, kits_per_parent:response.subkit.kits_per_parent, version:response.subkit.version, enabled:response.subkit.enabled} : null;
             this.bomEditor.error = "";
             this.bomEditor.notice = "";
@@ -25121,7 +25311,8 @@
               this.showToast("请先保存父产品，再添加内部组件", true);
               return;
             }
-            this.bomEditor.components.push(blankBomComponent());
+            this.bomEditor.components.push({...blankBomComponent(), inventory_relation:
+              this.bomEditor.inventory_mode === "legacy" ? null : (this.bomEditor.inventory_mode === "assembled" ? "assembly" : "accompany")});
             this.searchBomProducts("");
           },
           removeBomComponent(index) {
@@ -25129,6 +25320,12 @@
           },
           async selectBomComponent(component, productId) {
             const selected = (this.bomEditor.componentOptions || []).find(row => String(row.id) === String(productId));
+            component._yieldToken = Symbol(); component._yieldLoading = false; component._yieldError = "";
+            component.is_die_cut = selected?.box_category === "die_cut";
+            component.mold_tool_id = component.is_die_cut ? (selected?.mold_tool_id || null) : null;
+            component.mold_max_yield_per_sheet = null;
+            component.component = selected || null;
+            component.unit = selected?.unit || "";
             if (!selected) {
             component.component_product_id = null;
             component.product_code = "";
@@ -25147,18 +25344,53 @@
             component.mold_tool_id = null;
             component.mold_max_yield_per_sheet = null;
           },
+          onBomInventoryModeChange() {
+            const mode = this.bomEditor.inventory_mode;
+            for (const component of this.bomEditor.components) {
+              if (mode !== "legacy") {
+                component.is_required = true;
+                if (!component.inventory_relation) component.inventory_relation = mode === "assembled" ? "assembly" : "accompany";
+              }
+            }
+          },
+          async bindBomYieldToCurrentProduct(component) {
+            const editor = this.bomEditor, productId = Number(component.component_product_id);
+            const token = Symbol(); component._yieldToken = token;
+            component._yieldError = ""; component._yieldLoading = false;
+            if (editor.inventory_mode === "legacy" || component.mold_max_yield_per_sheet === "" || component.mold_max_yield_per_sheet == null) return;
+            component._yieldLoading = true;
+            const current = () => this.bomEditor === editor && editor.components.includes(component)
+              && Number(component.component_product_id) === productId && component._yieldToken === token;
+            try {
+              const {data} = await axios.get(`/api/master/products/${productId}`);
+              if (!current()) return;
+              if (Number(data.id) !== productId || Number(data.customer_id) !== Number(this.productForm.customer_id) || data.is_active === false) throw new Error("子件已变化，请重新选择");
+              if (data.box_category !== "die_cut" || !data.mold_tool_id) throw new Error("请先在子件中设置模切和模具");
+              component.is_die_cut = true; component.mold_tool_id = data.mold_tool_id;
+              component.component = data;
+            } catch (error) {
+              if (current()) component._yieldError = this.errorMessage(error);
+            } finally {
+              if (component._yieldToken === token) component._yieldLoading = false;
+            }
+          },
           _productBomSaveFields() {
             const editor = this.bomEditor || blankBomEditor();
             return {
               enabled: Boolean(editor.enabled), expected_version: editor.expected_version,
-              subkit: editor.subkit ? {...editor.subkit} : null,
+              inventory_mode: (editor.inventory_mode || "legacy") === "legacy" ? null : editor.inventory_mode,
+              material_mode: (editor.inventory_mode || "legacy") === "legacy" ? null : "expand_children",
+              delivery_mode: (editor.inventory_mode || "legacy") === "legacy" ? null : (this.productForm.composite_fulfillment_mode === "parent_delivery" ? "parent" : "components"),
+              subkit: (editor.inventory_mode || "legacy") === "legacy" && editor.subkit ? {...editor.subkit} : null,
               components: (editor.components || []).map(component => ({
                 component_product_id: component.component_product_id || null,
+                unit: component.unit || component.component?.unit || null,
+                inventory_relation: editor.inventory_mode === "legacy" ? null : component.inventory_relation,
                 quantity_per_set: component.quantity_per_set,
                 is_die_cut: component.is_die_cut === true,
                 mold_tool_id: component.mold_tool_id || null,
                 mold_max_yield_per_sheet: component.mold_max_yield_per_sheet === "" ? null : component.mold_max_yield_per_sheet,
-                spare_sheet_quantity: component.spare_sheet_quantity,
+                spare_sheet_quantity: Number(component.spare_sheet_quantity || 0),
                 display_mode: this.productForm.composite_fulfillment_mode === "component_delivery" ? "show_on_delivery" : "internal_only",
                 show_on_delivery: this.productForm.composite_fulfillment_mode === "component_delivery",
                 is_required: component.is_required !== false,
@@ -25171,19 +25403,29 @@
             return JSON.stringify(this._productBomSaveFields()) !== this.productBomSnapshot;
           },
           validateProductBom() {
+            const mode = this.bomEditor.inventory_mode || "legacy";
+            if (mode === "assembled" && this.productForm.composite_fulfillment_mode !== "parent_delivery") return "组装成套后按父件交货；如需子件实发，请选择子件分存";
+            if (mode === "assembled" && (!this.bomEditor.enabled || !this.bomEditor.components.some(row => row.inventory_relation === "assembly"))) return "组套成品至少需要一个组装子件";
             if (!this.bomEditor.enabled) return "";
             if (!this.bomEditor.components.length) return "启用组合产品后至少添加一个内部组件";
             const ids = new Set();
             for (const component of this.bomEditor.components) {
+              if (component._yieldLoading) return "正在核对子件模具，请稍后保存";
+              if (component._yieldError) return component._yieldError;
               if (!component.component_product_id) return "每个内部组件都必须选择同客户常用箱";
               if (String(component.component_product_id) === String(this.productForm.id)) return "组合产品不能把自己作为内部组件";
               if (ids.has(String(component.component_product_id))) return "同一个内部组件不能重复添加";
               ids.add(String(component.component_product_id));
+              if (mode !== "legacy" && !["assembly", "accompany"].includes(component.inventory_relation)) return "请选择子件的组装或配套关系";
+              if (mode !== "legacy" && !["assembled", "manufactured"].includes(mode) && component.inventory_relation === "assembly") return "组装消耗请选择自制或组套来源";
               if (!Number.isFinite(Number(component.quantity_per_set)) || Number(component.quantity_per_set) <= 0) return "每套数量必须大于0";
+              if (mode !== "legacy" && !Number.isInteger(Number(component.quantity_per_set))) return "每套用量必须为正整数";
               if (component.is_die_cut && !component.mold_tool_id) return "模切组件必须选择生产模具";
               if (!component.is_die_cut && (component.mold_tool_id || component.mold_max_yield_per_sheet)) return "非模切组件不能填写模具或最大产出";
               if (component.mold_max_yield_per_sheet !== null && component.mold_max_yield_per_sheet !== "" && (!Number.isFinite(Number(component.mold_max_yield_per_sheet)) || Number(component.mold_max_yield_per_sheet) <= 0)) return "模具最大产出必须大于0或留空";
+              if (component.mold_max_yield_per_sheet != null && component.mold_max_yield_per_sheet !== "" && !Number.isInteger(Number(component.mold_max_yield_per_sheet))) return "最大模切出数必须为整数";
               if (!Number.isFinite(Number(component.spare_sheet_quantity)) || Number(component.spare_sheet_quantity) < 0) return "备用纸张不能小于0";
+              if (!Number.isInteger(Number(component.spare_sheet_quantity))) return "备用纸张必须为整数";
             }
             return "";
           },
@@ -25191,7 +25433,10 @@
             const fields = this._productBomSaveFields();
             return {
               expected_version: expectedVersion ?? fields.expected_version ?? 1,
-              components: fields.components,
+              inventory_mode: fields.inventory_mode,
+              material_mode: fields.material_mode,
+              delivery_mode: fields.delivery_mode,
+              components: fields.enabled ? fields.components : [],
               subkit: fields.subkit,
             };
           },
@@ -25277,6 +25522,7 @@
             try {
               const {data} = await axios.get(`/api/orders/${orderId}/external-packaging-purchase`);
               this.externalPurchase.status = data.status;
+              this.externalPurchase.additional = !!data.additional_purchase;
               this.externalPurchase.confirmation = data.confirmation || null;
               this.externalPurchase.history = data.history || [];
               this.externalPurchase.items = (data.items || []).map(row => ({
@@ -25620,6 +25866,27 @@
             await this.openProduct({ id:Number(item.product_id) });
             this.modal.title = `编辑常用箱后返回当前订单｜${item.product_code || ""}`;
           },
+          async openBomChildEditor(component) {
+            const childId = Number(component?.component_product_id || 0);
+            if (!childId || !this.canEditProducts || this.masterSavePending || this.bomEditor.loading) return false;
+            const fields = ["productForm", "bomEditor", "externalComponentEditor", "drawingFile",
+              "productFormSnapshot", "productBomSnapshot", "productMaterialContext", "productMaterialActiveTab",
+              "productMaterialCandidateDetailKeys", "productMaterialCompareKeys", "masterVersionConflict",
+              "masterChangeConfirm", "masterPendingSaveOptions"];
+            this.productEditReturnContext = {
+              source:"bom", productId:childId, returnModal:{...this.modal},
+              previous:this.productEditReturnContext, baseline:this.masterEditBaseline.product,
+              // Keep File objects and unsaved Vue state intact; opening a child
+              // must not silently save or JSON-clone away the parent's draft.
+              editorState:Object.fromEntries(fields.map(key => [key,this[key]])),
+            };
+            if (!await this.openProduct({id:childId})) {
+              await this.returnFromCommonBoxEditor(childId, {saved:false});
+              return false;
+            }
+            this.modal.title = `编辑子件｜${this.productForm.product_name || ""}（关闭返回上级）`;
+            return true;
+          },
           resetProductEditorState() {
             this.productFormSnapshot = null;
             this.productBomSnapshot = null;
@@ -25634,6 +25901,30 @@
             if (!context) return false;
             const productId = Number(savedProductId || context.productId);
             const returnModal = context.returnModal;
+            if (context.source === "bom") {
+              this.productEditReturnContext = context.previous || null;
+              Object.entries(context.editorState).forEach(([key,value]) => { this[key]=value; });
+              this.masterEditBaseline.product = context.baseline;
+              this.modal = returnModal;
+              if (saved) {
+                try {
+                  const {data} = await axios.get(`/api/master/products/${productId}`);
+                  this.bomEditor.components.forEach(row => {
+                    if (Number(row.component_product_id) === productId) {
+                      row.product_code=data.product_code; row.product_name=data.product_name;
+                      row.component=data;
+                    }
+                  });
+                  this.bomEditor.componentOptions = this.bomEditor.componentOptions.filter(row => Number(row.id)!==productId);
+                  this.bomEditor.componentOptions.push(this.bomComponentOption(data));
+                  this.showToast("子件已保存，上级未保存内容已保留");
+                } catch (error) {
+                  this.showToast(`子件已保存，名称刷新失败：${this.errorMessage(error)}`,true);
+                }
+              }
+              if (this.productMaterialContext?.loading && this.productForm.id) this.loadProductMaterialContext(this.productForm.id);
+              return true;
+            }
             this.productEditReturnContext = null;
             this.resetProductEditorState();
             this.modal = returnModal;
@@ -31455,6 +31746,95 @@
               return true;
             } catch(error) { this.showToast(this.errorMessage(error), true); return false; }
           },
+          async openSemiProduction(item) {
+            if(this.semiProduction?.pending && this.semiProduction.itemId!==item.id) {this.showToast("请先重试上一笔半成品生产确认，核实执行结果");return;}
+            const opener=this.rememberModalOpener();
+            if(this.semiProduction?.itemId!==item.id)this.semiProduction={itemId:item.id,productId:0,products:[],completions:[],review:null,pending:null,loading:false,error:""};
+            this.modal={type:"semiProduction",title:"半成品生产确认"};this.focusAccessibleModal(opener);
+            const state=this.semiProduction;state.loading=true;
+            try {const {data}=await axios.get(`/api/orders/items/${state.itemId}/semi-production`);Object.assign(state,data);}
+            catch(error){state.error=this.errorMessage(error);}finally{state.loading=false;}
+          },
+          async previewSemiProduction() {
+            const state=this.semiProduction;if(!state || state.loading || state.pending)return;
+            state.loading=true;state.error="";state.review=null;
+            try {const {data}=await axios.post(`/api/orders/items/${state.itemId}/semi-production/preview`,{product_id:state.productId});state.review=data;}
+            catch(error){state.error=this.errorMessage(error);}finally{state.loading=false;}
+          },
+          async confirmSemiProduction() {
+            const state=this.semiProduction;if(!state || state.loading || (!state.pending && !state.review?.ready))return;
+            if(!state.pending)state.pending={product_id:state.productId,reviewed_hash:state.review.reviewed_hash,operation_key:crypto.randomUUID()};
+            state.loading=true;state.error="";
+            try {await axios.post(`/api/orders/items/${state.itemId}/semi-production/execute`,state.pending);state.pending=null;state.review=null;const {data}=await axios.get(`/api/orders/items/${state.itemId}/semi-production`);Object.assign(state,data);}
+            catch(error){state.error=this.errorMessage(error);if(error.response && [400,403,404,409,422].includes(error.response.status)){state.pending=null;state.review=null;}}
+            finally{state.loading=false;}
+          },
+          async reverseSemiProduction(completionId) {
+            const state=this.semiProduction;if(!state || state.loading || state.pending)return;
+            state.loading=true;state.error="";
+            try {await axios.post(`/api/orders/items/${state.itemId}/semi-production/${completionId}/revert`);const {data}=await axios.get(`/api/orders/items/${state.itemId}/semi-production`);Object.assign(state,data);state.review=null;}
+            catch(error){state.error=this.errorMessage(error);}finally{state.loading=false;}
+          },
+          async openReservedKitCutover(order,item,mode="reserved") {
+            const opener=this.rememberModalOpener();
+            this.bomCutover = {orderId:order.id,itemId:item.id,mode,route:({unstarted:"unstarted-bom-cutover",stocked:"stocked-bom-cutover",purchase:"purchase-bom-cutover",material:"material-bom-cutover"})[mode] || "reserved-kit-cutover",loading:true,error:"",review:null,locations:[],targets:{},confirmed:false,pending:null};
+            const state=this.bomCutover;
+            this.modal={type:"bomCutover",title:"切换未完成BOM"};
+            this.focusAccessibleModal(opener);
+            try {
+              const [review,locations]=await Promise.all([
+                axios.post(`/api/orders/items/${item.id}/${state.route}/preview`,{}),
+                mode==="unstarted"?Promise.resolve({data:{items:[]}}):axios.get("/api/warehouse/locations")]);
+              if(this.bomCutover!==state)return;
+              state.review=review.data;
+              state.locations=(locations.data.items || []).filter(x=>x.is_active && x.placement_status==='placed' && x.position_status==='mapped' && ['finished','semi_finished','shared'].includes(x.warehouse_type));
+              state.targets=Object.fromEntries(state.review.outputs.map(x=>[x.product_id,0]));
+            } catch(error) {if(this.bomCutover===state)state.error=this.errorMessage(error);}
+            finally {state.loading=false;}
+          },
+          async previewReservedKitCutover() {
+            const state=this.bomCutover;
+            if(!state || state.loading || state.pending)return;
+            state.confirmed=false;state.error="";
+            if(Object.values(state.targets).some(x=>!Number.isInteger(x)||x<=0)) {state.error="请为每个组装产品选择正式货位";return;}
+            state.loading=true;
+            try {
+              const {data}=await axios.post(`/api/orders/items/${state.itemId}/${state.route || "reserved-kit-cutover"}/preview`,{target_locations:state.targets});
+              if(this.bomCutover!==state)return;
+              state.review=data;state.confirmed=data.ready;
+            } catch(error) {if(this.bomCutover===state)state.error=this.errorMessage(error);}
+            finally {state.loading=false;}
+          },
+          async previewBomProcurement() {
+            const state=this.bomCutover;
+            if(!state || state.loading || state.pending)return;
+            state.loading=true;state.error="";state.procurement=null;
+            try {
+              const {data}=await axios.get(`/api/orders/items/${state.itemId}/bom-procurement-impact`);
+              if(this.bomCutover===state)state.procurement=data;
+            } catch(error) {if(this.bomCutover===state)state.error=this.errorMessage(error);}
+            finally {state.loading=false;}
+          },
+          async executeReservedKitCutover() {
+            const state=this.bomCutover;
+            if(!state || state.loading || (!state.confirmed && !state.pending))return;
+            if(!state.pending) {
+              const r=state.review;
+              state.pending=JSON.parse(JSON.stringify({target_locations:r.target_locations,reviewed_hash:r.reviewed_hash,
+                preview_hash:r.preview_hash,source_lot_versions:r.source_lot_versions,operation_key:crypto.randomUUID(),
+                ...(Number.isInteger(r.rule_revision)?{rule_revision:r.rule_revision}:{})}));
+            }
+            state.loading=true;state.error="";
+            try {
+              await axios.post(`/api/orders/items/${state.itemId}/${state.route || "reserved-kit-cutover"}/execute`,state.pending);
+              state.pending=null;state.confirmed=false;
+              this.showToast("剩余部分BOM切换已完成，已记录审计");
+              if(this.bomCutover===state && this.modal.type==='bomCutover')await this.openOrderDetail({id:state.orderId});
+            } catch(error) {
+              if(error.response && error.response.status<500) {state.pending=null;state.confirmed=false;}
+              state.error=error.response && error.response.status<500 ? this.errorMessage(error) : "结果暂不确定，请重试同一操作；不要另建转换。";
+            } finally {state.loading=false;}
+          },
           async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {
             const requestKey = "orders:read-detail-modal";
             const orderId = Number(row?.id || 0);
@@ -31755,6 +32135,7 @@
                 product_name:itemSnapshot.snapshot_product_name || "", material:itemSnapshot.display_material || this.displayMaterialText(itemSnapshot.snapshot_material) || "",
                 specification:this.orderSpecificationText(itemSnapshot.snapshot_spec, ""), production_notes:itemSnapshot.snapshot_production_notes || "",
                 quantity:itemSnapshot.quantity, unit_price:this.money(itemSnapshot.unit_price),
+                bom_production_expected_revision:Number(itemSnapshot.bom_production_revision || 0),
                 requisition_status:itemSnapshot.requisition_status || "未报料",
                 finished_inventory_reserved_qty:Number(itemSnapshot.finished_inventory_reserved_qty || 0),
                 production_required_qty:Number(itemSnapshot.production_required_qty ?? itemSnapshot.quantity),
@@ -33187,6 +33568,7 @@
                 pieces_per_box:Number(component.physical_pieces_per_component || 1),
                 required_piece_qty:Number(component.required_piece_quantity || 0),
                 semi_finished_reserved_piece_qty:Number(component.semi_finished_reserved_piece_qty || 0),
+                carried_material_piece_qty:Number(component.carried_material_piece_qty || 0),
                 remaining_required_piece_qty:Number(component.remaining_required_piece_qty || 0),
                 requisition_qty:Number(component.requisition_qty || 0),
                 cardboard_len:Number(component.report_length_mm || row.suggested_cardboard_len || 0),
@@ -35675,9 +36057,24 @@
               if (this.modal.type === "product") {
                 const productDirty = this._productFormDirty();
                 const bomDirty = this._productBomDirty();
+                if (bomDirty) {
+                  const bomError = this.validateProductBom();
+                  if (bomError) throw new Error(bomError);
+                }
                 const payload = this.buildProductWritePayload(masterOptions);
                 let saved;
-                if (this.productForm.id) {
+                if (bomDirty) {
+                  const combined = { product:payload, bom:this.bomPayload(this.productForm.id ? null : 1) };
+                  const response = this.productForm.id
+                    ? await axios.put(`/api/master/products/${this.productForm.id}/with-bom`, combined)
+                    : await axios.post("/api/master/products/with-bom", combined);
+                  saved = response.data.product;
+                  this.productForm = this.hydrateProductForm(saved);
+                  this.beginMasterEdit("product",this.productForm);
+                  this.applyBomResponse(response.data.bom);
+                  this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
+                }
+                else if (this.productForm.id) {
                   saved = { id: this.productForm.id };
                   if (productDirty) {
                     saved=(await axios.put(`/api/master/products/${this.productForm.id}`, payload)).data;
@@ -35691,7 +36088,6 @@
                   const form=new FormData(); form.append("file",this.drawingFile);
                   await axios.post(`/api/master/products/${saved.id}/drawings`,form);
                 }
-                if (saved?.id && bomDirty) await this.saveProductBom(saved.id, saved.version ?? null);
                 try {
                   const refreshed = await this.loadProducts();
                   if (!refreshed) throw new Error(this.productsError || "常用箱列表刷新未完成");

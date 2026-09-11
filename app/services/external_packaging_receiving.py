@@ -89,12 +89,13 @@ def _request_fingerprint(
 def _received_quantity_aggregate(
     purchase_item_ids: set[int] | None = None,
 ):
+    from app.services.external_receipt_state import active_receipt_item
     statement = select(
         ExternalPackagingReceiptItem.purchase_item_id.label("purchase_item_id"),
         func.sum(ExternalPackagingReceiptItem.received_quantity).label(
             "received_quantity"
         ),
-    ).group_by(ExternalPackagingReceiptItem.purchase_item_id)
+    ).where(active_receipt_item()).group_by(ExternalPackagingReceiptItem.purchase_item_id)
     if purchase_item_ids is not None:
         statement = statement.where(
             ExternalPackagingReceiptItem.purchase_item_id.in_(purchase_item_ids)
@@ -572,6 +573,9 @@ def record_external_purchase_receipt(
         )
     )
     if existing is not None:
+        from app.models.external_packaging_purchase import ExternalPackagingReceiptReversal
+        if db.get(ExternalPackagingReceiptReversal, existing.id) is not None:
+            raise ExternalPurchaseContractError('该实收已撤销，请使用新的收料请求')
         if (
             existing.purchase_order_id != purchase_order_id
             or existing.request_fingerprint != fingerprint
@@ -732,6 +736,15 @@ def record_external_purchase_receipt(
             )
         normalized.append((item, quantity))
 
+    from app.services.multilevel_bom_external_receipts import graph_receipt_conversions
+    from app.services.multilevel_bom_plan import BomPlanError
+    try:
+        graph_conversions = graph_receipt_conversions(
+            db, normalized, totals, customer_id=source_customer_id
+        )
+    except BomPlanError as error:
+        raise ExternalPurchaseContractError(str(error), status_code=409) from error
+
     ordinal = int(
         db.scalar(
             select(func.count(ExternalPackagingReceipt.id)).where(
@@ -750,8 +763,7 @@ def record_external_purchase_receipt(
     db.add(receipt)
     db.flush()
     for item, quantity in normalized:
-        converted_quantity = 0
-        remainder = Decimal("0")
+        converted_quantity, remainder = graph_conversions.get(item.id, (0, Decimal("0")))
         stock_item: StockReplenishmentOrderItem | None = None
         if replenishment_order is not None:
             stock_item = stock_items[int(item.stock_replenishment_item_id)]
@@ -791,6 +803,15 @@ def record_external_purchase_receipt(
         )
         db.add(receipt_item)
         db.flush()
+        if item.id in graph_conversions:
+            from app.services.multilevel_bom_external_receipts import post_graph_receipt_inventory
+            from app.services.production_workflow import ProductionWorkflowError
+            from app.services.warehouse_inventory import WarehouseInventoryError
+            try:
+                post_graph_receipt_inventory(db, purchase_item=item, receipt_item=receipt_item,
+                    customer_id=source_customer_id, operator_id=user.id)
+            except (BomPlanError, ProductionWorkflowError, WarehouseInventoryError) as error:
+                raise ExternalPurchaseContractError(str(error), status_code=409) from error
         if replenishment_order is not None and stock_item is not None:
             if converted_quantity > 0:
                 planned_quantity = min(
@@ -816,5 +837,36 @@ def record_external_purchase_receipt(
                     raise ExternalPurchaseContractError(
                         str(error), status_code=error.status_code
                     ) from error
+    graph_output_orders = {item.sales_order_item_id for item, _ in normalized
+        if item.id in graph_conversions and graph_conversions[item.id][0] > 0}
+    graph_receipt_orders = {item.sales_order_item_id for item, _ in normalized if item.id in graph_conversions}
+    if graph_receipt_orders:
+        from app.services.multilevel_bom_receipts import assemble_graph_order_receipt, refresh_graph_main_task, graph_material_receipts_closed
+        from app.services.multilevel_bom_external_receipts import reserve_external_picking
+        from app.services.multilevel_bom_orders import read_compiled_order_bom
+        from app.core.time_contract import utc_now_naive
+        from app.services.bom_subkits import SubkitError
+        from app.services.production_workflow import ProductionWorkflowError
+        from app.services.warehouse_inventory import WarehouseInventoryError
+        try:
+            for oid in sorted(graph_receipt_orders):
+                item = target_order_items[oid]
+                if oid in graph_output_orders:
+                    assemble_graph_order_receipt(db, compiled=read_compiled_order_bom(db, oid),
+                        order_item_id=oid, operation_key=f'bom-external-receipt:{receipt.id}:{oid}', operator_id=user.id)
+                    reserve_external_picking(db, receipt_id=receipt.id, item=item, operator_id=user.id)
+                if graph_material_receipts_closed(db, item):
+                    if item.material_status != 'received':
+                        item.material_received_at = utc_now_naive()
+                        item.material_received_by = user.id
+                    item.material_status, item.requisition_status = 'received', '已入库'
+                else:
+                    item.material_status = 'pending'
+                    if item.requisition_status == '已入库':
+                        item.requisition_status = '已报料'
+                    item.material_received_at = item.material_received_by = None
+                refresh_graph_main_task(db, item, create_if_missing=oid in graph_output_orders)
+        except (BomPlanError, SubkitError, ProductionWorkflowError, WarehouseInventoryError) as error:
+            raise ExternalPurchaseContractError(str(error), status_code=409) from error
     db.flush()
     return _load_receipt(db, receipt.id), True

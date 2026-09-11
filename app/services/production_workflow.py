@@ -21,6 +21,8 @@ from app.core.time_contract import (
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.incoming_receipt import IncomingReceiptItem
+from app.models.external_packaging_purchase import ExternalPackagingReceiptItem
+from app.models.multilevel_bom import BomAssembly
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.printing_plate import PrintingPlate
@@ -1000,6 +1002,10 @@ def refresh_production_task(
     item = db.get(OrderItem, order_item_id)
     if item is None:
         raise ProductionWorkflowError("订单明细不存在", 404)
+    from app.models.multilevel_bom import OrderBomGraph
+    if db.get(OrderBomGraph, item.id) is not None:
+        from app.services.multilevel_bom_receipts import refresh_graph_main_task
+        return refresh_graph_main_task(db, item, create_if_missing=create_if_missing)
     if item.supply_mode_snapshot == "external_purchase":
         return db.scalar(
             select(ProductionTask).where(
@@ -1515,7 +1521,7 @@ class ReceiptAutoFinishedGroundTarget:
     area: WarehouseArea | None = None
     floor: WarehouseFloor | None = None
     target_kind: Literal[
-        "fin_ground_plan", "floor3_v11", "preferred_location"
+        "fin_ground_plan", "floor3_v11", "preferred_location", "fixed_shelf"
     ] = "fin_ground_plan"
     runtime_map_revision: str | None = None
     area_sequence: int | None = None
@@ -2008,12 +2014,28 @@ def _receipt_auto_finished_ground_target(
     claim: bool,
     excluded_location_ids: set[int] | None = None,
     customer_id: int | None = None,
+    product_id: int | None = None,
 ) -> ReceiptAutoFinishedGroundTarget:
     excluded = excluded_location_ids or set()
     has_customer_preferences = bool(
         customer_id is not None
         and ordered_preferred_area_ids(db, int(customer_id))
     )
+    if product_id is not None and not has_customer_preferences:
+        from app.services.fixed_shelf import incoming_primary_location, ShelfError
+        try:
+            fixed = incoming_primary_location(db, product_id=product_id,
+                customer_id=customer_id, claim=claim)
+        except OperationalError as exc:
+            raise ProductionWorkflowError("固定货位正在调整，请稍后重试", 409) from exc
+        except ShelfError as exc:
+            raise ProductionWorkflowError(str(exc), 409) from exc
+        if fixed is not None:
+            if fixed.id in excluded:
+                raise ProductionWorkflowError("固定货位已被本批次占用，请核对分配", 409)
+            return ReceiptAutoFinishedGroundTarget(plan=None, slot=None, location=fixed,
+                layout_version=fixed.floor3_layout.version if fixed.floor3_layout else 0,
+                capacity_warning=None, target_kind="fixed_shelf")
     targets = [
         target
         for target in _receipt_auto_finished_ground_targets(
@@ -2848,15 +2870,18 @@ def _consume_completion_semi_reservations(
 def _reserve_component_completion_lot(
     db: Session,
     *,
-    completion: ProductionCompletion,
+    completion: ProductionCompletion | BomAssembly | ExternalPackagingReceiptItem,
     order: Order,
     item: OrderItem,
     snapshot_id: int,
     lot: InventoryLot,
     operator_id: int | None,
     idempotency_key: str,
+    reserve_quantity: int | None = None,
+    reservation_number_prefix: str = "CPRS",
+    movement_reason: str = "复合 BOM 组件生产完工自动预占",
 ) -> InventoryReservation:
-    """Reserve a just-created component lot for its immutable BOM snapshot.
+    """Reserve a just-created completion/assembly/external lot for its BOM snapshot.
 
     The legacy helper checks the parent product, which is intentionally wrong
     for a component.  This narrow variant preserves the same inventory
@@ -2876,8 +2901,12 @@ def _reserve_component_completion_lot(
         ):
             raise ProductionWorkflowError("组件完工库存预占幂等标识冲突", 409)
         return existing
-    quantity = int(completion.quantity or 0)
-    if quantity <= 0 or int(lot.quantity_available or 0) != quantity:
+    output_quantity = (completion.converted_finished_quantity
+        if isinstance(completion, ExternalPackagingReceiptItem) else completion.quantity)
+    quantity = int(output_quantity if reserve_quantity is None else reserve_quantity)
+    if quantity <= 0 or int(lot.quantity_available or 0) < quantity or (
+        reserve_quantity is None and int(lot.quantity_available or 0) != quantity
+    ):
         raise ProductionWorkflowError("组件完工库存数量与完工事实不一致", 409)
     before = _balances(lot)
     expected_version = int(lot.version or 0)
@@ -2887,7 +2916,7 @@ def _reserve_component_completion_lot(
         .where(
             InventoryLot.id == lot.id,
             InventoryLot.version == expected_version,
-            InventoryLot.quantity_available == quantity,
+            InventoryLot.quantity_available == int(lot.quantity_available),
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
         )
@@ -2901,7 +2930,7 @@ def _reserve_component_completion_lot(
     if updated.rowcount != 1:
         raise ProductionWorkflowError("组件完工库存数量或版本已变化，请刷新后重试", 409)
     reservation = InventoryReservation(
-        reservation_number=_stable_key("CPRS", completion.id, snapshot_id, max_length=50),
+        reservation_number=_stable_key(reservation_number_prefix, completion.id, snapshot_id, max_length=50),
         inventory_lot_id=lot.id,
         reservation_type="finished_order",
         order_id=order.id,
@@ -2928,7 +2957,7 @@ def _reserve_component_completion_lot(
         quantity=quantity,
         before=before,
         operator_id=operator_id,
-        reason="复合 BOM 组件生产完工自动预占",
+        reason=movement_reason,
         idempotency_key=idempotency_key,
         reservation_id=reservation.id,
         related_order_id=order.id,
@@ -3009,6 +3038,7 @@ def _stock_completion_lot(
     finished_ground_target: ReceiptAutoFinishedGroundTarget | None = None,
     source_type: str = "production_surplus",
     movement_reason: str = "生产完工入库",
+    semi_cost_detail: dict | None = None,
 ) -> InventoryLot:
     snapshot = (
         db.get(SalesOrderItemBomComponent, task.sales_order_item_bom_component_id)
@@ -3021,6 +3051,7 @@ def _stock_completion_lot(
     existing_pallet_id: int | None = None
     is_parent_delivery_component = (
         snapshot is not None
+        and snapshot.snapshot_schema_version != 5
         and (item.composite_fulfillment_mode_snapshot or "component_delivery")
         == "parent_delivery"
     )
@@ -3042,6 +3073,20 @@ def _stock_completion_lot(
     if location_id_override is not None:
         if finished_ground_target is not None:
             target_location = finished_ground_target.location
+            fixed_is_valid = False
+            if finished_ground_target.target_kind == "fixed_shelf":
+                from app.services.fixed_shelf import incoming_primary_location, ShelfError
+                try:
+                    fixed = incoming_primary_location(db,
+                        product_id=snapshot.component_product_id if snapshot is not None else item.product_id,
+                        customer_id=order.customer_id, claim=True)
+                except OperationalError as exc:
+                    raise ProductionWorkflowError("固定货位正在调整，请稍后重试", 409) from exc
+                except ShelfError as exc:
+                    raise ProductionWorkflowError(str(exc), 409) from exc
+                fixed_is_valid = (fixed is not None and fixed.id == target_location.id
+                    and not ordered_preferred_area_ids(db, int(order.customer_id)))
+                require_empty_pallet = False
             target_kind_is_valid = (
                 finished_ground_target.target_kind == "fin_ground_plan"
                 and finished_ground_target.uses_ground_plan
@@ -3064,7 +3109,7 @@ def _stock_completion_lot(
                 and finished_ground_target.area is not None
                 and int(finished_ground_target.area.id)
                 in ordered_preferred_area_ids(db, int(order.customer_id))
-            )
+            ) or fixed_is_valid
             if (
                 target_location.id != location_id_override
                 or not target_kind_is_valid
@@ -3098,6 +3143,26 @@ def _stock_completion_lot(
         if is_transfer or source_type == "production_completion"
         else int(completion.stock_quantity)
     )
+    from app.services.multilevel_bom_orders import read_order_graph
+    graph = read_order_graph(db, item.id)
+    if graph is not None:
+        nodes, children, _ = graph.validated()
+        if (product_id in nodes and nodes[product_id].source == "manufactured"
+                and any(edge.relation == "assembly" for edge in children[product_id])):
+            if is_transfer or pallet_id is not None or command.pallet_code:
+                raise ProductionWorkflowError("待装配本体请使用本体库存移位流程", 409)
+            from app.services.multilevel_bom_body_inventory import receive_body_inventory
+            from app.services.bom_subkits import SubkitError
+            try:
+                return receive_body_inventory(db, completion_id=completion.id,
+                    location_id=location.id, operator_id=operator_id,
+                    idempotency_key=_stable_key(idempotency_prefix, "body-in"),
+                    semi_cost_detail=semi_cost_detail,
+                    expected_layout_version=(int(location.floor3_layout.version)
+                        if location_id_override is not None and location.floor3_layout is not None
+                        else command.expected_layout_version))
+            except SubkitError as error:
+                raise ProductionWorkflowError(str(error), error.status_code) from error
     lot = manual_finished_in(
         db,
         customer_id=order.customer_id,
@@ -3146,7 +3211,7 @@ def _stock_completion_lot(
                 operator_id=operator_id,
                 idempotency_key=_stable_key(idempotency_prefix, "finished-reserve"),
             )
-    else:
+    elif snapshot.snapshot_schema_version != 5 or completion.order_reserved_quantity > 0:
         _reserve_component_completion_lot(
             db,
             completion=completion,
@@ -3156,6 +3221,7 @@ def _stock_completion_lot(
             lot=lot,
             operator_id=operator_id,
             idempotency_key=_stable_key(idempotency_prefix, "component-finished-reserve"),
+            reserve_quantity=(completion.order_reserved_quantity if snapshot.snapshot_schema_version == 5 else None),
         )
     return lot
 
@@ -4353,7 +4419,16 @@ def _reverse_completion_semi_consumption(
         reservation = db.get(InventoryReservation, movement.reservation_id)
         if reservation is None:
             raise ProductionWorkflowError("生产完工半成品预占不存在，不能自动回退", 409)
-        if int(reservation.consumed_stock_quantity or 0) != int(movement.quantity or 0):
+        expected_consumed = int(movement.quantity or 0)
+        output = db.get(InventoryLot, completion.inventory_lot_id) if completion.inventory_lot_id else None
+        detail = json.loads(output.cost_snapshot_detail_json or "{}") if output else {}
+        if "bom_material_product_id" in detail:
+            source = next((s for s in detail.get("bom_material_inputs", [])
+                           if s["kind"] == "reservation" and s["id"] == reservation.id), None)
+            if source is None or source["stock_after"] - source["stock_before"] != movement.quantity:
+                raise ProductionWorkflowError("多级BOM备料反向来源不完整", 409)
+            expected_consumed = source["stock_after"]
+        if int(reservation.consumed_stock_quantity or 0) != expected_consumed:
             raise ProductionWorkflowError(
                 "该半成品预占在生产完工后又发生了其他消耗，不能自动回退", 409
             )
@@ -4374,6 +4449,44 @@ def _reverse_completion_semi_consumption(
     return tuple(reversed_ids)
 
 
+def _is_reversed_delivery_pallet_restore(db, movement, lot, completion) -> bool:
+    """Only a proven cancellation restoring the exact auto-cleared slot.
+
+    Callers must independently validate all lot consumption/reversal facts.
+    A matching label or a round trip through another location is insufficient.
+    """
+    import re
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.warehouse_inventory import DeliveryInventoryAllocation
+    match = re.fullmatch(r"delivery-(\d+)-auto-release-pallet-(\d+):restore", movement.idempotency_key or "")
+    if (match is None or int(match[2]) != movement.pallet_id
+            or movement.from_location_id is not None or movement.to_location_id != lot.warehouse_location_id
+            or movement.confirmed_at is None or movement.pallet_version_before is None
+            or movement.pallet_version_after != movement.pallet_version_before + 1):
+        return False
+    clear = db.scalar(select(InventoryLocationMovement).where(
+        InventoryLocationMovement.idempotency_key == movement.idempotency_key.removesuffix(":restore")))
+    if (clear is None or clear.id >= movement.id or clear.movement_type != "clear"
+            or clear.pallet_id != movement.pallet_id or clear.from_location_id != movement.to_location_id
+            or clear.to_location_id is not None or clear.confirmed_at is None
+            or clear.pallet_version_before is None
+            or clear.pallet_version_after != clear.pallet_version_before + 1
+            or clear.pallet_version_after != movement.pallet_version_before):
+        return False
+    delivery = db.get(Delivery, int(match[1]))
+    if delivery is None or delivery.status == "dispatched":
+        return False
+    return db.scalar(select(DeliveryInventoryAllocation.id).join(
+        DeliveryItem, DeliveryItem.id == DeliveryInventoryAllocation.delivery_item_id).join(
+        InventoryReservation, InventoryReservation.id == DeliveryInventoryAllocation.reservation_id).where(
+            DeliveryItem.delivery_id == delivery.id,
+            DeliveryItem.order_item_id == completion.order_item_id,
+            InventoryReservation.inventory_lot_id == lot.id,
+            DeliveryInventoryAllocation.status == "reversed",
+            DeliveryInventoryAllocation.reversed_stock_quantity == DeliveryInventoryAllocation.consumed_stock_quantity,
+            DeliveryInventoryAllocation.reversed_requirement_quantity == DeliveryInventoryAllocation.credited_requirement_quantity).limit(1)) is not None
+
+
 def _reverse_completion_finished_lot(
     db: Session,
     *,
@@ -4385,10 +4498,20 @@ def _reverse_completion_finished_lot(
     lot = db.get(InventoryLot, lot_id)
     if lot is None:
         raise ProductionWorkflowError("生产完工成品库存批次不存在", 409)
+    is_body = lot.inventory_type == "assembly_body"
+    if is_body:
+        from app.services.multilevel_bom_body_inventory import stock_product_identity
+        from app.services.bom_subkits import SubkitError
+        try:
+            stock_product_identity(db, lot)
+        except SubkitError as error:
+            raise ProductionWorkflowError(str(error), error.status_code) from error
+        if lot.quantity_reserved or lot.pallet_item is not None:
+            raise ProductionWorkflowError("本体库存存在异常成品预占或栈板绑定，不能回退", 409)
     if (
         lot.source_ref_type != "production_completion"
         or int(lot.source_ref_id or 0) != completion.id
-        or lot.inventory_type != "finished"
+        or lot.inventory_type not in ("finished", "assembly_body")
         or lot.status != "active"
     ):
         raise ProductionWorkflowError("关联批次已不是有效的生产完工入库，不能回退", 409)
@@ -4414,6 +4537,8 @@ def _reverse_completion_finished_lot(
         .order_by(InventoryMovement.id)
     ).all()
     def safe_completion_movement(row: InventoryMovement) -> bool:
+        if is_body:
+            return row.movement_type == "manual_in"
         if row.movement_type in {"manual_in", "reserve"}:
             return True
         return bool(
@@ -4425,7 +4550,11 @@ def _reverse_completion_finished_lot(
             )
         )
 
-    if not movements or any(not safe_completion_movement(row) for row in movements):
+    graph_restored = False
+    if lot.cost_snapshot_detail_json and "bom_material_product_id" in json.loads(lot.cost_snapshot_detail_json):
+        from app.services.bom_subkit_inventory import _only_reversed_graph_consumptions
+        graph_restored = _only_reversed_graph_consumptions(db, lot, allow_initial_reserve=True)
+    if not movements or (not graph_restored and any(not safe_completion_movement(row) for row in movements)):
         raise ProductionWorkflowError("成品库存已经发生后续业务流水，不能回退生产确认", 409)
     reservations = db.scalars(
         select(InventoryReservation).where(
@@ -4444,14 +4573,14 @@ def _reverse_completion_finished_lot(
     ):
         raise ProductionWorkflowError("生产完工成品预占已发生后续变化，不能自动回退", 409)
     pallet = lot.pallet_item.pallet if lot.pallet_item is not None else None
-    if pallet is not None and db.scalar(
-        select(InventoryLocationMovement.id)
+    if pallet is not None and any(
+        not (graph_restored and _is_reversed_delivery_pallet_restore(db, movement, lot, completion))
+        for movement in db.scalars(select(InventoryLocationMovement)
         .where(
             InventoryLocationMovement.pallet_id == pallet.id,
             InventoryLocationMovement.movement_type == "move",
-        )
-        .limit(1)
-    ) is not None:
+        ))
+    ):
         raise ProductionWorkflowError("该成品入库后已经移过库位，不能自动回退", 409)
 
     if reservation is not None:
@@ -4739,6 +4868,8 @@ def post_automatic_receipt_completion(
     idempotency_key: str,
     capitalized_material_cost: Decimal,
     cost_detail: dict[str, object],
+    bom_snapshot_id: int | None = None,
+    semi_only: bool = False,
 ) -> ProductionCompletion | None:
     """Post one receipt-derived finished increment through the existing ledger.
 
@@ -4783,6 +4914,53 @@ def post_automatic_receipt_completion(
     if product is None or not product.is_active:
         raise ProductionWorkflowError("订单常用箱不存在或已停用，不能自动形成成品", 409)
     task = _ensure_receipt_auto_main_task(db, item=item, product=product)
+    graph_snapshot = None
+    is_assembly_body = False
+    required_quantity = int(item.quantity)
+    from app.models.multilevel_bom import OrderBomGraph
+    if bom_snapshot_id is None and db.get(OrderBomGraph, item.id) is not None:
+        raise ProductionWorkflowError("多级BOM必须按真实产品材料来源自动完工", 409)
+    if bom_snapshot_id is not None:
+        from app.services.multilevel_bom_orders import read_compiled_order_bom
+        compiled = read_compiled_order_bom(db, item.id)
+        graph_snapshot = next((s for s in compiled.snapshots if s.id == bom_snapshot_id), None) if compiled else None
+        if graph_snapshot is None or not any(n.product_id == graph_snapshot.component_product_id and n.source == "manufactured" for n in compiled.graph.nodes):
+            raise ProductionWorkflowError("多级BOM自动完工产品来源无效", 409)
+        if (cost_detail.get("bom_snapshot_id") != graph_snapshot.id
+                or cost_detail.get("bom_material_product_id") != graph_snapshot.component_product_id):
+            raise ProductionWorkflowError("组件完工成本与真实产品身份不一致", 409)
+        required_quantity = int(graph_snapshot.required_piece_quantity)
+        is_assembly_body = any(e.parent_id == graph_snapshot.component_product_id and e.relation == "assembly"
+                               for e in compiled.graph.edges)
+        if graph_snapshot.component_product_id != item.product_id:
+            component_product = db.get(Product, graph_snapshot.component_product_id)
+            if component_product is None or not component_product.is_active:
+                raise ProductionWorkflowError("组件产品已停用", 409)
+            task = db.scalar(select(ProductionTask).where(ProductionTask.sales_order_item_bom_component_id == graph_snapshot.id))
+            if task is None:
+                task = ProductionTask(order_item_id=item.id, sales_order_item_bom_component_id=graph_snapshot.id,
+                    task_role="component_internal", status=WAITING_MATERIAL, planned_quantity=0,
+                    finished_coverage_snapshot=0, ordered_quantity_snapshot=required_quantity,
+                    material_received_quantity=0, material_input_quantity=0, output_factor=1, version=1,
+                    **_new_task_printing_snapshot(db, component_product),
+                    **_new_task_label_snapshot(component_product, total_quantity=required_quantity))
+                db.add(task)
+                db.flush()
+    if semi_only:
+        from app.services.multilevel_bom_receipts import plan_semi_only_production
+        if graph_snapshot is None:
+            raise ProductionWorkflowError("半成品确认需要明确的冻结自制产品", 409)
+        _, semi_plan = plan_semi_only_production(db, order_item_id=item.id, product_id=graph_snapshot.component_product_id)
+        inputs = semi_plan["detail"]["bom_material_inputs"]
+        if (before != semi_plan["before"] or after != semi_plan["after"]
+                or capitalized_material_cost != semi_plan["total_cost"]
+                or cost_detail.get("bom_material_inputs") != inputs
+                or any(entry["kind"] != "reservation" for entry in inputs)
+                or material_input_delta != sum(entry["stock_after"]-entry["stock_before"] for entry in inputs)
+                or any(key in cost_detail for key in ("incoming_receipt_item_id", "purchase_receipt_fact_id", "purchase_purpose_source_snapshot_id"))):
+            raise ProductionWorkflowError("半成品生产确认与真实预占、数量或成本不一致", 409)
+        cost_detail = {**cost_detail, "bom_semi_confirmation": True}
+    received_before = int(task.material_received_quantity or 0)
     payload = {
         "order_item_id": item.id,
         "task_id": task.id,
@@ -4813,6 +4991,7 @@ def post_automatic_receipt_completion(
         db,
         claim=True,
         customer_id=order.customer_id,
+        product_id=graph_snapshot.component_product_id if graph_snapshot is not None else item.product_id,
     )
     location = ground_target.location
     existing_posted = db.scalar(
@@ -4839,14 +5018,28 @@ def post_automatic_receipt_completion(
     # Receipt capacity is an output fact, not the remaining order demand.
     # Existing finished-stock reservations (including quantities consumed by
     # delivery) already cover the order and must not be reserved a second time.
-    existing_order_coverage = min(
-        max(active_finished_reserved_qty(db, item.id), 0),
-        int(item.quantity or 0),
-    )
+    if graph_snapshot is not None and graph_snapshot.component_product_id == item.product_id:
+        from app.services.composite_bom_workflow import _snapshot_reservation_condition
+        delivered = compiled.execution_window.delivered_since if compiled.execution_window else int(item.delivered_quantity or 0)
+        root_reservations = db.scalars(select(InventoryReservation).where(
+            _snapshot_reservation_condition(db, graph_snapshot.id),
+            InventoryReservation.reservation_type == "finished_order",
+            InventoryReservation.status != "cancelled"))
+        remaining_reserved = sum(max(int(row.credited_requirement_quantity or 0)
+            - int(row.consumed_requirement_quantity or 0) - int(row.released_requirement_quantity or 0), 0)
+            for row in root_reservations)
+        existing_order_coverage = min(delivered + remaining_reserved, required_quantity)
+    elif graph_snapshot is not None:
+        from app.services.warehouse_inventory import active_finished_component_reserved_qty
+        existing_order_coverage = min(active_finished_component_reserved_qty(db, graph_snapshot.id), required_quantity)
+    else:
+        existing_order_coverage = min(max(active_finished_reserved_qty(db, item.id), 0), required_quantity)
     order_reserved = min(
         delta,
-        max(int(item.quantity or 0) - existing_order_coverage, 0),
+        max(required_quantity - existing_order_coverage, 0),
     )
+    if is_assembly_body:
+        order_reserved = 0
     completion = ProductionCompletion(
         batch_id=batch.id,
         task_id=task.id,
@@ -4854,44 +5047,41 @@ def post_automatic_receipt_completion(
         expected_version=max(int(task.version or 1), 1),
         quantity=delta,
         completion_type=completion_type,
-        origin="receipt_auto",
+        origin="manual" if semi_only else "receipt_auto",
         material_input_quantity=int(material_input_delta),
         planned_output_quantity=delta,
         actual_output_quantity=delta,
         defective_quantity=0,
         order_reserved_quantity=order_reserved,
-        direct_delivery_quantity=delta,
-        stock_quantity=0,
+        direct_delivery_quantity=0 if is_assembly_body else delta,
+        stock_quantity=delta if is_assembly_body else 0,
         surplus_finished_quantity=delta - order_reserved,
-        initial_disposition="direct",
+        initial_disposition="stock" if is_assembly_body else "direct",
         warehouse_location_id=location.id,
         inventory_lot_id=None,
-        remarks="收料后按冻结订单用途自动形成理论成品",
+        remarks="确认半成品预占加工完成" if semi_only else "收料后按冻结订单用途自动形成理论成品",
         completed_by=operator_id,
         completed_at=now,
     )
     db.add(completion)
     db.flush()
-    _consume_completion_semi_reservations(
-        db,
-        completion=completion,
-        task=task,
-        item=item,
-        # ``after`` is cumulative finished capacity.  The helper consumes only
-        # the still-live semi reservation balance, so retries and later partial
-        # receipts cannot consume the same inventory twice.
-        planned_quantity=after,
-        operator_id=operator_id,
-    )
+    if graph_snapshot is not None:
+        from app.services.multilevel_bom_receipts import consume_node_semi_inputs
+        consume_node_semi_inputs(db, completion=completion,
+            inputs=cost_detail.get("bom_material_inputs", []), operator_id=operator_id)
+    else:
+        _consume_completion_semi_reservations(db, completion=completion, task=task, item=item,
+            planned_quantity=after, operator_id=operator_id)
     command = CompletionCommand(
         task_id=task.id,
         expected_version=max(int(task.version or 1), 1),
-        disposition="direct",
+        disposition="stock" if is_assembly_body else "direct",
+        location_id=location.id if is_assembly_body else None,
         completion_type=completion_type,
         material_input_quantity=int(material_input_delta),
         actual_output_quantity=delta,
-        direct_delivery_quantity=delta,
-        remarks="收料自动成品进入当前真实成品位置",
+        direct_delivery_quantity=0 if is_assembly_body else delta,
+        remarks="半成品加工完成进入当前真实成品位置" if semi_only else "收料自动成品进入当前真实成品位置",
     )
     lot = _stock_completion_lot(
         db,
@@ -4905,12 +5095,18 @@ def post_automatic_receipt_completion(
         location_id_override=location.id,
         finished_ground_target=ground_target,
         source_type="production_completion",
-        movement_reason="订单用途来料自动形成成品并进入当前真实成品位置",
+        movement_reason="半成品预占加工完成入库" if semi_only else "订单用途来料自动形成成品并进入当前真实成品位置",
+        semi_cost_detail=cost_detail if semi_only else None,
     )
     completion.inventory_lot_id = lot.id
-    if ground_target.target_kind == "floor3_v11":
+    if is_assembly_body:
+        # The body already passed the real destination/map CAS checks. It is
+        # not dispatchable finished stock, so never create a finished pallet.
+        if lot.inventory_type != "assembly_body" or lot.finished_detail is not None:
+            raise ProductionWorkflowError("待装配本体库存阶段不一致", 409)
+    elif ground_target.target_kind == "floor3_v11":
         _validate_floor3_v11_direct_pallet(lot=lot, location=location)
-    else:
+    elif ground_target.target_kind != "fixed_shelf":
         _bind_direct_completion_lots_to_system_pallet(
             db,
             completion=completion,
@@ -4930,13 +5126,13 @@ def post_automatic_receipt_completion(
     ).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
     lot.estimated_square_price_snapshot = None
     lot.estimated_cost_area_m2_snapshot = None
-    lot.cost_snapshot_source = "purchase_receipt_actual"
+    lot.cost_snapshot_source = "semi_finished_estimate" if semi_only else "purchase_receipt_actual"
     lot.cost_snapshot_detail_json = json.dumps(
         {
             **cost_detail,
             "capitalized_material_cost": str(capitalized),
             "finished_quantity": delta,
-            "formula": "cumulative uncapitalized order-purpose cost / finished increment",
+            "formula": "reserved semi-finished cost / finished increment" if semi_only else "cumulative uncapitalized order-purpose cost / finished increment",
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -4945,19 +5141,19 @@ def post_automatic_receipt_completion(
 
     effective_order_coverage = min(
         existing_order_coverage + order_reserved,
-        int(item.quantity or 0),
+        required_quantity,
     )
     task.status = (
         COMPLETED
-        if effective_order_coverage >= int(item.quantity or 0)
+        if effective_order_coverage >= required_quantity
         else PENDING
     )
-    task.planned_quantity = max(int(item.quantity or 0), after, 1)
+    task.planned_quantity = max(required_quantity, after, 1)
     task.finished_coverage_snapshot = effective_order_coverage
-    task.ordered_quantity_snapshot = int(item.quantity or 0)
-    task.material_received_quantity = int(material_input_cumulative)
+    task.ordered_quantity_snapshot = required_quantity
+    task.material_received_quantity = received_before if semi_only else int(material_input_cumulative)
     task.material_input_quantity = int(material_input_cumulative)
-    task.readiness_basis = "automatic_receipt"
+    task.readiness_basis = "semi_finished_confirmation" if semi_only else "automatic_receipt"
     task.ready_at = task.ready_at or now
     task.version = max(int(task.version or 1), 1) + 1
     db.flush()
@@ -5091,13 +5287,21 @@ def reverse_automatic_receipt_completion(
     completion.reversed_at = now
     completion.reversal_reason = (reason or "").strip() or "撤销来料自动完工"
     remaining = max(int(remaining_theoretical_quantity or 0), 0)
+    required_quantity = int(item.quantity or 0)
+    component_coverage = None
+    if task.sales_order_item_bom_component_id is not None:
+        component = db.get(SalesOrderItemBomComponent, task.sales_order_item_bom_component_id)
+        if component is not None and component.snapshot_schema_version == 5:
+            from app.services.warehouse_inventory import active_finished_component_reserved_qty
+            required_quantity *= int(component.quantity_per_set)
+            component_coverage = active_finished_component_reserved_qty(db, component.id)
     effective_order_coverage = min(
-        max(active_finished_reserved_qty(db, item.id), 0),
-        int(item.quantity or 0),
+        max(active_finished_reserved_qty(db, item.id) if component_coverage is None else component_coverage, 0),
+        required_quantity,
     )
-    if effective_order_coverage >= int(item.quantity or 0):
+    if effective_order_coverage >= required_quantity:
         task.status = COMPLETED
-        task.planned_quantity = max(int(item.quantity or 0), remaining, 1)
+        task.planned_quantity = max(required_quantity, remaining, 1)
         task.ready_at = task.ready_at or now
         task.readiness_basis = "automatic_receipt"
     elif remaining <= 0:
@@ -5107,7 +5311,7 @@ def reverse_automatic_receipt_completion(
         task.readiness_basis = None
     else:
         task.status = PENDING
-        task.planned_quantity = max(int(item.quantity or 0), remaining, 1)
+        task.planned_quantity = max(required_quantity, remaining, 1)
         task.ready_at = task.ready_at or now
         task.readiness_basis = "automatic_receipt"
     task.finished_coverage_snapshot = effective_order_coverage
@@ -6762,6 +6966,18 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
             if lot_location is None:
                 current_inventory_status = "unlocated"
                 current_location_issue = "当前库存批次缺少有效库位，请核对仓库"
+            elif (lot_location.storage_type == "rack"
+                  and lot_location.address_kind == "rack_slot"
+                  and lot_location.map_rack_id):
+                # A formal shelf cell is the storage container. Ground-stock
+                # pallet requirements must not make valid rack stock disappear.
+                # Legacy rack/pallet records keep their historical validation.
+                if effective_pallet is not None:
+                    current_inventory_status = "pallet_mismatch"
+                    current_location_issue = "货架库存不应同时绑定实体栈板，请核对仓库"
+                else:
+                    current_inventory_status = "located"
+                    current_location = lot_location
             elif effective_pallet is None:
                 current_inventory_status = "missing_pallet"
                 current_location_issue = "当前库存未关联实体栈板，请核对仓库"

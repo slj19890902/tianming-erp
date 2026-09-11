@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.external_receipt_state import active_receipt_item
 
 from collections import Counter, defaultdict
 from decimal import Decimal
@@ -26,7 +27,11 @@ from app.models.finance import (
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
 from app.models.order_external_packaging import SalesOrderItemExternalComponent
-from app.models.product_bom import SalesOrderItemBomComponent
+from app.services.multilevel_bom_external_identity import current_external_component_predicate
+from app.services.multilevel_bom_execution_boundary import current_snapshot_predicate
+from app.models.product_bom import SalesOrderItemBomComponent, RequisitionItemBomSource
+from app.models.multilevel_bom import OrderBomGraph
+from app.models.requisition import Requisition, RequisitionItem
 from app.models.production import ProductionCompletion, ProductionTask
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
@@ -182,6 +187,20 @@ def build_order_business_statuses(
             ).all()
             if item_id is not None
         )
+        # The explicit BOM batch API is also a formal paper report. It freezes
+        # purchase-purpose sources directly; it need not manufacture a second
+        # supplier-order row merely to make the status projection advance.
+        confirmed_supplier_item_ids.update(db.scalars(select(RequisitionItem.order_item_id)
+            .join(Requisition, Requisition.id == RequisitionItem.requisition_id)
+            .join(RequisitionItemBomSource, RequisitionItemBomSource.requisition_item_id == RequisitionItem.id)
+            .join(SalesOrderItemBomComponent,
+                SalesOrderItemBomComponent.id == RequisitionItemBomSource.sales_order_item_bom_component_id)
+            .join(OrderBomGraph, OrderBomGraph.order_item_id == RequisitionItem.order_item_id)
+            .where(RequisitionItem.order_item_id.in_(item_id_chunk),
+                SalesOrderItemBomComponent.sales_order_item_id == RequisitionItem.order_item_id,
+                current_snapshot_predicate(), Requisition.status == "已报料",
+                Requisition.request_key.is_not(None), Requisition.request_actor_id.is_not(None),
+                RequisitionItem.status.in_(("已报料", "部分入库", "已入库"))).distinct()))
         external_purchase_rows = db.execute(
             select(
                 ExternalPackagingPurchaseItem.sales_order_item_id,
@@ -221,6 +240,7 @@ def build_order_business_statuses(
                     func.sum(ExternalPackagingReceiptItem.received_quantity),
                 )
                 .where(
+                    active_receipt_item(),
                     ExternalPackagingReceiptItem.purchase_item_id.in_(
                         external_purchase_item_ids
                     )
@@ -284,6 +304,7 @@ def build_order_business_statuses(
             ).where(
                 SalesOrderItemBomComponent.sales_order_item_id.in_(item_id_chunk),
                 SalesOrderItemBomComponent.is_required.is_(True),
+                current_snapshot_predicate(),
             )
         ):
             required_component_ids_by_item[int(order_item_id)].add(int(component_id))
@@ -296,6 +317,7 @@ def build_order_business_statuses(
                     item_id_chunk
                 ),
                 SalesOrderItemExternalComponent.is_required.is_(True),
+                current_external_component_predicate(),
             )
         ):
             required_external_component_ids_by_item[int(order_item_id)].add(

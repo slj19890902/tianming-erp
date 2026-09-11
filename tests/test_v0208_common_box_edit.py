@@ -190,14 +190,14 @@ def test_legacy_common_box_mismatch_only_blocks_report_or_crease_edits() -> None
 
 def test_common_box_processes_remove_double_and_drawings_are_independent_of_print() -> None:
     source = _source()
-    process_row = source.split("结合方式（三选一，模切可另选）", 1)[1].split(
+    process_row = source.split("结合 / 模切", 1)[1].split(
         'class="field product-mold-adjacent"', 1
     )[0]
 
     for process in ("粘贴", "打钉", "无需结合", "模切"):
         assert f'value="{process}"' in process_row
     assert 'value="其他"' not in process_row
-    assert "结合方式（三选一，模切可另选）" in source
+    assert "结合 / 模切" in source
     assert 'value="双拼"' not in source
     assert 'v-model="productForm._production_processes"' in source
 
@@ -454,6 +454,7 @@ def test_common_box_fifth_row_contains_price_drawing_history_and_save() -> None:
     assert "commonBoxPriceLabel(productForm.customer_id)" in row
     assert "图纸" in row
     assert "图纸记录" in row
-    assert "product-inline-save" in row
+    assert "product-inline-save" not in row
+    assert 'class="modal-foot product-editor-actions"' in source
     assert 'v-model="productForm.remark"' not in row
     assert "remark: f.remark" in source

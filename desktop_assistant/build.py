@@ -16,6 +16,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from desktop_assistant.storage import pack_tree, sha, write_json
 
 
+def runtime_copy_ignore(_directory, names):
+    """Drop content that is rebuilt explicitly for every signed package."""
+    rebuilt = {'site-packages', '__pycache__', 'Scripts', 'ocr'}
+    return {name for name in names if name in rebuilt}
+
+
 def source_snapshot(root, version, revision):
     """Bind metadata and every source byte to one committed Git tree."""
     if subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=all'], cwd=root):
@@ -106,7 +112,7 @@ def main():
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
     runtime = tree / 'runtime'
-    shutil.copytree(args.runtime_base, runtime, ignore=shutil.ignore_patterns('site-packages', '__pycache__', 'Scripts'))
+    shutil.copytree(args.runtime_base, runtime, ignore=runtime_copy_ignore)
     shutil.copytree(args.site_packages, runtime / 'Lib/site-packages',
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     from desktop_assistant.ocr_models import copy_models

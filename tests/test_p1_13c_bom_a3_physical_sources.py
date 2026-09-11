@@ -33,6 +33,7 @@ def a3_surround_app(tmp_path: Path):
         UserPermissionOverride,
     )
     from app.models.customer import Customer
+    from app.models.material import Material
     from app.models.order import Order, OrderItem
     from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
@@ -97,6 +98,14 @@ def a3_surround_app(tmp_path: Path):
             ]
         )
         db.flush()
+        # Real receipt now requires a stable supplier/material price contract;
+        # a code-only historical fixture must not bypass that production gate.
+        material = Material(code="A=A", supplier_name="匿名供应商", layer_count=5,
+            flute_type="AB", quote_price=Decimal("1.0000"), price_unit="元/平方米",
+            purchase_currency="CNY", purchase_tax_included=True,
+            purchase_tax_rate=Decimal("0.13"), is_active=True)
+        db.add(material)
+        db.flush()
         db.add_all(
             [
                 UserPermissionOverride(
@@ -114,6 +123,7 @@ def a3_surround_app(tmp_path: Path):
         )
         parent = Product(
             customer_id=customer.id,
+            material_id=material.id,
             product_code="SET-A3-SURROUND",
             customer_material_code="SET-A3-SURROUND",
             product_name="天地盖围板套件",
@@ -123,6 +133,7 @@ def a3_surround_app(tmp_path: Path):
         )
         a3 = Product(
             customer_id=customer.id,
+            material_id=material.id,
             product_code="A3-COMPONENT",
             customer_material_code="A3-COMPONENT",
             product_name="A3 天地盖",
@@ -133,6 +144,7 @@ def a3_surround_app(tmp_path: Path):
         )
         surround = Product(
             customer_id=customer.id,
+            material_id=material.id,
             product_code="SURROUND-COMPONENT",
             customer_material_code="SURROUND-COMPONENT",
             product_name="围板",
@@ -192,6 +204,7 @@ def a3_surround_app(tmp_path: Path):
                     snapshot_component_product_name=a3.product_name,
                     snapshot_component_spec="A3",
                     snapshot_component_material="A=A",
+                    snapshot_component_material_id=material.id,
                     snapshot_component_supplier_name="匿名供应商",
                     snapshot_component_layer_count=5,
                     snapshot_component_flute_type="AB",
@@ -223,6 +236,7 @@ def a3_surround_app(tmp_path: Path):
                     snapshot_component_product_name=surround.product_name,
                     snapshot_component_spec="围板双拼",
                     snapshot_component_material="A=A",
+                    snapshot_component_material_id=material.id,
                     snapshot_component_supplier_name="匿名供应商",
                     snapshot_component_layer_count=5,
                     snapshot_component_flute_type="AB",

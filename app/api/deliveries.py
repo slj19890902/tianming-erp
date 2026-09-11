@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.external_receipt_state import active_receipt_item
 
 import hashlib
 import json
@@ -49,6 +50,7 @@ from app.models.external_packaging_purchase import (
 )
 from app.models.order import Order, OrderItem
 from app.models.order_external_packaging import SalesOrderItemExternalComponent
+from app.services.multilevel_bom_external_identity import current_external_component_predicate
 from app.models.product import Product
 from app.models.product_bom import (
     BomComponentDirectDeliveryAllocation,
@@ -143,13 +145,16 @@ from app.services.production_workflow import (
     remaining_finished_order_credit_expression,
 )
 from app.services.composite_bom_workflow import (
+    _delivery_graph_root_snapshot,
+    _delivery_reservation_condition,
+    _snapshot_reservation_condition,
     ACTIVE_RESERVATION_STATUSES,
     DIRECT_DISPOSITION,
     ComponentDemand,
     CompositeBomWorkflowError,
     component_availability,
     delivery_component_required_quantities,
-    effective_component_demands,
+    delivery_component_demands,
     execute_delivery_component_consumption,
     is_composite_order_item,
     kit_availability,
@@ -455,6 +460,7 @@ def _external_packaging_received(db: Session, order_item_id: int) -> bool:
                 SalesOrderItemExternalComponent.sales_order_item_id
                 == order_item_id,
                 SalesOrderItemExternalComponent.is_required.is_(True),
+                current_external_component_predicate(),
             )
         ).all()
     }
@@ -467,6 +473,7 @@ def _external_packaging_received(db: Session, order_item_id: int) -> bool:
             )
         )
         .where(
+            active_receipt_item(),
             ExternalPackagingReceiptItem.purchase_item_id
             == ExternalPackagingPurchaseItem.id
         )
@@ -514,6 +521,7 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
                 SalesOrderItemExternalComponent.sales_order_item_id
                 == order_item.id,
                 SalesOrderItemExternalComponent.is_required.is_(True),
+                current_external_component_predicate(),
             )
             .limit(1)
         )
@@ -523,7 +531,7 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
     ):
         return 0
     has_receipt_auto_finished = _has_receipt_auto_finished_fact(db, order_item.id)
-    if is_composite_order_item(db, order_item.id) and not has_receipt_auto_finished:
+    if _uses_composite_inventory(db, order_item.id):
         return int(kit_availability(db, order_item.id)["available_sets"])
     task_query = select(ProductionTask).where(
         ProductionTask.order_item_id == order_item.id,
@@ -555,6 +563,20 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
     elif order_item.material_status != "received" and not inventory_covered:
         return 0
     return max(max_deliverable - int(order_item.delivered_quantity or 0), 0)
+
+
+def _uses_composite_inventory(db: Session, order_item_id: int, composite_hint=None) -> bool:
+    composite = is_composite_order_item(db, order_item_id) if composite_hint is None else composite_hint
+    if not composite:
+        return False
+    from app.models.multilevel_bom import OrderBomGraph
+    graph_exists = select(OrderBomGraph.order_item_id).where(
+        OrderBomGraph.order_item_id == order_item_id).exists()
+    receipt_exists = select(ProductionCompletion.id).where(
+        ProductionCompletion.order_item_id == order_item_id,
+        ProductionCompletion.status == "posted",
+        ProductionCompletion.origin == "receipt_auto").exists()
+    return bool(db.scalar(select(or_(graph_exists, ~receipt_exists))))
 
 
 def _has_receipt_auto_finished_fact(db: Session, order_item_id: int) -> bool:
@@ -2188,6 +2210,7 @@ def _pending_query(
         .where(
             SalesOrderItemExternalComponent.sales_order_item_id == OrderItem.id,
             SalesOrderItemExternalComponent.is_required.is_(True),
+            current_external_component_predicate(),
         )
         .correlate(OrderItem)
         .scalar_subquery()
@@ -2214,6 +2237,7 @@ def _pending_query(
             ExternalPackagingPurchaseOrder.status == "confirmed",
             ExternalPackagingPurchaseCancellation.id.is_(None),
             SalesOrderItemExternalComponent.is_required.is_(True),
+            current_external_component_predicate(),
             ExternalPackagingPurchaseItem.purchase_quantity
             <= select(
                 func.coalesce(
@@ -2221,6 +2245,7 @@ def _pending_query(
                 )
             )
             .where(
+                active_receipt_item(),
                 ExternalPackagingReceiptItem.purchase_item_id
                 == ExternalPackagingPurchaseItem.id
             )
@@ -2493,7 +2518,11 @@ def _composite_inventory_sources_for_order_item(
     read_context: dict | None = None,
 ) -> list[dict]:
     """Expose N039 component pick sources without treating pieces as parent sets."""
-    demands = effective_component_demands(db, order_item.id)
+    if dispatched and delivery_item_id is not None:
+        from app.services.multilevel_bom_delivery_history import historical_delivery_component_demands
+        demands = historical_delivery_component_demands(db, delivery_item_id=delivery_item_id, order_item_id=order_item.id)
+    else:
+        demands = delivery_component_demands(db, order_item.id)
     demand_by_snapshot = {row.snapshot_id: row for row in demands}
     if not demand_by_snapshot:
         return []
@@ -2535,6 +2564,8 @@ def _composite_inventory_sources_for_order_item(
             if read_context is not None and location is not None
             else None
         )
+        if location is not None and projection_context is None:
+            projection_context = load_warehouse_location_projection_contexts(db, [location]).get(int(location.id), {})
         return {
             "source_type": source_type,
             "reservation_id": reservation.id if reservation else None,
@@ -2573,6 +2604,7 @@ def _composite_inventory_sources_for_order_item(
 
     items: list[dict] = []
     if dispatched and delivery_item_id is not None:
+        root_snapshot_id = _delivery_graph_root_snapshot(db, delivery_item_id)
         stock_allocations = db.scalars(
             select(DeliveryInventoryAllocation)
             .join(
@@ -2581,7 +2613,7 @@ def _composite_inventory_sources_for_order_item(
             )
             .where(
                 DeliveryInventoryAllocation.delivery_item_id == delivery_item_id,
-                InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+                _delivery_reservation_condition(db, delivery_item_id),
             )
             .order_by(DeliveryInventoryAllocation.id)
         ).all()
@@ -2590,7 +2622,7 @@ def _composite_inventory_sources_for_order_item(
             if reservation is None:
                 continue
             demand = demand_by_snapshot.get(
-                reservation.sales_order_item_bom_component_id
+                reservation.sales_order_item_bom_component_id or root_snapshot_id
             )
             quantity = max(
                 int(allocation.consumed_stock_quantity or 0)
@@ -2649,8 +2681,7 @@ def _composite_inventory_sources_for_order_item(
             .join(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
             .where(
                 InventoryReservation.order_item_id == order_item.id,
-                InventoryReservation.sales_order_item_bom_component_id
-                == demand.snapshot_id,
+                _snapshot_reservation_condition(db, demand.snapshot_id),
                 InventoryReservation.status != "cancelled",
                 InventoryReservation.reserved_stock_quantity
                 > InventoryReservation.consumed_stock_quantity
@@ -2738,6 +2769,7 @@ def _customer_document_fulfillment_mode(
     *,
     frozen_order_mode: str | None,
     current_product_mode: str | None,
+    component_lines: list[dict] | None = None,
 ) -> str:
     """Resolve the customer-facing delivery projection without changing stock facts.
 
@@ -2751,6 +2783,7 @@ def _customer_document_fulfillment_mode(
     return resolve_customer_document_fulfillment_mode(
         frozen_order_mode=frozen_order_mode,
         current_product_mode=current_product_mode,
+        component_lines=component_lines,
     )
 
 
@@ -2803,7 +2836,7 @@ def _delivery_kit_metadata(
         }
     receipt_auto_finished = _has_receipt_auto_finished_fact(db, order_item.id)
     availability = kit_availability(db, order_item.id)
-    if receipt_auto_finished:
+    if receipt_auto_finished and not _uses_composite_inventory(db, order_item.id):
         available_finished = _delivery_remaining_quantity(db, order_item)
         availability = {
             **availability,
@@ -2840,6 +2873,7 @@ def _delivery_kit_metadata(
                 None,
             ),
             current_product_mode=current_product_fulfillment_mode,
+            component_lines=component_lines,
         ),
         "kit_availability": availability,
         "available_sets": int(availability.get("available_sets") or 0),
@@ -2858,11 +2892,7 @@ def _inventory_sources_for_order_item(
     composite_hint: bool | None = None,
     read_context: dict | None = None,
 ) -> list[dict]:
-    composite_source_mode = (
-        composite_hint
-        if composite_hint is not None
-        else is_composite_order_item(db, order_item.id)
-    ) and not _has_receipt_auto_finished_fact(db, order_item.id)
+    composite_source_mode = _uses_composite_inventory(db, order_item.id, composite_hint)
     if composite_source_mode:
         return _composite_inventory_sources_for_order_item(
             db,
@@ -3618,7 +3648,7 @@ def _delivery_list_component_required_quantities(
     for demand in context["component_demands_by_order_item"].get(order_item.id, []):
         consumed = context["component_delivered_by_snapshot"].get(demand.snapshot_id, 0)
         target_after_dispatch = min(
-            delivered_after * demand.quantity_per_set,
+            max(delivered_after - demand.delivered_before_cutover, 0) * demand.quantity_per_set,
             demand.required_piece_quantity,
         )
         result[demand.snapshot_id] = max(target_after_dispatch - consumed, 0)
@@ -3726,7 +3756,9 @@ def _delivery_list_kit_metadata(
             "product_code": demand.component_code,
             "product_name": demand.component_name,
             "specification": demand.specification,
-            "unit": "PCS",
+            "unit": demand.unit,
+            **({"is_graph_root": True} if demand.is_graph_root else {}),
+            **({"bom_delivery_mode": demand.frozen_delivery_mode} if demand.frozen_delivery_mode else {}),
             "quantity_per_set": demand.quantity_per_set,
             "target_quantity": demand.required_piece_quantity,
             "delivered_quantity": context["component_delivered_by_snapshot"].get(
@@ -3756,6 +3788,7 @@ def _delivery_list_kit_metadata(
                 None,
             ),
             current_product_mode=current_product_fulfillment_mode,
+            component_lines=component_lines,
         ),
         "kit_availability": availability,
         "available_sets": available_sets,
@@ -3815,7 +3848,9 @@ def _delivery_list_composite_inventory_sources(
             reservation = context["reservations"].get(int(allocation.reservation_id))
             if reservation is None:
                 continue
-            demand = demand_by_snapshot.get(reservation.sales_order_item_bom_component_id)
+            demand = demand_by_snapshot.get(reservation.sales_order_item_bom_component_id
+                or ((context.get("graph_roots") or {}).get(reservation.order_item_id)
+                    if reservation.reservation_type == "finished_order" else None))
             quantity = max(
                 int(allocation.consumed_stock_quantity or 0)
                 - int(allocation.reversed_stock_quantity or 0),
@@ -4165,10 +4200,14 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         for row in item_rows
         if row.get("order_item_id") is not None
     }
-    order_items = {
-        item.id: item
-        for item in db.scalars(select(OrderItem).where(OrderItem.id.in_(order_item_ids))).all()
-    } if order_item_ids else {}
+    from app.models.multilevel_bom import OrderBomGraph, OrderBomExecutionCutover
+    item_graph_rows = db.execute(select(OrderItem, OrderBomGraph, OrderBomExecutionCutover).outerjoin(
+        OrderBomGraph, OrderBomGraph.order_item_id == OrderItem.id
+    ).outerjoin(OrderBomExecutionCutover, OrderBomExecutionCutover.order_item_id == OrderItem.id
+    ).where(OrderItem.id.in_(order_item_ids))).all() if order_item_ids else []
+    order_items = {item.id: item for item, _graph, _cutover in item_graph_rows}
+    graphs = {item.id: graph for item, graph, _cutover in item_graph_rows if graph is not None}
+    cutovers = {item.id: cutover for item, _graph, cutover in item_graph_rows if cutover is not None}
     snapshots = list(
         db.scalars(
             select(SalesOrderItemBomComponent)
@@ -4216,6 +4255,10 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         snapshots,
         adjustments,
     )
+    from app.services.multilevel_bom_delivery_page import project_page_graph_demands
+    graph_history_orders = set()
+    graph_roots = project_page_graph_demands(db, graphs=graphs, cutovers=cutovers, order_items=order_items,
+        orders=orders, snapshots=snapshots, demands=component_demands_by_order_item, history_orders=graph_history_orders)
     requirements = list(
         db.scalars(
             select(OrderItemSemiRequirement)
@@ -4317,6 +4360,18 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
     reservations_by_order_item: dict[int, list[InventoryReservation]] = {}
     reservations_by_requirement: dict[int, list[InventoryReservation]] = {}
     reservations_by_snapshot: dict[int, list[InventoryReservation]] = {}
+    from app.services.multilevel_bom_delivery_history import root_reservation_source_expression
+    stock_snapshot_id = root_reservation_source_expression(db, graph_roots)
+    unresolved_roots = [row.id for row in reservation_rows
+                        if row.sales_order_item_bom_component_id is None
+                        and row.reservation_type == "finished_order"
+                        and row.order_item_id in graph_history_orders]
+    historical_root_sources = dict(db.execute(select(InventoryReservation.id, stock_snapshot_id).where(
+        InventoryReservation.id.in_(unresolved_roots))).all()) if unresolved_roots else {}
+    def reservation_source(reservation):
+        return reservation.sales_order_item_bom_component_id or historical_root_sources.get(reservation.id) or (
+            graph_roots.get(reservation.order_item_id)
+            if reservation.reservation_type == "finished_order" else None)
     for reservation in reservation_rows:
         if reservation.order_item_id is not None:
             reservations_by_order_item.setdefault(
@@ -4333,6 +4388,8 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
                 int(reservation.sales_order_item_bom_component_id),
                 [],
             ).append(reservation)
+        elif reservation.reservation_type == "finished_order" and reservation.order_item_id in graph_roots:
+            reservations_by_snapshot.setdefault(reservation_source(reservation), []).append(reservation)
     reserved_item_ids = {
         int(row.order_item_id)
         for row in reservation_rows
@@ -4488,7 +4545,7 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
             int(snapshot_id): int(quantity or 0)
             for snapshot_id, quantity in db.execute(
                 select(
-                    InventoryReservation.sales_order_item_bom_component_id,
+                    stock_snapshot_id,
                     func.coalesce(
                         func.sum(
                             DeliveryInventoryAllocation.credited_requirement_quantity
@@ -4503,14 +4560,14 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
                     == DeliveryInventoryAllocation.reservation_id,
                 )
                 .where(
-                    InventoryReservation.sales_order_item_bom_component_id.in_(
+                    stock_snapshot_id.in_(
                         snapshot_ids
                     ),
                     DeliveryInventoryAllocation.status.in_(
                         ACTIVE_RESERVATION_STATUSES
                     ),
                 )
-                .group_by(InventoryReservation.sales_order_item_bom_component_id)
+                .group_by(stock_snapshot_id)
             ).all()
         }
     component_delivered_by_snapshot = {
@@ -4534,13 +4591,16 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         if allocation.status not in ACTIVE_RESERVATION_STATUSES:
             continue
         reservation = reservations.get(int(allocation.reservation_id))
-        if reservation is None or reservation.sales_order_item_bom_component_id is None:
+        if reservation is None:
+            continue
+        resolved_snapshot_id = reservation_source(reservation)
+        if resolved_snapshot_id is None:
             continue
         quantities = component_quantities_by_delivery_item.setdefault(
             int(allocation.delivery_item_id),
             {},
         )
-        snapshot_id = int(reservation.sales_order_item_bom_component_id)
+        snapshot_id = int(resolved_snapshot_id)
         quantities[snapshot_id] = quantities.get(snapshot_id, 0) + int(
             allocation.credited_requirement_quantity or 0
         ) - int(allocation.reversed_requirement_quantity or 0)
@@ -4596,6 +4656,7 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         "order_items": order_items,
         "safe_empty_inventory_order_item_ids": safe_empty_inventory_order_item_ids,
         "component_demands_by_order_item": component_demands_by_order_item,
+        "graph_roots": graph_roots,
         "component_direct_available_by_snapshot": component_direct_available_by_snapshot,
         "component_delivered_by_snapshot": component_delivered_by_snapshot,
         "component_quantities_by_delivery_item": component_quantities_by_delivery_item,
@@ -4652,7 +4713,17 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
             continue
         delivery = deliveries.get(int(row["delivery_id"]))
         dispatched = bool(delivery and delivery.status in {"dispatched", "voided"})
-        if order_item.id in composite_item_ids:
+        if dispatched and order_item.id in graph_history_orders:
+            # The page-wide demand is current. A completed document retains
+            # the rule selected by its actual allocation sources instead.
+            kit_metadata = _delivery_kit_metadata(db, order_item,
+                planned_delivery_quantity=int(row["delivered_quantity"] or 0),
+                delivery_item_id=delivery_item_id, dispatched=True,
+                current_product_fulfillment_mode=row.get("current_product_fulfillment_mode"))
+            inventory_sources = _composite_inventory_sources_for_order_item(db, order_item=order_item,
+                planned_delivery_quantity=int(row["delivered_quantity"] or 0),
+                delivery_item_id=delivery_item_id, dispatched=True, read_context=context)
+        elif order_item.id in composite_item_ids:
             kit_metadata = _delivery_list_kit_metadata(
                 context,
                 order_item=order_item,
@@ -4780,6 +4851,10 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
     # Ordinary deliveries need no further work.  Composite orders are rare but
     # their collapsed quantity must still include the physical component lines,
     # so calculate only those exceptional rows using the established workflow.
+    from app.models.multilevel_bom import OrderBomGraph
+    graph_marker = or_(OrderBomGraph.order_item_id.is_not(None), select(SalesOrderItemBomComponent.id).where(
+        SalesOrderItemBomComponent.sales_order_item_id == OrderItem.id,
+        SalesOrderItemBomComponent.snapshot_schema_version >= 5).exists())
     composite_rows = db.execute(
         select(
             DeliveryItem.id,
@@ -4787,6 +4862,7 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
             DeliveryItem.order_item_id,
             DeliveryItem.delivered_quantity,
             Delivery.status,
+            case((graph_marker, OrderItem.id), else_=None).label("graph_order_item_id"),
             OrderItem.delivered_quantity.label("order_delivered_quantity"),
             OrderItem.composite_fulfillment_mode_snapshot.label(
                 "composite_fulfillment_mode"
@@ -4798,12 +4874,13 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
         .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
         .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
         .outerjoin(Product, Product.id == OrderItem.product_id)
+        .outerjoin(OrderBomGraph, OrderBomGraph.order_item_id == OrderItem.id)
         .where(
             DeliveryItem.delivery_id.in_(delivery_ids),
             DeliveryItem.is_current.is_(True),
-            DeliveryItem.order_item_id.in_(
+            or_(OrderBomGraph.order_item_id.is_not(None), DeliveryItem.order_item_id.in_(
                 select(SalesOrderItemBomComponent.sales_order_item_id).distinct()
-            ),
+            )),
         )
         .order_by(DeliveryItem.delivery_id, DeliveryItem.id)
     ).all()
@@ -4866,6 +4943,14 @@ def _delivery_summary_component_quantities(
 
     if not composite_rows:
         return {}
+    from app.services.multilevel_bom_delivery_page import summary_graph_contracts
+    contracts = summary_graph_contracts(db,
+        {row.graph_order_item_id for row in composite_rows if getattr(row, "graph_order_item_id", None) is not None})
+    graph_picks, graph_roots, excluded = contracts.picks, contracts.roots, contracts.excluded
+    stock_snapshot_id = InventoryReservation.sales_order_item_bom_component_id
+    if graph_roots:
+        from app.services.multilevel_bom_delivery_history import root_reservation_source_expression
+        stock_snapshot_id = root_reservation_source_expression(db, graph_roots)
     pending_rows = [
         row for row in composite_rows if row.status not in {"dispatched", "voided"}
     ]
@@ -4892,6 +4977,7 @@ def _delivery_summary_component_quantities(
                 BomComponentDirectDeliveryAllocation.delivery_item_id.in_(
                     historical_item_ids
                 ),
+                BomComponentDirectDeliveryAllocation.sales_order_item_bom_component_id.not_in(excluded),
                 BomComponentDirectDeliveryAllocation.status.in_(
                     ACTIVE_RESERVATION_STATUSES
                 ),
@@ -4918,7 +5004,8 @@ def _delivery_summary_component_quantities(
                 DeliveryInventoryAllocation.delivery_item_id.in_(
                     historical_item_ids
                 ),
-                InventoryReservation.sales_order_item_bom_component_id.is_not(None),
+                stock_snapshot_id.is_not(None),
+                stock_snapshot_id.not_in(excluded),
                 DeliveryInventoryAllocation.status.in_(
                     ACTIVE_RESERVATION_STATUSES
                 ),
@@ -5014,7 +5101,7 @@ def _delivery_summary_component_quantities(
                 consumed_quantities[int(snapshot_id)] = int(quantity or 0)
             for snapshot_id, quantity in db.execute(
                 select(
-                    InventoryReservation.sales_order_item_bom_component_id,
+                    stock_snapshot_id,
                     func.coalesce(
                         func.sum(
                             DeliveryInventoryAllocation.credited_requirement_quantity
@@ -5029,16 +5116,12 @@ def _delivery_summary_component_quantities(
                     == DeliveryInventoryAllocation.reservation_id,
                 )
                 .where(
-                    InventoryReservation.sales_order_item_bom_component_id.in_(
-                        snapshot_ids
-                    ),
+                    stock_snapshot_id.in_(snapshot_ids),
                     DeliveryInventoryAllocation.status.in_(
                         ACTIVE_RESERVATION_STATUSES
                     ),
                 )
-                .group_by(
-                    InventoryReservation.sales_order_item_bom_component_id
-                )
+                .group_by(stock_snapshot_id)
             ).all():
                 normalized_id = int(snapshot_id)
                 consumed_quantities[normalized_id] = (
@@ -5054,6 +5137,8 @@ def _delivery_summary_component_quantities(
                 int(row.order_item_id), []
             ):
                 snapshot_id = int(snapshot.id)
+                if snapshot_id in excluded or snapshot_id in contracts.history_ids:
+                    continue
                 delta_sets, delta_pieces = adjustment_totals.get(
                     snapshot_id, (0, 0)
                 )
@@ -5068,10 +5153,11 @@ def _delivery_summary_component_quantities(
                     raise CompositeBomWorkflowError(
                         "组件调整后的需求件数必须大于0"
                     )
-                target_after = min(
-                    delivered_after * int(snapshot.quantity_per_set or 0),
-                    target,
-                )
+                multiplier = int(snapshot.quantity_per_set or 0)
+                if snapshot_id in graph_picks:
+                    multiplier, target = graph_picks[snapshot_id]
+                current_delivered_after = max(delivered_after - contracts.delivered_before.get(int(row.order_item_id), 0), 0)
+                target_after = min(current_delivered_after * multiplier, target)
                 component_quantity += max(
                     target_after - consumed_quantities.get(snapshot_id, 0), 0
                 )
@@ -6671,6 +6757,15 @@ def _refresh_order_status(db: Session, order_id: int) -> None:
     items = db.scalars(
         select(OrderItem).where(OrderItem.order_id == order_id)
     ).all()
+    from app.services.multilevel_bom_fulfillment import read_order_component_fulfillment
+    for item in items:
+        if item.is_force_closed or item.delivered_quantity < item.quantity:
+            continue
+        fulfillment = read_order_component_fulfillment(db, item.id)
+        if fulfillment is not None and not fulfillment.complete:
+            missing = "、".join(f"产品{row.product_id}尚欠{row.remaining}{row.unit}"
+                for row in fulfillment.components if row.remaining)
+            raise HTTPException(409, f"子件实发尚未完成，不能按父件数量关闭订单：{missing}")
     if items and all(
         item.is_force_closed or item.delivered_quantity >= item.quantity
         for item in items
@@ -6750,6 +6845,7 @@ def _collect_delivery_lines(
                     SalesOrderItemExternalComponent.sales_order_item_id
                     == order_item.id,
                     SalesOrderItemExternalComponent.is_required.is_(True),
+                    current_external_component_predicate(),
                 )
                 .limit(1)
             )
@@ -7662,15 +7758,17 @@ class _PendingDeliveryReadContext:
         if not item_ids:
             self.fast_item_ids: set[int] = set()
             self.receipt_auto_item_ids: set[int] = set()
+            self.graph_item_ids: set[int] = set()
             return
 
-        self.composite_ids = set(
-            db.scalars(
-                select(SalesOrderItemBomComponent.sales_order_item_id)
+        composite_rows = db.execute(
+                select(SalesOrderItemBomComponent.sales_order_item_id,
+                       SalesOrderItemBomComponent.snapshot_schema_version)
                 .where(SalesOrderItemBomComponent.sales_order_item_id.in_(item_ids))
                 .distinct()
             ).all()
-        )
+        self.composite_ids = {int(row[0]) for row in composite_rows}
+        self.graph_item_ids = {int(row[0]) for row in composite_rows if row[1] == 5}
         self.composite_available_sets = kit_available_sets_by_order_item_ids(
             db,
             self.composite_ids,
@@ -7738,6 +7836,7 @@ class _PendingDeliveryReadContext:
                         item_ids
                     ),
                     SalesOrderItemExternalComponent.is_required.is_(True),
+                    current_external_component_predicate(),
                 )
                 .distinct()
             ).all()
@@ -7968,6 +8067,8 @@ class _PendingDeliveryReadContext:
         return bool(order_item and order_item.id in self.fast_item_ids)
 
     def remaining_quantity(self, db: Session, order_item: OrderItem) -> int:
+        if order_item.id in self.graph_item_ids:
+            return max(int(self.composite_available_sets.get(order_item.id, 0)), 0)
         if order_item.id in self.receipt_auto_item_ids:
             from app.services.bom_subkit_delivery import limit_by_subkit_stock
             return limit_by_subkit_stock(db, {order_item.id: max(int(self.remaining_by_item.get(order_item.id, 0)), 0)})[order_item.id]
@@ -9073,9 +9174,7 @@ def _dispatch_delivery(
                 consume_delivery_subkits(db, delivery_item_id=line.id, operator_id=user.id, operation_key=operation_key)
             except SubkitError as error:
                 raise HTTPException(status_code=error.status_code, detail=str(error)) from error
-            if is_composite_order_item(
-                db, order_item.id
-            ) and not _has_receipt_auto_finished_fact(db, order_item.id):
+            if _uses_composite_inventory(db, order_item.id):
                 execute_delivery_component_consumption(
                     db,
                     delivery_item_id=line.id,
@@ -10445,6 +10544,21 @@ def _cancel_delivery(
             .order_by(DeliveryItem.id)
         ).all()
         order_lines = [line for line in lines if line.source_type == "order"]
+        from app.services.multilevel_bom_delivery_boundary import validate_cancel_execution_boundary
+        from app.services.multilevel_bom_plan import BomPlanError
+        grouped_order_lines = {}
+        for line in order_lines:
+            grouped_order_lines.setdefault(line.order_item_id, []).append(line)
+        for item_id, item_lines in grouped_order_lines.items():
+            item = db.get(OrderItem, item_id)
+            if item is None:
+                raise HTTPException(status_code=409, detail=f"订单明细{item_id}不存在，无法回滚")
+            try:
+                validate_cancel_execution_boundary(db, item=item,
+                    delivery_item_ids=[line.id for line in item_lines],
+                    quantity=sum(line.delivered_quantity for line in item_lines))
+            except BomPlanError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
         unordered_lines = [
             line for line in lines if line.source_type == "unordered_finished"
         ]
@@ -10520,9 +10634,7 @@ def _cancel_delivery(
                 reverse_delivery_subkits(db, delivery_item_id=line.id, operator_id=user.id, operation_key=operation_key)
             except SubkitError as error:
                 raise HTTPException(status_code=error.status_code, detail=str(error)) from error
-            if is_composite_order_item(
-                db, order_item.id
-            ) and not _has_receipt_auto_finished_fact(db, order_item.id):
+            if _uses_composite_inventory(db, order_item.id):
                 reverse_delivery_component_allocations(
                     db,
                     delivery_item_id=line.id,
@@ -10961,7 +11073,8 @@ def get_delivery_print_data(
                 "product_code": _print_product_code(product_code),
                 "product_name": product_name,
                 "specification": specification,
-                "unit": row.unit_snapshot or "PCS",
+                "unit": next((component["unit"] for component in kit_metadata["component_lines"]
+                              if component.get("is_graph_root")), row.unit_snapshot or "PCS"),
                 "quantity": row.quantity,
                 "ordered_quantity": row.ordered_quantity_snapshot,
                 "over_delivery_quantity": row.over_delivery_quantity,

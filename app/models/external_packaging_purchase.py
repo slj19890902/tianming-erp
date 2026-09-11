@@ -438,3 +438,17 @@ class ExternalPackagingReceiptItem(Base):
     )
 
     receipt: Mapped[ExternalPackagingReceipt] = relationship(back_populates="items")
+
+
+class ExternalPackagingReceiptReversal(Base):
+    """Append-only cancellation; original receipt quantities and prices survive."""
+    __tablename__ = "external_packaging_receipt_reversals"
+    __table_args__ = (
+        CheckConstraint("length(trim(reason)) > 0 AND length(idempotency_key) > 0 AND length(request_fingerprint) = 64", name="ck_external_receipt_reversal_text"),
+    )
+    receipt_id: Mapped[int] = mapped_column(ForeignKey("external_packaging_receipts.id", ondelete="RESTRICT"), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    reversed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    reversed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp())

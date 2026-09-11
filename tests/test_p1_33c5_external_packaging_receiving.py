@@ -287,6 +287,6 @@ def test_receiving_permissions_and_frontend_contract(purchase_app: FastAPI) -> N
     source = Path("static/index.html").read_text(encoding="utf-8")
     assert "外购包装待收" in source
     assert "确认本次收料" in source
-    assert "这里只记实收，不增加纸板或成品库存" in source
+    assert "BOM 产品按组套规则入库" in source
     assert "/api/external-packaging-purchases/pending-receipts" in source
     assert "receiveExternalPurchase" in source

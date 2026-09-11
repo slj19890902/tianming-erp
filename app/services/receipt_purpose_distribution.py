@@ -10,6 +10,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP
 from hashlib import sha256
 import json
 from typing import Any
+from functools import wraps
 
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
@@ -74,6 +75,19 @@ class ReceiptPurposeFlowError(ValueError):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
+
+
+def _graph_receipt_errors(function):
+    @wraps(function)
+    def call(*args, **kwargs):
+        from app.services.bom_subkits import SubkitError
+        from app.services.multilevel_bom_plan import BomPlanError
+        try:
+            return function(*args, **kwargs)
+        except (SubkitError, BomPlanError) as error:
+            raise ReceiptPurposeFlowError("MULTILEVEL_BOM_RECEIPT_INVALID", str(error),
+                                          getattr(error, "status_code", 409)) from error
+    return call
 
 
 @dataclass(frozen=True, slots=True)
@@ -1139,6 +1153,7 @@ def _initial_movement(db: Session, lot_id: int) -> InventoryMovement:
     return movement
 
 
+@_graph_receipt_errors
 def post_receipt_purpose_allocation(
     db: Session,
     *,
@@ -1212,8 +1227,16 @@ def post_receipt_purpose_allocation(
     order_item_id = int(target.order_item.id)
     snapshots = _order_item_snapshots(db, order_item_id)
     active_item_allocations = _active_order_item_allocations(db, order_item_id)
+    from app.services.multilevel_bom_receipts import node_receipt_context, node_purpose_snapshots, node_receipt_plan
+    graph_context = node_receipt_context(db, order_item_id, snapshot)
+    if graph_context is not None:
+        snapshots = node_purpose_snapshots(db, graph_context, snapshots)
+        node_source_ids = {s.id for s in snapshots}
+        active_item_allocations = [a for a in active_item_allocations if a.purchase_purpose_source_snapshot_id in node_source_ids]
     from app.models.bom_subkit import OrderSubkit
     subkit = db.get(OrderSubkit, order_item_id)
+    if graph_context is not None and subkit is not None:
+        raise ReceiptPurposeFlowError("BOM_GRAPH_LEGACY_CONFLICT", "订单存在两套组套规则，必须先完成受控转换。")
     subkit_component_receipt = subkit is not None and snapshot.source_bom_requisition_source_id is not None
     if subkit is not None:
         # The physical parent and its liner are distinct stock identities.
@@ -1247,7 +1270,7 @@ def post_receipt_purpose_allocation(
         )
         or 0
     )
-    finished_after = _finished_capacity(
+    finished_after = finished_before if graph_context is not None else _finished_capacity(
         db,
         snapshots,
         after_sheets,
@@ -1289,6 +1312,14 @@ def post_receipt_purpose_allocation(
         if finished_delta > 0
         else Decimal("0.0000")
     )
+    graph_plan = None
+    if graph_context is not None:
+        graph_plan = node_receipt_plan(db, graph_context, snapshots=snapshots,
+            allocations=active_item_allocations, current_snapshot=snapshot,
+            order_delta=order_delta, order_cost=order_cost, currency=fact.currency)
+        finished_before, finished_after = graph_plan["before"], graph_plan["after"]
+        finished_delta = finished_after - finished_before
+        capitalized_cost = graph_plan["total_cost"]
     material_input_before = sum(before_sheets.values())
     material_input_after = sum(after_sheets.values())
 
@@ -1307,11 +1338,14 @@ def post_receipt_purpose_allocation(
                 idempotency_key=f"p181-completion:{idempotency_key}",
                 capitalized_material_cost=capitalized_cost,
                 cost_detail={
+                    **(graph_plan["detail"] if graph_plan else {}),
+                    **({"incoming_receipt_item_id": receipt_item.id} if graph_plan else {}),
                     "purchase_receipt_fact_id": fact.id,
                     "purchase_purpose_source_snapshot_id": snapshot.id,
                     "currency": fact.currency,
                     "sheet_cost": str(sheet_cost),
                 },
+                bom_snapshot_id=(graph_context.snapshot.id if graph_context else None),
             )
         except (ProductionWorkflowError, WarehouseInventoryError) as error:
             message = str(error)
@@ -1504,6 +1538,13 @@ def post_receipt_purpose_allocation(
     )
     db.add(allocation)
     db.flush()
+    if graph_context is not None:
+        from app.services.multilevel_bom_receipts import assemble_graph_receipt
+        try:
+            assemble_graph_receipt(db, context=graph_context, allocation=allocation, operator_id=operator_id)
+        except (ProductionWorkflowError, WarehouseInventoryError) as error:
+            raise ReceiptPurposeFlowError("MULTILEVEL_BOM_RECEIPT_INVALID", str(error),
+                                          error.status_code) from error
     if subkit:
         from app.services.bom_subkit_receipts import post_component_receipt, assemble_after_receipt
         from app.services.bom_subkits import SubkitError
@@ -1785,6 +1826,7 @@ def serialize_receipt_purpose_allocations(
     return result
 
 
+@_graph_receipt_errors
 def reverse_receipt_purpose_allocation(
     db: Session,
     *,
@@ -1826,6 +1868,12 @@ def reverse_receipt_purpose_allocation(
     from app.services.bom_subkit_receipts import reverse_component_receipt
     from app.services.bom_subkits import SubkitError
     try:
+        from app.services.multilevel_bom_orders import read_order_graph
+        from app.services.multilevel_bom_inventory import reverse_order_assembly
+        graph = read_order_graph(db, receipt_item.order_item_id)
+        if graph is not None and any(n.source == "assembled" for n in graph.nodes):
+            reverse_order_assembly(db, order_item_id=receipt_item.order_item_id,
+                operation_key=f"bom-receipt:{allocation.id}", operator_id=operator_id)
         reverse_component_receipt(db, allocation_id=allocation.id, operator_id=operator_id)
     except SubkitError as error:
         raise ReceiptPurposeFlowError("SUBKIT_REVERSAL_FAILED", str(error), error.status_code) from error
@@ -1983,6 +2031,19 @@ def serialize_receipt_purpose_reversal(
         sheet_map[sid] = sheet_map.get(sid, 0) + int(
             row.receipt_order_purpose_sheet_qty
         )
+    from app.services.multilevel_bom_receipts import node_receipt_context, node_purpose_snapshots
+    graph_context = node_receipt_context(db, allocation.incoming_receipt_item.order_item_id,
+        db.get(PurchasePurposeSourceSnapshot, allocation.purchase_purpose_source_snapshot_id))
+    if graph_context is not None:
+        from app.services.multilevel_bom_requirements import read_graph_requirements
+        requirements = read_graph_requirements(db, allocation.incoming_receipt_item.order_item_id)
+        physical = {route.key: requirements.physical_credits.get((graph_context.node.product_id, route.key), 0)
+                    for route in graph_context.node.routes}
+        for source in node_purpose_snapshots(db, graph_context, snapshots):
+            physical[source.component_type] += sheet_map.get(source.id, 0) * int(source.yield_per_sheet_snapshot)
+        capacity = min(physical[route.key] // route.pieces_per_unit for route in graph_context.node.routes)
+    else:
+        capacity = _finished_capacity(db, snapshots, sheet_map)
     return {
         "valid_received_cumulative": sum(
             int(row.receipt_total_sheet_qty) for row in active_source
@@ -1993,6 +2054,6 @@ def serialize_receipt_purpose_reversal(
         "reserve_sheet_cumulative": sum(
             int(row.receipt_reserve_purpose_sheet_qty) for row in active_source
         ),
-        "theoretical_finished_cumulative": _finished_capacity(db, snapshots, sheet_map),
+        "theoretical_finished_cumulative": capacity,
         "trace_id": f"receipt-purpose-reversal:{reversal.id}",
     }

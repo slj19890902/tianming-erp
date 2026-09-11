@@ -15,6 +15,8 @@ from app.models.finance import ReturnReceipt, ReturnReceiptItem
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order
 from app.models.order_external_packaging import SalesOrderItemExternalComponent
+from app.services.multilevel_bom_external_identity import current_external_component_predicate
+from app.services.multilevel_bom_execution_boundary import current_snapshot_predicate
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.production import ProductionCompletion, ProductionTask
@@ -259,6 +261,7 @@ def _required_components(
             ).where(
                 SalesOrderItemBomComponent.sales_order_item_id.in_(chunk),
                 SalesOrderItemBomComponent.is_required.is_(True),
+                current_snapshot_predicate(),
             )
         ):
             result[int(item_id)][int(component_id)] = int(component_product_id)
@@ -277,6 +280,7 @@ def _required_external_components(
             ).where(
                 SalesOrderItemExternalComponent.sales_order_item_id.in_(chunk),
                 SalesOrderItemExternalComponent.is_required.is_(True),
+                current_external_component_predicate(),
             )
         ):
             result[int(item_id)].add(int(component_id))

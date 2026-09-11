@@ -1,0 +1,100 @@
+/* Scoped to common-box editing: keep other order/material dialogs unchanged. */
+.modal.product-editor-modal { max-height: calc(100dvh - 32px); display: flex; flex-direction: column; }
+.product-editor-modal .modal-head,
+.product-editor-modal .product-editor-actions { flex: 0 0 auto; }
+.product-editor-modal .modal-body { min-height: 0; overflow-y: auto; padding: 10px; }
+.product-editor-modal .product-editor-actions { padding: 8px 14px; background: #fff; }
+.product-editor-modal .product-edit-grid { gap: 6px; }
+.product-editor-modal .product-form-row { padding: 8px; gap: 6px 10px; }
+.product-editor-modal .field { min-width: 0; margin-bottom: 0; }
+.product-editor-modal .input,
+.product-editor-modal .select,
+.product-editor-modal .search-select { max-width: 100%; box-sizing: border-box; }
+.product-editor-modal .product-core-row {
+  grid-template-columns: minmax(190px, 1.2fr) minmax(135px, .7fr) minmax(220px, 1.5fr) minmax(160px, .9fr) 145px;
+}
+/* Flex item sizing follows the fields actually present, unlike the old grid
+   whose absent splice fields shifted report inputs into a 96px column. */
+.product-editor-modal .product-size-report-row { display: flex; flex-wrap: wrap; align-items: start; }
+.product-editor-modal .product-dimension-field { flex: 0 0 84px; }
+.product-editor-modal .product-splice-field { flex: 0 0 96px; }
+.product-editor-modal .product-flap-field { flex: 0 0 72px; }
+.product-editor-modal .product-report-field { flex: 0 1 350px; min-width: 285px; }
+.product-editor-modal .report-size-line { display: flex; flex-wrap: wrap; gap: 4px; }
+.product-editor-modal .product-cutting-mode-field { flex: 0 0 100px; }
+.product-editor-modal .product-crease-type-field { flex: 0 0 112px; }
+.product-editor-modal .product-crease-field { flex: 0 1 268px; }
+.product-editor-modal .product-crease-warning { flex-basis: 100%; }
+.product-editor-modal .product-material-workbench {
+  grid-template-columns: minmax(460px, 1.15fr) minmax(320px, 1fr);
+  padding: 8px; margin: 0; gap: 8px;
+}
+.product-editor-modal .product-material-controls { grid-template-columns: 142px 80px 90px minmax(130px, 1fr); gap: 6px 8px; }
+.product-editor-modal .product-material-controls > .wide { grid-column: 1 / -1; }
+.product-editor-modal .product-material-controls textarea { width: 100%; resize: vertical; min-height: 42px; }
+.product-editor-modal .product-material-picker .search-select { min-width: 0; }
+.product-editor-modal .product-material-details-body { padding: 6px; }
+.product-editor-modal .product-print-row {
+  display: grid; grid-template-columns: minmax(280px, .9fr) minmax(350px, 1.6fr) 205px;
+  align-items: start;
+}
+.product-editor-modal .product-process-field { grid-column: 1; grid-row: 1; }
+.product-editor-modal .product-printing-direct-workbench,
+.product-editor-modal .product-printing-direct-workbench:not(.has-direct-colors) {
+  grid-column: 2; grid-row: 1; min-width: 0; width: 100%; flex-basis: auto; align-items: start;
+}
+.product-editor-modal .product-printing-direct-workbench.has-direct-colors > .product-print-status-field { margin-top: 0; }
+.product-editor-modal .product-production-label-config {
+  grid-column: 3; grid-row: 1; display: flex; align-items: center; flex-wrap: wrap;
+  gap: 6px; padding: 5px 7px;
+}
+.product-editor-modal .product-mold-adjacent,
+.product-editor-modal .product-printing-plate-config { grid-column: 1 / -1; min-width: 0; }
+.product-editor-modal .product-printing-plate-row { grid-template-columns: 64px minmax(160px, 1.4fr) repeat(3, minmax(100px, 1fr)) auto; }
+.product-editor-modal .product-final-row { grid-template-columns: minmax(260px, .8fr) minmax(250px, 1fr) minmax(200px, 1fr); }
+.product-editor-modal .product-inline-price { grid-template-columns: auto minmax(90px, 1fr); }
+.product-editor-modal .product-secondary-disclosure { margin-top: 6px; overflow: visible; }
+.product-editor-modal .product-secondary-disclosure > summary { padding: 7px 10px; }
+.product-editor-modal .bom-editor-panel { padding: 6px 10px 8px; }
+.product-editor-modal .bom-editor-heading { margin-bottom: 6px; }
+.product-editor-modal .bom-editor-heading-controls { gap: 6px 12px; width: 100%; }
+.product-editor-modal .bom-editor-heading-controls > .remember-line { min-height: 32px; }
+.product-editor-modal .bom-editor-heading-controls .select { min-width: 105px; min-height: 32px; }
+.product-editor-modal .bom-component-list { gap: 4px; }
+.product-editor-modal .bom-component-card { padding: 6px 8px; gap: 4px; box-shadow: none; }
+.product-editor-modal .bom-component-compact-row { grid-template-columns: minmax(220px, 1fr) 160px auto auto; gap: 8px; align-items: center; }
+.product-editor-modal .bom-component-compact-row .field { display: flex; gap: 6px; align-items: center; }
+.product-editor-modal .bom-component-compact-row .field > label { margin: 0; flex-shrink: 0; }
+.product-editor-modal .bom-component-compact-row .input { min-width: 0; width: 100%; }
+.product-editor-modal .bom-component-relation { width: 112px; min-width: 112px; }
+.product-editor-modal .bom-component-actions { display: inline-flex; gap: 4px; white-space: nowrap; }
+.product-editor-modal .bom-component-planning { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding-top: 4px; }
+.product-editor-modal .bom-component-planning > label { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
+.product-editor-modal .bom-component-planning .input { width: 84px; min-width: 0; }
+.product-editor-modal .bom-component-planning .status { white-space: normal; }
+.product-editor-modal .bom-subkit-trigger { order: 5; }
+.product-editor-modal .bom-subkit-controls { order: 6; flex-basis: 100%; }
+@media (max-width: 1050px) {
+  .product-editor-modal .product-core-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .product-editor-modal .product-material-workbench { grid-template-columns: minmax(0, 1fr); }
+  .product-editor-modal .product-print-row { grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr); }
+  .product-editor-modal .product-production-label-config { grid-column: 1; grid-row: 2; }
+  .product-editor-modal .product-final-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 600px) {
+  .product-editor-modal .product-material-controls { grid-template-columns: minmax(0, 1fr) 80px 90px; }
+  .product-editor-modal .product-material-picker { grid-column: 1 / -1; }
+  .product-editor-modal .product-print-row { display: flex; flex-direction: column; }
+  .product-editor-modal .product-print-row > * { flex: 0 1 auto; max-width: 100%; }
+  .product-editor-modal .field > .input,
+  .product-editor-modal .field > .select,
+  .product-editor-modal .field > .search-select { min-width: 0; max-width: 100%; }
+  .product-editor-modal .product-final-row { grid-template-columns: minmax(0, 1fr); }
+  .product-editor-modal .bom-component-card,
+  .product-editor-modal .bom-component-compact-row { min-width: 0; }
+  .product-editor-modal .bom-component-compact-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .product-editor-modal .bom-component-product { grid-column: 1 / -1; }
+  .product-editor-modal .bom-component-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .product-editor-modal .product-printing-plate-row,
+  .product-editor-modal .product-printing-plate-parameters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

@@ -569,18 +569,13 @@ class ProductPayload(BaseModel):
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
         """拒绝非法楞型/层数组合；七层写入必须明确 AAA/ABC。"""
+        if self.combination_mode == "component_priced" and self.composite_fulfillment_mode != "component_delivery":
+            raise ValueError("组件分别计价时必须按子件交付、打印标签和存放")
         if self.is_virtual_composite_parent:
             if self.supply_mode != "corrugated_production":
                 raise ValueError("虚拟组合套装父件不能设置为外购包材或混合供货")
-            if self.combination_mode != "parent_priced_set":
-                raise ValueError("虚拟组合套装父件必须采用父件按套计价")
             _clear_virtual_composite_parent_fields(self)
             return self
-        if (
-            self.combination_mode == "component_priced"
-            and self.composite_fulfillment_mode != "component_delivery"
-        ):
-            raise ValueError("组件分别计价时必须按子件交付、打印标签和存放")
         if self.supply_mode == "external_purchase":
             _clear_external_purchase_paper_fields(self)
         self.flute_type = normalize_flute_type(self.flute_type)
@@ -694,6 +689,8 @@ class ProductResponse(ProductPayload):
 
 class ProductBOMComponentPayload(BaseModel):
     component_product_id: int = Field(gt=0)
+    unit: str | None = Field(default=None, min_length=1, max_length=30)
+    inventory_relation: Literal["assembly", "accompany"] | None = None
     quantity_per_set: Decimal = Field(gt=0)
     is_die_cut: bool = False
     mold_tool_id: int | None = Field(default=None, gt=0)
@@ -735,6 +732,9 @@ class ProductSubkitPayload(BaseModel):
 
 class ProductBOMUpdatePayload(BaseModel):
     expected_version: int = Field(ge=1)
+    inventory_mode: Literal["manufactured", "purchased", "assembled", "separate"] | None = None
+    material_mode: Literal["expand_children"] | None = None
+    delivery_mode: Literal["parent", "components"] | None = None
     change_reason: str | None = Field(default=None, max_length=500)
     components: list[ProductBOMComponentPayload] = Field(max_length=99)
     subkit: ProductSubkitPayload | None = None
@@ -771,6 +771,16 @@ class ProductUpdatePayload(ProductPayload):
             return None
         reason = str(value).strip()
         return reason or None
+
+
+class ProductWithBOMCreatePayload(BaseModel):
+    product: ProductPayload
+    bom: ProductBOMUpdatePayload
+
+
+class ProductWithBOMUpdatePayload(BaseModel):
+    product: ProductUpdatePayload
+    bom: ProductBOMUpdatePayload
 
 
 class ProductUpdatePreviewPayload(ProductPayload):
@@ -909,7 +919,8 @@ def _clear_virtual_composite_parent_fields(payload: ProductPayload) -> None:
     payload.cost_unit_price = None
     payload.board_price = None
     payload.suggested_price = None
-    payload.combination_mode = "parent_priced_set"
+    # No parent material or stock does not dictate how the customer is billed.
+    # Keep the explicitly selected parent or component pricing mode.
 
 
 def _external_candidate_is_available(row: ExternalPackagingProduct) -> bool:
@@ -2171,6 +2182,10 @@ def update_product_bom(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
+    return _update_product_bom(product_id, payload, db, user)
+
+
+def _update_product_bom(product_id, payload, db, user, *, commit=True) -> dict:
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
     try:
@@ -2181,6 +2196,9 @@ def update_product_bom(
             expected_version=payload.expected_version,
             user=user,
             change_reason=payload.change_reason,
+            inventory_mode=payload.inventory_mode,
+            material_mode=payload.material_mode,
+            delivery_mode=payload.delivery_mode,
         )
         from app.services.bom_subkits import read_subkit, save_subkit, SubkitError
         from app.services.composite_bom_execution import CompositeBOMExecutionError
@@ -2202,7 +2220,8 @@ def update_product_bom(
             except (SubkitError, CompositeBOMExecutionError) as error:
                 raise HTTPException(status_code=getattr(error, "status_code", 400), detail=str(error)) from error
         result["subkit"] = read_subkit(db, product_id)
-        db.commit()
+        if commit:
+            db.commit()
         return result
     except CompositeBOMError as error:
         db.rollback()
@@ -2216,6 +2235,20 @@ def update_product_bom(
     except Exception:
         db.rollback()
         raise
+
+
+@router.get("/{product_id}/bom/structure")
+def read_product_bom_structure(
+    product_id: int, db: Session = Depends(get_db), user: User = Depends(can_read),
+) -> dict:
+    product = _product_or_404(db, product_id)
+    require_customer_access(product.customer_id, current_user=user, db=db)
+    from app.services.multilevel_bom_master import preview_master_structure
+    from app.services.multilevel_bom_plan import BomPlanError
+    try:
+        return preview_master_structure(db, product_id)
+    except BomPlanError as error:
+        raise HTTPException(409, str(error)) from error
 
 
 async def _create_drawing_version(
@@ -2399,6 +2432,10 @@ def create_product(
     db: Session = Depends(get_db),
     user: User = Depends(can_create),
 ) -> dict:
+    return _create_product(payload, db, user)
+
+
+def _create_product(payload, db, user, *, commit=True) -> dict:
     require_customer_access(payload.customer_id, current_user=user, db=db)
     supply_updates = _normalize_product_external_supply(db, payload=payload)
     _normalize_product_joining_method(payload)
@@ -2442,7 +2479,8 @@ def create_product(
             resource_id=product.id,
             details=data,
         )
-        db.commit()
+        if commit:
+            db.commit()
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(
@@ -2463,6 +2501,10 @@ def update_product(
     db: Session = Depends(get_db),
     user: User = Depends(can_write),
 ) -> dict:
+    return _update_product(product_id, payload, db, user)
+
+
+def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
     require_customer_access(payload.customer_id, current_user=user, db=db)
@@ -2496,7 +2538,8 @@ def update_product(
         if revision is not None:
             product.manual_modified = True
             product.manual_modified_at = beijing_now_naive()
-        db.commit()
+        if commit:
+            db.commit()
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(
@@ -2508,6 +2551,42 @@ def update_product(
         raise
     db.refresh(product)
     return _response(product, user)
+
+
+def _save_product_with_bom(payload, db, user, product_id=None):
+    from app.services.bom_transactions import atomic_bom
+
+    expected = payload.product.expected_version if product_id is not None else 1
+    if payload.bom.expected_version != expected:
+        raise HTTPException(409, "产品与 BOM 版本不一致，请刷新后重试")
+    try:
+        with atomic_bom(db):
+            saved = (_create_product(payload.product, db, user, commit=False)
+                     if product_id is None else
+                     _update_product(product_id, payload.product, db, user, commit=False))
+            product = _product_or_404(db, saved["id"])
+            bom_payload = payload.bom.model_copy(update={"expected_version": product.version})
+            bom = _update_product_bom(product.id, bom_payload, db, user, commit=False)
+            db.flush()
+            db.refresh(product)
+            result = {"product": _response(product, user), "bom": bom}
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/with-bom", status_code=status.HTTP_201_CREATED, dependencies=[Depends(can_write)])
+def create_product_with_bom(payload: ProductWithBOMCreatePayload,
+                            db: Session = Depends(get_db), user: User = Depends(can_create)) -> dict:
+    return _save_product_with_bom(payload, db, user)
+
+
+@router.put("/{product_id}/with-bom")
+def update_product_with_bom(product_id: int, payload: ProductWithBOMUpdatePayload,
+                            db: Session = Depends(get_db), user: User = Depends(can_write)) -> dict:
+    return _save_product_with_bom(payload, db, user, product_id)
 
 
 @router.put("/{product_id}/status")

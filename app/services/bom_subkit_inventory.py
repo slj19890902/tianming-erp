@@ -2,6 +2,7 @@
 import hashlib
 import json
 from decimal import Decimal, ROUND_HALF_UP
+from types import SimpleNamespace
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -12,6 +13,7 @@ from app.models.order import Order, OrderItem
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryLot, InventoryReservation, WarehouseLocation
 from app.services.audit_log import append_audit_event
+from app.services.bom_transactions import atomic_bom
 from app.services.bom_subkit_planning import SubkitMember, plan_receipt_assembly
 from app.services.bom_subkits import SubkitError, recipe_rows
 from app.services.warehouse_inventory import _balances, _movement, manual_finished_in, inventory_fifo_sort_key
@@ -25,6 +27,8 @@ def assemble_subkit_inventory(
     db: Session, *, order_item_id: int, source_lot_versions: dict[int, int],
     target_location_id: int, operation_key: str, operator_id: int,
     available_lot_ids: list[int] | None = None,
+    graph_product_id: int | None = None,
+    quantity_limit: int | None = None,
 ) -> SubkitConversion:
     """Use only explicitly supplied, versioned, unreserved component balances.
 
@@ -33,26 +37,71 @@ def assemble_subkit_inventory(
     """
     if not operation_key or len(operation_key) > 100:
         raise SubkitError("组套操作标识无效", 400)
+    Conversion, ConversionInput = SubkitConversion, SubkitConversionInput
+    source_ref = "subkit_conversion"
+    if graph_product_id is not None:
+        if type(graph_product_id) is not int or graph_product_id <= 0:
+            raise SubkitError("组装输出产品无效")
+        from app.models.multilevel_bom import BomAssembly, BomAssemblyInput
+        Conversion, ConversionInput = BomAssembly, BomAssemblyInput
+        source_ref = "bom_assembly"
+    if quantity_limit is not None and (type(quantity_limit) is not int or quantity_limit < 0):
+        raise SubkitError("组装数量上限无效")
+    if quantity_limit is not None and graph_product_id is None:
+        raise SubkitError("数量上限仅用于真实多级组装")
     payload = {"order_item_id": order_item_id, "lots": sorted(source_lot_versions.items()),
                "location_id": target_location_id, "operator_id": operator_id,
                "available_lot_ids": sorted(available_lot_ids) if available_lot_ids is not None else None}
+    if graph_product_id is not None:
+        payload.update(graph_product_id=graph_product_id, quantity_limit=quantity_limit)
     request_hash = _hash(payload)
-    existing = db.scalar(select(SubkitConversion).where(SubkitConversion.idempotency_key == operation_key))
+    existing = db.scalar(select(Conversion).where(Conversion.idempotency_key == operation_key))
     if existing:
         if existing.request_hash != request_hash or existing.status != "posted":
             raise SubkitError("组套操作标识已使用或该组套已撤销")
         return existing
-    with db.begin_nested():
+    with atomic_bom(db):
         item = db.get(OrderItem, order_item_id)
         snapshot = db.get(OrderSubkit, order_item_id)
+        recipe = None
+        body_product_id = None
+        execution_quantity = item.quantity if item is not None else 0
+        if graph_product_id is not None:
+            from app.services.multilevel_bom_orders import read_compiled_order_bom
+            from app.services.multilevel_bom_plan import plan_bom
+            compiled = read_compiled_order_bom(db, order_item_id)
+            if compiled is None or item is None:
+                raise SubkitError("订单缺少完整多级BOM快照")
+            if compiled.execution_window is not None:
+                execution_quantity = compiled.execution_window.execution_quantity
+            node = next((n for n in compiled.graph.nodes if n.product_id == graph_product_id), None)
+            has_assembly = any(e.parent_id == graph_product_id and e.relation == "assembly"
+                               for e in compiled.graph.edges)
+            if node is None or not has_assembly or node.source not in ("assembled", "manufactured"):
+                raise SubkitError("只能组装冻结BOM中的组套成品")
+            body_product_id = graph_product_id if node.source == "manufactured" else None
+            sources = {r.component_product_id: r.id for r in compiled.snapshots}
+            recipe = [{"product_id": e.child_id, "pieces_per_kit": e.quantity,
+                       "bom_snapshot_id": sources[e.child_id]} for e in compiled.graph.edges
+                      if e.parent_id == graph_product_id and e.relation == "assembly"]
+            multiplier = next(d.required_units for d in plan_bom(compiled.graph, 1).products
+                              if d.product_id == graph_product_id)
+            snapshot = SimpleNamespace(kit_product_id=node.product_id, kit_name_snapshot=node.name,
+                                       kits_per_parent=multiplier)
         if item is None or snapshot is None:
             raise SubkitError("订单缺少冻结的子套件配方")
         order = db.get(Order, item.order_id)
+        if graph_product_id is not None:
+            actor = db.get(User, operator_id)
+            if actor is None or not actor.is_active:
+                raise SubkitError("操作人已失效")
+            if order.status in ("dead", "completed", "archived", "delivered"):
+                raise SubkitError("已结束订单不能继续组套")
         if item.is_force_closed or int(item.delivered_quantity or 0) >= item.quantity or order.status in ("cancelled", "closed", "已作废", "已结单"):
             raise SubkitError("已结束订单不能继续组套")
         from app.services.production_workflow import lock_order_rows_for_production_transition
         lock_order_rows_for_production_transition(db, [order.id])
-        recipe = recipe_rows(snapshot)
+        recipe = recipe if recipe is not None else recipe_rows(snapshot)
         member_ids = {r["product_id"] for r in recipe}
         snapshot_ids = {r["bom_snapshot_id"] for r in recipe}
         from app.services.composite_bom_workflow import _remaining_reservation_quantity, _reservation_status
@@ -68,43 +117,76 @@ def assemble_subkit_inventory(
                         for lid, rows in reserved_by_lot.items()}
         lots = []
         available = {pid: 0 for pid in member_ids}
+        body_available = 0
+        product_by_lot = {}
         free_by_lot = {}
         from app.services.fixed_shelf_staging import staging_owner
         for lot_id, version in source_lot_versions.items():
             lot = db.get(InventoryLot, lot_id)
-            if (lot is None or lot.status != "active" or lot.version != version
-                    or lot.finished_detail is None or lot.inventory_type != "finished"):
+            if lot is None or lot.status != "active" or lot.version != version:
                 raise SubkitError("组套原片库存状态或版本已变化")
-            detail = lot.finished_detail
-            if (detail.product_id not in member_ids or detail.owner_customer_id != order.customer_id
-                    or detail.is_general or staging_owner(db, lot.id)):
+            from app.services.multilevel_bom_body_inventory import stock_product_identity
+            pid, customer_id = stock_product_identity(db, lot)
+            is_body = lot.inventory_type == "assembly_body"
+            if is_body:
+                from app.models.multilevel_bom import BomBodyInventoryDetail
+                from app.services.multilevel_bom_body_inventory import validate_body_execution
+                validate_body_execution(db, compiled, lot)
+                body = db.get(BomBodyInventoryDetail, lot.id)
+                if (pid != body_product_id or body.order_item_id != item.id
+                        or lot.quantity_reserved or reserved_qty.get(lot.id, 0)):
+                    raise SubkitError("组装本体与订单不一致或存在异常预占")
+            elif pid not in member_ids or lot.finished_detail.is_general:
+                raise SubkitError("组套原片产品、客户或集货状态不匹配")
+            from app.services.bom_subkits import active_subkit_order
+            owner = active_subkit_order(db, lot)
+            if owner is not None and owner != item.id:
+                raise SubkitError("组装库存已保留给其他未完成订单")
+            if customer_id != order.customer_id or staging_owner(db, lot.id):
                 raise SubkitError("组套原片产品、客户或集货状态不匹配")
             if reserved_qty.get(lot.id, 0) > lot.quantity_reserved:
                 raise SubkitError("原片预占余额不一致")
             free_by_lot[lot.id] = lot.quantity_available if available_lot_ids is None or lot.id in available_lot_ids else 0
-            available[detail.product_id] += free_by_lot[lot.id] + reserved_qty.get(lot.id, 0)
+            eligible = free_by_lot[lot.id] + reserved_qty.get(lot.id, 0)
+            if is_body:
+                body_available += eligible
+            else:
+                available[pid] += eligible
+            product_by_lot[lot.id] = pid
             lots.append(lot)
         completed = int(db.scalar(select(func.coalesce(func.sum(
             InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_consumed), 0))
-            .join(SubkitConversion, SubkitConversion.id == InventoryLot.source_ref_id).where(
-            InventoryLot.source_ref_type == "subkit_conversion",
-            SubkitConversion.order_item_id == item.id, SubkitConversion.status == "posted"
+            .join(Conversion, Conversion.id == InventoryLot.source_ref_id).where(
+            InventoryLot.source_ref_type == source_ref,
+            Conversion.order_item_id == item.id, Conversion.status == "posted",
+            Conversion.output_product_id == graph_product_id if graph_product_id is not None else True,
         )) or 0)
+        remaining = max(execution_quantity * snapshot.kits_per_parent - completed, 0)
+        if quantity_limit is not None:
+            remaining = min(remaining, quantity_limit)
+        if body_product_id is not None:
+            remaining = min(remaining, body_available)
         plan = plan_receipt_assembly(parent_product_id=item.product_id,
             kit_product_id=snapshot.kit_product_id,
             members=[SubkitMember(r["product_id"], r["pieces_per_kit"]) for r in recipe],
-            remaining_kit_demand=max(item.quantity * snapshot.kits_per_parent - completed, 0),
-            eligible_pieces=available)
-        conversion = SubkitConversion(order_item_id=item.id, idempotency_key=operation_key,
+            remaining_kit_demand=remaining, eligible_pieces=available,
+            allow_parent_output=graph_product_id is not None)
+        conversion = Conversion(order_item_id=item.id, idempotency_key=operation_key,
             request_hash=request_hash, quantity=plan.kit_quantity, total_cost=Decimal(0),
             status="posted", created_by=operator_id)
+        if graph_product_id is not None:
+            conversion.output_product_id = graph_product_id
         db.add(conversion)
         db.flush()
         to_consume = {row.product_id: row.consumed_pieces for row in plan.components}
+        if body_product_id is not None:
+            # Stage-qualified body stock is separate from the child recipe.
+            # Never add a self-referencing BOM edge or consume finished output.
+            to_consume[body_product_id] = plan.kit_quantity
         cost = Decimal(0)
         cost_sources = []
         for lot in sorted(lots, key=inventory_fifo_sort_key):
-            pid = lot.finished_detail.product_id
+            pid = product_by_lot[lot.id]
             take = min(free_by_lot[lot.id] + reserved_qty.get(lot.id, 0), to_consume[pid])
             if not take:
                 continue
@@ -143,7 +225,7 @@ def assemble_subkit_inventory(
                     reservation.status = _reservation_status(reservation)
                     used_reservations.append({"id": reservation.id, "quantity": debit})
                     reserved_take -= debit
-            db.add(SubkitConversionInput(conversion_id=conversion.id, lot_id=lot.id,
+            db.add(ConversionInput(conversion_id=conversion.id, lot_id=lot.id,
                 product_id=pid, quantity=take, total_cost=part_cost, consume_movement_id=movement.id,
                 reservations_json=json.dumps(used_reservations)))
             to_consume[pid] -= take
@@ -151,19 +233,22 @@ def assemble_subkit_inventory(
         if any(to_consume.values()):
             raise SubkitError("组套原片扣减不完整")
         if plan.kit_quantity:
+            from app.services.finished_stock_identity import order_product_basis
             destination = db.get(WarehouseLocation, target_location_id)
             if destination is None:
                 raise SubkitError("组套目标库位不存在")
             output = manual_finished_in(db, customer_id=order.customer_id,
                 product_id=snapshot.kit_product_id, location_id=target_location_id,
                 quantity=plan.kit_quantity, stock_date=beijing_today(), source_type="transfer",
-                source_ref_type="subkit_conversion", source_ref_id=conversion.id,
+                source_ref_type=source_ref, source_ref_id=conversion.id,
+                physical_basis_json=(order_product_basis(db, order_item_id, graph_product_id)
+                    if graph_product_id is not None else None),
                 expected_layout_version=destination.floor3_layout.version if destination.floor3_layout else None,
                 remarks="收料自动组套", operator_id=operator_id,
                 idempotency_key=f"{operation_key}:out", movement_reason="原片自动组套入库")
             output.finished_detail.product_name_snapshot = snapshot.kit_name_snapshot
             output.estimated_unit_cost_snapshot = (cost / plan.kit_quantity).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-            output.cost_snapshot_source = "subkit_conversion"
+            output.cost_snapshot_source = source_ref
             output.cost_snapshot_detail_json = json.dumps({"conversion_id": conversion.id, "total_cost": str(cost), "quantity": plan.kit_quantity})
             output.cost_snapshot_at = utc_now_naive()
             conversion.output_lot_id = output.id
@@ -172,35 +257,150 @@ def assemble_subkit_inventory(
             "actual": bool(cost_sources) and all(r["actual"] for r in cost_sources),
             "currency": next(iter({r["currency"] for r in cost_sources if r["currency"]}), "")})
         append_audit_event(db, event_category="business", result="success", source="system",
-            module_code="warehouse", action_code="assemble_subkit", resource="subkit_conversion",
-            actor=db.get(User, operator_id), entity_type="subkit_conversion", entity_id=conversion.id,
+            module_code="warehouse", action_code="assemble_subkit", resource=source_ref,
+            actor=db.get(User, operator_id), entity_type=source_ref, entity_id=conversion.id,
             customer_id=order.customer_id, details={"quantity": plan.kit_quantity, "cost": str(cost), "source_lot_ids": sorted(source_lot_versions)})
         db.flush()
         return conversion
 
 
-def reverse_subkit_conversion(db: Session, *, conversion_id: int, operator_id: int) -> None:
-    with db.begin_nested():
-        conversion = db.get(SubkitConversion, conversion_id)
+def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False, ignored_reserve_id=None):
+    """Allow unwinding only after every assembly/delivery use is reversed.
+
+    Equal balances alone are not proof: moves, counts or arbitrary adjustments
+    must still block. Match every intervening movement to real reversed lineage.
+    """
+    from app.models.multilevel_bom import BomAssembly, BomAssemblyInput
+    from app.models.warehouse_inventory import InventoryMovement
+    movements = list(db.scalars(select(InventoryMovement).where(
+        InventoryMovement.inventory_lot_id == output.id).order_by(InventoryMovement.id)))
+    if not movements or output.version != len(movements):
+        return False
+    later = movements[1:]
+    if ignored_reserve_id is not None:
+        later = [m for m in later if m.id != ignored_reserve_id]
+        if not later:
+            return True
+    if allow_initial_reserve and later and later[0].movement_type == "reserve":
+        later = later[1:]
+    # A cancelled delivery is an auditable use/reversal pair, not an untouched
+    # lot. Accept only fully reversed allocations with matching real lineage.
+    # Equal final balances (or merely status='reversed') are insufficient.
+    from app.models.warehouse_inventory import DeliveryInventoryAllocation
+    from app.models.delivery import DeliveryItem
+    by_id = {m.id: m for m in later}
+    allocations = list(db.scalars(select(DeliveryInventoryAllocation).where(
+        DeliveryInventoryAllocation.consume_movement_id.in_(list(by_id))))) if by_id else []
+    delivery_movements = set()
+    for allocation in allocations:
+        consumed = by_id[allocation.consume_movement_id]
+        reservation = db.get(InventoryReservation, allocation.reservation_id)
+        line = db.get(DeliveryItem, allocation.delivery_item_id)
+        reversals = [m for m in later if m.reversal_of_movement_id == consumed.id]
+        quantity = allocation.consumed_stock_quantity
+        if (allocation.status != "reversed" or allocation.reversed_stock_quantity != quantity
+                or allocation.reversed_requirement_quantity != allocation.credited_requirement_quantity
+                or allocation.credited_requirement_quantity != quantity
+                or reservation is None or line is None
+                or reservation.inventory_lot_id != output.id
+                or reservation.order_item_id != line.order_item_id
+                or consumed.movement_type != "consume" or consumed.quantity != quantity
+                or not reversals or sum(m.quantity for m in reversals) != quantity):
+            return False
+        for movement in [consumed, *reversals]:
+            reverse = movement is not consumed
+            sign = -1 if reverse else 1
+            if (movement.quantity <= 0
+                    or (reverse and (movement.movement_type != "reverse_consume" or movement.id <= consumed.id))
+                    or movement.reservation_id != reservation.id
+                    # Graph dispatch leaves these optional header pointers NULL;
+                    # allocation -> delivery line and reservation prove identity.
+                    or movement.related_order_id not in (None, reservation.order_id)
+                    or movement.related_order_item_id != line.order_item_id
+                    or (movement.related_delivery_id not in (None, line.delivery_id) if reverse
+                        else movement.related_delivery_id != line.delivery_id)
+                    or movement.unit != output.unit
+                    or movement.after_consumed - movement.before_consumed != sign * movement.quantity
+                    or movement.before_reserved - movement.after_reserved != sign * movement.quantity
+                    or any(getattr(movement, "before_" + field) != getattr(movement, "after_" + field)
+                           for field in ("available", "damaged", "scrapped"))):
+                return False
+            delivery_movements.add(movement.id)
+    later = [m for m in later if m.id not in delivery_movements]
+    if delivery_movements and not later:
+        return True
+    sources = list(db.scalars(select(BomAssemblyInput).where(BomAssemblyInput.lot_id == output.id)))
+    consumes = {r.consume_movement_id: r for r in sources}
+    if not consumes or len(later) != 2 * len(consumes):
+        return False
+    reversed_ids = set()
+    for movement in later:
+        if movement.id in consumes:
+            source = consumes[movement.id]
+            owner = db.get(BomAssembly, source.conversion_id)
+            if owner is None or owner.status != "reversed" or movement.movement_type != "consume" or movement.quantity != source.quantity:
+                return False
+        elif movement.movement_type == "reverse_consume" and movement.reversal_of_movement_id in consumes:
+            source = consumes[movement.reversal_of_movement_id]
+            if source.consume_movement_id in reversed_ids or movement.quantity != source.quantity:
+                return False
+            reversed_ids.add(source.consume_movement_id)
+        else:
+            return False
+    return reversed_ids == set(consumes)
+
+
+def reverse_subkit_conversion(db: Session, *, conversion_id: int, operator_id: int,
+                              graph_assembly: bool = False) -> None:
+    Conversion, ConversionInput = SubkitConversion, SubkitConversionInput
+    key_prefix = "subkit-reverse"
+    if graph_assembly:
+        from app.models.multilevel_bom import BomAssembly, BomAssemblyInput
+        Conversion, ConversionInput = BomAssembly, BomAssemblyInput
+        key_prefix = "bom-reverse"
+    with atomic_bom(db):
+        conversion = db.get(Conversion, conversion_id)
         if conversion is None:
             raise SubkitError("组套记录不存在", 404)
         if conversion.status == "reversed":
             return
         if conversion.output_lot_id:
             output = db.get(InventoryLot, conversion.output_lot_id)
+            released_auto_reserve = False
+            if graph_assembly and output is not None:
+                from app.models.warehouse_inventory import InventoryMovement
+                reservation = db.scalar(select(InventoryReservation).where(
+                    InventoryReservation.idempotency_key == f"bom-output-reserve:{conversion.id}"))
+                if reservation is not None:
+                    movement = db.scalar(select(InventoryMovement).where(
+                        InventoryMovement.idempotency_key == reservation.idempotency_key))
+                    if (reservation.inventory_lot_id != output.id or reservation.order_item_id != conversion.order_item_id
+                            or reservation.consumed_stock_quantity or reservation.released_stock_quantity
+                            or movement is None or movement.movement_type != "reserve"
+                            or movement.inventory_lot_id != output.id
+                            or movement.reservation_id != reservation.id
+                            or movement.quantity != reservation.reserved_stock_quantity
+                            or not _only_reversed_graph_consumptions(db, output, ignored_reserve_id=movement.id)):
+                        raise SubkitError("组套自动预占已有后续使用，不能撤销")
+                    from app.services.warehouse_inventory import release_finished_reservation
+                    release_finished_reservation(db, reservation_id=reservation.id, operator_id=operator_id,
+                        release_reason="撤销组套自动预占", idempotency_key=f"bom-output-unreserve:{conversion.id}",
+                        allow_downstream=True, allow_production_reversal=True)
+                    db.refresh(output)
+                    released_auto_reserve = True
             if (output is None or output.quantity_available != conversion.quantity or output.quantity_reserved
                     or output.quantity_consumed or output.quantity_damaged or output.quantity_scrapped
-                    or output.version != 1):
+                    or (output.version != 1 and not released_auto_reserve and not (graph_assembly and _only_reversed_graph_consumptions(db, output)))):
                 raise SubkitError("子套件已盘点、移库、预占或送货，不能撤销组套")
             before = _balances(output)
-            changed = db.execute(update(InventoryLot).where(InventoryLot.id == output.id, InventoryLot.version == 1).values(
-                quantity_available=0, quantity_consumed=conversion.quantity, version=2, status="closed"))
+            changed = db.execute(update(InventoryLot).where(InventoryLot.id == output.id, InventoryLot.version == output.version).values(
+                quantity_available=0, quantity_consumed=conversion.quantity, version=output.version + 1, status="closed"))
             if changed.rowcount != 1:
                 raise SubkitError("子套件库存已变化")
             db.refresh(output)
             _movement(db, lot=output, movement_type="consume", quantity=conversion.quantity, before=before,
-                operator_id=operator_id, reason="撤销组套成品", idempotency_key=f"subkit-reverse:{conversion.id}:out")
-        inputs = list(db.scalars(select(SubkitConversionInput).where(SubkitConversionInput.conversion_id == conversion.id)))
+                operator_id=operator_id, reason="撤销组套成品", idempotency_key=f"{key_prefix}:{conversion.id}:out")
+        inputs = list(db.scalars(select(ConversionInput).where(ConversionInput.conversion_id == conversion.id)))
         for source in inputs:
             lot = db.get(InventoryLot, source.lot_id)
             if lot is None or lot.quantity_consumed < source.quantity:
@@ -226,9 +426,9 @@ def reverse_subkit_conversion(db: Session, *, conversion_id: int, operator_id: i
             db.refresh(lot)
             _movement(db, lot=lot, movement_type="reverse_consume", quantity=source.quantity, before=before,
                 operator_id=operator_id, reason="撤销组套恢复原片", reversal_of_movement_id=source.consume_movement_id,
-                idempotency_key=f"subkit-reverse:{conversion.id}:{source.id}")
+                idempotency_key=f"{key_prefix}:{conversion.id}:{source.id}")
         conversion.status = "reversed"
         append_audit_event(db, event_category="business", result="success", source="system", module_code="warehouse",
-            action_code="reverse_subkit", resource="subkit_conversion", actor=db.get(User, operator_id),
-            entity_type="subkit_conversion", entity_id=conversion.id, details={"quantity": conversion.quantity})
+            action_code="reverse_subkit", resource="bom_assembly" if graph_assembly else "subkit_conversion", actor=db.get(User, operator_id),
+            entity_type="bom_assembly" if graph_assembly else "subkit_conversion", entity_id=conversion.id, details={"quantity": conversion.quantity})
         db.flush()

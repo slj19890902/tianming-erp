@@ -794,6 +794,48 @@ def semi_finished_inventory_candidates(
     return resolved
 
 
+def semi_finished_candidates_for_bom_component(db: Session, *, snapshot_id: int,
+                                                component_type: str) -> list[SemiFinishedCandidate]:
+    """Use server-owned frozen BOM facts, never today's edited product yield.
+
+    The generic product endpoint deliberately ignores untrusted client yield
+    overrides. Order BOM matching instead needs its own verified snapshot.
+    """
+    snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
+    item = db.get(OrderItem, snapshot.sales_order_item_id) if snapshot else None
+    order = db.get(Order, item.order_id) if item else None
+    product = db.get(Product, snapshot.component_product_id) if snapshot else None
+    if (snapshot is None or item is None or order is None or product is None
+            or product.deleted_at is not None or product.customer_id != order.customer_id):
+        raise WarehouseInventoryError("组件快照产品或客户身份无效", 409)
+    from app.services.incoming_receipts import _snapshot_component_types, _snapshot_physical_pieces
+    from app.services.bom_physical_quantities import resolve_bom_sheet_yield
+    if component_type not in _snapshot_component_types(snapshot):
+        raise WarehouseInventoryError("组件物理片组不匹配", 409)
+    prefix = "snapshot_component_base_" if component_type == "base" else "snapshot_component_"
+    length = int(getattr(snapshot, prefix + "report_length_mm") or 0)
+    width = int(getattr(snapshot, prefix + "report_width_mm") or 0)
+    if length <= 0 or width <= 0:
+        raise WarehouseInventoryError("组件报料长宽必须大于0", 409)
+    try:
+        sheet_yield = resolve_bom_sheet_yield(snapshot, strict=True).yield_per_sheet
+    except ValueError as error:
+        raise WarehouseInventoryError(str(error), 409) from error
+    expected = SemiFinishedSignature(customer_id=order.customer_id,
+        board_length_mm=length, board_width_mm=width,
+        normalized_material_code=normalize_material_code(snapshot.snapshot_component_material),
+        flute_type=_flute(snapshot.snapshot_component_flute_type), component_type=component_type,
+        pieces_per_box=_snapshot_physical_pieces(snapshot, component_type), stock_yield_per_sheet=sheet_yield)
+    return [replace(row, direct_deduction_eligible=direct_semi_finished_deduction_eligible(
+        db, lot=row.lot, product_id=product.id, customer_id=order.customer_id, expected=expected,
+        layer_count=snapshot.snapshot_component_layer_count,
+        crease_type=getattr(snapshot, prefix + "crease_type"),
+        crease_left_mm=getattr(snapshot, prefix + "crease_left_mm"),
+        crease_middle_mm=getattr(snapshot, prefix + "crease_middle_mm"),
+        crease_right_mm=getattr(snapshot, prefix + "crease_right_mm")))
+        for row in _semi_finished_candidates_for_signature(db, product_id=product.id, expected=expected)]
+
+
 def semi_finished_candidates_for_product(
     db: Session,
     *,

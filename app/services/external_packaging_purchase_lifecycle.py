@@ -14,6 +14,7 @@ from app.models.external_packaging_purchase import (
 )
 from app.models.stock_replenishment import StockReplenishmentOrder
 from app.core.time_contract import utc_now_naive
+from app.services.external_receipt_state import active_receipt_item
 
 
 class ExternalPackagingPurchaseLifecycleError(ValueError):
@@ -74,8 +75,11 @@ def cancel_unreceived_external_purchases(
     source: str,
     reason: str,
     cancelled_by: int | None,
+    batch_id: int | None = None,
 ) -> list[dict]:
     purchases = active_external_purchase_orders_for_order_ids(db, {order_id})
+    if batch_id is not None:
+        purchases = [purchase for purchase in purchases if purchase.batch_id == batch_id]
     if not purchases:
         return []
     purchase_item_ids = {
@@ -95,7 +99,7 @@ def cancel_unreceived_external_purchases(
                     ExternalPackagingReceiptItem.purchase_item_id
                     == ExternalPackagingPurchaseItem.id,
                 )
-                .where(ExternalPackagingPurchaseItem.id.in_(purchase_item_ids))
+                .where(ExternalPackagingPurchaseItem.id.in_(purchase_item_ids), active_receipt_item())
                 .group_by(ExternalPackagingPurchaseItem.purchase_order_id)
             ).all()
         }
@@ -173,7 +177,7 @@ def cancel_unreceived_stock_replenishment_purchase(
                 ExternalPackagingPurchaseItem.id
                 == ExternalPackagingReceiptItem.purchase_item_id,
             )
-            .where(ExternalPackagingPurchaseItem.purchase_order_id == purchase.id)
+            .where(ExternalPackagingPurchaseItem.purchase_order_id == purchase.id, active_receipt_item())
         )
         or 0
     )

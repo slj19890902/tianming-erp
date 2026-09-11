@@ -4,6 +4,8 @@ from decimal import Decimal
 import os
 from pathlib import Path
 import shutil
+import hashlib
+import sqlite3
 
 import pytest
 from sqlalchemy import select, func
@@ -22,7 +24,7 @@ from app.services.warehouse_inventory import manual_finished_in
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(tmp_path, monkeypatch):
     source = os.environ.get("ERP_SUBKIT_UAT_SOURCE")
     if not source:
         pytest.skip("requires an explicitly prepared isolated factory database copy")
@@ -30,13 +32,22 @@ def db(tmp_path):
     if path.name != "source-isolated.sqlite3" or "tm-uat" not in path.parts:
         pytest.fail("not the prepared isolated database")
     target = tmp_path / "subkit-test.sqlite3"
+    before = hashlib.sha256(path.read_bytes()).digest()
     shutil.copy2(path, target)
+    backup = tmp_path / "subkit-before.sqlite3"
+    shutil.copy2(target, backup)
+    assert hashlib.sha256(backup.read_bytes()).digest() == before
+    with sqlite3.connect(backup) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    from alembic import command
+    from tests.test_p1_131_material_cost_lineage_migration import _config
+    command.upgrade(_config(monkeypatch, target), "head")
     engine = create_sqlite_engine(target)
-    Base.metadata.create_all(engine)
     with Session(engine) as session:
         yield session
         session.rollback()
     engine.dispose()
+    assert hashlib.sha256(path.read_bytes()).digest() == before
 
 
 def setup_order(db):
@@ -241,3 +252,27 @@ def test_split_move_preserves_liner_order_and_available_sets(db):
     assert moved.quantity_available == 40
     assert active_subkit_order(db, moved) == item.id
     assert limit_by_subkit_stock(db, {item.id:100}) == {item.id:100}
+
+
+def test_outer_rollback_undoes_conversion_after_read_only_entry(db):
+    actor, item, _ = setup_order(db)
+    lots = [raw(db, actor, 3788, 200), raw(db, actor, 3789, 600)]
+    lot_ids = [lot.id for lot in lots]
+    result = convert(db, actor, item, lots, key="outer-rollback-assembly")
+    conversion_id, output_id = result.id, result.output_lot_id
+    db.rollback()
+    assert db.get(SubkitConversion, conversion_id) is None
+    assert db.get(InventoryLot, output_id) is None
+    assert [db.get(InventoryLot, lid).quantity_available for lid in lot_ids] == [200, 600]
+
+
+def test_outer_rollback_undoes_reversal_after_read_only_entry(db):
+    actor, item, _ = setup_order(db)
+    lots = [raw(db, actor, 3788, 200), raw(db, actor, 3789, 600)]
+    result = convert(db, actor, item, lots, key="outer-rollback-reversal")
+    db.commit()
+    conversion_id, output_id, actor_id = result.id, result.output_lot_id, actor.id
+    reverse_subkit_conversion(db, conversion_id=conversion_id, operator_id=actor_id)
+    db.rollback()
+    assert db.get(SubkitConversion, conversion_id).status == "posted"
+    assert db.get(InventoryLot, output_id).quantity_available == 100

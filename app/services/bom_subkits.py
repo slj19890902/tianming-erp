@@ -26,11 +26,12 @@ def recipe_rows(row: ProductSubkit | OrderSubkit) -> list[dict]:
 
 def active_subkit_order(db: Session, lot) -> int | None:
     """Conversion stock belongs to its unfinished parent order, even after moving."""
-    if lot.source_ref_type != "subkit_conversion":
+    if lot.source_ref_type not in ("subkit_conversion", "bom_assembly"):
         return None
     from app.models.bom_subkit import SubkitConversion
+    from app.models.multilevel_bom import BomAssembly
     from app.models.order import Order
-    conversion = db.get(SubkitConversion, lot.source_ref_id)
+    conversion = db.get(BomAssembly if lot.source_ref_type == "bom_assembly" else SubkitConversion, lot.source_ref_id)
     if conversion is None or conversion.status != "posted":
         raise SubkitError("内衬组套来源失效，请核对")
     item = db.get(OrderItem, conversion.order_item_id)

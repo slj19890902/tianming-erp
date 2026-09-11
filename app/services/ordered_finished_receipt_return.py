@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, update, or_
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -68,6 +68,11 @@ def _source_allocation_rows(
     *,
     delivery_item: DeliveryItem,
 ) -> list[tuple[DeliveryInventoryAllocation, InventoryReservation, InventoryLot]]:
+    from app.models.product_bom import SalesOrderItemBomComponent
+    root_sources = select(SalesOrderItemBomComponent.id).join(OrderItem,
+        OrderItem.id == SalesOrderItemBomComponent.sales_order_item_id).where(
+            OrderItem.id == delivery_item.order_item_id,
+            SalesOrderItemBomComponent.component_product_id == OrderItem.product_id)
     rows = list(
         db.execute(
             select(
@@ -86,7 +91,8 @@ def _source_allocation_rows(
             )
             .where(
                 DeliveryInventoryAllocation.delivery_item_id == delivery_item.id,
-                InventoryReservation.sales_order_item_bom_component_id.is_(None),
+                or_(InventoryReservation.sales_order_item_bom_component_id.is_(None),
+                    InventoryReservation.sales_order_item_bom_component_id.in_(root_sources)),
             )
             .order_by(DeliveryInventoryAllocation.id.desc())
         ).all()
@@ -99,6 +105,18 @@ def _source_allocation_rows(
             or lot.finished_detail is None
         ):
             raise WarehouseInventoryError("送货库存分配与订单明细不一致", 409)
+        if reservation.sales_order_item_bom_component_id is not None:
+            from app.services.multilevel_bom_orders import read_order_bom_source_contract
+            from app.services.multilevel_bom_plan import BomPlanError
+            try:
+                contract = read_order_bom_source_contract(db, reservation.order_item_id,
+                    reservation.sales_order_item_bom_component_id)
+            except BomPlanError as error:
+                raise WarehouseInventoryError(str(error), 409) from error
+            if (lot.finished_detail.product_id != contract.graph.root_id
+                    or lot.finished_detail.owner_customer_id != contract.graph.customer_id
+                    or reservation.yield_factor != 1):
+                raise WarehouseInventoryError("成套退回必须对应原订单父件及一对一套数", 409)
         available = int(allocation.consumed_stock_quantity or 0) - int(
             allocation.reversed_stock_quantity or 0
         )
@@ -201,6 +219,7 @@ def _clone_return_lot(
     db: Session,
     *,
     source_lot: InventoryLot,
+    source_snapshot_id: int | None,
     return_receipt_item_id: int,
     delivery_item: DeliveryItem,
     delivery: Delivery,
@@ -259,6 +278,7 @@ def _clone_return_lot(
         height_mm=source_detail.height_mm,
         material_code_snapshot=source_detail.material_code_snapshot,
         flute_type_snapshot=source_detail.flute_type_snapshot,
+        physical_basis_json=source_detail.physical_basis_json,
     )
     db.add(lot)
     db.flush()
@@ -275,6 +295,7 @@ def _clone_return_lot(
             reservation_type="finished_order",
             order_id=order.id,
             order_item_id=order_item.id,
+            sales_order_item_bom_component_id=source_snapshot_id,
             reserved_stock_quantity=quantity,
             credited_requirement_quantity=quantity,
             yield_factor=1,
@@ -503,6 +524,7 @@ def restore_ordered_finished_receipt_shortage(
         lot, reservation, movement, pallet_id = _clone_return_lot(
             db,
             source_lot=source_lot,
+            source_snapshot_id=source_reservation.sales_order_item_bom_component_id,
             return_receipt_item_id=return_receipt_item_id,
             delivery_item=delivery_item,
             delivery=delivery,
@@ -535,6 +557,13 @@ def restore_ordered_finished_receipt_shortage(
             created_by=operator_id,
         )
         db.add(fact)
+        db.flush()
+        from app.services.bom_return_cost import freeze_return_graph_cost
+        from app.services.bom_subkits import SubkitError
+        try:
+            freeze_return_graph_cost(db, returned=fact, lot=lot, allocation=allocation)
+        except SubkitError as error:
+            raise WarehouseInventoryError(str(error), 409) from error
         created.append(fact)
         remaining -= quantity
         sequence_no += 1

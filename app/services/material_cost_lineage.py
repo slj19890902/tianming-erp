@@ -390,6 +390,9 @@ def freeze_delivery_inventory_material_cost(
     lot: InventoryLot,
     operator_id: int | None,
 ) -> FinanceDeliveryMaterialCostFact | None:
+    from app.services.graph_delivery_cost import is_graph_output
+    if is_graph_output(lot):
+        return _freeze_graph_cost_checked(db, allocation=allocation, lot=lot, operator_id=operator_id)
     resolved = resolve_lot_actual_material_cost(db, lot)
     if resolved is None:
         from app.services.material_cost_supplement import freeze_inventory_entry_cost
@@ -421,6 +424,9 @@ def freeze_unordered_delivery_material_cost(
     lot: InventoryLot,
     operator_id: int | None,
 ) -> FinanceDeliveryMaterialCostFact | None:
+    from app.services.graph_delivery_cost import is_graph_output
+    if is_graph_output(lot):
+        return _freeze_graph_cost_checked(db, allocation=allocation, lot=lot, operator_id=operator_id, unordered=True)
     resolved = resolve_lot_actual_material_cost(db, lot)
     if resolved is None:
         from app.services.material_cost_supplement import freeze_inventory_entry_cost
@@ -443,6 +449,16 @@ def freeze_unordered_delivery_material_cost(
         inventory_lot_id=lot.id,
         unordered_finished_delivery_allocation_id=allocation.id,
     )
+
+
+def _freeze_graph_cost_checked(db, **kwargs):
+    from app.services.graph_delivery_cost import freeze_graph_delivery_cost
+    from app.services.bom_subkits import SubkitError
+    from app.services.warehouse_inventory import WarehouseInventoryError
+    try:
+        return freeze_graph_delivery_cost(db, **kwargs)
+    except SubkitError as error:
+        raise WarehouseInventoryError(str(error), error.status_code) from error
 
 
 def freeze_bom_direct_delivery_material_cost(
@@ -688,6 +704,8 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
     partial_lines = 0
     missing_details: list[dict[str, Any]] = []
 
+    from app.services.graph_delivery_cost import graph_cost_report_sources, active_graph_cost
+    graph_facts = graph_cost_report_sources(db, delivery_item_ids)
     for item_id in delivery_item_ids:
         sources = sources_by_item[item_id]
         line_frozen = 0
@@ -716,6 +734,20 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
                     collect_gap(item_id, source, "foreign_currency_rate_missing")
                 continue
             key = (str(source["kind"]), int(source["id"]))
+            graph_evidence = graph_facts.get(key)
+            if graph_evidence is not None:
+                graph_fact, graph_portions = graph_evidence
+                graph_amount = active_graph_cost(graph_fact, graph_portions, int(source["active_quantity"]))
+                frozen_sources += 1
+                currency = graph_fact.currency
+                currency_totals[currency] = currency_totals.get(currency, Decimal(0)) + graph_amount
+                if currency == "CNY":
+                    line_frozen += 1
+                    line_cost += graph_amount
+                else:
+                    foreign_currency_sources += 1
+                    line_reasons.add("foreign_currency_rate_missing")
+                continue
             fact = facts.get(key)
             if fact is not None:
                 frozen_sources += 1

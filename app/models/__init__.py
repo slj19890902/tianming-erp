@@ -51,6 +51,7 @@ from app.models.printing_plate import (  # noqa: E402,F401
 )
 from app.models.product import Product  # noqa: E402,F401
 from app.models.bom_subkit import ProductSubkit, OrderSubkit, SubkitConversion, SubkitConversionInput, SubkitReceiptOutput, SubkitDeliveryAllocation  # noqa: E402,F401
+from app.models.multilevel_bom import OrderBomGraph, OrderBomGraphProduct, ProductBomProfile, ProductBomInventoryRelation  # noqa: E402,F401
 from app.models.product_bom import (  # noqa: E402,F401
     BomComponentDirectDeliveryAllocation,
     ProductBomComponent,
@@ -191,6 +192,7 @@ from app.models.processing_cost import (  # noqa: E402,F401
 from app.models.material_cost import (  # noqa: E402,F401
     FinanceDeliveryMaterialCostFact,
 )
+from app.models.graph_material_cost import FinanceDeliveryGraphCostFact, FinanceDeliveryGraphCostPortion  # noqa: E402,F401
 from app.models.fulfillment_reminder import (  # noqa: E402,F401
     FulfillmentReminder,
     FulfillmentReminderMutation,

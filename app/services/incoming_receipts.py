@@ -420,6 +420,10 @@ def _all_expected_bom_sources_received(
     item: OrderItem,
 ) -> bool | None:
     """Return None for non-BOM items, otherwise exact physical-source closure."""
+    from app.services.multilevel_bom_receipts import graph_material_receipts_closed
+    graph_closed = graph_material_receipts_closed(db, item)
+    if graph_closed is not None:
+        return graph_closed
     snapshots = db.scalars(
         select(SalesOrderItemBomComponent)
         .where(SalesOrderItemBomComponent.sales_order_item_id == item.id)

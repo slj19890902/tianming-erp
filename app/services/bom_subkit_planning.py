@@ -44,12 +44,13 @@ def _quantity(value: Any, label: str, *, positive: bool = False) -> int:
 
 
 def normalize_members(
-    members: Sequence[SubkitMember], *, parent_product_id: int, kit_product_id: int
+    members: Sequence[SubkitMember], *, parent_product_id: int, kit_product_id: int,
+    allow_parent_output: bool = False,
 ) -> tuple[SubkitMember, ...]:
     """Reject ambiguous/self-referencing recipes before computing any quantities."""
     parent = _quantity(parent_product_id, "父产品", positive=True)
     kit = _quantity(kit_product_id, "子套件产品", positive=True)
-    if parent == kit:
+    if parent == kit and not allow_parent_output:
         raise CompositeBOMExecutionError("父产品与子套件必须分别登记")
     if not members:
         raise CompositeBOMExecutionError("子套件至少需要一个组件")
@@ -86,6 +87,7 @@ def plan_receipt_assembly(
     eligible_pieces: Mapping[int, Any],
     confirmed_loss_pieces: Mapping[int, Any] | None = None,
     loss_confirmed: bool = False,
+    allow_parent_output: bool = False,
 ) -> SubkitAssemblyPlan:
     """Assemble up to outstanding demand; retain every other piece by default.
 
@@ -96,7 +98,8 @@ def plan_receipt_assembly(
     loss confirmation. No parent cartons are created or consumed by this plan.
     """
     recipe = normalize_members(
-        members, parent_product_id=parent_product_id, kit_product_id=kit_product_id
+        members, parent_product_id=parent_product_id, kit_product_id=kit_product_id,
+        allow_parent_output=allow_parent_output,
     )
     demand = _quantity(remaining_kit_demand, "尚需子套件数量")
     available = _balances(eligible_pieces, recipe, "可用片数")

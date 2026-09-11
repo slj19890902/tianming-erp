@@ -138,6 +138,8 @@ body.warehouse-twin-page {
   text-decoration: none;
 }
 .twin-ledger-link:hover { border-color: var(--twin-cyan); color: var(--twin-cyan); }
+.twin-command-links { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.twin-command-links .twin-cost-link { display: inline-flex; white-space: nowrap; }
 
 .twin-toolbar {
   position: relative;

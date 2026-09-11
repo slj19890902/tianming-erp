@@ -57,10 +57,11 @@ export function moveLocationBounds(features, location) {
   return { left: Math.min(left, right), right: Math.max(left, right), bottom: Math.min(bottom, top), top: Math.max(bottom, top) };
 }
 
-export function intersectMappedMoveTargets(candidates, dashboardLocations, reservedTargetIds = [], blockedTargetIds = []) {
+export function intersectMappedMoveTargets(candidates, dashboardLocations, reservedTargetIds = [], blockedTargetIds = [], operation = "pallet_move") {
+  const allowOccupied = operation === "lot_transfer";
   const candidateIds = new Set(
     (candidates || [])
-      .filter((item) => item?.is_empty !== false && item?.occupied !== true)
+      .filter((item) => allowOccupied || (item?.is_empty !== false && item?.occupied !== true))
       .map((item) => normalizedId(item?.id))
       .filter(Boolean)
   );
@@ -69,7 +70,7 @@ export function intersectMappedMoveTargets(candidates, dashboardLocations, reser
   return (dashboardLocations || [])
     .filter((location) => candidateIds.has(normalizedId(location?.location_id)))
     .filter((location) => location?.is_active !== false)
-    .filter((location) => location?.occupancy_status === "empty")
+    .filter((location) => location?.occupancy_status === "empty" || (allowOccupied && location?.occupancy_status === "occupied"))
     .filter((location) => location?.position_status === "mapped" && location?.map_position)
     .filter((location) => !reserved.has(normalizedId(location?.location_id)))
     .filter((location) => !blocked.has(normalizedId(location?.location_id)))
@@ -112,8 +113,9 @@ export function upsertMoveDraft(drafts, draft) {
   if (!sourceKey || !targetId) return { items: drafts || [], error: "移货来源或目标货位无效。" };
   const collision = (drafts || []).find((item) =>
     item.source_key !== sourceKey && normalizedId(item.target_location_id) === targetId
+    && (item.operation !== "lot_transfer" || draft.operation !== "lot_transfer")
   );
-  if (collision) return { items: drafts || [], error: "该目标货位已被另一条页面草稿占用，请先撤销或改选空位。" };
+  if (collision) return { items: drafts || [], error: "目标已被草稿占用；整栈板必须独占空货位，不能与其他移货草稿共用。" };
   const currentIndex = (drafts || []).findIndex((item) => item.source_key === sourceKey);
   if (currentIndex < 0) return { items: [...(drafts || []), draft], error: null };
   const items = [...drafts];

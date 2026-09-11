@@ -86,7 +86,8 @@ def main():
     output.mkdir(parents=True)
     if not args.signing_key.is_file():
         raise ValueError('发布私钥必须预先生成并安全保存，构建不得自动更换发布身份')
-    key = serialization.load_pem_private_key(args.signing_key.read_bytes(), password=None)
+    from desktop_assistant.signing import load_key
+    key = load_key(args.signing_key)
     public = output / 'release-public.pem'
     public.write_bytes(key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
     tree = output / 'payload'

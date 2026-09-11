@@ -119,7 +119,7 @@ test("cell navigation rejects missing or conflicting identities even when occupi
   }
 });
 
-test("cell selection collapses the elevation and focuses the existing inspector without changing mode or drafts", () => {
+test("cell selection keeps the elevation and focuses the existing inspector without changing mode or drafts", () => {
   assert.match(source, /onSelectLocation=\{selectRackLocation\}/);
   const callback = source.slice(source.indexOf('  const selectRackLocation ='), source.indexOf('  const chooseRackEmptyLocation ='));
   const code = ts.transpileModule(callback, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText;
@@ -127,7 +127,7 @@ test("cell selection collapses the elevation and focuses the existing inspector 
     for (const blocked of ['none', 'busy', 'missing']) {
       const actions = [];
       const context = {mapMode, moveAction, spatialEditBusy: blocked === 'busy', focusedRackLocations: locations,
-        selectOperationalEntity: value => actions.push(['select', value.id]),
+        selectOperationalEntity: (value, origin) => actions.push(['select', value.id, origin]),
         inspectorRef: {current: {focus: () => actions.push(['focus']), scrollIntoView: () => actions.push(['scroll'])}},
         requestAnimationFrame: fn => fn(),
         setRackFocusId: value => actions.push(['rack', value]),
@@ -135,7 +135,7 @@ test("cell selection collapses the elevation and focuses the existing inspector 
       };
       vm.runInNewContext(code + `\nselectRackLocation(${blocked === 'missing' ? 999 : 107});`, context);
       assert.deepEqual(actions, blocked === 'none'
-        ? [['select', 'erp-location-107'], ['rack', null], ['detail', false], ['focus'], ['scroll']]
+        ? [['select', 'erp-location-107', 'rack'], ['detail', false], ['focus'], ['scroll']]
         : []);
     }
   }

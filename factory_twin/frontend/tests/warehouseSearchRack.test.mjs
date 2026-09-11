@@ -55,7 +55,7 @@ test('every new search selection closes the previous rack and replaces pending l
     assert.equal(state.PendingRackSearchLocationId,item.position_status==='mapped'?item.location_id:null);
     assert.equal(state.PendingLocationId,item.position_status==='mapped'?item.location_id:null);
     assert.equal(state.FocusedSearchProductKey,`product-${item.product_id}`);
-    assert.equal(state.SearchPanelOpen,true);
+    assert.equal(state.SearchPanelOpen,false,'dropdown closes for map access; the top search can reopen the retained results');
     assert.equal(state.PendingLocateResource,null);
   }
   assert.equal(state.PendingAreaCode,null,'a new unlocated result must clear a stale pending area');

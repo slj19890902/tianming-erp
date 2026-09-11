@@ -421,7 +421,7 @@ test("acknowledged warehouse moves are not offered again when dashboard refresh 
     let activeKey = key;
     let reads = 0;
     await componentValue("confirmMoveDrafts", {
-      moveDrafts: drafts, moveBatchBusy: false, moveBatchIdempotencyKey: key,
+      moveDrafts: drafts, moveBatchBusy: false, moveBatchIdempotencyKey: key, moveSubmitLock: {current:false},
       setMoveBatchBusy: value => { busy = value; },
       setWarehouseOperationMessage: value => messages.push(value),
       buildMoveBatchPayload: (idempotencyKey, items) => ({ idempotencyKey, items }),
@@ -449,7 +449,7 @@ test("acknowledged warehouse moves are not offered again when dashboard refresh 
       assert.equal(source, null);
       assert.equal(activeKey, "next-request");
       assert.equal(reads, 1);
-      assert.match(messages.at(-1), failure === "readback" ? /移货已完成.*刷新失败.*不要重复提交/ : /移货已成功/);
+      assert.match(messages.at(-1), failure === "readback" ? /移货已完成.*刷新失败.*不要重复提交/ : /移动完成|整批移货完成/);
     }
   }
 });
@@ -793,8 +793,9 @@ test("warehouse header keeps the ledger link on the command row", () => {
 test("lookup has one entry and area planning uses short adaptive actions", () => {
   const toolbar = source.slice(source.indexOf('<section className="twin-toolbar">'), source.indexOf('<section className={`twin-workspace'));
   assert.doesNotMatch(toolbar, /twin-warehouse-search-toggle/);
-  assert.match(source, /<header><h2>查货<\/h2><\/header>/);
-  assert.match(source, /<b>用途与容量<\/b>/);
+  assert.match(toolbar, /className="twin-top-search"/);
+  assert.match(source, /<header><h2>全仓搜索结果<\/h2>/);
+  assert.match(source, /<b>区域设置与容量<\/b>/);
   assert.match(source, /: "保存区域设置"\}<\/button>/);
   assert.match(source, />编辑<\/button>/);
   assert.match(source, />货位\/货架<\/button>/);

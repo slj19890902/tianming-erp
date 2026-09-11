@@ -1644,10 +1644,11 @@ def test_frontend_exposes_execute_scoped_three_level_move_draft_once_only() -> N
     )
     assert 'value.permissions.includes("warehouse.execute")' in source
     assert 'setMapMode("move")' in source
-    assert ">移货 / 盘点</button>" in source
+    assert ">移货</button>" in source and ">盘点</button>" in source
     assert "楼层" in source and "区域" in source and "具体货位" in source
     assert source.count('"/api/warehouse/twin-operations/move-batches"') == 1
-    assert "buildMoveBatchPayload(moveBatchIdempotencyKey, moveDrafts)" in source
+    assert "buildMoveBatchPayload(key, drafts)" in source
+    assert "moveSubmitLock.current = true" in source
     assert "export function buildMoveBatchPayload" in move_helper
     assert "idempotency_key: idempotencyKey" in move_helper
     assert "client_item_id: draft.client_item_id" in move_helper

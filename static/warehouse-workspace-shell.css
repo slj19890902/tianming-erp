@@ -1,0 +1,6 @@
+.warehouse-top-overview,.warehouse-account-menu { position:relative; font-size:14px; }
+.warehouse-top-overview > summary,.warehouse-account-menu > summary { cursor:pointer; padding:7px 10px; background:#fff; border:1px solid #cbd5e1; border-radius:7px; }
+.warehouse-top-overview > div,.warehouse-account-menu > div { position:absolute; right:0; top:100%; z-index:1000; min-width:200px; padding:10px; background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 5px 20px #18354b22; }
+.warehouse-account-menu > div { display:grid; gap:8px; }
+.warehouse-top-overview .warehouse-top-metrics { flex-direction:column; align-items:stretch; }
+.warehouse-account-menu summary:focus-visible,.warehouse-top-overview summary:focus-visible { outline:3px solid #2563eb; }

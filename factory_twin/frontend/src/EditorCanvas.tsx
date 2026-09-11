@@ -58,6 +58,7 @@ interface Props {
   highlightFeatureIds?: string[];
   highlightedPalletIds?: string[];
   mergeTargetPalletId?: string;
+  moveLocationStates?: Record<string, string>;
   draggablePalletIds?: string[];
   focusTarget?: CanvasFocusTarget | null;
   palletEditingOnly?: boolean;
@@ -163,23 +164,28 @@ function addEntityHighlight(group: THREE.Group, object: THREE.Object3D, color: n
   group.add(marker);
 }
 
-function syncEntityHighlights(runtime: CanvasRuntime, selected: SelectedEntity, focusTarget: CanvasFocusTarget | null | undefined) {
+function syncEntityHighlights(runtime: CanvasRuntime, selected: SelectedEntity, focusTarget: CanvasFocusTarget | null | undefined, moveStates?: Record<string, string>) {
   clearHighlightGroup(runtime.selectionHighlight);
   clearHighlightGroup(runtime.searchHighlight);
   const focusedKey = focusTarget ? entityKey(focusTarget.entity) : null;
-  if (selected && entityKey(selected) !== focusedKey) {
+  if (selected && entityKey(selected) !== focusedKey && !(selected.kind === "pallet" && moveStates?.[selected.id])) {
     const selectedObject = runtime.entityNodes.get(entityKey(selected));
     if (selectedObject) addEntityHighlight(runtime.selectionHighlight, selectedObject, 0x7c3aed, 90);
   }
-  if (focusTarget) {
+  if (focusTarget && !(focusTarget.entity.kind === "pallet" && moveStates?.[focusTarget.entity.id])) {
     const focusedObject = runtime.entityNodes.get(focusedKey!);
     if (focusedObject) addEntityHighlight(runtime.searchHighlight, focusedObject, 0x2563eb, 160);
   }
   runtime.requestRender();
 }
 
-function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], palletIds: string[], mergeTargetPalletId?: string) {
+function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], palletIds: string[], mergeTargetPalletId?: string, moveLocationStates?: Record<string, string>) {
   clearHighlightGroup(runtime.resultHighlight);
+  const colors: Record<string, number> = {empty:0x22c55e,occupied:0xf59e0b,target:0x2563eb,source:0x9333ea,blocked:0x94a3b8};
+  for (const [id, state] of Object.entries(moveLocationStates || {})) {
+    const object = runtime.entityNodes.get(`pallet:${id}`);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, colors[state] ?? colors.blocked, state === "target" ? 160 : 20);
+  }
   for (const id of featureIds) {
     const object = runtime.entityNodes.get(`feature:${id}`);
     if (object) addEntityHighlight(runtime.resultHighlight, object, 0x2563eb, 120);
@@ -426,6 +432,7 @@ export function EditorCanvas({
   highlightFeatureIds = [],
   highlightedPalletIds = [],
   mergeTargetPalletId,
+  moveLocationStates,
   draggablePalletIds,
   focusTarget = null,
   palletEditingOnly = false,
@@ -471,6 +478,8 @@ export function EditorCanvas({
   const coordinateRef = useRef<HTMLElement>(null);
   const runtimeRef = useRef<CanvasRuntime | null>(null);
   const selectedRef = useRef<SelectedEntity>(selected);
+  const moveStatesRef = useRef(moveLocationStates);
+  moveStatesRef.current = moveLocationStates;
   const nudgeHandlers = useRef({ onNudgeFeature, onFinishFeatureNudge, onNudgePallet, onFinishPalletNudge, featureEditingEnabled, onMoveRack });
   nudgeHandlers.current = { onNudgeFeature, onFinishFeatureNudge, onNudgePallet, onFinishPalletNudge, featureEditingEnabled, onMoveRack };
   const layoutRef = useRef(layout);
@@ -504,7 +513,7 @@ export function EditorCanvas({
             const bounds = layoutRef.current.bounds_mm;
             if (node) { node.position.x = rack.x_mm + dx - (bounds.min_x + bounds.max_x) / 2;
               node.position.z = (bounds.min_y + bounds.max_y) / 2 - rack.y_mm - dy;
-              if (current) { syncEntityHighlights(current, selection, focusTargetRef.current); current.requestRender(); } }
+              if (current) { syncEntityHighlights(current, selection, focusTargetRef.current, moveStatesRef.current); current.requestRender(); } }
           } else if (selection.kind === "feature") nudgeHandlers.current.onNudgeFeature?.(selection.id, x, y);
           else nudgeHandlers.current.onNudgePallet?.(selection.id, x, y);
         },
@@ -1589,8 +1598,8 @@ export function EditorCanvas({
       layoutId: layout.id
     };
     runtimeRef.current = runtime;
-    syncEntityHighlights(runtime, selectedRef.current, focusTargetRef.current);
-    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId);
+    syncEntityHighlights(runtime, selectedRef.current, focusTargetRef.current, moveStatesRef.current);
+    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates);
     if (focusTargetRef.current) {
       const nextFocusKey = `${focusTargetRef.current.token}:${layout.id}:${viewMode}`;
       if (lastFocusKeyRef.current !== nextFocusKey && animateFocus(runtime, focusTargetRef.current)) {
@@ -1662,19 +1671,19 @@ export function EditorCanvas({
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    syncEntityHighlights(runtime, selected, focusTarget);
+    syncEntityHighlights(runtime, selected, focusTarget, moveLocationStates);
     if (!focusTarget) return;
     const nextFocusKey = `${focusTarget.token}:${runtime.layoutId}:${runtime.viewMode}`;
     if (lastFocusKeyRef.current !== nextFocusKey && animateFocus(runtime, focusTarget)) {
       lastFocusKeyRef.current = nextFocusKey;
     }
-  }, [selected, focusTarget]);
+  }, [selected, focusTarget, moveLocationStates]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId);
-  }, [highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId]);
+    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates);
+  }, [highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates]);
 
   const realEastCompass = usesRealEastCompass(layout);
   const floor4CalibratingCompass = layout.floor_code.toUpperCase() === "4F" && calibrationMode;
@@ -1682,10 +1691,10 @@ export function EditorCanvas({
   const compassLabel = floor4CalibratingCompass ? "对齐3F" : realEastCompass ? "现实东向" : "图纸北向";
   return <div className={`editor-canvas ${visualTheme === "warehouse" ? "warehouse-theme" : ""} ${effectiveDrawMode || measureMode ? "drawing" : ""}`} ref={containerRef}>
     <div className="canvas-mount" ref={canvasMountRef} />
-    {!readOnly && viewMode === "2d" && <small className="map-edit-keyboard-hint">{MAP_KEYBOARD_HINT}。货架拖近120mm内吸附，Alt取消吸附；调整后按原流程保存/应用。</small>}
+    {!readOnly && showInternalCodes && viewMode === "2d" && <small className="map-edit-keyboard-hint">{MAP_KEYBOARD_HINT}。货架拖近120mm内吸附，Alt取消吸附；调整后按原流程保存/应用。</small>}
     <div className="map-compass" aria-label={compassLabel}><span ref={northArrowRef}>↑</span><b>{compassCode}</b><small>{compassLabel}</small></div>
     {referenceLayout && referenceOverlay?.enabled && layout.floor_code.toUpperCase()==="1F" && <div className="reference-overlay-badge">{referenceOverlay.shared_coordinates ? "3F 左半区柱墙 · 同坐标复核" : "3F 左半区柱墙参照 · 草稿"}</div>}
     <div className="map-scale"><span ref={scaleBarRef} /><b ref={scaleLabelRef}>—</b></div>
-    <small className="map-coordinate" ref={coordinateRef}>X — · Y — mm</small>
+    <small className="map-coordinate" hidden={!showInternalCodes} ref={coordinateRef}>X — · Y — mm</small>
   </div>;
 }

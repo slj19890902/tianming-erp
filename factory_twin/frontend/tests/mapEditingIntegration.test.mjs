@@ -21,7 +21,7 @@ function mount(kind = "rack", draggable = true, readOnly = false) {
   const track = name => (...args) => calls.push([name, ...args]);
   const context = { THREE, readOnly, viewMode: "2d", selectedRef: { current: { kind, id: "a" } }, runtimeRef: { current: runtime },
     layoutRef: { current: { racks: [{ id: "a", x_mm: 2000, y_mm: 2000 }], bounds_mm: { min_x: 0, max_x: 10000, min_y: 0, max_y: 10000 } } },
-    focusTargetRef: { current: null }, syncEntityHighlights() {},
+    focusTargetRef: { current: null }, moveStatesRef: { current: undefined }, syncEntityHighlights() {},
     nudgeHandlers: { current: { onMoveRack: track("rack"), onNudgeFeature: track("feature"), onFinishFeatureNudge: track("finishFeature"),
       onNudgePallet: track("pallet"), onFinishPalletNudge: track("finishPallet"), featureEditingEnabled: true } },
     createMapKeyboard: options => createMapKeyboard({ ...options, now: () => 0, requestFrame: () => 1, cancelFrame() {} }),

@@ -1,0 +1,86 @@
+/* Warehouse workspaces: browsing and operations share one map and one inspector. */
+.warehouse-twin-shell { display:flex; flex-direction:column; min-height:0; font-size:14px; }
+.warehouse-twin-shell > .twin-toolbar { flex:0 0 auto; flex-wrap:wrap!important; gap:8px; overflow:visible; padding:8px 12px; z-index:30; }
+.warehouse-twin-shell .twin-command-bar { flex:0 0 auto; min-height:40px; }
+.warehouse-twin-shell .twin-command-bar .twin-brand > :not(:first-child), .warehouse-twin-shell .twin-command-status,
+.warehouse-twin-shell .twin-toolbar-move-actions, .warehouse-twin-shell .twin-toolbar-view-tools { display:none; }
+.warehouse-twin-shell .twin-floor-area-row { display:flex; gap:8px; min-width:0; align-items:center; }
+.warehouse-twin-shell .twin-floor-area-row > label { display:flex; align-items:center; gap:5px; min-width:0; margin:0; }
+.warehouse-twin-shell .twin-floor-area-row > label:first-child { flex:0 0 96px; }
+.warehouse-twin-shell .twin-floor-area-row > label:last-child { flex:1; }
+.warehouse-twin-shell .twin-floor-area-row select { min-width:0; width:100%; max-width:220px; }
+.warehouse-twin-shell .twin-top-search { display:flex; flex:1 1 250px; max-width:500px; min-width:180px; gap:4px; }
+.warehouse-twin-shell .twin-top-search input { flex:1; min-width:0; }
+.warehouse-twin-shell .twin-toolbar :is(input,select,button,summary) { min-height:36px; font-size:14px!important; border-radius:7px; }
+.warehouse-twin-shell input,.warehouse-twin-shell select { border:1px solid #cbd5e1; padding:6px 8px; background:#fff; color:#18354b; }
+.twin-workspace-more { position:relative; }
+.twin-workspace-more > summary { cursor:pointer; padding:7px 10px; border:1px solid #cbd5e1; box-sizing:border-box; background:white; }
+.twin-workspace-more > div { position:absolute; right:0; top:100%; min-width:210px; padding:8px; display:grid; gap:5px; background:#fff; border:1px solid #cbd5e1; box-shadow:0 6px 20px #18354b22; z-index:60; }
+#warehouse-twin-root .twin-workspace { flex:1; min-height:0; position:relative; grid-template-columns:minmax(0,1fr) 350px!important; grid-template-rows:minmax(0,1fr)!important; overflow:visible; }
+.warehouse-twin-shell .twin-workspace > .twin-stage { grid-column:1; grid-row:1; min-height:0; }
+.warehouse-twin-shell .twin-workspace > .twin-inspector { display:flex!important; position:relative; inset:auto; flex-direction:column; grid-column:2; grid-row:1; width:auto; max-height:none; min-width:0; overflow-y:auto; gap:8px; }
+.warehouse-twin-shell .twin-workspace > .twin-layer-rail { display:block; position:absolute; left:0; top:0; bottom:0; width:150px; z-index:20; overflow:auto; }
+.warehouse-twin-shell .twin-workspace > .twin-context-rail { display:flex!important; flex-direction:column; position:absolute; left:8px; top:0; width:min(480px,calc(100% - 24px)); max-height:65vh; z-index:25; box-shadow:0 6px 20px #18354b33; }
+.warehouse-twin-shell .twin-context-rail > header { display:flex; justify-content:space-between; align-items:center; padding:6px 10px; }
+.warehouse-twin-shell .twin-global-search { display:block; overflow:auto!important; }
+.warehouse-twin-shell .twin-global-search .twin-search-step,.warehouse-twin-shell .twin-context-heading { display:none; }
+.warehouse-twin-shell .twin-search-result-list { max-height:none!important; }
+.warehouse-twin-shell .twin-stage.rack-focused { display:grid!important; grid-template-columns:minmax(210px,.7fr) minmax(0,1.3fr)!important; }
+.warehouse-twin-shell .twin-stage.rack-focused .twin-map-pane { display:flex!important; min-width:0; }
+.warehouse-twin-shell .twin-rack-focus-panel { min-width:0; }
+.warehouse-twin-shell .twin-rack-focus-panel:not(.twin-mold-rack-stage) .twin-rack-content { display:block; overflow:auto; padding:8px 18px; }
+.warehouse-twin-shell .twin-rack-focus-panel:not(.twin-mold-rack-stage) .twin-elevation-shell { min-height:350px; }
+.warehouse-twin-shell .twin-rack-content > aside[hidden] { display:none; }
+.warehouse-twin-shell .twin-rack-content > aside { margin-top:10px; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-product-card { padding:2px 3px; }
+.warehouse-twin-shell .shelf-product-summary { flex-wrap:nowrap; padding-top:0; }
+.warehouse-twin-shell .shelf-product-code-row .shelf-product-details-toggle { font-size:12px; }
+.warehouse-twin-shell .shelf-product-code-row { flex-wrap:nowrap; padding:0; gap:4px; }
+.warehouse-twin-shell .shelf-cell-heading { font-size:12px; }
+.warehouse-twin-shell .twin-inspector > .twin-location-card { order:0; flex-shrink:0; }
+.warehouse-twin-shell .twin-inspector > .twin-move-control-panel { order:2; flex-shrink:0; }
+.warehouse-twin-shell .twin-inspector > .twin-location-readonly-note { order:4; }
+.warehouse-twin-shell .twin-location-card { display:flex; flex-direction:column; }
+.warehouse-twin-shell .twin-location-card > warehouse-costs { order:10; }
+.warehouse-twin-shell .twin-location-card > .twin-detail-toggle.secondary { order:8; }
+.warehouse-twin-shell .twin-location-card > .twin-location-secondary { order:9; }
+.warehouse-twin-shell .twin-location-card-title { order:-2; }
+.warehouse-twin-shell .twin-inspector :is(p,label,button,input,select,textarea), .warehouse-twin-shell .twin-rack-content :is(p,button) { font-size:14px; }
+.warehouse-twin-shell .twin-inspector small { font-size:12px; line-height:1.5; }
+.warehouse-twin-shell .twin-inspector .warehouse-label-code-row { font-size:16px; }
+.warehouse-twin-shell .twin-inspector .warehouse-label-code-row > :is(button,strong) { font-size:16px; }
+.warehouse-twin-shell .twin-move-source-summary { background:#f5efff; border-color:#c4b5fd; }
+.warehouse-twin-shell .twin-move-source-summary :is(b,span,small) { font-size:13px; }
+.warehouse-twin-shell .twin-selected-target { background:#eff6ff; border:1px solid #60a5fa; padding:8px; font-weight:700; font-size:14px; }
+.twin-target-picker summary { cursor:pointer; padding:6px 0; }
+.twin-move-target-list { display:grid; gap:5px; max-height:240px; overflow:auto; padding:3px; }
+.warehouse-twin-shell .twin-move-target-list button { display:flex; justify-content:space-between; gap:6px; text-align:left; padding:8px; min-height:40px; border:1px solid; border-radius:5px; }
+.warehouse-twin-shell .move-state-empty { background:#dcfce7!important; border-color:#22c55e!important; color:#14532d!important; }
+.warehouse-twin-shell .move-state-occupied { background:#ffedd5!important; border-color:#f59e0b!important; color:#7c2d12!important; }
+.warehouse-twin-shell .move-state-source { background:#f3e8ff!important; border-color:#9333ea!important; color:#581c87!important; }
+.warehouse-twin-shell .move-state-blocked { background:#f1f5f9!important; border-color:#94a3b8!important; color:#475569!important; }
+.warehouse-twin-shell .move-state-target { background:#dbeafe!important; border-color:#2563eb!important; color:#1e3a8a!important; box-shadow:inset 0 0 0 2px #2563eb; }
+.twin-target-state { font-size:12px; font-weight:700; }
+.twin-move-legend { display:flex; align-items:center; gap:5px; flex-wrap:wrap; font-size:12px; }
+.twin-move-legend i { width:12px; height:12px; border:2px solid; display:inline-block; }
+.warehouse-twin-shell .twin-effective-map-status > b, .warehouse-twin-shell .twin-stage-heading > span { display:none; }
+.warehouse-twin-shell .location-editing .twin-effective-map-status > b { display:block; }
+.warehouse-twin-shell > .twin-move-draft-bar { flex:0 0 auto; max-height:26vh; overflow:auto; }
+.warehouse-twin-shell .twin-secondary-action { width:auto; padding:6px; background:transparent; color:#375a72; }
+.twin-top-ledger { display:flex; gap:10px; font-size:14px; }
+.warehouse-twin-shell .twin-command-bar { display:none; }
+.warehouse-twin-shell .twin-inspector > .twin-location-readonly-note[hidden] { display:none; }
+.warehouse-twin-shell .twin-inspector button:focus-visible,.warehouse-twin-shell summary:focus-visible { outline:3px solid #2563eb; outline-offset:2px; }
+@media(max-width:1100px) {
+ #warehouse-twin-root .twin-workspace { grid-template-columns:minmax(0,1fr) 310px!important; }
+ .warehouse-twin-shell .twin-stage.rack-focused { grid-template-columns:minmax(0,1fr)!important; grid-template-rows:180px minmax(0,1fr); }
+ .warehouse-twin-shell .twin-stage.rack-focused .twin-map-pane { min-height:180px; }
+}
+@media(max-width:700px) {
+ #warehouse-twin-root .twin-workspace { display:flex!important; flex-direction:column; overflow:auto; }
+ .warehouse-twin-shell .twin-workspace > .twin-stage { flex:0 0 55vh; }
+ .warehouse-twin-shell .twin-workspace > .twin-inspector { flex:0 0 auto; overflow:visible; }
+ .warehouse-twin-shell .twin-stage.rack-focused { min-height:75vh; }
+ .warehouse-twin-shell .twin-top-search { max-width:none; }
+ .warehouse-twin-shell .twin-toolbar :is(button,select,summary), .warehouse-twin-shell .twin-move-target-list button { min-height:42px; }
+}

@@ -3037,7 +3037,8 @@
       @media(max-width:1000px) { .finance-task-nav { grid-template-columns:repeat(3,minmax(0,1fr)); } }
       @media(max-width:600px) { .finance-task-nav { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; } .finance-step-guide { flex-direction:column; gap:4px; } }
     </style>
-  </head>
+  <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260911-1">
+</head>
   <body>
     <div id="app" v-cloak>
       <div v-if="!user" class="login-shell">
@@ -3057,20 +3058,21 @@
         <header class="topbar">
           <div class="brand"><img class="brand-logo" src="/static/assets/logo.png" alt="天明包装ERP" /><span>天明包装ERP</span></div>
           <div class="top-actions">
-            <div v-if="activePage==='warehouse'" class="warehouse-top-metrics" aria-label="仓库当前楼层状态">
+            <details v-if="activePage==='warehouse'" class="warehouse-top-overview"><summary>库存概况<span v-if="warehouseTwinMetrics.unlocated_finished || warehouseTwinMetrics.column_conflicts" class="status warning">需处理 {{ warehouseTwinMetrics.unlocated_finished + warehouseTwinMetrics.column_conflicts }}</span></summary><div class="warehouse-top-metrics" aria-label="仓库当前楼层状态">
               <span><b>{{ warehouseTwinMetrics.active_lots }}</b>有效批次</span>
               <span><b>{{ warehouseTwinMetrics.occupied_locations }}</b>占用库位</span>
               <span><b>{{ warehouseTwinMetrics.mapped_locations }}</b>地图库位</span>
               <span :class="{warning:warehouseTwinMetrics.unlocated_finished>0}"><b>{{ warehouseTwinMetrics.unlocated_finished }}</b>待定位成品</span>
               <span :class="{warning:warehouseTwinMetrics.column_conflicts>0}"><b>{{ warehouseTwinMetrics.column_conflicts }}</b>柱子冲突</span>
-            </div>
+            </div></details>
             <button v-if="pageAllowed('warehouse')" type="button" :class="['btn','primary','topbar-warehouse-entry',{active:activePage==='warehouse'}]" :aria-current="activePage==='warehouse' ? 'page' : null" title="进入仓库页面" @click="goMenu('warehouse')"><span aria-hidden="true" v-html="navIcon('warehouse')"></span><span>仓库</span></button>
-            <div v-if="activePage==='warehouse'" class="warehouse-top-shortcuts" role="group" aria-label="仓库楼层与台账">
-              <button type="button" :class="{active:warehouseTwinFloor==='1F'}" @click="selectWarehouseFloor('1F')">1F 生产车间</button>
-              <button type="button" :class="{active:warehouseTwinFloor==='3F'}" @click="selectWarehouseFloor('3F')">3F 成品仓库</button>
-              <button type="button" :class="{active:warehouseTwinFloor==='4F'}" @click="selectWarehouseFloor('4F')">4F 成品仓库</button>
-              <a href="/warehouse-ledger.html?tab=finished">库存台账</a>
-            </div>
+            <details v-if="activePage==='warehouse'" class="warehouse-account-menu"><summary>{{ user.real_name || user.username }} · {{ roleLabel(user.role) }}</summary><div>
+              <button type="button" class="btn small" :disabled="uiModeSaving" @click="setUiMode(uiMode==='large'?'standard':'large')">{{ uiMode==='large'?'切换标准字号':'切换大字' }}</button>
+              <button type="button" class="btn small" @click="openChangePassword()">修改密码</button>
+              <button type="button" class="btn small" @click="refreshCurrent">刷新</button>
+              <button type="button" class="btn small" @click="logout">退出</button>
+            </div></details>
+            <template v-if="activePage!=='warehouse'">
             <span class="top-user-name">{{ user.real_name || user.username }}</span>
             <span class="status blue">{{ roleLabel(user.role) }}</span>
             <div class="ui-mode-switch" role="group" aria-label="界面显示大小">
@@ -3081,6 +3083,7 @@
             <button class="btn small" @click="openChangePassword()">修改密码</button>
             <button class="btn small" @click="refreshCurrent">刷新</button>
             <button class="btn small" @click="logout">退出</button>
+            </template>
           </div>
         </header>
         <div class="layout">

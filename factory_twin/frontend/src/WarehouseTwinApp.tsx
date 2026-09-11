@@ -6185,7 +6185,6 @@ export function WarehouseTwinApp() {
       <div className="twin-command-status"><span className="live">{traceReadOnly ? "订单追溯 · 只读定位" : mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : layoutMapToolsOpen ? "区域规划 · 调整地图" : advancedAreaMaintenanceOpen ? "区域规划 · 整理货位/货架" : "区域规划 · 核对区域" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
       <nav className="twin-command-links" aria-label="仓库账目">
         <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
-        {canViewInventoryCost && <a className="twin-ledger-link twin-cost-link" href="/factory-twin-assets/warehouse-costs.html" target="_blank" rel="noopener">库存成本</a>}
       </nav>
     </header>
 
@@ -6198,7 +6197,7 @@ export function WarehouseTwinApp() {
         <input aria-label="全仓查货" placeholder="全仓查货：客户 / 编码 / 名称 / 规格" value={search} onFocus={() => setSearchPanelOpen(true)} onChange={event => {setSearch(event.target.value);setSearchPanelOpen(true);setFocusedSearchItem(null);setFocusedSearchProductKey(null);setPendingRackSearchLocationId(null);setPendingLocationId(null);setPendingAreaCode(null);}} />
         <button type="button" aria-expanded={searchPanelOpen} onClick={() => setSearchPanelOpen(value => !value)}>{searchPanelOpen ? "收起结果" : "查找"}</button>
       </div>
-      <nav className="twin-top-ledger" aria-label="库存账目"><a href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>{canViewInventoryCost && <a href="/factory-twin-assets/warehouse-costs.html" target="_blank" rel="noopener">库存成本</a>}</nav>
+      <nav className="twin-top-ledger" aria-label="库存账目"><a href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a></nav>
       <div className="twin-operation-modes" role="tablist" aria-label="仓库地图操作模式">
         {mapMode === "planning" && keyboardLocationEditActive && <button type="button" disabled={locationEditBusy || activeLocationDraftCount > 0} onClick={() => { setKeyboardLocationEditActive(false); locationNudgeRef.current = null; setLocationEditMessage("货位调整已完成；当前显示已应用位置。"); }}>完成货位调整</button>}
         {mapMode !== "lookup" && <button type="button" onClick={returnToLookupMode}>结束操作</button>}

@@ -15412,8 +15412,17 @@
                 if (this.isWarehouseTwinFloorCode(floor)) this.warehouseTwinFloor = floor;
               } catch (_) {}
             } else if (!this.warehouseFrameUrl) {
-              this.warehouseFrameUrl = "/warehouse.html?embedded=1&floor=3F&view=2d";
-              this.warehouseTwinFloor = "3F";
+              const query = new URLSearchParams(window.location.search);
+              const requestedFloor = String(query.get("warehouse_floor") || "3F").toUpperCase();
+              const floor = this.isWarehouseTwinFloorCode(requestedFloor) ? requestedFloor : "3F";
+              const requestedMode = query.get("warehouse_mode") || "";
+              const requestedAction = query.get("warehouse_action") || "";
+              const requestedView = query.get("warehouse_view") || "2d";
+              const params = new URLSearchParams({ embedded:"1", floor, view:requestedView === "25d" ? "25d" : "2d" });
+              if (["lookup", "move", "planning"].includes(requestedMode)) params.set("mode", requestedMode);
+              if (["relocate", "stocktake", "merge", "ground"].includes(requestedAction)) params.set("action", requestedAction);
+              this.warehouseFrameUrl = `/warehouse.html?${params.toString()}`;
+              this.warehouseTwinFloor = floor;
             }
           },
           refreshWarehouseFrame() {

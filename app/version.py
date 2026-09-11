@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.357"
-APP_VERSION_NAME = "仓库更多菜单完整显示"
+APP_VERSION = "v0.22.358"
+APP_VERSION_NAME = "仓库入口返回业务中心"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2682,9 +2682,23 @@ APP_VERIFICATION_STEPS = [
     "在较窄窗口再次展开，确认菜单覆盖在地图上方；内容超出时只滚动菜单，不被顶部工具栏裁掉。",
     "进入系统备份→系统版本确认版本为 v0.22.357；正式页面由管理员人工验收，本次发布不自动点击仓库或执行库存操作。",
 ]
+_V022357_CHANGES = APP_CHANGES
+_V022357_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "仓库地图顶部删除重复的库存成本入口，只保留库存台账；库存台账内的库存成本功能、管理员/老板权限和成本数据保持不变。",
+    "库存台账的盘点上架、实测仓库地图以及库存成本的返回仓库统一回到带左侧业务中心的 ERP 仓库页；盘点上架会在内嵌地图中直接进入盘点模式。",
+    "本版不修改地图、货位、库存数量、批次、成本或订单事实，不新增数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员刷新仓库，确认地图顶部只显示库存台账，不再显示并列的库存成本；进入库存台账后确认库存成本入口仍可用。",
+    "在库存台账点击盘点上架，确认左侧业务中心没有消失，并且内嵌仓库直接进入盘点模式；库存成本点击返回仓库也应回到同一主界面。",
+    "进入系统备份→系统版本确认版本为 v0.22.358；正式页面由管理员人工验收，本次发布不自动点击仓库或执行库存操作。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.357：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.357：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.358：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.358：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.357：本次更新｜{item}" for item in _V022357_CHANGES),
+    *(f"v0.22.357：如何验证｜{item}" for item in _V022357_STEPS),
     *(f"v0.22.356：本次更新｜{item}" for item in _V022356_CHANGES),
     *(f"v0.22.356：如何验证｜{item}" for item in _V022356_STEPS),
     *(f"v0.22.355：本次更新｜{item}" for item in _V022355_CHANGES),

@@ -33,16 +33,17 @@ TWIN_ENTRY = (
 ).read_text(encoding="utf-8")
 
 
-def test_warehouse_primary_navigation_has_exactly_four_daily_entries() -> None:
+def test_warehouse_primary_navigation_keeps_ledger_scoped_cost_and_daily_entries() -> None:
     start = WAREHOUSE.index('<div class="tabs">')
     end = WAREHOUSE.index("</div>", start)
     primary = WAREHOUSE[start:end]
-    assert primary.count("<button") + primary.count("<a ") == 4
+    assert primary.count("<button") + primary.count("<a ") == 5
     assert ">库存台账</button>" in primary
+    assert ">库存成本</a>" in primary
     assert ">库存流水</button>" in primary
     assert ">模具位置</button>" in primary
     assert ">盘点上架</a>" in primary
-    assert "/warehouse.html?mode=move&amp;action=stocktake&amp;view=2d" in primary
+    assert "/?page=warehouse&amp;warehouse_mode=move&amp;warehouse_action=stocktake&amp;warehouse_view=2d" in primary
     assert '<details class="warehouse-secondary">' in WAREHOUSE
 
 

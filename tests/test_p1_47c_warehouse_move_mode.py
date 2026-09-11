@@ -1542,12 +1542,16 @@ def test_multiple_single_products_can_share_target_in_one_batch(move_batch_app):
             assert db.get(InventoryLot, item["target_lot_id"]).warehouse_location_id == ids["occupied_target"]
 
 
-def test_warehouse_main_map_exposes_role_scoped_cost_entry():
+def test_warehouse_main_map_does_not_duplicate_ledger_cost_entry():
     source = FRONTEND.read_text(encoding="utf-8")
     assert 'setCanViewInventoryCost(["admin", "boss"].includes(value.user.role))' in source
-    assert '{canViewInventoryCost && <a' in source
-    assert 'href="/factory-twin-assets/warehouse-costs.html"' in source
-    assert '>库存成本</a>' in source
+    command_start = source.index('<nav className="twin-command-links"')
+    command_end = source.index("</nav>", command_start)
+    toolbar_start = source.index('<nav className="twin-top-ledger"')
+    toolbar_end = source.index("</nav>", toolbar_start)
+    assert "库存成本" not in source[command_start:command_end]
+    assert "库存成本" not in source[toolbar_start:toolbar_end]
+    assert 'createElement("warehouse-costs"' in source
 
 
 @pytest.mark.parametrize("target_frozen", [False, True])

@@ -5,6 +5,7 @@ permission to switch an order. Procurement and stock execution facts still
 need a locked, versioned handoff; this module does not invent stock credits.
 """
 from dataclasses import asdict, dataclass
+from fractions import Fraction
 import hashlib
 import json
 from types import SimpleNamespace
@@ -73,9 +74,16 @@ def rule_quantity_impact(previous, proposed, *, remaining_quantity):
             and old_nodes[pid].routes == new_nodes[pid].routes
             and all(getattr(old_sources[pid], PREFIX + field) == getattr(new_sources[pid], PREFIX + field)
                     for field in FIELDS))
+        old_purchase = old_nodes[pid].purchase_units if pid in old_nodes else None
+        new_purchase = new_nodes[pid].purchase_units if pid in new_nodes else None
+        purchase_compatible = bool(compatible and before["source"] == after["source"] == "purchased"
+            and old_purchase and new_purchase and old_purchase.purchase_unit == new_purchase.purchase_unit
+            and Fraction(old_purchase.stock_basis) / Fraction(old_purchase.purchase_basis)
+                == Fraction(new_purchase.stock_basis) / Fraction(new_purchase.purchase_basis))
         rows.append(dict(product_id=pid, before=before, after=after,
             physical_identity_compatible=compatible,
             material_conversion_compatible=material_compatible,
+            purchase_conversion_compatible=purchase_compatible,
             required_delta=(after["required_quantity"] - before["required_quantity"] if same_unit else None),
             pick_delta=(after["pick_quantity"] - before["pick_quantity"] if same_unit else None),
             change="added" if before is None else "removed" if after is None else "retained"))

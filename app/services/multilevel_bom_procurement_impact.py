@@ -54,6 +54,7 @@ def review_procurement_impact(db, *, order_item_id, customer_id):
         ExternalPackagingReceiptItem, ExternalPackagingPurchaseCancellation)
     from app.services.external_receipt_state import active_receipt_item
     from app.services.multilevel_bom_external_identity import read_external_source_contract
+    from app.services.multilevel_bom_purchase_units import cumulative_receipt_conversion
     external = []
     for line in db.scalars(select(ExternalPackagingPurchaseItem).where(
             ExternalPackagingPurchaseItem.sales_order_item_id == order_item_id)
@@ -69,9 +70,30 @@ def review_procurement_impact(db, *, order_item_id, customer_id):
         received = sum(row.received_quantity for row in receipts if row.id in active)
         cancellation = db.scalar(select(ExternalPackagingPurchaseCancellation).where(
             ExternalPackagingPurchaseCancellation.purchase_order_id == header.id))
+        node = next(node for node in contract.graph.nodes if node.product_id == link.product_id)
+        if line.purchase_unit != node.purchase_units.purchase_unit:
+            raise BomPlanError(f"采购行#{line.id}的单位与原冻结换算不一致")
+        remaining = max(line.purchase_quantity-received, 0) if cancellation is None else 0
+        received_stock, received_remainder = cumulative_receipt_conversion(
+            node, received_before=0, received_now=received)
+        pending_stock, final_remainder = cumulative_receipt_conversion(
+            node, received_before=received, received_now=remaining)
+        impact = products.get(link.product_id)
+        # These are source capacities, not an allocation or an authorization:
+        # old contract prices, supplier and receipt identity stay unchanged.
+        mapping = dict(source_snapshot_id=link.bom_snapshot_id,
+            current_source=link.bom_snapshot_id in current,
+            purchase_conversion_compatible=bool(link.bom_snapshot_id in current and impact
+                and impact["purchase_conversion_compatible"]),
+            stock_unit=node.unit, stock_basis=node.purchase_units.stock_basis,
+            purchase_basis=node.purchase_units.purchase_basis,
+            received_stock_capacity=received_stock, pending_stock_capacity=pending_stock,
+            received_purchase_remainder=str(received_remainder),
+            final_purchase_remainder=str(final_remainder),
+            proposed_gross_purchase=impact["after"]["purchase"] if impact and impact["after"] else None)
         external.append(dict(line=_row(line), header=_row(header), product_id=link.product_id,
             unit=line.purchase_unit, received_quantity=received,
-            remaining_quantity=max(line.purchase_quantity-received, 0) if cancellation is None else 0,
+            remaining_quantity=remaining, mapping=mapping,
             cancellation=_row(cancellation) if cancellation else None,
             receipts=[_row(row) for row in receipts], active_receipt_ids=sorted(active)))
     document = json.dumps(dict(rule_document=rule.document, paper=paper, external=external),

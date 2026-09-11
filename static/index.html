@@ -8064,7 +8064,12 @@
                   <tr v-for="row in bomCutover.procurement.paper" :key="row.line.id"><td>{{ row.line.product_name_snapshot }} · {{ row.line.id }}</td><td>{{ row.line.requisition_qty }} 张</td><td>{{ row.receipt_summary ? row.receipt_summary.cumulative_received_quantity + ' 张' : '待核对' }}</td><td>{{ row.receipt_summary ? row.receipt_summary.remaining_quantity + ' 张' : row.receipt_summary_error }}</td></tr>
                 </tbody></table>
                 <table v-if="bomCutover.procurement.external.length"><thead><tr><th>采购单 / 产品</th><th>原采购</th><th>实收</th><th>欠收 / 撤销</th></tr></thead><tbody>
-                  <tr v-for="row in bomCutover.procurement.external" :key="row.line.id"><td>{{ row.header.purchase_number }} / {{ row.product_id }}</td><td>{{ row.line.purchase_quantity }} {{ row.unit }}</td><td>{{ row.received_quantity }} {{ row.unit }}</td><td>{{ row.cancellation ? row.cancellation.reason : row.remaining_quantity + ' ' + row.unit }}</td></tr>
+                  <tr v-for="row in bomCutover.procurement.external" :key="row.line.id">
+                    <td>{{ row.header.purchase_number }} / {{ row.product_id }}<div v-if="row.mapping" class="muted">{{ !row.mapping.current_source ? '历史来源，未交接' : row.mapping.purchase_conversion_compatible ? '新旧单位换算一致，尚未分配' : '新旧实物或采购换算不同，须核对' }}</div></td>
+                    <td>{{ row.line.purchase_quantity }} {{ row.unit }}<div v-if="row.mapping" class="muted">{{ row.mapping.purchase_basis }} {{ row.unit }} → {{ row.mapping.stock_basis }} {{ row.mapping.stock_unit }}</div></td>
+                    <td>{{ row.received_quantity }} {{ row.unit }}<div v-if="row.mapping" class="muted">累计折算 {{ row.mapping.received_stock_capacity }} {{ row.mapping.stock_unit }}，零散 {{ row.mapping.received_purchase_remainder }} {{ row.unit }}</div></td>
+                    <td>{{ row.cancellation ? row.cancellation.reason : row.remaining_quantity + ' ' + row.unit }}<div v-if="row.mapping && !row.cancellation" class="muted">补收后可再折算 {{ row.mapping.pending_stock_capacity }} {{ row.mapping.stock_unit }}，余 {{ row.mapping.final_purchase_remainder }} {{ row.unit }}</div></td>
+                  </tr>
                 </tbody></table>
                 <p v-if="!bomCutover.procurement.paper.length && !bomCutover.procurement.external.length" class="muted">当前订单没有采购记录。</p>
               </details>

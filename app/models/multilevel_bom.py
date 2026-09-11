@@ -159,6 +159,7 @@ class OrderBomRuleSource(Base):
     __tablename__ = "order_bom_rule_sources"
     __table_args__ = (
         UniqueConstraint("revision_id", "product_id", name="uq_bom_rule_source_product"),
+        UniqueConstraint("snapshot_id", "revision_id", "order_item_id", "product_id", name="uq_bom_rule_source_identity"),
         ForeignKeyConstraint(["revision_id", "product_id", "order_item_id"],
             ["order_bom_rule_products.revision_id", "order_bom_rule_products.product_id", "order_bom_rule_products.order_item_id"],
             ondelete="RESTRICT", name="fk_bom_rule_source_product"),
@@ -171,6 +172,32 @@ class OrderBomRuleSource(Base):
     revision_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     product_id: Mapped[int] = mapped_column(Integer, nullable=False)
     order_item_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+
+class OrderBomSourceHandoff(Base):
+    """Explicit old-to-new source identity; supplier and receipt facts stay put."""
+    __tablename__ = "order_bom_source_handoffs"
+    __table_args__ = (
+        ForeignKeyConstraint(["source_snapshot_id", "order_item_id", "product_id"],
+            ["sales_order_item_bom_components.id", "sales_order_item_bom_components.sales_order_item_id",
+             "sales_order_item_bom_components.component_product_id"],
+            ondelete="RESTRICT", name="fk_bom_handoff_source"),
+        ForeignKeyConstraint(["target_snapshot_id", "revision_id", "order_item_id", "product_id"],
+            ["order_bom_rule_sources.snapshot_id", "order_bom_rule_sources.revision_id",
+             "order_bom_rule_sources.order_item_id", "order_bom_rule_sources.product_id"],
+            ondelete="RESTRICT", name="fk_bom_handoff_target"),
+        CheckConstraint("source_snapshot_id <> target_snapshot_id", name="ck_bom_handoff_distinct"),
+        CheckConstraint("source_kind IN ('manufactured', 'purchased')", name="ck_bom_handoff_kind"),
+        CheckConstraint("length(source_basis_hash) = 64 AND length(target_basis_hash) = 64", name="ck_bom_handoff_hash"),
+    )
+    revision_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_snapshot_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_snapshot_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    order_item_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    product_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_basis_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_basis_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class OrderBomExternalComponent(Base):

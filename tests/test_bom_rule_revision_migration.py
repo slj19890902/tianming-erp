@@ -81,8 +81,8 @@ def test_v327_rule_migration_roundtrip_preserves_original_facts(factory_copy, mo
         triggers = dict(before.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))
     db.rollback()
     config = _config(monkeypatch, target)
-    assert ScriptDirectory.from_config(config).get_heads() == ["sl24v8x9z86"]
-    for destination in ("sh20v8x9z82", "sl24v8x9z86"):
+    assert ScriptDirectory.from_config(config).get_heads() == ["sm25v8x9z87"]
+    for destination in ("sh20v8x9z82", "sm25v8x9z87"):
         if destination == "sh20v8x9z82":
             command.downgrade(config, destination)
         else:
@@ -91,7 +91,7 @@ def test_v327_rule_migration_roundtrip_preserves_original_facts(factory_copy, mo
             assert after.execute("PRAGMA integrity_check").fetchone() == ("ok",)
             assert after.execute("PRAGMA foreign_key_check").fetchall() == []
             assert {row[0] for row in after.execute("SELECT version_num FROM alembic_version")} == (
-                {destination} if destination == "sl24v8x9z86" else {destination, "rw10v8x9z71"})
+                {destination} if destination == "sm25v8x9z87" else {destination, "rw10v8x9z71"})
             assert original_facts(after, columns) == facts
             actual = dict(after.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'"))
             assert all(actual.get(name) == sql for name, sql in triggers.items())
@@ -105,6 +105,8 @@ def test_stored_rule_facts_refuse_downgrade_without_changing_bytes(factory_copy,
     from tests.test_multilevel_bom_rule_impact import frozen_order
 
     db = factory_copy
+    # Test the original 83 fact guard, before later empty schema is removed.
+    command.downgrade(_config(monkeypatch, Path(db.get_bind().url.database)), "sl24v8x9z86")
     actor, item, frozen = frozen_order(db)
     review = review_current_rule_requirements(db, order_item_id=item.id, customer_id=frozen.graph.customer_id)
     db.add_all(review.proposed.snapshots)

@@ -16,6 +16,8 @@ def review_procurement_impact(db, *, order_item_id, customer_id):
     from app.services.multilevel_bom_rule_impact import review_current_rule_requirements
     from app.services.incoming_receipts import _target, source_summary, IncomingReceiptError
     rule = review_current_rule_requirements(db, order_item_id=order_item_id, customer_id=customer_id)
+    from app.services.multilevel_bom_source_handoffs import current_source_handoffs
+    handoffs = [_row(row) for row in current_source_handoffs(db, rule.previous)]
     current = {row.id: row for row in rule.previous.snapshots}
     products = {row["product_id"]: row for row in rule.impact["products"]}
     paper = []
@@ -96,8 +98,8 @@ def review_procurement_impact(db, *, order_item_id, customer_id):
             remaining_quantity=remaining, mapping=mapping,
             cancellation=_row(cancellation) if cancellation else None,
             receipts=[_row(row) for row in receipts], active_receipt_ids=sorted(active)))
-    document = json.dumps(dict(rule_document=rule.document, paper=paper, external=external),
+    document = json.dumps(dict(rule_document=rule.document, paper=paper, external=external, source_handoffs=handoffs),
         ensure_ascii=False, sort_keys=True, default=str)
-    return dict(order_item_id=order_item_id, quantity_impact=rule.impact, paper=paper, external=external,
+    return dict(order_item_id=order_item_id, quantity_impact=rule.impact, paper=paper, external=external, source_handoffs=handoffs,
         evidence_hash=hashlib.sha256(document.encode()).hexdigest(), executable=False,
         scope="逐行采购与实收事实核对；新规则材料为毛需求，未分配旧采购，不可作为执行凭据")

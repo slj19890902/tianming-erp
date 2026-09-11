@@ -61,6 +61,8 @@ def read_graph_requirements(db, order_item_id):
     # would hide the unreported balance on a partially procured order.
     reserves = [r for r in reserves if r.inventory_lot_id not in own_ids]
     finished, pieces = {}, {}
+    from app.services.multilevel_bom_carried_material import carried_semi_pieces
+    inherited_semi = carried_semi_pieces(db, compiled)
     for node in graph.nodes:
         row = snapshots[node.product_id]
         if node.source == "separate":
@@ -83,6 +85,6 @@ def read_graph_requirements(db, order_item_id):
                 if r.sales_order_item_bom_component_id == row.id)
         for route in node.routes:
             coverage = component_inventory_coverage(db, row.id, component_type=route.key)
-            pieces[node.product_id, route.key] = coverage["semi_piece_quantity"]
+            pieces[node.product_id, route.key] = coverage["semi_piece_quantity"] + inherited_semi.get((node.product_id, route.key), 0)
     return GraphRequirements(quantity, compiled, plan_bom(graph, quantity,
         eligible_stock=finished, eligible_pieces=pieces), finished, pieces)

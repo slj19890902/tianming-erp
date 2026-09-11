@@ -108,6 +108,13 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
                                   .order_by(InventoryReservation.id)))
     active = [row for row in reservations
               if row.reserved_stock_quantity > row.consumed_stock_quantity + row.released_stock_quantity]
+    semi_rows, semi_lots = [], {}
+    if carry_materials:
+        from app.services.multilevel_bom_carried_material import source_semi_reservations
+        semi_rows = source_semi_reservations(db, item.id, material_sources, require_pending=True)
+        allowed_semi = {row.id for row, _ in semi_rows}
+        active = [row for row in active if row.id not in allowed_semi]
+        semi_lots = {row.inventory_lot_id: db.get(InventoryLot, row.inventory_lot_id) for row, _ in semi_rows}
     from app.services.multilevel_bom_output_history import current_finished_reservation_condition
     current_ids = set(db.scalars(select(InventoryReservation.id).where(
         current_finished_reservation_condition(db, rule.previous))))
@@ -203,6 +210,8 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
     def facts(model, condition):
         return [_row(row) for row in db.scalars(select(model).where(condition).order_by(model.id))]
     payload = dict(schema=1, rule=rule.document, order=_row(order), item=_row(item), procurement=procurement,
+        semi_requirements=[_row(requirement) for _, requirement in semi_rows],
+        semi_lots=[dict(lot=_row(lot), detail=_row(lot.semi_finished_detail)) for lot in semi_lots.values()],
         reservations=[_row(row) for row in reservations], lots=[_row(lot) for lot in lots.values()],
         finished=[_row(lot.finished_detail) for lot in lots.values()], costs=costs, retain=retain,
         tasks=facts(ProductionTask, ProductionTask.order_item_id == item.id),
@@ -222,7 +231,14 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
         unit=new_nodes[rule.proposed.graph.root_id].unit,
         delivered_quantity=item.delivered_quantity or 0, preview_hash=checksum, reviewed_hash=checksum,
         rule_revision=revision, target_locations=target_locations,
-        source_lot_versions={lid: lot.version for lid, lot in lots.items()}, source_costs=costs,
+        source_lot_versions={lid: lot.version for lid, lot in (lots | semi_lots).items()}, source_costs=costs,
+        retained_semi=[dict(reservation_id=row.id, lot_id=row.inventory_lot_id,
+            location_id=semi_lots[row.inventory_lot_id].warehouse_location_id,
+            reserved_sheets=row.reserved_stock_quantity, consumed_sheets=row.consumed_stock_quantity,
+            released_sheets=row.released_stock_quantity, physical_pieces=row.credited_requirement_quantity,
+            estimated_unit_cost=str(semi_lots[row.inventory_lot_id].estimated_unit_cost_snapshot),
+            cost_source=semi_lots[row.inventory_lot_id].cost_snapshot_source,
+            yield_per_sheet=row.yield_factor) for row, _ in semi_rows],
         outputs=[dict(product_id=pid, name=new_nodes[pid].name, unit=new_nodes[pid].unit,
             quantity=steps[pid].produced_units if pid in steps else 0,
             consumed=[dict(name=new_nodes[cid].name, quantity=qty, unit=new_nodes[cid].unit)
@@ -303,6 +319,12 @@ def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, ex
                 or review.preview["rule_revision"] != expected_revision
                 or review.preview["source_lot_versions"] != source_lot_versions):
             raise BomPlanError("库存、订单、规则或目标地图已变化，请重新预览")
+        for entry in review.preview["retained_semi"]:
+            lid = entry["lot_id"]
+            claimed = db.execute(update(InventoryLot).where(InventoryLot.id == lid,
+                InventoryLot.version == source_lot_versions[lid]).values(version=InventoryLot.version))
+            if claimed.rowcount != 1:
+                raise BomPlanError("半成品预占批次已变化，请重新预览")
         previous = db.scalar(select(OrderBomRuleRevision).where(OrderBomRuleRevision.order_item_id == item.id)
             .order_by(OrderBomRuleRevision.revision.desc()))
         from app.services.multilevel_bom_rule_cutover import persist_reviewed_rule
@@ -326,8 +348,9 @@ def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, ex
             from app.services.multilevel_bom_source_handoffs import current_source_handoffs
             current_source_handoffs(db, read_compiled_order_bom(db, item.id))
             if review.material_sources:
-                from app.services.multilevel_bom_carried_material import carried_material_pieces
+                from app.services.multilevel_bom_carried_material import carried_material_pieces, carried_semi_pieces
                 carried_material_pieces(db, read_compiled_order_bom(db, item.id))
+                carried_semi_pieces(db, read_compiled_order_bom(db, item.id))
         order = db.get(Order, item.order_id)
         for reservation in review.active:
             lot = review.lots[reservation.inventory_lot_id]

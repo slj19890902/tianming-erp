@@ -8053,7 +8053,7 @@
             <div v-else-if="modal.type === 'bomCutover' && bomCutover">
               <label>切换场景 <select v-model="bomCutover.mode" :disabled="bomCutover.loading || !!bomCutover.pending" @change="openReservedKitCutover({id:bomCutover.orderId},{id:bomCutover.itemId},bomCutover.mode)"><option value="reserved">旧单全预占子件</option><option value="stocked">已收齐库存交接</option><option value="purchase">保留未收外购交接</option><option value="material">保留纸板在制交接</option><option value="unstarted">尚未开始的订单</option></select></label>
               <p v-if="bomCutover.mode === 'reserved'" class="muted">旧单全预占库存切换：子件转组装父件，或保留原子件分存。含采购、本体或未完成采购交接须另行核对；已完成和已送历史保持冻结。</p>
-              <p v-if="bomCutover.mode === 'material'" class="muted">保留原纸板与外购采购，按原规格和开料换算继续收料；匹配产出和成品预占交接新版本，后续只报差额。半成品预占及待装配本体仍须单独核对。</p>
+              <p v-if="bomCutover.mode === 'material'" class="muted">保留原纸板与外购采购，按原规格和开料换算继续收料；匹配产出和成品预占交接新版本，后续只报差额。半成品原预占随原报料继续使用；原报料已取消的剩余预占及待装配本体仍须单独处理。</p>
               <p v-if="bomCutover.mode === 'purchase'" class="muted">原外购合同与未收数量保留，按原换算收料；匹配库存绑定新版本，欠缺子件待实际收齐后组装。纸板及自产部分仍须已完成，不能把未收采购当成库存。</p>
               <p v-if="bomCutover.mode === 'stocked'" class="muted">剩余需求须由本订单真实成品预占覆盖，原采购须已收齐或明确撤销。按新规则保留所需批次、释放多余数量，必要时组装；不隐含拆解成套库存或处理未收采购。</p>
               <div v-if="bomCutover.loading" role="status">正在核对…</div>
@@ -8096,6 +8096,7 @@
                 </table>
                 <p>{{ bomCutover.review.cost_impact }}</p>
                 <table v-if="bomCutover.review.source_costs && bomCutover.review.source_costs.length"><thead><tr><th>成本批次</th><th>数量</th><th>来源金额</th><th>依据</th></tr></thead><tbody><tr v-for="row in bomCutover.review.source_costs" :key="row.lot_id"><td>{{ row.lot_id }}</td><td>{{ row.quantity }} {{ row.unit }}</td><td>{{ row.amount }} {{ row.lineage.currency || '' }}</td><td>{{ row.lineage.actual === true ? '实际来源' : '估算或混合来源，保留原依据' }}</td></tr></tbody></table>
+                <p v-for="row in bomCutover.review.retained_semi || []" :key="'semi-'+row.reservation_id">半成品原预占 #{{ row.reservation_id }} · 货位 {{ row.location_id }} · 原预占 {{ row.reserved_sheets }} 张 · 已消耗 {{ row.consumed_sheets }} 张 · 每张 {{ row.yield_per_sheet }} 片（原记录保留）</p>
                 <p v-for="row in bomCutover.review.carried_materials || []" :key="'material-'+row.line.id">原报料 #{{ row.line.id }} · {{ row.line.status }} · {{ row.line.requisition_qty }} 张 · 原价格及实收保留</p>
                 <p v-for="row in bomCutover.review.carried_purchases || []" :key="'purchase-'+row.line.id">原采购 {{ row.header.purchase_number }} · 已收 {{ row.received_quantity }} {{ row.unit }} · 继续收料 {{ row.remaining_quantity }} {{ row.unit }} · 原合同价格不变</p>
                 <p v-for="row in bomCutover.review.retained_locations || []" :key="row.lot_id">{{ row.name || '' }} · 批次 {{ row.lot_id }} · 原货位 ID {{ row.location_id }}<span v-if="['stocked','purchase','material'].includes(bomCutover.mode)"> · 新预占 {{ row.quantity }} {{ row.unit }} · 交接后可用 {{ row.available_after_handoff }} {{ row.unit }}</span></p>

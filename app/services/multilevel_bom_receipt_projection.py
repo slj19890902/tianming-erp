@@ -16,7 +16,8 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
     body_ids = {n.product_id for n in graph.nodes if n.source == "manufactured"
                 and any(e.parent_id == n.product_id and e.relation == "assembly" for e in graph.edges)}
     snapshots = {s.component_product_id: s for s in requirements.compiled.snapshots}
-    from app.services.multilevel_bom_carried_material import carried_material_pieces
+    from app.services.multilevel_bom_carried_material import carried_material_pieces, carried_semi_pieces
+    inherited_semi = carried_semi_pieces(db, requirements.compiled)
     inherited_received = carried_material_pieces(db, requirements.compiled, include_pending=False)
     inherited_planned = carried_material_pieces(db, requirements.compiled)
     states = {s["component_key"]: s for s in states}
@@ -31,7 +32,7 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
             # Existing frozen purpose conversion is in procurement units.
             # Recover physical pieces before applying this real node's ratio.
             divisor = int(state.get("pieces_per_finished", 1))
-            credit = semi_credits.get((order_item_id, key), 0)
+            credit = semi_credits.get((order_item_id, key), 0) + inherited_semi.get((node.product_id, route.key), 0)
             carried_received = inherited_received.get((node.product_id, route.key), 0)
             carried_planned = inherited_planned.get((node.product_id, route.key), 0)
             current = int((state.get("received_capacity", Decimal(0)) * divisor + credit + carried_received) // route.pieces_per_unit)

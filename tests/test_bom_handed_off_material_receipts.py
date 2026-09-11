@@ -146,7 +146,8 @@ def test_partial_material_receipt_preserves_original_consumption(composite_requi
             assert len(purposes) == 1 and purposes[0].order_purpose_sheet_qty == half
 
 
-def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_requisition_app, _p181_published_map_identity, monkeypatch):
+@pytest.mark.parametrize("with_semi,semi_received_before", [(False, 0), (True, 0), (True, 12)])
+def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_requisition_app, _p181_published_map_identity, monkeypatch, with_semi, semi_received_before):
     from app.api.bom_cutover import router
     from app.models.order import OrderItem
     from app.models.multilevel_bom import OrderBomSourceHandoff, BomAssembly
@@ -156,15 +157,42 @@ def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_r
     app, factory = composite_requisition_app
     app.include_router(router, prefix="/api/orders")
     material_id, snapshots = seed_graph(factory)
+    if with_semi:
+        from tests.test_p1_81_receipt_purpose_flow import _seed_order_semi_reservation
+        from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement, SemiFinishedLotAllowedProduct
+        _seed_order_semi_reservation(factory, credited_piece_quantity=6, pieces_per_box=1)
+        with factory() as db:
+            reservation = db.scalar(select(InventoryReservation))
+            reservation.sales_order_item_bom_component_id = snapshots[0][0]
+            requirement = db.get(OrderItemSemiRequirement, reservation.semi_requirement_id)
+            requirement.sales_order_item_bom_component_id = snapshots[0][0]
+            requirement.required_piece_quantity = 30
+            requirement.board_length_mm, requirement.board_width_mm = 1000, 700
+            lot = db.get(InventoryLot, reservation.inventory_lot_id)
+            lot.estimated_unit_cost_snapshot = Decimal("0.5")
+            lot.semi_finished_detail.board_length_mm, lot.semi_finished_detail.board_width_mm = 1000, 700
+            db.scalar(select(SemiFinishedLotAllowedProduct)).product_id = 2
+            semi_reservation_id, semi_lot_id = reservation.id, lot.id
+            db.commit()
     with TestClient(app) as client:
         _login(client)
         sources = purchase_sources(client, factory, material_id, snapshots)
         facts = [_freeze_receipt_fact(client, source, idempotency_key=f"public-paper-price-{index}",
             unit_price="0.1234").json() for index, source in enumerate(sources)]
-        half = sources[0].order_purpose_sheet_qty // 2
-        first = _receive(client, sources[0], facts[0], quantity=half, idempotency_key="public-paper-first")
-        assert first.status_code == 200, first.text
+        half = semi_received_before if with_semi else sources[0].order_purpose_sheet_qty // 2
+        if half:
+            first = _receive(client, sources[0], facts[0], quantity=half, idempotency_key="public-paper-first")
+            assert first.status_code == 200, first.text
         url = "/api/orders/items/1/material-bom-cutover"
+        if with_semi:
+            with factory() as db:
+                db.get(InventoryLot, semi_lot_id).estimated_unit_cost_snapshot = None
+                db.commit()
+            invalid = client.post(url + "/preview", json={})
+            assert invalid.status_code == 409 and "成本" in invalid.text
+            with factory() as db:
+                db.get(InventoryLot, semi_lot_id).estimated_unit_cost_snapshot = Decimal("0.5")
+                db.commit()
         preview = client.post(url + "/preview", json={})
         assert preview.status_code == 200, preview.text
         review = preview.json()
@@ -202,10 +230,12 @@ def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_r
             assert len(list(db.scalars(select(OrderBomSourceHandoff)))) == 2
             assert graph_material_receipts_closed(db, db.get(OrderItem, 1)) is False
             assert all(row["requisition_qty"] == 0 for row in _bom_pending_component_requirements(db, db.get(OrderItem, 1)))
+        received_ids = []
         for index, source in enumerate(sources):
             result = _receive(client, source, facts[index], quantity=source.order_purpose_sheet_qty-(half if index == 0 else 0),
                 idempotency_key=f"public-material-after-{index}")
             assert result.status_code == 200, result.text
+            received_ids.append(result.json()["receipt_item_id"])
         with factory() as db:
             assert graph_material_receipts_closed(db, db.get(OrderItem, 1)) is True
             outputs = list(db.scalars(select(BomAssembly).where(BomAssembly.order_item_id == 1,
@@ -221,3 +251,13 @@ def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_r
         assert reverted.status_code == 200, reverted.text
         with factory() as db:
             assert graph_material_receipts_closed(db, db.get(OrderItem, 1)) is False
+
+        if with_semi:
+            undone = client.put(f"/api/incoming/receipt-items/{received_ids[0]}/revert", json={})
+            assert undone.status_code == 200, undone.text
+            with factory() as db:
+                reservation = db.get(InventoryReservation, semi_reservation_id)
+                assert reservation.sales_order_item_bom_component_id == snapshots[0][0]
+                assert reservation.consumed_stock_quantity == (6 if semi_received_before else 0)
+                assert reservation.reserved_stock_quantity == 6
+                assert db.get(InventoryLot, semi_lot_id).quantity_reserved == (0 if semi_received_before else 6)

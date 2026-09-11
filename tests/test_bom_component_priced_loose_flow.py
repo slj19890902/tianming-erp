@@ -1,5 +1,6 @@
 """One commercial order: loose stock, material conversion, receipts and settlement."""
 from decimal import Decimal
+import pytest
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -16,8 +17,9 @@ from tests.test_p1_81_receipt_purpose_flow import _p181_published_map_identity, 
 from tests.test_bom_commercial_settlement import _dispatch, _confirm_receipt
 
 
+@pytest.mark.parametrize("reverse_receipts", [False, True])
 def test_component_order_loose_stock_to_receipts_delivery_and_statement(
-    composite_requisition_app, _p181_published_map_identity,
+    composite_requisition_app, _p181_published_map_identity, reverse_receipts, monkeypatch,
 ):
     from app.api.deliveries import router as delivery_router
     from app.api.finance import router as finance_router
@@ -134,6 +136,7 @@ def test_component_order_loose_stock_to_receipts_delivery_and_statement(
         saved = client.post("/api/requisition/batches", json={"request_key": "priced-loose-material",
             "supplier_name": "苏州纸板供应商", "items": requisitions})
         assert saved.status_code == 201, saved.text
+        receipt_ids = []
         for index, source in enumerate(read_purchase_sources(factory, material_id)):
             fact = _freeze_receipt_fact(client, source, idempotency_key=f"priced-fact-{index}", unit_price="0.1234")
             assert fact.status_code == 200, fact.text
@@ -142,6 +145,7 @@ def test_component_order_loose_stock_to_receipts_delivery_and_statement(
                 received = _receive(client, source, fact.json(), quantity=qty,
                                     idempotency_key=f"priced-receipt-{index}-{batch}")
                 assert received.status_code == 200, received.text
+                receipt_ids.append(received.json()["receipt_item_id"])
                 replay = _receive(client, source, fact.json(), quantity=qty,
                                   idempotency_key=f"priced-receipt-{index}-{batch}")
                 assert replay.status_code == 200, replay.text
@@ -170,6 +174,48 @@ def test_component_order_loose_stock_to_receipts_delivery_and_statement(
                 rows = list(db.scalars(select(InventoryReservation).where(InventoryReservation.order_item_id == iid)))
                 assert sum(row.reserved_stock_quantity-row.consumed_stock_quantity-row.released_stock_quantity
                            for row in rows) == (300 if pid == 2 else 400)
+        if reverse_receipts:
+            # Fail after the real audit write: all business facts and the audit
+            # must roll back, and the same operation key must remain retryable.
+            from app.services import incoming_receipts
+            from sqlalchemy import inspect, text
+
+            def database_facts():
+                with factory() as db:
+                    names = inspect(db.get_bind()).get_table_names()
+                    return {name: db.execute(text(f'SELECT * FROM "{name}" ORDER BY 1')).all()
+                            for name in names if name != "sqlite_sequence"}
+
+            before_failure = database_facts()
+            real_audit = incoming_receipts.append_audit_event
+
+            def fail_after_audit(*args, **kwargs):
+                real_audit(*args, **kwargs)
+                raise RuntimeError("isolated reversal audit failure")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(incoming_receipts, "append_audit_event", fail_after_audit)
+                with pytest.raises(RuntimeError, match="isolated reversal audit failure"):
+                    client.put(f"/api/incoming/receipt-items/{receipt_ids[-1]}/revert", json={
+                        "reason": "隔离验收恢复原余料",
+                        "idempotency_key": f"priced-undo-{receipt_ids[-1]}"})
+            assert database_facts() == before_failure
+            for rid in reversed(receipt_ids):
+                body = {"reason": "隔离验收恢复原余料", "idempotency_key": f"priced-undo-{rid}"}
+                undone = client.put(f"/api/incoming/receipt-items/{rid}/revert", json=body)
+                assert undone.status_code == 200, undone.text
+                replay = client.put(f"/api/incoming/receipt-items/{rid}/revert", json=body)
+                assert replay.status_code == 200 and replay.json() == undone.json(), replay.text
+            with factory() as db:
+                for pid, (lid, _, qty) in lots.items():
+                    lot = db.get(InventoryLot, lid)
+                    assert lot.quantity_reserved == qty + (10 if pid == 2 else 30)
+                    assert lot.quantity_consumed == 0
+                    requirements = read_graph_requirements(db, items[pid])
+                    assert requirements.plan.materials[0].purchase_sheets == (70 if pid == 2 else 175)
+                assert {row.id: _row(row) for row in db.scalars(select(InventoryReservation)
+                        .where(InventoryReservation.order_item_id.in_(protected_ids)))} == protected
+            return
         first_delivery = _dispatch(client, 1, [(items[2], 120), (items[3], 100)])
         second = _dispatch(client, 1, [(items[2], 180), (items[3], 300)])
         _confirm_receipt(client, first_delivery)

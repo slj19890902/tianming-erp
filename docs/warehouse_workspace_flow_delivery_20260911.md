@@ -23,8 +23,18 @@
 - 扩大前端回归发现旧夹具问题：手机三项在 v354 也失败（缺 groupWarehouseRackGoods 夹具依赖/旧返回假设）；旧货架仅加载 warehouseTwin.css 的三产品布局测试亦在 v354 失败。本轮新 workspace 样式的隔离布局测试覆盖 1440/1024/600 宽度并通过；未把扩大回归写成全绿。
 - 正式页面不自动点击。真实屏幕、移货与手机操作由管理员人工验收。
 
-## 发布前状态
+## 正式发布结果
 
-开发验证通过；待最终正式基线、已验证备份、同 head 隔离演练与正式服务/资源核对。保留原正式地图和草稿、location_id、库存/成本/业务事实；不导入家庭布局。回滚按本次已验证备份与前版代码保留现场处理，不降级/删除已有 BOM、邮件或库存事实。
+2026-09-11 21:10:26 技术发布完成，待管理员人工验收。正式代码及候选均已推送 0e62b3f4b61949ff80531ee8a9303b0aaded2f5c；发布报告 docs/migration_reports/release_runtime_20260911_210829.json 为 completed，版本 v0.22.355，head sp28v8x9z90 不变。
+
+备份 data/backups/carton_erp_before_release_20260911_210830.sqlite3，隔离演练 data/release_rehearsals/carton_erp_release_rehearsal_20260911_210830.sqlite3；两者文件 SHA256 da8895412b406d7713d72c156bea301b9984cbfed396e9b45a848c61c6d32f5e。SQLite Backup API 的页头与源文件不同，额外比较正式源/备份/演练全部 279 张表逐行内容，一致，逻辑摘要 7676f86d09297c8d3a217854d9fd2151366cf7d63ae8cef93b2fc0cc773d0ab0。完整性 ok、外键 0、核心计数一致。
+
+正式发布前后文件 SHA256 都为 b4a5e6891a372494b22b25c2cb4694ec7b99e9eeef5c552d155ea0869360a10a；原正式地图和草稿、location_id、库存/成本/业务事实不变，无家庭布局导入。回滚按上述已验证备份与前版 22f91b88 保留现场处理，不降级/删除已有 BOM、邮件或库存事实。
+
+本机 18000、局域网 192.168.3.80:8000、公开 HTTPS 健康均 200。局域网首页/仓库入口及关键资源 7 项逐字节一致；HTTPS 初次静态读取超时，有限复验仓库入口及主 JS/CSS 全部 200 且哈希一致。内部 18000 HTTP 页会跳 HTTPS，不作现场访问入口。
+
+正式入口仓库 JS 为 warehouseTwin-Cbswk0MP.js，SHA256 ece49cb0db4092b92994a1520c3b8bb849101443a9dbab6d1455abada748d9d1；CSS warehouseTwin-Bb-7k-Ol.css，SHA256 c35b3f96a0f3ba81b719a806c3ca5684fe2514d6ed29ccddc036e629b6497659。旧哈希资源为已开标签页保留，不再被新版入口引用；/warehouse.html 为 no-store。未自动点击正式页面，启动脚本打开页面不计人工验收。
+
+NAS 独立回执：04_开发记录/任务回执/20260911_2113_仓库正视图与移货工作区_v355.md。
 
 管理员最短验收：①点货架、内层格、左地图具体货位核对展开/收起及右栏；②单品选橙色有货层格、整板禁选并核对真实目标后确认一次；③顶部搜索切换产品/楼层，核对实际层格及盘点入口。真实 token 用量不可获取，不估算。

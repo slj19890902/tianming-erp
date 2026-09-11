@@ -49,6 +49,20 @@ class CrossRevisionTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT value FROM new_feature').fetchone()[0],'new version fact')
             self.assertEqual(db.execute('SELECT version_num FROM alembic_version').fetchone()[0],'r2')
 
+    def test_registered_invoice_attachment_is_required_for_complete_backup(self):
+        folder=self.manager.root/'shared/data/invoice_attachments';folder.mkdir()
+        invoice=folder/'invoice.pdf';invoice.write_bytes(b'%PDF-fixture')
+        with closing(sqlite3.connect(self.database)) as db:
+            db.execute('CREATE TABLE finance_invoice_attachments(id INTEGER, stored_name TEXT, content_hash TEXT)')
+            db.execute('INSERT INTO finance_invoice_attachments VALUES(1,?,?)',('invoice.pdf',sha(invoice).upper()));db.commit()
+        backup=self.manager.backup(recovery.PASSWORD,self.fixture.nas)
+        restored=recovery.TestManager(self.fixture.root/'restored-invoice',self.fixture.public)
+        restored.restore(backup,recovery.PASSWORD)
+        self.assertEqual((restored.root/'shared/data/invoice_attachments/invoice.pdf').read_bytes(),invoice.read_bytes())
+        invoice.unlink()
+        with self.assertRaisesRegex(ValueError,'附件缺失'):
+            self.manager.backup(recovery.PASSWORD,self.fixture.nas)
+
     def test_signed_contract_must_bind_exact_previous_package(self):
         with self.assertRaisesRegex(ValueError,'兼容契约'):
             self.manager.update(self.package(old='a'*64),recovery.PASSWORD,self.fixture.nas)

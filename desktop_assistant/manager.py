@@ -190,6 +190,10 @@ class Manager:
         if not current:
             raise ValueError('尚未导入或恢复ERP数据')
         before = database_info(self.root / 'shared/data/carton_erp.sqlite3')
+        from desktop_assistant.preflight import inspect
+        checks = inspect(self.root / 'shared/data/carton_erp.sqlite3', self.root / 'shared', managed=True)
+        if any(checks['counts'][key] for key in ('missing', 'external', 'hash_mismatch')):
+            raise ValueError('附件缺失或校验失败，不能标记为完整备份')
         job = self.root / 'staging' / uuid.uuid4().hex
         job.mkdir()
         tree = job / 'payload'
@@ -366,6 +370,11 @@ class Manager:
                 raise ValueError('备份程序与数据不兼容')
             rebind_pdf_sources(payload / 'shared/data/carton_erp.sqlite3', Path(manifest['source_shared']),
                                payload / 'shared', self.root / 'shared')
+            from desktop_assistant.preflight import inspect
+            checks = inspect(payload / 'shared/data/carton_erp.sqlite3', payload / 'shared',
+                             managed=True, recorded_root=self.root / 'shared')
+            if any(checks['counts'][key] for key in ('missing', 'external', 'hash_mismatch')):
+                raise ValueError('恢复附件缺失或校验失败，尚未启用恢复数据')
             (self.root / 'shared').rmdir()  # proven empty above
             (payload / 'shared').rename(self.root / 'shared')
             write_json(self.root / 'state.json', {'current': release['id'], 'previous': None,

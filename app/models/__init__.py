@@ -291,3 +291,5 @@ from app.models.fixed_shelf import ShelfProfile, ShelfBinding, ShelfLotState, Sh
 from app.models.material_candidate import MaterialCandidateSelection  # noqa: E402,F401
 from app.models.warehouse_goods import WarehouseGoodsProfile, WarehouseGoodsMutation  # noqa: E402,F401
 from app.models.inventory_cost_rule import InventoryCostRule, InventoryCostMutation  # noqa: E402,F401
+
+from app.models.email_intake import EmailIntakeSettings, EmailIntakeMessage, EmailIntakeAttachment  # noqa: E402,F401

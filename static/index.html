@@ -8028,6 +8028,7 @@
                 <div class="field"><label class="sys-num">系统单号</label><div class="sys-num">{{ displayOrderNumber(orderDetail) }}</div></div>
                 <div class="field"><label>客户</label><div>{{ orderDetail.customer_name }}</div></div>
                 <div class="field"><label>客户单号</label><div>{{ orderDetail.customer_po || "-" }}</div></div>
+                <div v-if="canCreateOrders && ['admin','boss'].includes(user?.role)" class="field"><label>邮件来源</label><a :href="`/email-intake.html?order=${orderDetail.id}`" target="_blank" rel="noopener">查看原邮件</a></div>
                 <div class="field"><label>下单日期</label><div>{{ orderDetail.order_date }}</div></div>
                 <div class="field"><label>交货日期</label><div>{{ orderDetail.delivery_date || "-" }}</div></div>
                 <div class="field"><label>状态</label><status-tag :value="orderDisplayStatusKey(orderDetail)"></status-tag></div>
@@ -29794,6 +29795,11 @@
             this.orderImportDrafts = [];
           },
           async openEmailAttachmentFromLocation() {
+            const linkedOrder = new URLSearchParams(window.location.search).get("email_order");
+            if (linkedOrder && /^[1-9][0-9]*$/.test(linkedOrder) && this.user && !this.user.must_change_password) {
+              await this.openOrderDetail({id:Number(linkedOrder)});
+              return;
+            }
             const source = new URLSearchParams(window.location.search).get("email_attachment");
             if (!source || !/^[1-9][0-9]*$/.test(source) || !this.user || this.user.must_change_password) return;
             if (!this.canCreateOrders || !["admin","boss"].includes(this.user.role)) return;

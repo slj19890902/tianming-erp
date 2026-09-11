@@ -4,11 +4,12 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query, UploadFile
 from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy import select, func, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy.exc import IntegrityError
 from starlette.datastructures import Headers
 from app.api.deps import get_db, PermissionChecker, has_unrestricted_customer_access
 from app.models.user import User
+from app.models.order import Order
 from app.models.email_intake import EmailIntakeSettings, EmailIntakeMessage, EmailIntakeAttachment, EmailIntakeOrderLink
 from app.services import email_intake as service
 
@@ -87,15 +88,39 @@ def sync(db: Session = Depends(get_db), user: User = Depends(allowed)):
 
 @router.get('')
 def messages(response: Response, page: int = Query(1, ge=1), state: str = Query('all', pattern='^(all|pending|ignored|oversize)$'),
+             association: str = Query('all', pattern='^(all|linked|unlinked)$'),
              db: Session = Depends(get_db), user: User = Depends(allowed)):
     response.headers['Cache-Control'] = 'private, no-store'
-    query = select(EmailIntakeMessage)
+    source = aliased(EmailIntakeAttachment)
+    linked = (select(EmailIntakeAttachment.message_id.label('mail_id'),
+                     func.count(func.distinct(Order.id)).label('order_count'))
+        .join(source, source.sha256 == EmailIntakeAttachment.sha256)
+        .join(EmailIntakeOrderLink, EmailIntakeOrderLink.attachment_id == source.id)
+        .join(Order, Order.id == EmailIntakeOrderLink.order_id)
+        .group_by(EmailIntakeAttachment.message_id).subquery())
+    count = func.coalesce(linked.c.order_count, 0)
+    query = select(EmailIntakeMessage, count).outerjoin(linked, linked.c.mail_id == EmailIntakeMessage.id)
     if state != 'all':
         query = query.where(EmailIntakeMessage.status == state)
+    if association != 'all':
+        query = query.where(count > 0 if association == 'linked' else count == 0)
     total = db.scalar(select(func.count()).select_from(query.subquery()))
-    rows = db.scalars(query.order_by(EmailIntakeMessage.id.desc()).offset((page-1)*25).limit(25))
-    return {'total': total, 'page': page, 'items': [{key: getattr(row, key) for key in
-        ('id', 'subject', 'sender', 'received', 'status', 'version', 'notice')} for row in rows]}
+    rows = db.execute(query.order_by(EmailIntakeMessage.id.desc()).offset((page-1)*25).limit(25))
+    return {'total': total, 'page': page, 'items': [{**{key: getattr(row, key) for key in
+        ('id', 'subject', 'sender', 'received', 'status', 'version', 'notice')},
+        'linked_order_count': order_count} for row, order_count in rows]}
+
+
+@router.get('/orders/{order_id}/source')
+def order_source(order_id: int, response: Response, db: Session = Depends(get_db), user: User = Depends(allowed)):
+    response.headers['Cache-Control'] = 'private, no-store'
+    if not db.get(Order, order_id):
+        raise HTTPException(404, '订单不存在')
+    rows = db.execute(select(EmailIntakeAttachment.id, EmailIntakeAttachment.message_id,
+                             EmailIntakeAttachment.filename)
+        .join(EmailIntakeOrderLink, EmailIntakeOrderLink.attachment_id == EmailIntakeAttachment.id)
+        .where(EmailIntakeOrderLink.order_id == order_id).order_by(EmailIntakeAttachment.id)).all()
+    return {'sources': [dict(row._mapping) for row in rows]}
 
 
 @router.get('/{message_id}')
@@ -145,7 +170,7 @@ async def preview(attachment_id: int, db: Session = Depends(get_db), user: User 
     if not row:
         raise HTTPException(404, '附件不存在')
     if not row.filename.lower().endswith('.pdf'):
-        raise HTTPException(422, 'Excel草稿映射正在接入；当前可下载原附件核对')
+        raise HTTPException(422, '订单识别仅支持PDF；其他附件可下载后人工核对')
     from app.api.orders import preview_order_pdf
     result = await preview_order_pdf(UploadFile(filename=row.filename, file=BytesIO(row.content),
         headers=Headers({'content-type': 'application/pdf'})), db, user)

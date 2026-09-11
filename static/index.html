@@ -6984,6 +6984,7 @@
                 >
                 <div class="toolbar" style="margin-bottom:8px">
                   <div><strong>识别结果：{{ draft.items?.length || 0 }} 行</strong><span class="muted" style="margin-left:8px">请核对行数、存货编码和数量</span></div>
+                  <div v-if="draft.email_attachment_id" class="toolbar-group"><button class="btn small" type="button" :disabled="draft._email_draft_saving || loading" @click="saveEmailPdfWorkingDraft(draft)">{{ draft._email_draft_saving ? '暂存中…' : '暂存核对进度' }}</button><span class="muted">{{ draft.email_draft_restored ? '已恢复上次核对；请重新确认后保存订单' : (draft.email_draft_saved_at ? '已暂存，可关闭后继续；后续修改需再次暂存' : '暂存不会创建订单') }}</span></div>
                   <button class="btn small" type="button" @click="draft._show_advanced_details=!draft._show_advanced_details">{{ draft._show_advanced_details ? '隐藏高级详情' : '高级匹配详情' }}</button>
                 </div>
                 <div class="form-grid" style="margin-bottom:12px">
@@ -8134,6 +8135,7 @@
                 <div class="field"><label class="sys-num">系统单号</label><div class="sys-num">{{ displayOrderNumber(orderDetail) }}</div></div>
                 <div class="field"><label>客户</label><div>{{ orderDetail.customer_name }}</div></div>
                 <div class="field"><label>客户单号</label><div>{{ orderDetail.customer_po || "-" }}</div></div>
+                <div v-if="canCreateOrders && ['admin','boss'].includes(user?.role)" class="field"><label>邮件来源</label><a :href="`/email-intake.html?order=${orderDetail.id}`" target="_blank" rel="noopener">查看原邮件</a></div>
                 <div class="field"><label>下单日期</label><div>{{ orderDetail.order_date }}</div></div>
                 <div class="field"><label>交货日期</label><div>{{ orderDetail.delivery_date || "-" }}</div></div>
                 <div class="field"><label>状态</label><status-tag :value="orderDisplayStatusKey(orderDetail)"></status-tag></div>
@@ -29134,6 +29136,7 @@
               specification:this.orderSpecificationText(item?.specification, ""),
               client_line_id:item.client_line_id || createIdempotencyKey(),
               _inventory:item._inventory || this.newOrderInventoryState(),
+              temp_drawing_preview_url:item.temp_drawing_preview_url || (item.temp_drawing_token ? `/api/orders/draft-drawing/${encodeURIComponent(item.temp_drawing_token)}/content/preview.bin` : null),
             };
             this.refreshPdfPriceConflict(prepared);
             return prepared;
@@ -30084,18 +30087,39 @@
             this.orderImportBatch.retryDraft = null;
             this.orderImportDrafts = [];
           },
+          async saveEmailPdfWorkingDraft(draft) {
+            if (!draft?.email_attachment_id || draft._email_draft_saving || this.isImportDraftLocked(draft)) return;
+            if ((draft.items||[]).some(item=>item._editing)) {this.showToast("请先完成正在修改的明细，再暂存核对进度",true);return;}
+            draft._email_draft_saving = true;
+            try {
+              const {data} = await axios.put(`/api/email-intake/attachments/${draft.email_attachment_id}/working-draft`, {
+                expected_version:draft.email_draft_version || 0,
+                draft:JSON.parse(JSON.stringify(draft,(key,value)=>key.startsWith('_')?undefined:value))
+              });
+              draft.email_draft_version=data.version;
+              draft.email_draft_saved_at=data.saved_at;
+              this.showToast("核对进度已暂存，可从原邮件继续编辑；尚未创建订单");
+            } catch(error) {this.showToast(this.errorMessage(error),true);}
+            finally {draft._email_draft_saving=false;}
+          },
           async openEmailAttachmentFromLocation() {
+            const linkedOrder = new URLSearchParams(window.location.search).get("email_order");
+            if (linkedOrder && /^[1-9][0-9]*$/.test(linkedOrder) && this.user && !this.user.must_change_password) {
+              await this.openOrderDetail({id:Number(linkedOrder)});
+              return;
+            }
             const source = new URLSearchParams(window.location.search).get("email_attachment");
             if (!source || !/^[1-9][0-9]*$/.test(source) || !this.user || this.user.must_change_password) return;
             if (!this.canCreateOrders || !["admin","boss"].includes(this.user.role)) return;
             this.openOrderPdfImport();
             this.orderImportBatch.status = "recognizing";
             try {
-              const {data:draft} = await axios.post(`/api/email-intake/attachments/${source}/preview`);
+              const {data:draft} = await axios.post(`/api/email-intake/attachments/${source}/preview?resume=true`);
               this.orderImportDrafts = [this.prepareImportDraftReminderState({...draft,confirmed:false,_save_status:"idle",_save_message:"",items:(draft.items||[]).map(item=>this.preparePdfImportItem(item))})];
               await this.loadOrderImportReminders();
               if (this.modal?.type !== "orderPdfImport") return;
               await Promise.all(this.orderImportDrafts.map(row=>Promise.all((row.items||[]).filter(item=>item.matched_product_id).map(item=>this.loadOrderLineInventory(item,row.matched_customer_id)))));
+              if (draft.email_draft_restored && this.canViewCosts) await Promise.all(this.orderImportDrafts[0].items.filter(item=>item.matched_product_id).map(item=>this.recalculateImportCost(item).catch(()=>{item.cost_status="pending";item.estimated_cost=null;})));
               this.orderImportBatch.status="recognized";
             } catch(error) {this.orderImportBatch.status="failed";this.showToast(this.errorMessage(error),true);}
           },

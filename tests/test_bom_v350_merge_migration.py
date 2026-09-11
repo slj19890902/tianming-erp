@@ -22,7 +22,8 @@ def test_migration_identities_unique_and_formal_cost_lineage_preserved(monkeypat
                 assert revision not in identities, (revision, path, identities.get(revision))
                 identities[revision] = path.name
     scripts = ScriptDirectory.from_config(_config(monkeypatch, tmp_path / "unused.sqlite3"))
-    assert scripts.get_heads() == ["so27v8x9z89"]
+    assert scripts.get_heads() == ["sp28v8x9z90"]
+    assert set(scripts.get_revision("sp28v8x9z90").down_revision) == {"so27v8x9z89", "sb11v8x9z76"}
     assert scripts.get_revision("rx10v8x9z72").down_revision == "rw10v8x9z71"
     assert scripts.get_revision("rx11v8x9z72").down_revision == "rw09v8x9z71"
     assert scripts.get_revision("ry11v8x9z73").down_revision == "rx11v8x9z72"
@@ -47,11 +48,11 @@ def test_merge_keeps_original_rows_indexes_triggers_and_roundtrips(factory_copy,
             assert all(actual.get(key) == value for key, value in objects.items())
             assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
             assert db.execute("PRAGMA foreign_key_check").fetchall() == []
-            expected_heads = {"sn26v8x9z88", "rz10v8x9z74"} if destination != "head" else {"so27v8x9z89"}
+            expected_heads = {"sn26v8x9z88", "sb11v8x9z76"} if destination != "head" else {"sp28v8x9z90"}
             assert {r[0] for r in db.execute("SELECT version_num FROM alembic_version")} == expected_heads
 
 
-@pytest.mark.parametrize("kind", ["cost", "mail"])
+@pytest.mark.parametrize("kind", ["cost", "mail", "draft"])
 def test_formal_facts_block_downgrade_before_file_changes(factory_copy, monkeypatch, kind):
     target = Path(factory_copy.get_bind().url.database)
     factory_copy.rollback()
@@ -60,8 +61,12 @@ def test_formal_facts_block_downgrade_before_file_changes(factory_copy, monkeypa
         if kind == "cost":
             db.execute("INSERT INTO inventory_cost_rules(product_id,config_json,version,updated_by) "
                        "SELECT p.id,'{}',1,u.id FROM products p CROSS JOIN users u WHERE u.is_active=1 LIMIT 1")
-        else:
+        elif kind == "mail":
             db.execute("INSERT INTO email_intake_settings(id,encrypted_secret,version) VALUES(1,'isolated-test-placeholder',1)")
+        else:
+            db.execute("INSERT INTO email_intake_messages(id,mailbox_key,uid_validity,uid,message_id,subject,sender,received,body,status,notice,version) VALUES(1,'isolated','1',1,'isolated','test','test','test','test','pending','',1)")
+            db.execute("INSERT INTO email_intake_attachments(id,message_id,part_number,filename,sha256,content) VALUES(1,1,1,'isolated.pdf',?,?)", ('a'*64,b'isolated-test'))
+            db.execute("INSERT INTO email_pdf_working_drafts(id,attachment_id,actor_id,content_json,content_hash,version,saved_at) SELECT 1,1,id,'{}',?,1,'2026-09-11' FROM users WHERE is_active=1 LIMIT 1", ('b'*64,))
     before = hashlib.sha256(target.read_bytes()).digest()
     with pytest.raises(RuntimeError, match="已有BOM、库存成本或邮件事实"):
         command.downgrade(_config(monkeypatch, target), "sn26v8x9z88")

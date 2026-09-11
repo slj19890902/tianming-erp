@@ -8229,7 +8229,7 @@
             <div v-else-if="modal.type === 'externalPurchase'">
               <div v-if="externalPurchase.loading" class="empty">正在读取冻结候选和有效价格…</div>
               <div v-else-if="externalPurchase.error" class="notice danger">{{ externalPurchase.error }}</div>
-              <div v-else-if="externalPurchase.status === 'stock_covered'" class="notice success">已由预占库存覆盖，无需采购。预占变更后重新打开核对。</div>
+              <div v-else-if="externalPurchase.status === 'stock_covered'" class="notice success">已由预占库存或已交接采购覆盖，无需追加采购。库存或采购变化后重新打开核对。</div>
               <template v-else-if="externalPurchase.status === 'confirmed' && externalPurchase.confirmation">
                 <div class="notice success">已确认采购；这里只查看冻结结果，不会自动收货或增加库存。</div>
                 <div v-for="purchase in externalPurchase.confirmation.purchase_orders" :key="purchase.id" class="external-purchase-confirmed">
@@ -8244,7 +8244,7 @@
                 <div class="notice danger">原外购包装采购已随订单流程撤回作废；不能再次确认或打印。如需重新采购，请新建正确订单。</div>
               </template>
               <template v-else>
-                <div class="notice">一次核对全部外购组件；同一供应商自动合并为一张采购单。附加费按价格版本保留为条款，本阶段不自动收货入库。</div>
+                <div class="notice"><template v-if="externalPurchase.additional">本次按新版本未覆盖差额追加采购，原采购继续保留；以下不包含已经确认采购的当前来源。</template><template v-else>一次核对全部外购组件；同一供应商自动合并为一张采购单。</template>附加费按价格版本保留为条款，本阶段不自动收货入库。</div>
                 <div class="table-wrap"><table class="external-purchase-table"><thead><tr><th>订单明细</th><th>外购组件</th><th>采购数量</th><th>供应商候选</th><th>供应商采购成本（正式报价）</th></tr></thead><tbody>
                   <tr v-for="row in externalPurchase.items" :key="row.order_component_id">
                     <td>序号 {{ row.item_sequence || '-' }}<br>{{ row.product_code || '-' }}<br><span class="muted">{{ row.product_name || '-' }}</span></td>
@@ -25497,6 +25497,7 @@
             try {
               const {data} = await axios.get(`/api/orders/${orderId}/external-packaging-purchase`);
               this.externalPurchase.status = data.status;
+              this.externalPurchase.additional = !!data.additional_purchase;
               this.externalPurchase.confirmation = data.confirmation || null;
               this.externalPurchase.history = data.history || [];
               this.externalPurchase.items = (data.items || []).map(row => ({

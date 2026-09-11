@@ -75,8 +75,11 @@ def cancel_unreceived_external_purchases(
     source: str,
     reason: str,
     cancelled_by: int | None,
+    batch_id: int | None = None,
 ) -> list[dict]:
     purchases = active_external_purchase_orders_for_order_ids(db, {order_id})
+    if batch_id is not None:
+        purchases = [purchase for purchase in purchases if purchase.batch_id == batch_id]
     if not purchases:
         return []
     purchase_item_ids = {

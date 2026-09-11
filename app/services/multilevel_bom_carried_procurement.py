@@ -64,3 +64,45 @@ def carried_purchase_stock(db, compiled):
             if any(row.id in current_ids and row.component_product_id == link.product_id for row in execution.snapshots):
                 credits[link.product_id] += receipt.converted_finished_quantity
     return dict(credits)
+
+
+def additional_purchase_components(db, order, components):
+    """Permit a fresh-version batch only after every old obligation is known.
+
+    Current sources already purchased remain protected by the existing
+    one-confirmation rule. This does not reopen arbitrary ordinary orders.
+    """
+    from app.models.multilevel_bom import OrderBomGraph
+    from app.services.multilevel_bom_orders import read_compiled_order_bom
+    from app.services.multilevel_bom_external_identity import external_receipt_contract
+    current_ids = {row.id for row in components}
+    cancelled = select(ExternalPackagingPurchaseCancellation.purchase_order_id)
+    purchases = list(db.scalars(select(ExternalPackagingPurchaseItem).join(ExternalPackagingPurchaseOrder,
+        ExternalPackagingPurchaseOrder.id == ExternalPackagingPurchaseItem.purchase_order_id).where(
+            ExternalPackagingPurchaseItem.sales_order_id == order.id,
+            ExternalPackagingPurchaseOrder.status == "confirmed",
+            ExternalPackagingPurchaseOrder.id.not_in(cancelled))))
+    if not purchases:
+        return None
+    graph_ids = set(db.scalars(select(OrderBomGraph.order_item_id).where(
+        OrderBomGraph.order_item_id.in_({row.sales_order_item_id for row in components}))))
+    graphs = {iid: read_compiled_order_bom(db, iid) for iid in graph_ids}
+    mapped = {iid: {row.source_snapshot_id for row in current_source_handoffs(db, graph)
+        if row.source_kind == "purchased"} for iid, graph in graphs.items()}
+    already_purchased = set()
+    for purchase in purchases:
+        if purchase.order_component_id in current_ids:
+            already_purchased.add(purchase.order_component_id)
+            continue
+        compiled = graphs.get(purchase.sales_order_item_id)
+        if compiled is None or compiled.rule_revision_id is None:
+            return None
+        source_link = db.get(OrderBomExternalComponent, purchase.order_component_id)
+        if source_link is None or source_link.bom_snapshot_id not in mapped[purchase.sales_order_item_id]:
+            return None
+        # Fail closed on an unmapped historical contract, rather than treating
+        # it as cancelled or subtracting guessed quantities from a new source.
+        external_receipt_contract(db, purchase.order_component_id, compiled=compiled)
+    eligible = [row for row in components if row.id not in already_purchased
+        and row.sales_order_item_id in graphs and graphs[row.sales_order_item_id].rule_revision_id is not None]
+    return eligible or None

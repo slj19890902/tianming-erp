@@ -1258,7 +1258,15 @@ def build_external_purchase_preview(
             "history": history,
             "items": [],
         }
-    if summary["status"] == "confirmed":
+    additional = None
+    if summary["status"] in {"confirmed", "pending"}:
+        from app.services.multilevel_bom_carried_procurement import additional_purchase_components
+        from app.services.multilevel_bom_plan import BomPlanError
+        try:
+            additional = additional_purchase_components(db, order, components)
+        except BomPlanError as error:
+            raise ExternalPurchaseContractError(str(error), status_code=409) from error
+    if summary["status"] == "confirmed" and additional is None:
         batch = _load_batch(db, int(summary["batch_id"]))
         return {
             "order_id": order.id,
@@ -1268,6 +1276,8 @@ def build_external_purchase_preview(
             "history": history,
             "items": [],
         }
+    if additional is not None:
+        components = additional
     if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
         raise ExternalPurchaseContractError("订单已终止，不能确认外购包材采购")
     as_of = beijing_today()
@@ -1335,6 +1345,7 @@ def build_external_purchase_preview(
         "order_id": order.id,
         "order_number": order.order_number,
         "status": "stock_covered" if not items else "pending",
+        "additional_purchase": additional is not None,
         "as_of": as_of.isoformat(),
         "history": history,
         "items": items,
@@ -1773,7 +1784,15 @@ def confirm_external_purchase(
         .limit(1)
     )
     if existing is not None:
-        raise ExternalPurchaseContractError("该订单的外购包装已经确认采购，请勿重复提交")
+        from app.services.multilevel_bom_carried_procurement import additional_purchase_components
+        from app.services.multilevel_bom_plan import BomPlanError
+        try:
+            additional = additional_purchase_components(db, order, components)
+        except BomPlanError as error:
+            raise ExternalPurchaseContractError(str(error), status_code=409) from error
+        if additional is None:
+            raise ExternalPurchaseContractError("该订单的外购包装已经确认采购，请勿重复提交")
+        components = additional
 
     order_items = _external_component_order_items(
         db,

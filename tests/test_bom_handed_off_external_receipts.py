@@ -203,7 +203,7 @@ def test_handed_off_receipt_assembles_and_reverses_under_execution_version(purch
 
 
 @pytest.mark.parametrize("new_ratio,expected_purchase", [(2, 0), (3, 1)])
-def test_carried_pack_capacity_is_subtracted_before_new_purchase_rounding(purchase_app, new_ratio, expected_purchase):
+def test_carried_pack_capacity_is_subtracted_before_new_purchase_rounding(purchase_app, new_ratio, expected_purchase, monkeypatch):
     from fastapi.testclient import TestClient
     from app.models.order import OrderItem
     from app.models.order_external_packaging import SalesOrderItemExternalComponent
@@ -220,6 +220,8 @@ def test_carried_pack_capacity_is_subtracted_before_new_purchase_rounding(purcha
             frozen = read_compiled_order_bom(db, iid)
             purchase = db.scalar(select(ExternalPackagingPurchaseItem).where(ExternalPackagingPurchaseItem.sales_order_item_id == iid))
             assert purchase.purchase_quantity == 1  # one purchased pack contains five stock units
+            original_purchase_id = purchase.id
+            original_contract = {column.key: getattr(purchase, column.key) for column in purchase.__table__.columns}
             save(db, actor, item.product_id, "assembled", [(child_id, new_ratio, "assembly")])
             db.commit()
             review = review_current_rule_requirements(db, order_item_id=iid, customer_id=frozen.graph.customer_id)
@@ -237,3 +239,71 @@ def test_carried_pack_capacity_is_subtracted_before_new_purchase_rounding(purcha
             component = db.get(SalesOrderItemExternalComponent, link.external_component_id)
             assert frozen_purchase_quantities(db, [component], {iid: item}) == {component.id: Decimal(expected_purchase)}
             assert purchase.purchase_quantity == 1
+            component_id = component.id
+            candidate_id = next(row.id for row in component.candidates if row.is_default)
+        preview = client.get(f"/api/orders/{oid}/external-packaging-purchase")
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["additional_purchase"] is True
+        assert len(preview.json()["history"]) == 1
+        payload = {"idempotency_key": "additional-pack-purchase", "lines": [{
+            "order_component_id": component_id, "candidate_id": candidate_id, "purchase_quantity": "1"}]}
+        if expected_purchase == 0:
+            assert preview.json()["status"] == "stock_covered" and preview.json()["items"] == []
+            assert client.post(f"/api/orders/{oid}/external-packaging-purchase/confirm", json=payload).status_code == 409
+        else:
+            assert preview.json()["status"] == "pending"
+            assert Decimal(preview.json()["items"][0]["suggested_purchase_quantity"]) == 1
+            from app.api import external_packaging_purchases as api
+            from sqlalchemy.exc import OperationalError
+            from tests.test_multilevel_bom_modes_migration import original_facts
+            with purchase_app.state.session_factory() as db:
+                database_path = Path(db.get_bind().url.database)
+            def facts():
+                with sqlite3.connect(database_path.as_uri() + "?mode=ro", uri=True) as check:
+                    columns = {table: [row[1] for row in check.execute(f'PRAGMA table_info("{table}")')]
+                        for table, in check.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                    return original_facts(check, columns)
+            before_failure = facts()
+            def fail_audit(*args, **kwargs):
+                raise OperationalError("isolated audit failure", {}, Exception("rollback proof"))
+            with monkeypatch.context() as patch:
+                patch.setattr(api, "append_audit_event", fail_audit)
+                failed = client.post(f"/api/orders/{oid}/external-packaging-purchase/confirm", json=payload)
+                assert failed.status_code == 409, failed.text
+            assert facts() == before_failure
+            from concurrent.futures import ThreadPoolExecutor
+            requests = [payload, {**payload, "idempotency_key": "racing-additional-pack"}]
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(client.post, f"/api/orders/{oid}/external-packaging-purchase/confirm", json=request)
+                    for request in requests]
+                responses = [future.result() for future in futures]
+            assert sorted(response.status_code for response in responses) == [200, 409], [response.text for response in responses]
+            winner = next(i for i, response in enumerate(responses) if response.status_code == 200)
+            payload, confirmed = requests[winner], responses[winner]
+            replay = client.post(f"/api/orders/{oid}/external-packaging-purchase/confirm", json=payload)
+            assert replay.status_code == 200, replay.text
+            assert replay.json()["confirmation"]["batch_id"] == confirmed.json()["confirmation"]["batch_id"]
+            duplicate = client.post(f"/api/orders/{oid}/external-packaging-purchase/confirm",
+                json={**payload, "idempotency_key": "different-additional-key"})
+            assert duplicate.status_code == 409, duplicate.text
+            after = client.get(f"/api/orders/{oid}/external-packaging-purchase")
+            assert after.status_code == 200 and after.json()["status"] == "confirmed"
+            assert len(after.json()["history"]) == 2
+            cancelled = client.post(f"/api/orders/{oid}/external-packaging-purchase/cancel", json={
+                "expected_batch_id": confirmed.json()["confirmation"]["batch_id"], "confirmed": True,
+                "reason": "隔离验证撤销追加批次，保留原合同"})
+            assert cancelled.status_code == 200, cancelled.text
+            assert cancelled.json()["preview"]["additional_purchase"] is True
+            assert Decimal(cancelled.json()["preview"]["items"][0]["suggested_purchase_quantity"]) == 1
+            recreated = client.post(f"/api/orders/{oid}/external-packaging-purchase/confirm",
+                json={**payload, "idempotency_key": "recreate-additional-pack"})
+            assert recreated.status_code == 200, recreated.text
+        with purchase_app.state.session_factory() as db:
+            purchases = list(db.scalars(select(ExternalPackagingPurchaseItem).where(ExternalPackagingPurchaseItem.sales_order_item_id == iid)))
+            assert len(purchases) == 1 + 2 * int(expected_purchase > 0)
+            assert all(row.purchase_quantity == 1 for row in purchases)
+            original = db.get(ExternalPackagingPurchaseItem, original_purchase_id)
+            assert {column.key: getattr(original, column.key) for column in original.__table__.columns} == original_contract
+            from app.models.external_packaging_purchase import ExternalPackagingPurchaseCancellation
+            assert db.scalar(select(ExternalPackagingPurchaseCancellation).where(
+                ExternalPackagingPurchaseCancellation.purchase_order_id == original.purchase_order_id)) is None

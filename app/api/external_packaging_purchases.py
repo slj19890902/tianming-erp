@@ -388,7 +388,8 @@ def cancel_external_packaging_purchase(
     _cost_user: User = Depends(can_cost),
 ) -> dict[str, Any]:
     try:
-        order = db.get(Order, order_id)
+        from app.services.external_packaging_purchase import claim_external_purchase_order
+        order = claim_external_purchase_order(db, order_id)
         if order is None:
             raise HTTPException(status_code=404, detail="订单不存在")
         summary = get_external_purchase_summary(db, order_id)
@@ -402,6 +403,7 @@ def cancel_external_packaging_purchase(
             source="manual_purchase_cancel",
             reason=payload.reason,
             cancelled_by=user.id,
+            batch_id=payload.expected_batch_id,
         )
         if not changes:
             raise HTTPException(status_code=409, detail="当前没有可撤销的有效外购包材采购")

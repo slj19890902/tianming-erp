@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.339"
+APP_VERSION = "v0.22.340"
 APP_VERSION_NAME = "客户Excel对账差异核对"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -2546,17 +2546,29 @@ _V022337_VERIFICATION_STEPS = [
     "盘点输入规格后选择全部客户，确认规格仍在，列表显示各客户产品、实际尺寸和接近度，完全一致在最前。",
     "选中另一客户的产品，确认待入库客户随产品正确变化，已有库存仍提示先核对或移货。",
 ]
-APP_CHANGES = ["历史缺价采用可读取稳定关联订单中一致的报料快照，不套用多行采购单抬头尺寸；新收料仍严格要求逐行有效价格与尺寸。", "提供老板授权的71批库存参考成本与20条收料当前价补录清单、事务校验和审计；不改产品主档、数量或已有历史价格。"]
-APP_VERIFICATION_STEPS = ["核对历史缺价收料的当前价采用记录与逐行报料尺寸；已有冻结价格保持。", "查看批次参考成本来源；仍缺关键资料的4款保持待补，不使用1×1占位尺寸或虚构价格。"]
-_V022338_CHANGES = APP_CHANGES
-_V022338_STEPS = APP_VERIFICATION_STEPS
+_V022338_CHANGES = ["历史缺价采用可读取稳定关联订单中一致的报料快照，不套用多行采购单抬头尺寸；新收料仍严格要求逐行有效价格与尺寸。", "提供老板授权的71批库存参考成本与20条收料当前价补录清单、事务校验和审计；不改产品主档、数量或已有历史价格。"]
+_V022338_VERIFICATION_STEPS = ["核对历史缺价收料的当前价采用记录与逐行报料尺寸；已有冻结价格保持。", "查看批次参考成本来源；仍缺关键资料的4款保持待补，不使用1×1占位尺寸或虚构价格。"]
+APP_CHANGES = [
+    "成品、原材料及半成品盘点新增按当前人民币材质报价和可靠展开规则自动冻结批次材料成本；缺关键资料明确阻止无价入库。",
+    "管理员和老板可在仓库、手机货位及库存成本页查看成本单价和已定价金额；员工及财务角色不能取得这些仓库成本接口数据。",
+    "出货优先使用真实采购成本，无采购来源的盘点库存沿用已确认入库成本；不新造供应商应付。承接已授权参考成本，旧尺寸单位异常不冒充有效成本。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员或老板展开货位成本，并按客户、编码查询全部库存成本；员工同接口返回403且页面不显示金额。",
+    "隔离副本中新盘点入库后改报价，再移货或出货，核对旧批次单价不变；缺尺寸或报价时不生成无价批次。",
+    "核对旧估算尺寸单位纠正的前值和审计；仍需真实资料的产品显示待核价，地图、数量及历史采购与出货事实保持。",
+]
+_V022339_CHANGES = APP_CHANGES
+_V022339_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["对账单新增核对客户Excel入口，自动识别表头或手工选列，按单号与存货编码汇总比较数量、单价及金额。", "支持下载差异和未识别行报告；保持客户权限隔离，不修改正式回单、对账或收款。"]
 APP_VERIFICATION_STEPS = ["从对账单打开核对客户Excel，上传xlsx并核对列对应和税口径，查看数量、单价、金额差异及未识别行。", "下载差异报告；修改对账单后旧版本下载应要求重新核对。"]
 APP_CHANGELOG = [
-    *(f"v0.22.339：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.339：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.340：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.340：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.339：本次更新｜{item}" for item in _V022339_CHANGES),
+    *(f"v0.22.339：如何验证｜{item}" for item in _V022339_STEPS),
     *(f"v0.22.338：本次更新｜{item}" for item in _V022338_CHANGES),
-    *(f"v0.22.338：如何验证｜{item}" for item in _V022338_STEPS),
+    *(f"v0.22.338：如何验证｜{item}" for item in _V022338_VERIFICATION_STEPS),
     *(f"v0.22.337：本次更新｜{item}" for item in _V022337_CHANGES),
     *(f"v0.22.337：如何验证｜{item}" for item in _V022337_VERIFICATION_STEPS),
     *(f"v0.22.336：本次更新｜{item}" for item in _V022336_CHANGES),

@@ -55,6 +55,7 @@ def _material(
         price_unit="元/㎡",
         supplier_name=supplier,
         is_active=True,
+        purchase_currency="CNY", purchase_tax_included=True, purchase_tax_rate=Decimal("0.13"),
     )
     db.add(row)
     db.flush()
@@ -102,7 +103,7 @@ def test_finished_entry_snapshots_report_area_times_square_price(db: Session) ->
     assert lot.estimated_cost_area_m2_snapshot == Decimal("1.727200")
     assert lot.estimated_square_price_snapshot == Decimal("1.8000")
     assert lot.estimated_unit_cost_snapshot == Decimal("3.1090")
-    assert lot.cost_snapshot_source == "material_quote_area"
+    assert lot.cost_snapshot_source == "inventory_confirmed_material"
 
     material.quote_price = Decimal("9.9000")
     db.flush()

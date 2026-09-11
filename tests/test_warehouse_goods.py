@@ -134,12 +134,18 @@ def test_sheet_entry_typed_code_no_fake_product_replay_and_layout_cas(stocktake_
         payload=SheetEntry(facts=GoodsFacts(material_code='A1B' if layer==3 else 'A1B1C1D'),location_id=loc,expected_layout_version=version,
             quantity=15,stock_date=date.today(),internal_name='通用纸板',board_length_mm=800,board_width_mm=600,
             layer_count=layer,flute_type=flute,idempotency_key=f'goods-entry-{layer}')
+        # An unquoted typed code may no longer create a priceless stocktake batch.
+        with pytest.raises(HTTPException,match="入库成本"):
+            create_sheet(payload,db,user)
+        db.add(Material(code=payload.facts.material_code,supplier_name="唯一测试供应商",layer_count=layer,
+            quote_price=2,price_unit="元/㎡",purchase_currency="CNY",purchase_tax_included=True,purchase_tax_rate=0.13))
+        db.commit()
         result=create_sheet(payload,db,user)
         lot=db.get(InventoryLot,result['lot_id'])
         assert lot.quantity_available==15 and lot.unit=='sheets'
         assert lot.semi_finished_detail.material_id is None
         assert lot.semi_finished_detail.material_code_snapshot==payload.facts.material_code
-        assert lot.estimated_unit_cost_snapshot is None
+        assert float(lot.estimated_unit_cost_snapshot)==0.96
         assert lot.semi_finished_detail.owner_customer_id is None
         assert create_sheet(payload,db,user)==result
         count=db.scalar(select(func.count()).select_from(InventoryLot))

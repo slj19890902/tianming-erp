@@ -3,7 +3,7 @@ import { MaterialCandidates } from "./MaterialCandidates";
 import { StocktakeObservationPanel } from "./StocktakeObservationPanel";
 // Also render these exact components in the isolated visual acceptance fixture.
 export { MoldRackElevation, WarehouseRackElevation };
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { EditorCanvas, type CanvasFocusTarget } from "./EditorCanvas";
 import { filterOperationalFeatures } from "./operationalView.mjs";
 import {
@@ -6502,6 +6502,7 @@ export function WarehouseTwinApp() {
           {warehouseOperationMessage && <div className="twin-location-message">{warehouseOperationMessage}</div>}
         </section>}
         {selectedLocation && <section className="twin-location-card twin-stocktake-compact">
+          {createElement("warehouse-costs", {"location-id": String(selectedLocation.location_id), "revision": String(loading)})}
           <div className="twin-location-card-title"><div><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em>
           {!traceReadOnly && canStocktake && !locationEditMode && !(mapMode === "move" && moveAction === "stocktake") && <button type="button" className="warehouse-label-add" disabled={loading || pendingPlacementBusy} onClick={() => { setMapMode("move"); setMoveAction("stocktake"); setSearchPanelOpen(true); }}>＋ 添加货物</button>}</div>
           <button type="button" className="twin-detail-toggle secondary" aria-expanded={locationDetailOpen} onClick={() => setLocationDetailOpen((current) => !current)}>{locationDetailOpen ? "收起位置与栈板详情" : "位置与栈板详情"}</button>

@@ -2658,6 +2658,9 @@ def manual_finished_in(
         remarks=remarks,
         created_by=operator_id,
     )
+    if source_type == "stocktake":
+        from app.services.inventory_valuation import freeze_entry_cost
+        freeze_entry_cost(db, lot, product)
     apply_cost_snapshot(
         lot,
         estimate_finished_product_cost(
@@ -2665,7 +2668,7 @@ def manual_finished_in(
             product=product,
             material_code=material_code,
             flute_type=product.flute_type,
-        ),
+        ) if source_type != "stocktake" else None,
         captured_at=now,
     )
     db.add(lot)
@@ -4569,6 +4572,9 @@ def manual_semi_finished_in(
         crease_right_mm=crease_right_mm,
         cutting_note=cutting_note,
     )
+    if source_type == "stocktake":
+        from app.services.inventory_valuation import freeze_entry_cost
+        freeze_entry_cost(db, lot)
     _movement(
         db,
         lot=lot,

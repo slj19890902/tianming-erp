@@ -23823,6 +23823,39 @@ def _redact_inventory_insight_costs(insights: dict) -> dict:
     return result
 
 
+@router.get("/costs")
+def get_inventory_costs(response: Response, location_id: int | None = Query(default=None, ge=1),
+                        db: Session = Depends(get_db), user: User = Depends(can_read)) -> dict:
+    from app.services.inventory_valuation import can_view_inventory_cost, cost_payload
+    if not can_view_inventory_cost(user):
+        raise HTTPException(403, "仅管理员和老板可以查看成本")
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    query = _lot_query(require_formal_location=False).where(
+        InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged > 0)
+    scope = _visible_customer_ids(user, db)
+    if scope is not None:
+        query = query.where(_visible_lot_condition(scope))
+    if location_id is not None:
+        query = query.where(InventoryLot.warehouse_location_id == location_id)
+    rows, total, missing = [], Decimal(0), 0
+    for lot in db.scalars(query.order_by(InventoryLot.id)).unique():
+        value = cost_payload(lot, db)
+        detail = lot.finished_detail or lot.semi_finished_detail
+        value.update(lot_number=lot.lot_number, inventory_type=lot.inventory_type,
+            stock_date=lot.stock_date, location_id=lot.warehouse_location_id,
+            location_name=lot.location.location_name if lot.location else "未归位",
+            product_code=getattr(detail, "inventory_code_snapshot", None),
+            product_name=getattr(detail, "product_name_snapshot", None) or getattr(detail, "internal_name", None),
+            customer_name=getattr(detail, "owner_customer_name_snapshot", None))
+        rows.append(value)
+        if value["inventory_value"] is None:
+            missing += 1
+        else:
+            total += Decimal(value["inventory_value"])
+    return dict(currency="CNY", inventory_value=str(total), total_lots=len(rows),
+                missing_lots=missing, rows=rows, basis="入库批次材料成本，含可用、预占及损坏实物；不含加工人工费用")
+
+
 @router.get("/insights")
 def get_inventory_insights(
     as_of: date | None = None,
@@ -23835,7 +23868,8 @@ def get_inventory_insights(
         as_of=as_of,
         customer_ids=visible_customer_ids,
     )
-    if has_permission(user, "cost.view"):
+    from app.services.inventory_valuation import can_view_inventory_cost
+    if can_view_inventory_cost(user):
         return insights
     return _redact_inventory_insight_costs(insights)
 
@@ -23935,6 +23969,9 @@ def get_lot(
     from app.services.shelf_lot_history import shelf_delivery_history, shelf_related_inventory
     result["shelf_deliveries"] = shelf_delivery_history(db, lot_id, visible_customer_ids)
     result["shelf_related_inventory"] = shelf_related_inventory(db, row, visible_customer_ids)
+    from app.services.inventory_valuation import can_view_inventory_cost, cost_payload
+    if can_view_inventory_cost(user):
+        result["cost"] = cost_payload(row, db)
     return result
 
 

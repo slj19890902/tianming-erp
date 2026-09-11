@@ -8119,11 +8119,11 @@
               </template>
             </div>
             <div v-else-if="modal.type === 'semiProduction' && semiProduction">
-              <label>生产子件 <select v-model.number="semiProduction.productId" :disabled="semiProduction.loading || !!semiProduction.pending" @change="semiProduction.review=null"><option :value="0">请选择</option><option v-for="product in semiProduction.products" :key="product.id" :value="product.id">{{ product.name }} · {{ product.unit }}</option></select></label>
-              <p class="muted">用于半成品预占已完整覆盖的自制子件。实际加工完成后确认；不新增来料或采购数量。</p>
+              <label>生产产品 <select v-model.number="semiProduction.productId" :disabled="semiProduction.loading || !!semiProduction.pending" @change="semiProduction.review=null"><option :value="0">请选择</option><option v-for="product in semiProduction.products" :key="product.id" :value="product.id">{{ product.name }} · #{{ product.id }} · {{ product.unit }}</option></select></label>
+              <p class="muted">用于半成品预占已完整覆盖的自制产品。实际加工完成后确认；本体保持待装配阶段，不新增来料或采购数量。</p>
               <p v-if="semiProduction.error" role="alert" class="status orange">{{ semiProduction.error }}</p>
               <p v-if="semiProduction.review">本次 {{ semiProduction.review.quantity }} {{ semiProduction.review.unit }} · 材料估算成本 {{ semiProduction.review.estimated_cost }} · 来源货位 {{ Object.values(semiProduction.review.source_locations).join('、') }}</p>
-              <p v-if="semiProduction.review" class="muted">产出位置：{{ Object.entries(semiProduction.review.target_locations).map(([pid,lid])=>`${semiProduction.review.target_names[pid]}（ID ${lid}）`).join('、') }}</p>
+              <p v-if="semiProduction.review" class="muted">生产位置：{{ semiProduction.review.production_location.name }}（ID {{ semiProduction.review.production_location.id }}）<span v-if="Object.keys(semiProduction.review.target_locations).length">；组装位置：{{ Object.entries(semiProduction.review.target_locations).map(([pid,lid])=>`${semiProduction.review.target_names[pid]}（ID ${lid}）`).join('、') }}</span></p>
               <div class="toolbar-group"><button class="btn" :disabled="semiProduction.loading || !!semiProduction.pending || !semiProduction.productId" @click="previewSemiProduction">核对预占</button><button class="btn primary" :disabled="semiProduction.loading || (!semiProduction.pending && !semiProduction.review?.ready)" @click="confirmSemiProduction">{{ semiProduction.pending ? '重试同一确认' : '确认加工完成' }}</button></div>
               <p v-for="row in semiProduction.completions" :key="row.id">完工 #{{ row.id }} · 产品 {{ row.product_id }} · 数量 {{ row.quantity }} · {{ row.status === 'reversed' ? '已撤销' : '已确认' }} <button v-if="row.status === 'posted'" class="btn small" :disabled="semiProduction.loading || !!semiProduction.pending" @click="reverseSemiProduction(row.id)">撤销本次生产</button></p>
             </div>

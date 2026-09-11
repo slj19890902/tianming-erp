@@ -11,7 +11,7 @@ from tests.test_multilevel_bom_receipt_flow import seed_graph, purchase_sources,
 
 
 @pytest.mark.parametrize("uncredited_sheets,credited_pieces", [(0, 6), (2, 6), (0, 30)])
-def test_cancelled_original_material_moves_only_unused_semi(composite_requisition_app, _p181_published_map_identity, monkeypatch, uncredited_sheets, credited_pieces, plan_only=False):
+def test_cancelled_original_material_moves_only_unused_semi(composite_requisition_app, _p181_published_map_identity, monkeypatch, uncredited_sheets, credited_pieces, plan_only=False, with_body=False):
     from app.api.bom_cutover import router
     from app.models.warehouse_inventory import InventoryLot, InventoryReservation, OrderItemSemiRequirement, SemiFinishedLotAllowedProduct
     from app.models.requisition import RequisitionItem
@@ -21,7 +21,9 @@ def test_cancelled_original_material_moves_only_unused_semi(composite_requisitio
     from app.services.multilevel_bom_orders import read_compiled_order_bom
     app, factory = composite_requisition_app
     app.include_router(router, prefix="/api/orders")
-    material_id, snapshots = seed_graph(factory)
+    material_id, snapshots = seed_graph(factory, liner=with_body, body=with_body)
+    production_pid = 1 if with_body else 2
+    full_coverage = with_body or credited_pieces == 30
     _seed_order_semi_reservation(factory, credited_piece_quantity=credited_pieces+uncredited_sheets, pieces_per_box=1)
     with factory() as db:
         old = db.scalar(select(InventoryReservation))
@@ -29,12 +31,12 @@ def test_cancelled_original_material_moves_only_unused_semi(composite_requisitio
         old.sales_order_item_bom_component_id = snapshots[0][0]
         requirement = db.get(OrderItemSemiRequirement, old.semi_requirement_id)
         requirement.sales_order_item_bom_component_id = snapshots[0][0]
-        requirement.required_piece_quantity = 30
+        requirement.required_piece_quantity = 10 if with_body else 30
         requirement.board_length_mm, requirement.board_width_mm = 1000, 700
         lot = db.get(InventoryLot, old.inventory_lot_id)
         lot.estimated_unit_cost_snapshot = Decimal("0.5")
         lot.semi_finished_detail.board_length_mm, lot.semi_finished_detail.board_width_mm = 1000, 700
-        db.scalar(select(SemiFinishedLotAllowedProduct)).product_id = 2
+        db.scalar(select(SemiFinishedLotAllowedProduct)).product_id = production_pid
         old_id, lot_id = old.id, lot.id
         db.commit()
     with TestClient(app) as client:
@@ -102,9 +104,9 @@ def test_cancelled_original_material_moves_only_unused_semi(composite_requisitio
             assert db.get(InventoryLot, lot_id).quantity_reserved == credited_pieces
             assert db.get(InventoryLot, lot_id).quantity_available == uncredited_sheets
             pending = _bom_pending_component_requirements(db, db.get(OrderItem, 1))
-            assert sorted(row["requisition_qty"] for row in pending) == [30-credited_pieces, 40]
+            assert sorted(row["requisition_qty"] for row in pending) == ([0,20,60] if with_body else [30-credited_pieces,40])
             items = [{**_component_payload(row.id), "order_item_id": 1, "special_process": "一开一"}
-                for row in current.snapshots if row.component_product_id in ({3} if credited_pieces == 30 else {2, 3})]
+                for row in current.snapshots if row.component_product_id in ({3} if full_coverage and not with_body else {2, 3})]
             source_ids = {row.id for row in current.snapshots}
         batch = client.post("/api/requisition/batches", json={"request_key": "detached-new-paper", "supplier_name": "苏州纸板供应商", "items": items})
         assert batch.status_code == 201, batch.text
@@ -121,11 +123,11 @@ def test_cancelled_original_material_moves_only_unused_semi(composite_requisitio
             assert received.status_code == 200, received.text
             receipt_ids.append(received.json()["receipt_item_id"])
         semi_completion_id = None
-        if credited_pieces == 30:
+        if full_coverage:
             semi_url = "/api/orders/items/1/semi-production"
-            semi_preview = client.post(semi_url+"/preview", json={"product_id": 2})
+            semi_preview = client.post(semi_url+"/preview", json={"product_id": production_pid})
             assert semi_preview.status_code == 200, semi_preview.text
-            semi_payload = dict(product_id=2, reviewed_hash=semi_preview.json()["reviewed_hash"], operation_key="complete-from-semi")
+            semi_payload = dict(product_id=production_pid, reviewed_hash=semi_preview.json()["reviewed_hash"], operation_key="complete-from-semi")
             before_semi = facts()
             assert client.post(semi_url+"/execute", json={**semi_payload, "reviewed_hash": "0"*64}).status_code == 409
             assert facts() == before_semi
@@ -150,16 +152,36 @@ def test_cancelled_original_material_moves_only_unused_semi(composite_requisitio
             with factory() as db:
                 completion = db.get(ProductionCompletion, semi_completion_id)
                 assert completion.origin == "manual"
-                assert db.get(ProductionTask, completion.task_id).material_received_quantity == 0
+                if not with_body:
+                    assert db.get(ProductionTask, completion.task_id).material_received_quantity == 0
                 main_task = db.scalar(select(ProductionTask).where(ProductionTask.order_item_id == 1,
                     ProductionTask.sales_order_item_bom_component_id.is_(None)))
                 assert main_task.finished_coverage_snapshot == 10
-                assert main_task.material_received_quantity == 40 and main_task.material_input_quantity == 70
+                assert main_task.material_received_quantity == (80 if with_body else 40)
+                assert main_task.material_input_quantity == (90 if with_body else 70)
                 produced_lot = db.get(InventoryLot, completion.inventory_lot_id)
                 assert produced_lot.cost_snapshot_source == "semi_finished_estimate"
+                assert produced_lot.inventory_type == ("assembly_body" if with_body else "finished")
                 assert sum(db.get(InventoryLot, assembly.output_lot_id).quantity_reserved
                     for assembly in db.scalars(select(BomAssembly).where(BomAssembly.output_product_id == 1,
                         BomAssembly.output_lot_id.is_not(None), BomAssembly.status == "posted"))) == 10
+                from app.services.bom_subkit_costs import source_cost
+                parent = db.scalar(select(BomAssembly).where(BomAssembly.output_product_id == 1,
+                    BomAssembly.output_lot_id.is_not(None), BomAssembly.status == "posted"))
+                amount, lineage = source_cost(db, db.get(InventoryLot, parent.output_lot_id), 10)
+                assert amount == (Decimal("14.8720") if with_body else Decimal("19.9360"))
+                assert lineage["actual"] is False
+                if with_body:
+                    import json
+                    from app.services.multilevel_bom_body_inventory import stock_product_identity
+                    from app.services.bom_subkits import SubkitError
+                    assert stock_product_identity(db, produced_lot) == (1, 1)
+                    bad_proof = json.loads(produced_lot.cost_snapshot_detail_json)
+                    bad_proof["bom_material_inputs"][0]["id"] = old_id
+                    produced_lot.cost_snapshot_detail_json = json.dumps(bad_proof)
+                    with pytest.raises(SubkitError):
+                        stock_product_identity(db, produced_lot)
+                    db.rollback()
         with factory() as db:
             assert db.get(InventoryReservation, old_id).consumed_stock_quantity == 0
             assert db.get(InventoryReservation, new.id).consumed_stock_quantity == credited_pieces
@@ -188,3 +210,8 @@ def test_cancelled_original_material_moves_only_unused_semi(composite_requisitio
 def test_semi_only_plan_has_no_synthetic_receipt(composite_requisition_app, _p181_published_map_identity, monkeypatch):
     test_cancelled_original_material_moves_only_unused_semi(composite_requisition_app,
         _p181_published_map_identity, monkeypatch, 0, 30, plan_only=True)
+
+
+def test_semi_body_confirmation_assembles_with_existing_liner(composite_requisition_app, _p181_published_map_identity, monkeypatch):
+    test_cancelled_original_material_moves_only_unused_semi(composite_requisition_app,
+        _p181_published_map_identity, monkeypatch, 0, 10, with_body=True)

@@ -3038,6 +3038,7 @@ def _stock_completion_lot(
     finished_ground_target: ReceiptAutoFinishedGroundTarget | None = None,
     source_type: str = "production_surplus",
     movement_reason: str = "生产完工入库",
+    semi_cost_detail: dict | None = None,
 ) -> InventoryLot:
     snapshot = (
         db.get(SalesOrderItemBomComponent, task.sales_order_item_bom_component_id)
@@ -3156,6 +3157,7 @@ def _stock_completion_lot(
                 return receive_body_inventory(db, completion_id=completion.id,
                     location_id=location.id, operator_id=operator_id,
                     idempotency_key=_stable_key(idempotency_prefix, "body-in"),
+                    semi_cost_detail=semi_cost_detail,
                     expected_layout_version=(int(location.floor3_layout.version)
                         if location_id_override is not None and location.floor3_layout is not None
                         else command.expected_layout_version))
@@ -4946,8 +4948,8 @@ def post_automatic_receipt_completion(
                 db.flush()
     if semi_only:
         from app.services.multilevel_bom_receipts import plan_semi_only_production
-        if graph_snapshot is None or is_assembly_body:
-            raise ProductionWorkflowError("半成品确认当前需要独立自制子件，本体装配须走对应生产流程", 409)
+        if graph_snapshot is None:
+            raise ProductionWorkflowError("半成品确认需要明确的冻结自制产品", 409)
         _, semi_plan = plan_semi_only_production(db, order_item_id=item.id, product_id=graph_snapshot.component_product_id)
         inputs = semi_plan["detail"]["bom_material_inputs"]
         if (before != semi_plan["before"] or after != semi_plan["after"]
@@ -5094,6 +5096,7 @@ def post_automatic_receipt_completion(
         finished_ground_target=ground_target,
         source_type="production_completion",
         movement_reason="半成品预占加工完成入库" if semi_only else "订单用途来料自动形成成品并进入当前真实成品位置",
+        semi_cost_detail=cost_detail if semi_only else None,
     )
     completion.inventory_lot_id = lot.id
     if is_assembly_body:

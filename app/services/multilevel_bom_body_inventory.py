@@ -19,9 +19,44 @@ from app.services.bom_transactions import atomic_bom
 from app.services.multilevel_bom_orders import read_order_graph
 
 
-def body_completion_identity(db, completion):
-    if completion is None or completion.status != "posted" or completion.origin != "receipt_auto":
+def body_completion_identity(db, completion, semi_cost_detail=None):
+    if completion is None or completion.status != "posted" or completion.origin not in {"receipt_auto", "manual"}:
         raise SubkitError("本体入库需要有效的自动收料完工来源")
+    if completion.origin == "manual":
+        from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
+        from app.services.production_workflow import _stable_key
+        lot = db.get(InventoryLot, completion.inventory_lot_id) if completion.inventory_lot_id else None
+        try:
+            proof = json.loads(lot.cost_snapshot_detail_json or "{}") if lot else semi_cost_detail
+            inputs = proof.get("bom_material_inputs") if proof else None
+            source_id = proof.get("bom_snapshot_id") if proof else None
+            if (not proof or proof.get("bom_semi_confirmation") is not True
+                    or not proof.get("semi_production_request_hash") or type(source_id) is not int
+                    or not isinstance(inputs, list) or not inputs):
+                raise SubkitError("手工本体缺少明确的半成品生产来源")
+            stock_input = 0
+            for entry in inputs:
+                reservation = db.get(InventoryReservation, entry.get("id"))
+                requirement = db.get(OrderItemSemiRequirement, reservation.semi_requirement_id) if reservation else None
+                quantity = entry["stock_after"]-entry["stock_before"]
+                movement = db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key ==
+                    _stable_key("production-completion", completion.id, "semi", entry["id"])))
+                if (entry.get("kind") != "reservation" or reservation is None or requirement is None
+                        or reservation.order_item_id != completion.order_item_id
+                        or requirement.sales_order_item_bom_component_id != source_id
+                        or reservation.sales_order_item_bom_component_id not in (None, source_id)
+                        or entry.get("lot_id") != reservation.inventory_lot_id
+                        or quantity <= 0 or movement is None or movement.movement_type != "consume"
+                        or movement.reservation_id != reservation.id or movement.quantity != quantity
+                        or movement.related_order_item_id != completion.order_item_id):
+                    raise SubkitError("本体半成品来源与实际消耗流水不一致")
+                stock_input += quantity
+            if stock_input != completion.material_input_quantity:
+                raise SubkitError("本体半成品投入张数与完工不一致")
+        except SubkitError:
+            raise
+        except (ValueError, TypeError, KeyError, AttributeError) as error:
+            raise SubkitError("本体半成品生产依据无效") from error
     task = db.get(ProductionTask, completion.task_id)
     item = db.get(OrderItem, completion.order_item_id)
     if completion.inventory_lot_id is not None and db.scalar(select(OrderBomRuleRevision.id).where(
@@ -48,6 +83,11 @@ def body_completion_identity(db, completion):
             raise SubkitError("本体完工缺少冻结产品来源")
         pid = snapshot.component_product_id
     nodes, children, _ = graph.validated()
+    if completion.origin == "manual":
+        source = db.get(SalesOrderItemBomComponent, proof["bom_snapshot_id"])
+        if (source is None or source.sales_order_item_id != item.id or source.component_product_id != pid
+                or proof.get("bom_material_product_id") != pid):
+            raise SubkitError("本体半成品生产产品与冻结来源不一致")
     if (pid not in nodes or nodes[pid].source != "manufactured"
             or not any(e.relation == "assembly" for e in children[pid])):
         raise SubkitError("该完工产品不属于待装配本体")
@@ -126,7 +166,7 @@ def validate_body_execution(db, compiled, lot):
 
 
 def receive_body_inventory(db, *, completion_id, location_id, operator_id,
-                           idempotency_key, expected_layout_version=None):
+                           idempotency_key, expected_layout_version=None, semi_cost_detail=None):
     from app.services.production_workflow import lock_order_rows_for_production_transition
     from app.services.warehouse_inventory import (
         _claim_inventory_destination, _location, _number, _movement, _balances,
@@ -141,13 +181,14 @@ def receive_body_inventory(db, *, completion_id, location_id, operator_id,
         if actor is None or not actor.is_active:
             raise SubkitError("操作人已失效")
         completion = db.get(ProductionCompletion, completion_id)
-        item, graph, pid = body_completion_identity(db, completion)
+        item, graph, pid = body_completion_identity(db, completion, semi_cost_detail=semi_cost_detail)
         order = db.get(Order, item.order_id)
         lock_order_rows_for_production_transition(db, [order.id])
         if item.is_force_closed or order.status in ("cancelled", "closed", "dead", "completed", "archived", "delivered"):
             raise SubkitError("已结束订单不能增加本体库存")
         manifest = hashlib.sha256(json.dumps({"completion":completion.id, "product":pid,
             "quantity":completion.quantity, "location":location_id, "actor":operator_id,
+            **({"semi_cost_detail":semi_cost_detail} if semi_cost_detail is not None else {}),
             "layout_version":expected_layout_version}, sort_keys=True).encode()).hexdigest()
         previous = db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key == idempotency_key))
         if previous is not None:
@@ -167,6 +208,7 @@ def receive_body_inventory(db, *, completion_id, location_id, operator_id,
         _location(db, location_id, "finished")
         now = utc_now_naive()
         lot = InventoryLot(lot_number=_number("BODY"), inventory_type="assembly_body",
+            cost_snapshot_detail_json=json.dumps(semi_cost_detail) if semi_cost_detail is not None else None,
             warehouse_location_id=location_id, quantity_available=completion.quantity,
             unit="boxes", status="active", source_type="production_completion",
             source_ref_type="production_completion", source_ref_id=completion.id,

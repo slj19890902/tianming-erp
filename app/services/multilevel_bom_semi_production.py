@@ -25,11 +25,14 @@ def preview_semi_production(db, *, order_item_id, product_id):
     from app.services.multilevel_bom_cutover_review import _row
     context, plan = plan_semi_only_production(db, order_item_id=order_item_id, product_id=product_id)
     from app.services.production_workflow import _receipt_auto_finished_ground_target
-    target_products = {product_id} | {node.product_id for node in context.compiled.graph.nodes
+    target_products = {node.product_id for node in context.compiled.graph.nodes
         if node.source == "assembled" or (node.source == "manufactured" and any(
             edge.parent_id == node.product_id and edge.relation == "assembly" for edge in context.compiled.graph.edges))}
-    targets, excluded = {}, set()
-    for pid in [product_id]+sorted(target_products-{product_id}):
+    production_target = _receipt_auto_finished_ground_target(db, claim=False,
+        customer_id=context.compiled.graph.customer_id, product_id=product_id)
+    targets = {}
+    excluded = set() if production_target.target_kind == "fixed_shelf" else {production_target.location.id}
+    for pid in sorted(target_products):
         target = _receipt_auto_finished_ground_target(db, claim=False, excluded_location_ids=excluded,
             customer_id=context.compiled.graph.customer_id, product_id=pid)
         targets[pid] = target.location
@@ -40,11 +43,13 @@ def preview_semi_production(db, *, order_item_id, product_id):
     lots = {row.inventory_lot_id: db.get(InventoryLot, row.inventory_lot_id) for row in reservations}
     document = dict(plan=plan, snapshot_id=context.snapshot.id, item=_row(db.get(OrderItem, order_item_id)),
         reservations=[_row(row) for row in reservations], lots=[_row(lot) for lot in lots.values()],
+        production_location=_row(production_target.location),
         targets={pid: _row(location) for pid, location in targets.items()}, map_hash=_map_hash())
     return context, plan, dict(product_id=product_id, snapshot_id=context.snapshot.id,
         quantity=plan["after"]-plan["before"], unit=context.node.unit, estimated_cost=str(plan["total_cost"]),
         reviewed_hash=_hash(document), ready=plan["after"] > plan["before"],
         source_lot_versions={lid: lot.version for lid, lot in lots.items()},
+        production_location=dict(id=production_target.location.id, name=production_target.location.location_name),
         target_locations={pid: location.id for pid, location in targets.items()},
         target_names={pid: location.location_name for pid, location in targets.items()},
         source_locations={lid: lot.warehouse_location_id for lid, lot in lots.items()}, map_hash=document["map_hash"])
@@ -84,7 +89,7 @@ def confirm_semi_production(db, *, order_item_id, product_id, reviewed_hash, ope
             bom_snapshot_id=context.snapshot.id, semi_only=True)
         assemblies = assemble_graph_order_receipt(db, compiled=context.compiled, order_item_id=order_item_id,
             operation_key=f"bom-semi-assembly:{completion.id}", operator_id=actor.id)
-        if completion.warehouse_location_id != preview["target_locations"][product_id] or any(
+        if completion.warehouse_location_id != preview["production_location"]["id"] or any(
                 db.get(InventoryLot, row.output_lot_id).warehouse_location_id != preview["target_locations"][row.output_product_id]
                 for row in assemblies if row.output_lot_id):
             raise BomPlanError("实际生产或组装位置与预览不一致")

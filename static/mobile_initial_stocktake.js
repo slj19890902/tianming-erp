@@ -12,6 +12,7 @@ function resetInitialInbound() {
   inbound.type = "finished";
   $("inboundCandidates").replaceChildren();
   $("inboundSave").textContent = "保存入库";
+  inbound.unmountSheet?.();inbound.unmountSheet=null;
   $("sheetGoods").replaceChildren();
   $("sheetGoods").classList.add("hidden");
   $("finishedGoods").classList.remove("hidden");
@@ -268,9 +269,11 @@ document.querySelectorAll("[data-goods-type]").forEach(button=>button.onclick=()
   document.querySelectorAll("[data-goods-type]").forEach(b=>b.classList.toggle("primary",b===button));
   $("finishedGoods").classList.toggle("hidden",inbound.type!=="finished");
   $("sheetGoods").classList.toggle("hidden",inbound.type==="finished");
+  inbound.unmountSheet?.();inbound.unmountSheet=null;
   $("sheetGoods").replaceChildren();
   if(inbound.type!=="finished"){
-    const frame=document.createElement("iframe");frame.title=inbound.type==="raw"?"原材料入库":"半成品入库";frame.src="/static/factory-twin-assets/mobile-goods.html";$("sheetGoods").append(frame);
+    if(!window.mountMobileGoods){$("sheetGoods").textContent="表单正在加载，请稍后重新选择";return;}
+    inbound.unmountSheet=window.mountMobileGoods($("sheetGoods"),{...window.mobileGoodsConfig(),onBusyChange:window.mobileGoodsBusy,onSaved:window.mobileGoodsSaved});
   }
   updateSubmitState();
 });

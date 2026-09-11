@@ -17,9 +17,9 @@ from tests.test_p1_81_receipt_purpose_flow import _p181_published_map_identity, 
 from tests.test_bom_commercial_settlement import _dispatch, _confirm_receipt
 
 
-@pytest.mark.parametrize("reverse_receipts", [False, True])
+@pytest.mark.parametrize("reverse_receipts,short_received", [(False, 0), (True, 0), (False, 20), (False, 1)])
 def test_component_order_loose_stock_to_receipts_delivery_and_statement(
-    composite_requisition_app, _p181_published_map_identity, reverse_receipts, monkeypatch,
+    composite_requisition_app, _p181_published_map_identity, reverse_receipts, short_received, monkeypatch,
 ):
     from app.api.deliveries import router as delivery_router
     from app.api.finance import router as finance_router
@@ -180,6 +180,17 @@ def test_component_order_loose_stock_to_receipts_delivery_and_statement(
             assert data["paper"][0]["frozen_costs"]
         first_delivery = _dispatch(client, 1, [(items[2], 120), (items[3], 100)])
         second = _dispatch(client, 1, [(items[2], 180), (items[3], 300)])
+        def actual_dispatch_cost(deliveries):
+            from app.services.graph_delivery_cost import graph_cost_report_sources, active_graph_cost
+            from app.models.warehouse_inventory import DeliveryInventoryAllocation
+            with factory() as db:
+                sources = graph_cost_report_sources(db, [line["id"] for delivery in deliveries for line in delivery["items"]])
+                return sum((active_graph_cost(fact, portions,
+                    db.get(DeliveryInventoryAllocation, allocation_id).consumed_stock_quantity
+                    - db.get(DeliveryInventoryAllocation, allocation_id).reversed_stock_quantity)
+                    for (_, allocation_id), (fact, portions) in sources.items()), Decimal(0))
+        cost_before_returns = actual_dispatch_cost([first_delivery, second])
+        assert cost_before_returns > 0
         cancelled = client.put(f"/api/deliveries/{second['id']}/cancel")
         assert cancelled.status_code == 200, cancelled.text
         with factory() as db:
@@ -245,14 +256,85 @@ def test_component_order_loose_stock_to_receipts_delivery_and_statement(
                         .where(InventoryReservation.order_item_id.in_(protected_ids)))} == protected
             return
         first_delivery = _dispatch(client, 1, [(items[2], 120), (items[3], 100)])
+        return_locations = None
+        return_versions = {}
+        if short_received:
+            from app.services.ordered_finished_receipt_return import _return_location_candidates
+            with factory() as db:
+                candidates = _return_location_candidates(db)
+                free = list(candidates)
+                assert len(free) >= 2
+                return_locations = {items[2]: free[0], items[3]: free[1]}
+                return_versions = {iid: candidates[lid].floor3_layout.version for iid, lid in return_locations.items()}
+        if short_received:
+            from app.services import bom_return_cost
+            from app.services.bom_subkits import SubkitError
+            from sqlalchemy import inspect, text
+            def return_facts():
+                with factory() as db:
+                    return {name: db.execute(text(f'SELECT * FROM "{name}" ORDER BY 1')).all()
+                            for name in inspect(db.get_bind()).get_table_names() if name != "sqlite_sequence"}
+            original_facts = return_facts()
+            freeze = bom_return_cost.freeze_return_graph_cost
+            def fail_after_cost(*args, **kwargs):
+                freeze(*args, **kwargs)
+                raise SubkitError("模拟退回成本写入失败")
+            with monkeypatch.context() as patch:
+                patch.setattr(bom_return_cost, "freeze_return_graph_cost", fail_after_cost)
+                with pytest.raises(AssertionError, match="模拟退回成本写入失败"):
+                    _confirm_receipt(client, first_delivery, short_received=short_received,
+                        return_location_id=return_locations, return_layout_versions=return_versions)
+            assert return_facts() == original_facts
+        receipt = _confirm_receipt(client, first_delivery, short_received=short_received,
+                         return_location_id=return_locations, return_layout_versions=return_versions)
+        if short_received:
+            cancelled = client.post(f"/api/finance/return_receipts/{receipt['id']}/cancel")
+            assert cancelled.status_code == 200, cancelled.text
+            reopened = client.put(f"/api/finance/return_receipts/{receipt['id']}", json={
+                "actual_received_date": beijing_today().isoformat(), "items": [dict(
+                    delivery_item_id=line["id"], actual_received_quantity=line["delivered_quantity"]-short_received,
+                    resolution_action="continue_delivery", difference_reason="隔离验收重新确认短收",
+                    return_location_id=return_locations[line["order_item_id"]],
+                    expected_return_layout_version=return_versions[line["order_item_id"]])
+                    for line in first_delivery["items"]]})
+            assert reopened.status_code == 200, reopened.text
         second = _dispatch(client, 1, [(items[2], 180), (items[3], 300)])
-        _confirm_receipt(client, first_delivery)
         _confirm_receipt(client, second)
         statement = client.post("/api/finance/statements", json={"customer_id": 1,
             "statement_month": beijing_today().strftime("%Y-%m"),
             "delivery_ids": [first_delivery["id"], second["id"]]})
         assert statement.status_code == 201, statement.text
         with factory() as db:
-            assert db.get(Statement, statement.json()["id"]).total_receivable == Decimal("695.00")
+            assert db.get(Statement, statement.json()["id"]).total_receivable == Decimal("695.00")-short_received*Decimal("2.05")
             assert {row.id: _row(row) for row in db.scalars(select(InventoryReservation)
                     .where(InventoryReservation.order_item_id.in_(protected_ids)))} == protected
+        if short_received:
+            from app.services.finished_stock_identity import order_product_basis
+            from app.services.multilevel_bom_cost_lineage import graph_material_sources
+            with factory() as db:
+                for pid, iid in items.items():
+                    returned = list(db.scalars(select(InventoryLot).where(
+                        InventoryLot.warehouse_location_id == return_locations[iid],
+                        InventoryLot.source_ref_type == "return_receipt_item")))
+                    assert sum(lot.quantity_reserved for lot in returned) == short_received
+                    for lot in returned:
+                        assert lot.finished_detail.physical_basis_json == order_product_basis(db, iid, pid)
+                        assert graph_material_sources(db, lot), "Actual receipt cost lineage must survive customer return"
+                        import json
+                        original_detail = lot.cost_snapshot_detail_json
+                        forged = json.loads(original_detail)
+                        forged["bom_return_cost"]["offset"] += 1
+                        lot.cost_snapshot_detail_json = json.dumps(forged)
+                        with pytest.raises(SubkitError, match="成本身份不一致"):
+                            graph_material_sources(db, lot)
+                        lot.cost_snapshot_detail_json = original_detail
+            replacement = _dispatch(client, 1, [(items[2], short_received), (items[3], short_received)])
+            _confirm_receipt(client, replacement)
+            assert actual_dispatch_cost([first_delivery, second, replacement]) == cost_before_returns
+            replacement_statement = client.post("/api/finance/statements", json={"customer_id": 1,
+                "statement_month": beijing_today().strftime("%Y-%m"), "delivery_ids": [replacement["id"]]})
+            assert replacement_statement.status_code == 201, replacement_statement.text
+            with factory() as db:
+                assert db.get(Statement, replacement_statement.json()["id"]).total_receivable == short_received*Decimal("2.05")
+                assert db.get(OrderItem, items[2]).delivered_quantity == 300
+                assert db.get(OrderItem, items[3]).delivered_quantity == 400

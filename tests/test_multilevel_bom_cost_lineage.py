@@ -33,6 +33,9 @@ class SourceSession:
         return self.conversion
 
     def scalar(self, _statement):
+        from app.models.warehouse_inventory import OrderedFinishedReceiptReturn
+        if OrderedFinishedReceiptReturn.__table__ in _statement.get_final_froms():
+            return 0  # This small fixture has no customer-return transfers.
         return self.used
 
 

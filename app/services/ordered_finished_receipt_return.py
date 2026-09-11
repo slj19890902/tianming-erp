@@ -259,6 +259,7 @@ def _clone_return_lot(
         height_mm=source_detail.height_mm,
         material_code_snapshot=source_detail.material_code_snapshot,
         flute_type_snapshot=source_detail.flute_type_snapshot,
+        physical_basis_json=source_detail.physical_basis_json,
     )
     db.add(lot)
     db.flush()
@@ -535,6 +536,13 @@ def restore_ordered_finished_receipt_shortage(
             created_by=operator_id,
         )
         db.add(fact)
+        db.flush()
+        from app.services.bom_return_cost import freeze_return_graph_cost
+        from app.services.bom_subkits import SubkitError
+        try:
+            freeze_return_graph_cost(db, returned=fact, lot=lot, allocation=allocation)
+        except SubkitError as error:
+            raise WarehouseInventoryError(str(error), 409) from error
         created.append(fact)
         remaining -= quantity
         sequence_no += 1

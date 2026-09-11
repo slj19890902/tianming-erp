@@ -23,6 +23,12 @@ QUANTUM = Decimal("0.0001")
 
 
 def graph_output_quantity(db, lot):
+    if lot.source_ref_type == "return_receipt_item":
+        from app.services.bom_return_cost import return_graph_sources
+        result = return_graph_sources(db, lot)
+        if result is None:
+            raise SubkitError("退回批次缺少冻结实际成本")
+        return result[0]
     if lot.source_ref_type == "bom_external_receipt":
         output = db.get(ExternalPackagingReceiptItem, lot.source_ref_id)
         return output.converted_finished_quantity
@@ -76,6 +82,10 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
     This is not the remaining lot balance. Moved/split descendants retain the
     original output's quantity and evidence. Dispatch slicing is a separate step.
     """
+    if lot.source_ref_type == "return_receipt_item":
+        from app.services.bom_return_cost import return_graph_sources
+        result = return_graph_sources(db, lot)
+        return result[1] if result is not None else None
     identity = (lot.source_ref_type, lot.source_ref_id)
     if identity in _visited:
         raise SubkitError("组套材料成本来源循环")

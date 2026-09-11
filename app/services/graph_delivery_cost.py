@@ -14,6 +14,8 @@ from app.services.multilevel_bom_cost_lineage import graph_material_sources, gra
 
 def is_graph_output(lot):
     source_type = getattr(lot, "source_ref_type", None)
+    if source_type == "return_receipt_item":
+        return "bom_return_cost" in json.loads(lot.cost_snapshot_detail_json or "{}")
     return source_type in ("bom_assembly", "bom_external_receipt") or (
         source_type == "production_completion"
         and "bom_material_product_id" in json.loads(lot.cost_snapshot_detail_json or "{}"))

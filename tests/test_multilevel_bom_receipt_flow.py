@@ -14,6 +14,7 @@ from tests.test_multilevel_bom_master import save
 
 @pytest.mark.parametrize("liner", [False, True])
 def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_app, _p181_published_map_identity, liner, monkeypatch):
+    from app.core.time_contract import beijing_today
     from app.api.deliveries import router
     from app.models.warehouse_inventory import InventoryLot
     from app.models.order import OrderItem
@@ -59,7 +60,7 @@ def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_ap
         assert {row["component_product_id"] for row in pending_line["component_lines"]} == expected_products
         assert len(pending_line["inventory_sources"]) == len(expected_products)
         assert all(row["location_id"] and row["quantity_to_pick_stock"] == 10 for row in pending_line["inventory_sources"])
-        created = client.post("/api/deliveries", json={"customer_id": 1, "delivery_date": "2026-09-10",
+        created = client.post("/api/deliveries", json={"customer_id": 1, "delivery_date": beijing_today().isoformat(),
             "items": [{"order_item_id": 1, "delivered_quantity": 4}]})
         assert created.status_code == 201, created.text
         did = created.json()["id"]
@@ -94,7 +95,7 @@ def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_ap
         check(4)
         from app.services.material_cost_lineage import material_cost_coverage_report
         with factory() as db:
-            report = material_cost_coverage_report(db, month="2026-09")
+            report = material_cost_coverage_report(db, month=beijing_today().strftime("%Y-%m"))
             assert report["covered_delivery_lines"] == 1, report
             assert report["actual_material_cost"] == Decimal("4.44" if liner else "3.46")
             cost_facts = list(db.scalars(select(FinanceDeliveryGraphCostFact)))
@@ -111,7 +112,7 @@ def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_ap
         assert cancelled.status_code == 200, cancelled.text
         check(0)
         with factory() as db:
-            assert material_cost_coverage_report(db, month="2026-09")["actual_material_cost"] == 0
+            assert material_cost_coverage_report(db, month=beijing_today().strftime("%Y-%m"))["actual_material_cost"] == 0
             assert [f.id for f in db.scalars(select(FinanceDeliveryGraphCostFact))] == frozen_ids
 
 

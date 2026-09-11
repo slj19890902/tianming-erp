@@ -17,6 +17,14 @@ def cost_slice(total, quantity, used, take):
 
 
 def source_cost(db, lot, take):
+    if lot.source_ref_type == "return_receipt_item":
+        from app.services.bom_return_cost import return_graph_sources
+        result = return_graph_sources(db, lot)
+        if result is not None:
+            quantity, rows = result
+            used = lineage_used(db, lot)
+            amount = sum((cost_slice(row["amount"], quantity, used, take) for row in rows), Decimal(0))
+            return amount, {"actual": True, "currency": rows[0]["currency"], "sources": rows}
     if lot.source_ref_type == 'bom_external_receipt':
         from app.services.multilevel_bom_external_costs import external_lot_cost
         return external_lot_cost(db, lot, take)
@@ -93,7 +101,21 @@ def estimated_slice(lot, take):
 
 
 def lineage_used(db, lot):
-    from app.models.warehouse_inventory import InventoryLot
-    return int(db.scalar(select(func.coalesce(func.sum(
+    from app.models.warehouse_inventory import InventoryLot, OrderedFinishedReceiptReturn
+    extra = []
+    if lot.source_ref_type == "return_receipt_item":
+        # One receipt line can return multiple source lots, each with its own
+        # exact cost slice. Moved descendants keep this frozen document.
+        extra = [InventoryLot.cost_snapshot_detail_json == lot.cost_snapshot_detail_json]
+    identity = [InventoryLot.source_ref_type == lot.source_ref_type,
+                InventoryLot.source_ref_id == lot.source_ref_id, *extra]
+    consumed = int(db.scalar(select(func.coalesce(func.sum(
         InventoryLot.quantity_consumed + InventoryLot.quantity_damaged + InventoryLot.quantity_scrapped), 0)).where(
-        InventoryLot.source_ref_type == lot.source_ref_type, InventoryLot.source_ref_id == lot.source_ref_id)) or 0)
+        *identity)) or 0)
+    # A short return moves a cost interval to a separately identified output.
+    # Its original interval stays used, even before the returned lot is sent
+    # again; otherwise a later debit of the source would reuse that interval.
+    transferred = int(db.scalar(select(func.coalesce(func.sum(OrderedFinishedReceiptReturn.quantity), 0)).where(
+        OrderedFinishedReceiptReturn.source_inventory_lot_id.in_(select(InventoryLot.id).where(*identity)),
+        OrderedFinishedReceiptReturn.status == "active")) or 0)
+    return consumed + transferred

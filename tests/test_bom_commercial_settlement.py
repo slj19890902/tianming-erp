@@ -259,7 +259,8 @@ def _dispatch(client: TestClient, customer_id: int, quantities: list[tuple[int, 
     return dispatched.json()
 
 
-def _confirm_receipt(client: TestClient, delivery: dict, *, short_received: int = 0, return_location_id=None) -> None:
+def _confirm_receipt(client: TestClient, delivery: dict, *, short_received: int = 0,
+                     return_location_id=None, return_layout_versions=None) -> dict:
     response = client.post(
         "/api/finance/return_receipts",
         json={
@@ -271,7 +272,8 @@ def _confirm_receipt(client: TestClient, delivery: dict, *, short_received: int 
                     "actual_received_quantity": line["delivered_quantity"] - short_received,
                     **({"resolution_action": "continue_delivery", "difference_reason": "隔离验收：客户短收，继续待送",
                         "return_location_id": (return_location_id[line["order_item_id"]]
-                            if isinstance(return_location_id, dict) else return_location_id)}
+                            if isinstance(return_location_id, dict) else return_location_id),
+                        "expected_return_layout_version": (return_layout_versions or {}).get(line["order_item_id"])}
                        if short_received else {}),
                 }
                 for line in delivery["items"]
@@ -279,6 +281,7 @@ def _confirm_receipt(client: TestClient, delivery: dict, *, short_received: int 
         },
     )
     assert response.status_code == 201, response.text
+    return response.json()
 
 
 @pytest.mark.parametrize("short_received", [0, 20])

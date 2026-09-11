@@ -163,6 +163,18 @@ def preview_stocked(item_id: int, payload: CutoverPreview, db: Session = Depends
         raise HTTPException(409, str(exc)) from exc
 
 
+@router.get("/items/{item_id}/bom-procurement-impact")
+def procurement_impact(item_id: int, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    customer_id = _access(db, user, item_id)
+    from app.services.multilevel_bom_procurement_impact import review_procurement_impact
+    from app.services.incoming_receipts import IncomingReceiptError
+    try:
+        return review_procurement_impact(db, order_item_id=item_id, customer_id=customer_id)
+    except (BomPlanError, SubkitError, CompositeBOMError, IncomingReceiptError) as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.post("/items/{item_id}/stocked-bom-cutover/execute")
 def execute_stocked(item_id: int, payload: StockedExecute, db: Session = Depends(get_db), user: User = Depends(can_edit)):
     customer_id = _access(db, user, item_id)

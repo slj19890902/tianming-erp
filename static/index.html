@@ -8056,6 +8056,18 @@
               <p v-if="bomCutover.mode === 'stocked'" class="muted">剩余需求须由本订单真实成品预占覆盖，原采购须已收齐或明确撤销。按新规则保留所需批次、释放多余数量，必要时组装；不隐含拆解成套库存或处理未收采购。</p>
               <div v-if="bomCutover.loading" role="status">正在核对…</div>
               <div v-if="bomCutover.error" class="status orange" role="alert">{{ bomCutover.error }}</div>
+              <button v-if="bomCutover.mode !== 'reserved'" class="btn" type="button" :disabled="bomCutover.loading || !!bomCutover.pending" @click="previewBomProcurement">核对原采购与实收</button>
+              <details v-if="bomCutover.procurement" open>
+                <summary>原采购与实收核对</summary>
+                <p class="muted">这里只核对原记录，不取消或转移采购；不能代替切换确认。材料按张、外购按原采购单位显示。</p>
+                <table v-if="bomCutover.procurement.paper.length"><thead><tr><th>报料行</th><th>原报料</th><th>实收</th><th>欠收</th></tr></thead><tbody>
+                  <tr v-for="row in bomCutover.procurement.paper" :key="row.line.id"><td>{{ row.line.product_name_snapshot }} · {{ row.line.id }}</td><td>{{ row.line.requisition_qty }} 张</td><td>{{ row.receipt_summary ? row.receipt_summary.cumulative_received_quantity + ' 张' : '待核对' }}</td><td>{{ row.receipt_summary ? row.receipt_summary.remaining_quantity + ' 张' : row.receipt_summary_error }}</td></tr>
+                </tbody></table>
+                <table v-if="bomCutover.procurement.external.length"><thead><tr><th>采购单 / 产品</th><th>原采购</th><th>实收</th><th>欠收 / 撤销</th></tr></thead><tbody>
+                  <tr v-for="row in bomCutover.procurement.external" :key="row.line.id"><td>{{ row.header.purchase_number }} / {{ row.product_id }}</td><td>{{ row.line.purchase_quantity }} {{ row.unit }}</td><td>{{ row.received_quantity }} {{ row.unit }}</td><td>{{ row.cancellation ? row.cancellation.reason : row.remaining_quantity + ' ' + row.unit }}</td></tr>
+                </tbody></table>
+                <p v-if="!bomCutover.procurement.paper.length && !bomCutover.procurement.external.length" class="muted">当前订单没有采购记录。</p>
+              </details>
               <template v-if="bomCutover.review">
                 <p v-if="bomCutover.mode === 'unstarted'" class="muted">须没有实际报料、预占、生产或送货；下单自动生成的待到料主任务原样保留。曾建外购采购须已明确撤销且从未收料，后续使用本次选定的新规则。</p>
                 <p>订单 {{ bomCutover.review.quantity }} · 已送 {{ bomCutover.review.delivered_quantity }} · 本次剩余 <strong>{{ bomCutover.review.execution_quantity }} {{ bomCutover.review.unit || '套' }}</strong></p>
@@ -31691,6 +31703,16 @@
               const {data}=await axios.post(`/api/orders/items/${state.itemId}/${state.route || "reserved-kit-cutover"}/preview`,{target_locations:state.targets});
               if(this.bomCutover!==state)return;
               state.review=data;state.confirmed=data.ready;
+            } catch(error) {if(this.bomCutover===state)state.error=this.errorMessage(error);}
+            finally {state.loading=false;}
+          },
+          async previewBomProcurement() {
+            const state=this.bomCutover;
+            if(!state || state.loading || state.pending)return;
+            state.loading=true;state.error="";state.procurement=null;
+            try {
+              const {data}=await axios.get(`/api/orders/items/${state.itemId}/bom-procurement-impact`);
+              if(this.bomCutover===state)state.procurement=data;
             } catch(error) {if(this.bomCutover===state)state.error=this.errorMessage(error);}
             finally {state.loading=false;}
           },

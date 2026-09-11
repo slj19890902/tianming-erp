@@ -36,6 +36,8 @@ def test_component_order_loose_stock_to_receipts_delivery_and_statement(
     app.include_router(delivery_router, prefix="/api/deliveries")
     app.include_router(finance_router, prefix="/api/finance")
     app.include_router(products_api.router, prefix="/api/master/products")
+    from app.api.bom_cutover import router as cutover_router
+    app.include_router(cutover_router, prefix="/api/orders")
     material_id, _ = seed_graph(factory, separate=True, quantity=100,
                                cutting_modes={2: "一开四", 3: "一开二"}, finished_slot_count=16)
     lots = {}
@@ -136,6 +138,18 @@ def test_component_order_loose_stock_to_receipts_delivery_and_statement(
         saved = client.post("/api/requisition/batches", json={"request_key": "priced-loose-material",
             "supplier_name": "苏州纸板供应商", "items": requisitions})
         assert saved.status_code == 201, saved.text
+        procurement_hashes = {}
+        for pid, iid in items.items():
+            preview = client.get(f"/api/orders/items/{iid}/bom-procurement-impact")
+            assert preview.status_code == 200, preview.text
+            data = preview.json()
+            assert data["executable"] is False
+            assert len(data["paper"]) == 1
+            line = data["paper"][0]
+            assert line["unit"] == "张"
+            assert line["receipt_summary"]["remaining_quantity"] == (70 if pid == 2 else 175)
+            assert line["mappings"][0]["product_id"] == pid
+            procurement_hashes[pid] = data["evidence_hash"]
         receipt_ids = []
         for index, source in enumerate(read_purchase_sources(factory, material_id)):
             fact = _freeze_receipt_fact(client, source, idempotency_key=f"priced-fact-{index}", unit_price="0.1234")
@@ -156,6 +170,14 @@ def test_component_order_loose_stock_to_receipts_delivery_and_statement(
                 rows = list(db.scalars(select(InventoryReservation).where(InventoryReservation.order_item_id == iid)))
                 assert sum(row.reserved_stock_quantity-row.consumed_stock_quantity-row.released_stock_quantity
                            for row in rows) == (300 if pid == 2 else 400)
+        for pid, iid in items.items():
+            preview = client.get(f"/api/orders/items/{iid}/bom-procurement-impact")
+            assert preview.status_code == 200, preview.text
+            data = preview.json()
+            assert data["evidence_hash"] != procurement_hashes[pid]
+            assert data["paper"][0]["receipt_summary"]["remaining_quantity"] == 0
+            assert len(data["paper"][0]["receipts"]) == 2
+            assert data["paper"][0]["frozen_costs"]
         first_delivery = _dispatch(client, 1, [(items[2], 120), (items[3], 100)])
         second = _dispatch(client, 1, [(items[2], 180), (items[3], 300)])
         cancelled = client.put(f"/api/deliveries/{second['id']}/cancel")

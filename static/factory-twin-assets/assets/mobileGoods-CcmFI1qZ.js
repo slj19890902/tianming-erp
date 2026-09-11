@@ -1,0 +1,1 @@
+import{c as e,j as s}from"./client-XPznW3iY.js";import{W as t}from"./WarehouseGoods-ymw41Dfs.js";const o=window.parent;e.createRoot(document.getElementById("root")).render(s.jsx(t,{...o.mobileGoodsConfig(),onBusyChange:o.mobileGoodsBusy,onSaved:o.mobileGoodsSaved}));

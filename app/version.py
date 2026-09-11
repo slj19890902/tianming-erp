@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.332"
-APP_VERSION_NAME = "仓库模具输入筛选"
-APP_BUILD_DATE = "2026-09-10"
+APP_VERSION = "v0.22.334"
+APP_VERSION_NAME = "手机盘点旧页面自动更新"
+APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -2509,11 +2509,28 @@ _V022331_VERIFICATION_STEPS = [
     "输入材质代码并选择供应商条目，核对平方价、单张价及合计；入库后调整供应商价格不改变该批快照。",
     "主数据→供应商→纸板材质维护，在基础纸种代码编辑颜色并保存；核对白色与瓦楞色不可互用、不同白色代码同规格可用。",
 ]
-APP_CHANGES = ["仓库半成品模具选择支持输入编号、名称、拼音或首字母筛选，搜索保留已选模具。"]
-APP_VERIFICATION_STEPS = ["仓库添加半成品，在使用模具上方输入编号或名称筛选，选中后确认仍按该模具筛选适用产品。"]
+_V022332_CHANGES = ["仓库半成品模具选择支持输入编号、名称、拼音或首字母筛选，搜索保留已选模具。"]
+_V022332_VERIFICATION_STEPS = ["仓库添加半成品，在使用模具上方输入编号或名称筛选，选中后确认仍按该模具筛选适用产品。"]
+_V022333_CHANGES = [
+    "修复手机打开含半成品或原材料货架时读取材质字段错误导致HTTP500，保留批次真实名称与材质代码。",
+    "手机空货位直接进入添加货物，压缩位置和批次统计，合并盘点与实物搜索入口。",
+    "成品先查未归位库存、再查已有货位库存；未在列表时查ERP匹配产品前10条，支持规格尺寸搜索。",
+    "手机新增半成品、原材料切换，共用电脑端表单与价格、用途、库存保存规则，基本表单在手机一屏内操作。",
+]
+_V022333_VERIFICATION_STEPS = [
+    "手机打开三楼F区L010，确认可查看半成品货物且没有HTTP500。",
+    "点击空货位，选择客户并搜索库存；先显示未归位批次，归位或移货保持全仓总数不增加。",
+    "点击未在列表检查ERP前10个匹配产品；切换半成品和原材料，检查材质、规格、数量及保存按钮可见。",
+]
+APP_CHANGES = ["修复手机缓存旧盘点页面却加载新版脚本导致空货位读取失败；旧页面自动换新，盘点HTML禁止缓存。"]
+APP_VERIFICATION_STEPS = ["手机重新点击空货位，旧页面应自动更新并直接显示添加货物，不再出现inboundCandidates空对象错误。"]
 APP_CHANGELOG = [
-    *(f"v0.22.332：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.332：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.334：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.334：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.333：本次更新｜{item}" for item in _V022333_CHANGES),
+    *(f"v0.22.333：如何验证｜{item}" for item in _V022333_VERIFICATION_STEPS),
+    *(f"v0.22.332：本次更新｜{item}" for item in _V022332_CHANGES),
+    *(f"v0.22.332：如何验证｜{item}" for item in _V022332_VERIFICATION_STEPS),
     *(f"v0.22.331：本次更新｜{item}" for item in _V022331_CHANGES),
     *(f"v0.22.331：如何验证｜{item}" for item in _V022331_VERIFICATION_STEPS),
     *(f"v0.22.330：本次更新｜{item}" for item in _V022330_CHANGES),

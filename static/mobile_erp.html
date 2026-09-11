@@ -1710,6 +1710,11 @@
           card.append(move, returned);
           container.append(card);
         });
+        if (!goods.length && !discrepantGoods.length) {
+          const params = new URLSearchParams({location_id: location.location_id, return_floor: state.warehouseMapFloor, return_area: state.warehouseMapArea});
+          window.location.assign(`/mobile/stocktake.html?${params}`);
+          return;
+        }
         const addPanel = node("section", "warehouse-label-operation");
         {
           const stocktake = node("button", "search-btn", "盘点 / 添加货物");
@@ -1719,7 +1724,7 @@
             window.location.assign(`/mobile/stocktake.html?${params}`);
           });
           addPanel.append(stocktake);
-          renderEmptyWarehouseLocationSearch(location, addPanel);
+
         }
         goods.forEach(good => {
           const card = node("section", "candidate warehouse-label-card");

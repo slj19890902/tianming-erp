@@ -3047,8 +3047,8 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
             else ""
         )
         customer_name = detail.owner_customer_name_snapshot if detail else None
-        product_code = detail.material_code if detail else None
-        product_name = "半成品纸板"
+        product_code = detail.material_code_snapshot if detail else None
+        product_name = (detail.internal_name or ("原材料纸板" if detail.sheet_type == "raw_board" else "半成品纸板")) if detail else "半成品纸板"
     movable_quantity = int(lot.quantity_available or 0) + int(
         lot.quantity_reserved or 0
     )
@@ -3524,6 +3524,7 @@ def search_mobile_warehouse_physical_inventory(
     response: Response,
     customer_keyword: str | None = Query(default=None, max_length=120),
     inventory_keyword: str | None = Query(default=None, max_length=200),
+    customer_id: int | None = Query(default=None, gt=0),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -3534,7 +3535,7 @@ def search_mobile_warehouse_physical_inventory(
     _no_store(response)
     customer_text = str(customer_keyword or "").strip()
     inventory_text = str(inventory_keyword or "").strip()
-    if not customer_text and not inventory_text:
+    if not customer_text and not inventory_text and customer_id is None:
         raise HTTPException(status_code=422, detail="请输入客户简称或存货编码等关键词")
 
     filters = [
@@ -3552,6 +3553,8 @@ def search_mobile_warehouse_physical_inventory(
         filters.append(
             FinishedGoodsInventoryDetail.owner_customer_id.in_(visible_customer_ids)
         )
+    if isinstance(customer_id, int):
+        filters.append(FinishedGoodsInventoryDetail.owner_customer_id == customer_id)
     if customer_text:
         pattern = f"%{customer_text}%"
         filters.append(
@@ -3572,6 +3575,7 @@ def search_mobile_warehouse_physical_inventory(
                 Product.product_code.ilike(pattern),
                 Product.customer_material_code.ilike(pattern),
                 Product.product_name.ilike(pattern),
+                (cast(FinishedGoodsInventoryDetail.length_mm, String) + "×" + cast(FinishedGoodsInventoryDetail.width_mm, String) + "×" + cast(FinishedGoodsInventoryDetail.height_mm, String)).ilike("%" + inventory_text.replace("*", "×").replace("x", "×").replace("X", "×") + "%"),
             )
         )
 
@@ -3587,6 +3591,7 @@ def search_mobile_warehouse_physical_inventory(
                 Customer.id == FinishedGoodsInventoryDetail.owner_customer_id,
             )
             .outerjoin(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+            .join(WarehouseLocation, WarehouseLocation.id == InventoryLot.warehouse_location_id)
             .where(*filters)
         )
 
@@ -3603,6 +3608,7 @@ def search_mobile_warehouse_physical_inventory(
             joined_statement()
             .options(*_mobile_lot_options())
             .order_by(
+                case((WarehouseLocation.location_code == "RECOUNT-PENDING", 0), else_=1),
                 FinishedGoodsInventoryDetail.owner_customer_name_snapshot,
                 FinishedGoodsInventoryDetail.inventory_code_snapshot,
                 InventoryLot.stock_date,
@@ -3639,6 +3645,7 @@ def search_mobile_warehouse_physical_inventory(
                     "is_pending_relocation": is_pending_relocation_location(location),
                     "location_id": int(location.id),
                     "location_code": location.location_code,
+                    "address_version": location.address_version,
                     "employee_location_name": address["employee_location_name"],
                     "floor": location.warehouse_floor,
                     "area_code": location.area_code,

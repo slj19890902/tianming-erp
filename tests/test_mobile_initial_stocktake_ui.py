@@ -6,15 +6,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_initial_ui_keeps_retry_payload_and_rejects_stale_search():
-    source = (ROOT / "static/mobile_initial_stocktake.js").read_text(encoding="utf-8")
+    source = (ROOT / "static/mobile_initial_stocktake_runtime.js").read_text(encoding="utf-8")
     harness = r'''
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const nodes = new Map();
-const $ = id => { if (!nodes.has(id)) nodes.set(id, {value:'', checked:false, disabled:false, classList:{add(){},remove(){},toggle(){}}}); return nodes.get(id); };
+const $ = id => { if (!nodes.has(id)) nodes.set(id, {replaceChildren(){},value:'', checked:false, disabled:false, classList:{add(){},remove(){},toggle(){}}}); return nodes.get(id); };
 const state = {user:{id:1,role:'admin'}, selectedLocation:{id:2,layout_version:1}, lots:[], locked:false};
 let mode='race', calls=[], deferred=[];
 const context = {console, URLSearchParams, Intl, Date, JSON, Number, $, state, h: x => String(x),
+  document: {querySelectorAll(){return []}},
   window: {location: {search: ''}},
   pick:(row,keys)=>keys.map(k=>row?.[k]).find(x=>x!==undefined),
   idempotencyKey:()=> 'stable-key', updateSubmitState(){}, showMessage(){},
@@ -49,6 +50,19 @@ vm.runInContext(SOURCE, context);
   assert.deepEqual(calls[0],calls[1]);
   assert.equal(calls[1].items[0].quantity,13);
   assert.equal(vm.runInContext('inbound.attempt',context),null);
+  calls=[];
+  state.selectedLocation.address_version=2;state.selectedLocation.published_map_revision='map-1';
+  vm.runInContext("inbound.stockLot={lot_id:20,lot_version:3,quantity_movable:10,registered_location:{location_id:9,is_pending_relocation:true}}",context);
+  $('inboundQuantity').value='6';
+  await vm.runInContext('saveInitialInbound()',context);
+  assert.equal(vm.runInContext('inbound.attempt.move_path',context),'/api/warehouse/twin-operations/pending-lots/20/place');
+  $('inboundQuantity').value='10';
+  await vm.runInContext('saveInitialInbound()',context);
+  assert.deepEqual(calls[0],calls[1]);
+  assert.equal(calls[1].quantity,6);
+  assert.equal(calls[1].expected_version,3);
+  assert.equal(calls[1].expected_map_revision,'map-1');
+
 })().catch(error=>{console.error(error);process.exit(1)});
 '''
     result = subprocess.run(["node", "-e", "const SOURCE=" + json.dumps(source) + ";\n" + harness], capture_output=True, text=True)

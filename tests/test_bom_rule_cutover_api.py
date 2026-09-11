@@ -1,5 +1,6 @@
 import pytest
 from sqlalchemy import select, text
+from app.core.time_contract import beijing_today
 
 from app.models.product import Product
 from app.models.multilevel_bom import OrderBomRuleRevision
@@ -275,7 +276,7 @@ def test_000148_real_carton_and_assembled_liner_keep_separate_stock_after_rule_s
         if lot.finished_detail.product_id == pid and lot.quantity_reserved > 0} for pid in (3765, 3822)}
     assert all(positions.values()) and positions[3765].isdisjoint(positions[3822])
     delivery = client.post("/api/deliveries", json={"customer_id": current.graph.customer_id,
-        "delivery_date": "2026-09-10", "items": [{"order_item_id": item.id, "delivered_quantity": 1}]})
+        "delivery_date": beijing_today().isoformat(), "items": [{"order_item_id": item.id, "delivered_quantity": 1}]})
     assert delivery.status_code == 201, delivery.text
     did = delivery.json()["id"]
     detail = client.get(f"/api/deliveries/{did}")

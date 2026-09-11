@@ -43,8 +43,8 @@ class App:
         self.busy = False
         window.protocol('WM_DELETE_WINDOW', self.close)
         window.title('天明ERP助手 · 更新、备份与恢复')
-        window.geometry('760x620')
-        window.minsize(700, 580)
+        window.geometry('760x680')
+        window.minsize(700, 640)
         box = ttk.Frame(window, padding=24)
         box.pack(fill='both', expand=True)
         ttk.Label(box, text='天明 ERP 助手', font=('Microsoft YaHei UI', 21, 'bold')).pack(anchor='w')
@@ -57,6 +57,7 @@ class App:
                              ('回退到上一个版本', self.rollback), ('立即完整备份到NAS', self.backup),
                              ('从NAS恢复到本机空安装', self.restore), ('首次接入原ERP（只读复制）', self.import_old),
                              ('设置本机局域网访问地址', self.network),
+                             ('设置AI密钥', self.configure_ai),
                              ('设置NAS与每天23点备份', self.configure)]:
             button = ttk.Button(box, text=text, command=action)
             button.pack(fill='x', pady=4)
@@ -163,6 +164,34 @@ class App:
             register_nightly(self.manager.root, Path(sys.executable))
             return '23点任务已注册；请立即做一次完整备份验证NAS连接，并妥善保管恢复口令'
         self.run('保存备份设置', save)
+
+    def configure_ai(self):
+        from desktop_assistant.ai_config import save_openai_api_key
+
+        key = simpledialog.askstring(
+            '设置AI密钥',
+            '粘贴从 OpenAI 安全创建入口取得的密钥。\n密钥仅加密保存在本机，不进入ERP数据库、日志、发布包或NAS备份。',
+            show='*',
+        )
+        if not key:
+            return
+        again = simpledialog.askstring('确认AI密钥', '再次粘贴同一个密钥：', show='*')
+        if key.strip() != (again or '').strip():
+            messagebox.showerror('密钥不匹配', '两次输入的AI密钥不同，未保存。')
+            return
+
+        def save():
+            with self.manager.lock():
+                running = bool(self.manager._process())
+                self.manager.stop()
+                try:
+                    save_openai_api_key(self.manager.root, key)
+                finally:
+                    if running:
+                        self.manager.start()
+            return 'AI密钥已加密保存；ERP已按原运行状态重新加载配置。'
+
+        self.run('安全保存AI密钥', save)
 
     def open_erp(self):
         def start():

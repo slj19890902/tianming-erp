@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.358"
-APP_VERSION_NAME = "仓库入口返回业务中心"
+APP_VERSION = "v0.22.359"
+APP_VERSION_NAME = "AI库存解读安全底座与密钥入口"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2694,9 +2694,25 @@ APP_VERIFICATION_STEPS = [
     "在库存台账点击盘点上架，确认左侧业务中心没有消失，并且内嵌仓库直接进入盘点模式；库存成本点击返回仓库也应回到同一主界面。",
     "进入系统备份→系统版本确认版本为 v0.22.358；正式页面由管理员人工验收，本次发布不自动点击仓库或执行库存操作。",
 ]
+_V022358_CHANGES = APP_CHANGES
+_V022358_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "库存助手新增AI经营解读区域；模型只能解释ERP已算出的脱敏库存快照，不能自动抵扣、报料、报废、建单或修改库存。",
+    "AI运行新增权限快照、输入指纹、幂等防重复、结构与证据引用校验、操作日志、反馈及用量账本；外部服务不可用时保留本地规则看板。",
+    "天明ERP助手新增“设置AI密钥”，密钥由Windows当前用户加密并仅保存在本机控制目录，不进入ERP数据库、日志、发布包或NAS备份。",
+    "新增sq29v8x9z91线性迁移，只建立AI运行、反馈和用量表，不回填或修改订单、库存、价格及其他正式业务事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "打开库存助手，确认本地规则结果正常，AI区域明确显示当前连接状态；未启用模型时生成按钮不可用且不影响库存查询。",
+    "在天明ERP助手点击“设置AI密钥”，两次输入不一致时确认不会保存；正确保存后确认ERP按原运行状态重新加载，界面不显示密钥内容。",
+    "在隔离环境启用Mock生成一次解读，确认摘要、风险、依据、人工核对建议和有帮助/不准确反馈可用；重复幂等请求不重复计费。",
+    "进入系统备份→系统版本确认v0.22.359、数据库revision为sq29v8x9z91；正式页面由管理员人工验收，不执行自动点击。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.358：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.358：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.359：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.359：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.358：本次更新｜{item}" for item in _V022358_CHANGES),
+    *(f"v0.22.358：如何验证｜{item}" for item in _V022358_STEPS),
     *(f"v0.22.357：本次更新｜{item}" for item in _V022357_CHANGES),
     *(f"v0.22.357：如何验证｜{item}" for item in _V022357_STEPS),
     *(f"v0.22.356：本次更新｜{item}" for item in _V022356_CHANGES),

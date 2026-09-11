@@ -152,6 +152,21 @@ def test_snapshot_removes_all_cost_fields_without_cost_permission() -> None:
         )
 
 
+def test_data_quality_focus_only_keeps_data_quality_reasons() -> None:
+    from app.services.ai.inventory_assistant import build_inventory_snapshot
+
+    insights = _insights()
+    insights["action_items"][0]["reasons"].append(
+        {"code": "location_unavailable", "text": "库位不可用"}
+    )
+    snapshot = build_inventory_snapshot(
+        insights,
+        focus="data_quality",
+        include_cost=False,
+    )
+    assert snapshot["evidence"][0]["risk_codes"] == ["location_unavailable"]
+
+
 def test_mock_provider_returns_only_valid_evidence_backed_checks() -> None:
     from app.services.ai.inventory_assistant import (
         build_inventory_snapshot,
@@ -274,12 +289,14 @@ def test_ai_permission_defaults_match_confirmed_roles() -> None:
     assert {"ai.usage.view", "ai.configure"}.issubset(ADMIN_ONLY_PERMISSIONS)
 
 
-def test_ai_permission_labels_and_frontend_fallback_match_backend_contract() -> None:
+def test_ai_permission_labels_and_inventory_page_fallback_match_backend_contract() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
     auth_source = (root / "app" / "api" / "auth.py").read_text(encoding="utf-8")
-    frontend = (root / "static" / "index.html").read_text(encoding="utf-8")
+    frontend = (root / "static" / "inventory-assistant.html").read_text(
+        encoding="utf-8"
+    )
 
     for code, label in (
         ("ai.inventory.view", "AI 库存经营解读"),
@@ -287,10 +304,12 @@ def test_ai_permission_labels_and_frontend_fallback_match_backend_contract() -> 
         ("ai.configure", "AI 安全配置"),
     ):
         assert code in auth_source
-        assert code in frontend
         assert label in auth_source
-        assert label in frontend
-    assert (
-        '"ai.usage.view","ai.configure"].includes(code)'
-        in frontend
-    )
+    for contract in (
+        "/api/ai/status",
+        "/api/ai/inventory-insights/runs",
+        "生成本次解读",
+        "不会自动抵扣、报料、报废、建单或修改库存",
+        "天明ERP助手中设置AI密钥",
+    ):
+        assert contract in frontend

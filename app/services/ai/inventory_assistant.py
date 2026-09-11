@@ -18,13 +18,14 @@ InventoryFocus = Literal[
     "aged_inventory",
     "demand_coverage",
     "cost_missing",
+    "data_quality",
 ]
 
 SNAPSHOT_SCHEMA_VERSION = "ai.inventory.insight.snapshot.v1"
 PROMPT_VERSION = "ai.inventory.insight.zh-cn.v1"
 MAX_EVIDENCE = 50
 ALLOWED_FOCUS = frozenset(
-    {"all", "aged_inventory", "demand_coverage", "cost_missing"}
+    {"all", "aged_inventory", "demand_coverage", "cost_missing", "data_quality"}
 )
 ALLOWED_CATEGORIES = frozenset(
     {"aged_inventory", "demand_coverage", "cost_missing", "data_quality"}
@@ -95,6 +96,8 @@ def _focus_codes(focus: str, *, include_cost: bool) -> frozenset[str]:
         if not include_cost:
             raise InventoryAssistantError("当前账号无成本权限，不能生成成本缺失解读")
         return COST_REASON_CODES
+    if focus == "data_quality":
+        return DATA_QUALITY_REASON_CODES
     return ALLOWED_REASON_CODES if include_cost else ALLOWED_REASON_CODES - COST_REASON_CODES
 
 

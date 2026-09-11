@@ -118,15 +118,25 @@ class Manager:
                 raise ValueError('服务未能正常停止，未强杀，请检查日志') from None
 
     def _environment(self, release: Path):
+        from desktop_assistant.ai_config import load_openai_api_key
+
         shared = self.root / 'shared'
         saved = read_json(shared / 'environment.json')
-        env = {k: v for k, v in os.environ.items() if not k.startswith(('ERP_', 'TM_ERP_', 'PYTHON'))}
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(('ERP_', 'TM_ERP_', 'PYTHON'))
+            and key != 'OPENAI_API_KEY'
+        }
         for key, value in saved.items():
             env[key] = value.replace('${SHARED}', str(shared))
         env['PYTHONUTF8'] = '1'
         env['PYTHONPATH'] = str(release)
         env['ERP_DATABASE_PATH'] = str(shared / 'data/carton_erp.sqlite3')
         env['ERP_WORKERS'] = '1'
+        ai_key = load_openai_api_key(self.root)
+        if ai_key:
+            env['OPENAI_API_KEY'] = ai_key
         models = release / 'runtime/ocr/model'
         if models.is_dir():
             env['EASYOCR_MODULE_PATH'] = str(models.parent)

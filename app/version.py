@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.360"
-APP_VERSION_NAME = "AI库存真实解读安全接入"
+APP_VERSION = "v0.22.361"
+APP_VERSION_NAME = "邮箱自动收单与运行状态"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2722,9 +2722,25 @@ APP_VERIFICATION_STEPS = [
     "临时断开外网或使用无权限项目时，确认页面给出安全提示且原本地库存经营看板仍可正常查询，不产生任何业务写入。",
     "进入系统备份→系统版本确认v0.22.360、数据库revision仍为sq29v8x9z91；正式页面由管理员人工验收，不执行自动点击。",
 ]
+_V022360_CHANGES = APP_CHANGES
+_V022360_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "邮箱收单支持后台自动读取126收件箱，保存授权码后默认每5分钟检查；有多批历史邮件时会按每批20封连续安全补齐。",
+    "邮箱设置可暂停自动读取或选择1至60分钟间隔，并显示最近执行时间、新增邮件、剩余数量和失败原因；手动读取入口继续保留。",
+    "自动任务只使用IMAP只读方式暂存允许的PDF/Excel附件，不标已读、不移动、不删除邮件，也不自动创建订单；订单仍须管理员核对后保存。",
+    "新增sr30v8x9z92线性迁移，只保存自动读取配置及运行状态，不修改既有邮件、附件、订单、客户、库存、价格或生产事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "打开邮箱收单→邮箱设置，确认显示自动读取状态和5分钟间隔；可暂停后保存，再恢复启用。",
+    "向sz_tmbz@126.com收件箱放入一封PDF订单，等待自动读取或点击读取收件箱，确认邮件只进入待核对且原邮箱状态未改变。",
+    "打开附件并核对识别结果；不确认时不得创建订单，确认保存后可从邮件回到对应订单来源。",
+    "进入系统备份→系统版本确认v0.22.361、数据库revision为sr30v8x9z92；正式页面由管理员人工验收。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.360：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.360：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.361：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.361：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.360：本次更新｜{item}" for item in _V022360_CHANGES),
+    *(f"v0.22.360：如何验证｜{item}" for item in _V022360_STEPS),
     *(f"v0.22.359：本次更新｜{item}" for item in _V022359_CHANGES),
     *(f"v0.22.359：如何验证｜{item}" for item in _V022359_STEPS),
     *(f"v0.22.358：本次更新｜{item}" for item in _V022358_CHANGES),

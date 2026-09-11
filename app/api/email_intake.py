@@ -39,12 +39,35 @@ class PdfDraftChange(BaseModel):
     draft: dict
 
 
+class AutomationChange(BaseModel):
+    expected_version: int = Field(ge=1)
+    automatic_enabled: bool
+    sync_interval_minutes: int = Field(default=5, ge=1, le=60)
+
+
+def _settings_payload(row):
+    return {
+        'account': service.ACCOUNT,
+        'folder': '收件箱',
+        'configured': row is not None,
+        'version': row.version if row else 0,
+        'mode': 'automatic' if row and row.automatic_enabled else 'manual',
+        'automatic_enabled': bool(row and row.automatic_enabled),
+        'sync_interval_minutes': int(row.sync_interval_minutes) if row else 5,
+        'last_sync_started_at': row.last_sync_started_at if row else None,
+        'last_sync_completed_at': row.last_sync_completed_at if row else None,
+        'last_sync_status': row.last_sync_status if row else 'never',
+        'last_sync_received': int(row.last_sync_received) if row else 0,
+        'last_sync_remaining': int(row.last_sync_remaining) if row else 0,
+        'last_sync_error': row.last_sync_error if row else None,
+    }
+
+
 @router.get('/settings')
 def settings(response: Response, db: Session = Depends(get_db), user: User = Depends(allowed)):
     response.headers['Cache-Control'] = 'private, no-store'
     row = db.get(EmailIntakeSettings, 1)
-    return {'account': service.ACCOUNT, 'folder': '收件箱', 'configured': row is not None,
-            'version': row.version if row else 0, 'mode': 'manual'}
+    return _settings_payload(row)
 
 
 @router.put('/settings')
@@ -62,7 +85,8 @@ def save_settings(payload: SettingsChange, request: Request, db: Session = Depen
     if row is None:
         if payload.expected_version != 0:
             raise HTTPException(409, '邮箱设置已变化，请刷新')
-        db.add(EmailIntakeSettings(id=1, encrypted_secret=encrypted))
+        db.add(EmailIntakeSettings(id=1, encrypted_secret=encrypted, automatic_enabled=True,
+                                   sync_interval_minutes=5, last_sync_status='never'))
     else:
         changed = db.execute(update(EmailIntakeSettings).where(
             EmailIntakeSettings.id == 1, EmailIntakeSettings.version == payload.expected_version
@@ -75,6 +99,29 @@ def save_settings(payload: SettingsChange, request: Request, db: Session = Depen
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, '邮箱设置已变化，请刷新') from None
+    return {'saved': True}
+
+
+@router.put('/automation')
+def save_automation(payload: AutomationChange, db: Session = Depends(get_db), user: User = Depends(allowed)):
+    row = db.get(EmailIntakeSettings, 1)
+    if row is None:
+        raise HTTPException(409, '请先保存126客户端授权码')
+    changed = db.execute(update(EmailIntakeSettings).where(
+        EmailIntakeSettings.id == 1,
+        EmailIntakeSettings.version == payload.expected_version,
+    ).values(
+        automatic_enabled=payload.automatic_enabled,
+        sync_interval_minutes=payload.sync_interval_minutes,
+        version=EmailIntakeSettings.version + 1,
+    ))
+    if changed.rowcount != 1:
+        raise HTTPException(409, '邮箱设置已变化，请刷新')
+    service.audit(db, user, 'configure_automatic_sync', {
+        'automatic_enabled': payload.automatic_enabled,
+        'sync_interval_minutes': payload.sync_interval_minutes,
+    })
+    db.commit()
     return {'saved': True}
 
 

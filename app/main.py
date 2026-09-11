@@ -126,16 +126,18 @@ async def phase2_lifespan(_: FastAPI):
     import asyncio
     from app.core.database import SessionLocal
     from app.services.supplier_settlement_automation import settlement_loop
+    from app.services.email_intake import automatic_sync_loop
     stop = asyncio.Event()
-    job = None
+    jobs = []
     if current.is_production and not os.getenv("ERP_UAT_ROOT"):
-        job = asyncio.create_task(settlement_loop(stop, SessionLocal))
+        jobs.append(asyncio.create_task(settlement_loop(stop, SessionLocal)))
+        jobs.append(asyncio.create_task(automatic_sync_loop(stop, SessionLocal)))
     try:
         yield
     finally:
         stop.set()
-        if job is not None:
-            await job
+        if jobs:
+            await asyncio.gather(*jobs)
 
 
 def apply_production_security(application: FastAPI, current) -> None:

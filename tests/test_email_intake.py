@@ -1,4 +1,5 @@
 from email.message import EmailMessage
+from datetime import datetime
 from fastapi.testclient import TestClient
 from sqlalchemy import select, func
 from app.models.email_intake import EmailIntakeSettings, EmailIntakeMessage, EmailIntakeAttachment
@@ -31,7 +32,18 @@ def test_mail_permissions_config_encryption_and_version(mobile_portal_app):
         assert response.status_code == 200, response.text
         public = client.get('/api/email-intake/settings')
         assert public.json()['version'] == 1 and 'fake-uat' not in public.text
+        assert public.json()['automatic_enabled'] is True
+        assert public.json()['sync_interval_minutes'] == 5
         assert client.put('/api/email-intake/settings', json=payload).status_code == 409
+        changed = client.put('/api/email-intake/automation', json={
+            'automatic_enabled': False, 'sync_interval_minutes': 10,
+            'expected_version': 1,
+        })
+        assert changed.status_code == 200, changed.text
+        current = client.get('/api/email-intake/settings').json()
+        assert current['automatic_enabled'] is False
+        assert current['sync_interval_minutes'] == 10
+        assert current['version'] == 2
         rejected = client.put('http://192.168.3.80/api/email-intake/settings', json=payload)
         assert rejected.status_code in (400, 401)
         with factory() as db:
@@ -118,3 +130,56 @@ def test_oversize_and_encrypted_secret_failure(mobile_portal_app):
     message.set_content('<script>steal()</script><img src="https://example.invalid/pixel">', subtype='html')
     parsed, attachments = service.parse_message(message.as_bytes())
     assert parsed['body'] == '' and 'HTML' in parsed['notice']
+
+
+def test_automatic_cycle_keeps_mail_as_pending_draft(mobile_portal_app):
+    app, ids, factory = mobile_portal_app
+    raw = mail_bytes()
+
+    class FakeIMAP:
+        capabilities = ()
+        def __init__(self, *args, **kwargs): pass
+        def login(self, *args): pass
+        def select(self, folder, readonly):
+            assert readonly is True
+            return 'OK', []
+        def response(self, name): return name, [b'456']
+        def uid(self, command, *args):
+            if command == 'search': return 'OK', [b'9']
+            if args[1] == '(RFC822.SIZE)':
+                return 'OK', [b'9 (RFC822.SIZE ' + str(len(raw)).encode() + b')']
+            return 'OK', [(b'header', raw)]
+        def logout(self): pass
+
+    with factory() as db:
+        db.add(EmailIntakeSettings(
+            id=1, encrypted_secret=service.protect('automatic-test-secret'),
+            automatic_enabled=True, sync_interval_minutes=5,
+        ))
+        db.commit()
+    result = service.run_automatic_cycle(factory, FakeIMAP)
+    assert result == {'enabled': True, 'received': 1, 'remaining': 0}
+    with factory() as db:
+        settings = db.get(EmailIntakeSettings, 1)
+        assert settings.last_sync_status == 'success'
+        assert settings.last_sync_received == 1
+        assert settings.last_sync_remaining == 0
+        assert isinstance(settings.last_sync_started_at, datetime)
+        assert isinstance(settings.last_sync_completed_at, datetime)
+        mail = db.scalar(select(EmailIntakeMessage))
+        assert mail.status == 'pending'
+        assert db.scalar(select(func.count()).select_from(EmailIntakeAttachment)) == 1
+
+
+def test_automatic_cycle_disabled_does_not_connect(mobile_portal_app):
+    app, ids, factory = mobile_portal_app
+    with factory() as db:
+        db.add(EmailIntakeSettings(
+            id=1, encrypted_secret=service.protect('automatic-test-secret'),
+            automatic_enabled=False, sync_interval_minutes=5,
+        ))
+        db.commit()
+    class MustNotConnect:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError('disabled automatic sync connected to IMAP')
+    assert service.run_automatic_cycle(factory, MustNotConnect)['enabled'] is False

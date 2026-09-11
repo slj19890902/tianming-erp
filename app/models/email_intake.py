@@ -1,14 +1,29 @@
 """Mail intake staging; no automatic sales facts."""
-from sqlalchemy import Integer, String, Text, LargeBinary, ForeignKey, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, Text, LargeBinary, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models import Base
 
 
 class EmailIntakeSettings(Base):
     __tablename__ = 'email_intake_settings'
+    __table_args__ = (
+        CheckConstraint('sync_interval_minutes BETWEEN 1 AND 60', name='ck_email_intake_sync_interval'),
+        CheckConstraint("last_sync_status IN ('never','running','success','failed')", name='ck_email_intake_sync_status'),
+        CheckConstraint('last_sync_received >= 0 AND last_sync_remaining >= 0', name='ck_email_intake_sync_counts'),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     encrypted_secret: Mapped[str] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    automatic_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    sync_interval_minutes: Mapped[int] = mapped_column(Integer, default=5)
+    last_sync_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_sync_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_sync_status: Mapped[str] = mapped_column(String(30), default="never")
+    last_sync_received: Mapped[int] = mapped_column(Integer, default=0)
+    last_sync_remaining: Mapped[int] = mapped_column(Integer, default=0)
+    last_sync_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
 class EmailIntakeMessage(Base):

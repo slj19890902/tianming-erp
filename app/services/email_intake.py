@@ -7,6 +7,9 @@ import os
 import re
 import ssl
 import threading
+import asyncio
+import logging
+from datetime import datetime
 from email import policy
 from email.parser import BytesParser
 from pathlib import PurePosixPath
@@ -19,6 +22,7 @@ MAILBOX_KEY = ACCOUNT + '/INBOX'
 MAX_MESSAGE = 16 * 1024 * 1024
 MAX_ATTACHMENT = 8 * 1024 * 1024
 sync_lock = threading.Lock()
+log = logging.getLogger(__name__)
 
 
 def protect(value, decrypt=False):
@@ -57,9 +61,11 @@ def secret(db):
 
 
 def audit(db, user, action, details):
-    append_audit_event(db, event_category='system', result='success', source='web',
+    append_audit_event(db, event_category='system', result='success',
+                      source='web' if user is not None else 'system',
                       module_code='email_intake', action_code=action, resource='email_intake',
-                      actor=user, details=details)
+                      actor=user, operator_name=None if user is not None else '系统自动收件',
+                      details=details)
 
 
 def parse_message(raw):
@@ -167,3 +173,68 @@ def sync_inbox(db, user, factory=imaplib.IMAP4_SSL):
             except (OSError, imaplib.IMAP4.error):
                 pass
         sync_lock.release()
+
+
+def _safe_automatic_error(error):
+    if isinstance(error, LookupError):
+        return '已有收件任务正在运行，下次自动重试'
+    if isinstance(error, (OSError, imaplib.IMAP4.error)):
+        return '126邮箱连接失败，下次自动重试'
+    if isinstance(error, ValueError):
+        text = str(error).strip()
+        return text[:500] if text else '邮箱配置或邮件内容校验失败'
+    return '自动读取失败，下次自动重试'
+
+
+def run_automatic_cycle(session_factory, factory=imaplib.IMAP4_SSL):
+    """Run one configured inbox read without creating sales facts."""
+    with session_factory() as db:
+        settings = db.get(EmailIntakeSettings, 1)
+        if settings is None or not settings.automatic_enabled:
+            return {'enabled': False, 'received': 0, 'remaining': 0}
+        settings.last_sync_started_at = datetime.now()
+        settings.last_sync_status = 'running'
+        settings.last_sync_error = None
+        db.commit()
+        try:
+            result = sync_inbox(db, None, factory)
+        except Exception as error:
+            db.rollback()
+            settings = db.get(EmailIntakeSettings, 1)
+            if settings is not None:
+                settings.last_sync_completed_at = datetime.now()
+                settings.last_sync_status = 'failed'
+                settings.last_sync_error = _safe_automatic_error(error)
+                db.commit()
+            raise
+        settings = db.get(EmailIntakeSettings, 1)
+        if settings is not None:
+            settings.last_sync_completed_at = datetime.now()
+            settings.last_sync_status = 'success'
+            settings.last_sync_received = int(result['received'])
+            settings.last_sync_remaining = int(result['remaining'])
+            settings.last_sync_error = None
+            db.commit()
+        return {'enabled': True, **result}
+
+
+async def automatic_sync_loop(stop, session_factory, default_interval_seconds=300):
+    """Poll the configured inbox in the single formal worker."""
+    delay = 1
+    while not stop.is_set():
+        try:
+            result = await asyncio.to_thread(run_automatic_cycle, session_factory)
+            with session_factory() as db:
+                settings = db.get(EmailIntakeSettings, 1)
+                configured_minutes = int(settings.sync_interval_minutes) if settings else 5
+            if result.get('enabled') and int(result.get('remaining') or 0) > 0:
+                delay = 5
+            else:
+                delay = max(60, min(3600, configured_minutes * 60)) if settings else default_interval_seconds
+        except Exception:
+            log.exception('邮箱自动读取失败；已完成邮件保留，下次重试')
+            delay = max(60, default_interval_seconds)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass

@@ -53,7 +53,12 @@ def test_mixed_batch_preserves_normal_order_and_fixed_query_families(cutover_rea
             result = project_complete_order_material_rows(db, rows)
         finally:
             event.remove(db.bind, "before_cursor_execute", capture)
-        assert len(statements) == 4  # header + identities + revisions + one cutover role batch
+        # Production and structural rule histories are distinct immutable
+        # families. Adding a second order must not add per-order queries.
+        families = ("sales_order_items", "order_bom_graph_products", "order_bom_production_revisions",
+                    "order_bom_rule_revisions", "order_bom_cutover_sources")
+        assert len(statements) == len(families)
+        assert all(sum(f"FROM {table}" in statement for statement in statements) == 1 for table in families), [statement.split("FROM", 1)[-1] for statement in statements]
         expected = {row.id for row in current}
         if second.id in ids:
             expected.update(row.id for row in normal.snapshots)

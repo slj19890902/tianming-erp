@@ -200,7 +200,50 @@ def own_output_lots(db, order_item_id):
         and_(InventoryLot.source_ref_type == "bom_external_receipt", InventoryLot.source_ref_id.in_(external)),
         and_(InventoryLot.source_ref_type == "bom_assembly", InventoryLot.source_ref_id.in_(assemblies))))))
     from app.services.multilevel_bom_output_history import current_output_lots
-    return current_output_lots(db, read_compiled_order_bom(db, order_item_id), lots)
+    compiled = read_compiled_order_bom(db, order_item_id)
+    lots = current_output_lots(db, compiled, lots)
+    from app.services.multilevel_bom_execution_boundary import handoff_assembly_ids
+    handoffs = handoff_assembly_ids(db, compiled)
+    lots = [lot for lot in lots if not (lot.source_ref_type == "bom_assembly" and lot.source_ref_id in handoffs)]
+    # Customer returns move existing output; they are not new free stock that
+    # may reduce material demand a second time. Follow the original return
+    # facts after source-version qualification, including repeated returns.
+    from app.models.warehouse_inventory import OrderedFinishedReceiptReturn
+    from app.models.delivery import DeliveryItem
+    returns = list(db.scalars(select(OrderedFinishedReceiptReturn).join(DeliveryItem,
+        DeliveryItem.id == OrderedFinishedReceiptReturn.delivery_item_id).where(
+            DeliveryItem.order_item_id == order_item_id, OrderedFinishedReceiptReturn.status == "active")))
+    owned = {lot.id: lot for lot in lots}
+    visited = set()
+    while True:
+        added = False
+        for returned in returns:
+            if returned.id in visited or returned.source_inventory_lot_id not in owned:
+                continue
+            source = owned[returned.source_inventory_lot_id]
+            original = db.get(InventoryLot, returned.return_inventory_lot_id)
+            if (original is None or original.source_ref_type != "return_receipt_item"
+                    or original.source_ref_id != returned.return_receipt_item_id
+                    or original.finished_detail is None or source.finished_detail is None
+                    or original.finished_detail.product_id != source.finished_detail.product_id
+                    or original.finished_detail.owner_customer_id != source.finished_detail.owner_customer_id
+                    or original.finished_detail.physical_basis_json != source.finished_detail.physical_basis_json):
+                raise BomPlanError("自产退回批次与原产品或规格工艺身份不一致")
+            descendants = db.scalars(select(InventoryLot).where(
+                InventoryLot.source_ref_type == original.source_ref_type,
+                InventoryLot.source_ref_id == original.source_ref_id,
+                InventoryLot.cost_snapshot_detail_json == original.cost_snapshot_detail_json))
+            for descendant in descendants:
+                if (descendant.finished_detail is None
+                        or descendant.finished_detail.product_id != original.finished_detail.product_id
+                        or descendant.finished_detail.owner_customer_id != original.finished_detail.owner_customer_id
+                        or descendant.finished_detail.physical_basis_json != original.finished_detail.physical_basis_json):
+                    raise BomPlanError("自产退回移位批次身份不一致")
+                owned[descendant.id] = descendant
+            visited.add(returned.id)
+            added = True
+        if not added:
+            return list(owned.values())
 
 
 def assemble_graph_receipt(db, *, context, allocation, operator_id):

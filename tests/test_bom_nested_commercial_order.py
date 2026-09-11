@@ -1,5 +1,6 @@
 """A priced physical subassembly retains both commercial parent and its own BOM."""
 from fastapi.testclient import TestClient
+import pytest
 
 from app.models.product import Product
 from app.models.order import OrderItem
@@ -10,8 +11,9 @@ from tests.test_p1_81_receipt_purpose_flow import _p181_published_map_identity
 from tests.test_multilevel_bom_receipt_flow import seed_graph
 
 
+@pytest.mark.parametrize("short_received", [0, 5])
 def test_assembled_child_keeps_upstream_price_and_internal_recipe(
-    composite_requisition_app, _p181_published_map_identity,
+    composite_requisition_app, _p181_published_map_identity, short_received,
 ):
     app, factory = composite_requisition_app
     material_id, _ = seed_graph(factory, liner=True)
@@ -90,11 +92,50 @@ def test_assembled_child_keeps_upstream_price_and_internal_recipe(
         with factory() as db:
             assert db.get(OrderItem, iid).delivered_quantity == 0
         delivery = _dispatch(client, 1, [(iid, 25)])
-        _confirm_receipt(client, delivery)
+        target, versions = None, {}
+        if short_received:
+            from app.services.ordered_finished_receipt_return import _return_location_candidates
+            with factory() as db:
+                from app.models.multilevel_bom import BomAssemblyInput
+                from app.services.multilevel_bom_cutover_review import _row
+                from app.services.multilevel_bom_requirements import read_graph_requirements
+                original_materials = read_graph_requirements(db, iid).plan.materials
+                original_inputs = {row.id: _row(row) for row in db.scalars(select(BomAssemblyInput))}
+                location = next(iter(_return_location_candidates(db).values()))
+                target = location.id
+                versions = {iid: location.floor3_layout.version}
+        _confirm_receipt(client, delivery, short_received=short_received,
+                         return_location_id=target, return_layout_versions=versions)
         statement = client.post("/api/finance/statements", json={
             "customer_id": 1, "statement_month": date.today().strftime("%Y-%m"),
             "delivery_ids": [delivery["id"]],
         })
         assert statement.status_code == 201, statement.text
         with factory() as db:
-            assert db.get(Statement, statement.json()["id"]).total_receivable == Decimal("212.50")
+            assert db.get(Statement, statement.json()["id"]).total_receivable == Decimal("212.50")-short_received*Decimal("8.50")
+            if short_received:
+                from app.models.warehouse_inventory import InventoryLot
+                from app.services.multilevel_bom_cost_lineage import graph_material_sources
+                returned = list(db.scalars(select(InventoryLot).where(
+                    InventoryLot.warehouse_location_id == target,
+                    InventoryLot.source_ref_type == "return_receipt_item")))
+                assert sum(lot.quantity_reserved for lot in returned) == short_received
+                assert all(lot.finished_detail.product_id == 4 and graph_material_sources(db, lot) for lot in returned)
+                assert read_graph_requirements(db, iid).plan.materials == original_materials
+                returned_ids = [lot.id for lot in returned]
+                assert {row.id: _row(row) for row in db.scalars(select(BomAssemblyInput))} == original_inputs
+        if short_received:
+            remaining_original = _dispatch(client, 1, [(iid, 75)])
+            _confirm_receipt(client, remaining_original)
+            replacement = _dispatch(client, 1, [(iid, short_received)])
+            _confirm_receipt(client, replacement)
+            with factory() as db:
+                assert sum(db.get(InventoryLot, lid).quantity_consumed for lid in returned_ids) == short_received
+                assert db.get(OrderItem, iid).delivered_quantity == 100
+                assert {row.id: _row(row) for row in db.scalars(select(BomAssemblyInput))} == original_inputs
+            final_statement = client.post("/api/finance/statements", json={"customer_id": 1,
+                "statement_month": date.today().strftime("%Y-%m"),
+                "delivery_ids": [remaining_original["id"], replacement["id"]]})
+            assert final_statement.status_code == 201, final_statement.text
+            with factory() as db:
+                assert db.get(Statement, final_statement.json()["id"]).total_receivable == Decimal("680.00")

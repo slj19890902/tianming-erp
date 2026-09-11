@@ -137,6 +137,8 @@ class Manager:
         ai_key = load_openai_api_key(self.root)
         if ai_key:
             env['OPENAI_API_KEY'] = ai_key
+            env['ERP_AI_INVENTORY_PROVIDER'] = 'openai'
+            env.setdefault('ERP_AI_INVENTORY_MODEL', 'gpt-5-mini')
         models = release / 'runtime/ocr/model'
         if models.is_dir():
             env['EASYOCR_MODULE_PATH'] = str(models.parent)

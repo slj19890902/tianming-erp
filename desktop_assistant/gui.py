@@ -189,7 +189,7 @@ class App:
                 finally:
                     if running:
                         self.manager.start()
-            return 'AI密钥已加密保存；ERP已按原运行状态重新加载配置。'
+            return 'AI密钥已加密保存；AI库存解读已启用，ERP已按原运行状态重新加载配置。'
 
         self.run('安全保存AI密钥', save)
 

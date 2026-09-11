@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.359"
-APP_VERSION_NAME = "AI库存解读安全底座与密钥入口"
+APP_VERSION = "v0.22.360"
+APP_VERSION_NAME = "AI库存真实解读安全接入"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2708,9 +2708,25 @@ APP_VERIFICATION_STEPS = [
     "在隔离环境启用Mock生成一次解读，确认摘要、风险、依据、人工核对建议和有帮助/不准确反馈可用；重复幂等请求不重复计费。",
     "进入系统备份→系统版本确认v0.22.359、数据库revision为sq29v8x9z91；正式页面由管理员人工验收，不执行自动点击。",
 ]
+_V022359_CHANGES = APP_CHANGES
+_V022359_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "库存助手接入OpenAI Responses API；只发送ERP按当前账号权限生成的脱敏库存快照，关闭响应存储且不给模型任何ERP工具。",
+    "AI输出使用严格结构化JSON，并继续通过本地风险类别、证据引用、目标页面、长度和禁止内容校验；模型不能改订单、库存、报料、生产、送货或财务事实。",
+    "天明ERP助手保存本机加密密钥后会自动启用OpenAI库存解读；未配置、密钥被拒绝、限流、超时、断网或响应无效时安全降级，本地库存看板继续可用。",
+    "本版不新增数据库迁移，不修改任何正式订单、库存、成本、价格、邮件或客户事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "在天明ERP助手点击设置AI密钥并完成两次输入，确认服务按原状态重载；页面和日志不得显示密钥。",
+    "打开库存助手，确认状态显示AI库存经营解读已启用；生成一次解读并核对摘要、风险、依据与人工核对入口均来自当前库存快照。",
+    "临时断开外网或使用无权限项目时，确认页面给出安全提示且原本地库存经营看板仍可正常查询，不产生任何业务写入。",
+    "进入系统备份→系统版本确认v0.22.360、数据库revision仍为sq29v8x9z91；正式页面由管理员人工验收，不执行自动点击。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.359：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.359：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.360：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.360：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.359：本次更新｜{item}" for item in _V022359_CHANGES),
+    *(f"v0.22.359：如何验证｜{item}" for item in _V022359_STEPS),
     *(f"v0.22.358：本次更新｜{item}" for item in _V022358_CHANGES),
     *(f"v0.22.358：如何验证｜{item}" for item in _V022358_STEPS),
     *(f"v0.22.357：本次更新｜{item}" for item in _V022357_CHANGES),

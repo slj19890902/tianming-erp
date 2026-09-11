@@ -47,6 +47,8 @@ class AiConfigTests(unittest.TestCase):
             ):
                 environment = manager._environment(release)
             self.assertEqual(environment["OPENAI_API_KEY"], key)
+            self.assertEqual(environment["ERP_AI_INVENTORY_PROVIDER"], "openai")
+            self.assertEqual(environment["ERP_AI_INVENTORY_MODEL"], "gpt-5-mini")
             self.assertNotIn(
                 "OPENAI_API_KEY",
                 (shared / "environment.json").read_text(encoding="utf-8"),

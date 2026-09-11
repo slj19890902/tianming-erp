@@ -401,6 +401,7 @@ def create_inventory_insight_run(
         run.input_tokens = int(result["input_tokens"])
         run.output_tokens = int(result["output_tokens"])
     except ProviderUnavailable as error:
+        request_count = 1 if error.request_attempted else 0
         run.status = "degraded"
         run.error_code = error.code
     except InventoryAssistantError:

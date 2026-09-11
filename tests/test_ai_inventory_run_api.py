@@ -387,3 +387,55 @@ def test_production_never_enables_the_mock_provider(monkeypatch) -> None:
     assert provider_status["enabled"] is False
     assert provider_status["provider_code"] == "disabled"
     assert isinstance(resolve_inventory_provider(), DisabledInventoryInsightProvider)
+
+
+def test_attempted_openai_failure_is_degraded_and_counted_once(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from app.services.ai.providers import ProviderUnavailable
+
+    class AttemptedFailureProvider:
+        provider_code = "openai"
+        model_code = "gpt-5-mini"
+
+        def generate(self, *_args, **_kwargs):
+            raise ProviderUnavailable(
+                "ai_rate_limited",
+                "AI 当前繁忙或项目额度不足，请稍后重试。",
+                request_attempted=True,
+            )
+
+    _engine, factory = _factory(tmp_path)
+    monkeypatch.setenv("ERP_ENVIRONMENT", "test")
+    monkeypatch.setenv("ERP_AI_INVENTORY_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai-provider-secret-value")
+    monkeypatch.setattr(
+        "app.api.ai_assistant.build_inventory_insights",
+        lambda *_args, **_kwargs: _insights(),
+    )
+    monkeypatch.setattr(
+        "app.api.ai_assistant.resolve_inventory_provider",
+        lambda: AttemptedFailureProvider(),
+    )
+    application = _app(factory)
+
+    with TestClient(application) as client:
+        _login(client, "operator")
+        response = client.post(
+            "/api/ai/inventory-insights/runs",
+            json={
+                "as_of": "2026-07-26",
+                "focus": "all",
+                "idempotency_key": "attempted-openai-failure",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "degraded"
+        assert response.json()["error_code"] == "ai_rate_limited"
+
+    with factory() as db:
+        run = db.scalar(select(AiAnalysisRun))
+        usage = db.scalar(select(AiUsageLedger))
+        assert run is not None and run.status == "degraded"
+        assert usage is not None and usage.request_count == 1

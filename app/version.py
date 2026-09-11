@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.347"
-APP_VERSION_NAME = "126邮箱收单待核对工作台"
+APP_VERSION = "v0.22.348"
+APP_VERSION_NAME = "仓库成本入口与单品整板移货"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2600,9 +2600,23 @@ _V022346_CHANGES = APP_CHANGES
 _V022346_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["订单页面增加邮箱收单入口，固定接入已确认的126收件箱，支持手动分批读取、重复附件提示、忽略恢复和PDF预览。", "客户端授权码由Windows加密保存且不回显，收信不改变已读状态、不移动删除邮件；本版仅待核对收件箱，不自动生成订单。"]
 APP_VERIFICATION_STEPS = ["管理员从订单→邮箱收单，用HTTPS地址保存126客户端授权码；手动读取并核对附件与重复提示。真实邮箱连通需完成授权码配置后验证。", "普通账号不可读取收件箱；在隔离副本验证重复读取、忽略恢复和PDF预览。Excel草稿与正式订单关联仍待后续完成。"]
+_V022347_CHANGES = APP_CHANGES
+_V022347_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "仓库主地图顶部新增库存成本入口，仅管理员、老板可见；台账也提供直接入口。",
+    "单个产品可移入已有货物的货位，多条单品草稿可共用目标；整栈板只选空位，一次移动板内全部正式产品。",
+    "保留混放权限、异常货物、容量、版本、幂等、事务、库存数量与入库成本保护；本版不修改地图或既有业务数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员或老板进入仓库，在顶部打开库存成本；普通员工不应看到入口或价格。",
+    "移货/盘点→移动位置，选择产品旁移动此产品，选择已有货物目标并提交；再选择整栈移动，只能移到空地面货位，全部产品一起过去。",
+    "核对单品数量及各自原成本保留；重复提交不重复移动。Chrome自动验收连接超时，现场真实操作待确认。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.347：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.347：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.348：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.348：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.347：本次更新｜{item}" for item in _V022347_CHANGES),
+    *(f"v0.22.347：如何验证｜{item}" for item in _V022347_STEPS),
     *(f"v0.22.346：本次更新｜{item}" for item in _V022346_CHANGES),
     *(f"v0.22.346：如何验证｜{item}" for item in _V022346_STEPS),
     *(f"v0.22.345：本次更新｜{item}" for item in _V022345_CHANGES),

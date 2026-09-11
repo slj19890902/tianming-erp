@@ -14,6 +14,28 @@ from app.services.multilevel_bom_plan import BomPlanError
 from app.services.multilevel_bom_source_handoffs import current_source_handoffs
 
 
+def remaining_semi_allocation(reservation):
+    """Separate physical sheets from credited pieces when transferring a remainder.
+
+    A partly credited sheet does not gain extra credit during a rule switch.
+    Historical consumed/released counters remain authoritative and unmodified.
+    """
+    fields = ("reserved_stock_quantity", "consumed_stock_quantity", "released_stock_quantity",
+              "credited_requirement_quantity", "consumed_requirement_quantity", "released_requirement_quantity")
+    values = {field: getattr(reservation, field) for field in fields}
+    factor = reservation.yield_factor
+    if any(type(value) is not int or value < 0 for value in values.values()) or type(factor) is not int or factor <= 0:
+        raise BomPlanError(f"半成品预占#{reservation.id}的张数、片数或换算无效")
+    sheets = values["reserved_stock_quantity"]-values["consumed_stock_quantity"]-values["released_stock_quantity"]
+    pieces = values["credited_requirement_quantity"]-values["consumed_requirement_quantity"]-values["released_requirement_quantity"]
+    if (sheets < 0 or pieces < 0 or pieces > sheets*factor
+            or values["credited_requirement_quantity"] > values["reserved_stock_quantity"]*factor
+            or values["consumed_requirement_quantity"] > values["consumed_stock_quantity"]*factor
+            or values["released_requirement_quantity"] > values["released_stock_quantity"]*factor):
+        raise BomPlanError(f"半成品预占#{reservation.id}的历史消耗、释放或剩余换算不守恒")
+    return sheets, pieces
+
+
 def source_semi_reservations(db, order_id, source_ids, *, require_pending=False):
     """Keep the original reservation identity and its consumed history."""
     from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
@@ -30,6 +52,7 @@ def source_semi_reservations(db, order_id, source_ids, *, require_pending=False)
     order = db.get(Order, item.order_id) if item else None
     reserved_by_lot = defaultdict(int)
     for reservation, requirement in rows:
+        remaining_sheets, remaining_pieces = remaining_semi_allocation(reservation)
         source_id = requirement.sales_order_item_bom_component_id
         source = db.get(SalesOrderItemBomComponent, source_id)
         lot = db.get(InventoryLot, reservation.inventory_lot_id)
@@ -44,7 +67,7 @@ def source_semi_reservations(db, order_id, source_ids, *, require_pending=False)
                 or reservation.credited_requirement_quantity > reservation.reserved_stock_quantity * reservation.yield_factor
                 or reservation.reserved_stock_quantity-reservation.consumed_stock_quantity-reservation.released_stock_quantity > lot.quantity_reserved):
             raise BomPlanError(f"半成品预占#{reservation.id}的原来源、单位、成本或批次余额不一致")
-        if reservation.credited_requirement_quantity > reservation.released_requirement_quantity + reservation.consumed_requirement_quantity:
+        if remaining_pieces:
             pending = db.scalar(select(RequisitionItem.id).join(RequisitionItemBomSource,
                 RequisitionItemBomSource.requisition_item_id == RequisitionItem.id).where(
                     RequisitionItemBomSource.sales_order_item_bom_component_id == source_id,
@@ -56,7 +79,7 @@ def source_semi_reservations(db, order_id, source_ids, *, require_pending=False)
                     RequisitionItem.status.in_({"已取消", "已作废", "已撤回"})).limit(1))
             if pending is None and (require_pending or cancelled is not None):
                 raise BomPlanError(f"半成品预占#{reservation.id}尚未用完，但原报料无后续收料；须先明确将剩余预占转给新报料，不能重复抵扣")
-        reserved_by_lot[lot.id] += reservation.reserved_stock_quantity-reservation.consumed_stock_quantity-reservation.released_stock_quantity
+        reserved_by_lot[lot.id] += remaining_sheets
     for lot_id, quantity in reserved_by_lot.items():
         if quantity > db.get(InventoryLot, lot_id).quantity_reserved:
             raise BomPlanError("半成品交接预占合计超过批次余额")

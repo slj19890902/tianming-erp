@@ -208,6 +208,9 @@ def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_r
         assert preview.status_code == 200, preview.text
         review = preview.json()
         assert review["ready"] and review["carried_materials"]
+        if with_semi:
+            assert review["retained_semi"][0]["remaining_sheets"] == (0 if semi_received_before else 6)
+            assert review["retained_semi"][0]["remaining_pieces"] == (0 if semi_received_before else 6)
         if with_body:
             assert len(review["retained_bodies"]) == 1
             assert review["retained_bodies"][0]["quantity"] == 5

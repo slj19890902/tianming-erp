@@ -53,7 +53,7 @@ def workbench(response:Response, focus:str=Query('all',pattern='^(all|demand|mat
     from app.api.warehouse import get_inventory_costs
     costs=get_inventory_costs(response,location_id=None,db=db,user=user)
     summary={key:costs[key] for key in ("inventory_value","total_lots","missing_lots","basis")}
-    return {'summary':summary,'mode':'local_rules','generated_at':insights['generated_at'],'as_of':insights['as_of'],'total':len(items),'page':page,'page_size':25,'items':items[(page-1)*25:page*25], 'notice':'本地规则建议。未送需求不等于还需采购数量；同款需求不按批次重复相加。金额采用批次冻结材料成本，缺价单列。'}
+    return {'summary':summary,'mode':'local_rules','generated_at':insights['generated_at'],'as_of':insights['as_of'],'total':len(items),'page':page,'page_size':25,'items':items[(page-1)*25:page*25], 'notice':'本地规则建议。未送需求不等于还需采购数量；同款需求不按批次重复相加。金额采用批次冻结成本，缺价单列。'}
 
 @router.get('/{lot_id}/orders')
 def orders(lot_id:int,response:Response,page:int=Query(1,ge=1),db:Session=Depends(get_db),user:User=Depends(allowed)):

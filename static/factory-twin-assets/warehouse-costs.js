@@ -35,6 +35,8 @@ class WarehouseCosts extends HTMLElement {
           row.append(el("span",`${r.quantity}${r.unit==="sheets"?"张":"只"} · 单价 ${r.unit_cost==null?"待补价":`¥${r.unit_cost}`}`),el("strong",r.inventory_value==null?"成本待补":`¥${r.inventory_value}`));
           const info=el("div",`${r.stock_date} · ${r.lot_number}${location?"":` · ${r.location_name}`} · ${r.label}`);info.className="muted";
           article.append(row,info);list.append(article);
+          if(r.cost_basis){const basis=el("div",r.cost_basis);basis.className="muted";article.append(basis);}
+          if(auth.user.role==="admin"&&r.product_id&&!location){const edit=el("button","成本依据");edit.type="button";edit.addEventListener("click",async()=>{const {editCostRule}=await import("./warehouse-cost-rule-editor.js?v=20260911-1");await editCostRule(root,r,()=>this.load());});article.append(edit);}
           if(r.validation_issue){const warning=el("div",r.validation_issue);warning.className="warning";article.append(warning);}
         }
         if(!list.childElementCount)list.append(el("div","没有符合条件的库存"));

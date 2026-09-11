@@ -23847,6 +23847,7 @@ def _redact_inventory_insight_costs(insights: dict) -> dict:
 def get_inventory_costs(response: Response, location_id: int | None = Query(default=None, ge=1),
                         db: Session = Depends(get_db), user: User = Depends(can_read)) -> dict:
     from app.services.inventory_valuation import can_view_inventory_cost, cost_payload
+    from app.services.inventory_cost_rules import is_revaluable
     if not can_view_inventory_cost(user):
         raise HTTPException(403, "仅管理员和老板可以查看成本")
     response.headers["Cache-Control"] = "private, no-store, max-age=0"
@@ -23865,6 +23866,8 @@ def get_inventory_costs(response: Response, location_id: int | None = Query(defa
             stock_date=lot.stock_date, location_id=lot.warehouse_location_id,
             location_name=lot.location.location_name if lot.location else "未归位",
             product_code=getattr(detail, "inventory_code_snapshot", None),
+            product_id=getattr(detail, "product_id", None),
+            can_revalue=bool(lot.finished_detail and is_revaluable(db, lot)),
             product_name=getattr(detail, "product_name_snapshot", None) or getattr(detail, "internal_name", None),
             customer_name=getattr(detail, "owner_customer_name_snapshot", None))
         rows.append(value)
@@ -23873,7 +23876,7 @@ def get_inventory_costs(response: Response, location_id: int | None = Query(defa
         else:
             total += Decimal(value["inventory_value"])
     return dict(currency="CNY", inventory_value=str(total), total_lots=len(rows),
-                missing_lots=missing, rows=rows, basis="入库批次材料成本，含可用、预占及损坏实物；不含加工人工费用")
+                missing_lots=missing, rows=rows, basis="按批次冻结的人民币成本，含可用、预占及损坏实物；材料成本、外购价与售价参考分别标明")
 
 
 @router.get("/insights")
@@ -24530,3 +24533,7 @@ def scrap_lot(lot_id: int, payload: QuantityOperationPayload, request: Request =
 @router.post("/lots/{lot_id}/transfer-to-general")
 def transfer_to_general(lot_id: int, payload: VersionPayload, request: Request = None, db: Session = Depends(get_db), user: User = Depends(admin_only)) -> dict:
     return _operate(db, user, lot_id, "transfer_to_general", payload, request=request)
+
+
+from app.api.inventory_cost_rules import router as inventory_cost_rules_router
+router.include_router(inventory_cost_rules_router)

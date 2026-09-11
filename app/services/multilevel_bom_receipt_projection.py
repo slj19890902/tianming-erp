@@ -68,6 +68,11 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
         ProductionCompletion.order_item_id == order_item_id, ProductionCompletion.status == "posted")):
         task = db.get(ProductionTask, completion.task_id)
         sid = task.sales_order_item_bom_component_id
+        if requirements.compiled.rule_revision_id is not None:
+            from app.services.multilevel_bom_output_history import completion_source_id
+            sid = completion_source_id(db, completion)
+            if sid in requirements.compiled.history_source_ids:
+                continue
         if sid in historical_ids:
             continue
         if sid is not None and sid not in product_by_snapshot:
@@ -90,6 +95,14 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
         BomAssembly.order_item_id == order_item_id, BomAssembly.status == "posted")):
         if assembly.id in handoffs:
             continue  # Already credited stock, not a new receipt's output.
+        if requirements.compiled.rule_revision_id is not None and assembly.output_lot_id is not None:
+            from app.models.warehouse_inventory import InventoryLot
+            from app.services.multilevel_bom_output_history import output_source_ids
+            source_ids = output_source_ids(db, db.get(InventoryLot, assembly.output_lot_id), order_item_id)
+            if source_ids.issubset(set(requirements.compiled.history_source_ids)):
+                continue
+            if not source_ids.issubset(product_by_snapshot):
+                raise BomPlanError("组装产出不属于同一当前BOM版本")
         outputs[assembly.output_product_id] += assembly.quantity
         if assembly.output_product_id == graph.root_id:
             reservation = db.scalar(select(InventoryReservation).where(

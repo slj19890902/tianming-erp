@@ -53,6 +53,28 @@ def completion_source_id(db, completion):
     return sid
 
 
+def completion_material_source_id(db, completion):
+    """Keep original material consumption separate from output execution."""
+    execution_id = completion_source_id(db, completion)
+    lot = db.get(InventoryLot, completion.inventory_lot_id) if completion.inventory_lot_id else None
+    detail = json.loads(lot.cost_snapshot_detail_json or "{}") if lot is not None else {}
+    source_id = detail.get("bom_material_source_snapshot_id", execution_id)
+    if type(source_id) is not int or source_id <= 0:
+        raise BomPlanError("完工材料来源身份无效")
+    if source_id == execution_id:
+        return source_id
+    from app.models.multilevel_bom import OrderBomRuleSource, OrderBomSourceHandoff
+    from app.services.multilevel_bom_orders import read_order_bom_source_contract
+    from app.services.multilevel_bom_source_handoffs import validate_source_handoff
+    target = db.get(OrderBomRuleSource, execution_id)
+    handoff = db.get(OrderBomSourceHandoff, (target.revision_id, source_id)) if target else None
+    if (handoff is None or handoff.target_snapshot_id != execution_id or handoff.source_kind != "manufactured"):
+        raise BomPlanError("完工材料与执行版本缺少明确的自制来源交接")
+    contract = read_order_bom_source_contract(db, completion.order_item_id, execution_id)
+    validate_source_handoff(db, handoff, contract)
+    return source_id
+
+
 def _external_source(db, receipt_item_id, order_item_id):
     receipt = db.get(ExternalPackagingReceiptItem, receipt_item_id)
     purchase = db.get(ExternalPackagingPurchaseItem, receipt.purchase_item_id) if receipt else None

@@ -1,4 +1,5 @@
 from sqlalchemy import select
+from app.core.time_contract import beijing_today
 
 from tests.test_multilevel_bom_body_assembly_ledger import seed, composite_requisition_app, _p181_published_map_identity
 from app.models.product_bom import SalesOrderItemBomComponent
@@ -98,7 +99,7 @@ def test_real_http_body_receipts_assemble_cost_and_reverse(composite_requisition
         line = next(r for r in pending.json()["items"] if r["order_item_id"] == 1)
         assert {r["component_product_id"] for r in line["component_lines"]} == {1}
         if dispatch:
-            created = client.post("/api/deliveries", json={"customer_id":1,"delivery_date":"2026-09-10",
+            created = client.post("/api/deliveries", json={"customer_id":1,"delivery_date":beijing_today().isoformat(),
                 "items":[{"order_item_id":1,"delivered_quantity":4}]})
             assert created.status_code == 201, created.text
             did = created.json()["id"]
@@ -108,16 +109,17 @@ def test_real_http_body_receipts_assemble_cost_and_reverse(composite_requisition
                 assert db.get(OrderItem,1).delivered_quantity == 4
                 body = db.scalar(select(InventoryLot).where(InventoryLot.inventory_type == "assembly_body"))
                 assert body.quantity_consumed == 10 and body.quantity_reserved == 0
-            cancelled = client.put(f"/api/deliveries/{did}/cancel")
-            assert cancelled.status_code == 200, cancelled.text
-            # Existing downstream-history gate stays fail-closed. A cancelled
-            # dispatch is not proof that every later effect can be unwound.
+            # Active delivery still blocks receipt reversal. Once its exact
+            # movements are reversed, the existing d092becd path permits undo.
             blocked = client.put(f"/api/incoming/receipt-items/{receipt_ids[-1]}/revert", json={})
             assert blocked.status_code == 409, blocked.text
             with factory() as db:
-                assert db.get(OrderItem,1).delivered_quantity == 0
+                assert db.get(OrderItem,1).delivered_quantity == 4
                 assert all(r.status == "posted" for r in db.scalars(select(BomAssembly)))
-            return
+            cancelled = client.put(f"/api/deliveries/{did}/cancel")
+            assert cancelled.status_code == 200, cancelled.text
+            with factory() as db:
+                assert db.get(OrderItem,1).delivered_quantity == 0
         for rid in reversed(receipt_ids):
             result = client.put(f"/api/incoming/receipt-items/{rid}/revert", json={})
             assert result.status_code == 200, result.text

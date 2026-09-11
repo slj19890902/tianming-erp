@@ -143,6 +143,13 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
         return None
     if detail["bom_material_product_id"] != identity[0]:
         raise SubkitError("组套材料完工产品身份不一致")
+    from app.services.multilevel_bom_output_history import completion_material_source_id
+    from app.services.multilevel_bom_plan import BomPlanError
+    try:
+        material_source_id = (completion_material_source_id(db, completion)
+            if "bom_material_source_snapshot_id" in detail else detail["bom_snapshot_id"])
+    except BomPlanError as error:
+        raise SubkitError(str(error)) from error
     rows = []
     for source in detail.get("bom_material_inputs", []):
         if not source.get("actual"):
@@ -168,7 +175,7 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
                 or allocation.customer_id != identity[1]
                 or snapshot.sales_order_item_id != completion.order_item_id
                 or snapshot.component_product_id != identity[0]
-                or snapshot.id != detail["bom_snapshot_id"]):
+                or snapshot.id != material_source_id):
             raise SubkitError("组套材料采购产品或客户不一致")
         expected = cost_slice(allocation.order_purpose_cost,
             allocation.receipt_order_purpose_sheet_qty * int(purpose.yield_per_sheet_snapshot),

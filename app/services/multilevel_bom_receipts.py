@@ -24,6 +24,11 @@ class NodeReceiptContext:
     compiled: CompiledMasterBom
     node: ProductNode
     snapshot: SalesOrderItemBomComponent
+    material_snapshot: SalesOrderItemBomComponent | None = None
+
+    @property
+    def material_source_id(self):
+        return (self.material_snapshot or self.snapshot).id
 
 
 def node_receipt_context(db, order_item_id, purpose):
@@ -32,32 +37,44 @@ def node_receipt_context(db, order_item_id, purpose):
     compiled = read_compiled_order_bom(db, order_item_id)
     source = db.get(RequisitionItemBomSource, purpose.source_bom_requisition_source_id) if purpose.source_bom_requisition_source_id else None
     snapshot = next((s for s in compiled.snapshots if source and s.id == source.sales_order_item_bom_component_id), None)
+    material_snapshot = None
+    if snapshot is None and source is not None:
+        from app.services.multilevel_bom_source_handoffs import current_source_handoffs
+        handoff = next((row for row in current_source_handoffs(db, compiled)
+            if row.source_snapshot_id == source.sales_order_item_bom_component_id
+            and row.source_kind == "manufactured"), None)
+        if handoff is not None:
+            snapshot = next(row for row in compiled.snapshots if row.id == handoff.target_snapshot_id)
+            material_snapshot = db.get(SalesOrderItemBomComponent, handoff.source_snapshot_id)
     if (snapshot is None or purpose.source_order_item_id not in (None, order_item_id)
             or purpose.customer_id != compiled.graph.customer_id):
         raise SubkitError("多级BOM收料缺少真实产品材料来源")
     node = next(n for n in compiled.graph.nodes if n.product_id == snapshot.component_product_id)
     if node.source != "manufactured" or source.component_type not in {r.key for r in node.routes}:
         raise SubkitError("该BOM产品不是当前纸板收料的自制物理片组")
-    return NodeReceiptContext(compiled, node, snapshot)
+    return NodeReceiptContext(compiled, node, snapshot, material_snapshot)
 
 
 def node_purpose_snapshots(db, context, snapshots):
     source_ids = set(db.scalars(select(RequisitionItemBomSource.id).where(
-        RequisitionItemBomSource.sales_order_item_bom_component_id == context.snapshot.id)))
+        RequisitionItemBomSource.sales_order_item_bom_component_id == context.material_source_id)))
     return [s for s in snapshots if s.source_bom_requisition_source_id in source_ids]
 
 
 def node_completed_quantity(db, context):
     root = context.node.product_id == context.compiled.graph.root_id
-    if root and context.compiled.rule_revision_id is not None:
-        from app.services.multilevel_bom_output_history import completion_source_id
+    if context.compiled.rule_revision_id is not None:
+        from app.services.multilevel_bom_output_history import completion_material_source_id
+        relevant_tasks = (ProductionTask.sales_order_item_bom_component_id.is_(None) if root else
+            ProductionTask.sales_order_item_bom_component_id.in_(select(SalesOrderItemBomComponent.id).where(
+                SalesOrderItemBomComponent.sales_order_item_id == context.snapshot.sales_order_item_id,
+                SalesOrderItemBomComponent.component_product_id == context.node.product_id)))
         completions = db.scalars(select(ProductionCompletion).join(ProductionTask,
             ProductionTask.id == ProductionCompletion.task_id).where(
                 ProductionCompletion.order_item_id == context.snapshot.sales_order_item_id,
-                ProductionCompletion.status == "posted",
-                ProductionTask.sales_order_item_bom_component_id.is_(None)))
+                ProductionCompletion.status == "posted", relevant_tasks))
         return sum(row.actual_output_quantity for row in completions
-                   if completion_source_id(db, row) == context.snapshot.id)
+                   if completion_material_source_id(db, row) == context.material_source_id)
     condition = ProductionTask.sales_order_item_bom_component_id.is_(None) if root else (
         ProductionTask.sales_order_item_bom_component_id == context.snapshot.id)
     return int(db.scalar(select(func.coalesce(func.sum(ProductionCompletion.actual_output_quantity), 0))
@@ -82,8 +99,8 @@ def node_receipt_plan(db, context, *, snapshots, allocations, current_snapshot,
         .outerjoin(OrderItemSemiRequirement, OrderItemSemiRequirement.id == InventoryReservation.semi_requirement_id)
         .where(InventoryReservation.order_item_id == context.snapshot.sales_order_item_id,
             InventoryReservation.reservation_type == "semi_order", InventoryReservation.status != "cancelled",
-            or_(InventoryReservation.sales_order_item_bom_component_id == context.snapshot.id,
-                OrderItemSemiRequirement.sales_order_item_bom_component_id == context.snapshot.id))
+            or_(InventoryReservation.sales_order_item_bom_component_id == context.material_source_id,
+                OrderItemSemiRequirement.sales_order_item_bom_component_id == context.material_source_id))
         .order_by(InventoryReservation.id)).all()
     for reservation, requirement in reserves:
         route = requirement.component_type if requirement else "whole"
@@ -153,6 +170,8 @@ def node_receipt_plan(db, context, *, snapshots, allocations, current_snapshot,
     return {"before": before, "after": after, "total_cost": total,
             "detail": {"bom_material_product_id": context.node.product_id,
                 "bom_snapshot_id": context.snapshot.id, "bom_material_inputs": inputs,
+                **({"bom_material_source_snapshot_id": context.material_source_id}
+                    if context.material_source_id != context.snapshot.id else {}),
                 "currency": next(iter(currencies), ""), "actual": all(i["actual"] for i in inputs)}}
 
 

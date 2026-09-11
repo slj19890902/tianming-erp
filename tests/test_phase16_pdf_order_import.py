@@ -1092,6 +1092,122 @@ def test_draft_rematch_rejects_source_name_or_hash_mismatch(tmp_path: Path) -> N
     assert wrong_hash.json()["detail"]["code"] == "PDF_PREVIEW_TOKEN_STALE"
 
 
+def test_failed_pdf_can_be_manually_checked_rematched_and_saved(tmp_path: Path) -> None:
+    from sqlalchemy import func, select
+
+    from app.models.order import Order
+
+    app = _order_import_app(tmp_path)
+    failed_token = _signed_pdf_preview_token(
+        app,
+        recognition_status="failed",
+        customer_route_status="unmatched",
+        customer_match_status="unmatched",
+        integrity_status="failed",
+        matched_customer_id=0,
+    )
+    manual_draft = {
+        "source_name": "needs-confirmation.pdf",
+        "file_hash": "a" * 64,
+        "customer_po": "PO-MANUAL-PDF-001",
+        "order_date": "2026-09-11",
+        "delivery_date": "2026-09-18",
+        "items": [
+            {
+                "line_no": 1,
+                "raw_product_code": "21312009",
+                "raw_product_name": "中性内箱",
+                "raw_spec_model": "116*68*1.8/2.1cm",
+                "quantity": 30,
+                "unit_price": "1.79",
+                "is_new_product": True,
+                "matched_product_id": 999999,
+            }
+        ],
+    }
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        response = client.post(
+            "/api/orders/draft-manual-rematch",
+            json={
+                "draft": manual_draft,
+                "customer_id": 1,
+                "preview_safety_token": failed_token,
+                "manual_complete": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        draft = response.json()
+        claims = _decode_pdf_preview_token_for_test(draft["preview_safety_token"])
+        assert draft["manual_entry"] is True
+        assert draft["matched_customer_id"] == 1
+        assert draft["items"][0]["matched_product_id"] == 1
+        assert draft["items"][0]["is_new_product"] is False
+        assert claims["recognition_status"] == "needs_confirmation"
+        assert claims["customer_route_status"] == "manual"
+        assert claims["integrity_status"] == "manual_confirmed"
+
+        save_payload = _pdf_order_payload(
+            confirmed=True,
+            token=draft["preview_safety_token"],
+        )
+        save_payload["customer_po"] = "PO-MANUAL-PDF-001"
+        save_payload["import_integrity_status"] = "manual_confirmed"
+        save_response = client.post("/api/orders", json=save_payload)
+
+    assert save_response.status_code == 201, save_response.text
+    assert _database_scalar(app, select(func.count(Order.id))) == 1
+
+
+def test_manual_pdf_rematch_rejects_tampered_source_and_invalid_facts(tmp_path: Path) -> None:
+    app = _order_import_app(tmp_path)
+    token = _signed_pdf_preview_token(
+        app,
+        recognition_status="failed",
+        customer_route_status="unmatched",
+        customer_match_status="unmatched",
+        integrity_status="failed",
+        matched_customer_id=0,
+    )
+    base_draft = {
+        "source_name": "needs-confirmation.pdf",
+        "file_hash": "a" * 64,
+        "customer_po": "PO-MANUAL-PDF-002",
+        "items": [{"raw_product_code": "21312009", "quantity": 30}],
+    }
+
+    def request(client: TestClient, draft: dict):
+        return client.post(
+            "/api/orders/draft-manual-rematch",
+            json={
+                "draft": draft,
+                "customer_id": 1,
+                "preview_safety_token": token,
+                "manual_complete": True,
+            },
+        )
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "sales", "password": "RolePass123!"})
+        wrong_source = request(client, {**base_draft, "source_name": "other.pdf"})
+        missing_po = request(client, {**base_draft, "customer_po": ""})
+        fractional = request(
+            client,
+            {**base_draft, "items": [{"raw_product_code": "21312009", "quantity": 0.5}]},
+        )
+        blank_identity = request(
+            client,
+            {**base_draft, "items": [{"raw_product_code": "", "raw_product_name": "", "quantity": 1}]},
+        )
+
+    assert wrong_source.status_code == 409
+    assert wrong_source.json()["detail"]["code"] == "PDF_PREVIEW_TOKEN_STALE"
+    assert missing_po.status_code == 400
+    assert fractional.status_code == 400
+    assert blank_identity.status_code == 400
+
+
 def test_normal_non_pdf_order_create_is_unaffected(tmp_path: Path) -> None:
     app = _order_import_app(tmp_path)
     with TestClient(app) as client:
@@ -1536,7 +1652,7 @@ def test_pdf_draft_edits_and_reservation_changes_invalidate_confirmation() -> No
     assert '@change="toggleNewProduct(draft,item)"' in source
     assert '@click="removeImportDraftItem(draft,item)"' in source
     assert 'v-model.trim="item.production_notes" placeholder="生产说明（来自常用箱，可修改）" @input="invalidateImportDraftConfirmation(draft)"' in source
-    assert 'draft?.integrity_check?.integrity_status !== "passed"' in source
+    assert '["passed","manual_confirmed"].includes(draft?.integrity_check?.integrity_status)' in source
 
     helper = source.split("invalidatePdfDraftForItem(item) {", 1)[1].split(
         "removeImportDraftItem", 1

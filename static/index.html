@@ -6995,7 +6995,7 @@
                   <div class="field"><label>状态</label><div>{{ importStatusText(draft) }}</div></div>
                   <div class="field"><label>识别客户原文</label><div>{{ draft.customer_name_raw || draft.customer_name || "-" }}</div></div>
                   <div class="field"><label>系统匹配客户</label><div :class="{'danger-text':!draft.matched_customer_id}">{{ importCustomerMatchText(draft) }}</div></div>
-                  <div class="field"><label>{{ draft.customer_match_status === 'multiple_candidates' ? '候选客户' : '确认客户' }}</label><search-select v-model="draft.matched_customer_id" :options="importCustomerOptions(draft)" label-key="name" value-key="id" placeholder="手动选择客户" :disabled="isImportDraftLocked(draft)" @change="rematchImportDraft(draftIndex)"></search-select></div>
+                  <div class="field"><label>{{ draft.customer_match_status === 'multiple_candidates' ? '候选客户' : '确认客户' }}</label><search-select v-model="draft.matched_customer_id" :options="importCustomerOptions(draft)" label-key="name" value-key="id" placeholder="手动选择客户" :disabled="isImportDraftLocked(draft)" @change="handleImportDraftCustomerChange(draftIndex)"></search-select></div>
                   <div v-if="!draft.matched_customer_id" class="field wide">
                     <div class="notice danger" style="margin:0;white-space:normal">尚未选择确认客户。请先选择客户；提交改进和保存正式订单都需要确认客户。</div>
                   </div>
@@ -7041,6 +7041,14 @@
                   >重试此文件</button>
                 </div>
                 <div v-if="draft.duplicate_reason" class="status orange" style="display:block;margin-bottom:10px">{{ draft.duplicate_reason }}</div>
+                <div v-if="!draft.manual_entry && (draft.recognition_status === 'failed' || !draft.items?.length)" class="panel" style="margin-bottom:10px;border-color:#93c5fd;background:#f8fbff">
+                  <strong>这份 PDF 可以按原单人工录入</strong>
+                  <div class="muted" style="margin:4px 0 8px">系统保留原 PDF 文件凭据；请人工填写客户单号和明细，再由系统匹配该客户的常用箱。</div>
+                  <button class="btn primary small" type="button" :disabled="isImportDraftLocked(draft)" @click="startManualPdfDraft(draft)">按原 PDF 人工录入</button>
+                </div>
+                <div v-if="draft.manual_entry" class="notice" style="margin-bottom:10px;white-space:normal">
+                  <strong>人工录入模式：</strong>请逐项对照原 PDF 填写，系统不会自动补写订单事实。填写后点击“核对并匹配常用箱”；未唯一匹配的行仍需人工选择。
+                </div>
                 <div v-if="importDraftBlockReasons(draft).length" class="status red" style="display:block;margin-bottom:10px;line-height:1.7">
                   <strong>当前草稿不能加入批量保存：</strong>
                   <div v-for="reason in importDraftBlockReasons(draft)" :key="reason">{{ reason }}</div>
@@ -7118,6 +7126,10 @@
                     <button class="btn primary small" type="button" :disabled="draft._correction_submitting || !draft.matched_customer_id" @click="submitPdfCorrection(draft)">{{ draft._correction_submitting ? "提交中…" : "提交改进" }}</button>
                   </div>
                 </div>
+                <div v-if="draft.manual_entry" class="toolbar-group" style="justify-content:flex-start;margin:0 0 10px">
+                  <button class="btn small" type="button" :disabled="isImportDraftLocked(draft)" @click="addManualPdfDraftItem(draft)">新增人工明细</button>
+                  <button class="btn primary small" type="button" :disabled="isImportDraftLocked(draft) || draft._manual_matching || !draft.matched_customer_id" @click="confirmManualPdfDraft(draftIndex)">{{ draft._manual_matching ? '正在核对…' : '核对并匹配常用箱' }}</button>
+                </div>
                 <!-- PDF 草稿默认只保留现场核对必需信息；候选、证据和主档详情统一收在高级详情。 -->
                 <div
                   v-if="draft.items?.length"
@@ -7157,11 +7169,11 @@
                       </td>
                       <td>
                         <div style="display:flex;gap:4px;align-items:center;margin-bottom:3px">
-                          <input v-if="item.is_new_product" class="input compact-input" v-model.trim="item.raw_product_code" placeholder="存货编码" @input="invalidateImportDraftConfirmation(draft)" />
+                          <input v-if="item.is_new_product || (draft.manual_entry && !item.matched_product_id)" class="input compact-input" v-model.trim="item.raw_product_code" placeholder="存货编码" @input="invalidateImportDraftConfirmation(draft)" />
                           <span v-else class="pdf-match-code-value" style="font-size:12px;font-weight:600">{{ item.normalized_product_code || item.product_code || item.raw_product_code || "-" }}</span>
                         </div>
                         <!-- 无匹配时允许新建 -->
-                        <label v-if="!item.matched_product_id" style="font-size:11px;margin-top:4px;display:flex;align-items:center;gap:3px;cursor:pointer">
+                        <label v-if="!item.matched_product_id && !draft.manual_entry" style="font-size:11px;margin-top:4px;display:flex;align-items:center;gap:3px;cursor:pointer">
                           <input type="checkbox" v-model="item.is_new_product" @change="toggleNewProduct(draft,item)" style="margin:0" /> 新产品（系统新建）
                         </label>
                       </td>
@@ -7169,7 +7181,7 @@
                         <div v-if="item.matched_product_id && !item.is_new_product">
                           <div class="pdf-product-name" :title="pdfCommonBoxProductName(item)">{{ pdfCommonBoxProductName(item) }}</div>
                         </div>
-                        <input v-else-if="item.is_new_product" class="input" v-model.trim="item.raw_product_name" placeholder="产品名称" @input="invalidateImportDraftConfirmation(draft)" />
+                        <input v-else-if="item.is_new_product || (draft.manual_entry && !item.matched_product_id)" class="input" v-model.trim="item.raw_product_name" placeholder="产品名称" @input="invalidateImportDraftConfirmation(draft)" />
                         <div v-else class="pdf-product-name" :title="item.raw_product_name || '-'">{{ item.raw_product_name || "-" }}</div>
                       </td>
                       <td>
@@ -30226,7 +30238,7 @@
             }
             if (!draft?.items?.length) reasons.push("没有识别到明细。");
             if (draft?.duplicate_status === "duplicate_skipped") reasons.push("重复订单已跳过。");
-            if (draft?.integrity_check?.integrity_status !== "passed") reasons.push("PDF识别完整性未通过或缺失，请重新识别并处理完整性异常。");
+            if (!["passed","manual_confirmed"].includes(draft?.integrity_check?.integrity_status)) reasons.push(draft?.manual_entry ? "请先核对并匹配人工录入明细。" : "PDF识别完整性未通过或缺失，请重新识别并处理完整性异常。");
             if (this.hasImportDraftQuantityReview(draft)) reasons.push("存在非整数数量，不能直接保存，请人工修改后再保存。");
             (draft?.items || []).forEach(item => {
               const inventoryReason = this.inventoryDecisionRequired(item);
@@ -30305,6 +30317,80 @@
             const index = (draft?.items || []).indexOf(item);
             if (index >= 0) draft.items.splice(index, 1);
 	            this.syncOrderImportReminderVisibility(draft);
+          },
+          manualPdfDraftItem(lineNo) {
+            return this.preparePdfImportItem({
+              line_no:lineNo,
+              raw_product_code:"",
+              raw_product_name:"",
+              raw_spec_model:"",
+              quantity:null,
+              unit:"",
+              unit_price:"",
+              matched_product_id:null,
+              product_candidates:[],
+              match_status:"unmatched",
+              is_new_product:false,
+              cost_status:"pending",
+              estimated_cost:null,
+            });
+          },
+          startManualPdfDraft(draft) {
+            if (!draft || this.isImportDraftLocked(draft)) return;
+            draft.manual_entry = true;
+            draft.confirmed = false;
+            draft._manual_matching = false;
+            draft._show_advanced_details = true;
+            draft.items = [this.manualPdfDraftItem(1)];
+            draft.integrity_check = {...(draft.integrity_check || {}),integrity_status:"failed"};
+          },
+          addManualPdfDraftItem(draft) {
+            if (!draft || this.isImportDraftLocked(draft)) return;
+            this.invalidateImportDraftConfirmation(draft);
+            draft.items.push(this.manualPdfDraftItem(draft.items.length + 1));
+          },
+          async handleImportDraftCustomerChange(index) {
+            const draft = this.orderImportDrafts[index];
+            if (!draft) return;
+            this.invalidateImportDraftConfirmation(draft);
+            if (draft.manual_entry) {
+              draft._reminder_loaded = false;
+              draft._reminder_acknowledged_signature = "";
+              if (draft.matched_customer_id) await this.loadOrderImportReminderForDraft(draft,{force:true});
+              return;
+            }
+            await this.rematchImportDraft(index);
+          },
+          async confirmManualPdfDraft(index) {
+            const draft = this.orderImportDrafts[index];
+            if (!draft?.manual_entry || !draft.matched_customer_id || this.isImportDraftLocked(draft) || draft._manual_matching) return;
+            this.invalidateImportDraftConfirmation(draft);
+            draft._manual_matching = true;
+            try {
+              const { data } = await axios.post("/api/orders/draft-manual-rematch", {
+                draft,
+                customer_id:draft.matched_customer_id,
+                preview_safety_token:draft.preview_safety_token,
+                manual_complete:true,
+              });
+              this.orderImportDrafts[index] = this.prepareImportDraftReminderState({
+                ...data,
+                manual_entry:true,
+                confirmed:false,
+                _manual_matching:false,
+                _save_status:"idle",
+                _save_message:"",
+                items:(data.items || []).map(item => this.preparePdfImportItem(item)),
+              });
+              const refreshed = this.orderImportDrafts[index];
+              await this.loadOrderImportReminderForDraft(refreshed,{force:true});
+              await Promise.all(refreshed.items.filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,refreshed.matched_customer_id)));
+              this.showToast("人工明细已核对，请确认未匹配行、数量和单价");
+            } catch (error) {
+              draft._manual_matching = false;
+              const detail = error.response?.data?.detail;
+              this.showToast(typeof detail === "string" ? detail : (detail?.message || "人工明细核对失败，请检查后重试"), true);
+            }
           },
           toggleNewProduct(draft, item) {
             if (this.isImportDraftLocked(draft)) return;

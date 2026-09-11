@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.355"
-APP_VERSION_NAME = "仓库正视图与移货工作区统一"
+APP_VERSION = "v0.22.356"
+APP_VERSION_NAME = "邮箱PDF人工录单兜底"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2658,9 +2658,23 @@ APP_VERIFICATION_STEPS = [
     "选择移动此产品，打开目标货架并选橙色有货格，核对层格、数量后确认移动；整栈板不得选有货格或货架格。",
     "从顶部搜索连续选择不同货架产品，核对黄色层格定位；检查3F默认、1F/4F切换、区域字母分组及盘点入口。正式页面由管理员人工验收，本次未自动点击或试移正式库存。",
 ]
+_V022355_CHANGES = APP_CHANGES
+_V022355_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "邮箱PDF识别失败或没有识别到明细时，可按原PDF人工填写客户单号、存货编码、名称、规格、数量和单价，再匹配该客户的正式常用箱。",
+    "人工录入继续校验原PDF文件凭据、客户范围、整数数量、客户单价、常用箱、生产提醒、库存选择和重复订单；保存时记录人工覆盖审计。",
+    "本版不新增数据库结构，不自动补写客户订单事实，也不改变已同步邮件、已有订单、库存、价格或生产数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员从订单→邮箱收单打开识别失败的PDF，点击按原PDF人工录入，选择客户并逐项填写后点击核对并匹配常用箱。",
+    "确认未匹配行仍被阻止；补齐整数数量、单价和正式常用箱并确认生产提醒后，保存订单并从原邮件查看关联订单。",
+    "尝试更换原文件名、空客户单号、空产品或小数数量，确认后端拒绝；正式页面由管理员人工验收。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.355：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.355：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.356：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.356：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.355：本次更新｜{item}" for item in _V022355_CHANGES),
+    *(f"v0.22.355：如何验证｜{item}" for item in _V022355_STEPS),
     *(f"v0.22.354：本次更新｜{item}" for item in _V022354_CHANGES),
     *(f"v0.22.354：如何验证｜{item}" for item in _V022354_STEPS),
     *(f"v0.22.353：本次更新｜{item}" for item in _V022353_CHANGES),

@@ -977,7 +977,7 @@ def _validate_pdf_import_safety(
         user,
         observability=observability,
     )
-    if claims["integrity_status"] != "passed":
+    if claims["integrity_status"] not in {"passed", "manual_confirmed"}:
         raise HTTPException(
             status_code=409,
             detail={
@@ -1796,6 +1796,10 @@ class DraftRematchRequest(BaseModel):
     draft: dict
     customer_id: int
     preview_safety_token: str = Field(min_length=1, max_length=4000)
+
+
+class ManualDraftRematchRequest(DraftRematchRequest):
+    manual_complete: Literal[True]
 
 
 class CostPreviewRequest(BaseModel):
@@ -4407,6 +4411,117 @@ def rematch_order_draft(
             "customer_route_status": trusted_claims["customer_route_status"],
             "customer_match_status": "matched",
             "integrity_status": trusted_claims["integrity_status"],
+            "matched_customer_id": payload.customer_id,
+        },
+    )
+
+
+@router.post("/draft-manual-rematch")
+def rematch_manual_order_draft(
+    payload: ManualDraftRematchRequest,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_create),
+) -> dict:
+    """Turn a failed PDF preview into an explicitly checked manual draft.
+
+    The original signed file identity remains authoritative.  Only the order
+    facts typed by the operator are copied into the rematch request; product
+    identity is resolved again against the selected customer's active common
+    boxes before a new save token is issued.
+    """
+
+    trusted_claims = _decode_pdf_preview_safety_token(
+        payload.preview_safety_token,
+        _user,
+    )
+    draft_source_name = str(payload.draft.get("source_name") or "").strip()
+    trusted_source_name = str(trusted_claims["source_name"] or "").strip()
+    draft_source_hash = str(payload.draft.get("file_hash") or "").strip().casefold()
+    trusted_source_hash = str(trusted_claims["source_hash"] or "").strip().casefold()
+    if (draft_source_name or trusted_source_name) and draft_source_name != trusted_source_name:
+        raise _pdf_preview_token_error("PDF 预览 token 与草稿文件名不一致，请重新预览")
+    if (draft_source_hash or trusted_source_hash) and draft_source_hash != trusted_source_hash:
+        raise _pdf_preview_token_error("PDF 预览 token 与草稿文件哈希不一致，请重新预览")
+    if trusted_claims["recognition_status"] not in {"failed", "needs_confirmation"}:
+        raise HTTPException(status_code=409, detail="当前 PDF 已正常识别，无需改用人工录入")
+
+    customer_po = str(payload.draft.get("customer_po") or "").strip()
+    if not customer_po:
+        raise HTTPException(status_code=400, detail="按原 PDF 人工录入时必须填写客户单号")
+    raw_items = payload.draft.get("items")
+    if not isinstance(raw_items, list) or not 1 <= len(raw_items) <= 500:
+        raise HTTPException(status_code=400, detail="按原 PDF 人工录入必须包含 1 至 500 条明细")
+
+    manual_items: list[dict] = []
+    for index, raw in enumerate(raw_items, start=1):
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail=f"第{index}条人工明细格式无效")
+        raw_code = str(raw.get("raw_product_code") or raw.get("product_code") or "").strip()
+        raw_name = str(raw.get("raw_product_name") or raw.get("product_name") or "").strip()
+        if not raw_code and not raw_name:
+            raise HTTPException(status_code=400, detail=f"第{index}条人工明细必须填写存货编码或产品名称")
+        try:
+            quantity = Decimal(str(raw.get("quantity")))
+        except (ArithmeticError, TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"第{index}条人工明细数量无效") from None
+        if quantity <= 0 or quantity != quantity.to_integral_value():
+            raise HTTPException(status_code=400, detail=f"第{index}条人工明细数量必须为正整数")
+        unit_price = raw.get("unit_price")
+        if unit_price not in (None, ""):
+            try:
+                price = Decimal(str(unit_price))
+            except (ArithmeticError, TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"第{index}条人工明细单价无效") from None
+            if price < 0:
+                raise HTTPException(status_code=400, detail=f"第{index}条人工明细单价不能小于 0")
+        manual_items.append(
+            {
+                "line_no": raw.get("line_no") or index,
+                "raw_product_code": raw_code,
+                "product_code": raw_code,
+                "raw_product_name": raw_name,
+                "raw_spec_model": str(raw.get("raw_spec_model") or raw.get("specification") or "").strip(),
+                "quantity": int(quantity),
+                "unit": str(raw.get("unit") or "").strip() or None,
+                "unit_price": unit_price,
+                "delivery_date": raw.get("delivery_date") or payload.draft.get("delivery_date"),
+                "is_new_product": False,
+            }
+        )
+
+    trusted_draft = {
+        "source_name": trusted_claims["source_name"],
+        "file_hash": trusted_claims["source_hash"],
+        "customer_po": customer_po,
+        "order_date": payload.draft.get("order_date"),
+        "delivery_date": payload.draft.get("delivery_date"),
+        "recognition_status": "needs_confirmation",
+        "parse_status": "needs_confirmation",
+        "manual_entry": True,
+        "customer_route": {"status": "manual"},
+        "integrity_check": {
+            "integrity_status": "manual_confirmed",
+            "integrity_errors": [],
+            "manual_notice": "操作员已逐项对照原 PDF 人工录入，系统未自动补写订单事实。",
+        },
+        "items": manual_items,
+        "warnings": ["本草稿由操作员逐项对照原 PDF 人工录入，请在保存前再次核对。"],
+    }
+    result = _match_pdf_preview_for_user(
+        db,
+        trusted_draft,
+        _user,
+        customer_id=payload.customer_id,
+    )
+    result["manual_entry"] = True
+    return _finalize_pdf_preview_for_user(
+        result,
+        _user,
+        state_overrides={
+            "recognition_status": "needs_confirmation",
+            "customer_route_status": "manual",
+            "customer_match_status": "matched",
+            "integrity_status": "manual_confirmed",
             "matched_customer_id": payload.customer_id,
         },
     )

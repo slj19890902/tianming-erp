@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.354"
-APP_VERSION_NAME = "通用多级BOM与组装配套独立执行"
+APP_VERSION = "v0.22.355"
+APP_VERSION_NAME = "仓库正视图与移货工作区统一"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2646,9 +2646,23 @@ APP_VERIFICATION_STEPS = [
     "抽查无本体组合4005的新单计划，确认只显示真实子件报料和分存；再核对配套拿货位置与数量、实发及撤销规则。",
     "进入系统备份→系统版本，确认版本v0.22.354、数据库唯一head为sp28v8x9z90；产品及本格标签试打和手机扫码由管理员现场验收。",
 ]
+_V022354_CHANGES = APP_CHANGES
+_V022354_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "地图点货架展开正视图，正视图内点层格保持展开并更新右侧货位；点左侧地图具体货位才收起。右侧标签不再被货架遮挡。",
+    "移货时空位绿色、有货位橙色、目标蓝色、来源紫色；单品可移入合规有货层格，整栈板仍限空地面货位，不可用选位清除旧目标。单次确认直接移动，批量按需加入待执行列表。",
+    "楼层区域同行、区域按字母分组，查货改为顶部搜索；移货和盘点直接进入，合并栈板、规划及特殊存放收进更多，现存产品优先展示。保留工厂地图草稿、库存数量、批次成本、权限和最新BOM及OCR更新。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库，点货架再点正视图层格，确认货架不收起且右栏更新；再点左侧地图具体货位，确认正视图收起。",
+    "选择移动此产品，打开目标货架并选橙色有货格，核对层格、数量后确认移动；整栈板不得选有货格或货架格。",
+    "从顶部搜索连续选择不同货架产品，核对黄色层格定位；检查3F默认、1F/4F切换、区域字母分组及盘点入口。正式页面由管理员人工验收，本次未自动点击或试移正式库存。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.354：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.354：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.355：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.355：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.354：本次更新｜{item}" for item in _V022354_CHANGES),
+    *(f"v0.22.354：如何验证｜{item}" for item in _V022354_STEPS),
     *(f"v0.22.353：本次更新｜{item}" for item in _V022353_CHANGES),
     *(f"v0.22.353：如何验证｜{item}" for item in _V022353_STEPS),
     *(f"v0.22.352：本次更新｜{item}" for item in _V022352_CHANGES),

@@ -220,7 +220,11 @@ def own_output_lots(db, order_item_id):
         and_(InventoryLot.source_ref_type == "bom_assembly", InventoryLot.source_ref_id.in_(assemblies))))))
     from app.services.multilevel_bom_output_history import current_output_lots
     compiled = read_compiled_order_bom(db, order_item_id)
+    from app.services.multilevel_bom_body_inventory import carried_body_quantity
+    carried_bodies = [lot for lot in lots if lot.inventory_type == "assembly_body"
+        and carried_body_quantity(db, compiled, db.get(ProductionCompletion, lot.source_ref_id)) > 0]
     lots = current_output_lots(db, compiled, lots)
+    lots = list({lot.id: lot for lot in lots + carried_bodies}.values())
     from app.services.multilevel_bom_execution_boundary import handoff_assembly_ids
     handoffs = handoff_assembly_ids(db, compiled)
     lots = [lot for lot in lots if not (lot.source_ref_type == "bom_assembly" and lot.source_ref_id in handoffs)]

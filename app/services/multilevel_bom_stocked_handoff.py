@@ -36,6 +36,7 @@ class StockedHandoffReview:
     preview: dict
     purchase_sources: tuple = ()
     material_sources: tuple = ()
+    body_lots: tuple = ()
 
 
 def _closed_procurement(db, item):
@@ -125,6 +126,7 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
     old_nodes = {node.product_id: node for node in rule.previous.graph.nodes}
     new_nodes = {node.product_id: node for node in rule.proposed.graph.nodes}
     lots, eligible, quantities = {}, defaultdict(int), defaultdict(int)
+    body_lots, body_balances = {}, defaultdict(int)
     from app.services.fixed_shelf_staging import staging_owner
     for row in active:
         if (row.id not in current_ids or row.reservation_type != "finished_order"
@@ -157,7 +159,21 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
             if lot.quantity_available <= 0:
                 continue
             if lot.finished_detail is None:
-                raise BomPlanError(f"原订单批次{lot.lot_number}为{lot.inventory_type}，须明确待装配本体的库存交接，不能按成品预占处理")
+                from app.services.multilevel_bom_body_inventory import stock_product_identity
+                from app.services.multilevel_bom_output_history import completion_source_id
+                pid, owner_customer = stock_product_identity(db, lot)
+                completion = db.get(ProductionCompletion, lot.source_ref_id)
+                if (not carry_materials or completion_source_id(db, completion) not in material_sources
+                        or owner_customer != customer_id or lot.status != "active" or lot.quantity_reserved
+                        or pid not in new_nodes or new_nodes[pid].source != "manufactured"
+                        or new_bases[pid] != old_bases[pid]
+                        or not any(edge.parent_id == pid and edge.relation == "assembly" for edge in rule.proposed.graph.edges)):
+                    raise BomPlanError(f"本体批次{lot.lot_number}缺少兼容材料交接或新规则待装配阶段，须核对本体处理方式")
+                if staging_owner(db, lot.id):
+                    raise BomPlanError(f"本体批次{lot.lot_number}仍在集货")
+                body_lots[lot.id] = lot
+                body_balances[pid] += lot.quantity_available
+                continue
             pid = lot.finished_detail.product_id
             if (lot.status != "active" or lot.finished_detail.owner_customer_id != customer_id
                     or lot.finished_detail.is_general or pid not in old_bases
@@ -171,7 +187,8 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
                 eligible[pid] += lot.quantity_available
     remaining = item.quantity - (item.delivered_quantity or 0)
     plan = plan_bom(rule.proposed.graph, remaining, eligible_stock=eligible)
-    shortage = [row for row in plan.products if row.make_units and new_nodes[row.product_id].source in {"manufactured", "purchased"}]
+    shortage = [row for row in plan.products if row.make_units > body_balances.get(row.product_id, 0)
+        and new_nodes[row.product_id].source in {"manufactured", "purchased"}]
     blocking_shortage = [row for row in shortage if not carry_materials
         and (not carry_purchases or new_nodes[row.product_id].source != "purchased")]
     if blocking_shortage:
@@ -180,7 +197,7 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
     # Pending purchase capacity is not physical stock. Assembly waits for real
     # receipts; never manufacture a parent from a supplier obligation.
     assembly = (SimpleNamespace(steps=(), remaining_stock=tuple(eligible.items())) if shortage
-        else plan_assembly(rule.proposed.graph, remaining, eligible_stock=eligible, body_stock={}))
+        else plan_assembly(rule.proposed.graph, remaining, eligible_stock=eligible, body_stock=body_balances))
     balances = dict(assembly.remaining_stock)
     if not shortage and any(balances[pid] < quantity for pid, quantity in plan.picking):
         raise BomPlanError("现有预占不能在新规则下配齐剩余交付，请核对需要拆解或缺少的实际子件")
@@ -207,9 +224,15 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
         amount, lineage = source_cost(db, lots[lid], quantity)
         costs.append(dict(lot_id=lid, quantity=quantity, amount=str(amount), lineage=lineage,
                           unit=old_nodes[lots[lid].finished_detail.product_id].unit))
+    for lid, lot in body_lots.items():
+        amount, lineage = source_cost(db, lot, lot.quantity_available)
+        pid, _ = stock_product_identity(db, lot)
+        costs.append(dict(lot_id=lid, quantity=lot.quantity_available, amount=str(amount),
+            lineage=lineage, unit=old_nodes[pid].unit, inventory_type="assembly_body"))
     def facts(model, condition):
         return [_row(row) for row in db.scalars(select(model).where(condition).order_by(model.id))]
     payload = dict(schema=1, rule=rule.document, order=_row(order), item=_row(item), procurement=procurement,
+        bodies=[_row(lot) for lot in body_lots.values()],
         semi_requirements=[_row(requirement) for _, requirement in semi_rows],
         semi_lots=[dict(lot=_row(lot), detail=_row(lot.semi_finished_detail)) for lot in semi_lots.values()],
         reservations=[_row(row) for row in reservations], lots=[_row(lot) for lot in lots.values()],
@@ -231,7 +254,12 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
         unit=new_nodes[rule.proposed.graph.root_id].unit,
         delivered_quantity=item.delivered_quantity or 0, preview_hash=checksum, reviewed_hash=checksum,
         rule_revision=revision, target_locations=target_locations,
-        source_lot_versions={lid: lot.version for lid, lot in (lots | semi_lots).items()}, source_costs=costs,
+        source_lot_versions={lid: lot.version for lid, lot in (lots | semi_lots | body_lots).items()}, source_costs=costs,
+        retained_bodies=[dict(lot_id=lot.id, quantity=lot.quantity_available,
+            location_id=lot.warehouse_location_id, product_id=stock_product_identity(db, lot)[0],
+            name=old_nodes[stock_product_identity(db, lot)[0]].name,
+            unit=old_nodes[stock_product_identity(db, lot)[0]].unit)
+            for lot in body_lots.values()],
         retained_semi=[dict(reservation_id=row.id, lot_id=row.inventory_lot_id,
             location_id=semi_lots[row.inventory_lot_id].warehouse_location_id,
             reserved_sheets=row.reserved_stock_quantity, consumed_sheets=row.consumed_stock_quantity,
@@ -258,12 +286,12 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
             else "只接收已收齐或明确撤销的原采购，保留全部原合同和实收，不追加采购"),
         carried_purchases=procurement["external"] if carry_purchases else [],
         carried_materials=procurement["paper"] if carry_materials else [],
-        inventory_impact="释放本订单剩余旧预占；所需数量绑定新来源，多余量留原批次可用；需组装时只消耗本次重新绑定的子件",
+        inventory_impact="释放本订单剩余旧预占；所需数量绑定新来源，多余量留原批次可用；组装仅消耗已核验子件及预览中的待装配本体",
         cost_impact="沿用原批次成本来源，估算不升级实际；新组装只转移成本，旧已送成本不变",
         picking_impact="按新冻结交付规则与明确批次拿货；切换前已送不变",
         product_versions={node.product_id:node.version for node in rule.proposed.graph.nodes},
         new_modes=asdict(rule.proposed.graph.modes) if rule.proposed.graph.modes else None)
-    return StockedHandoffReview(rule, active, lots, retain, assembly, document, preview, purchase_sources, material_sources)
+    return StockedHandoffReview(rule, active, lots, retain, assembly, document, preview, purchase_sources, material_sources, tuple(body_lots.values()))
 
 
 def _result(db, row):
@@ -319,7 +347,7 @@ def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, ex
                 or review.preview["rule_revision"] != expected_revision
                 or review.preview["source_lot_versions"] != source_lot_versions):
             raise BomPlanError("库存、订单、规则或目标地图已变化，请重新预览")
-        for entry in review.preview["retained_semi"]:
+        for entry in review.preview["retained_semi"] + review.preview["retained_bodies"]:
             lid = entry["lot_id"]
             claimed = db.execute(update(InventoryLot).where(InventoryLot.id == lid,
                 InventoryLot.version == source_lot_versions[lid]).values(version=InventoryLot.version))
@@ -404,9 +432,10 @@ def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, ex
         if review.assembly.steps:
             from app.services.multilevel_bom_inventory import assemble_order_inventory
             assemblies = assemble_order_inventory(db, order_item_id=item.id,
-                source_lot_versions={lid:review.lots[lid].version for lid, qty in review.retain.items() if qty},
+                source_lot_versions=({lid:review.lots[lid].version for lid, qty in review.retain.items() if qty}
+                    | {lot.id: lot.version for lot in review.body_lots}),
                 target_locations=target_locations, operation_key=operation_key+":assemble",
-                operator_id=actor.id, available_lot_ids=[])
+                operator_id=actor.id, available_lot_ids=[lot.id for lot in review.body_lots])
             from app.services.production_workflow import _reserve_component_completion_lot
             picking = dict(plan_bom(review.rule.proposed.graph, review.preview["execution_quantity"]).picking)
             for assembly in assemblies:

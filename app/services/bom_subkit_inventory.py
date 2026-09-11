@@ -130,6 +130,8 @@ def assemble_subkit_inventory(
             is_body = lot.inventory_type == "assembly_body"
             if is_body:
                 from app.models.multilevel_bom import BomBodyInventoryDetail
+                from app.services.multilevel_bom_body_inventory import validate_body_execution
+                validate_body_execution(db, compiled, lot)
                 body = db.get(BomBodyInventoryDetail, lot.id)
                 if (pid != body_product_id or body.order_item_id != item.id
                         or lot.quantity_reserved or reserved_qty.get(lot.id, 0)):

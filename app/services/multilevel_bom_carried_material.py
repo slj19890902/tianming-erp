@@ -80,11 +80,16 @@ def carried_semi_pieces(db, compiled):
             continue
         lot = db.get(InventoryLot, completion.inventory_lot_id)
         detail = json.loads(lot.cost_snapshot_detail_json or "{}") if lot else {}
+        from app.services.multilevel_bom_body_inventory import carried_body_quantity
+        body_quantity = carried_body_quantity(db, compiled, completion)
         for entry in detail.get("bom_material_inputs", []):
             if entry.get("kind") == "reservation" and entry.get("id") in balances:
                 if type(entry.get("quantity")) is not int or entry["quantity"] <= 0:
                     raise BomPlanError("半成品历史消耗片数无效")
-                balances[entry["id"]] -= entry["quantity"]
+                historical = entry["quantity"] * (completion.quantity-body_quantity)
+                if historical % completion.quantity:
+                    raise BomPlanError("历史本体半成品消耗不能按完整物理片数分摊")
+                balances[entry["id"]] -= historical // completion.quantity
     result = defaultdict(int)
     for reservation, requirement in rows:
         quantity = balances[reservation.id]
@@ -147,6 +152,8 @@ def carried_material_pieces(db, compiled, *, include_pending=True):
             raise BomPlanError("历史材料完工缺少原产出成本依据")
         detail = json.loads(lot.cost_snapshot_detail_json or "{}")
         inputs = detail.get("bom_material_inputs")
+        from app.services.multilevel_bom_body_inventory import carried_body_quantity
+        body_quantity = carried_body_quantity(db, compiled, completion)
         if not isinstance(inputs, list) or not inputs:
             raise BomPlanError("历史材料完工缺少逐片消耗依据")
         for entry in inputs:
@@ -169,7 +176,10 @@ def carried_material_pieces(db, compiled, *, include_pending=True):
                         or entry["before"] + entry["quantity"] >
                             allocation.receipt_order_purpose_sheet_qty * purpose.yield_per_sheet_snapshot):
                     raise BomPlanError("历史材料消耗与原实收片数或来源不一致")
-                by_source[material, entry["route"]] -= entry["quantity"]
+                historical = entry["quantity"] * (completion.quantity-body_quantity)
+                if historical % completion.quantity:
+                    raise BomPlanError("历史本体材料消耗不能按完整物理片数分摊")
+                by_source[material, entry["route"]] -= historical // completion.quantity
             elif entry["kind"] != "reservation":
                 raise BomPlanError("历史材料投入来源类型无效")
     result = defaultdict(int)

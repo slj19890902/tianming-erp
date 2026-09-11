@@ -146,8 +146,8 @@ def test_partial_material_receipt_preserves_original_consumption(composite_requi
             assert len(purposes) == 1 and purposes[0].order_purpose_sheet_qty == half
 
 
-@pytest.mark.parametrize("with_semi,semi_received_before", [(False, 0), (True, 0), (True, 12)])
-def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_requisition_app, _p181_published_map_identity, monkeypatch, with_semi, semi_received_before):
+@pytest.mark.parametrize("with_semi,semi_received_before,with_body,old_assembled", [(False, 0, False, False), (True, 0, False, False), (True, 12, False, False), (False, 0, True, False), (False, 0, True, True)])
+def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_requisition_app, _p181_published_map_identity, monkeypatch, with_semi, semi_received_before, with_body, old_assembled):
     from app.api.bom_cutover import router
     from app.models.order import OrderItem
     from app.models.multilevel_bom import OrderBomSourceHandoff, BomAssembly
@@ -156,7 +156,7 @@ def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_r
     from app.api.requisition import _bom_pending_component_requirements
     app, factory = composite_requisition_app
     app.include_router(router, prefix="/api/orders")
-    material_id, snapshots = seed_graph(factory)
+    material_id, snapshots = seed_graph(factory, liner=with_body, body=with_body)
     if with_semi:
         from tests.test_p1_81_receipt_purpose_flow import _seed_order_semi_reservation
         from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement, SemiFinishedLotAllowedProduct
@@ -180,9 +180,20 @@ def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_r
         facts = [_freeze_receipt_fact(client, source, idempotency_key=f"public-paper-price-{index}",
             unit_price="0.1234").json() for index, source in enumerate(sources)]
         half = semi_received_before if with_semi else sources[0].order_purpose_sheet_qty // 2
-        if half:
-            first = _receive(client, sources[0], facts[0], quantity=half, idempotency_key="public-paper-first")
+        initial = [half] + [0] * (len(sources)-1)
+        if old_assembled:
+            initial = [sources[0].order_purpose_sheet_qty] + [source.order_purpose_sheet_qty // 2 for source in sources[1:]]
+        for index, quantity in enumerate(initial):
+            if not quantity:
+                continue
+            first = _receive(client, sources[index], facts[index], quantity=quantity, idempotency_key=f"public-paper-first-{index}")
             assert first.status_code == 200, first.text
+        with factory() as db:
+            old_assemblies = {row.id: {column.key: getattr(row, column.key) for column in row.__table__.columns}
+                for row in db.scalars(select(BomAssembly).where(BomAssembly.quantity > 0))}
+            old_bodies = {lot.id: (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed,
+                lot.cost_snapshot_detail_json) for lot in db.scalars(select(InventoryLot).where(
+                    InventoryLot.inventory_type == "assembly_body"))}
         url = "/api/orders/items/1/material-bom-cutover"
         if with_semi:
             with factory() as db:
@@ -197,6 +208,9 @@ def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_r
         assert preview.status_code == 200, preview.text
         review = preview.json()
         assert review["ready"] and review["carried_materials"]
+        if with_body:
+            assert len(review["retained_bodies"]) == 1
+            assert review["retained_bodies"][0]["quantity"] == 5
         payload = {key: review[key] for key in ("reviewed_hash", "preview_hash", "rule_revision",
             "source_lot_versions", "target_locations")}
         payload["operation_key"] = "public-material-switch"
@@ -227,12 +241,15 @@ def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_r
         assert switched.status_code == 200, switched.text
         assert client.post(url + "/execute", json=payload).json() == switched.json()
         with factory() as db:
-            assert len(list(db.scalars(select(OrderBomSourceHandoff)))) == 2
+            assert len(list(db.scalars(select(OrderBomSourceHandoff)))) == len(snapshots)
             assert graph_material_receipts_closed(db, db.get(OrderItem, 1)) is False
             assert all(row["requisition_qty"] == 0 for row in _bom_pending_component_requirements(db, db.get(OrderItem, 1)))
         received_ids = []
         for index, source in enumerate(sources):
-            result = _receive(client, source, facts[index], quantity=source.order_purpose_sheet_qty-(half if index == 0 else 0),
+            quantity = source.order_purpose_sheet_qty-initial[index]
+            if not quantity:
+                continue
+            result = _receive(client, source, facts[index], quantity=quantity,
                 idempotency_key=f"public-material-after-{index}")
             assert result.status_code == 200, result.text
             received_ids.append(result.json()["receipt_item_id"])
@@ -243,14 +260,21 @@ def test_admin_material_handoff_preserves_partial_stock_and_finishes(composite_r
             assert sum(db.get(InventoryLot, row.output_lot_id).quantity_reserved for row in outputs) == 10
             from app.services.receipt_managed_production import receipt_purpose_summaries_by_order_item_ids
             summary = receipt_purpose_summaries_by_order_item_ids(db, [1])[1]
-            assert summary["current_theoretical_finished_capacity_qty"] == 10
-            assert summary["automatic_finished_output_qty"] == 10
+            assert summary["current_theoretical_finished_capacity_qty"] == (5 if old_assembled else 10)
+            assert summary["automatic_finished_output_qty"] == (5 if old_assembled else 10)
             assert summary["remaining_order_purpose_sheet_qty"] == 0
             assert summary["projection_inconsistent"] is False
+            for assembly_id, original in old_assemblies.items():
+                row = db.get(BomAssembly, assembly_id)
+                assert {column.key: getattr(row, column.key) for column in row.__table__.columns} == original
         reverted = client.put(f"/api/incoming/receipt-items/{result.json()['receipt_item_id']}/revert", json={})
         assert reverted.status_code == 200, reverted.text
         with factory() as db:
             assert graph_material_receipts_closed(db, db.get(OrderItem, 1)) is False
+            for lot_id, original in old_bodies.items():
+                lot = db.get(InventoryLot, lot_id)
+                assert (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed,
+                    lot.cost_snapshot_detail_json) == original
 
         if with_semi:
             undone = client.put(f"/api/incoming/receipt-items/{received_ids[0]}/revert", json={})

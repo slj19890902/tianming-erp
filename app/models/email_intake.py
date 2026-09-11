@@ -38,3 +38,13 @@ class EmailIntakeAttachment(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     content: Mapped[bytes] = mapped_column(LargeBinary)
     duplicate_of: Mapped[int | None] = mapped_column(ForeignKey('email_intake_attachments.id'), nullable=True)
+
+
+class EmailIntakeOrderLink(Base):
+    __tablename__ = 'email_intake_order_links'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    import_key: Mapped[str] = mapped_column(String(64), unique=True)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    attachment_id: Mapped[int] = mapped_column(ForeignKey('email_intake_attachments.id'))
+    order_id: Mapped[int | None] = mapped_column(ForeignKey('sales_orders.id', ondelete='SET NULL'), nullable=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey('users.id'))

@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from starlette.datastructures import Headers
 from app.api.deps import get_db, PermissionChecker, has_unrestricted_customer_access
 from app.models.user import User
-from app.models.email_intake import EmailIntakeSettings, EmailIntakeMessage, EmailIntakeAttachment
+from app.models.email_intake import EmailIntakeSettings, EmailIntakeMessage, EmailIntakeAttachment, EmailIntakeOrderLink
 from app.services import email_intake as service
 
 router = APIRouter()
@@ -105,8 +105,17 @@ def detail(message_id: int, response: Response, db: Session = Depends(get_db), u
     if not row:
         raise HTTPException(404, '邮件不存在')
     attachments = db.scalars(select(EmailIntakeAttachment).where(EmailIntakeAttachment.message_id == row.id))
+    from app.models.order import Order
+    results = []
+    for attachment in attachments:
+        links = db.execute(select(EmailIntakeOrderLink.order_id, Order.order_number, Order.customer_po)
+            .join(EmailIntakeAttachment, EmailIntakeAttachment.id == EmailIntakeOrderLink.attachment_id)
+            .outerjoin(Order, Order.id == EmailIntakeOrderLink.order_id)
+            .where(EmailIntakeAttachment.sha256 == attachment.sha256)).all()
+        results.append({**{key: getattr(attachment, key) for key in ('id', 'filename', 'sha256', 'duplicate_of')},
+            'orders': [{'id': link.order_id, 'order_number': link.order_number, 'customer_po': link.customer_po} for link in links]})
     return {**{key: getattr(row, key) for key in ('id', 'subject', 'sender', 'received', 'body', 'notice', 'status', 'version')},
-            'attachments': [{key: getattr(a, key) for key in ('id', 'filename', 'sha256', 'duplicate_of')} for a in attachments]}
+            'attachments': results}
 
 
 @router.put('/{message_id}/state')
@@ -138,5 +147,6 @@ async def preview(attachment_id: int, db: Session = Depends(get_db), user: User 
     if not row.filename.lower().endswith('.pdf'):
         raise HTTPException(422, 'Excel草稿映射正在接入；当前可下载原附件核对')
     from app.api.orders import preview_order_pdf
-    return await preview_order_pdf(UploadFile(filename=row.filename, file=BytesIO(row.content),
+    result = await preview_order_pdf(UploadFile(filename=row.filename, file=BytesIO(row.content),
         headers=Headers({'content-type': 'application/pdf'})), db, user)
+    return {**result, 'email_attachment_id': row.id}

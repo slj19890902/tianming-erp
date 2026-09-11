@@ -14476,6 +14476,7 @@
               this.incomingWorkspace = this.initialIncomingWorkspaceFromLocation(this.activePage);
               this.applyInitialMaterialPriceRoute();
               if (!await this.loadInitialPageResources()) return;
+              await this.openEmailAttachmentFromLocation();
               if (this.user?.must_change_password) this.openChangePassword(true);
             } catch (error) {
               if (!requestIsCurrent()) return;
@@ -14527,6 +14528,7 @@
               this.applyInitialMaterialPriceRoute();
               const initialResourcesReady = await this.loadInitialPageResources();
               if (!requestIsCurrent() || !initialResourcesReady) return;
+              await this.openEmailAttachmentFromLocation();
               if (this.user?.must_change_password) this.openChangePassword(true, currentPassword);
             } catch (error) {
               if (requestIsCurrent()) this.loginError = this.errorMessage(error);
@@ -29791,6 +29793,21 @@
             this.orderImportBatch.retryDraft = null;
             this.orderImportDrafts = [];
           },
+          async openEmailAttachmentFromLocation() {
+            const source = new URLSearchParams(window.location.search).get("email_attachment");
+            if (!source || !/^[1-9][0-9]*$/.test(source) || !this.user || this.user.must_change_password) return;
+            if (!this.canCreateOrders || !["admin","boss"].includes(this.user.role)) return;
+            this.openOrderPdfImport();
+            this.orderImportBatch.status = "recognizing";
+            try {
+              const {data:draft} = await axios.post(`/api/email-intake/attachments/${source}/preview`);
+              this.orderImportDrafts = [this.prepareImportDraftReminderState({...draft,confirmed:false,_save_status:"idle",_save_message:"",items:(draft.items||[]).map(item=>this.preparePdfImportItem(item))})];
+              await this.loadOrderImportReminders();
+              if (this.modal?.type !== "orderPdfImport") return;
+              await Promise.all(this.orderImportDrafts.map(row=>Promise.all((row.items||[]).filter(item=>item.matched_product_id).map(item=>this.loadOrderLineInventory(item,row.matched_customer_id)))));
+              this.orderImportBatch.status="recognized";
+            } catch(error) {this.orderImportBatch.status="failed";this.showToast(this.errorMessage(error),true);}
+          },
           async previewOrderPdfImport() {
             if (!this.orderImportBatch.files.length) {
               this.showToast("请先选择一个或多个 PDF 文件", true);
@@ -30141,6 +30158,7 @@
               order_date: draft.order_date || today(),
               delivery_date: draft.delivery_date || plusDays(7),
               remark: `PDF识别草稿：${draft.source_name || "客户采购订单"}`,
+              email_attachment_id: draft.email_attachment_id || null,
               import_draft: true,
               import_integrity_status: draft.integrity_check?.integrity_status || null,
               import_integrity_errors: draft.integrity_check?.integrity_errors || [],
@@ -30253,6 +30271,7 @@
                     customer_id:draft.matched_customer_id, customer_po:draft.customer_po,
                     order_date:draft.order_date || today(), delivery_date:draft.delivery_date || null,
                     remark:`PDF识别草稿：${draft.source_name}`,
+                    email_attachment_id:draft.email_attachment_id || null,
                     import_draft:true,
                     import_integrity_status:draft.integrity_check?.integrity_status || null,
                     import_integrity_errors:draft.integrity_check?.integrity_errors || [],

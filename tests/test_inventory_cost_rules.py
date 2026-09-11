@@ -135,6 +135,35 @@ def test_cost_api_roles_scope_and_stale_rule(db,monkeypatch):
         u.role='admin'
         r=client.get(f'/api/warehouse/cost-rules/{p.id}')
         assert r.status_code==200 and 'no-store' in r.headers['cache-control']
+        endpoint=f'/api/warehouse/cost-rules/{p.id}'
+        payload=dict(expected_version=0,expected_product_version=p.version,config=dict(mode='fixed',unit_cost=5,basis='含税参考'))
+        write=client.put(endpoint,json=payload)
+        assert write.status_code==200,write.text
+        assert client.put(endpoint,json=payload).status_code==409
+        u.role='boss'
+        assert client.get(endpoint).status_code==200
+        assert client.put(endpoint,json={**payload,'expected_version':1}).status_code==403
+        u.role='admin'
         def deny(*a,**kw):raise HTTPException(403,'客户范围')
         monkeypatch.setattr(api,'require_customer_access',deny)
         assert client.get(f'/api/warehouse/cost-rules/{p.id}').status_code==403
+
+
+def test_manifest_rejects_other_customer_and_is_atomic(db,monkeypatch):
+    from scripts.admin.warehouse_cost_rules import preview_manifest,adopt_manifest
+    p,m,u,loc=setup(db);l=lot(db,p,u,loc);db.commit()
+    item=dict(product_id=p.id,product_code=p.product_code,product_name=p.product_name,customer_id=p.customer_id,
+        product_version=p.version,config=dict(mode='fixed',unit_cost=3,basis='文件含税'),lot_ids=[l.id])
+    manifest=dict(authorization='用户指定产品和价格',unmatched=[],rules=[item])
+    bad={**manifest,'rules':[{**item,'customer_id':p.customer_id+1}]}
+    with pytest.raises(ValueError,match='身份'):preview_manifest(db,bad)
+    plan=preview_manifest(db,manifest)
+    original=service.append_audit_event
+    monkeypatch.setattr(service,'append_audit_event',lambda *a,**kw: (_ for _ in ()).throw(RuntimeError('audit')))
+    with pytest.raises(RuntimeError):adopt_manifest(db,manifest,expected=plan['fingerprint'],batch='manifest',user=u)
+    db.rollback()
+    assert db.get(InventoryCostRule,p.id) is None and l.estimated_unit_cost_snapshot==Decimal('1.6300')
+    monkeypatch.setattr(service,'append_audit_event',original)
+    assert adopt_manifest(db,manifest,expected=plan['fingerprint'],batch='manifest',user=u)['lot_count']==1
+    db.commit()
+    assert adopt_manifest(db,manifest,expected=plan['fingerprint'],batch='manifest',user=u)['replayed']

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.353"
-APP_VERSION_NAME = "查货直达货架正视图与层格高亮"
+APP_VERSION = "v0.22.354"
+APP_VERSION_NAME = "通用多级BOM与组装配套独立执行"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2632,9 +2632,25 @@ _V022352_CHANGES = APP_CHANGES
 _V022352_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["查货点击货架产品后直接打开对应货架正视图，黄色标出所在层格和产品，深色边框标记当前具体位置。", "搜索列表保持可用；切换产品、楼层或具体位置时同步切换货架，地面栈板继续地图定位；点货位自动收起仍保留。"]
 APP_VERIFICATION_STEPS = ["搜索货架产品并点击，核对正视图、层数格数和黄色产品；同格其他产品不得误高亮。", "连续切换不同产品、跨楼层位置和地面货位，确认旧货架收起且新位置准确；点击货位应返回其信息，编码标签和批次按钮功能保留。"]
+_V022353_CHANGES = APP_CHANGES
+_V022353_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "常用箱可用统一多级BOM配置分别定义报料、库存形态和交货方式；组装与配套分开，子件身份、用量、单位和来源按版本冻结。",
+    "管理员可先预览再切换未完成订单规则，系统校验库存、预占、来源和版本，并以幂等事务及审计保护历史已送、成本和库存事实。",
+    "子件分存支持余料分别抵扣、分批收料、按真实子件实发及撤销恢复；无本体组合不产生父件报料或虚拟父库存。",
+    "本次只发布通用功能和必要结构，不执行00205的300套入库、库存转换或正式归位；00096刀模由管理员后录，80012500产出待首产核实。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员打开常用箱，配置并重开一款多级BOM，确认报料、库存形态、交货方式及子件用量和单位保持一致。",
+    "打开未完成订单版本切换，先核对影响预览、正式货位和版本校验；不执行00205转换，确认历史已送、预占和库存数量未被发布自动改写。",
+    "抽查无本体组合4005的新单计划，确认只显示真实子件报料和分存；再核对配套拿货位置与数量、实发及撤销规则。",
+    "进入系统备份→系统版本，确认版本v0.22.354、数据库唯一head为sp28v8x9z90；产品及本格标签试打和手机扫码由管理员现场验收。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.353：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.353：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.354：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.354：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.353：本次更新｜{item}" for item in _V022353_CHANGES),
+    *(f"v0.22.353：如何验证｜{item}" for item in _V022353_STEPS),
     *(f"v0.22.352：本次更新｜{item}" for item in _V022352_CHANGES),
     *(f"v0.22.352：如何验证｜{item}" for item in _V022352_STEPS),
     *(f"v0.22.351：本次更新｜{item}" for item in _V022351_CHANGES),

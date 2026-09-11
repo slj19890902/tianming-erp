@@ -21,7 +21,7 @@ def test_save_is_in_fixed_dialog_footer_and_preserves_validation():
 
 
 def test_compact_css_loaded_and_grid_does_not_clip_search_popups():
-    assert '/static/product-editor-compact.css?v=multilevel-bom-1' in HTML
+    assert '/static/product-editor-compact.css?v=e210145a0c7d' in HTML
     css = (ROOT / 'static/product-editor-compact.css').read_text(encoding='utf-8')
     assert 'grid-column: 1 / -1' in css
     assert '.product-size-report-row' in css

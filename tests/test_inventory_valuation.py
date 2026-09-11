@@ -135,3 +135,49 @@ def test_dispatch_cost_uses_frozen_entry_and_return_quantity_no_repricing(requis
         assert db.scalar(select(func.count()).select_from(Supplement))==1
         with pytest.raises(ValueError,match="不能覆盖"):
             freeze_inventory_entry_cost(db,**{**args,"quantity":7})
+
+
+def test_backfill_rejects_stale_price_and_rolls_back_with_audit(db,monkeypatch):
+    from app.models.user import User
+    from app.services import inventory_cost_backfill as service
+    row,material=product(db)
+    user=User(username="costadmin",real_name="成本验收",password_hash="test-only",role="admin",is_active=True)
+    location=WarehouseLocation(location_code="BACKFILL",location_name="测试",warehouse_type="finished")
+    db.add_all([user,location]);db.flush()
+    lot=manual_finished_in(db,customer_id=row.customer_id,product_id=row.id,location_id=location.id,
+        quantity=8,stock_date=date(2026,9,11),source_type="manual",remarks=None,operator_id=user.id,idempotency_key="old-unpriced")
+    for field in service.COST_FIELDS:setattr(lot,field,None)
+    db.commit()
+    db.expire_all()
+    initial=service.preview(db)
+    material.quote_price=3;db.flush()
+    with pytest.raises(ValueError,match="已变化"):
+        service.adopt(db,user=user,expected=initial["fingerprint"],batch_id="backfill-test")
+    db.rollback()
+    old_audit=service.append_audit_event
+    def broken(*args,**kwargs):raise RuntimeError("audit unavailable")
+    monkeypatch.setattr(service,"append_audit_event",broken)
+    with pytest.raises(RuntimeError,match="audit"):
+        service.adopt(db,user=user,expected=initial["fingerprint"],batch_id="backfill-test")
+    db.rollback();db.refresh(lot)
+    assert lot.estimated_unit_cost_snapshot is None and lot.quantity_available==8
+    monkeypatch.setattr(service,"append_audit_event",old_audit)
+    assert service.adopt(db,user=user,expected=initial["fingerprint"],batch_id="backfill-test")["adopted"]==1
+    db.commit()
+    assert lot.quantity_available==8 and lot.warehouse_location_id==location.id
+    assert lot.estimated_unit_cost_snapshot==Decimal("1.6300")
+    assert service.preview(db)["proposals"]==[]
+
+
+def test_legacy_centimetre_snapshot_is_flagged_not_used_for_dispatch(db):
+    import json
+    from app.services.inventory_valuation import frozen_cost
+    row,material=product(db)
+    location=WarehouseLocation(location_code="BAD-UNITS",location_name="测试",warehouse_type="finished")
+    db.add(location);db.flush()
+    lot=manual_finished_in(db,customer_id=row.customer_id,product_id=row.id,location_id=location.id,
+        quantity=8,stock_date=date(2026,9,11),source_type="manual",remarks=None,operator_id=None,idempotency_key="old-cm")
+    lot.estimated_unit_cost_snapshot=Decimal("0.0163");lot.cost_snapshot_source="material_quote_area"
+    lot.cost_snapshot_detail_json=json.dumps(dict(price_unit="元/㎡",components=[dict(component="whole",length_mm="163",width_mm="50",pieces_per_box=1)]))
+    unit,detail=frozen_cost(lot,db)
+    assert unit is None and "厘米" in detail["validation_issue"]

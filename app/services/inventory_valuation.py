@@ -83,6 +83,8 @@ def _external_cost(db, product):
     if row.currency != "CNY" or not all((unit, numerator, denominator)):
         return CostResolution(None, ["本产品缺少有效人民币采购价或成品换算关系"])
     if row.tax_mode == "tax_exclusive":
+        if row.tax_rate is None:
+            return CostResolution(None, ["本产品未税采购价缺少税率"])
         unit *= 1 + Decimal(str(row.tax_rate))
     elif row.tax_mode != "tax_inclusive":
         return CostResolution(None, ["本产品采购价税口径不完整"])
@@ -239,11 +241,11 @@ def frozen_cost(lot, db=None, visited=None):
     # promote a clearly undersized sheet snapshot into a confirmed outbound cost.
     physical = lot.finished_detail
     components = detail.get("components") or []
-    if lot.cost_snapshot_source == "material_quote_area" and physical and len(components) == 1:
+    if lot.cost_snapshot_source == "material_quote_area" and physical and isinstance(components, list) and len(components) == 1 and isinstance(components[0], dict):
         part = components[0]
         sheet_max = max(positive(part.get("length_mm")) or 0, positive(part.get("width_mm")) or 0)
         physical_max = max(positive(getattr(physical, f, None)) or 0 for f in ("length_mm", "width_mm", "height_mm"))
-        if part.get("component") == "whole" and int(part.get("pieces_per_box") or 1) <= 2 and 0 < sheet_max * 2 < physical_max:
+        if part.get("component") == "whole" and (positive(part.get("pieces_per_box")) or 1) <= 2 and 0 < sheet_max * 2 < physical_max:
             return None, {**detail, "validation_issue": "旧报料尺寸小于实物，疑似厘米误当毫米，须核对展开尺寸"}
     return unit, detail
 

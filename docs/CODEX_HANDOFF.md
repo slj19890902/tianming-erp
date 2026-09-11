@@ -5390,3 +5390,5 @@ legacy_ruida_* 原始层
 
 ### 2026-09-11 MAIL-005 v0.22.352
 正式代码8dab6bdab9c3b73cf79e528e92ef3631d597301a；head升级sb11v8x9z76（父rz10v8x9z74，仅PDF个人工作草稿表）。报告release_runtime_20260911_155447.json completed，NAS回执20260911_1556_PDF核对暂存恢复_v0.22.352.md。PDF暂存/刷新恢复已技术发布，真实126收件仍待授权码配置。
+
+- 2026-09-11：查货直达货架正视图及层格高亮 v0.22.353 技术发布，代码 33b70e6c，head sb11v8x9z76 不变；保留 v352，正式数据未改。证据 docs/warehouse_search_rack_focus_delivery.md；NAS 20260911_1603_查货直达货架层格_v353.md。Chrome 连接超时，现场点击验收待完成。

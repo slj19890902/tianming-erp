@@ -201,7 +201,8 @@ def get_goods(lot_id: int, db: Session = Depends(get_db), user: User = Depends(c
     physical = dict(length=detail.board_length_mm, width=detail.board_width_mm, flute=detail.flute_type,
         material=detail.material_code_snapshot, name=detail.internal_name)
     if can_view_inventory_cost(user):
-        physical["settlement_unit_price"] = str(lot.estimated_unit_cost_snapshot) if lot.estimated_unit_cost_snapshot is not None else None
+        from app.services.inventory_valuation import cost_payload
+        physical["settlement_unit_price"] = cost_payload(lot, db)["unit_cost"]
     return dict(lot_id=lot.id, version=lot.version, facts=profile, physical=physical,
         editable=lot.status == "active" and lot.quantity_reserved == 0 and lot.quantity_available > 0)
 

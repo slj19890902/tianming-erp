@@ -13,7 +13,7 @@ from app.models.material import Material
 from app.models.material_mapping import MaterialCodeMappingCandidate
 from app.models.product import Product
 from app.models.product_bom import ProductBomComponent
-from app.models.warehouse_inventory import InventoryLot
+from app.models.warehouse_inventory import InventoryLot, FinishedGoodsInventoryDetail
 from app.services.box_type_rules import recommend_box_type, BoxTypeRuleError
 from app.services.inventory_cost_snapshot import (
     InventoryCostEstimate, apply_cost_snapshot, estimate_finished_product_cost,
@@ -23,6 +23,7 @@ from app.services.inventory_cost_snapshot import (
 ALGORITHM = "inventory-confirmed-material-cny-v1"
 CONFIRMED_SOURCE = "inventory_confirmed_material"
 Q = Decimal("0.0001")
+OWNER_SOURCES = {"owner_current_reference_backfill", "owner_current_external_reference"}
 
 
 def positive(value):
@@ -99,6 +100,58 @@ def _external_cost(db, product):
     }), [])
 
 
+def _authorized_product_recipe(db, product):
+    """Reuse this exact product's approved recipe, but price a new entry today.
+
+    Approval is not transferred to similarly named products or a changed master.
+    Historical reference prices themselves remain immutable.
+    """
+    if product.is_composite:
+        return None
+    lots = db.scalars(select(InventoryLot).join(FinishedGoodsInventoryDetail).where(
+        FinishedGoodsInventoryDetail.product_id == product.id,
+        InventoryLot.cost_snapshot_source == "owner_current_reference_backfill",
+    ).order_by(InventoryLot.cost_snapshot_at.desc(), InventoryLot.id.desc()))
+    for lot in lots:
+        try:
+            detail = json.loads(lot.cost_snapshot_detail_json or "{}")
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(detail, dict) or not detail.get("authorization") or detail.get("basis") != "current_reference_cost_not_historical_purchase_fact":
+            continue
+        if detail.get("product_version") != product.version or detail.get("currency") != "CNY":
+            continue
+        parts = detail.get("components")
+        if not isinstance(parts, list) or len(parts) != 1 or not isinstance(parts[0], dict):
+            continue
+        part = parts[0]
+        if part.get("component") != "whole" or not positive(part.get("length_mm")) or not positive(part.get("width_mm")):
+            continue
+        material = db.get(Material, detail.get("material_id"))
+        if not material or not material.is_active or material.purchase_currency != "CNY" or material.purchase_tax_included is None:
+            continue
+        view = SimpleNamespace(material=material, material_id=material.id, default_material_code=None,
+            legacy_material_text=None, default_cardboard_length=None, default_cardboard_width=None,
+            layer_count=material.layer_count, flute_type=detail.get("flute_type"), box_style="异形箱",
+            report_length_mm=positive(part["length_mm"]), report_width_mm=positive(part["width_mm"]),
+            base_report_length_mm=None, base_report_width_mm=None, pieces_per_box=positive(part.get("pieces_per_box")) or 1)
+        estimate = estimate_finished_product_cost(db, product=view)
+        if not estimate or not positive(estimate.unit_cost):
+            continue
+        unit = estimate.unit_cost
+        if not material.purchase_tax_included:
+            if material.purchase_tax_rate is None:
+                continue
+            unit = (unit * (1 + material.purchase_tax_rate)).quantize(Q, rounding=ROUND_HALF_UP)
+        return CostResolution(InventoryCostEstimate(unit, estimate.square_price, estimate.area_m2, CONFIRMED_SOURCE,
+            {**estimate.detail, "algorithm_version": ALGORITHM, "currency": "CNY", "tax_included": True,
+             "product_id": product.id, "product_version": product.version, "material_version": material.version,
+             "reference_recipe_lot_id": lot.id, "reference_recipe": detail,
+             "formula_version": "owner-approved-product-recipe-current-quote-v1",
+             "source_tax_included": material.purchase_tax_included, "source_tax_rate": str(material.purchase_tax_rate)}), [])
+    return None
+
+
 def resolve_product_cost(db: Session, product: Product, visited=None, *, main_only=False) -> CostResolution:
     visited = set(visited or ())
     if product.id in visited:
@@ -166,7 +219,7 @@ def resolve_product_cost(db: Session, product: Product, visited=None, *, main_on
     if view.report_length_mm == 1 and view.report_width_mm == 1:
         missing.append("纸板尺寸1×1为占位资料，请填写实际展开尺寸")
     if missing:
-        return CostResolution(None, missing)
+        return _authorized_product_recipe(db, product) or CostResolution(None, missing)
     estimate = estimate_finished_product_cost(db, product=view)
     if estimate is None or estimate.unit_cost <= 0:
         return CostResolution(None, ["供应商平方价、价格单位或天地盖底片尺寸不完整"])
@@ -234,8 +287,12 @@ def frozen_cost(lot, db=None, visited=None):
             currency = "CNY"
             detail = {**detail, "origin_currency_evidence": origin_detail}
     if currency != "CNY" or lot.cost_snapshot_source not in {
-        CONFIRMED_SOURCE, "material_quote_area", "purchase_receipt_actual"
+        CONFIRMED_SOURCE, "material_quote_area", "purchase_receipt_actual", *OWNER_SOURCES
     }:
+        return None, detail
+    if lot.cost_snapshot_source in OWNER_SOURCES and (
+        not detail.get("authorization") or detail.get("basis") != "current_reference_cost_not_historical_purchase_fact"
+    ):
         return None, detail
     # Some historical estimates mislabeled centimetres as millimetres. Do not
     # promote a clearly undersized sheet snapshot into a confirmed outbound cost.
@@ -258,7 +315,9 @@ def cost_payload(lot, db=None):
         "quantity": quantity, "unit": lot.unit, "currency": "CNY",
         "source": lot.cost_snapshot_source, "captured_at": str(lot.cost_snapshot_at) if lot.cost_snapshot_at else None,
         "validation_issue": detail.get("validation_issue"),
-        "label": "采购入库成本" if lot.cost_snapshot_source == "purchase_receipt_actual" else "批次材料成本"}
+        "label": "采购入库成本" if lot.cost_snapshot_source == "purchase_receipt_actual" else (
+            "老板确认参考成本" if lot.cost_snapshot_source in OWNER_SOURCES else (
+                "参考配方材料成本" if detail.get("reference_recipe_lot_id") else "批次材料成本"))}
 
 
 def freeze_entry_cost(db, lot, product=None):

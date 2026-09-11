@@ -181,3 +181,36 @@ def test_legacy_centimetre_snapshot_is_flagged_not_used_for_dispatch(db):
     lot.cost_snapshot_detail_json=json.dumps(dict(price_unit="元/㎡",components=[dict(component="whole",length_mm="163",width_mm="50",pieces_per_box=1)]))
     unit,detail=frozen_cost(lot,db)
     assert unit is None and "厘米" in detail["validation_issue"]
+    from app.services.inventory_cost_backfill import preview,adopt
+    from app.models.user import User
+    user=User(username="unitadmin",real_name="单位纠错",password_hash="test-only",role="admin",is_active=True)
+    db.add(user);db.commit();db.expire_all()
+    plan=preview(db)
+    assert plan["proposals"][0]["correction_kind"]=="legacy_estimate_unit_error"
+    adopt(db,user=user,expected=plan["fingerprint"],batch_id="unit-fix-test");db.commit()
+    assert lot.estimated_unit_cost_snapshot==Decimal("1.6300")
+    assert json.loads(lot.cost_snapshot_detail_json)["original_cost"]["estimated_unit_cost_snapshot"]=="0.0163"
+    assert lot.quantity_available==8
+    assert preview(db)["proposals"]==[]
+
+
+def test_owner_authorized_recipe_reprices_new_entry_only_for_same_product_version(db):
+    import json
+    row,material=product(db)
+    location=WarehouseLocation(location_code="RECIPE",location_name="测试",warehouse_type="finished")
+    db.add(location);db.flush()
+    lot=manual_finished_in(db,customer_id=row.customer_id,product_id=row.id,location_id=location.id,
+        quantity=8,stock_date=date(2026,9,11),source_type="manual",remarks=None,operator_id=None,idempotency_key="recipe")
+    row.box_style="未配置的模切箱";db.flush()
+    lot.cost_snapshot_source="owner_current_reference_backfill"
+    lot.estimated_unit_cost_snapshot=Decimal("1.6300")
+    lot.cost_snapshot_detail_json=json.dumps(dict(authorization="老板确认",basis="current_reference_cost_not_historical_purchase_fact",
+        product_version=row.version,currency="CNY",material_id=material.id,flute_type="B",
+        components=[dict(component="whole",length_mm=1630,width_mm=500,pieces_per_box=1)]))
+    material.quote_price=Decimal("4");db.flush()
+    result=resolve_product_cost(db,row)
+    assert result.estimate.unit_cost==Decimal("3.2600")
+    assert result.estimate.detail["reference_recipe_lot_id"]==lot.id
+    assert cost_payload(lot)["unit_cost"]=="1.6300"
+    row.version+=1
+    assert resolve_product_cost(db,row).estimate is None

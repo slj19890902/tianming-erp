@@ -4,7 +4,7 @@ from decimal import Decimal
 from sqlalchemy import select, update
 from app.models.warehouse_inventory import InventoryLot
 from app.services.inventory_cost_snapshot import InventoryCostEstimate, apply_cost_snapshot
-from app.services.inventory_valuation import ALGORITHM, positive, resolve_lot_cost
+from app.services.inventory_valuation import ALGORITHM, positive, resolve_lot_cost, frozen_cost
 from app.services.material_cost_supplement import canonical, fingerprint
 from app.services.audit_log import append_audit_event
 
@@ -16,12 +16,15 @@ def preview(db):
     rows, missing, priced = [], [], 0
     query = select(InventoryLot).where(InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged > 0)
     for lot in db.scalars(query.order_by(InventoryLot.id)):
-        if positive(lot.estimated_unit_cost_snapshot):
+        unit, evidence = frozen_cost(lot, db)
+        unit_correction = lot.cost_snapshot_source == "material_quote_area" and bool(evidence.get("validation_issue"))
+        if positive(lot.estimated_unit_cost_snapshot) and not unit_correction:
             priced += 1
             continue
         result = resolve_lot_cost(db, lot)
         product = lot.finished_detail
         identity = dict(lot_id=lot.id, version=lot.version, code=product.inventory_code_snapshot if product else None,
+            correction_kind="legacy_estimate_unit_error" if unit_correction else "missing_cost",
             quantity=lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged)
         if result.estimate is None:
             missing.append({**identity, "reason": result.missing})
@@ -42,14 +45,17 @@ def adopt(db, *, user, expected, batch_id):
         raise ValueError("库存或报价已变化，请重新预览；未补价")
     for p in plan["proposals"]:
         lot = db.get(InventoryLot, p["lot_id"])
+        cost_match = (InventoryLot.estimated_unit_cost_snapshot.is_(None)) if p["before"]["estimated_unit_cost_snapshot"] is None else (
+            InventoryLot.estimated_unit_cost_snapshot == Decimal(p["before"]["estimated_unit_cost_snapshot"]))
         changed = db.execute(update(InventoryLot).where(InventoryLot.id==lot.id, InventoryLot.version==p["version"],
-            (InventoryLot.estimated_unit_cost_snapshot.is_(None)) | (InventoryLot.estimated_unit_cost_snapshot<=0)).values(version=InventoryLot.version+1),
+            cost_match).values(version=InventoryLot.version+1),
             execution_options={"synchronize_session":False})
         if changed.rowcount != 1:
             raise ValueError("批次已变化，整批取消补价")
         db.refresh(lot)
         evidence={**p["evidence"], "adoption_batch":batch_id, "original_cost":p["before"],
-            "historical_reference_adoption":True, "scope":"当前参考成本补定，不认定当年采购价，不新增应付"}
+            "historical_reference_adoption":True, "correction_kind":p["correction_kind"],
+            "scope":"当前参考成本补定，不认定当年采购价，不新增应付"}
         apply_cost_snapshot(lot,InventoryCostEstimate(Decimal(p["unit_cost"]),Decimal(p["square_price"]),
             Decimal(p["area_m2"]),p["source"],evidence))
         append_audit_event(db,actor=user,event_category="business",result="success",source="script",

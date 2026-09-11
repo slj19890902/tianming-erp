@@ -329,7 +329,7 @@ def estimate_from_snapshot(lot: InventoryLot) -> InventoryCostEstimate | None:
     area = _positive_decimal(lot.estimated_cost_area_m2_snapshot)
     if unit_cost is None:
         return None
-    if (square_price is None or area is None) and lot.cost_snapshot_source != "inventory_confirmed_material":
+    if (square_price is None or area is None) and lot.cost_snapshot_source not in {"inventory_confirmed_material", "owner_current_external_reference"}:
         return None
     square_price = square_price or Decimal(0)
     area = area or Decimal(0)

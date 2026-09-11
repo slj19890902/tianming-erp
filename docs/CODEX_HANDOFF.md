@@ -5350,3 +5350,5 @@ legacy_ruida_* 原始层
 ## 2026-09-11 v0.22.334 手机旧缓存兼容
 
 代码 `4badf6fd` 已发布，head仍 `rw10v8x9z71`。旧HTML先自动换新再加载入库runtime，盘点HTML/JS均no-store，修复inboundCandidates空对象。NAS回执 `04_开发记录/任务回执/20260911_1149_手机盘点旧缓存修复_v0.22.334.md`；发布报告 `docs/migration_reports/release_runtime_20260911_114707.json`。真实手机验收待完成。
+
+- 2026-09-11 v0.22.335：c39737fe 已正式发布；对话需求复核、无高度尺寸查询与手机片料盘点补齐。无新迁移，报告 release_runtime_20260911_122223.json；详情见 docs/requirements_audit_20260911.md 及NAS回执 20260911_1225_需求复核与手机混合盘点补齐_v0.22.335.md。

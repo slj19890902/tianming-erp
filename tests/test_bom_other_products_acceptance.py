@@ -17,7 +17,7 @@ PRODUCTS = [2817, 3113, 3156, 3479, 3484, 3485, 3489, 3496,
 
 @pytest.fixture
 def factory_http(factory_copy):
-    from app.api import auth, products, orders, requisition, incoming, production, warehouse, deliveries
+    from app.api import auth, products, orders, requisition, incoming, production, warehouse, deliveries, finance
     from app.api.deps import get_db
     from app.core.security import hash_password
     db = factory_copy
@@ -29,7 +29,7 @@ def factory_http(factory_copy):
     app = FastAPI()
     for name, module in (("auth", auth), ("products", products), ("orders", orders),
             ("requisition", requisition), ("incoming", incoming), ("production", production),
-            ("warehouse", warehouse), ("deliveries", deliveries)):
+            ("warehouse", warehouse), ("deliveries", deliveries), ("finance", finance)):
         app.include_router(module.router, prefix="/api/" + name)
     from app.api.external_packaging_purchases import router as external_router
     app.include_router(external_router, prefix="/api")
@@ -44,7 +44,7 @@ def factory_http(factory_copy):
 
 
 @pytest.mark.parametrize("pid", PRODUCTS)
-def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_http, pid, occupy_released=False):
+def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_http, pid, occupy_released=False, settle=False):
     from app.api.products import ProductBOMComponentPayload
     client, db = factory_http
     original = client.get(f"/api/products/{pid}/bom")
@@ -95,11 +95,11 @@ def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_htt
             received = receive(client, line.purchase_order_id, line.id,
                 f"other16-external-{pid}-{line.id}", line.purchase_quantity)
             assert received.status_code == 200, received.text
-    paper_receipt_flow(client, db, compiled, iid, pid, occupy_released=occupy_released)
+    paper_receipt_flow(client, db, compiled, iid, pid, occupy_released=occupy_released, settle=settle)
 
 
 def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False,
-                       stop_after_first_delivery=False, stop_after_receipts=False, key_suffix=""):
+                       stop_after_first_delivery=False, stop_after_receipts=False, key_suffix="", settle=False):
     from collections import defaultdict
     from app.models.order import OrderItem
     from app.models.product_bom import RequisitionItemBomSource
@@ -185,6 +185,26 @@ def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False,
     balances(2)
     from app.models.order import Order
     assert db.get(Order, db.get(OrderItem, iid).order_id).status == "delivered"
+    if settle:
+        from decimal import Decimal
+        from app.models.finance import Statement
+        from tests.test_bom_commercial_settlement import _confirm_receipt
+        for delivery_id in (did, second_id):
+            detail = client.get(f"/api/deliveries/{delivery_id}")
+            assert detail.status_code == 200, detail.text
+            # Internal accompanying pick lines must not become extra billable rows.
+            assert len(detail.json()["items"]) == 1
+            assert detail.json()["items"][0]["order_item_id"] == iid
+            _confirm_receipt(client, detail.json())
+        statement = client.post("/api/finance/statements", json={
+            "customer_id": compiled.graph.customer_id,
+            "statement_month": beijing_today().strftime("%Y-%m"),
+            "delivery_ids": [did, second_id]})
+        assert statement.status_code == 201, statement.text
+        db.expire_all()
+        assert db.get(Statement, statement.json()["id"]).total_receivable == Decimal("200.00")
+        balances(2)
+        return
     if occupy_released:
         from datetime import date
         from app.models.user import User
@@ -219,3 +239,8 @@ def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False,
 
 def test_completed_bom_delivery_cannot_restore_into_another_pallet(factory_http):
     test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_http, 2817, occupy_released=True)
+
+
+@pytest.mark.parametrize("pid", [2817, 3479])
+def test_actual_supply_groups_reach_signed_parent_statement(factory_http, pid):
+    test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_http, pid, settle=True)

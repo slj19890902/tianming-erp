@@ -10,7 +10,9 @@
 - 新迁移6项通过11.10秒：唯一编号和head、原表原字段/索引/触发器、升降升、成本及邮件事实阻止降级且文件哈希不变。源为v330私有副本，不能冒充v350新鲜数据。
 - 整合后业务35项通过92.53秒：test_bom_component_priced_loose_flow.py、test_bom_commercial_settlement.py、test_multilevel_bom_receipt_flow.py、test_inventory_cost_rules.py；包含子件实发/回单/撤销/结算、父件套价和库存成本规则。不代表Chrome或全部16款通过。
 - 7份PDF本次重新按missing-pdf-training-files.json核验7/7哈希一致，位于D:/tm-uat/bom-home-v330-20260910/verified-pdf-inputs。撤销此前重复补包请求。
-- Chrome连接仍返回nodeRepl.fetch request failed；没有本次真实Chrome页面验收。运行18082不能视为当前工作区代码。
+- Chrome连接仍返回nodeRepl.fetch request failed；没有本次真实Chrome页面验收。旧18082已核实无监听。当前18083以ccf03c4b代码启动，独立目录D:/tm-uat/bom-home-v350-code-v330-data-20260911；启动隔离门禁和健康检查通过，数据仍为v330，不能视作最新正式验收。
+- 新运行副本经官方隔离准备器复制旧私有运行库，7份PDF复制/重定位；86升89保留原268表原字段、索引与触发器，完整性ok、外键0，旧私有库哈希不变。证据migration-evidence.json与startup.log保存在新运行目录，服务绑定127.0.0.1。
+- 其余16款按实际来源分组补回单/对账：2817、3479管理员保存→下单→报料/采购→实收→两批送货→回单→对账，2项通过11.05秒，2×100=200，无配套子件重复计价。原三款资料缺口仍未解除。
 
 ## 按顺序完成的工作
 

@@ -11126,7 +11126,7 @@ def _formal_area_publish_blockers(
                             feature.get("storage_layout") or ""
                         ),
                     ):
-                        blockers.append(f"{area_code} 区{message}")
+                        blockers.append(f"{area.area_name or area_code}：{message}")
             blockers.extend(
                 _zone_asset_and_production_blockers(
                     db,
@@ -11162,7 +11162,7 @@ def _formal_area_publish_blockers(
             requested_inventory_types=requested_types,
             requested_storage_layout=requested_layout,
         ):
-            blockers.append(f"{area_code} 区{message}")
+            blockers.append(f"{area.area_name or area_code}：{message}")
     for policy in policies:
         area = policy.area
         feature = features.get(policy.map_feature_id)

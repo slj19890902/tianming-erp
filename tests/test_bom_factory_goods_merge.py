@@ -17,7 +17,7 @@ def test_merge_roundtrip_keeps_factory_usage_and_bom_tables(factory_copy, monkey
     path = Path(db.get_bind().url.database)
     db.rollback()
     config = _config(monkeypatch, path)
-    assert ScriptDirectory.from_config(config).get_heads() == ["sm25v8x9z87"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["sn26v8x9z88"]
     # This test owns the factory merge at 86; the additive handoff schema has
     # its own roundtrip and immutable-fact failure checks.
     command.downgrade(config, "sl24v8x9z86")

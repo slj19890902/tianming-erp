@@ -16,7 +16,7 @@ from app.services.bom_subkits import SubkitError
 from app.services.bom_subkit_inventory import _only_reversed_graph_consumptions
 from app.services.external_packaging_purchase import ExternalPurchaseContractError
 from app.services.external_receipt_state import active_receipt_item
-from app.services.multilevel_bom_external_identity import read_external_source_contract
+from app.services.multilevel_bom_external_identity import external_receipt_execution_contract
 from app.services.multilevel_bom_external_costs import validated_external_lot_detail
 from app.services.multilevel_bom_inventory import reverse_order_assembly
 from app.services.multilevel_bom_orders import read_compiled_order_bom
@@ -88,13 +88,14 @@ def reverse_graph_external_receipt(db, *, receipt_id, idempotency_key, reason, u
                 raise ExternalPurchaseContractError('无权撤销该客户实收或订单来源不完整', status_code=403)
             if purchase.purchase_order_id != receipt.purchase_order_id or purchase.sales_order_id != order.id:
                 raise SubkitError('外购实收订单身份不一致')
-            link, graph = read_external_source_contract(db, purchase.order_component_id)
+            link, graph = external_receipt_execution_contract(db, row.id)
             if link is None or link.order_item_id != item.id or graph is None or graph.graph.customer_id != order.customer_id:
                 raise SubkitError('该实收不是完整真实BOM来源，不能按组套撤销')
             if item.id in graphs and {s.id for s in graphs[item.id].snapshots} != {s.id for s in graph.snapshots}:
                 raise SubkitError('同次外购实收混用了不同BOM版本，须核实原来源')
             current = read_compiled_order_bom(db, item.id)
-            if link.bom_snapshot_id in {s.id for s in current.snapshots}:
+            execution_source = next(s.id for s in graph.snapshots if s.component_product_id == link.product_id)
+            if execution_source in {s.id for s in current.snapshots}:
                 current_items.add(item.id)
             items[item.id] = item
             graphs[item.id] = graph

@@ -200,6 +200,20 @@ class OrderBomSourceHandoff(Base):
     target_basis_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class OrderBomExternalReceiptExecution(Base):
+    """Execution ownership of a new receipt against a handed-off old contract."""
+    __tablename__ = "order_bom_external_receipt_executions"
+    __table_args__ = (
+        ForeignKeyConstraint(["revision_id", "source_snapshot_id"],
+            ["order_bom_source_handoffs.revision_id", "order_bom_source_handoffs.source_snapshot_id"],
+            ondelete="RESTRICT", name="fk_bom_receipt_execution_handoff"),
+    )
+    receipt_item_id: Mapped[int] = mapped_column(
+        ForeignKey("external_packaging_receipt_items.id", ondelete="RESTRICT"), primary_key=True)
+    revision_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_snapshot_id: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class OrderBomExternalComponent(Base):
     """Stable link between a procurement snapshot and its real frozen node."""
     __tablename__ = "order_bom_external_components"

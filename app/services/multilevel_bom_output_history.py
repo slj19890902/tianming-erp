@@ -56,11 +56,11 @@ def completion_source_id(db, completion):
 def _external_source(db, receipt_item_id, order_item_id):
     receipt = db.get(ExternalPackagingReceiptItem, receipt_item_id)
     purchase = db.get(ExternalPackagingPurchaseItem, receipt.purchase_item_id) if receipt else None
-    from app.services.multilevel_bom_external_identity import read_external_source_contract
-    link = read_external_source_contract(db, purchase.order_component_id)[0] if purchase else None
+    from app.services.multilevel_bom_external_identity import external_receipt_execution_contract
+    link, execution = external_receipt_execution_contract(db, receipt_item_id) if purchase else (None, None)
     if link is None or link.order_item_id != order_item_id or purchase.sales_order_item_id != order_item_id:
         raise BomPlanError("外购产出缺少准确订单BOM来源")
-    return link.bom_snapshot_id
+    return next(row.id for row in execution.snapshots if row.component_product_id == link.product_id)
 
 
 def output_source_ids(db, lot, order_item_id):

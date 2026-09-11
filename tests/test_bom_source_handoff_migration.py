@@ -67,8 +67,8 @@ def test_handoff_upgrade_roundtrip_preserves_factory_copy(factory_copy, monkeypa
         schema = dict(original.execute("SELECT name,sql FROM sqlite_master WHERE type IN ('trigger','index') AND sql IS NOT NULL"))
     db.rollback()
     config = _config(monkeypatch, target)
-    assert ScriptDirectory.from_config(config).get_heads() == ["sm25v8x9z87"]
-    for destination in ("sl24v8x9z86", "sm25v8x9z87"):
+    assert ScriptDirectory.from_config(config).get_heads() == ["sn26v8x9z88"]
+    for destination in ("sl24v8x9z86", "sn26v8x9z88"):
         if destination == "sl24v8x9z86":
             command.downgrade(config, destination)
         else:
@@ -80,7 +80,7 @@ def test_handoff_upgrade_roundtrip_preserves_factory_copy(factory_copy, monkeypa
             assert original_facts(check, columns) == facts
             actual = dict(check.execute("SELECT name,sql FROM sqlite_master WHERE type IN ('trigger','index') AND sql IS NOT NULL"))
             assert all(actual.get(name) == sql for name, sql in schema.items())
-            if destination == "sm25v8x9z87":
+            if destination == "sn26v8x9z88":
                 assert check.execute("SELECT count(*) FROM order_bom_source_handoffs").fetchone() == (0,)
     assert hashlib.sha256(backup.read_bytes()).hexdigest() == original_hash
 
@@ -97,6 +97,7 @@ def test_real_handoff_fact_blocks_downgrade_without_any_write(factory_copy, monk
     from tests.test_multilevel_bom_rule_impact import frozen_order
 
     db = factory_copy
+    command.downgrade(_config(monkeypatch, Path(db.get_bind().url.database)), "sm25v8x9z87")
     actor, item, frozen = frozen_order(db)
     review = review_current_rule_requirements(db, order_item_id=item.id, customer_id=frozen.graph.customer_id)
     # Migration fixture only: public execution is not enabled by this record.
@@ -120,6 +121,15 @@ def test_real_handoff_fact_blocks_downgrade_without_any_write(factory_copy, monk
         assert links[0].target_snapshot_id == target_source.id
     db.rollback()
     target = Path(db.get_bind().url.database)
+    # Adding/removing an empty receipt ownership table must preserve existing
+    # source handoffs, including the immutable triggers protecting those facts.
+    config = _config(monkeypatch, target)
+    with sqlite3.connect(target.as_uri() + "?mode=ro", uri=True) as check:
+        saved_handoff = check.execute("SELECT * FROM order_bom_source_handoffs").fetchall()
+    command.upgrade(config, "sn26v8x9z88")
+    command.downgrade(config, "sm25v8x9z87")
+    with sqlite3.connect(target.as_uri() + "?mode=ro", uri=True) as check:
+        assert check.execute("SELECT * FROM order_bom_source_handoffs").fetchall() == saved_handoff
     before = hashlib.sha256(target.read_bytes()).hexdigest()
     with pytest.raises(RuntimeError, match="已有BOM来源交接事实"):
         command.downgrade(_config(monkeypatch, target), "sl24v8x9z86")

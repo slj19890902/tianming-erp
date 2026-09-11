@@ -126,6 +126,47 @@ def read_external_source_contract(db, external_component_id):
     return link, compiled
 
 
+def external_receipt_contract(db, external_component_id, *, compiled=None):
+    """Old quote owns conversion/cost; explicit handoff owns new execution."""
+    link, original = read_external_source_contract(db, external_component_id)
+    current = compiled if compiled is not None else read_compiled_order_bom(db, link.order_item_id)
+    if current is None or current.graph.customer_id != original.graph.customer_id:
+        raise BomPlanError("外购实收缺少同客户当前执行规则")
+    if link.bom_snapshot_id in {row.id for row in current.snapshots}:
+        return link, original, current, None
+    from app.services.multilevel_bom_source_handoffs import current_source_handoffs
+    handoff = next((row for row in current_source_handoffs(db, current)
+        if row.source_snapshot_id == link.bom_snapshot_id and row.source_kind == "purchased"), None)
+    if handoff is None:
+        raise BomPlanError("旧外购来源尚未明确交接到当前版本，不能收料")
+    return link, original, current, handoff
+
+
+def external_receipt_execution_contract(db, receipt_item_id):
+    """Read the version recorded at receipt time, including after later edits."""
+    from app.models.external_packaging_purchase import ExternalPackagingReceiptItem, ExternalPackagingPurchaseItem
+    from app.models.multilevel_bom import OrderBomExternalReceiptExecution, OrderBomSourceHandoff
+    from app.services.multilevel_bom_orders import read_order_bom_source_contract
+    from app.services.multilevel_bom_source_handoffs import validate_source_handoff
+    receipt = db.get(ExternalPackagingReceiptItem, receipt_item_id)
+    purchase = db.get(ExternalPackagingPurchaseItem, receipt.purchase_item_id) if receipt else None
+    if purchase is None:
+        raise BomPlanError("外购实收缺少原采购来源")
+    link, original = read_external_source_contract(db, purchase.order_component_id)
+    ownership = db.get(OrderBomExternalReceiptExecution, receipt_item_id)
+    if ownership is None:
+        return link, original
+    handoff = db.get(OrderBomSourceHandoff, (ownership.revision_id, ownership.source_snapshot_id))
+    if (handoff is None or handoff.source_snapshot_id != link.bom_snapshot_id
+            or handoff.order_item_id != purchase.sales_order_item_id
+            or handoff.order_item_id != link.order_item_id or handoff.product_id != link.product_id
+            or handoff.source_kind != "purchased"):
+        raise BomPlanError("外购实收执行来源与原合同不一致")
+    execution = read_order_bom_source_contract(db, link.order_item_id, handoff.target_snapshot_id)
+    validate_source_handoff(db, handoff, execution)
+    return link, execution
+
+
 def frozen_purchase_quantities(db, components, order_items):
     """Uncovered procurement demand from authoritative order reservations.
 

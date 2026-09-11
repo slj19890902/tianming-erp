@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.338"
-APP_VERSION_NAME = "历史缺价收料与库存参考成本补录"
+APP_VERSION = "v0.22.339"
+APP_VERSION_NAME = "客户Excel对账差异核对"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2548,9 +2548,15 @@ _V022337_VERIFICATION_STEPS = [
 ]
 APP_CHANGES = ["历史缺价采用可读取稳定关联订单中一致的报料快照，不套用多行采购单抬头尺寸；新收料仍严格要求逐行有效价格与尺寸。", "提供老板授权的71批库存参考成本与20条收料当前价补录清单、事务校验和审计；不改产品主档、数量或已有历史价格。"]
 APP_VERIFICATION_STEPS = ["核对历史缺价收料的当前价采用记录与逐行报料尺寸；已有冻结价格保持。", "查看批次参考成本来源；仍缺关键资料的4款保持待补，不使用1×1占位尺寸或虚构价格。"]
+_V022338_CHANGES = APP_CHANGES
+_V022338_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["对账单新增核对客户Excel入口，自动识别表头或手工选列，按单号与存货编码汇总比较数量、单价及金额。", "支持下载差异和未识别行报告；保持客户权限隔离，不修改正式回单、对账或收款。"]
+APP_VERIFICATION_STEPS = ["从对账单打开核对客户Excel，上传xlsx并核对列对应和税口径，查看数量、单价、金额差异及未识别行。", "下载差异报告；修改对账单后旧版本下载应要求重新核对。"]
 APP_CHANGELOG = [
-    *(f"v0.22.338：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.338：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.339：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.339：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.338：本次更新｜{item}" for item in _V022338_CHANGES),
+    *(f"v0.22.338：如何验证｜{item}" for item in _V022338_STEPS),
     *(f"v0.22.337：本次更新｜{item}" for item in _V022337_CHANGES),
     *(f"v0.22.337：如何验证｜{item}" for item in _V022337_VERIFICATION_STEPS),
     *(f"v0.22.336：本次更新｜{item}" for item in _V022336_CHANGES),
